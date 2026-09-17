@@ -1551,6 +1551,118 @@ type sessionTestResponseView struct {
 	Body    string            `json:"body,omitempty"`
 }
 
+// sessionRuleAnalyzeMacro serves POST /api/session/rules/{id}/analyze — Burp's "Re-analyze
+// macro" (burpsy-react-ui-e23c). It runs the same dry-run /test runs, then reads the responses
+// for the three parameter-relationship classes Burp's own docs name (hidden form fields,
+// Set-Cookie names, query strings in links) and returns the extractions that would capture
+// them. Read-only: nothing is written to the rule, the login-run memory, or the jar beyond
+// what the dry-run itself already does.
+func (s *Server) sessionRuleAnalyzeMacro(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid rule id", http.StatusBadRequest)
+		return
+	}
+	rule := s.sessionCoordinator.Rule(session.RuleID(id))
+	if rule == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+	report := s.sessionCoordinator.RunMacroDetailed(rule, s.macroRunner(r.Context()))
+	suggestions := session.AnalyzeMacro(rule, report)
+	// The suggestions carry the step index they were found in; the UI shows them beside the
+	// dry-run it just watched, so the step's own response is the context the operator reads.
+	if suggestions == nil {
+		suggestions = []session.ExtractionSuggestion{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"rule_id":     id,
+		"suggestions": suggestions,
+		// The honest count Burp's dialog implies: how many relationships were found that the
+		// rule does not already capture. Same number as the list; carried so a caller can say
+		// "found 3" without re-deriving it.
+		"found": len(suggestions),
+	})
+}
+
+// sessionRuleApplyExtractions serves POST /api/session/rules/{id}/apply-extractions — the
+// apply half of Re-analyze. The body names which suggested extractions to add, by name, so
+// the operator picks from the list they were shown; the server rebuilds each extraction from
+// its own suggestion (the client never posts an extraction shape, which would let a stale
+// suggestion overwrite a good one).
+func (s *Server) sessionRuleApplyExtractions(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid rule id", http.StatusBadRequest)
+		return
+	}
+	rule := s.sessionCoordinator.Rule(session.RuleID(id))
+	if rule == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
+		return
+	}
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if len(req.Names) == 0 {
+		http.Error(w, "Nothing to apply: name the suggestions to add", http.StatusBadRequest)
+		return
+	}
+	// Re-run the analysis the operator saw, and match by name. The suggestions are rebuilt
+	// server-side from the same dry-run that produced them, so what lands in the rule is a
+	// working extraction, not whatever shape arrived on the wire.
+	report := s.sessionCoordinator.RunMacroDetailed(rule, s.macroRunner(r.Context()))
+	suggestions := session.AnalyzeMacro(rule, report)
+	applied := make([]string, 0, len(req.Names))
+	for _, want := range req.Names {
+		for i := range suggestions {
+			if suggestions[i].Name != want {
+				continue
+			}
+			ex, err := session.NewExtraction(suggestions[i].Name, suggestions[i].From, suggestions[i].Pattern, suggestions[i].Group)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Suggestion %q does not compile: %v", want, err), http.StatusBadRequest)
+				return
+			}
+			ex.Header = suggestions[i].Header
+			ex.Step = suggestions[i].Step
+			if err := s.sessionCoordinator.AddExtraction(session.RuleID(id), ex); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			applied = append(applied, want)
+			break
+		}
+	}
+	if len(applied) == 0 {
+		// A name that matches no current suggestion is a stale list: the responses changed
+		// between the analyze and the apply, and silently ignoring that would let the UI
+		// claim a wiring that did not happen.
+		http.Error(w, "No named suggestion is current — the responses changed since the analysis; re-analyze", http.StatusConflict)
+		return
+	}
+	s.persistSessionRules()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"rule_id": id,
+		"applied": applied,
+		"rule":    ruleToDto(s.sessionCoordinator.Rule(session.RuleID(id))),
+	})
+}
+
 func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.handleSessionCookiesMutate(w, r)

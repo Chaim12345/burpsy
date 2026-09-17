@@ -324,6 +324,36 @@ export interface SessionTestStep {
  extractions?: SessionTestExtraction[];
 }
 
+/** One parameter relationship the macro analyzer found (e23c) — Burp's "identifying
+ * parameters whose values can be determined from the preceding response". The fields mirror
+ * the Go session.ExtractionSuggestion exactly; the server computes them, the UI only shows them. */
+export interface ExtractionSuggestion {
+ name: string;
+ from: "body" | "header";
+ header?: string;
+ pattern: string;
+ group: number;
+ step: number;
+ source: string;
+ /** What the dry-run's response actually carried — shown so the operator can see the
+  * relationship is real before applying it. */
+ value: string;
+}
+
+/** POST /api/session/rules/{id}/analyze — Re-analyze (e23c). Read-only. */
+export interface SessionAnalyzeResponse {
+ rule_id: number;
+ suggestions: ExtractionSuggestion[];
+ found: number;
+}
+
+/** POST /api/session/rules/{id}/apply-extractions — the apply half of Re-analyze (e23c). */
+export interface SessionApplyExtractionsResponse {
+ rule_id: number;
+ applied: string[];
+ rule: SessionRuleFull;
+}
+
 export interface SessionTestResponse {
  rule: string;
  rule_id: number;

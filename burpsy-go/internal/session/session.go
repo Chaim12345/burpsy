@@ -1710,6 +1710,34 @@ func (c *Coordinator) UpdateRule(id RuleID, rule *SessionRule) error {
 	return nil
 }
 
+// AddExtraction appends one extraction to a rule (burpsy-react-ui-e23c — the apply half of
+// Re-analyze). Built as its own method rather than "read, mutate, UpdateRule" in a caller,
+// because UpdateRule replaces the whole rule and two racing applies would drop each other's
+// extractions; the add is one lock hold, and a name that is already there is refused rather
+// than duplicated — a duplicate would make {{name}} resolve to whichever extraction the map
+// happened to hold last, which is a resolution nobody can debug.
+func (c *Coordinator) AddExtraction(id RuleID, ex *Extraction) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rule := c.rules[id]
+	if rule == nil {
+		return fmt.Errorf("%w: %d", ErrNoSuchRule, id)
+	}
+	if ex == nil || strings.TrimSpace(ex.Name) == "" {
+		return fmt.Errorf("an extraction needs a name")
+	}
+	for _, existing := range rule.Extractions {
+		if existing != nil && existing.Name == ex.Name {
+			return fmt.Errorf("rule already extracts %q", ex.Name)
+		}
+	}
+	if err := ex.Recompile(); err != nil {
+		return err
+	}
+	rule.Extractions = append(rule.Extractions, ex)
+	return nil
+}
+
 func (c *Coordinator) AllRules() []*SessionRule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

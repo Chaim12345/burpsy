@@ -16,6 +16,8 @@ import type {
  SessionMacroStep,
  SessionRulesResponse,
  SessionTestResponse,
+ SessionAnalyzeResponse,
+ SessionApplyExtractionsResponse,
 } from "./types.policy";
 
 /** Keys not already declared in data.ts. Prefix-compatible with the event-stream invalidation map. */
@@ -288,6 +290,31 @@ export function useTestSessionRule() {
  return useMutation({
   mutationFn: (id: number) =>
    api<SessionTestResponse>(`/api/session/rules/${id}/test`, json("POST", {})),
+ });
+}
+
+/**
+ * POST /api/session/rules/{id}/analyze — Burp's "Re-analyze macro" (e23c): the same dry-run
+ * /test runs, plus the parameter-relationship analysis over its responses (hidden form
+ * fields, Set-Cookie names, query strings in links). Read-only like /test; the apply is a
+ * separate call so the operator picks from what they were shown.
+ */
+export function useAnalyzeSessionRule() {
+ return useMutation({
+  mutationFn: (id: number) =>
+   api<SessionAnalyzeResponse>(`/api/session/rules/${id}/analyze`, json("POST", {})),
+ });
+}
+
+/**
+ * POST /api/session/rules/{id}/apply-extractions — the apply half of Re-analyze (e23c). The
+ * body names suggestions by name only; the server rebuilds each extraction from its own
+ * analysis, so what lands in the rule is a working extraction, not whatever shape arrived.
+ */
+export function useApplySessionExtractions() {
+ return useMutation({
+  mutationFn: (vars: { id: number; names: string[] }) =>
+   api<SessionApplyExtractionsResponse>(`/api/session/rules/${vars.id}/apply-extractions`, json("POST", { names: vars.names })),
  });
 }
 

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, History, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, History, KeyRound, Pencil, Play, Plus, RotateCcw, Save, Trash2, Upload, X , SearchCheck , Wand2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDeleteSessionRule, useSaveSessionRule } from "../lib/data";
-import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
+import { useMoveSessionRule, useSessionCookies, useSessionLogin, useSessionRulesFull, useTestSessionRule, useAnalyzeSessionRule, useApplySessionExtractions, useUpdateSessionMacro, useCookieJarWrite } from "../lib/data.policy";
 import { MacroRecorder } from "../ui/macro-recorder";
 import type {
  SessionAction,
@@ -10,6 +10,7 @@ import type {
  SessionExtractHow,
  SessionExtraction,
  SessionTestResponse,
+ ExtractionSuggestion,
  SessionLoginResponse,
  SessionMacroStep,
  SessionRuleFull,
@@ -959,6 +960,44 @@ export function SessionPage(): JSX.Element {
  // The Test-macro report for the open rule (burpsy-react-ui-7zdm). State, not cache: a dry-run is
  // a one-shot answer to "what would this macro do right now", not a resource to re-render from.
  const [testReport, setTestReport] = useState<SessionTestResponse | null>(null);
+ // Re-analyze (e23c): the suggestion list the last analysis answered, the per-suggestion
+ // pick state, and the two mutations. State not cache — an analysis is a one-shot answer
+ // about what the target just returned, and it goes stale the moment the target does.
+ const analyzeMacro = useAnalyzeSessionRule();
+ const applyExtractions = useApplySessionExtractions();
+ const [suggestions, setSuggestions] = useState<ExtractionSuggestion[] | null>(null);
+ const [pickedSuggestions, setPickedSuggestions] = useState<string[]>([]);
+ const runAnalyze = () => {
+  if (editing?.id === undefined) return;
+  analyzeMacro.mutate(editing.id, {
+   onSuccess: (out) => {
+    setSuggestions(out.suggestions);
+    setPickedSuggestions(out.suggestions.map((sug) => sug.name));
+    toast.success(
+     out.found === 0
+      ? "No new parameter relationships — every value the responses determine is already wired"
+      : `Found ${out.found} parameter relationship${out.found === 1 ? "" : "s"}`,
+    );
+   },
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Re-analyze failed"),
+  });
+ };
+ const runApply = () => {
+  if (editing?.id === undefined || pickedSuggestions.length === 0) return;
+  applyExtractions.mutate(
+   { id: editing.id, names: pickedSuggestions },
+   {
+    onSuccess: (out) => {
+     setSuggestions(null);
+     setPickedSuggestions([]);
+     setTestReport(null);
+     setBaseline(JSON.stringify(out.rule));
+     toast.success(`Wired ${out.applied.length} extraction${out.applied.length === 1 ? "" : "s"}`);
+    },
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Applying suggestions failed"),
+   },
+  );
+ };
 
  /** Selection is by rule id; a new rule is `{ id: null }` until the server assigns one. */
  const [editing, setEditing] = useState<RuleDraft | null>(null);
@@ -1343,6 +1382,20 @@ export function SessionPage(): JSX.Element {
          <Play size={13} />
          {testMacro.isPending ? "Testing…" : "Test macro"}
         </Button>
+        {/* Re-analyze (e23c): Burp's "automatically tries to find any relationships". Runs
+            the same dry-run and reads its responses for values the target determines —
+            hidden fields, Set-Cookie names, query strings in links — then offers them as
+            extractions to wire. */}
+        <Button
+         variant="outline"
+         size="small"
+         disabled={!wired || editing.id === undefined || analyzeMacro.isPending}
+         title={editing.id === undefined ? "Save the rule before analyzing it" : "Find the parameter relationships this rule's responses determine"}
+         onClick={runAnalyze}
+        >
+         <SearchCheck size={13} />
+         {analyzeMacro.isPending ? "Analyzing…" : "Re-analyze"}
+        </Button>
         <IconButton
          label="Close the rule editor"
          size="small"
@@ -1589,6 +1642,63 @@ export function SessionPage(): JSX.Element {
        </div>
       </div>
 
+      {/* Re-analyze's suggestion list (e23c): what the analysis found, each row naming the
+          source and the value the response actually carried — checkable rather than magic.
+          Rows default to picked, because an operator who clicked Re-analyze asked for the
+          wiring; unchecking is how they decline one. */}
+      {suggestions !== null ? (
+       <Card>
+        <SectionHeading
+         title="Parameter relationships"
+         detail={suggestions.length === 0 ? "No new values the responses determine — everything found is already wired." : "Values the dry-run's responses determined. Picked rows will be added to the rule as extractions."}
+         actions={
+          <>
+           <Button
+            variant="outline"
+            size="small"
+            disabled={suggestions.length === 0 || applyExtractions.isPending}
+            onClick={runApply}
+           >
+            <Wand2 size={13} />
+            {applyExtractions.isPending ? "Wiring…" : `Wire ${pickedSuggestions.length}`}
+           </Button>
+           <IconButton
+            label="Dismiss the suggestions"
+            size="small"
+            onClick={() => {
+             setSuggestions(null);
+             setPickedSuggestions([]);
+            }}
+           >
+            <X size={13} />
+           </IconButton>
+          </>
+         }
+        />
+        {suggestions.length === 0 ? null : (
+         <div className="stack-tight">
+          {suggestions.map((sug) => (
+           <label key={sug.name} className="check-row">
+            <input
+             type="checkbox"
+             checked={pickedSuggestions.includes(sug.name)}
+             onChange={(event) => {
+              const next = event.target.checked
+               ? [...pickedSuggestions, sug.name]
+               : pickedSuggestions.filter((n) => n !== sug.name);
+              setPickedSuggestions(next);
+             }}
+            />
+            <code>{`{{${sug.name}}}`}</code>
+            <span className="cell-dim">from step {sug.step + 1}'s {sug.source}</span>
+            <span className="cell-dim">·</span>
+            <code className="cell-dim">{sug.value}</code>
+           </label>
+          ))}
+         </div>
+        )}
+       </Card>
+      ) : null}
       {testReport ? (
        <div className="stack-tight">
         <span className="eyebrow">Test macro report</span>
