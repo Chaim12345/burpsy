@@ -1225,3 +1225,83 @@ removes only its scheme; armless rules match both), `scope_restore_test.go`
 (protocol survives save/load; a v2-era database still restores), and
 `server_test.go` (arm survives the wire and gates through `AuthoriseRaw`;
 "gopher" is refused). Landed as de93912.
+
+## Scanner-logic research declines (2026-09-17)
+
+The Burp scanner-decision-layer research (`/tmp/smartscan-report.md`, §1–§7) ported
+the gaps that were worth porting and, per the honest-counting rule, records what it
+deliberately did **not** port and why. Each entry names the Burp evidence, so a
+future reader can re-open the decision rather than re-derive it.
+
+### Decline 1 — ML in the engine core
+
+**Burp has none.** The "statistical battery" in `burp.Zr8b`
+(`map_root.tsv:5899-6035`) is classical FIPS monobit/long-run/runs tests,
+chi-square, ZLIB-ratio, spectral and correlation tests — each computes a
+significance level; `Zr8b:3999` itself says the tests "provide only an indicative
+guide". That battery is **already ported** as the sequencer. The `"training"`
+literals (`Zepn:8713-8719`) are the licence trial, not model training. Burp's
+actual AI is **Burp AI**, an LLM post-scan issue investigator gated by
+severity+confidence (Standard = High + Medium-tentative), which explicitly "does
+not affect the crawl or audit phases"
+(portswigger.net DAST, "Configuring AI-enhanced scanning", updated 2026-09-09).
+
+**Why declined:** an in-engine model would add a nondeterministic verdict to a
+scanner whose whole value is honest counting, needs a training corpus burpsy does
+not have, and would not fix the current misses — the xsschallenge corpus is 23
+vulnerable / 9 safe at **zero** false positives, so the misses (`hvez`, `2p9u`,
+`1a3z`) are capability gaps, not precision gaps. The LLM half is tracked
+separately (bead `ei0v`, "LLM post-scan second look") and needs an
+operator-supplied endpoint before it can be built.
+
+### Decline 2 — Session handling rules during audit
+
+**Burp:** `scanner.session_handling_rules` (`map_root.tsv:2894, 5850-5851,
+20198`) lets an audit invoke a named rule set to re-authenticate mid-scan.
+
+**Why declined:** burpsy's session recovery lives in the crawler
+(`internal/crawler/session_gate.go`); the audit engine does not own the macro /
+session infrastructure, so adding the config key without the invocation path
+would be a config row that decides nothing. Re-open when the session epic lands
+the audit-side wiring — the breaker model itself is already richer than assumed
+(both levels plus the session count/percentage breaker, with Burp's exact key
+names, `audit_items.go:301-304`).
+
+### Decline 3 — `LOW_VALUE` audit disposition
+
+**Burp:** `Zwee.java:125-129` assigns `LOW_VALUE` to requests whose crawl action
+was, e.g., a speculative navigation or a floating form. **Why declined:** the
+disposition keys on crawler *action types* that burpsy's crawler does not record.
+Porting the constant alone would be a label over nothing; port the metadata
+first, then the disposition.
+
+### Decline 4 — The full `crawl_optimization` tolerance-key family
+
+**Burp:** `map_root.tsv:243-267` (`scanner.crawl_optimization.*` tolerance keys).
+**Why declined:** the family decides whether two renders are "the same" by
+comparing DOMs; burpsy's crawler captures wire bytes and has no rendered-DOM
+comparator. A single tolerance number without the comparator is unenforceable.
+(Related: bead `xuim` covers the rendered-DOM audit row, which is the
+prerequisite for most of this family.)
+
+### Decline 5 — HTTP/2 pseudo-header awareness
+
+**Burp:** `Zee2.java:12-63` classifies `:scheme` / `:method` / `:path` /
+`:authority` as a distinct header class (literals `map_root.tsv:10712-10715`),
+used by `Ze0j.findInvalidHeaderNames` (`Ze0j.java:170-171`) to keep them out of
+the ordinary-header insertion-point path.
+
+**Why declined:** the sender is HTTP/1.1 `writeHTTP1` (`sender.go:597`) and
+nothing in burpsy reads pseudo-headers, so there is no insertion-point class for
+the rule to protect. Re-open if an HTTP/2 sender lands.
+
+### Decline 6 — Name+value relocation matching
+
+**Burp:** `InsertionPointBuilder.java:1035-1045` moves the matching URL parameter
+to the corresponding body kind by matching **name and value**.
+
+**Why declined:** burpsy already ships 2 of Burp's 6 relocation directions
+(`insertion.go:381`); the remaining matching adds a comparison cost to a kind
+that rarely fires. Re-open if a real target shows a relocation the blanket clause
+move gets wrong.
+
