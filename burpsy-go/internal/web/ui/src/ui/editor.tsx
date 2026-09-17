@@ -3,7 +3,7 @@ import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText , Percent } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
@@ -34,6 +34,7 @@ const CONSTRUCT_DIALECTS: Record<ConstructDialect, string> = {
 };
 import { cn } from "../lib/cn";
 import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
+import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
 import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
@@ -452,6 +453,12 @@ export function HttpEditor({
   },
   [onChange],
  );
+ // URL-encode as you type (burpsy-react-ui-js1): Burp's toggle — "Automatically URL-encodes
+ // special characters as you type". One persisted preference for every editor surface, the
+ // same class of fact as the wrapping toggle; the filter itself is built in the extensions
+ // memo below, only when this is on.
+ const urlEncodeAsYouType = useApp((state) => state.urlEncodeAsYouType);
+
  const extensions = useMemo<Extension[]>(() => {
   // CodeMirror's content element renders with role="textbox" but nothing in @uiw/react-codemirror's
   // own props reaches it — the wrapper spreads unknown props onto its outer container, not the
@@ -506,8 +513,17 @@ export function HttpEditor({
   ];
   if (wrap) base.push(EditorView.lineWrapping);
   if (showNonPrinting) base.push(nonPrintingGlyphs, nonPrintingEOLPlugin(rawTextRef));
+  // URL-encode as you type (burpsy-react-ui-js1). A transaction filter, added only when the
+  // persisted toggle is on: it rewrites the user's typed insert through the same
+  // urlEncodeKeyChars the ctrl+U chord uses, so the operator sees %26 land under their cursor
+  // as they type &. "input.type" only — paste is content chosen whole, and programmatic
+  // changes (reveal, sort) must not be re-encoded.
+  if (urlEncodeAsYouType) {
+   base.push(urlEncodeAsYouTypeExtension());
+  }
   return base;
- }, [wrap, showNonPrinting, label]);
+ },
+  [wrap, showNonPrinting, label, urlEncodeAsYouType]);
 
  const bytes = useMemo(() => new TextEncoder().encode(value).length, [value]);
  const response = useMemo(() => isResponse(value), [value]);
@@ -643,6 +659,7 @@ export function HttpEditor({
  // through the store so every editor on every page moves together — one strip shape, not one
  // per surface (t94i).
  const setEditorTabs = useApp((state) => state.setEditorTabs);
+ const setUrlEncodeAsYouType = useApp((state) => state.setUrlEncodeAsYouType);
 
  // The five operator-added tabs (t94i). Each warrants itself by the message's own content —
  // a Headers tab exists for every HTTP message (every message has a head), Query/Body
@@ -1089,6 +1106,23 @@ export function HttpEditor({
        onClick={() => setShowNonPrinting((current) => !current)}
       >
        <Pilcrow size={13} />
+      </IconButton>
+     ) : null}
+     {/* URL-encode as you type (burpsy-react-ui-js1): Burp's context-menu toggle —
+         "Automatically URL-encodes special characters as you type". A pressed-state toggle on
+         the text views, persisted for every editor surface through the workspace store. Hidden
+         when the editor is read-only: encoding what cannot be typed is a control that can
+         never act. */}
+     {active === "pretty" || active === "raw" ? (
+      <IconButton
+       label={urlEncodeAsYouType ? "Stop URL-encoding as you type" : "URL-encode as you type"}
+       title="Special characters typed into this editor are URL-encoded automatically, the same key-character set as the ctrl+U selection command"
+       size="small"
+       aria-pressed={urlEncodeAsYouType}
+       disabled={!editable}
+       onClick={() => setUrlEncodeAsYouType(!urlEncodeAsYouType)}
+      >
+       <Percent size={13} />
       </IconButton>
      ) : null}
      {editable ? (

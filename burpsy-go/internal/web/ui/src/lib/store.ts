@@ -383,6 +383,11 @@ interface AppState {
  collaboratorRead: number[];
  collaboratorAnnotations: Record<number, CollaboratorAnnotation>;
  editorFont: EditorFont;
+ /** URL-encode as you type (burpsy-react-ui-js1) — Burp's editor toggle: special characters
+  * typed into a request are encoded automatically. Persisted: a typing preference is a
+  * layout-class choice, the same one editorFont is. */
+ urlEncodeAsYouType: boolean;
+ setUrlEncodeAsYouType: (on: boolean) => void;
  /** UI text scale (burpsy-react-ui-7bd); sets --ui-scale on <html>. */
  uiScale: UiScale;
  paletteOpen: boolean;
@@ -522,6 +527,7 @@ export function persistedWorkspace(state: AppState) {
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
   editorFont: state.editorFont,
+  urlEncodeAsYouType: state.urlEncodeAsYouType,
   uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
   // operator makes once. Persisted here rather than under a `burpsy.*` key of
@@ -560,6 +566,7 @@ export const useApp = create<AppState>()(
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
+  urlEncodeAsYouType: false,
    uiScale: "100%",
    paletteOpen: false,
    shortcutsOpen: false,
@@ -594,6 +601,7 @@ export const useApp = create<AppState>()(
    setCollaboratorAnnotation: (id, annotation) =>
     set((state) => ({ collaboratorAnnotations: { ...state.collaboratorAnnotations, [id]: annotation } })),
    setEditorFont: (editorFont) => set({ editorFont }),
+  setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
