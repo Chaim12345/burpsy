@@ -50,11 +50,19 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 	for _, c := range contexts {
 		switch c.Kind {
 		case xssCtxText:
-			add(xssPayload{build: htmlBreakoutPayload, note: "tag injection in a text node",
+			// A text node needs NO leading quote: the value is already being parsed as content,
+			// so a bare `<` opens an element. The quote-prefixed htmlBreakoutPayload belongs to
+			// the unknown-context bank, where the value might sit inside a quoted attribute and
+			// `">` is what closes it. Using it here was not merely redundant. An insertion point
+			// whose container refuses DQUOTE — a Cookie value, RFC 6265 §5.2 — refused every
+			// text-node payload before it was sent, and checkReflectedXSSCore skips a refused send,
+			// so a cookie reflected into a text node produced no probe at all and the row could
+			// never report however vulnerable the target was.
+			add(xssPayload{build: textNodeBreakoutPayload, note: "tag injection in a text node",
 				confirm: confirmMarkupBreakout})
 			// The same breakout with a handler a blocklist is unlikely to name. One extra request,
 			// and without it a host that strips onerror/onload reads as not vulnerable.
-			add(xssPayload{build: altHandlerBreakoutPayload,
+			add(xssPayload{build: textNodeAltHandlerPayload,
 				note:    "tag injection with a handler outside the usual blocklist",
 				confirm: confirmAltHandlerBreakout})
 
@@ -235,6 +243,26 @@ func unquotedAttrPayload(canary string) string {
 // inside the handler so the parser can confirm it.
 func altHandlerBreakoutPayload(canary string) string {
 	return `"><details open ontoggle=alert(` + canary + `)>`
+}
+
+// textNodeBreakoutPayload opens an element from a value the parser is already treating as content.
+//
+// It is htmlBreakoutPayload without the leading quote, and the difference is the whole point. In a
+// text node `<` starts a tag on its own; the quote was inherited from the unknown-context bank,
+// where the value may sit inside a quoted attribute and only `">` closes it. Carrying it here cost
+// real detections: a container that refuses DQUOTE (a Cookie value) rejected the payload before it
+// was sent, and a refused send is skipped, so the text node was never probed.
+//
+// Confirmed by confirmMarkupBreakout, which asks the parser for `<svg id=CANARY>` as a real element
+// — the same evidence the quote-prefixed form was confirmed by, so this is not a weaker check.
+func textNodeBreakoutPayload(canary string) string {
+	return `<svg id=` + canary + ` onload=alert(1)>`
+}
+
+// textNodeAltHandlerPayload is altHandlerBreakoutPayload without the leading `">`, for the same
+// reason textNodeBreakoutPayload drops it: in a text node the element opens on its own.
+func textNodeAltHandlerPayload(canary string) string {
+	return `<details open ontoggle=alert(` + canary + `)>`
 }
 
 func quotedAttrEventPayload(quote byte, canary string) string {
