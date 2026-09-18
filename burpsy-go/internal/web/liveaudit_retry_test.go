@@ -178,7 +178,8 @@ func TestTheOperatorRetryRewindsTheCursorAndCarriesTheStallBudget(t *testing.T) 
 		}
 		time.Sleep(sweepTick)
 	}
-	if _, waiting := s.liveAudit.StalledAt(); !waiting {
+	stalledID, waiting := s.liveAudit.StalledAt()
+	if !waiting {
 		t.Fatal("control case missing: the sweep never showed a stall for the operator to retry")
 	}
 
@@ -189,10 +190,31 @@ func TestTheOperatorRetryRewindsTheCursorAndCarriesTheStallBudget(t *testing.T) 
 		t.Fatalf("POST retry_stalled: status = %d, want 200", rec.Code)
 	}
 
-	// The cursor is back at the stalled id, and the budget carried, not restarted: the sweep
-	// will give up on this id within liveAuditStallTicks more ticks — not ten fresh ones.
-	// Observable as: the skip counter moves within a bounded, shorter window.
-	fastDeadline := time.Now().Add(time.Duration(liveAuditStallTicks+4) * sweepTick)
+	// The rewind itself is observable immediately: the cursor is back at the stalled id and
+	// the stall budget is at its limit, NOT reset — a fresh budget would read 0. This is the
+	// carried-budget assertion, checked where it is a fact about the rewind rather than a
+	// race against the sweep's next tick.
+	s.liveAudit.retryMu.Lock()
+	cur := s.liveAudit.retryCursor
+	stallsAfterRewind, atAfterRewind := -1, int64(-1)
+	if cur != nil {
+		stallsAfterRewind, atAfterRewind = cur.stalls, int64(cur.at)
+	}
+	s.liveAudit.retryMu.Unlock()
+	if stallsAfterRewind != liveAuditStallTicks || atAfterRewind != int64(stalledID) {
+		t.Fatalf("after the rewind: stalls=%d at=%d, want stalls=%d at the stalled id %d — the budget must carry, not restart",
+			stallsAfterRewind, atAfterRewind, liveAuditStallTicks, stalledID)
+	}
+
+	// And the skip fires once ticks resume — without needing any fresh ten-tick budget. The
+	// window is generous because the sweep loop is synchronous behind a real audit batch; the
+	// assertion above is the carried-budget fact, this one is that the sweep does give up.
+	// The window must survive a real audit batch: the tick that follows the rewind can be
+	// blocked behind the previous batch's AuditSession (the sweep loop is synchronous), so
+	// the bound is a full audit-worth of time, not merely stallTicks × the interval. Carried
+	// means "no fresh ten-tick budget": the skip fires as soon as ticks resume, well before a
+	// restarted budget would have.
+	fastDeadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(fastDeadline) && s.liveAudit.Skipped() == 0 {
 		time.Sleep(sweepTick / 2)
 	}

@@ -645,6 +645,15 @@ func main() {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
 		webServer.WithPersist(persistStore)
+		// The live sweep's cross-run seen ledger (apfh) survives restarts: re-seen request
+		// content stays REQUEST_TO_AUDIT_DEDUPLICATED instead of re-auditing everything the
+		// last process already covered. Loaded here onto the state the sweep consults, before
+		// StartLiveAuditSweep runs its first tick.
+		if blob, err := persistStore.LoadLiveSeenLedger(); err != nil {
+			logger.Warn("could not restore the live sweep's seen ledger", zap.Error(err))
+		} else if len(blob) > 0 {
+			webServer.LoadLiveSeenLedger(blob)
+		}
 		// Runtime edits to the TLS passthrough list survive restarts. The persisted
 		// patterns apply on top of whatever the flags configured — a flag rule and a
 		// UI-added rule are both real rules, and dedupe keeps a pattern that arrived

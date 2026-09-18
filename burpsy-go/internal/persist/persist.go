@@ -2175,6 +2175,24 @@ func (s *Store) getSetting(key string) (string, error) {
 	return v, err
 }
 
+// SaveLiveSeenLedger persists the live sweep's cross-run seen ledger (apfh) as one
+// settings blob: a set of "host#fingerprint" keys, one per line. The sweep that owns the
+// ledger serialises it; a restart restores it so a re-seen exchange is still counted as
+// REQUEST_TO_AUDIT_DEDUPLICATED rather than re-audited from scratch.
+func (s *Store) SaveLiveSeenLedger(blob []byte) error {
+	return s.setSetting("live_audit_seen_ledger", string(blob))
+}
+
+// LoadLiveSeenLedger restores the seen ledger; empty (never saved) is a fresh ledger, not an
+// error.
+func (s *Store) LoadLiveSeenLedger() ([]byte, error) {
+	v, err := s.getSetting("live_audit_seen_ledger")
+	if err != nil {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
 // SaveTlsPassthrough replaces the persisted TLS passthrough host-pattern list.
 //
 // One settings value holding a JSON array rather than its own table: this is a

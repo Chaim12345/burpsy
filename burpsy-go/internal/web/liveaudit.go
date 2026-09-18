@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,6 +53,35 @@ type LiveAuditState struct {
 	// count with no idea how much it was behind.
 	reached  atomic.Uint64
 	recorded atomic.Uint64
+	// seenMu guards seen: the cross-run request-content ledger (apfh). The sweep's AuditLedger
+	// lives on the run and dies with it — a restarted sweep or process re-audited every
+	// exchange it had already covered. This ledger lives on the state and on disk, keyed by
+	// (host, request fingerprint): a re-seen exchange with content already audited is counted
+	// as REQUEST_TO_AUDIT_DEDUPLICATED (Burp's Zeze.java:17 disposition) instead of becoming
+	// audit work again. The 6n4d pairing is exact: the fingerprint makes changed content a
+	// NEW key there; here identical content is the OLD key, so one gate admits the changed
+	// and the other refuses the same.
+	seenMu sync.Mutex
+	// seen holds "host#fp" -> true. Bounded like the dispatch ledger: past seenCap it is
+	// dropped and rebuilt, counted, reported, and recorded as an event — the honest trade,
+	// not a silent cap (see seenCap).
+	seen map[string]bool
+	// seenCap bounds the seen ledger. Twenty thousand distinct request contents is more
+	// than any single engagement's in-scope surface; past it the ledger resets and
+	// already-audited content re-audits once more, visibly.
+	seenCap int
+	// seenAddedSinceSave counts new ledger keys since the last persist; the sweep saves in
+	// small batches rather than per-exchange, so a trickling capture does not become a
+	// write-per-request on disk.
+	seenAddedSinceSave atomic.Int64
+	// seenLedgerResets counts how many times the seen ledger was dropped at its cap. On the
+	// state, not a package global: a counter that outlives its state leaks across -count runs
+	// and across servers in one process, and the pane would report resets another sweep made.
+	seenLedgerResets atomic.Uint64
+	// deduplicated counts exchanges the sweep refused as already-audited content — the
+	// disposition rows, not a caveat: a sweep that skipped 50 re-seen captures is 50 rows of
+	// "we already audited this exact request", and the pane says so.
+	deduplicated atomic.Uint64
 	// pendingRetry holds the id the sweep gave up waiting on, for one bounded re-enqueue when
 	// its response eventually lands (iyqg: a skip must not be a death sentence — a proxied
 	// request whose response finally arrives after the sweep moved on is auditable, and
@@ -138,6 +169,98 @@ func (la *LiveAuditState) recordSkipped(n uint64, retryID core.ExchangeID) {
 
 // Retried reports how many exchanges the sweep audited on their second chance.
 func (la *LiveAuditState) Retried() uint64 { return la.retried.Load() }
+
+// seenKey is the cross-run dedup key: the host the request went to and the request-content
+// fingerprint. Not the URL: the sweep's own audit ledger already keys by scope+content
+// (6n4d), and this ledger's question is coarser — "has THIS exact content at THIS host been
+// audited by any sweep before?" — because it is what survives restarts.
+func seenKey(ex *core.Exchange) string {
+	return ex.Host + "#" + fmt.Sprintf("%x", ex.RequestFP)
+}
+
+// admitSeen consults the cross-run ledger for one exchange. Returns true when the content is
+// new (and records it); false when it was already audited — the REQUEST_TO_AUDIT_DEDUPLICATED
+// disposition. A zero fingerprint (hand-built or restored exchanges, exchanges minted before
+// the capture seam computed one) always admits: refusing content the ledger cannot identify
+// would dedup on "unknown", which is a silent coverage hole.
+func (la *LiveAuditState) admitSeen(ex *core.Exchange) bool {
+	if ex == nil || ex.RequestFP == 0 {
+		return true
+	}
+	la.seenMu.Lock()
+	defer la.seenMu.Unlock()
+	key := seenKey(ex)
+	if la.seen == nil {
+		la.seen = make(map[string]bool)
+	}
+	if la.seen[key] {
+		return false
+	}
+	la.seen[key] = true
+	la.seenAddedSinceSave.Add(1)
+	return true
+}
+
+// SeenCount reports distinct request contents the ledger holds.
+func (la *LiveAuditState) SeenCount() int {
+	la.seenMu.Lock()
+	defer la.seenMu.Unlock()
+	return len(la.seen)
+}
+
+// seenLedgerCap returns the cap in force, defaulting to 20000.
+func (la *LiveAuditState) seenLedgerCap() int {
+	if la.seenCap > 0 {
+		return la.seenCap
+	}
+	return 20000
+}
+
+// maybeResetSeen drops the seen ledger when it has outgrown its cap, returning true when a
+// reset happened. The caller reports it: a reset means already-audited content re-audits once
+// more, and that trade is visible, counted, and evented — never a silent cap.
+func (la *LiveAuditState) maybeResetSeen() bool {
+	la.seenMu.Lock()
+	defer la.seenMu.Unlock()
+	if len(la.seen) <= la.seenLedgerCap() {
+		return false
+	}
+	la.seen = make(map[string]bool)
+	la.seenLedgerResets.Add(1)
+	return true
+}
+
+// Deduplicated reports how many re-seen exchanges were counted as
+// REQUEST_TO_AUDIT_DEDUPLICATED instead of audit work.
+func (la *LiveAuditState) Deduplicated() uint64 { return la.deduplicated.Load() }
+
+// SeenLedgerResets reports how many times the seen ledger was dropped at its cap.
+func (la *LiveAuditState) SeenLedgerResets() uint64 { return la.seenLedgerResets.Load() }
+
+// PersistSeen stores the seen ledger's keys for a restart, and LoadSeen restores them. The
+// list is bounded by the cap, and the format is one key per line: the ledger is a set, and a
+// set in a settings value does not want a second encoding ceremony.
+func (la *LiveAuditState) PersistSeen() []byte {
+	la.seenMu.Lock()
+	defer la.seenMu.Unlock()
+	out := make([]string, 0, len(la.seen))
+	for k := range la.seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return []byte(strings.Join(out, "\n"))
+}
+
+func (la *LiveAuditState) LoadSeen(blob []byte) {
+	la.seenMu.Lock()
+	defer la.seenMu.Unlock()
+	la.seen = make(map[string]bool)
+	for _, line := range strings.Split(string(blob), "\n") {
+		if line != "" {
+			la.seen[line] = true
+		}
+	}
+}
 
 // pendingRetryID returns the filed retry id, or none.
 func (la *LiveAuditState) pendingRetryID() (core.ExchangeID, bool) {
@@ -305,6 +428,15 @@ type liveAuditView struct {
 	// response was late, taken back when it landed. Reported beside Skipped because "gave up
 	// on 3" and "gave up on 3, took 1 back" are different coverage claims.
 	Retried uint64 `json:"retried"`
+	// Deduplicated is re-seen exchanges counted as REQUEST_TO_AUDIT_DEDUPLICATED (apfh):
+	// content a sweep already audited, refused as work and recorded as a row. Reported
+	// beside Collapsed — the two are the same saving at different scopes (Collapsed is
+	// per-run (unit, check) pairs; Deduplicated is whole requests across runs).
+	Deduplicated uint64 `json:"deduplicated"`
+	// SeenLedgerResets is how many times the cross-run seen ledger was dropped at its cap —
+	// the same honest trade the dispatch ledger's resets make: bounded memory, one visible
+	// re-audit of already-covered content.
+	SeenLedgerResets uint64 `json:"seen_ledger_resets"`
 }
 
 // liveAuditUnwired reports a 200 with wired:false rather than a 404, matching the other
@@ -337,6 +469,8 @@ func (s *Server) liveAuditStatus() liveAuditView {
 		v.StalledAt = &id
 	}
 	v.Retried = s.liveAudit.Retried()
+	v.Deduplicated = s.liveAudit.Deduplicated()
+	v.SeenLedgerResets = s.liveAudit.SeenLedgerResets()
 	return v
 }
 
@@ -553,6 +687,16 @@ func (s *Server) StartLiveAuditSweep(ctx context.Context) {
 // startLiveAuditSweep is StartLiveAuditSweep with the interval exposed, so a test can pin the
 // opt-in (CRAWL-06) against a real target inside a test's patience rather than waiting whole
 // multiples of the shipped interval to observe that nothing was sent.
+// LoadLiveSeenLedger restores the cross-run seen ledger from disk (apfh). The sweep's
+// own state is created lazily, so this materialises it first — a restore that needed the
+// sweep to have started would load after the first tick had already re-audited content.
+func (s *Server) LoadLiveSeenLedger(blob []byte) {
+	if s.liveAudit == nil {
+		s.liveAudit = NewLiveAuditState()
+	}
+	s.liveAudit.LoadSeen(blob)
+}
+
 func (s *Server) startLiveAuditSweep(ctx context.Context, every time.Duration) {
 	if s.liveAudit == nil {
 		s.liveAudit = NewLiveAuditState()
@@ -678,6 +822,13 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			retriedThisTick++
 		}
 	}
+	// The seen ledger's bound (apfh): checked once per tick, before new admissions. A reset
+	// re-audits already-covered content once more — visibly, counted, evented.
+	if s.liveAudit.maybeResetSeen() {
+		s.events.Record(dash.EventLedgerReset, dash.SeverityWarn, fmt.Sprintf(
+			"the live sweep's cross-run seen ledger passed its cap and was reset; re-seen request content will audit once more"))
+	}
+
 	next := cursor.at
 	// waitingOn is the id the walk stopped at because its response had not landed. Distinct from
 	// "ran out of exchanges": only the former is something the cursor can get permanently stuck on.
@@ -693,7 +844,16 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			break
 		}
 		if s.liveAuditAdmits(ex) {
-			ids = append(ids, next)
+			// The cross-run dedup (apfh): content this sweep lineage has already audited is
+			// counted as REQUEST_TO_AUDIT_DEDUPLICATED — a disposition row, not work. The
+			// fingerprint is 6n4d's, so changed content admits (that ledger's job) and only
+			// identical re-seen content dedups here. The id advances either way: the cursor's
+			// position is the store, and a dedup row is still a row the sweep has accounted for.
+			if !s.liveAudit.admitSeen(ex) {
+				s.liveAudit.deduplicated.Add(1)
+			} else {
+				ids = append(ids, next)
+			}
 		}
 		next++
 	}
@@ -737,6 +897,20 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	cursor.at = next
 	cursor.stalls = 0
 	s.liveAudit.noteStall(uint64(waitingOn), waiting)
+	// Persist the seen ledger in small batches (apfh): a restart restores it, so
+	// REQUEST_TO_AUDIT_DEDUPLICATED survives restarts. Sixteen keys to a save bounds disk
+	// writes while keeping the restore window narrow; zero keys means the tick admitted
+	// nothing new and touches nothing.
+	if s.persist != nil && s.liveAudit.seenAddedSinceSave.Load() >= 16 {
+		if err := s.persist.SaveLiveSeenLedger(s.liveAudit.PersistSeen()); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("could not persist the live sweep's seen ledger", zap.Error(err))
+			}
+			// The counter still clears: an unwritable save must not retry the same batch on
+			// every tick forever, and the in-memory ledger keeps working regardless.
+		}
+		s.liveAudit.seenAddedSinceSave.Store(0)
+	}
 	if len(ids) == 0 {
 		return
 	}
