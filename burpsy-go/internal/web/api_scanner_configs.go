@@ -65,6 +65,12 @@ type auditConfigView struct {
 	// NestedInsertionPoints is Burp's use_nested_insertion_points: null inherits the default (on),
 	// false stops the enumerator expanding JSON/base64/XML inside a parameter value.
 	NestedInsertionPoints *bool `json:"nested_insertion_points"`
+	// SkipAllTestsForParameters is Burp's scanner.ignored_insertion_points
+	// skip_all_tests_for_parameters: parameter names an operator exempted from testing
+	// entirely (v9cg). Absent/null means no exemptions; an empty array is accepted as "the
+	// operator cleared the list" — unlike the numeric keys there is no zero-value ambiguity,
+	// because absent and empty mean the same thing for a list.
+	SkipAllTestsForParameters []string `json:"skip_all_tests_for_parameters"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -102,6 +108,12 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 		v.MaxInsertionPointsPerRequest = &n
 	}
 	v.NestedInsertionPoints = optBoolPtr(cfg.NestedInsertionPoints)
+	// The skip list is carried, not defaulted: an absent field reads back absent, and a list
+	// the operator set reads back in the order they set it (the enumerator's matching is
+	// case-insensitive, so round-tripping preserves spelling rather than normalising it away).
+	if len(cfg.SkipAllTestsForParameters) > 0 {
+		v.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
+	}
 	return v
 }
 
@@ -114,8 +126,9 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 // would have done exactly that: a save that sent only a ceiling would have stored a configuration
 // with a zero time budget and every breaker disabled, under the operator's name.
 //
-// Only the two misc_insertion_point_options keys are writable here so far. The rest of the view is
-// still read-only and says so at the endpoint, rather than accepting a field and storing nothing.
+// Three keys are writable here: the two misc_insertion_point_options keys and the operator's
+// parameter skip list (v9cg). The rest of the view is still read-only and says so at the
+// endpoint, rather than accepting a field and storing nothing.
 func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, error) {
 	if v.MaxInsertionPointsPerRequest != nil {
 		n := *v.MaxInsertionPointsPerRequest
@@ -130,6 +143,23 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 	}
 	if v.NestedInsertionPoints != nil {
 		cfg.NestedInsertionPoints = scanner.SomeUint32(b2u32(*v.NestedInsertionPoints))
+	}
+	// The skip list overlays when the request carried the field at all. Decoding the body
+	// into the view leaves the field nil when the key was absent and a non-nil slice when it
+	// was present — even as [] — so clearing the list ("skip nothing") is expressible as
+	// an explicit empty array and distinguishable from not touching it. Each name is
+	// trimmed; an empty name is refused rather than dropped, because a name that silently
+	// vanishes from the list is a parameter that silently goes back to being tested.
+	if v.SkipAllTestsForParameters != nil {
+		names := make([]string, 0, len(v.SkipAllTestsForParameters))
+		for _, raw := range v.SkipAllTestsForParameters {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				return cfg, errors.New("skip_all_tests_for_parameters: every entry needs a parameter name")
+			}
+			names = append(names, name)
+		}
+		cfg.SkipAllTestsForParameters = names
 	}
 	return cfg, nil
 }
