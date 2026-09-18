@@ -484,6 +484,12 @@ func (s ItemState) MarshalJSON() ([]byte, error) { return json.Marshal(s.Label()
 // exception: a shipped configuration names check classes and point classes a run must honour, and
 // a preset overlay (BuiltInConfig.Apply) writes them here. The overlay is an approximation and
 // auditLevelNotes says exactly where it bends.
+// DefaultAutoBackoffMs is the inherited per-step backoff after a 429/503 (fkl8): two
+// seconds — the range Burp's own auto_backoff operates in, long enough for a per-minute
+// token bucket to refill a little between steps, short enough that a rate-limited audit
+// still makes progress inside a normal run's time budget.
+const DefaultAutoBackoffMs uint32 = 2000
+
 type AuditConfig struct {
 	// TimeBudget is the wall-clock ceiling for the whole run.
 	TimeBudget time.Duration
@@ -571,6 +577,13 @@ type AuditConfig struct {
 	// counted onto the run's own record as a bcheck.Declined, so a run with it off cannot be
 	// mistaken for one that found nothing nested.
 	NestedInsertionPoints OptUint32
+	// AutoBackoffMs is the per-step delay the dispatch loop applies after a probe came back
+	// 429 or 503 (burpsy-react-ui-fkl8) — Burp's resource-pool auto_backoff, in the
+	// smallest honest shape: a counter and a sleep, not a resource-pool rewrite. Unset
+	// inherits the default (see DefaultAutoBackoffMs); zero disables the backoff, which is
+	// a real choice (an operator who knows the target's limiter resets per-minute may
+	// prefer to let the request budget eat the 429s) and must not read as "unset".
+	AutoBackoffMs OptUint32
 	// SkipAllTestsForParameters is Burp's
 	// scanner/ignored_insertion_points/skip_all_tests_for_parameters: parameters an operator
 	// exempted from testing entirely, by name. A named parameter's points are dropped from

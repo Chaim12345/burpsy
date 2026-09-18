@@ -557,6 +557,15 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	if err == nil && resp != nil {
 		meter.succeeded()
+		// Auto-backoff (burpsy-react-ui-fkl8): a 429 or 503 means the target is asking for
+		// less pace, and it is observed HERE — the one place every probe response passes —
+		// so every check family shares one backoff without each of them learning the rule.
+		// Recorded on the meter (per-run state, already threaded to every send site) rather
+		// the scanner (cross-run state, which would leak one host's rate limit into the next
+		// audit against a different target).
+		if resp.StatusCode == 429 || resp.StatusCode == 503 {
+			meter.rateLimited(resp.StatusCode)
+		}
 		// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a probe response is a
 		// response the scanner drove, and Burp's jar can monitor the Scanner. Absorbed from the
 		// response's raw bytes at the one place every probe response passes. A probe session that

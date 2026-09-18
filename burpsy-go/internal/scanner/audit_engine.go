@@ -303,6 +303,15 @@ type probeMeter struct {
 	sent      atomic.Uint32
 	failed    atomic.Uint32
 	refused   atomic.Uint32
+	// rateLimitedCount counts probes the target answered 429/503 (fkl8) — the honest half of
+	// auto-backoff: the outcome reports how many times the target asked the audit to slow
+	// down, because a sweep that ignored N rate-limit responses is a sweep an operator must
+	// be able to distinguish from one the target never throttled.
+	rateLimitedCount atomic.Uint32
+	// limitedStatus is the most recent rate-limit status seen (0 = none), read by the
+	// dispatch loop to decide the backoff wait. Only the LAST status matters: a mixed 429
+	// then 503 sequence backs off the same either way.
+	limitedStatus atomic.Uint32
 }
 
 // The methods are nil-safe: a check invoked outside an audit (a direct unit test, say) has no meter
@@ -322,6 +331,14 @@ func (m *probeMeter) succeeded() {
 func (m *probeMeter) failure() {
 	if m != nil {
 		m.failed.Add(1)
+	}
+}
+
+// rateLimited records one 429/503 probe response (fkl8). Nil-safe like its siblings.
+func (m *probeMeter) rateLimited(status int) {
+	if m != nil {
+		m.rateLimitedCount.Add(1)
+		m.limitedStatus.Store(uint32(status))
 	}
 }
 
@@ -510,6 +527,12 @@ type AuditOutcome struct {
 	// AlreadyCovered counts checks not admitted because an identical (dispatch unit, check) already
 	// ran this session.
 	AlreadyCovered int `json:"already_covered"`
+	// RateLimited counts steps the dispatch loop delayed because the target answered a probe
+	// 429 or 503 (fkl8). The work still ran — this is not a disposition — but an audit that
+	// was slowed by the target N times says so in its outcome, because a sweep that ignored
+	// N rate-limit responses is a sweep an operator must be able to distinguish from one the
+	// target never throttled.
+	RateLimited int `json:"rate_limited"`
 	// RequestBudgetSpent counts checks not admitted because the outbound-request budget was spent.
 	RequestBudgetSpent int `json:"request_budget_spent"`
 	// UnitAbandoned counts checks not admitted because consecutive failures abandoned their dispatch
@@ -645,6 +668,9 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.RequestsRefused > 0 {
 		fmt.Fprintf(&b, "; %d probe(s) refused by scope", o.RequestsRefused)
+	}
+	if o.RateLimited > 0 {
+		fmt.Fprintf(&b, "; %d step(s) delayed for rate limiting", o.RateLimited)
 	}
 	if o.Unmeasurable > 0 {
 		fmt.Fprintf(&b, "; %d check(s) undecided, not clean", o.Unmeasurable)
@@ -1093,6 +1119,27 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			// while paused, and the loop must not resume into an audit that should have stopped.
 			if s.suiteGate != nil {
 				s.suiteGate(ctx)
+			}
+
+			// Auto-backoff (fkl8): the target answered a probe 429/503, so the next step
+			// waits a configured beat before it sends. One wait per rate-limited status,
+			// re-checked every step, so a target that keeps 429ing keeps being waited on and
+			// a target that recovers stops paying. The wait is bounded by the time budget's
+			// own expiry — a backoff that outlived the budget would be a wait with no audit
+			// on the other side of it.
+			// Unset inherits the default; set-and-zero is the real off. Resolving the wait here,
+			// at the read, keeps the field's wire shape one value with no second "enabled" flag
+			// to fall out of sync.
+			ms := DefaultAutoBackoffMs
+			if run.cfg.AutoBackoffMs.Set {
+				ms = run.cfg.AutoBackoffMs.Value
+			}
+			if ms > 0 && meter != nil && meter.limitedStatus.Load() != 0 {
+				select {
+				case <-time.After(time.Duration(ms) * time.Millisecond):
+				case <-ctx.Done():
+				}
+				o.RateLimited++
 			}
 
 			check := steps[pos].check

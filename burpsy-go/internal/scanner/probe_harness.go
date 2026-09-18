@@ -131,6 +131,12 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 	if out.Status == 0 {
 		out.Status = responseStatus(string(res.Raw))
 	}
+	// Auto-backoff (fkl8): the same 429/503 observation sendTestRequestFull holds. The
+	// injection families send through THIS path, not that one, so the rule lives in both —
+	// one observation per send path, no third place a rate limit could slip past.
+	if out.Status == 429 || out.Status == 503 {
+		meter.rateLimited(out.Status)
+	}
 	return out, nil
 }
 

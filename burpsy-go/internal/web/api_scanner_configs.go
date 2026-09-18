@@ -65,6 +65,11 @@ type auditConfigView struct {
 	// NestedInsertionPoints is Burp's use_nested_insertion_points: null inherits the default (on),
 	// false stops the enumerator expanding JSON/base64/XML inside a parameter value.
 	NestedInsertionPoints *bool `json:"nested_insertion_points"`
+	// AutoBackoffMs is the per-step delay after the target answers a probe 429/503
+	// (fkl8): null inherits the engine default (2s), 0 disables the backoff (a real
+	// choice — an operator who knows the limiter's cadence may prefer the request
+	// budget eat the 429s), a positive number is the wait in milliseconds.
+	AutoBackoffMs *uint32 `json:"auto_backoff_ms"`
 	// SkipAllTestsForParameters is Burp's scanner.ignored_insertion_points
 	// skip_all_tests_for_parameters: parameter names an operator exempted from testing
 	// entirely (v9cg). Absent/null means no exemptions; an empty array is accepted as "the
@@ -108,6 +113,10 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 		v.MaxInsertionPointsPerRequest = &n
 	}
 	v.NestedInsertionPoints = optBoolPtr(cfg.NestedInsertionPoints)
+	if cfg.AutoBackoffMs.Set {
+		n := cfg.AutoBackoffMs.Value
+		v.AutoBackoffMs = &n
+	}
 	// The skip list is carried, not defaulted: an absent field reads back absent, and a list
 	// the operator set reads back in the order they set it (the enumerator's matching is
 	// case-insensitive, so round-tripping preserves spelling rather than normalising it away).
@@ -143,6 +152,9 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 	}
 	if v.NestedInsertionPoints != nil {
 		cfg.NestedInsertionPoints = scanner.SomeUint32(b2u32(*v.NestedInsertionPoints))
+	}
+	if v.AutoBackoffMs != nil {
+		cfg.AutoBackoffMs = scanner.SomeUint32(*v.AutoBackoffMs)
 	}
 	// The skip list overlays when the request carried the field at all. Decoding the body
 	// into the view leaves the field nil when the key was absent and a non-nil slice when it
