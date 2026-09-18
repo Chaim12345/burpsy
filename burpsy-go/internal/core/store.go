@@ -420,6 +420,13 @@ type Exchange struct {
 	// A pointer rather than a zero sentinel, because exchange 0 is a real exchange and is very often
 	// the first thing an operator sends to Repeater.
 	ParentID *ExchangeID
+	// RequestFP fingerprints this exchange's raw request bytes (FNV-1a), computed once at
+	// capture by RequestFingerprint. It exists so the audit ledger's URL-keyed scopes can
+	// tell two captures of one endpoint apart (burpsy-react-ui-6n4d): same fingerprint =
+	// same unit (identical work, still collapsed), different fingerprint = the endpoint's
+	// semantics changed and the checks run again. Zero means "not computed" — an exchange
+	// minted without the capture seam has no fingerprint and keys the way it always did.
+	RequestFP uint64
 	// Cookies names the cookies the response set, in first-seen order. Computed once at
 	// capture by CookieNames, for the same reason Mime is: listing history must never read
 	// response bytes. Nil means none were set — like Mime, only Response separates "none

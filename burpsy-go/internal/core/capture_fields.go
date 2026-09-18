@@ -107,3 +107,42 @@ func ResponseTitle(raw []byte) string {
 	}
 	return title
 }
+
+// RequestFingerprint is a 64-bit FNV-1a over one request's raw bytes, computed once at
+// capture (burpsy-react-ui-6n4d).
+//
+// # What it is for
+//
+// The audit ledger collapses identical work by (dispatch unit, check), and the URL-keyed
+// scopes key by host/path alone — so a second capture of the same URL with a different body
+// or different parameters was collapsed as "already covered" even though its semantics
+// changed under the checks. The fingerprint rides the unit key: same content = same unit
+// (still collapsed — cross-task dedup's whole point), changed content = a different unit
+// (re-admitted and re-audited, counted as dispatched, never silently deduped).
+//
+// # Why FNV-1a over a cryptographic hash
+//
+// This is not an adversarial digest: the input is burpsy's own captured bytes, keyed only
+// to tell two captures of one endpoint apart. FNV-1a is 64 bits, allocation-free over the
+// request head+body in one pass, and stores as the exchange row's uint64. A collision would
+// need two DIFFERENT requests of one URL colliding in the same session — ~2^32 requests by
+// birthday, against a ledger that resets at 20k units; the failure mode is one missed
+// re-audit, the same loss the feature replaces (every changed request was missed before).
+//
+// # Why the whole request, not just the body
+//
+// "Changed content" includes a changed Content-Type on an identical body, a changed header
+// the checks read, a changed method on the same path. The request IS the content; splitting
+// it would re-open the same silent dedup for everything outside the split.
+func RequestFingerprint(raw []byte) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for _, b := range raw {
+		h ^= uint64(b)
+		h *= prime64
+	}
+	return h
+}

@@ -272,6 +272,11 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// and filter have anything to work with at all.
 		Mime: core.MimeEssence(x.Response),
 		// Same seam as Mime: the bytes are here, so the derived columns are decided here.
+		// RequestFP is the request-content fingerprint the audit ledger keys changed-content
+		// re-audits on (6n4d) — computed here for the same reason Mime is: this is the one
+		// place the raw bytes are in hand, and a consumer that had to read them back would
+		// re-pay the store for bytes it already paid for once.
+		RequestFP: core.RequestFingerprint(x.Request),
 		Cookies:   core.CookieNames(x.Response),
 		Title:     core.ResponseTitle(x.Response),
 		Notes:     x.Notes,

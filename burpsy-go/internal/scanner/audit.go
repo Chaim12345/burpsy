@@ -186,13 +186,27 @@ func (s DispatchScope) UnitKey(ex *core.Exchange) (string, bool) {
 	if i := strings.IndexByte(pathOnly, '?'); i >= 0 {
 		pathOnly = pathOnly[:i]
 	}
+	// The request-content fingerprint (6n4d): appended to the three URL-keyed scopes so the
+	// ledger's collapse is content-aware. Same content = same key (identical work stays
+	// collapsed — cross-task dedup's whole point); changed content = a different key, so a
+	// second capture of this endpoint whose parameters or body changed is re-admitted and
+	// re-audited rather than silently "already covered". The per-request and
+	// per-insertion-point scopes already key by ex.ID, which a new capture always has a new
+	// one of — appending the fingerprint there would change nothing and cost a longer key.
+	// Zero (an exchange minted without the capture seam) keys the way it always did, so
+	// restored sessions and tests that build exchanges by hand do not change identity
+	// mid-run.
+	fp := ""
+	if ex.RequestFP != 0 {
+		fp = fmt.Sprintf("#fp%x", ex.RequestFP)
+	}
 	switch s {
 	case DispatchScopePerHost:
-		return origin, true
+		return origin + fp, true
 	case DispatchScopePerPath:
-		return origin + pathOnly, true
+		return origin + pathOnly + fp, true
 	case DispatchScopePerUrl:
-		return origin + ex.Path, true
+		return origin + ex.Path + fp, true
 	case DispatchScopePerRequest:
 		return fmt.Sprintf("%s#%d", origin, ex.ID), true
 	case DispatchScopePerInsertionPoint, DispatchScopeStoredPerInsertionPoint:
