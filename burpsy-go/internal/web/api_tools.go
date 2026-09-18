@@ -1544,6 +1544,12 @@ type scannerFinding struct {
 type liveAuditEnableReq struct {
 	Enabled bool    `json:"enabled"`
 	Query   *string `json:"query"`
+	// RetryStalled asks for the iyqg operator action: rewind the cursor to the stalled
+	// exchange so the next tick waits on it with the stall budget carried, not restarted.
+	// Distinguished from absent by pointer so a plain {enabled} toggle from an older client
+	// never means "retry" — but a plain {enabled} POST already carries the current switch,
+	// so the two compose without a second route.
+	RetryStalled *bool `json:"retry_stalled"`
 }
 
 // handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
@@ -1560,6 +1566,19 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			// The retry action runs before the switch handling: a stalled sweep being retried is
+			// enabled by definition (it is running ticks), and ordering keeps "enable" the
+			// body's last word. A retry requested while nothing is stalled is refused with a
+			// 409 rather than a silent 200 — an operator pressing the button wants to know the
+			// stall already cleared, not a no-op they must infer from stalled_at disappearing.
+			if req.RetryStalled != nil && *req.RetryStalled {
+				if !s.liveAudit.RetryStalled() {
+					http.Error(w, "not stalled: the sweep is not waiting on any exchange right now", http.StatusConflict)
+					return
+				}
+				s.events.Record(dash.EventLiveAuditStalled, dash.SeverityInfo,
+					"the operator re-queued the stalled exchange; the sweep will wait on it again with its stall budget carried")
+			}
 			// The query is installed before the switch is flipped. If it will not parse the request is
 			// refused and nothing changes — a filter the operator believed they had set, followed by a
 			// sweep running against the whole scope because the parse failed quietly, is the one

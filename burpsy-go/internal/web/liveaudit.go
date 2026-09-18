@@ -51,6 +51,24 @@ type LiveAuditState struct {
 	// count with no idea how much it was behind.
 	reached  atomic.Uint64
 	recorded atomic.Uint64
+	// pendingRetry holds the id the sweep gave up waiting on, for one bounded re-enqueue when
+	// its response eventually lands (iyqg: a skip must not be a death sentence — a proxied
+	// request whose response finally arrives after the sweep moved on is auditable, and
+	// dropping it permanently because the response was thirty-one seconds late is a coverage
+	// loss the pane would never mention). One slot, not a set: the cursor is a position, and a
+	// stall is a single id at a time; anything more is a backlog system, which the Behind()
+	// counter already reports honestly.
+	pendingRetry atomic.Uint64
+	// retried counts exchanges audited on their second chance. Distinct from swept — a pane
+	// that folded it in would read "audited 401" for a run that gave up on 1 and took it back,
+	// and the second-chance arithmetic (gave up on N, took back M) is the honest sentence.
+	retried atomic.Uint64
+	// retryMu guards retryCursor's identity across the sweep goroutine and an operator's
+	// RetryStalled call: a rewind that races a tick must land the cursor at the id, not at
+	// wherever the tick's read moved it in between.
+	retryMu sync.Mutex
+	// retryCursor is the liveAuditRun whose cursor RetryStalled rewinds. Set at loop start.
+	retryCursor *liveAuditCursor
 	// collapsed counts checks the shared ledger refused because an identical (dispatch unit, check)
 	// had already run. Not a caveat — this work ran, see SessionOutcome.AlreadyCovered — but reported,
 	// because it is the whole reason the sweep shares a ledger across ticks and the only way to see
@@ -109,8 +127,79 @@ func (la *LiveAuditState) StalledAt() (uint64, bool) {
 	return v - 1, true
 }
 
-// recordSkipped accounts for one exchange the cursor gave up waiting on.
-func (la *LiveAuditState) recordSkipped(n uint64) { la.skipped.Add(n) }
+// recordSkipped accounts for one exchange the cursor gave up waiting on, and files the id
+// for its one bounded retry: when the response lands later, the sweep audits it once more
+// rather than leaving the skip as a terminal verdict.
+func (la *LiveAuditState) recordSkipped(n uint64, retryID core.ExchangeID) {
+	la.skipped.Add(n)
+	// +1 so 0 means "no retry pending" — id 0 is a real exchange in a position-is-the-id store.
+	la.pendingRetry.Store(uint64(retryID) + 1)
+}
+
+// Retried reports how many exchanges the sweep audited on their second chance.
+func (la *LiveAuditState) Retried() uint64 { return la.retried.Load() }
+
+// pendingRetryID returns the filed retry id, or none.
+func (la *LiveAuditState) pendingRetryID() (core.ExchangeID, bool) {
+	v := la.pendingRetry.Load()
+	if v == 0 {
+		return 0, false
+	}
+	return core.ExchangeID(v - 1), true
+}
+
+// takePendingRetry clears the slot and returns the id if the response has landed: the sweep
+// calls this once per tick, and a landed response turns the pending skip into one more
+// exchange to audit. Cleared whether or not it landed — the retry is once, and a second
+// give-up must not be fileable forever.
+func (la *LiveAuditState) takePendingRetry(store *core.TrafficStore) (core.ExchangeID, bool) {
+	id, ok := la.pendingRetryID()
+	if !ok {
+		return 0, false
+	}
+	la.pendingRetry.Store(0)
+	if store == nil {
+		return 0, false
+	}
+	ex, err := store.GetExchange(id)
+	if err != nil || ex.Response == nil {
+		return id, false
+	}
+	return id, true
+}
+
+// attachRun hands the sweep's cursor to the state so RetryStalled can rewind it.
+func (la *LiveAuditState) attachRun(cursor *liveAuditCursor) {
+	la.retryMu.Lock()
+	la.retryCursor = cursor
+	la.retryMu.Unlock()
+}
+
+// RetryStalled rewinds the cursor to the stalled exchange so the next tick waits on it again
+// with a fresh stall budget. An operator action (iyqg): the pane's only remedies were waiting
+// ten ticks or disabling the sweep, and neither tells the operator whether the exchange that
+// stalled is auditable at all. Answers whether a rewind happened — false means "not currently
+// stalled" or "no sweep running", both of which the pane renders as the button standing down.
+func (la *LiveAuditState) RetryStalled() bool {
+	id, waiting := la.StalledAt()
+	if !waiting {
+		return false
+	}
+	la.retryMu.Lock()
+	defer la.retryMu.Unlock()
+	cursor := la.retryCursor
+	if cursor == nil {
+		return false
+	}
+	// Rewind under the same lock the tick's cursor operations are serialized by: a tick that
+	// advanced past the id between the StalledAt read and here would make the rewind land the
+	// cursor ahead of the stall, silently. Note the stall budget is NOT reset: the exchange
+	// has already waited its ten ticks once, and an operator retry that silently restarted
+	// the full budget would be a second, invisible thirty-second wait for the same answer.
+	cursor.at = core.ExchangeID(id)
+	cursor.stalls = liveAuditStallTicks
+	return true
+}
 
 // Behind reports how many recorded exchanges the cursor has not reached yet — the sweep's backlog.
 //
@@ -212,6 +301,10 @@ type liveAuditView struct {
 	Query string `json:"query,omitempty"`
 	// StalledAt is the exchange id the cursor is waiting on, omitted when it is moving.
 	StalledAt *uint64 `json:"stalled_at,omitempty"`
+	// Retried is exchanges the sweep audited on their second chance (iyqg): skipped when their
+	// response was late, taken back when it landed. Reported beside Skipped because "gave up
+	// on 3" and "gave up on 3, took 1 back" are different coverage claims.
+	Retried uint64 `json:"retried"`
 }
 
 // liveAuditUnwired reports a 200 with wired:false rather than a 404, matching the other
@@ -243,6 +336,7 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	if id, waiting := s.liveAudit.StalledAt(); waiting {
 		v.StalledAt = &id
 	}
+	v.Retried = s.liveAudit.Retried()
 	return v
 }
 
@@ -468,6 +562,8 @@ func (s *Server) startLiveAuditSweep(ctx context.Context, every time.Duration) {
 
 func (s *Server) liveAuditLoop(ctx context.Context, every time.Duration) {
 	run := liveAuditRun{}
+	// The operator's RetryStalled needs the live cursor; hand it over the moment it exists.
+	s.liveAudit.attachRun(&run.cursor)
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -569,6 +665,19 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	cursor := &run.cursor
 	_, total := s.store.Count()
 	ids := make([]core.ExchangeID, 0, liveAuditBatchSize)
+	// The skip's second chance (iyqg): if a response landed after the sweep gave up on its
+	// exchange, the id goes into this tick's batch ahead of the walk. Admitted by the same
+	// in-scope gate as everything else — a retry that bypassed scope would re-open an
+	// exemption the operator set deliberately. Counted as retried, never folded into swept:
+	// the pane reports "gave up on N, took back M", and folding M into swept would read as if
+	// the skip never happened.
+	var retriedThisTick int
+	if id, landed := s.liveAudit.takePendingRetry(s.store); landed {
+		if ex, err := s.store.GetExchange(id); err == nil && s.liveAuditAdmits(ex) {
+			ids = append(ids, id)
+			retriedThisTick++
+		}
+	}
 	next := cursor.at
 	// waitingOn is the id the walk stopped at because its response had not landed. Distinct from
 	// "ran out of exchanges": only the former is something the cursor can get permanently stuck on.
@@ -593,7 +702,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// needs to see how far behind it is.
 	s.liveAudit.recordPosition(uint64(next), uint64(total))
 
-	if next == cursor.at {
+	// A retry consumed at the top of this tick counts as work regardless of walk progress: a
+	// tick whose only batch is one taken-back exchange is a tick with work, and sending it to
+	// the stall accounting (or returning with it uncounted) would lose the second chance the
+	// skip was owed (iyqg).
+	if next == cursor.at && len(ids) == 0 {
 		// No progress. If we are parked on a response that never landed, give it a bounded number of
 		// ticks and then step over it, counting it as skipped — an exchange nobody audited is not an
 		// exchange that came back clean. Without this the sweep waits here forever.
@@ -609,7 +722,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 					waitingOn, cursor.stalls))
 				cursor.at = waitingOn + 1
 				cursor.stalls = 0
-				s.liveAudit.recordSkipped(1)
+				s.liveAudit.recordSkipped(1, waitingOn)
 				s.liveAudit.noteStall(0, false)
 			} else if cursor.stalls == 1 {
 				// Once, on the tick the wait begins, rather than every tick it continues: a stall that
@@ -628,6 +741,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 		return
 	}
 
+	if retriedThisTick > 0 {
+		s.liveAudit.retried.Add(uint64(retriedThisTick))
+		s.events.Record(dash.EventLiveAuditSkipped, dash.SeverityInfo, fmt.Sprintf(
+			"exchange the sweep had given up on got its response; auditing it now (retry)"))
+	}
 	if s.scanner == nil {
 		s.logger.Warn("live audit enabled but no active scanner wired")
 		return

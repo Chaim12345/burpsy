@@ -209,7 +209,34 @@ function LiveAuditCard(): JSX.Element {
       <SectionHeading
         title="Live active audit"
         detail="Audits new in-scope traffic as it is captured. Active checks are never sent automatically while this is off."
-        actions={<Switch checked={data?.enabled ?? false} onCheckedChange={toggle} label="Live active audit" />}
+        actions={
+          <>
+            {data?.stalled_at !== undefined ? (
+              <Button
+                variant="outline"
+                size="small"
+                disabled={setLive.isPending}
+                title="Wait on the stalled exchange again, with its stall budget carried rather than restarted"
+                onClick={() => {
+                  setLive.mutate(
+                    { enabled: data?.enabled ?? false, retry_stalled: true },
+                    {
+                      onSuccess: (next) => {
+                        if (next.stalled_at === undefined) {
+                          toast.success("Re-queued — the sweep will wait on the stalled exchange again");
+                        }
+                      },
+                      onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+                    },
+                  );
+                }}
+              >
+                Retry stalled
+              </Button>
+            ) : null}
+            <Switch checked={data?.enabled ?? false} onCheckedChange={toggle} label="Live active audit" />
+          </>
+        }
       />
       {error ? <ErrorNotice error={error} /> : null}
       {data && !data.wired ? <div className="notice notice-warn">{data.hint ?? "not available"}</div> : null}
@@ -230,7 +257,16 @@ function LiveAuditCard(): JSX.Element {
                 {data.skipped.toLocaleString()} given up on
               </Badge>
             ) : null}
-            {data.stalled_at !== undefined ? <Badge tone="warn">waiting on #{data.stalled_at}</Badge> : null}
+            {data.stalled_at !== undefined ? (
+              <Badge tone="warn" title="the sweep is waiting for this exchange's response; press retry to wait on it again with its stall budget carried">
+                waiting on #{data.stalled_at}
+              </Badge>
+            ) : null}
+            {data.retried ? (
+              <Badge title="exchanges the sweep had given up on whose response landed; audited on their second chance">
+                {data.retried.toLocaleString()} taken back
+              </Badge>
+            ) : null}
             {data.collapsed ? (
               <Badge title="checks the shared ledger refused as already covered — this work ran, it is not a gap">
                 {data.collapsed.toLocaleString()} already covered

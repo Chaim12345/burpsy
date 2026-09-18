@@ -246,6 +246,10 @@ export interface LiveAuditState {
   query?: string;
   /** The exchange id the cursor is blocked on, absent while it is moving. */
   stalled_at?: number;
+  /** Exchanges audited on their second chance (iyqg): skipped when their response was
+   * late, taken back when it landed. Reported beside skipped — "gave up on 3" and
+   * "gave up on 3, took 1 back" are different coverage claims. */
+  retried: number;
 }
 
 /* --- scanner: targeted audit result -------------------------------------- */
