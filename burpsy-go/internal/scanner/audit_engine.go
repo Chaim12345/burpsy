@@ -440,6 +440,19 @@ type auditRun struct {
 	deadline time.Time
 	ledger   *AuditLedger
 
+	// lightAudit is the light-audit tier's per-run state (burpsy-react-ui-7bkj): how many
+	// CLEAN same-(kind, host) points each type has produced this run. Burp's Zq5 bank calls
+	// the outcome "Skipped due to repetitive behavior" — a cheap probe on the Nth occurrence
+	// of an insertion-point TYPE, then skip the rest of that type on the same host. This is
+	// the type-occurrence half only: Burp's content-similarity half needs response-diff
+	// infrastructure this engine does not have, so it is declined rather than half-built —
+	// a similarity rule that could not say what it compared would skip work it never
+	// justified. Type-keyed, not content-keyed, exactly as Burp's own sentence is.
+	//
+	// On the run, not the scanner: one audit's repetition prior must not bound a different
+	// audit against the same host — the same discipline the request meter and breakers hold.
+	lightAudit map[lightAuditKey]uint32
+
 	mu sync.Mutex
 	// requestsSent counts probes from items that have already finished. The current item's probes
 	// are counted separately, because its meter is still live.
@@ -463,6 +476,37 @@ func newAuditRun(cfg AuditConfig) *auditRun {
 		r.deadline = time.Now().Add(cfg.TimeBudget)
 	}
 	return r
+}
+
+// lightAuditKey identifies one insertion-point type on one host: the light-audit tier's
+// repetition unit. The host is the full authority (host:port_tls), because the same
+// parameter type on two hosts is two applications' handling and no prior of each other's.
+type lightAuditKey struct {
+	kind string
+	host string
+}
+
+// lightAuditShouldSkip reports whether this point's type on this host has produced enough
+// clean occurrences this run that the rest can be skipped as repetitive. First call for a
+// point answers false (the point runs); the caller then records the point's outcome so the
+// counter reaches the threshold over the run's own evidence.
+func (r *auditRun) lightAuditShouldSkip(kind, host string, threshold uint32) bool {
+	if threshold == 0 {
+		return false // tier off: set-and-zero or unset-below-one both mean "never skip"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lightAudit[lightAuditKey{kind: kind, host: host}] >= threshold
+}
+
+// lightAuditRecordClean notes one more clean same-(kind, host) point.
+func (r *auditRun) lightAuditRecordClean(kind, host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lightAudit == nil {
+		r.lightAudit = make(map[lightAuditKey]uint32)
+	}
+	r.lightAudit[lightAuditKey{kind: kind, host: host}]++
 }
 
 // outOfTime reports whether the wall-clock budget is spent.
@@ -533,6 +577,13 @@ type AuditOutcome struct {
 	// N rate-limit responses is a sweep an operator must be able to distinguish from one the
 	// target never throttled.
 	RateLimited int `json:"rate_limited"`
+	// PointsSkippedRepetitive counts insertion points the light-audit tier skipped because
+	// their (kind, host) had produced enough clean points this run (7bkj). Not a
+	// check-level disposition — the check ran, on fewer points — so it sits beside
+	// RateLimited rather than in the Considered() partition: a check that probed 8 of 30
+	// points because 20 clean ones came before has still been considered, run, and
+	// answered; what it has not done is TEST the 22, and that is what this number says.
+	PointsSkippedRepetitive int `json:"points_skipped_repetitive"`
 	// RequestBudgetSpent counts checks not admitted because the outbound-request budget was spent.
 	RequestBudgetSpent int `json:"request_budget_spent"`
 	// UnitAbandoned counts checks not admitted because consecutive failures abandoned their dispatch
@@ -671,6 +722,9 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.RateLimited > 0 {
 		fmt.Fprintf(&b, "; %d step(s) delayed for rate limiting", o.RateLimited)
+	}
+	if o.PointsSkippedRepetitive > 0 {
+		fmt.Fprintf(&b, "; %d point(s) skipped as repetitive (light audit)", o.PointsSkippedRepetitive)
 	}
 	if o.Unmeasurable > 0 {
 		fmt.Fprintf(&b, "; %d check(s) undecided, not clean", o.Unmeasurable)
@@ -1076,7 +1130,24 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	meter := &probeMeter{}
 	// The run's configuration travels with the dispatch context so every check enumerates under the
 	// configuration this audit was launched with, not the server-wide default. See runCfgKey.
-	ictx := withRunConfig(withMeter(ctx, meter), run.cfg)
+	// The light-audit tier's check-facing handle (7bkj): one per item, closed over the
+	// run's shared counter so the repetition prior accumulates across the run's items —
+	// Burp's tier is cross-request by construction ("the Nth occurrence of the type on
+	// this host"). The threshold resolves here so the check side has no knob of its own.
+	lightThreshold := run.cfg.LightAuditSamplePerKind.Value
+	if !run.cfg.LightAuditSamplePerKind.Set {
+		lightThreshold = DefaultLightAuditSamplePerKind
+	}
+	var lightSkipped int32
+	lightHandle := &RunLightAudit{
+		shouldSkip: func(kind, host string) bool {
+			return run.lightAuditShouldSkip(kind, host, lightThreshold)
+		},
+		recordClean: run.lightAuditRecordClean,
+		recordSkip:  func() {},
+		skipped:     &lightSkipped,
+	}
+	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), run.cfg)
 	breaker := newItemBreaker(run.cfg)
 
 	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
@@ -1289,6 +1360,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		}
 	}
 
+	// The tier's per-item skip count, folded once (7bkj): the checks ran and answered;
+	// this number says how many points they did not test, and rides the outcome beside the
+	// rate-limiting count.
+	o.PointsSkippedRepetitive = int(lightHandle.SkippedPoints())
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

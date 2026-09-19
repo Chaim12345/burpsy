@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -60,6 +61,60 @@ type CheckContext struct {
 	// InsertionKinds is *which classes of place*, this is *how many and how deep*. A check reads
 	// both through ProbeEnumerateOptions, which is the only spelling a probe site should use.
 	EnumerateOptions bcheck.EnumerateOptions
+	// LightAudit is the run's light-audit tier handle (burpsy-react-ui-7bkj): nil in a
+	// context built outside a dispatched audit, which ProbeHarness-equivalent consumers read
+	// as "the tier is off" — a unit test or a direct check call must not skip points on the
+	// strength of a run it never joined. Set by the dispatcher to the run's own state.
+	LightAudit *RunLightAudit
+}
+
+// RunLightAudit is what a check context sees of the audit run's light-audit tier: the
+// should-skip question and the clean-record, nothing else. The run keeps the map and the
+// threshold resolution so a check cannot invent its own prior.
+type RunLightAudit struct {
+	// shouldSkip answers whether this (kind, host) has enough clean occurrences to skip.
+	shouldSkip func(kind, host string) bool
+	// recordClean notes one more clean occurrence.
+	recordClean func(kind, host string)
+	// recordSkip notes one more skipped point, so the item's outcome can carry the tier's
+	// accounting without the check returning a second channel of numbers.
+	recordSkip func()
+	// skipped is the per-item count this handle has recorded. The handle is per item, so
+	// the dispatcher reads it once, after the item's checks have run.
+	skipped *int32
+}
+
+// ShouldSkipRepetitive is the check-facing question. Nil-safe by design: a nil tier
+// (outside a dispatched audit) never skips.
+func (la *RunLightAudit) ShouldSkipRepetitive(kind, host string) bool {
+	if la == nil || la.shouldSkip == nil {
+		return false
+	}
+	return la.shouldSkip(kind, host)
+}
+
+// RecordCleanPoint is the check-facing report of a clean point. Nil-safe by design.
+func (la *RunLightAudit) RecordCleanPoint(kind, host string) {
+	if la == nil || la.recordClean == nil {
+		return
+	}
+	la.recordClean(kind, host)
+}
+
+// RecordSkippedPoint notes one point the tier skipped. Nil-safe by design.
+func (la *RunLightAudit) RecordSkippedPoint() {
+	if la == nil || la.skipped == nil {
+		return
+	}
+	atomic.AddInt32(la.skipped, 1)
+}
+
+// SkippedPoints is the item's skip count, for the dispatcher to fold into the outcome.
+func (la *RunLightAudit) SkippedPoints() int32 {
+	if la == nil || la.skipped == nil {
+		return 0
+	}
+	return atomic.LoadInt32(la.skipped)
 }
 
 // ProbeEnumerateOptions is the enumerator tuning an active probe must enumerate under: the run's
@@ -129,7 +184,29 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 		cc.InsertionKinds = cfg.insertionKinds()
 		cc.EnumerateOptions = cfg.enumerateOptions()
 	}
+	// The light-audit tier rides the same context (7bkj): the dispatcher puts the run's
+	// state on, so every check the run dispatches sees one prior. Absent (a context built
+	// outside an audit) reads nil, which the RunLightAudit methods treat as off.
+	cc.LightAudit = lightAuditFrom(ctx)
 	return cc
+}
+
+// lightAuditKeyCtx is the context key for the run's light-audit tier. Unexported struct key
+// so no other package can collide with it.
+type lightAuditKeyCtx struct{}
+
+// withLightAudit attaches the run's light-audit state to a dispatch context.
+func withLightAudit(ctx context.Context, la *RunLightAudit) context.Context {
+	return context.WithValue(ctx, lightAuditKeyCtx{}, la)
+}
+
+// lightAuditFrom reads it back; nil when absent.
+func lightAuditFrom(ctx context.Context) *RunLightAudit {
+	if ctx == nil {
+		return nil
+	}
+	la, _ := ctx.Value(lightAuditKeyCtx{}).(*RunLightAudit)
+	return la
 }
 
 // CheckRunner evaluates one admitted check unit. A refusal is represented by the

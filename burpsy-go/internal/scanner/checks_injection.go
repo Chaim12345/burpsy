@@ -64,9 +64,42 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 		tested = MaxInjectionPointsPerCheck
 	}
 
+	// The light-audit tier (burpsy-react-ui-7bkj): a (kind, host) type that has produced
+	// enough CLEAN points this run is skipped for the rest of that type on that host —
+	// Burp's "Skipped due to repetitive behavior". The skip is counted, never hidden: a
+	// check that probed 8 of 30 query points because 20 clean query points on this host
+	// came before has NOT tested 22 points, and the coverage line must say so in its own
+	// field rather than reading as a smaller request.
+	//
+	// The counter consult happens BEFORE the point's probes: a point that is skipped never
+	// sends, which is the whole saving. A point that runs and finds nothing records CLEAN,
+	// which is what raises the type toward the threshold.
+	light := cc.LightAudit
+	var skippedRepetitive int
 	var probes []InjectionProbe
 	for _, point := range points {
+		if light != nil && light.ShouldSkipRepetitive(string(point.Kind), cc.Exchange.Host) {
+			skippedRepetitive++
+			light.RecordSkippedPoint()
+			continue
+		}
+		pointStart := len(probes)
 		probes = append(probes, perPoint(h, point)...)
+		// A point whose probes all came back without evidence is CLEAN for the tier's
+		// purposes — a signal (an error signature, a differential, an OOB hit) means this
+		// type on this host deserves full price again, so the prior must not rise.
+		if light != nil {
+			clean := true
+			for _, pr := range probes[pointStart:] {
+				if pr.Evidence != InjectionEvidenceNone {
+					clean = false
+					break
+				}
+			}
+			if clean {
+				light.RecordCleanPoint(string(point.Kind), cc.Exchange.Host)
+			}
+		}
 		// Stop at the first confirmation: further payloads cost requests and add nothing
 		// to a finding that is already proven.
 		if _, confirmed := BestEvidence(probes); confirmed {
@@ -74,8 +107,9 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 		}
 	}
 	best, confirmed := BestEvidence(probes)
-	cov := h.Coverage(probes, tested)
+	cov := h.Coverage(probes, tested-skippedRepetitive)
 	cov.PointsCapped = capped
+	cov.PointsSkippedRepetitive = skippedRepetitive
 	return injectionResult{best: best, confirmed: confirmed, coverage: cov}, nil
 }
 

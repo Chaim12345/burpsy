@@ -484,6 +484,13 @@ func (s ItemState) MarshalJSON() ([]byte, error) { return json.Marshal(s.Label()
 // exception: a shipped configuration names check classes and point classes a run must honour, and
 // a preset overlay (BuiltInConfig.Apply) writes them here. The overlay is an approximation and
 // auditLevelNotes says exactly where it bends.
+// DefaultLightAuditSamplePerKind is the inherited light-audit threshold (7bkj): twenty
+// CLEAN same-(kind, host) points in one run. Burp's own bank does not name a number; twenty
+// is a prior strong enough that a 21st identical-clean point is evidence the type is
+// handled uniformly on this host, and small enough that a genuinely varied surface breaks
+// it long before it skips anything meaningful.
+const DefaultLightAuditSamplePerKind uint32 = 20
+
 // DefaultAutoBackoffMs is the inherited per-step backoff after a 429/503 (fkl8): two
 // seconds — the range Burp's own auto_backoff operates in, long enough for a per-minute
 // token bucket to refill a little between steps, short enough that a rate-limited audit
@@ -577,6 +584,13 @@ type AuditConfig struct {
 	// counted onto the run's own record as a bcheck.Declined, so a run with it off cannot be
 	// mistaken for one that found nothing nested.
 	NestedInsertionPoints OptUint32
+	// LightAuditSamplePerKind is the light-audit tier's threshold (7bkj): after this many
+	// CLEAN same-(kind, host) points in one run, further points of that type on that host
+	// are skipped as repetitive — Burp's "Skipped due to repetitive behavior" (Zq5). Unset
+	// inherits DefaultLightAuditSamplePerKind; set-and-zero turns the tier off, which is a
+	// real choice (an engagement that must pay full price for every point, e.g. a
+	// compliance sweep, can say so) and must not read as unset.
+	LightAuditSamplePerKind OptUint32
 	// AutoBackoffMs is the per-step delay the dispatch loop applies after a probe came back
 	// 429 or 503 (burpsy-react-ui-fkl8) — Burp's resource-pool auto_backoff, in the
 	// smallest honest shape: a counter and a sleep, not a resource-pool rewrite. Unset

@@ -254,6 +254,12 @@ type ProbeCoverage struct {
 	// request that had 20, which is a coverage claim the check did not earn. The cap is a bound on
 	// requests, not a statement that the extra points were tested and clean.
 	PointsCapped int
+	// PointsSkippedRepetitive counts points the light-audit tier skipped because the same
+	// (kind, host) had produced enough clean points this run (burpsy-react-ui-7bkj) — Burp's
+	// "Skipped due to repetitive behavior". Reported beside PointsCapped because it is the
+	// same honesty at a different scope: skipped points are NOT tested and must never read
+	// as clean.
+	PointsSkippedRepetitive int
 }
 
 // Coverage summarises a probe set for reporting.
