@@ -45,6 +45,7 @@ func TestAReSeenIdenticalRequestIsDeduplicatedNotReAudited(t *testing.T) {
 			Request: reqID, Response: &respID,
 			Host: host, Port: port, Method: "POST", Path: "/login",
 			RequestFP: core.RequestFingerprint(raw1),
+			Source:    core.SourceProxy,
 		})
 	}
 
@@ -87,6 +88,7 @@ func TestChangedContentAtTheSamePathStillAudits(t *testing.T) {
 			Request: reqID, Response: &respID,
 			Host: host, Port: port, Method: "POST", Path: "/login",
 			RequestFP: core.RequestFingerprint(raw),
+			Source:    core.SourceProxy,
 		})
 		_ = i
 	}
@@ -113,7 +115,7 @@ func TestAZeroFingerprintAlwaysAdmits(t *testing.T) {
 	// restored, minted before the seam computed a fingerprint) must never be deduplicated on
 	// "unknown" — that would be a silent coverage hole with a counter that reads as success.
 	s := NewLiveAuditState()
-	ex := &core.Exchange{Host: "app.test", RequestFP: 0}
+	ex := &core.Exchange{Host: "app.test", RequestFP: 0, Source: core.SourceProxy}
 	if !s.admitSeen(ex) {
 		t.Fatal("a zero fingerprint was deduplicated: content the ledger cannot identify must admit")
 	}
@@ -127,7 +129,7 @@ func TestTheSeenLedgerSurvivesANewSweepRunAndARestart(t *testing.T) {
 	// sweep's run, so a NEW run (the sweep restarted) still dedups; and the Persist/Load
 	// round-trip carries it across a process restart.
 	state := NewLiveAuditState()
-	ex := &core.Exchange{Host: "app.test", RequestFP: 0xdeadbeef}
+	ex := &core.Exchange{Host: "app.test", RequestFP: 0xdeadbeef, Source: core.SourceProxy}
 	if !state.admitSeen(ex) {
 		t.Fatal("control: the first consult must admit")
 	}
@@ -147,7 +149,7 @@ func TestTheSeenLedgerSurvivesANewSweepRunAndARestart(t *testing.T) {
 	if fresh.admitSeen(ex) {
 		t.Fatal("after a restart the ledger forgot what it had seen — the persistence claim is broken")
 	}
-	if !fresh.admitSeen(&core.Exchange{Host: "app.test", RequestFP: 0xfeedface}) {
+	if !fresh.admitSeen(&core.Exchange{Host: "app.test", RequestFP: 0xfeedface, Source: core.SourceProxy}) {
 		t.Fatal("the restored ledger refuses NEW content — the load corrupted the map's semantics")
 	}
 }
@@ -156,7 +158,7 @@ func TestTheSeenLedgerIsBoundedAndItsResetIsCounted(t *testing.T) {
 	state := NewLiveAuditState()
 	state.seenCap = 4
 	for i := 0; i < 5; i++ {
-		state.admitSeen(&core.Exchange{Host: "app.test", RequestFP: uint64(0x1000 + i)})
+		state.admitSeen(&core.Exchange{Host: "app.test", RequestFP: uint64(0x1000 + i), Source: core.SourceProxy})
 	}
 	// Cap 4, admitted 5: the reset should have fired.
 	if !state.maybeResetSeen() {

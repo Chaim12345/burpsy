@@ -223,7 +223,7 @@ export function useScannerLive(pollMs = 2_000): UseQueryResult<LiveAuditState> {
  */
 export function useSetScannerLive() {
  const client = useQueryClient();
- return useMutation<LiveAuditState, Error, { enabled: boolean; query?: string; retry_stalled?: boolean }>({
+ return useMutation<LiveAuditState, Error, { enabled: boolean; query?: string; retry_stalled?: boolean; traffic_source?: string }>({
   mutationFn: (body) => api<LiveAuditState>("/api/scanner/live", json("POST", body)),
   onSuccess: () => void client.invalidateQueries({ queryKey: keys.scannerLive }),
  });

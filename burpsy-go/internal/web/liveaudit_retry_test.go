@@ -43,6 +43,7 @@ func TestASkippedExchangeWhoseResponseLaterLandsIsAuditedOnceAsRetried(t *testin
 	s.store.AddExchange(&core.Exchange{
 		Request: reqID, Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/late",
+		Source: core.SourceProxy,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,6 +122,7 @@ func TestTheRetryIsOnceASecondGiveUpStaysASkip(t *testing.T) {
 	s.store.AddExchange(&core.Exchange{
 		Request: reqID, Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/never2",
+		Source: core.SourceProxy,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,6 +165,7 @@ func TestTheOperatorRetryRewindsTheCursorAndCarriesTheStallBudget(t *testing.T) 
 	s.store.AddExchange(&core.Exchange{
 		Request: reqID, Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/still-waiting",
+		Source: core.SourceProxy,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

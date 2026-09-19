@@ -37,6 +37,16 @@ func stalledExchange(t *testing.T, s *Server, host, path string) *core.Exchange 
 	return ex
 }
 
+// proxiedCompleteExchange is completeExchange attributed the way the capture seam
+// attributes proxy traffic (zk35): the live sweep's source gate refuses unattributed
+// captures under the default, so a test that means "the operator's own capture" says so.
+func proxiedCompleteExchange(t *testing.T, s *Server, host, path string) *core.Exchange {
+	t.Helper()
+	ex := completeExchange(t, s, host, path)
+	ex.Source = core.SourceProxy
+	return ex
+}
+
 // completeExchange records a request and a response, the ordinary case.
 func completeExchange(t *testing.T, s *Server, host, path string) *core.Exchange {
 	t.Helper()
@@ -155,7 +165,7 @@ func TestLiveAuditRecordsAnEventWhenItGivesUpOnAnExchange(t *testing.T) {
 func TestLiveAuditReportsItsBacklogNotJustWhatItSwept(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
 	for i := 0; i < liveAuditBatchSize+25; i++ {
-		completeExchange(t, s, "shop.test", "/p")
+		proxiedCompleteExchange(t, s, "shop.test", "/p")
 	}
 
 	run := liveAuditRun{}
@@ -194,7 +204,7 @@ func TestDashboardLiveAuditSummaryCarriesTheBacklog(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
 	s.liveAudit.SetEnabled(true)
 	for i := 0; i < liveAuditBatchSize+7; i++ {
-		completeExchange(t, s, "shop.test", "/p")
+		proxiedCompleteExchange(t, s, "shop.test", "/p")
 	}
 	run := liveAuditRun{}
 	s.liveAuditTick(context.Background(), &run)
@@ -225,7 +235,7 @@ func TestDashboardLiveAuditSummaryCarriesTheBacklog(t *testing.T) {
 
 func TestLiveAuditQueryFiltersWhichExchangesAreAdmitted(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
-	html := completeExchange(t, s, "shop.test", "/page")
+	html := proxiedCompleteExchange(t, s, "shop.test", "/page")
 	other := stalledExchange(t, s, "shop.test", "/no-response")
 
 	// Every field the grammar has, including the three the crawler's gate must refuse.

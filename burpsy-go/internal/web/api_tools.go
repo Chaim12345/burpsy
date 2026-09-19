@@ -1544,6 +1544,11 @@ type scannerFinding struct {
 type liveAuditEnableReq struct {
 	Enabled bool    `json:"enabled"`
 	Query   *string `json:"query"`
+	// TrafficSource is the per-source gate choice (zk35): "proxy" (the default — only the
+	// operator's own proxied captures) or "everything" (any tool's in-scope captures, so a
+	// crawl with the sweep on gets its discoveries audited as they land). Pointer so an
+	// absent field never changes the choice; an unknown value is refused by the state.
+	TrafficSource *string `json:"traffic_source"`
 	// RetryStalled asks for the iyqg operator action: rewind the cursor to the stalled
 	// exchange so the next tick waits on it with the stall budget carried, not restarted.
 	// Distinguished from absent by pointer so a plain {enabled} toggle from an older client
@@ -1566,6 +1571,14 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			if req.TrafficSource != nil {
+				if err := s.liveAudit.SetTrafficSource(LiveAuditTrafficSource(*req.TrafficSource)); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo, fmt.Sprintf(
+					"the live audit now admits %q-captured traffic", *req.TrafficSource))
+			}
 			// The retry action runs before the switch handling: a stalled sweep being retried is
 			// enabled by definition (it is running ticks), and ordering keeps "enable" the
 			// body's last word. A retry requested while nothing is stalled is refused with a

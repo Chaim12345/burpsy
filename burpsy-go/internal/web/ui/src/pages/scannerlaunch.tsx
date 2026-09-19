@@ -211,6 +211,24 @@ function LiveAuditCard(): JSX.Element {
         detail="Audits new in-scope traffic as it is captured. Active checks are never sent automatically while this is off."
         actions={
           <>
+            {/* The per-source gate (zk35), Burp's scope source choice: "proxy" admits only
+                the operator's own captures (the default — a sweep that audited its own
+                probes would be a feedback loop), "everything" admits any tool's in-scope
+                captures. The choice posts with the switch's own mutation. */}
+            <Select
+              aria-label="Live audit traffic source"
+              value={data?.traffic_source ?? "proxy"}
+              onChange={(event) => {
+                setLive.mutate(
+                  { enabled: data?.enabled ?? false, traffic_source: event.target.value },
+                  { onError: (err) => toast.error(err instanceof Error ? err.message : String(err)) },
+                );
+              }}
+              style={{ width: "auto" }}
+            >
+              <option value="proxy">Proxy traffic only</option>
+              <option value="everything">Everything in scope</option>
+            </Select>
             {data?.stalled_at !== undefined ? (
               <Button
                 variant="outline"
@@ -260,6 +278,11 @@ function LiveAuditCard(): JSX.Element {
             {data.stalled_at !== undefined ? (
               <Badge tone="warn" title="the sweep is waiting for this exchange's response; press retry to wait on it again with its stall budget carried">
                 waiting on #{data.stalled_at}
+              </Badge>
+            ) : null}
+            {data.refused_source ? (
+              <Badge tone="warn" title="in-scope captures the source gate skipped — not the tool you chose">
+                {data.refused_source.toLocaleString()} not this source
               </Badge>
             ) : null}
             {data.retried ? (

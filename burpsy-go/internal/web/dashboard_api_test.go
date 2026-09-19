@@ -498,7 +498,10 @@ func TestDashboardTaskLifecycleAppearsInTheEventLog(t *testing.T) {
 func TestSweepCompletionIsNotFakedAsARequestRow(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
 	for i := 0; i < 3; i++ {
-		completeExchange(t, s, "shop.test", "/p")
+		// Attributed the way the capture seam attributes proxy traffic (zk35): the sweep's
+		// source gate refuses unattributed captures under the default, and this test means
+		// the operator's own captures.
+		proxiedCompleteExchange(t, s, "shop.test", "/p")
 	}
 	// A scanner with no sender: it audits without reaching a network, which is enough to finish a sweep.
 	s.WithScanner(scanner.NewActiveScanner(s.store, zap.NewNop()).WithScope(s.scope))

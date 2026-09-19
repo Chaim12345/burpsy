@@ -250,6 +250,10 @@ export interface LiveAuditState {
    * late, taken back when it landed. Reported beside skipped — "gave up on 3" and
    * "gave up on 3, took 1 back" are different coverage claims. */
   retried: number;
+  /** In-scope exchanges the source gate skipped (zk35): "in scope, but not the tool you chose". */
+  refused_source: number;
+  /** The source choice in force: "proxy" (default) or "everything". Always present. */
+  traffic_source: string;
 }
 
 /* --- scanner: targeted audit result -------------------------------------- */

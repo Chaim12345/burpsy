@@ -24,6 +24,25 @@ import (
 // (append-only store, so position is the id), hand a batch to the active scanner, and record
 // what happened. An exchange whose response has not landed simply waits for a later tick.
 
+// LiveAuditTrafficSource is Burp's scope source choice (Zhwl :1606-1607), for the live
+// sweep (burpsy-react-ui-zk35): which captured traffic the sweep admits.
+type LiveAuditTrafficSource string
+
+const (
+	// LiveAuditSourceProxy is Burp's "Proxy": only traffic the operator's own client sent
+	// through the proxy. The default, because a sweep that also audits the crawler's and
+	// the scanner's own requests would audit its own probe traffic — the feedback loop Burp's
+	// "Proxy" choice exists to prevent.
+	LiveAuditSourceProxy LiveAuditTrafficSource = "proxy"
+	// LiveAuditSourceEverything is Burp's "Everything": every in-scope captured exchange
+	// regardless of which tool produced it. An operator crawling a target with the live
+	// sweep on wants the crawler's discoveries audited as they land, and says so here.
+	LiveAuditSourceEverything LiveAuditTrafficSource = "everything"
+)
+
+// liveAuditSourceDefault is the inherited choice when the operator never set one.
+const liveAuditSourceDefault = LiveAuditSourceProxy
+
 // LiveAuditState is the operator-visible state of the live sweep: whether it is enabled and
 // how many exchanges/findings the sweep has accumulated so far.
 //
@@ -117,7 +136,46 @@ type LiveAuditState struct {
 	queryMu  sync.RWMutex
 	query    *query.Expr
 	querySrc string
+
+	// trafficSource is the per-source gate (zk35): which tool's traffic the sweep admits.
+	// Guarded by the same queryMu as the DSL filter: the view reports the choice text and
+	// the sweep reads it per exchange, and a pane showing one source while another filters
+	// traffic is the same lie a split query read would be.
+	trafficSource LiveAuditTrafficSource
+	// refusedSource counts in-scope exchanges the sweep skipped because of the source gate.
+	// Counted per source like the other refuses: a sweep that declined 40 crawler captures
+	// is 40 rows of "the operator chose Proxy", and the pane says so rather than reading
+	// them as swept.
+	refusedSource atomic.Uint64
 }
+
+// TrafficSource returns the sweep's source choice, the default when never set.
+func (la *LiveAuditState) TrafficSource() LiveAuditTrafficSource {
+	la.queryMu.RLock()
+	defer la.queryMu.RUnlock()
+	if la.trafficSource == "" {
+		return liveAuditSourceDefault
+	}
+	return la.trafficSource
+}
+
+// SetTrafficSource installs the operator's choice. An unknown value is refused rather than
+// read as "everything": a typo in the wire shape must not silently widen the gate.
+func (la *LiveAuditState) SetTrafficSource(src LiveAuditTrafficSource) error {
+	switch src {
+	case LiveAuditSourceProxy, LiveAuditSourceEverything:
+	default:
+		return fmt.Errorf("unknown live-audit traffic source %q: want %q or %q",
+			src, LiveAuditSourceProxy, LiveAuditSourceEverything)
+	}
+	la.queryMu.Lock()
+	la.trafficSource = src
+	la.queryMu.Unlock()
+	return nil
+}
+
+// RefusedSource reports how many in-scope exchanges the source gate skipped.
+func (la *LiveAuditState) RefusedSource() uint64 { return la.refusedSource.Load() }
 
 // NewLiveAuditState creates a disabled live audit state.
 func NewLiveAuditState() *LiveAuditState {
@@ -424,6 +482,14 @@ type liveAuditView struct {
 	Query string `json:"query,omitempty"`
 	// StalledAt is the exchange id the cursor is waiting on, omitted when it is moving.
 	StalledAt *uint64 `json:"stalled_at,omitempty"`
+	// RefusedSource is in-scope exchanges the source gate skipped (zk35): the sweep's own
+	// count of "in scope, but not the tool you chose". Reported beside Skipped because
+	// both are floors on coverage, each naming its own reason.
+	RefusedSource uint64 `json:"refused_source"`
+	// TrafficSource is the operator's choice in force (zk35), rendered as the word the
+	// pane shows: "proxy" or "everything". Always present — an unset choice is a real
+	// answer (the default), not an absence.
+	TrafficSource string `json:"traffic_source"`
 	// Retried is exchanges the sweep audited on their second chance (iyqg): skipped when their
 	// response was late, taken back when it landed. Reported beside Skipped because "gave up
 	// on 3" and "gave up on 3, took 1 back" are different coverage claims.
@@ -471,6 +537,8 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	v.Retried = s.liveAudit.Retried()
 	v.Deduplicated = s.liveAudit.Deduplicated()
 	v.SeenLedgerResets = s.liveAudit.SeenLedgerResets()
+	v.RefusedSource = s.liveAudit.RefusedSource()
+	v.TrafficSource = string(s.liveAudit.TrafficSource())
 	return v
 }
 
@@ -605,6 +673,16 @@ func (q *auditedExchangeQuery) DurationUs() (int64, bool) {
 // it.
 func (s *Server) liveAuditAdmits(ex *core.Exchange) bool {
 	if !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {
+		return false
+	}
+	// The per-source gate (zk35), after scope and before the query: the same order Burp's
+	// own scope dialog reads (source choice, then in-scope test, then the rest). "Proxy"
+	// admits only SourceProxy captures — the sweep must not audit the crawler's or its own
+	// probe traffic unless the operator chose Everything. Refused HERE is a counted
+	// refusal, not a silent gap: the cursor advances either way (the position is the
+	// store), and the pane reports the gate's own count.
+	if s.liveAudit.TrafficSource() == LiveAuditSourceProxy && ex.Source != core.SourceProxy {
+		s.liveAudit.refusedSource.Add(1)
 		return false
 	}
 	// An exchange with no response is refused before the query is consulted, and this is not merely
