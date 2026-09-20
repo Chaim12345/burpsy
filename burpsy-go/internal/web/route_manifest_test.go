@@ -857,6 +857,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "dry-run the match & replace set against a buffer without installing it",
 	},
+	"/api/wordlists": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the wordlist inventory: the lists bundled into the binary (with payload counts) and the operator's uploads, so a tool points once instead of per attack",
+	},
 	"/api/ws/connections": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "WebSocket connections the proxy has relayed",

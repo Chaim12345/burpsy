@@ -572,3 +572,21 @@ export function parseCharSubstitutions(text: string): Record<string, string> {
   }
   return subs;
 }
+
+/** One row of the wordlist inventory (kal). */
+export interface WordlistEntry {
+ /** What the operator selects. */
+ name: string;
+ /** "builtin" (bundled into the binary) or "upload" (the operator's own). */
+ kind: "builtin" | "upload";
+ /** The value a consuming tool takes: "builtin:<name>" or the stored path. */
+ ref: string;
+ /** The payload count the attack will see (blank lines already skipped). */
+ lines: number;
+}
+
+/** GET /api/wordlists. */
+export interface WordlistsResponse {
+ wordlists: WordlistEntry[];
+ note: string;
+}

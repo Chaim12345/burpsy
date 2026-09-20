@@ -895,6 +895,9 @@ func (s *Server) setupRoutes() {
 	// in burpsy's upload directory; the response names the path the ordinary file payload
 	// source resolves. A POST because it stores state.
 	s.mux.HandleFunc("/api/intruder/payload-files", s.handleIntruderPayloadUpload)
+	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
+	// uploaded — so Intruder's file source and content discovery both point once.
+	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)

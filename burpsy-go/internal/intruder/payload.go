@@ -626,6 +626,24 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		if s.File == nil || strings.TrimSpace(s.File.Filename) == "" {
 			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "file"}
 		}
+		// The bundled-corpus shorthand (kal): "builtin:<name>" resolves from the embedded
+		// wordlists rather than the server's filesystem — the same reader contract, one
+		// extra address space. Checked BEFORE the os.ReadFile so a builtin name never
+		// becomes a filesystem probe.
+		if IsBuiltinWordlist(s.File.Filename) {
+			lines, err := resolveBuiltinWordlist(s.File.Filename, checkLen)
+			if err != nil {
+				return nil, err
+			}
+			total = uint64(len(lines))
+			exact = true
+			if uint64(len(lines)) > uint64(cap) {
+				lines = lines[:cap]
+				trunc = true
+			}
+			items = lines
+			break
+		}
 		data, err := os.ReadFile(s.File.Filename)
 		if err != nil {
 			return nil, err

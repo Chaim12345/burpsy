@@ -16,6 +16,7 @@ import {
   useIntruderPoints,
   useIntruderRun,
   type IntruderRunRequest,
+  useWordlists,
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
 import { useMessage } from "../lib/data";
@@ -1027,6 +1028,9 @@ function AttackResult({
 export function IntruderPage(): JSX.Element {
   const seed = useApp((state) => state.intruderSeed);
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
+  // The wordlist inventory (kal): the bundled corpus plus this session's uploads, listed
+  // once for every file-source position the operator configures.
+  const wordlistsQuery = useWordlists();
 
   // The whole configuration lives in the store, not in this component: app.tsx mounts one page at
   // a time, so component-local state was destroyed by any nav click, taking the finished report
@@ -2145,7 +2149,32 @@ export function IntruderPage(): JSX.Element {
                       </div>
                     ) : t === "file" ? (
                       <div className="stack">
-                        <Field label="Server file path" hint="File must exist on server; blank lines skipped">
+                        {/* The wordlist manager (kal): the inventory of bundled and uploaded
+                            lists, one select instead of a path the operator must invent. The
+                            builtin entries fill the path as "builtin:<name>" (resolved from
+                            the binary), uploads as their stored path — both read by the same
+                            file source, so nothing downstream changes. */}
+                        <Field label="Available wordlists" hint="Bundled lists resolve from the binary; uploads from this session">
+                          {(id) => (
+                            <Select
+                              id={id}
+                              value=""
+                              onChange={(e) => {
+                                const ref = e.target.value;
+                                if (!ref) return;
+                                setPayloadFiles((cur) => cur.map((v, i) => (i === index ? ref : v)));
+                              }}
+                            >
+                              <option value="">Choose a wordlist…</option>
+                              {(wordlistsQuery.data?.wordlists ?? []).map((wl) => (
+                                <option key={wl.ref} value={wl.ref}>
+                                  {wl.name} ({wl.kind === "builtin" ? "bundled" : "upload"}, {wl.lines} lines)
+                                </option>
+                              ))}
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Server file path" hint="File must exist on server; blank lines skipped. Bundled lists use builtin:<name>">
                           {(id) => (
                             <Input
                               id={id}
@@ -2153,7 +2182,7 @@ export function IntruderPage(): JSX.Element {
                               onChange={(e) =>
                                 setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
                               }
-                              placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                              placeholder="builtin:sqli-basic or /tmp/payloads.txt"
                             />
                           )}
                         </Field>

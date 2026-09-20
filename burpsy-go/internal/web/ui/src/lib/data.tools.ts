@@ -8,7 +8,7 @@ import type {
   RepeaterResult,
   RepeaterSendOptions,
 } from "./types";
-import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
+import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView , WordlistsResponse } from "./types.tools";
 
 export interface IntruderRunRequest {
   msg_id: number;
@@ -276,4 +276,14 @@ export function useIntruderAttackAction() {
       }
     },
   });
+}
+
+/** GET /api/wordlists (kal): the payload-corpus inventory, bundled and uploaded. No poll —
+ * the bundled set is fixed at build time and an upload invalidates through its own mutation. */
+export function useWordlists() {
+ return useQuery({
+  queryKey: ["wordlists"],
+  queryFn: ({ signal }) => api<WordlistsResponse>("/api/wordlists", { signal }),
+  staleTime: 30_000,
+ });
 }
