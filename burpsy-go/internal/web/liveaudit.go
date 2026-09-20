@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -89,6 +90,18 @@ type LiveAuditState struct {
 	// than any single engagement's in-scope surface; past it the ledger resets and
 	// already-audited content re-audits once more, visibly.
 	seenCap int
+	// liveSeen holds every distinct in-scope URL the sweep has admitted, in first-seen order —
+	// the live passive crawl's seed set (burpsy-react-ui-tqug). Wire-observed: the URL a
+	// captured exchange actually fetched, not a link parsed out of a body. This set is what
+	// a "crawl from live capture" seeds from, so a page a user browses is not only audited
+	// but becomes a crawl origin; the count of distinct URLs is the honest metric the pane
+	// reports. The same collector is where browser-rendered links (nx7b) will land — one
+	// mechanism, two producers — so wire and DOM sources cannot disagree about what was
+	// seen.
+	liveSeenMu sync.Mutex
+	liveSeen   []string
+	liveSeenOf map[string]bool
+
 	// seenAddedSinceSave counts new ledger keys since the last persist; the sweep saves in
 	// small batches rather than per-exchange, so a trickling capture does not become a
 	// write-per-request on disk.
@@ -176,6 +189,70 @@ func (la *LiveAuditState) SetTrafficSource(src LiveAuditTrafficSource) error {
 
 // RefusedSource reports how many in-scope exchanges the source gate skipped.
 func (la *LiveAuditState) RefusedSource() uint64 { return la.refusedSource.Load() }
+
+// NoteLiveURL records one URL the sweep admitted (tqug). Returns true when the URL was new
+// to the set. The URL is normalized to scheme://host:port/path (query dropped, default
+// ports spelled off): a crawl seed is an origin to walk, not an exact request to replay, the
+// query the user typed carries parameters the crawler would re-submit verbatim, and a URL
+// spelled two ways would re-walk one origin. Normalization lives HERE rather than in the
+// producer so every producer — the sweep today, the browser enrichment (nx7b) later —
+// shares one spelling and the dedup holds across them.
+func (la *LiveAuditState) NoteLiveURL(u string) bool {
+	u = normalizeLiveSeedURL(u)
+	if u == "" {
+		return false
+	}
+	la.liveSeenMu.Lock()
+	defer la.liveSeenMu.Unlock()
+	if la.liveSeenOf == nil {
+		la.liveSeenOf = make(map[string]bool)
+	}
+	if la.liveSeenOf[u] {
+		return false
+	}
+	la.liveSeenOf[u] = true
+	la.liveSeen = append(la.liveSeen, u)
+	return true
+}
+
+// normalizeLiveSeedURL strips the query and spells off default ports. An unparseable URL is
+// returned as-is: inventing a spelling for a URL this cannot parse would seed the crawl
+// with a string nobody observed.
+func normalizeLiveSeedURL(u string) string {
+	parsed, err := url.Parse(strings.TrimSpace(u))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimSpace(u)
+	}
+	host := parsed.Hostname()
+	port := parsed.Port()
+	switch {
+	case port == "", parsed.Scheme == "https" && port == "443", parsed.Scheme == "http" && port == "80":
+		return parsed.Scheme + "://" + host + parsed.Path
+	default:
+		return parsed.Scheme + "://" + host + ":" + port + parsed.Path
+	}
+}
+
+// LiveSeenURLs returns the distinct in-scope URLs the sweep has admitted, in first-seen
+// order, and takes them: a crawl seeded from the set consumes the observation (Burp's live
+// passive crawl does not re-feed the same origin twice), and a later crawl that finds
+// nothing new says so rather than silently reusing an old harvest. The second return is
+// how many URLs were taken.
+func (la *LiveAuditState) TakeLiveSeenURLs() ([]string, int) {
+	la.liveSeenMu.Lock()
+	defer la.liveSeenMu.Unlock()
+	out := append([]string(nil), la.liveSeen...)
+	la.liveSeen = nil
+	la.liveSeenOf = make(map[string]bool)
+	return out, len(out)
+}
+
+// LiveSeenCount reports how many distinct URLs are held without taking them.
+func (la *LiveAuditState) LiveSeenCount() int {
+	la.liveSeenMu.Lock()
+	defer la.liveSeenMu.Unlock()
+	return len(la.liveSeen)
+}
 
 // NewLiveAuditState creates a disabled live audit state.
 func NewLiveAuditState() *LiveAuditState {
@@ -486,6 +563,11 @@ type liveAuditView struct {
 	// count of "in scope, but not the tool you chose". Reported beside Skipped because
 	// both are floors on coverage, each naming its own reason.
 	RefusedSource uint64 `json:"refused_source"`
+	// LiveSeenHeld is the count of distinct in-scope URLs the sweep holds for a live crawl
+	// to seed from (tqug), not yet consumed. The pane offers "Crawl from live capture" on
+	// it; after a crawl takes the set this returns to zero — a held count that never moved
+	// would be a set nothing read.
+	LiveSeenHeld int `json:"live_seen_held"`
 	// TrafficSource is the operator's choice in force (zk35), rendered as the word the
 	// pane shows: "proxy" or "everything". Always present — an unset choice is a real
 	// answer (the default), not an absence.
@@ -539,7 +621,44 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	v.SeenLedgerResets = s.liveAudit.SeenLedgerResets()
 	v.RefusedSource = s.liveAudit.RefusedSource()
 	v.TrafficSource = string(s.liveAudit.TrafficSource())
+	v.LiveSeenHeld = s.liveAudit.LiveSeenCount()
 	return v
+}
+
+// exchangeSeedURL renders one exchange as a live-crawl seed origin: scheme, authority, path.
+// Port spelled only when non-default, so the set's entries look like what an operator would
+// have typed.
+func exchangeSeedURL(ex *core.Exchange) string {
+	if ex == nil {
+		return ""
+	}
+	scheme := "http"
+	if ex.TLS {
+		scheme = "https"
+	}
+	switch {
+	case ex.TLS && ex.Port == 443:
+		return fmt.Sprintf("%s://%s%s", scheme, ex.Host, pathOf(ex.Path))
+	case !ex.TLS && (ex.Port == 80 || ex.Port == 0):
+		return fmt.Sprintf("%s://%s%s", scheme, ex.Host, pathOf(ex.Path))
+	default:
+		return fmt.Sprintf("%s://%s:%d%s", scheme, ex.Host, ex.Port, pathOf(ex.Path))
+	}
+}
+
+// pathOf strips the query from a request target; a target with no path reads "/".
+func pathOf(target string) string {
+	p := target
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" || p[0] != '/' {
+		if len(p) > 0 && p[0] != '/' {
+			return "/" + p
+		}
+		return "/"
+	}
+	return p
 }
 
 // auditedExchangeQuery adapts a stored, completed exchange to query.Queryable for the live-audit gate
@@ -922,6 +1041,13 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			break
 		}
 		if s.liveAuditAdmits(ex) {
+			// The live passive crawl's seed set (tqug): the URL this admitted exchange
+			// actually fetched joins the live-seen set — wire-observed, not body-parsed. The
+			// scope gate has already passed (liveAuditAdmits), so every URL here is one the
+			// engagement authorised; the crawler's own New re-checks scope when a crawl
+			// consumes the set, so an operator tightening scope between capture and crawl
+			// cannot be handed a stale origin.
+			s.liveAudit.NoteLiveURL(exchangeSeedURL(ex))
 			// The cross-run dedup (apfh): content this sweep lineage has already audited is
 			// counted as REQUEST_TO_AUDIT_DEDUPLICATED — a disposition row, not work. The
 			// fingerprint is 6n4d's, so changed content admits (that ledger's job) and only

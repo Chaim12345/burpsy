@@ -163,6 +163,13 @@ const (
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
+	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
+	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
+	// request may name its own origins as well. Taking the set consumes it — a second crawl
+	// finds nothing held and says so, rather than silently re-walking the same harvest.
+	// With nothing held and no Seeds, the request is refused: a crawl with no origins is
+	// not a smaller crawl, it is none.
+	IncludeLiveSeen bool `json:"include_live_seen,omitempty"`
 	// Kind is which scan kind to run: crawlKindCrawl (the default, empty) or crawlKindAudit. An
 	// unrecognised value is refused rather than treated as the default — see startCrawl. A typo'd
 	// kind that silently ran a plain crawl would leave an operator waiting for findings that the
@@ -231,7 +238,7 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	taskID, seeds, err := s.startCrawl(req)
+	taskID, seeds, liveTaken, err := s.startCrawl(req)
 	if err != nil {
 		http.Error(w, err.Error(), crawlStartStatus(err))
 		return
@@ -245,7 +252,10 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"task_id": taskID,
 		"seeds":   seeds,
-		"state":   state,
+		// The live-seen count the seeds include (tqug): an operator who asked for live capture
+		// needs to know how much of the seed list came from the wire rather than their typing.
+		"live_seen_used": liveTaken,
+		"state":          state,
 		// Echoed for the same reason /api/scanner/audit echoes config_name: a reply that looked the
 		// same whether or not the audit half was accepted could not be told apart from one that
 		// accepted the kind and ran a plain crawl.
@@ -309,24 +319,35 @@ func scanKind(requested string) (string, error) {
 		"unknown scan kind %q; this build runs %q and %q", requested, crawlKindCrawl, crawlKindAudit)
 }
 
-func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
+func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, err error) {
 	kind, kerr := scanKind(req.Kind)
 	if kerr != nil {
-		return 0, nil, kerr
+		return 0, nil, 0, kerr
 	}
-	seeds := make([]string, 0, len(req.Seeds))
+	seeds = make([]string, 0, len(req.Seeds))
 	for _, seed := range req.Seeds {
 		if t := strings.TrimSpace(seed); t != "" {
 			seeds = append(seeds, t)
 		}
 	}
+	// The live passive crawl's seed set (tqug): the sweep's captured URLs, taken (consumed) so
+	// a second crawl cannot silently re-walk the same harvest. Union with the named seeds; the
+	// honest count rides the reply.
+	if req.IncludeLiveSeen && s.liveAudit != nil {
+		live, n := s.liveAudit.TakeLiveSeenURLs()
+		liveTaken = n
+		seeds = append(seeds, live...)
+	}
 	if len(seeds) == 0 {
-		return 0, nil, errors.New("At least one seed URL is required")
+		if req.IncludeLiveSeen {
+			return 0, nil, 0, errors.New("no seed URLs and no live-captured URLs held: the live audit has not admitted any in-scope traffic to seed from yet")
+		}
+		return 0, nil, 0, errors.New("At least one seed URL is required")
 	}
 
 	poolLimit, err := s.resolveRunRate(req.Pool, req.RequestsPerSecond)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, 0, err
 	}
 
 	limits := crawler.DefaultLimits()
@@ -364,7 +385,7 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 		Logger:            s.logger,
 	})
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, 0, err
 	}
 	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
 	// nil-receiver safe, so a process with no task registry attaches a gate that never holds.
@@ -405,7 +426,7 @@ func (s *Server) startCrawl(req crawlStartReq) (uint64, []string, error) {
 		s.live.notify(changeDashboard)
 	}()
 
-	return task.ID(), seeds, nil
+	return task.ID(), seeds, liveTaken, nil
 }
 
 // auditCrawledExchanges runs the audit half of a crawl-and-audit scan over the exchanges the crawl

@@ -235,7 +235,7 @@ func (s *Server) registerScheduleKinds() {
 			// rate together, and a saved form almost always carries one.
 			req.RequestsPerSecond = 0
 		}
-		taskID, seeds, err := s.startCrawl(req)
+		taskID, seeds, _, err := s.startCrawl(req)
 		if err != nil {
 			return "", err
 		}
