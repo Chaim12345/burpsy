@@ -16,26 +16,26 @@ import type { Advisory, Occurrence } from "./types";
  * operator triages the queue by.
  */
 export interface HeldMessageDetail {
-  id: number;
-  direction: string;
-  host: string;
-  port: number;
-  tls: boolean;
-  method: string;
-  path: string;
-  status: number | null;
-  held_ms: number;
-  len: number;
-  raw: string;
-  /** The operator's annotation on the hold (burpsy-react-ui-5q8u); empty = none. */
-  comment?: string;
-  highlight?: string;
-  /**
-   * WebSocket frame type — "text", "binary", or a control opcode. Absent for HTTP, which has no
-   * equivalent, so this is optional rather than an empty string: "not applicable" and "unknown" are
-   * different, and only one of them should render a badge.
-   */
-  opcode?: string;
+ id: number;
+ direction: string;
+ host: string;
+ port: number;
+ tls: boolean;
+ method: string;
+ path: string;
+ status: number | null;
+ held_ms: number;
+ len: number;
+ raw: string;
+ /** The operator's annotation on the hold (burpsy-react-ui-5q8u); empty = none. */
+ comment?: string;
+ highlight?: string;
+ /**
+  * WebSocket frame type — "text", "binary", or a control opcode. Absent for HTTP, which has no
+  * equivalent, so this is optional rather than an empty string: "not applicable" and "unknown" are
+  * different, and only one of them should render a badge.
+  */
+ opcode?: string;
 }
 
 /**
@@ -44,45 +44,45 @@ export interface HeldMessageDetail {
  * indistinguishable from a proxy that has stopped working.
  */
 export interface InterceptStateDetail {
-  enabled: boolean;
-  wired: boolean;
-  hint?: string;
-  pending: number;
-  held: HeldMessageDetail[];
-  holds_every_request?: boolean;
-  holds_every_response?: boolean;
-  /** Burp's "Only intercept in-scope messages". */
-  in_scope_only: boolean;
-  /**
-   * Whether the engine has a scope to consult. False makes `in_scope_only` inert, and the page says
-   * so rather than offering a toggle that changes nothing — the same reason `wired` sits beside
-   * `enabled`.
-   */
-  scope_attached: boolean;
+ enabled: boolean;
+ wired: boolean;
+ hint?: string;
+ pending: number;
+ held: HeldMessageDetail[];
+ holds_every_request?: boolean;
+ holds_every_response?: boolean;
+ /** Burp's "Only intercept in-scope messages". */
+ in_scope_only: boolean;
+ /**
+  * Whether the engine has a scope to consult. False makes `in_scope_only` inert, and the page says
+  * so rather than offering a toggle that changes nothing — the same reason `wired` sits beside
+  * `enabled`.
+  */
+ scope_attached: boolean;
 }
 
 /** One condition in an interception rule list. Mirrors intercept.ts's RuleSpec / `interceptRuleSpec`. */
 export interface InterceptRuleSpec {
-  field: "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
-  category: "regex" | "literal";
-  string_match: string;
-  enabled: boolean;
-  comment: string;
-  /**
-   * What a match does: Burp's per-rule Do/Don't intercept (burpsy-react-ui-35i4).
-   * Absent means hold — the wire omits it and the server defaults it — so every list
-   * written before actions existed reads back unchanged.
-   */
-  action?: "hold" | "pass";
+ field: "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
+ category: "regex" | "literal";
+ string_match: string;
+ enabled: boolean;
+ comment: string;
+ /**
+  * What a match does: Burp's per-rule Do/Don't intercept (burpsy-react-ui-35i4).
+  * Absent means hold — the wire omits it and the server defaults it — so every list
+  * written before actions existed reads back unchanged.
+  */
+ action?: "hold" | "pass";
 }
 
 /** GET/PUT body for /api/intercept/rules/{requests|responses} — Go's `interceptListState`. */
 export interface InterceptListState {
-  wired: boolean;
-  active: boolean;
-  unconditional: boolean;
-  count: number;
-  rules: InterceptRuleSpec[];
+ wired: boolean;
+ active: boolean;
+ unconditional: boolean;
+ count: number;
+ rules: InterceptRuleSpec[];
 }
 
 /* --- scanner findings ----------------------------------------------------- */
@@ -93,52 +93,52 @@ export interface InterceptListState {
  * finding recorded with neither reads as the literal string "null" unless they are nullable here.
  */
 export interface FindingDetail {
-  id: number;
-  check_name?: string;
-  issue_name?: string | null;
-  severity: string;
-  confidence: string;
-  host: string;
-  detail: string | null;
-  remediation: string | null;
-  /** The parameter this finding was observed at; absent for resource-level findings. */
-  param?: string;
-  /**
-   * Every parameter this finding covers. Findings of one type against one target are merged into a
-   * single row, so a reflected XSS reachable through five parameters is one finding with five
-   * entries here rather than five rows. `param` remains the first one observed; without this field
-   * the merge would hide the other four, which would make it a loss of information rather than a
-   * tidier list. Absent for a resource-level finding and for legacy rows.
-   */
-  params?: string[];
-  times_seen: number;
-  occurrences: Occurrence[];
-  /** The catalogue entry this check resolved to, when it resolved to one. */
-  advisory?: Advisory | null;
-  /** Present instead when it deliberately resolved to none, explaining why. */
-  advisory_note?: string;
-  /**
-   * Operator triage (burpsy-react-ui-pwd). `severity`/`confidence` above are the *effective*
-   * values — the override when one stands, the engine's report otherwise — so every view that
-   * sorts or counts by severity keeps working unchanged. The override itself and the engine value
-   * it replaced are present only when an override stands, which is what lets the UI tell "the
-   * engine said High" from "an operator said High".
-   */
-  severity_override?: string;
-  original_severity?: string;
-  confidence_override?: string;
-  original_confidence?: string;
-  /** Always present: the wire has no omitempty on either, so a legacy row reads as unmarked. */
-  false_positive: boolean;
-  comment: string;
+ id: number;
+ check_name?: string;
+ issue_name?: string | null;
+ severity: string;
+ confidence: string;
+ host: string;
+ detail: string | null;
+ remediation: string | null;
+ /** The parameter this finding was observed at; absent for resource-level findings. */
+ param?: string;
+ /**
+  * Every parameter this finding covers. Findings of one type against one target are merged into a
+  * single row, so a reflected XSS reachable through five parameters is one finding with five
+  * entries here rather than five rows. `param` remains the first one observed; without this field
+  * the merge would hide the other four, which would make it a loss of information rather than a
+  * tidier list. Absent for a resource-level finding and for legacy rows.
+  */
+ params?: string[];
+ times_seen: number;
+ occurrences: Occurrence[];
+ /** The catalogue entry this check resolved to, when it resolved to one. */
+ advisory?: Advisory | null;
+ /** Present instead when it deliberately resolved to none, explaining why. */
+ advisory_note?: string;
+ /**
+  * Operator triage (burpsy-react-ui-pwd). `severity`/`confidence` above are the *effective*
+  * values — the override when one stands, the engine's report otherwise — so every view that
+  * sorts or counts by severity keeps working unchanged. The override itself and the engine value
+  * it replaced are present only when an override stands, which is what lets the UI tell "the
+  * engine said High" from "an operator said High".
+  */
+ severity_override?: string;
+ original_severity?: string;
+ confidence_override?: string;
+ original_confidence?: string;
+ /** Always present: the wire has no omitempty on either, so a legacy row reads as unmarked. */
+ false_positive: boolean;
+ comment: string;
 }
 
 export interface IssuesDetail {
-  enabled: boolean;
-  hint?: string;
-  loaded?: number;
-  findings: FindingDetail[];
-  counts?: Record<string, number>;
+ enabled: boolean;
+ hint?: string;
+ loaded?: number;
+ findings: FindingDetail[];
+ counts?: Record<string, number>;
 }
 
 /* --- scanner: audit configurations --------------------------------------- */
@@ -148,36 +148,36 @@ export interface IssuesDetail {
  * Go's OptUint32 keeps "uncapped" and "capped at zero" apart, and those are opposite instructions.
  */
 export interface AuditConfigView {
-  time_budget_ms: number;
-  max_requests: number | null;
-  consecutive_check_failures_to_abandon_unit: number;
-  consecutive_unit_failures_to_fail_item: number;
-  pause_session_after_failed_items: number;
-  pause_session_at_failed_item_percentage: number;
+ time_budget_ms: number;
+ max_requests: number | null;
+ consecutive_check_failures_to_abandon_unit: number;
+ consecutive_unit_failures_to_fail_item: number;
+ pause_session_after_failed_items: number;
+ pause_session_at_failed_item_percentage: number;
 }
 
 /** One key a shipped Burp configuration can carry. `set` false is not `value` 0: unset inherits the
  * base configuration, zero disables a breaker, and both spellings appear in Burp's own files. */
 export interface BuiltInConfigKey {
-  name: string;
-  burp_key: string;
-  what: string;
-  value?: number;
-  set: boolean;
+ name: string;
+ burp_key: string;
+ what: string;
+ value?: number;
+ set: boolean;
 }
 
 export interface BuiltInConfigView {
-  name: string;
-  /** Empty for a saved configuration: it is a resolved config, not an overlay of preset keys. */
-  keys: BuiltInConfigKey[];
-  resolved: AuditConfigView;
-  /** True for the configurations burpsy ships, which are read-only. The operator's own saved ones
-   *  are false, and only those can be renamed, overwritten or deleted. */
-  shipped: boolean;
-  /** A saved configuration whose stored document cannot be parsed. Listed so it does not vanish,
-   *  but never offered for a run — an audit under "whatever the default is", named as the
-   *  operator's configuration, is the outcome the library exists to prevent. */
-  damaged?: boolean;
+ name: string;
+ /** Empty for a saved configuration: it is a resolved config, not an overlay of preset keys. */
+ keys: BuiltInConfigKey[];
+ resolved: AuditConfigView;
+ /** True for the configurations burpsy ships, which are read-only. The operator's own saved ones
+  *  are false, and only those can be renamed, overwritten or deleted. */
+ shipped: boolean;
+ /** A saved configuration whose stored document cannot be parsed. Listed so it does not vanish,
+  *  but never offered for a run — an audit under "whatever the default is", named as the
+  *  operator's configuration, is the outcome the library exists to prevent. */
+ damaged?: boolean;
 }
 
 /** GET /api/scanner/configs — the scan configurations an audit can run under: the shipped presets
@@ -185,41 +185,41 @@ export interface BuiltInConfigView {
  * POST/PUT/DELETE on the same route save, clone, rename and delete a saved one; a shipped name is
  * read-only and every write refuses it. */
 export interface ScannerConfigsResponse {
-  configs: BuiltInConfigView[];
-  default: AuditConfigView;
-  shipped_by_burp: number;
-  implemented_here: number;
-  omitted_reason: string;
-  how_to_run_under: string;
-  applies_to_server: string;
+ configs: BuiltInConfigView[];
+ default: AuditConfigView;
+ shipped_by_burp: number;
+ implemented_here: number;
+ omitted_reason: string;
+ how_to_run_under: string;
+ applies_to_server: string;
 }
 
 /* --- scanner: passive coverage ------------------------------------------- */
 
 export interface CoverageCheckView {
-  name: string;
-  ran: number;
-  findings: number;
-  errored: number;
-  last_error?: string;
-  state: string;
+ name: string;
+ ran: number;
+ findings: number;
+ errored: number;
+ last_error?: string;
+ state: string;
 }
 
 export interface CoveragePartitionView {
-  state: string;
-  count: number;
+ state: string;
+ count: number;
 }
 
 /** GET /api/scanner/coverage. Everything past `enabled`/`hint` is absent when no BCheck corpus is
  * loaded, which is the gated case the page must render honestly rather than as zeroes. */
 export interface ScannerCoverage {
-  enabled: boolean;
-  hint?: string;
-  loaded?: number;
-  summary?: string;
-  checks?: CoverageCheckView[];
-  skips?: number;
-  partition?: CoveragePartitionView[];
+ enabled: boolean;
+ hint?: string;
+ loaded?: number;
+ summary?: string;
+ checks?: CoverageCheckView[];
+ skips?: number;
+ partition?: CoveragePartitionView[];
 }
 
 /* --- scanner: live active audit ------------------------------------------ */
@@ -233,27 +233,37 @@ export interface ScannerCoverage {
  * a server that never reported a backlog at all.
  */
 export interface LiveAuditState {
-  wired: boolean;
-  enabled: boolean;
-  hint?: string;
-  swept?: number;
-  findings?: number;
-  /** Exchanges the sweep gave up waiting on. Carried beside `swept`, never added to it. */
-  skipped?: number;
-  behind: number;
-  collapsed: number;
-  ledger_resets: number;
-  query?: string;
-  /** The exchange id the cursor is blocked on, absent while it is moving. */
-  stalled_at?: number;
-  /** Exchanges audited on their second chance (iyqg): skipped when their response was
-   * late, taken back when it landed. Reported beside skipped — "gave up on 3" and
-   * "gave up on 3, took 1 back" are different coverage claims. */
-  retried: number;
-  /** In-scope exchanges the source gate skipped (zk35): "in scope, but not the tool you chose". */
-  refused_source: number;
-  /** The source choice in force: "proxy" (default) or "everything". Always present. */
-  traffic_source: string;
+ wired: boolean;
+ enabled: boolean;
+ hint?: string;
+ swept?: number;
+ findings?: number;
+ /** Exchanges the sweep gave up waiting on. Carried beside `swept`, never added to it. */
+ skipped?: number;
+ behind: number;
+ /** How long that backlog has existed, in milliseconds, 0 while the sweep is caught up. Behind
+  * alone cannot tell a sweep twenty seconds behind a burst from one that has been behind since the
+  * crawl started — the age is the difference. Not optional, matching the Go struct's lack of
+  * `omitempty`: zero is "caught up", and an absent field would make that indistinguishable from a
+  * server too old to report an age. */
+ behind_for_ms: number;
+ /** The admission bound the last tick ran with: the baseline while the sweep keeps up, larger while
+  * it is catching up, 0 before any tick has run. Carried so a catch-up burst reads as a decision
+  * rather than as an unexplained jump in `swept`. */
+ batch_limit: number;
+ collapsed: number;
+ ledger_resets: number;
+ query?: string;
+ /** The exchange id the cursor is blocked on, absent while it is moving. */
+ stalled_at?: number;
+ /** Exchanges audited on their second chance (iyqg): skipped when their response was
+  * late, taken back when it landed. Reported beside skipped — "gave up on 3" and
+  * "gave up on 3, took 1 back" are different coverage claims. */
+ retried: number;
+ /** In-scope exchanges the source gate skipped (zk35): "in scope, but not the tool you chose". */
+ refused_source: number;
+ /** The source choice in force: "proxy" (default) or "everything". Always present. */
+ traffic_source: string;
 }
 
 /* --- scanner: targeted audit result -------------------------------------- */
@@ -266,15 +276,49 @@ export interface LiveAuditState {
  * JsonView rather than a bespoke layout that would silently drop keys.
  */
 export interface AuditResult {
-  started: boolean;
-  exchange_id: number;
-  active_checks: number;
-  unimplemented: number;
-  config_name: string;
-  config: AuditConfigView;
-  summary?: string;
-  outcome?: unknown;
-  dispositions?: unknown;
-  breakdown?: unknown;
-  error?: string;
+ started: boolean;
+ exchange_id: number;
+ active_checks: number;
+ unimplemented: number;
+ config_name: string;
+ config: AuditConfigView;
+ summary?: string;
+ outcome?: unknown;
+ dispositions?: unknown;
+ breakdown?: unknown;
+ error?: string;
+}
+
+/** One investigated finding in the LLM triage run's answer (ei0v). */
+export interface LLMTriageRunRow {
+ finding_id: number;
+ name: string;
+ verdict: string;
+ model: string;
+}
+
+/** POST /api/issues/triage's answer: the honest counts the pass owes. */
+export interface LLMTriageRun {
+ investigated: LLMTriageRunRow[];
+ investigated_count: number;
+ outside_gate: number;
+ errors: { finding_id: number; name: string; error: string }[];
+}
+
+/** The LLM second look's note on one finding (ei0v): advice, never promotion. */
+export interface TriageNote {
+ verdict: string;
+ reasoning: string;
+ model: string;
+ investigated_at: string;
+}
+
+/** GET/PUT /api/settings/triage (ei0v). api_key is write-only: GET omits it and answers
+ * configured instead. */
+export interface TriageSettingsView {
+ enabled: boolean;
+ base_url: string;
+ model: string;
+ api_key?: string;
+ configured: boolean;
 }

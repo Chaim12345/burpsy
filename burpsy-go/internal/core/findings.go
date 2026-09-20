@@ -200,6 +200,31 @@ type DedupPolicy struct {
 	Exempt map[string]bool
 }
 
+// TriageNote is the LLM post-scan second look's verdict on one finding (ei0v). The engine
+// copies the scanner package's verdict vocabulary; the reasoning is carried verbatim.
+type TriageNote struct {
+	Verdict        string    `json:"verdict"`
+	Reasoning      string    `json:"reasoning"`
+	Model          string    `json:"model"`
+	InvestigatedAt time.Time `json:"investigated_at"`
+}
+
+// SetTriage attaches (or, with nil, clears) the second-look note on one finding. The note
+// is written under the store lock so a re-audit merging into the same finding cannot lose
+// it, and it never touches the severity or confidence fields — advice rides beside grades.
+func (fs *FindingStore) SetTriage(id uint64, note *TriageNote) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, f := range fs.findings {
+		if f.ID == id {
+			f.Triage = note
+			fs.signalChangeLocked()
+			return true
+		}
+	}
+	return false
+}
+
 // Inserted represents inserted payload information.
 type Inserted struct {
 	Original string
@@ -253,6 +278,10 @@ type Finding struct {
 	// NewFinding.Confirm — empty for every finding the tier never saw, which is every finding
 	// except the DOM pass's own.
 	Confirm string `json:"confirm,omitempty"`
+	// Triage is the LLM second look's note (ei0v): verdict + reasoning + model. ADVICE never
+	// promotion — it is carried beside Confidence/ConfidenceOverride and moves neither, the
+	// same rule SeverityOverride already obeys. Nil = not investigated.
+	Triage *TriageNote `json:"triage,omitempty"`
 	// Param names the parameter the finding was observed at, empty when it is about a resource.
 	// See NewFinding.Param. On a merged finding this is the *first* param observed; Params below is
 	// the full set and is what a reader should use.

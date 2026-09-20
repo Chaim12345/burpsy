@@ -471,6 +471,10 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "record an issue by hand against one exchange (Burp's 'Record an issue')",
 	},
+	"/api/issues/triage": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "the LLM post-scan second look over gated findings (Standard profile: High any-confidence, Medium tentative-or-better) — advice attached to findings, never a promotion",
+	},
 	"/api/message/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
@@ -744,6 +748,11 @@ var manifest = map[string]route{
 		// egress.
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "turn the session-handling tracer on or off (off by default — it imposes a per-request overhead, which is why it is opt-in)",
+	},
+	"/api/settings/triage": {
+		// riskCredential: the PUT stores an API key. GET is riskRead-shaped but shares the door.
+		methods: []string{"GET", "PUT"}, risk: riskCredential,
+		summary: "the LLM triage endpoint configuration (base URL, model, key, enabled) — the key is write-only on the wire",
 	},
 	"/api/sitemap": {
 		// DELETE is riskDestructive, not riskLocal, and the line between them is evidence: the
@@ -1207,6 +1216,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/network/auth", "/api/network/client-certs",
 		"/api/proxy/ca/import",
 		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
+		"/api/settings/triage",
 	}
 	equal := func(name string, got, want []string) {
 		if strings.Join(got, " ") != strings.Join(want, " ") {

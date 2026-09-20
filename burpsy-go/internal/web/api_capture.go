@@ -855,6 +855,12 @@ type issueFindingView struct {
 	// tentative DOM candidates a browser confirmed — a verdict visible only in the log is a
 	// verdict nobody receives.
 	Confirm string `json:"confirm,omitempty"`
+	// Triage is the LLM second look's note (ei0v), carried verbatim: verdict + reasoning +
+	// the model that produced it. ADVICE never promotion — a triage line never moves
+	// Severity or Confidence, and the view holds them beside each other so an operator can
+	// weigh both. Omitted = not investigated (the feature off, the finding outside the
+	// gate, or the pass not yet run — the reasons the route states).
+	Triage *core.TriageNote `json:"triage,omitempty"`
 }
 
 // findingToIssueView converts a stored finding into the UI shape. Host is derived from the first
@@ -881,6 +887,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		TimesSeen:   len(f.Occurrences),
 		TaskID:      f.TaskID,
 		Confirm:     f.Confirm,
+		Triage:      f.Triage,
 	}
 	if f.SeverityOverride != nil {
 		over := f.SeverityOverride.String()
@@ -1055,6 +1062,14 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 // feature: anything that is not exactly an id is a 404, not a fall-through.
 func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/issues/")
+	// The LLM second look's one-finding arm (ei0v): POST /api/issues/{id}/triage runs the
+	// operator's hand on one finding, outside the sweep gate. Routed here rather than as its
+	// own top-level pattern because the id owns the subtree and the triage pass is one of
+	// its verbs.
+	if strings.HasSuffix(id, "/triage") && r.Method == http.MethodPost {
+		s.handleIssueTriageOne(w, r, strings.TrimSuffix(id, "/triage"))
+		return
+	}
 	if id == "" || strings.Contains(id, "/") {
 		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
 		return

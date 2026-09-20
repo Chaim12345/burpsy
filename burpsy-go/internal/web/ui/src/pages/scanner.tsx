@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal , Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
-import { useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
+import { useIssueLLMTriage, useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
 import { triageMenuGroups } from "../lib/issue-triage";
 import { useApp } from "../lib/store";
 import type { FindingDetail } from "../lib/types.attack";
@@ -183,6 +183,9 @@ export function ScannerPage(): JSX.Element {
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
  const actions = usePluginExchangeActions();
  const triage = useIssueTriage();
+ // The LLM second look (ei0v): advice, never promotion. The sweep button lives in the
+ // pane toolbar; the per-finding hand lives in the leaf menu.
+ const llmTriage = useIssueLLMTriage();
 
  const [severities, setSeverities] = useState<Set<string>>(new Set());
  const [confidences, setConfidences] = useState<Set<string>>(new Set());
@@ -371,6 +374,23 @@ export function ScannerPage(): JSX.Element {
     editComment: () => editComment(finding),
     remove: () => removeFinding(finding),
    }),
+   {
+    id: "llm-triage",
+    actions: [
+     {
+      id: "llm-second-look",
+      label: "LLM second look",
+      icon: Sparkles,
+      disabled: llmTriage.one.isPending,
+      onSelect: () => {
+       llmTriage.one.mutate(finding.id, {
+        onSuccess: () => toast.success("Second look attached — the note rides beside the severity, it never moves it"),
+        onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The second look failed"),
+       });
+      },
+     },
+    ],
+   },
    {
     id: "goto",
     actions: [

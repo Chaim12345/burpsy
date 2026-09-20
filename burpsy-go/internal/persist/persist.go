@@ -2193,6 +2193,51 @@ func (s *Store) LoadLiveSeenLedger() ([]byte, error) {
 	return []byte(v), nil
 }
 
+// LLM Triage Settings (burpsy-react-ui-ei0v): the operator-supplied OpenAI-compatible
+// endpoint for the post-scan triage pass. One settings value holding JSON rather than a
+// table: three fields with no row identity of their own, the same ceremony-free shape the
+// TLS passthrough list uses. The API key rides in the same blob: the settings table is
+// burpsy's own local store, and the alternative (a separate secrets file) would be a second
+// thing to back up and to leak. SaveTriageSettings never echoes the key back — Load returns
+// it for the process that will dial, and the API layer reports only configured/not.
+type TriageSettings struct {
+	// Enabled is the operator's switch. The feature is OFF until an endpoint is configured
+	// AND the switch is on — two gates, because a configured-but-unwanted endpoint is a
+	// surprise bill and an on-but-unconfigured switch is a silent no-op.
+	Enabled bool `json:"enabled"`
+	// BaseURL is the OpenAI-compatible root, e.g. https://api.openai.com/v1 — the path
+	// /chat/completions is appended. No default: free OMP models are unreliable (the bead's
+	// own finding), and a compiled-in default would send finding text to whoever owns it.
+	BaseURL string `json:"base_url"`
+	// Model names what to call.
+	Model string `json:"model"`
+	// APIKey authenticates. Stored locally, never served back by the API.
+	APIKey string `json:"api_key"`
+}
+
+// SaveTriageSettings persists the triage endpoint configuration.
+func (s *Store) SaveTriageSettings(t TriageSettings) error {
+	raw, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("llm_triage", string(raw))
+}
+
+// LoadTriageSettings restores it; empty (never saved) is a fresh, disabled config, not an
+// error.
+func (s *Store) LoadTriageSettings() (TriageSettings, error) {
+	v, err := s.getSetting("llm_triage")
+	if err != nil || v == "" {
+		return TriageSettings{}, err
+	}
+	var t TriageSettings
+	if err := json.Unmarshal([]byte(v), &t); err != nil {
+		return TriageSettings{}, err
+	}
+	return t, nil
+}
+
 // SaveTlsPassthrough replaces the persisted TLS passthrough host-pattern list.
 //
 // One settings value holding a JSON array rather than its own table: this is a

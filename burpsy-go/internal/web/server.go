@@ -828,6 +828,11 @@ func (s *Server) setupRoutes() {
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.
 	s.mux.HandleFunc("/api/issues/", s.handleIssueByID)
+	// The LLM second look (ei0v): the pass over gated findings, and its settings door. The
+	// /api/issues/triage exact pattern outranks the {id} subtree above it, so "triage" is
+	// never mistaken for an issue id.
+	s.mux.HandleFunc("/api/issues/triage", s.handleIssueTriageRun)
+	s.mux.HandleFunc("/api/settings/triage", s.handleTriageSettings)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
 	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one

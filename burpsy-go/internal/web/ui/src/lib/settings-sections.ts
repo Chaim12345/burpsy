@@ -87,6 +87,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "audit crawl configuration library preset",
   },
   {
+    id: "llm-triage",
+    title: "LLM triage",
+    summary: "The post-scan second look: an operator-supplied OpenAI-compatible endpoint that advises on gated findings. Advice only — a triage note never moves a finding's severity or confidence.",
+    keywords: "llm ai triage second look endpoint model openai",
+  },
+  {
     id: "browser-engine",
     title: "Browser engine",
     summary: "Which headless browser runs the DOM-based checks. Changing it takes a restart.",

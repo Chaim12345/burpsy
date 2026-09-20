@@ -15,9 +15,11 @@ import type {
  InterceptListState,
  InterceptStateDetail,
  IssuesDetail,
+ LLMTriageRun,
  LiveAuditState,
  ScannerConfigsResponse,
  ScannerCoverage,
+ TriageSettingsView,
 } from "./types.attack";
 
 /**
@@ -159,6 +161,47 @@ export function useIssueTriage() {
   remove: useMutation<unknown, Error, number>({
    mutationFn: (id) => api<unknown>(`/api/issues/${id}`, { method: "DELETE" }),
    onSuccess: done,
+  }),
+ };
+}
+
+/**
+ * The LLM post-scan second look (ei0v). Two doors: the pass over every gated finding
+ * (POST /api/issues/triage) and the operator's hand on one (POST /api/issues/{id}/triage).
+ * Both are refused 503 until an endpoint is configured AND enabled — two gates, because a
+ * configured-but-unwanted endpoint is a surprise bill and an on-but-unconfigured switch is
+ * a silent no-op. The finding's own severity/confidence never move; the note rides beside
+ * them.
+ */
+export function useIssueLLMTriage() {
+ const client = useQueryClient();
+ const done = () => void client.invalidateQueries({ queryKey: keys.issues });
+ return {
+  sweep: useMutation<LLMTriageRun, Error, void>({
+   mutationFn: () => api<LLMTriageRun>("/api/issues/triage", json("POST", {})),
+   onSuccess: done,
+  }),
+  one: useMutation<unknown, Error, number>({
+   mutationFn: (id) => api<unknown>(`/api/issues/${id}/triage`, json("POST", {})),
+   onSuccess: done,
+  }),
+ };
+}
+
+/** GET/PUT /api/settings/triage (ei0v): the LLM triage endpoint configuration. The PUT
+ * keeps a stored key when the body omits one, so re-saving the GET shape never clears
+ * the credential. */
+export function useTriageSettings() {
+ const client = useQueryClient();
+ return {
+  get: useQuery<TriageSettingsView>({
+   queryKey: ["settings", "triage"],
+   queryFn: ({ signal }) => api<TriageSettingsView>("/api/settings/triage", { signal }),
+   staleTime: 30_000,
+  }),
+  put: useMutation<TriageSettingsView, Error, TriageSettingsView>({
+   mutationFn: (body) => api<TriageSettingsView>("/api/settings/triage", json("PUT", body)),
+   onSuccess: () => void client.invalidateQueries({ queryKey: ["settings", "triage"] }),
   }),
  };
 }

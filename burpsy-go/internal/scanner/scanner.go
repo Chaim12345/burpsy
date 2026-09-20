@@ -232,7 +232,35 @@ type Finding struct {
 	// because Confidence is a graded belief and Confirm is a machine-checkable fact about one
 	// load — an operator filtering by either should not lose the other.
 	Confirm DOMConfirmState `json:"confirm,omitempty"`
+	// Triage is the LLM post-scan second look's note (ei0v): the model's verdict on this
+	// finding — real-risk / investigate-further / false-positive-likely — with its reasoning
+	// and the model+prompt that produced it. ADVICE, never promotion: a triage line never
+	// moves Confidence or Severity, because a nondeterministic verdict graded on a scale the
+	// engine earned through evidence would be the exact honest-counting violation the
+	// enrich rule (enrich.go) already refuses for catalog severities. Nil = not investigated;
+	// triaged-not-investigated is the feature being off, not an empty verdict.
+	Triage *TriageNote `json:"triage,omitempty"`
 }
+
+// TriageNote is one LLM triage verdict attached to a finding (ei0v).
+type TriageNote struct {
+	// Verdict is one of TriageVerdict*.
+	Verdict string `json:"verdict"`
+	// Reasoning is the model's own explanation, carried verbatim — an operator acting on
+	// the verdict reads WHY, and a summary the engine wrote would be a third opinion.
+	Reasoning string `json:"reasoning"`
+	// Model names what produced this, so an operator knows which model to believe.
+	Model string `json:"model"`
+	// InvestigatedAt is when the note landed, so a re-triage after a finding change is
+	// distinguishable from a stale note.
+	InvestigatedAt time.Time `json:"investigated_at"`
+}
+
+const (
+	TriageVerdictRealRisk            = "real-risk"
+	TriageVerdictInvestigateFurther  = "investigate-further"
+	TriageVerdictFalsePositiveLikely = "false-positive-likely"
+)
 
 // NewActiveScanner creates a new active scanner.
 func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScanner {

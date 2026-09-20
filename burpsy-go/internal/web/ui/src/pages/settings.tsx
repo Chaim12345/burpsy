@@ -3,7 +3,7 @@ import { Download, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucid
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
-import { useScanConfigLibrary, useScannerConfigs } from "../lib/data.attack";
+import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type { HostOverride, NetworkPatch, NetworkSettings, RedirectMode, ResolutionPolicy } from "../lib/data.network";
 import {
@@ -41,6 +41,7 @@ import { useApp, type Density, type EditorFont, type Theme, type UiScale } from 
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
+import type { TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
@@ -2066,6 +2067,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  protocols: ProtocolSection,
  network: NetworkSection,
  scanner: ScannerSettingsSection,
+ "llm-triage": LlmTriageSection,
  "browser-engine": DomEngineSection,
  "upstream-proxy": UpstreamProxySection,
  "platform-auth": PlatformAuthSection,
@@ -3009,6 +3011,70 @@ export function ScheduledTasksSection(): JSX.Element {
      }}
     />
    ) : null}
+  </Card>
+ );
+}
+
+/**
+ * The LLM triage endpoint (ei0v): the post-scan second look's OpenAI-compatible endpoint.
+ *
+ * The key is WRITE-ONLY here: GET answers configured/not and the stored shape, and the PUT
+ * keeps a stored key when this form omits one, so re-saving the other fields never clears
+ * the credential. Enabling with no base URL is refused by the server — the two-gate rule,
+ * and the refusal names what to fill in.
+ */
+function LlmTriageSection(): JSX.Element {
+ const { get, put } = useTriageSettings();
+ const [draft, setDraft] = useState<TriageSettingsView | null>(null);
+
+ // Seed the draft from the GET once; a null api_key means "keep whatever is stored".
+ useEffect(() => {
+  if (get.data && draft === null) {
+   setDraft({ enabled: get.data.enabled, base_url: get.data.base_url, model: get.data.model, configured: get.data.configured });
+  }
+ }, [get.data, draft]);
+
+ if (get.error) return <ErrorNotice error={get.error} />;
+ if (!get.data || draft === null) return <LoadingPanel />;
+
+ const save = () => {
+  put.mutate(
+   { enabled: draft.enabled, base_url: draft.base_url, model: draft.model, api_key: "", configured: false },
+   {
+    onSuccess: () => toast.success("LLM triage settings applied"),
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "LLM triage settings were refused"),
+   },
+  );
+ };
+
+ return (
+  <Card>
+   <SectionHeading
+    title="LLM triage"
+    detail="The post-scan second look: an OpenAI-compatible endpoint that advises on gated findings (High any-confidence, Medium tentative-or-better). Advice only — a triage note never moves a finding's severity or confidence. No default endpoint: the pass is off until one is configured here AND enabled."
+   />
+   <div className="stack">
+    <Field label="Enabled" hint="Two gates: an endpoint configured AND this switch on. The pass refuses with 503 otherwise.">
+     {() => <Switch checked={draft.enabled} onCheckedChange={(on) => setDraft({ ...draft, enabled: on })} label="LLM triage" />}
+    </Field>
+    <Field label="Base URL" hint="The OpenAI-compatible root, e.g. https://api.openai.com/v1 — /chat/completions is appended.">
+     {(id) => <Input id={id} value={draft.base_url} onChange={(e) => setDraft({ ...draft, base_url: e.target.value })} placeholder="https://api.openai.com/v1" />}
+    </Field>
+    <Field label="Model" hint="What to call, e.g. gpt-4o-mini. The model name rides every triage note.">
+     {(id) => <Input id={id} value={draft.model} onChange={(e) => setDraft({ ...draft, model: e.target.value })} placeholder="gpt-4o-mini" />}
+    </Field>
+    <Field label="API key" hint={get.data.configured ? "A key is stored. Send a new one only to replace it; saving without one keeps the stored key." : "Not configured yet."}>
+     {(id) => <Input id={id} value={draft.api_key ?? ""} onChange={(e) => setDraft({ ...draft, api_key: e.target.value })} placeholder={get.data.configured ? "(unchanged)" : "sk-…"} type="password" />}
+    </Field>
+    <div>
+     <Button variant="primary" size="small" disabled={put.isPending} onClick={save}>
+      {put.isPending ? "Applying…" : "Apply"}
+     </Button>
+     <span className="cell-dim" style={{ marginLeft: 8 }}>
+      {get.data.configured ? "Endpoint configured." : "No endpoint key stored; the pass stays off."}
+     </span>
+    </div>
+   </div>
   </Card>
  );
 }
