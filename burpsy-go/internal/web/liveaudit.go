@@ -122,6 +122,15 @@ type LiveAuditState struct {
 	// stall is a single id at a time; anything more is a backlog system, which the Behind()
 	// counter already reports honestly.
 	pendingRetry atomic.Uint64
+	// reWalkMu guards the reset re-walk accounting below (m9e0).
+	reWalkMu sync.Mutex
+	// reWalkWidth is the admitted-pair count the dead ledger held at the last reset —
+	// the width of the re-dispatch the fresh ledger will perform. 0 = no re-walk in progress.
+	reWalkWidth int
+	// reWalkAdmittedAt is how many pairs the fresh ledger has admitted since the reset.
+	reWalkAdmittedAt int
+	// reAdmittedTotal accumulates re-admitted pairs across all resets.
+	reAdmittedTotal int
 	// passiveFindings counts findings the live PASSIVE pass raised (v7fo) — the posture and
 	// analysis rows that read the captured exchange and send nothing. Counted separately
 	// from the active audit's findings because they are different claims: "found on
@@ -500,6 +509,46 @@ func (la *LiveAuditState) recordPosition(reached, recorded uint64) {
 func (la *LiveAuditState) recordCollapsed(n uint64) { la.collapsed.Add(n) }
 func (la *LiveAuditState) recordLedgerReset()       { la.ledgerResets.Add(1) }
 
+// The reset re-walk's honest accounting (m9e0): after a ledger reset, the collapsed pairs
+// re-dispatch. reWalkWidth is the dead ledger's admitted count AT THE RESET — the cost,
+// stated once; reAdmittedTotal accumulates what the fresh ledger has actually admitted.
+// Together with ledgerResets, the pane shows the event, its width, and the payment — not
+// one figure hiding an unbounded cost. Zero width means "no re-walk in progress".
+func (la *LiveAuditState) beginResetReWalk(width int) {
+	la.reWalkMu.Lock()
+	la.reWalkWidth = width
+	la.reWalkAdmittedAt = 0
+	la.reWalkMu.Unlock()
+}
+
+// recordReAdmission notes the fresh ledger admitting one pair after a reset. Returns true
+// when the re-walk just completed — the caller reports it.
+func (la *LiveAuditState) recordReAdmission() (done bool) {
+	la.reWalkMu.Lock()
+	defer la.reWalkMu.Unlock()
+	if la.reWalkWidth == 0 {
+		return false // no re-walk in progress
+	}
+	la.reWalkAdmittedAt++
+	la.reAdmittedTotal++
+	if la.reWalkAdmittedAt >= la.reWalkWidth {
+		la.reWalkWidth = 0
+		return true
+	}
+	return false
+}
+
+// ResetReWalk reports the in-progress re-walk's remaining width and the total re-admitted
+// across resets. Zero width with a nonzero admitted is a completed re-walk.
+func (la *LiveAuditState) ResetReWalk() (remaining, admitted int) {
+	la.reWalkMu.Lock()
+	defer la.reWalkMu.Unlock()
+	if la.reWalkWidth == 0 {
+		return 0, la.reAdmittedTotal
+	}
+	return la.reWalkWidth - la.reWalkAdmittedAt, la.reAdmittedTotal
+}
+
 // SetQuery installs the live-audit scope query (DSL-03), or clears it when src is empty.
 //
 // The full grammar is accepted with no field restriction, which is the difference between this gate
@@ -586,6 +635,15 @@ type liveAuditView struct {
 	// are different claims, and folding them would make a passive-heavy sweep read as an
 	// active one.
 	PassiveFindings uint64 `json:"passive_findings"`
+	// ResetReWalkRemaining is how many pairs the in-progress ledger-reset re-walk has left
+	// to re-dispatch (m9e0). Zero = no re-walk in progress (none began, or it completed).
+	// Reported beside LedgerResets because the reset count alone hides the cost: three
+	// resets at width zero are three non-events, and one reset at width 18,000 is a
+	// scheduled re-dispatch the pane owes the operator a number for.
+	ResetReWalkRemaining int `json:"reset_re_walk_remaining"`
+	// ResetReAdmitted accumulates the pairs re-admitted across all resets — the payment
+	// made, so a completed re-walk's cost stays visible after "remaining" reads zero.
+	ResetReAdmitted int `json:"reset_re_admitted"`
 	// TrafficSource is the operator's choice in force (zk35), rendered as the word the
 	// pane shows: "proxy" or "everything". Always present — an unset choice is a real
 	// answer (the default), not an absence.
@@ -641,6 +699,7 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	v.TrafficSource = string(s.liveAudit.TrafficSource())
 	v.LiveSeenHeld = s.liveAudit.LiveSeenCount()
 	v.PassiveFindings = s.liveAudit.PassiveFindings()
+	v.ResetReWalkRemaining, v.ResetReAdmitted = s.liveAudit.ResetReWalk()
 	return v
 }
 
@@ -978,8 +1037,15 @@ func (r *liveAuditRun) auditLedger(state *LiveAuditState, events *dash.EventLog,
 		return r.ledger
 	}
 	if units := r.ledger.Units(); units > liveAuditLedgerUnitCap {
+		// The reset's cost, stated (m9e0): the dead ledger's admitted-pair count is the
+		// width of the re-walk the fresh ledger will perform — every one of those pairs
+		// dispatches once more. Recorded BEFORE the drop, reported beside the reset
+		// count, and the re-admission is measured against it so the pane shows the cost
+		// and the payment, not a single "resets" figure hiding both.
+		width := r.ledger.Admitted()
 		r.ledger = scanner.NewAuditLedger()
 		state.recordLedgerReset()
+		state.beginResetReWalk(width)
 		events.Record(dash.EventLedgerReset, dash.SeverityWarn, fmt.Sprintf(
 			"the live sweep's admission ledger passed its cap of %d dispatch units (%d) and was reset; already-covered checks will dispatch once more",
 			liveAuditLedgerUnitCap, units))
@@ -1210,8 +1276,21 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// budget bounded. The queue's own cap (scanner.DefaultAuditItemCap) is what keeps a sweep that
 	// runs for hours from growing it without limit, and the endpoint reports the evictions.
 	cfg.Items = s.auditItems
+	// The reset re-walk's measurement point (m9e0): the ledger's admitted count before the
+	// session; after it, the delta while a re-walk is in progress is pairs the fresh ledger
+	// re-admitted — the payment, tick by tick, against the width the reset stated.
+	ledgerAdmittedBefore := run.ledger.Admitted()
 	outcome, findings := s.scanner.AuditSession(ctx, ids, cfg)
 	s.liveAudit.recordCollapsed(uint64(outcome.AlreadyCovered()))
+	if reAdmitted := run.ledger.Admitted() - ledgerAdmittedBefore; reAdmitted > 0 {
+		for range reAdmitted {
+			if done := s.liveAudit.recordReAdmission(); done {
+				s.events.Record(dash.EventLedgerReset, dash.SeverityInfo, fmt.Sprintf(
+					"the live sweep finished re-dispatching the checks the ledger reset had collapsed; steady-state admission resumed"))
+				break
+			}
+		}
+	}
 	task.Advance(uint64(len(ids)))
 	// The engine's own outcome, projected onto the dashboard's four buckets: a sweep the failure
 	// breaker paused or the budget bounded finishes here with a non-complete result, so the
