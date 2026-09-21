@@ -1102,7 +1102,13 @@ function App(): JSX.Element {
           </ErrorBoundary>
         </main>
 
-        <div className="statusbar">
+        {/* The status bar as a landmark (burpsy-react-ui-4t8a): a <footer> gives
+            screen-reader users a navigable contentinfo region, so the status text is
+            reachable by landmark navigation rather than only by reading the whole page.
+            The bare div before was axe's 'region' finding — not a WCAG A/AA failure (the
+            tagged gate was green), but the text was unreachable by navigation, which is
+            what the landmark exists to fix. */}
+        <footer className="statusbar">
           <span>
             <span className={live ? "status-dot live" : "status-dot stale"} />
             {live ? "event stream connected" : "event stream offline"}
@@ -1135,7 +1141,7 @@ function App(): JSX.Element {
           <span className="status-push">
             {eventCount > 0 && lastEventAt ? `last event ${relativeTime(lastEventAt)}` : "no events yet"}
           </span>
-        </div>
+        </footer>
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
