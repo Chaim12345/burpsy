@@ -122,6 +122,12 @@ type LiveAuditState struct {
 	// stall is a single id at a time; anything more is a backlog system, which the Behind()
 	// counter already reports honestly.
 	pendingRetry atomic.Uint64
+	// passiveFindings counts findings the live PASSIVE pass raised (v7fo) — the posture and
+	// analysis rows that read the captured exchange and send nothing. Counted separately
+	// from the active audit's findings because they are different claims: "found on
+	// capture" and "found by sending probes" deserve their own numbers on the pane, and
+	// folding them would make a passive-heavy sweep read as an active one.
+	passiveFindings atomic.Uint64
 	// retried counts exchanges audited on their second chance. Distinct from swept — a pane
 	// that folded it in would read "audited 401" for a run that gave up on 1 and took it back,
 	// and the second-chance arithmetic (gave up on N, took back M) is the honest sentence.
@@ -304,6 +310,12 @@ func (la *LiveAuditState) recordSkipped(n uint64, retryID core.ExchangeID) {
 
 // Retried reports how many exchanges the sweep audited on their second chance.
 func (la *LiveAuditState) Retried() uint64 { return la.retried.Load() }
+
+// recordPassive counts passive findings raised by the live passive pass (v7fo).
+func (la *LiveAuditState) recordPassive(n uint64) { la.passiveFindings.Add(n) }
+
+// PassiveFindings reports how many findings the live passive pass has raised.
+func (la *LiveAuditState) PassiveFindings() uint64 { return la.passiveFindings.Load() }
 
 // seenKey is the cross-run dedup key: the host the request went to and the request-content
 // fingerprint. Not the URL: the sweep's own audit ledger already keys by scope+content
@@ -568,6 +580,12 @@ type liveAuditView struct {
 	// it; after a crawl takes the set this returns to zero — a held count that never moved
 	// would be a set nothing read.
 	LiveSeenHeld int `json:"live_seen_held"`
+	// PassiveFindings counts findings the live PASSIVE pass has raised (v7fo) — the posture
+	// and analysis rows that read the captured exchange and send nothing. Reported beside
+	// the active Findings number because "found on capture" and "found by sending probes"
+	// are different claims, and folding them would make a passive-heavy sweep read as an
+	// active one.
+	PassiveFindings uint64 `json:"passive_findings"`
 	// TrafficSource is the operator's choice in force (zk35), rendered as the word the
 	// pane shows: "proxy" or "everything". Always present — an unset choice is a real
 	// answer (the default), not an absence.
@@ -622,6 +640,7 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	v.RefusedSource = s.liveAudit.RefusedSource()
 	v.TrafficSource = string(s.liveAudit.TrafficSource())
 	v.LiveSeenHeld = s.liveAudit.LiveSeenCount()
+	v.PassiveFindings = s.liveAudit.PassiveFindings()
 	return v
 }
 
@@ -1138,6 +1157,51 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// is the only place that saving is visible, and a sweep that reported "200 exchanges, 3 findings"
 	// while quietly admitting a fraction of the work would be the exact claim the engine exists to
 	// prevent.
+	// The live passive audit (burpsy-react-ui-v7fo): Burp's Zcvb — passive checks run on
+	// live traffic as it lands, not only inside an audit session. The passive rows read the
+	// captured exchange and send nothing, so they run over every admitted id BEFORE the
+	// active half: a posture finding (a cleartext password form, a missing HSTS) surfaces
+	// the moment the traffic is captured. Counted separately (passiveFindings); the
+	// active session's own passive rows then merge into the same stored findings by
+	// identity — confirmed, not duplicated.
+	passiveFindings := 0
+	if s.scanner != nil {
+		for _, id := range ids {
+			ex, err := s.store.GetExchange(id)
+			if err != nil || ex == nil {
+				continue
+			}
+			for _, f := range s.scanner.RunPassiveChecks(ctx, ex) {
+				if f == nil {
+					continue
+				}
+				// core.NewFinding is the one door the store's merge knows: a finding added
+				// here is the same finding a later audit session's passive row would raise,
+				// so the store's dedup by identity is what keeps the count single.
+				s.findings.Add(core.NewFinding{
+					Name:        f.Name,
+					Severity:     core.ParseSeverity(f.Severity),
+					Confidence:   core.ParseConfidence(f.Confidence),
+					Description: f.Description,
+					Remediation: f.Solution,
+					Param:        f.Param,
+					Target: core.FindingTarget{
+						Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path,
+					},
+					TaskID: ex.TaskID,
+					// One occurrence citing the captured exchange: the merge key the
+					// audit session's own passive row will agree with, which is what
+					// keeps this finding single in the store.
+					Occurrences: []core.Occurrence{{
+						ExchangeID: ex.ID, Request: ex.Request, Response: ex.Response,
+					}},
+				})
+				passiveFindings++
+			}
+		}
+	}
+	s.liveAudit.recordPassive(uint64(passiveFindings))
+
 	// The ledger is the one part of the config that outlives this tick — see liveAuditRun.
 	cfg := s.scanner.AuditConfig()
 	cfg.Ledger = run.auditLedger(s.liveAudit, s.events, s.logger)
