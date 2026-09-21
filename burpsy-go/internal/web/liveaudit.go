@@ -122,6 +122,10 @@ type LiveAuditState struct {
 	// stall is a single id at a time; anything more is a backlog system, which the Behind()
 	// counter already reports honestly.
 	pendingRetry atomic.Uint64
+	// hostSessions counts per-host AuditSessions the sweep has run (6urp) — the honest
+	// pacing metric: a multi-host tick runs one session PER HOST, and the operator can see
+	// the batch was split rather than one global sequential run.
+	hostSessions atomic.Uint64
 	// reWalkMu guards the reset re-walk accounting below (m9e0).
 	reWalkMu sync.Mutex
 	// reWalkWidth is the admitted-pair count the dead ledger held at the last reset —
@@ -325,6 +329,12 @@ func (la *LiveAuditState) recordPassive(n uint64) { la.passiveFindings.Add(n) }
 
 // PassiveFindings reports how many findings the live passive pass has raised.
 func (la *LiveAuditState) PassiveFindings() uint64 { return la.passiveFindings.Load() }
+
+// recordHostSessions notes the per-host session count one tick ran (6urp).
+func (la *LiveAuditState) recordHostSessions(n uint64) { la.hostSessions.Add(n) }
+
+// HostSessions reports the total per-host sessions the sweep has run.
+func (la *LiveAuditState) HostSessions() uint64 { return la.hostSessions.Load() }
 
 // seenKey is the cross-run dedup key: the host the request went to and the request-content
 // fingerprint. Not the URL: the sweep's own audit ledger already keys by scope+content
@@ -945,11 +955,32 @@ func liveAuditTarget(store *core.TrafficStore, ids []core.ExchangeID) string {
 	if len(ids) == 0 {
 		return "no exchanges"
 	}
-	ex, err := store.GetExchange(ids[0])
-	if err != nil {
+	// Every distinct host in the batch, in first-seen order, capped for the label's length:
+	// a multi-host sweep is not the first host's run, and a label that says otherwise is a
+	// claim the numbers do not back (6urp).
+	seen := map[string]bool{}
+	var hosts []string
+	for _, id := range ids {
+		ex, err := store.GetExchange(id)
+		if err != nil {
+			continue
+		}
+		if !seen[ex.Host] {
+			seen[ex.Host] = true
+			hosts = append(hosts, ex.Host)
+			if len(hosts) >= 3 {
+				break
+			}
+		}
+	}
+	if len(hosts) == 0 {
 		return fmt.Sprintf("%d exchange(s)", len(ids))
 	}
-	return fmt.Sprintf("%s (%d exchange(s))", ex.Host, len(ids))
+	label := strings.Join(hosts, ", ")
+	if seenCount := len(seen); seenCount > len(hosts) {
+		label = fmt.Sprintf("%s + %d more host(s)", label, seenCount-len(hosts))
+	}
+	return fmt.Sprintf("%s (%d exchange(s))", label, len(ids))
 }
 
 // StartLiveAuditSweep launches the background sweep loop. It walks newly-completed
@@ -1215,6 +1246,8 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	}
 	// Registered per sweep-with-work rather than per tick: a tick that found nothing new returned
 	// above, and a registry filling with empty three-second ticks would bury the runs that matter.
+	// The target names EVERY host in the batch (6urp): a first-host-only label described a
+	// multi-host sweep as one host's run, which was a claim the numbers did not back.
 	task := s.tasks.Start(dash.KindLiveAudit, liveAuditTarget(s.store, ids), uint64(len(ids)))
 	start := time.Now()
 	// AuditSession rather than AuditMultiple: this is the highest-volume audit path in the process, so
@@ -1280,7 +1313,9 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// session; after it, the delta while a re-walk is in progress is pairs the fresh ledger
 	// re-admitted — the payment, tick by tick, against the width the reset stated.
 	ledgerAdmittedBefore := run.ledger.Admitted()
-	outcome, findings := s.scanner.AuditSession(ctx, ids, cfg)
+	// Per-host pacing (6urp): the tick's ids group by authority and each group runs as its
+	// OWN AuditSession, concurrently under a bound — so one slow host paces only itself.
+	outcome, findings := s.auditGroupedByHost(ctx, ids, cfg)
 	s.liveAudit.recordCollapsed(uint64(outcome.AlreadyCovered()))
 	if reAdmitted := run.ledger.Admitted() - ledgerAdmittedBefore; reAdmitted > 0 {
 		for range reAdmitted {
@@ -1324,4 +1359,99 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			zap.Bool("paused", outcome.Paused),
 			zap.Bool("timed_out", outcome.TimedOut))
 	}
+}
+
+// liveAuditHostSessions bounds how many per-host sessions one tick runs at once (6urp).
+// Four, not the engine's MaxConcurrency: each session already runs its own workers under
+// that figure, so the true in-flight ceiling is this bound × the engine's, and an operator
+// pacing per host wants the host count small. Named because it is half of the tick's
+// real concurrency ceiling and nothing reported it.
+const liveAuditHostSessions = 4
+
+// auditGroupedByHost runs the tick's ids as one AuditSession PER HOST, concurrently under
+// liveAuditHostSessions (6urp). Burp's live-audit queue is per-host (Zeuc :255,
+// parallel_crawl_and_audit :8768-8769): pacing is a per-queue property, and a global
+// sequential batch lets one slow host wedge every host behind it.
+//
+// The returned outcome is the FOLD of every host session — the same SessionOutcome shape
+// the single call produced, aggregated so the task row, the event and the pane keep one
+// set of numbers per tick (items summed, the worst state kept, Paused/TimedOut ORed)
+// rather than per-host rows the operator would have to add. A single-host batch makes
+// exactly one call and returns its outcome verbatim — no folding artefacts in the common
+// case.
+func (s *Server) auditGroupedByHost(ctx context.Context, ids []core.ExchangeID, cfg scanner.AuditConfig) (*scanner.SessionOutcome, []*scanner.Finding) {
+	// Group in first-seen order so the fold's item order matches the batch's walk order.
+	// The key is the AUTHORITY (host:port_tls), not the hostname: two local test origins on
+	// different ports are two targets, and one hostname behind a port-based vhost array is
+	// exactly the case where per-host pacing must not collapse them.
+	byHost := make(map[string][]core.ExchangeID)
+	var order []string
+	authorityOf := func(ex *core.Exchange) string {
+		auth := fmt.Sprintf("%s:%d", ex.Host, ex.Port)
+		if ex.TLS {
+			return auth + "/tls"
+		}
+		return auth
+	}
+	for _, id := range ids {
+		ex, err := s.store.GetExchange(id)
+		if err != nil {
+			continue
+		}
+		auth := authorityOf(ex)
+		if _, ok := byHost[auth]; !ok {
+			order = append(order, auth)
+		}
+		byHost[auth] = append(byHost[auth], id)
+	}
+	if len(order) <= 1 {
+		// The single-host batch: the old one call, verbatim — no fold, no new concurrency.
+		s.liveAudit.recordHostSessions(1)
+		return oneSession(s, ctx, ids, cfg)
+	}
+	s.liveAudit.recordHostSessions(uint64(len(order)))
+	type result struct {
+		outcome *scanner.SessionOutcome
+		findings []*scanner.Finding
+	}
+	results := make([]result, len(order))
+	sem := make(chan struct{}, liveAuditHostSessions)
+	var wg sync.WaitGroup
+	for i, host := range order {
+		wg.Add(1)
+		go func(i int, host string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			o, f := oneSession(s, ctx, byHost[host], cfg)
+			results[i] = result{o, f}
+		}(i, host)
+	}
+	wg.Wait()
+
+	fold := &scanner.SessionOutcome{}
+	var findings []*scanner.Finding
+	for _, r := range results {
+		if r.outcome == nil {
+			continue
+		}
+		fold.Items = append(fold.Items, r.outcome.Items...)
+		findings = append(findings, r.findings...)
+		fold.DispatchUnits += r.outcome.DispatchUnits
+		fold.RequestsSent += r.outcome.RequestsSent
+		fold.FailedItems += r.outcome.FailedItems
+		if r.outcome.Paused {
+			fold.Paused = true
+		}
+		if r.outcome.TimedOut {
+			fold.TimedOut = true
+		}
+	}
+	return fold, findings
+}
+
+// oneSession is the single AuditSession call the sweep has always made, isolated so the
+// per-host path and the single-host path share one spelling.
+func oneSession(s *Server, ctx context.Context, ids []core.ExchangeID, cfg scanner.AuditConfig) (*scanner.SessionOutcome, []*scanner.Finding) {
+	return s.scanner.AuditSession(ctx, ids, cfg)
 }
