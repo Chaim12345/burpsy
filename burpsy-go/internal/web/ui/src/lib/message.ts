@@ -348,6 +348,127 @@ function prettyMarkup(input: string): string {
     .join("\n");
 }
 
+/* ==== the message editor's hide-headers lists (burpsy-react-ui-whr) ========
+ *
+ * Burp keeps two editable lists under Settings > User interface > Message editor and an
+ * eye button above each message that hides whatever they name, in the Pretty tab only.
+ * The Burp-side keys are recoverable and were used as the shape here:
+ * `user_options.misc.uninteresting_headers` (request),
+ * `user_options.misc.uninteresting_response_headers` (response), and
+ * `user_options.misc.uninteresting_headers.hide_uninteresting_headers_by_default`
+ * (the master toggle) — burp.Zf4w / burp.Zhs4 / burp.Zblz in map_root.tsv. The default
+ * *contents* of those lists are not recoverable from the evidence base (no literal in the
+ * extracted strings, and the docs do not publish them), so the lists below are burpsy's
+ * own starting sets, chosen from protocol-level noise, and the settings section is where
+ * an operator replaces them. Claiming they were Burp's would be a fabricated citation.
+ *
+ * Deliberately NOT the Comparer's lists (Settings > Comparer: uninteresting headers).
+ * Those name headers whose *differences* are dimmed in a diff and nothing is ever hidden
+ * there. Two lists rather than one because the two answer different questions — "what do I
+ * not want to read right now?" versus "what should not count as a difference?" — and one
+ * list serving both would make the eye's behaviour change whenever someone tuned a diff.
+ */
+
+/** Request headers the eye hides out of the box: what the client's own stack adds to every
+ *  request and no application behaviour lives in. */
+export const DEFAULT_HIDE_REQUEST_HEADERS: string[] = [
+ "accept",
+ "accept-encoding",
+ "accept-language",
+ "connection",
+];
+
+/** Response headers the eye hides out of the box: connection and framing bookkeeping, cache
+ *  validators, and server metadata. Deliberately excludes `set-cookie` (a rotated session
+ *  token can be the finding), `content-type`/`content-length` (a reader checking truncation
+ *  or a mislabelled body needs them) and the security headers, which are findings-relevant. */
+export const DEFAULT_HIDE_RESPONSE_HEADERS: string[] = [
+ "cache-control",
+ "connection",
+ "content-security-policy-report-only",
+ "date",
+ "etag",
+ "expires",
+ "keep-alive",
+ "last-modified",
+ "pragma",
+ "server",
+ "transfer-encoding",
+ "vary",
+];
+
+/**
+ * Turn one textarea's contents into a list of header names.
+ *
+ * One name per line. A pasted whole header line (`Cache-Control: no-store`) is tolerated by
+ * taking what precedes the colon, which is also what the server-side Comparer list does — an
+ * operator who pastes a line and gets a silent no-match would conclude the setting is broken.
+ * Names fold, so they are stored lower-cased (RFC 9110 §5.1); a duplicate is dropped rather
+ * than hiding the same line twice.
+ */
+export function parseHeaderNames(text: string): string[] {
+ const seen = new Set<string>();
+ for (const line of text.split(/\r?\n/)) {
+  const colon = line.indexOf(":");
+  const name = (colon >= 0 ? line.slice(0, colon) : line).trim().toLowerCase();
+  if (name !== "") seen.add(name);
+ }
+ return [...seen];
+}
+
+/**
+ * Remove the named header lines from a message's head, for display.
+ *
+ * Pure, and it splices rather than rebuilding: every byte outside a dropped line is the byte
+ * the server captured, so the start line, the surviving headers, their spacing and the body
+ * come through untouched — the same discipline the editor's writers follow, for the same
+ * reason (the Pretty view is the message, minus some lines).
+ *
+ * A dropped header takes any folded continuation lines with it: leaving an orphan
+ * continuation behind would fold it onto the *previous* surviving header and change that
+ * header's value, which is a silent corruption rather than a display filter.
+ *
+ * The message's own line ending is whatever the bytes say — this walks lines with the same
+ * helpers `headerSpans` uses rather than splitting on `\r\n`, so an LF-only message filters
+ * too.
+ */
+export function hideHeadersIn(raw: string, names: readonly string[]): string {
+ const hidden = new Set(names.map((name) => name.trim().toLowerCase()).filter((name) => name !== ""));
+ if (hidden.size === 0) return raw;
+ const { headEnd, bodyOffset } = headBounds(raw);
+ const drops: Span[] = [];
+ for (const span of headerSpans(raw)) {
+  if (!hidden.has(span.name.toLowerCase())) continue;
+  // The line plus its terminator, then every folded continuation line after it: a
+  // continuation belongs to the header above it, so leaving one behind would fold it onto
+  // the previous surviving header and change that header's value.
+  //
+  // The advance is clamped at `bodyOffset`, not `headEnd`: the last header line's terminator
+  // is the first CRLF of the blank-line separator, so stopping at `headEnd` would remove the
+  // line's text and leave its terminator behind as an extra blank line. Clamping at
+  // `bodyOffset` takes exactly that one terminator and leaves the separator's second CRLF —
+  // the blank line that ends the head — intact.
+  let stop = span.end;
+  for (;;) {
+   const next = Math.min(skipEol(raw, lineEnd(raw, stop, headEnd)), bodyOffset);
+   if (next <= stop) break;
+   stop = next;
+   if (stop >= headEnd) break;
+   const first = raw[stop];
+   if (first !== " " && first !== "\t") break;
+  }
+  drops.push({ start: span.start, end: stop });
+ }
+ if (drops.length === 0) return raw;
+ let out = "";
+ let cursor = 0;
+ for (const drop of drops) {
+  out += raw.slice(cursor, drop.start);
+  cursor = drop.end;
+ }
+ return out + raw.slice(cursor);
+}
+
 /** Classic 16-byte-per-line dump with an ASCII gutter, like Burp's Hex view. */
 export function hexDump(input: string): string {
  return hexDumpBytes(new TextEncoder().encode(input));

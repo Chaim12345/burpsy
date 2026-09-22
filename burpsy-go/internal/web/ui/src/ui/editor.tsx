@@ -3,10 +3,10 @@ import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText , Percent } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText , Percent , EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
 import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
 import {
  base64Decode,
@@ -402,6 +402,23 @@ export function HttpEditor({
  messageId?: number;
 }): JSX.Element {
  const [wrap, setWrap] = useState(true);
+ // Burp's eye button (burpsy-react-ui-whr): hide the headers named in the Settings > Message
+ // editor lists, in Pretty only — the docs scope it there ("In the Pretty tab, you have the
+ // option to hide HTTP headers…") and on Raw the bytes are the bytes. Which list applies is the
+ // message's own direction: a request pane reads Hide request headers, a response pane Hide
+ // response headers (Burp keeps the two apart: `user_options.misc.uninteresting_headers` vs
+ // `user_options.misc.uninteresting_response_headers`).
+ const hideRequestHeaders = useApp((state) => state.hideRequestHeaders);
+ const hideResponseHeaders = useApp((state) => state.hideResponseHeaders);
+ const hideHeadersByDefault = useApp((state) => state.hideHeadersByDefault);
+ // Which headers this pane's eye would hide. Derived from the message, because one editor
+ // instance shows a request in one pane and a response in the pane beside it.
+ const hideList = isResponse(value) ? hideResponseHeaders : hideRequestHeaders;
+ // The eye's state. `null` means the operator has not pressed it in this pane, so the Settings
+ // default decides — the same rule `view` follows for an operator who has not picked a view
+ // (burpsy-react-ui-vet). One explicit press wins for the life of this pane, because a choice
+ // made by hand outranks a default set elsewhere.
+ const [hidePicked, setHidePicked] = useState<boolean | null>(null);
  // Burp's \n toggle (burpsy-react-ui-1e4): off by default, and a pure decoration - the
  // document never changes, so toggling cannot alter the bytes that get sent.
  const [showNonPrinting, setShowNonPrinting] = useState(false);
@@ -732,7 +749,11 @@ export function HttpEditor({
  // Raw is the one view the charset override actually changes — Hex always shows the true bytes
  // (the override never reaches this variable when active is "hex"), and Pretty/Render/GraphQL/
  // JWT/Params are simply not offered while charsetActive (see `available` above).
- const shown = active === "pretty" ? prettied : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
+ // Whether the eye is actually in force in this pane. An empty list hides nothing, so the
+ // button is not offered at all (see the toolbar) and `hiding` stays false either way.
+ const hiding = active === "pretty" && hideList.length > 0 && (hidePicked ?? hideHeadersByDefault);
+ const shown =
+  active === "pretty" && hiding ? hideHeadersIn(prettied, hideList) : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
  // Refreshed every render, before any plugin constructor or update can run: the EOL plugin
  // names breaks off the raw text (CM6 normalises CRLF away in the document), and reading it
  // here keeps `value` out of the extensions useMemo deps - which would otherwise rebuild the
@@ -745,8 +766,19 @@ export function HttpEditor({
  // what is actually on screen, matching every other "what you see is what exports" surface in
  // this codebase (History and Organizer's CSV exports both follow the same rule).
  const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
+ // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
+ // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
+ // the button the operator just pressed.
  const clipboard =
-  active === "pretty" ? prettied : active === "hex" ? hexDumpText : active === "raw" && charsetActive ? (charsetOverride ?? value) : value;
+  active === "pretty"
+   ? hiding
+     ? hideHeadersIn(prettied, hideList)
+     : prettied
+   : active === "hex"
+    ? hexDumpText
+    : active === "raw" && charsetActive
+      ? (charsetOverride ?? value)
+      : value;
 
  // A Hex selection handed to the Raw view. The byte range is mapped to a character
  // range on the way, because the two views index the same message differently.
@@ -1087,6 +1119,26 @@ export function HttpEditor({
      {/* Wrapping is a CodeMirror setting, so the toggle is offered only on the two
               views CodeMirror renders. It used to be hidden for Render alone, which left
               a dead control on Hex. */}
+     {/* Burp's eye button (whr), on Burp's own labels ("Show / Hide specified headers",
+         messageAnalyserToggleHideUninterestingHeaders) — "specified" rather than
+         "uninteresting", which is the Comparer's word for a different list. Offered only when
+         the direction's list is non-empty: an eye with nothing to hide is a control that can
+         never act, and its presence would tell an operator the setting is in force when it is
+         empty. `editable` is deliberately not part of this test — see the note below, which
+         turns editing off while the eye is on rather than hiding the button from editable
+         panes, because the response pane in Repeater is read-only while the request pane is
+         not and Burp offers the eye on both. */}
+     {active === "pretty" && hideList.length > 0 ? (
+      <IconButton
+       label={hiding ? "Show specified headers" : "Hide specified headers"}
+       title={`Hide the headers named in Settings › Message editor (${hideList.length} listed for ${isResponse(value) ? "responses" : "requests"}). Pretty view only — the bytes and anything sent are untouched.`}
+       size="small"
+       aria-pressed={hiding}
+       onClick={() => setHidePicked(!hiding)}
+      >
+       <EyeOff size={13} />
+      </IconButton>
+     ) : null}
      {active === "pretty" || active === "raw" ? (
       <IconButton
        label={wrap ? "Disable wrapping" : "Enable wrapping"}
@@ -1245,8 +1297,8 @@ export function HttpEditor({
            ? onChange
            : undefined
        }
-       editable={editable && !charsetActive && (active === "raw" || active === "pretty")}
-       readOnly={!(editable && !charsetActive && (active === "raw" || active === "pretty"))}
+       editable={editable && !charsetActive && !hiding && (active === "raw" || active === "pretty")}
+       readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}
        height="100%"
        theme={editorTheme}
        extensions={extensions}
@@ -1316,6 +1368,13 @@ export function HttpEditor({
    ) : null}
    {charsetError ? (
     <div className="editor-note">{charsetError} — showing the platform default instead.</div>
+   ) : hiding ? (
+    <div className="editor-note">
+     The eye is on: {hideList.length} header name{hideList.length === 1 ? "" : "s"} listed under Settings › Message
+     editor {hideList.length === 1 ? "is" : "are"} hidden here in Pretty. The message itself is unchanged — Raw and
+     everything sent still carry them — but editing is off while they are hidden, because an edit here would be
+     written back against a head missing those lines. Press the eye again to edit.
+    </div>
    ) : charsetActive ? (
     <div className="editor-note">
      Raw is showing the body decoded as {charsetLabel}. Hex still shows the true bytes, but editing and the

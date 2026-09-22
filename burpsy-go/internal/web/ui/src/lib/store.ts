@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
+import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS } from "./message";
 
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
@@ -402,6 +403,25 @@ interface AppState {
   */
  editorTabs: EditorTabPrefs;
  setEditorTabs: (prefs: EditorTabPrefs) => void;
+ /**
+  * Burp's Hide request/response headers lists (burpsy-react-ui-whr): the names the message
+  * editor's eye button removes from a Pretty view. Burp keeps these as user options
+  * (`user_options.misc.uninteresting_headers` / `user_options.misc.uninteresting_response_headers`);
+  * here they are per-browser, because only this browser's render consults them — the server
+  * never reads them, and nothing about a capture changes when they do. The list *contents* are
+  * burpsy's own (see message.ts), not a recovered Burp default.
+  */
+ hideRequestHeaders: string[];
+ hideResponseHeaders: string[];
+ /** Burp's `hide_uninteresting_headers_by_default`: whether a newly opened Pretty view starts
+  *  with the eye already on. Off by default, so a reader who never asked for it sees every
+  *  header. */
+ hideHeadersByDefault: boolean;
+ /** Replace one direction's list. Names are normalised by `parseHeaderNames` — the same
+  *  function the settings textarea uses — so the stored list and the text the operator typed
+  *  cannot disagree about folding or duplicates. */
+ setHideHeaders: (kind: "request" | "response", names: string[]) => void;
+ setHideHeadersByDefault: (on: boolean) => void;
 
  repeaterTabs: RepeaterTab[];
  activeRepeaterTab: string | null;
@@ -536,6 +556,12 @@ export function persistedWorkspace(state: AppState) {
   inspectorPanelState: state.inspectorPanelState,
   // The tab strip's show/hide and order (t94i): layout the operator curates once.
   editorTabs: state.editorTabs,
+  // The message editor's hide-headers lists (whr) and their default toggle: the same class of
+  // layout choice as the tab strip — an operator curates them once and expects the eye to
+  // behave the same next session.
+  hideRequestHeaders: state.hideRequestHeaders,
+  hideResponseHeaders: state.hideResponseHeaders,
+  hideHeadersByDefault: state.hideHeadersByDefault,
   repeaterTabs: state.repeaterTabs,
   activeRepeaterTab: state.activeRepeaterTab,
   // Groups are layout the operator curates — same persistence class as tab drafts.
@@ -574,6 +600,12 @@ export const useApp = create<AppState>()(
    inspectorPanelState: "auto",
   editorTabs: defaultEditorTabPrefs,
   setEditorTabs: (prefs) => set({ editorTabs: prefs }),
+  hideRequestHeaders: [...DEFAULT_HIDE_REQUEST_HEADERS],
+  hideResponseHeaders: [...DEFAULT_HIDE_RESPONSE_HEADERS],
+  hideHeadersByDefault: false,
+  setHideHeaders: (kind, names) =>
+   set(kind === "request" ? { hideRequestHeaders: names } : { hideResponseHeaders: names }),
+  setHideHeadersByDefault: (hideHeadersByDefault) => set({ hideHeadersByDefault }),
    repeaterTabs: [],
    activeRepeaterTab: null,
    closedRepeaterTabs: [],

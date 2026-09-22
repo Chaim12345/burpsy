@@ -141,10 +141,16 @@ export const SETTINGS_SECTIONS = [
     keywords: "import pem key signing certificate authority",
   },
   {
+    id: "message-editor",
+    title: "Message editor",
+    summary: "Which headers the message editor's eye button hides in Pretty. Stored in this browser.",
+    keywords: "hide headers eye pretty uninteresting eye request response",
+  },
+  {
     id: "uninteresting-headers",
-    title: "Uninteresting headers",
-    summary: "Headers whose differences are dimmed when comparing messages.",
-    keywords: "comparer diff ignore noise date",
+    title: "Comparer: uninteresting headers",
+    summary: "Headers whose differences are dimmed when comparing messages. Nothing is hidden here.",
+    keywords: "comparer diff ignore noise date dimmed",
   },
   {
     id: "project-backup",

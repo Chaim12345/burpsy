@@ -753,7 +753,8 @@ export function ComparerPage(): JSX.Element {
                 ? `: ${result.uninteresting_headers_applied.join(", ")}`
                 : ""}
               . They are dimmed below rather than removed — the bytes really do differ. Edit the list
-              in Settings → Uninteresting headers.
+              in Settings → Comparer: uninteresting headers. (The Message editor section lists the
+              headers the message editor's eye <em>hides</em>; this list hides nothing.)
             </div>
           ) : null}
 

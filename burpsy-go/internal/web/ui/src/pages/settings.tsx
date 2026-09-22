@@ -37,6 +37,7 @@ import {
  type SettingsSection,
  type SettingsSectionId,
 } from "../lib/settings-sections";
+import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
 import { useApp, type Density, type EditorFont, type Theme, type UiScale } from "../lib/store";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -1381,6 +1382,107 @@ function AppearanceSection(): JSX.Element {
  * would be reaching into the wrong machine's filesystem.
  */
 /**
+ * Burp's Settings > User interface > Message editor, the half that drives the eye button above a
+ * message (burpsy-react-ui-whr). Burp keeps the two lists as user options —
+ * `user_options.misc.uninteresting_headers` (request), `user_options.misc.uninteresting_response_headers`
+ * (response), gated by `user_options.misc.uninteresting_headers.hide_uninteresting_headers_by_default`
+ * (recovered from the obfuscated jar: burp.Zf4w, burp.Zhs4, burp.Zblz in map_root.tsv). They are
+ * per-browser here because only this browser's render consults them; the server never reads them.
+ *
+ * The section below is a *different* feature with a deliberately similar name: the Comparer's list
+ * dims a difference inside a header and hides nothing. This one removes the line from the Pretty
+ * view outright. The defect this closes was an operator reading one of those for the other, so both
+ * sections name the other and say which is which.
+ */
+function MessageEditorSection(): JSX.Element {
+ const request = useApp((state) => state.hideRequestHeaders);
+ const response = useApp((state) => state.hideResponseHeaders);
+ const byDefault = useApp((state) => state.hideHeadersByDefault);
+ const setHideHeaders = useApp((state) => state.setHideHeaders);
+ const setHideHeadersByDefault = useApp((state) => state.setHideHeadersByDefault);
+ const [requestDraft, setRequestDraft] = useState<string | null>(null);
+ const [responseDraft, setResponseDraft] = useState<string | null>(null);
+
+ // Drafts, like the Comparer panel below: the textarea must not be rewritten under the
+ // operator's cursor by an unrelated re-render.
+ const requestText = requestDraft ?? request.join("\n");
+ const responseText = responseDraft ?? response.join("\n");
+ const dirty = requestDraft !== null || responseDraft !== null;
+
+ const commit = () => {
+  // Through parseHeaderNames, the same function the stored list is built with, so what is
+  // saved cannot disagree with what was typed about case or duplicates.
+  setHideHeaders("request", parseHeaderNames(requestText));
+  setHideHeaders("response", parseHeaderNames(responseText));
+  setRequestDraft(null);
+  setResponseDraft(null);
+  toast.success("Hide-headers lists saved");
+ };
+
+ return (
+  <Card>
+   <SectionHeading
+    title="Message editor"
+    detail="Which headers the message editor's eye button hides in a Pretty view. Stored in this browser."
+   />
+   <div className="two-col">
+    <Field label="Hide request headers" hint="One name per line. Hidden in a request's Pretty view when the eye is on.">
+     <Textarea
+      aria-label="Header names the request eye hides, one per line"
+      rows={8}
+      spellCheck={false}
+      value={requestText}
+      onChange={(event) => setRequestDraft(event.target.value)}
+     />
+    </Field>
+    <Field label="Hide response headers" hint="One name per line. Hidden in a response's Pretty view when the eye is on.">
+     <Textarea
+      aria-label="Header names the response eye hides, one per line"
+      rows={8}
+      spellCheck={false}
+      value={responseText}
+      onChange={(event) => setResponseDraft(event.target.value)}
+     />
+    </Field>
+   </div>
+   <Toolbar>
+    <Button size="small" disabled={!dirty} onClick={commit}>
+     Save
+    </Button>
+    <Button
+     size="small"
+     variant="ghost"
+     onClick={() => {
+      setRequestDraft(DEFAULT_HIDE_REQUEST_HEADERS.join("\n"));
+      setResponseDraft(DEFAULT_HIDE_RESPONSE_HEADERS.join("\n"));
+      toast.message("Defaults restored in this form — Save to apply.");
+     }}
+    >
+     Restore defaults
+    </Button>
+    {dirty ? <Badge tone="warn">unsaved</Badge> : null}
+   </Toolbar>
+   <Field label="Hide these headers by default" hint="A newly opened Pretty view starts with the eye already on.">
+    {(id) => (
+     <Switch
+      id={id}
+      label="Hide these headers by default"
+      checked={byDefault}
+      onCheckedChange={setHideHeadersByDefault}
+     />
+    )}
+   </Field>
+   <p className="field-hint">
+    The eye button above a message hides these names in the <strong>Pretty</strong> view only, and the
+    bytes are never touched: Raw still shows every header, and so does anything sent. This is not{" "}
+    <strong>Comparer: uninteresting headers</strong> below — those names are still shown in a message
+    and only their <em>differences</em> are dimmed.
+   </p>
+  </Card>
+ );
+}
+
+/**
  * Burp's `configPanelUninterestingRequestHeaders` / `configPanelUninterestingResponseHeaders`
  * (W6 #81/#82), which had no counterpart here at all.
  *
@@ -1502,7 +1604,7 @@ function UninterestingHeadersSection(): JSX.Element {
  return (
   <Card>
    <SectionHeading
-    title="Uninteresting headers"
+    title="Comparer: uninteresting headers"
     detail={
      data?.applies_to?.length
       ? `Differences in these headers are dimmed in: ${data.applies_to.join(", ")}.`
@@ -1562,6 +1664,11 @@ function UninterestingHeadersSection(): JSX.Element {
     discounted&rdquo; stays distinguishable from &ldquo;these messages are identical&rdquo;.
     <strong> Set-Cookie is deliberately not a default</strong>: a rotated or fixated session token
     can be the finding.
+   </p>
+   <p className="field-hint">
+    Not the message editor&rsquo;s hide-headers lists: these names are still shown in a message, so the
+    only thing this list changes is what a comparison discounts. The lists that <em>remove</em> lines
+    from a Pretty view live in <strong>Message editor</strong> above.
    </p>
   </Card>
  );
@@ -2076,6 +2183,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  hotkeys: HotkeysSection,
  certificate: CertificateSection,
  "ca-import": CaImportSection,
+ "message-editor": MessageEditorSection,
  "uninteresting-headers": UninterestingHeadersSection,
  "project-backup": ProjectBackupSection,
  diagnostics: DiagnosticsSection,
