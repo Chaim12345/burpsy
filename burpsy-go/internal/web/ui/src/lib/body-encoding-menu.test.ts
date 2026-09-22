@@ -50,7 +50,14 @@ describe("the two operations are separate rows with separate names", () => {
 
 describe("the Repeater draft offers the conversion and the toggle on its own bytes", () => {
   test("the request editor is handed the body-encoding group, which is what makes the rows reachable", () => {
-    expect(repeater).toContain("menuGroups={[...(messageMenu ?? []), ...bodyEncodingMenu]}");
+    // The subject is that the group reaches a menuGroups, not the exact expression it is spread
+    // alongside. This assertion used to pin the whole expression; the draft-send row then landed
+    // between the two groups (bg7j) and failed a test whose subject had not changed at all. What
+    // must hold is that the group is spread into a menuGroups, and the count says it is not also
+    // built and handed to a second one, which is how the same rows come to be listed twice.
+    expect(repeater).toContain("...bodyEncodingMenu");
+    const mentions = repeater.match(/bodyEncodingMenu/g) ?? [];
+    expect(mentions).toHaveLength(2); // the declaration, and the one spread
   });
 
   test("the toggle's target is remembered per tab id, not in one global slot", () => {
