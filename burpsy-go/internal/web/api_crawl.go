@@ -73,6 +73,25 @@ type crawlRun struct {
 	Report     *crawler.Report `json:"report,omitempty"`
 }
 
+// snapshot returns a copy of the run safe to read without the lock.
+//
+// The pointer start() returned used to be handed straight back out by get() and list(), which is a
+// data race the moment the run is still in flight: finish() and setDefinition() write State, Report,
+// Finished and Definition under c.mu, while every caller read those same fields after get() had
+// already released it. The mutex guarded the map, not the struct it handed over - so the fields a
+// report is made of were never protected at all, and `go test -race` flagged every stored run.
+//
+// Copying under the lock is the fix rather than locking at each call site: the readers are a JSON
+// encode, a dashboard list, and a launch reply, and none of them should have to know a run can be
+// written while it is being read. Report and Finished are pointers, but their pointees are written
+// once and never mutated afterwards, so sharing them in the copy is safe; Seeds is copied because
+// it is the one slice a caller could plausibly retain.
+func (r *crawlRun) snapshot() crawlRun {
+	out := *r
+	out.Seeds = append([]string(nil), r.Seeds...)
+	return out
+}
+
 func newCrawlRuns() *crawlRuns {
 	return &crawlRuns{byID: map[uint64]*crawlRun{}}
 }
@@ -112,11 +131,14 @@ func (c *crawlRuns) finish(taskID uint64, rep *crawler.Report, err error) {
 	run.State = "done"
 }
 
-func (c *crawlRuns) get(taskID uint64) (*crawlRun, bool) {
+func (c *crawlRuns) get(taskID uint64) (crawlRun, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	run, ok := c.byID[taskID]
-	return run, ok
+	if !ok {
+		return crawlRun{}, false
+	}
+	return *run, true
 }
 
 // setDefinition attaches an API scan's definition summary to the run the task id names. A no-op when
@@ -131,13 +153,13 @@ func (c *crawlRuns) setDefinition(taskID uint64, summary *apiScanSummary) {
 }
 
 // list returns the retained runs, newest first.
-func (c *crawlRuns) list() []*crawlRun {
+func (c *crawlRuns) list() []crawlRun {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]*crawlRun, 0, len(c.order))
+	out := make([]crawlRun, 0, len(c.order))
 	for _, id := range c.order {
 		if run := c.byID[id]; run != nil {
-			out = append(out, run)
+			out = append(out, run.snapshot())
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TaskID > out[j].TaskID })
@@ -244,9 +266,9 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), crawlStartStatus(err))
 		return
 	}
-	run, _ := s.crawls.get(taskID)
+	run, ok := s.crawls.get(taskID)
 	state, kind := "", crawlKindCrawl
-	if run != nil {
+	if ok {
 		state = run.State
 		kind = run.Kind
 	}

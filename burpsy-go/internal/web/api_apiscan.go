@@ -149,9 +149,9 @@ func (s *Server) handleAPIScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), crawlStartStatus(err))
 		return
 	}
-	run, _ := s.crawls.get(taskID)
+	run, ok := s.crawls.get(taskID)
 	state, kind := "", runKindAPIScan
-	if run != nil {
+	if ok {
 		state = run.State
 		kind = run.Kind
 	}
