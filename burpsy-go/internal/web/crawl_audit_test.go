@@ -23,8 +23,8 @@ import (
 // the crawl's request count.
 
 // crawlsForAuditTarget reads the audit task's row out of the registry. A crawl-and-audit is two rows
-// by design — see auditCrawledExchanges — so "the audit happened" is a statement about the
-// audit-session row, not about the crawl's.
+// by design — see crawlAuditFeed — so "the audit happened" is a statement about the audit-session
+// row, not about the crawl's. There is exactly one of them however many batches ran.
 func auditTaskFor(t *testing.T, s *Server) (dash.Task, bool) {
 	t.Helper()
 	for _, task := range s.tasks.Snapshot() {
@@ -297,4 +297,147 @@ func recordCompleteExchange(t *testing.T, s *Server, host, path string) {
 		Source:   core.SourceProxy,
 	}
 	s.store.AddExchange(ex)
+}
+
+// ---- The audit runs beside the crawl, not after it (burpsy-react-ui-7suo) -----------------------
+//
+// Burp's crawl→audit bridge is per-URL and event-driven: a newly-reached URL is published to the
+// audit bus as it is reached, so audit work overlaps the crawl. burpsy handed the finished
+// Report.Fetches to the audit engine after c.Run had returned, which made "crawl and audit" a crawl
+// *then* an audit — on a twenty-minute crawl no finding could appear before minute twenty, and a
+// crawl stopped at minute nineteen produced none at all despite having fetched hundreds of auditable
+// exchanges.
+
+// slowChainTarget serves a chain of pages, each linking to the next, with a delay on the pages the
+// crawl walks. The delay is on the chain's own paths only, so the audit's probe traffic — which goes
+// to the same server — is not slowed by the thing that exists to slow the crawl.
+func slowChainTarget(t *testing.T, pages int, delay time.Duration) *httptest.Server {
+	t.Helper()
+	chain := map[string]string{}
+	for i := 0; i < pages; i++ {
+		path := "/page" + strconv.Itoa(i)
+		if i == 0 {
+			path = "/"
+		}
+		next := "/page" + strconv.Itoa(i+1)
+		if i == pages-1 {
+			chain[path] = `<html><body><p>end of the chain</p></body></html>`
+			continue
+		}
+		chain[path] = `<html><body><a href="` + next + `">next</a></body></html>`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, onChain := chain[r.URL.Path]
+		// Only a bare request for a chain page is a crawl fetch. A probe rewrites the query string or
+		// the path, so it answers immediately and the audit is never throttled by the crawl's clock.
+		if onChain && r.URL.RawQuery == "" {
+			time.Sleep(delay)
+		}
+		w.Header().Set("Content-Type", "text/html")
+		if !onChain {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`<html><body>not found</body></html>`))
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// crawlTaskState reads one crawl's row out of the registry.
+func crawlTaskState(t *testing.T, s *Server, taskID uint64) (dash.Task, bool) {
+	t.Helper()
+	for _, task := range s.tasks.Snapshot() {
+		if task.ID == taskID {
+			return task, true
+		}
+	}
+	return dash.Task{}, false
+}
+
+// The claim the whole change exists for: exchanges reach the audit half while the crawl is still
+// fetching. Observed as the audit's row carrying work *before* the crawl's row leaves the running
+// state — under the old batch shape the audit row did not exist at all until the crawl had finished.
+func TestTheAuditOfACrawlStartsWhileTheCrawlIsStillFetching(t *testing.T) {
+	target := slowChainTarget(t, 6, 300*time.Millisecond)
+	s := newTestServer()
+	u, _ := url.Parse(target.URL)
+	s.scope.AddInclude(u.Hostname())
+
+	crawlTaskID := startCrawlAndAudit(t, s, target.URL+"/", map[string]any{
+		"max_requests": 8, "max_depth": 8,
+	})
+
+	// Poll until the crawl's row leaves running, recording what the audit row looked like at each
+	// look. The assertion is over what was true *during* the crawl, so nothing here waits for the end
+	// first — that would be the batch shape and would pass either way.
+	var auditSeenDuringCrawl, auditQueuedDuringCrawl uint64
+	var sawAuditDuringCrawl bool
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		crawl, ok := crawlTaskState(t, s, crawlTaskID)
+		if !ok {
+			t.Fatalf("crawl task %d is not in the registry", crawlTaskID)
+		}
+		if audit, found := auditTaskFor(t, s); found && crawl.State == dash.TaskRunning {
+			sawAuditDuringCrawl = true
+			if audit.Total > auditQueuedDuringCrawl {
+				auditQueuedDuringCrawl = audit.Total
+			}
+			if audit.Done > auditSeenDuringCrawl {
+				auditSeenDuringCrawl = audit.Done
+			}
+		}
+		if crawl.State != dash.TaskRunning {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if !sawAuditDuringCrawl {
+		t.Fatal("no audit task existed while the crawl was still running; the audit half is still a " +
+			"batch that starts once the crawl is over, which is the gap this change closes")
+	}
+	if auditQueuedDuringCrawl == 0 {
+		t.Error("the audit row existed during the crawl but was never handed an exchange; a row " +
+			"registered early and fed late is the old batch with a longer-lived task")
+	}
+	if auditSeenDuringCrawl == 0 {
+		t.Error("no exchange had been audited by the time the crawl finished; the bridge delivered " +
+			"ids but no audit work overlapped the crawl, which is the capability being claimed")
+	}
+
+	// And the end state is still the honest one: everything the crawl fetched was audited.
+	run := waitForCrawl(t, s, crawlTaskID)
+	if run.Report == nil {
+		t.Fatal("the crawl produced no report")
+	}
+	audit := waitForAuditTask(t, s)
+	if int(audit.Total) != run.Report.Fetched || audit.Done != audit.Total {
+		t.Errorf("audit done/total = %d/%d for %d fetched; running the audit early must not cost it "+
+			"coverage — the incremental row still has to account for every exchange the crawl made",
+			audit.Done, audit.Total, run.Report.Fetched)
+	}
+}
+
+// A crawl that fetches nothing still says so. "The crawl found no exchanges to audit" and "the audit
+// half did not run" are different facts, only one of them is a problem, and the row is the only place
+// they are distinguishable.
+func TestACrawlThatFetchesNothingStillReportsItsAuditRow(t *testing.T) {
+	s := newTestServer()
+	// In scope by name, and nothing listening: every fetch fails at the transport, so the crawl
+	// completes with no exchange captured.
+	s.scope.AddInclude("localhost")
+	crawlTaskID := startCrawlAndAudit(t, s, "http://localhost:1/", nil)
+	waitForCrawl(t, s, crawlTaskID)
+
+	audit := waitForAuditTask(t, s)
+	if audit.Total != 0 || audit.Done != 0 {
+		t.Errorf("audit done/total = %d/%d for a crawl that captured nothing", audit.Done, audit.Total)
+	}
+	if !strings.Contains(audit.Note, "no exchanges to audit") {
+		t.Errorf("the empty audit's note is %q; a row that does not say why it is empty cannot be "+
+			"told apart from an audit that silently skipped its work", audit.Note)
+	}
 }

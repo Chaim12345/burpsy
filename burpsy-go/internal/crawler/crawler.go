@@ -293,6 +293,29 @@ type Config struct {
 	// that the session is gone. Empty (the default) disables this signal and keeps the
 	// status-flip rule. Compiled in New; a malformed pattern is a construction error.
 	LoginPagePattern string
+	// OnFetch, when set, is called once for every fetch that reached the shared capture path, at the
+	// moment its exchange exists in the store — while the crawl is still running.
+	//
+	// It exists for one caller and one gap. Burp's crawl→audit bridge is per-URL and event-driven: a
+	// newly-reached URL is published to the audit bus as it is reached, so the audit of the first page
+	// overlaps the crawl of the twentieth. burpsy's caller audited Report.Fetches after Run returned,
+	// which made "crawl and audit" a crawl *then* an audit — the first finding of a twenty-minute
+	// crawl could not appear until minute twenty, and a crawl stopped at minute nineteen produced
+	// none at all. This callback is the smallest thing that closes that.
+	//
+	// It deliberately changes nothing the crawl counts: Report is built exactly as before, a nil
+	// callback is the previous behaviour to the byte, and the crawler learns nothing about auditing —
+	// it announces a fetch and the caller decides what that is worth. The alternative shape, pushing
+	// ids straight into the live sweep's queue, was rejected: the sweep walks store ids in order
+	// because an id is handed out at capture time and a later one can complete first, and auditing
+	// past that gap would skip a request still in flight.
+	//
+	// Two things a consumer must know. It runs synchronously on the crawl goroutine, so a callback
+	// that blocks throttles the crawl — take the id, hand it to a consumer, return. And the Fetch is
+	// a capture-time snapshot: URL, Method, Status, ExchangeID, Depth, FoundAt and LinkText are final,
+	// while Fingerprint, DuplicateOf and RetentionExcluded are decided on branches below this point
+	// and are zero here. The matching entry in Report.Fetches carries the completed record.
+	OnFetch func(Fetch)
 	// MaxSkipRecords bounds the sampled refusal detail. Zero takes DefaultMaxSkipRecords; a negative
 	// value keeps counts only.
 	MaxSkipRecords int
@@ -1117,6 +1140,16 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
+	}
+	// Announced here, where the record is complete, rather than beside each rep.Fetches append. The
+	// appends are at ten return sites — the unreadable stored response, the expired session, a
+	// seeds-only run, robots.txt, a redirect, an encoded body, a non-HTML body, a retention-excluded
+	// response, a duplicate location, and the ordinary tail — and a consumer wired at each of them
+	// would silently miss whichever branch the next edit adds, auditing less than the crawl fetched
+	// with nothing on screen saying so. One call at the one point every branch passes through cannot
+	// drift that way. See Config.OnFetch for what the snapshot does and does not carry.
+	if c.cfg.OnFetch != nil {
+		c.cfg.OnFetch(fetch)
 	}
 
 	// Read the response back out of the store rather than re-parsing the wire bytes: this way the

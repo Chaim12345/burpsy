@@ -19,6 +19,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"go.uber.org/zap"
 )
 
 // ---- Crawl ---------------------------------------------------------------------------------------
@@ -361,6 +362,17 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		limits.MaxDuration = time.Duration(req.MaxDurationSecs) * time.Second
 	}
 
+	// The audit half's producer, built before the crawler because it is one of the crawler's
+	// collaborators now rather than something applied to the report afterwards. It registers nothing
+	// and starts nothing yet: a configuration mistake below must still be a 400 with no task row, so
+	// the feed only becomes visible once the crawl goroutine starts it.
+	var feed *crawlAuditFeed
+	var onFetch func(crawler.Fetch)
+	if kind == crawlKindAudit {
+		feed = newCrawlAuditFeed(s, "crawl of "+seedAuditHost(seeds))
+		onFetch = feed.offer
+	}
+
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
 	c, err := crawler.New(crawler.Config{
@@ -382,6 +394,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		Pool:              poolLimit,
 		UserAgent:         req.UserAgent,
 		Headers:           req.Headers,
+		OnFetch:           onFetch,
 		Logger:            s.logger,
 	})
 	if err != nil {
@@ -407,15 +420,23 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		// Started before Run, not after it: from here on every completed fetch is audited while the
+		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
+		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two
+		// in a happens-before relation rather than relying on the crawl's own timing.
+		if feed != nil {
+			feed.start(ctx)
+		}
 		rep := c.Run(ctx)
 		s.crawls.finish(task.ID(), &rep, nil)
 		task.SetNote(fmt.Sprintf("%d fetched, %d refused, %d failed", rep.Fetched, rep.Refused, rep.Failed))
 		task.Advance(uint64(rep.Fetched))
-		if kind == crawlKindAudit {
-			// Before Finish, because the audit phase's own task id is handed to the findings it
-			// produces and the crawl task stays open while it runs — the two rows then read as one
-			// scan's two halves, which is what the operator launched.
-			s.auditCrawledExchanges(ctx, &rep)
+		if feed != nil {
+			// Before Finish and before this goroutine's deferred cancel, because the audit phase's
+			// own task id is handed to the findings it produces and the crawl task stays open while
+			// it runs — the two rows then read as one scan's two halves, which is what the operator
+			// launched. Most of the audit is already done by now; seal waits out the tail of it.
+			feed.seal()
 		}
 		task.Finish(dash.Breakdown{})
 		// changeHistory covers the site map and every traffic-derived count; changeIssues covers the
@@ -429,46 +450,305 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	return task.ID(), seeds, liveTaken, nil
 }
 
-// auditCrawledExchanges runs the audit half of a crawl-and-audit scan over the exchanges the crawl
-// itself produced.
+// crawlAuditBatchLimit is how many exchanges one incremental audit batch covers.
 //
-// A one-line wrapper over auditFetchedExchanges, which is the same body the API-only scan's audit
-// half calls: the two differ only in what the task row calls the run.
+// Small on purpose. The batch is the unit of latency between a page being fetched and its findings
+// being on screen, and the whole point of auditing during the crawl is that the number is small; a
+// batch of two hundred would be the end-of-crawl batch again with extra steps. It is not a coverage
+// bound — nothing is dropped for exceeding it, the queue simply hands over the next batch — so the
+// only thing a larger value buys is fewer task-row updates, and the only thing it costs is the
+// latency this exists to remove.
+const crawlAuditBatchLimit = 16
+
+// crawlAuditFeed is the audit half of a crawl-and-audit, running beside the crawl instead of after it.
+//
+// # The gap this closes
+//
+// Burp's crawl→audit bridge is per-URL and event-driven: a newly-reached URL is published to the
+// audit bus as it is reached, so audit work starts mid-crawl. burpsy handed the finished
+// Report.Fetches to the audit engine once c.Run had returned, which made "crawl and audit" a crawl
+// *then* an audit. On a twenty-minute crawl the first finding could not appear until minute twenty,
+// and a crawl the operator stopped at minute nineteen produced no findings at all despite having
+// fetched hundreds of auditable exchanges. The crawl already knew about each fetch the instant it
+// completed; the information was there and was being thrown away until the end.
 //
 // # Where the list comes from
 //
-// The crawl's own report, not the store. Report.Fetches carries one entry per request that reached
-// the target, each with the exchange id the capture path wrote — so the audit is over exactly what
-// this crawl fetched, and a second crawl running beside it cannot contribute a single row. A scan of
-// "everything recorded since the crawl started" would audit the operator's own browsing, and the
-// task row would count it as the scan's work.
+// The crawl's own fetches, announced by the crawl, never the store. Every id audited here came from
+// a request this crawl made, so a second crawl running beside it cannot contribute a single row and
+// neither can the operator's own browser. A scan of "everything recorded since the crawl started"
+// would audit traffic the operator did not launch a scan for, and the task row would count it as
+// this scan's work. That property survived the move off the finished Report.Fetches because the
+// source is still the same crawl — it is now announcing each fetch instead of handing over a list.
 //
-// # Why it is a second task rather than a phase of the first
+// # Why a crawl-side callback, and not a channel into the live sweep
 //
-// The crawl's progress is counted in requests fetched against a request budget, and the audit's work
-// is counted in exchanges audited against an exchange count. Folding them into one row would need
-// one total in two units, and a fraction computed from that number is a number that means nothing.
-// Registering the audit as its own task is the same call the live sweep makes for its own ticks
-// (see liveAuditTick), and it is what lets the audit report the engine's own outcome — including the
-// checks its budget did not admit — against a total an operator can check.
+// The obvious-looking shape is to push each ExchangeID into a queue the always-on live sweep
+// consumes. It was rejected. The sweep walks store ids *in order* precisely because an id is handed
+// out at capture time and a later id can complete before an earlier one, so auditing past a gap
+// would skip a request still in flight; liveAuditStallTicks, Skipped, StalledAt and RetryStalled all
+// exist to manage exactly that. An event-driven push has no gap to wait at, so it would retire the
+// four of them and silently drop the coverage accounting they produce. The sweep's job is "audit
+// everything that has been captured, in order, missing nothing"; this one's is "audit what this scan
+// just fetched, as it fetches it". Two different jobs, and folding the second into the first costs
+// the first its honesty.
 //
-// # What it refuses to leave unsaid
+// # One task row, not one per batch
 //
-// The task is registered even when there is nothing to audit, because "the crawl found no exchanges
-// to audit" and "the audit half did not run" are different facts and only one of them is a problem,
-// and a row that says the former is the only way to tell them apart on screen.
-func (s *Server) auditCrawledExchanges(ctx context.Context, rep *crawler.Report) {
-	s.auditFetchedExchanges(ctx, rep, "crawl of "+crawlAuditHost(rep))
+// The row is registered when the crawl starts and its total grows as fetches arrive (dash.Handle
+// has SetTotal for exactly this). A row per batch would make a crawl-and-audit produce dozens of
+// KindAuditSession rows an operator would have to add up to answer "did the audit cover what the
+// crawl fetched", which is the one question the row exists to answer. The trade is that the total is
+// provisional while the crawl runs — it is the fetches so far, not a prediction — and done/total is
+// therefore a rate rather than a fraction of a known whole until the crawl finishes.
+//
+// # What is genuinely different from the end-of-crawl batch
+//
+// Two things, both deliberate. The AuditLedger is created once here and handed to every batch, so
+// the scope collapse that makes 500 captures of one URL dispatch once still happens across batch
+// boundaries — without it, incremental auditing would do strictly more work than the batch it
+// replaces. The time and request budgets cannot be shared that way (AuditSession starts a fresh
+// auditRun per call), so they bound each batch rather than the scan. That is the same bargain the
+// live sweep already makes for its own per-tick sessions, and it is stated here rather than left to
+// be discovered from a request count.
+type crawlAuditFeed struct {
+	s      *Server
+	target string
+	// cfg is snapshotted once, when the scan is launched, so every batch of one run audits under the
+	// configuration the run was started with. Re-reading the active scanner per batch would let a
+	// mid-crawl settings change split one scan into two different scans with one row.
+	cfg scanner.AuditConfig
+
+	// mu guards the queue and the counters, which the crawl goroutine writes (offer) and the
+	// consumer goroutine reads (take).
+	mu      sync.Mutex
+	pending []core.ExchangeID
+	queued  uint64
+	sealed  bool
+
+	// wake is a capacity-1 signal, never a queue: offer does a non-blocking send, so a crawl that
+	// outruns the audit is never *slowed* by it, and a full channel means "the consumer already has
+	// work to find" rather than a lost fetch. The ids themselves live in pending, which is unbounded
+	// for the reason a bounded one would be wrong — dropping an id on a full buffer is coverage loss
+	// that nothing on screen would report.
+	wake chan struct{}
+	done chan struct{}
+
+	// task and outcome are touched only by the consumer goroutine after start, so they need no lock.
+	task    *dash.Handle
+	outcome scanner.SessionOutcome
 }
 
-// auditFetchedExchanges runs the audit half of any scan whose fetches are known: the crawl-and-audit
-// phase and the API-only sweep.
+// newCrawlAuditFeed prepares the audit half of a crawl-and-audit without registering or starting
+// anything: the crawler it is handed to may still fail to build, and a scan that was refused with a
+// 400 must leave no task row behind. start does the visible half.
+func newCrawlAuditFeed(s *Server, target string) *crawlAuditFeed {
+	// The config comes off the active scanner rather than from a preset name, because a
+	// crawl-and-audit is not launched with a configuration — the crawl's card names bounds, not a
+	// check set. Same call auditFetchedExchanges makes, so the two launch surfaces cannot disagree
+	// about what a crawl's audit runs.
+	cfg := s.activeScanner().AuditConfig()
+	cfg.Ledger = scanner.NewAuditLedger()
+	return &crawlAuditFeed{
+		s:      s,
+		target: target,
+		cfg:    cfg,
+		wake:   make(chan struct{}, 1),
+		done:   make(chan struct{}),
+	}
+}
+
+// start registers the audit's task row and starts the consumer. It must be called before the crawl
+// runs and from the same goroutine that runs it, which is what orders the write of task against the
+// reads offer makes from the crawl's own goroutine.
 //
-// One body rather than two, for the reason the audit started as a shared call: two places that both
-// "audit these exchanges" is how a launched scan comes to audit less than another one did, with
-// nothing on screen saying which. subject names the run for the task row and is the callers' only
-// difference — the crawl names a host it discovered its way around, the API scan names a host it was
-// handed.
+// The row is registered even for a crawl that turns out to fetch nothing, because "the crawl found
+// no exchanges to audit" and "the audit half did not run" are different facts, only one of them is a
+// problem, and a row that says the former is the only way to tell them apart on screen.
+func (f *crawlAuditFeed) start(ctx context.Context) {
+	f.task = f.s.tasks.Start(dash.KindAuditSession, f.target+" (audited during the crawl)", 0)
+	go f.run(ctx)
+}
+
+// offer is the crawler's OnFetch callback: one completed fetch, announced from the crawl goroutine.
+//
+// It does an append and a non-blocking signal and returns, because it runs synchronously inside the
+// crawl loop — anything slower here would turn audit latency into crawl latency, which is the
+// failure mode that makes an event-driven bridge worse than the batch it replaces.
+func (f *crawlAuditFeed) offer(fetch crawler.Fetch) {
+	f.mu.Lock()
+	f.pending = append(f.pending, fetch.ExchangeID)
+	f.queued++
+	queued := f.queued
+	f.mu.Unlock()
+	// The total is the fetches so far, restated on every arrival. It is honest rather than
+	// predictive: a crawl's final fetch count is not knowable while it is running, and a row showing
+	// the request *budget* as the audit's total would report a fraction of a number the audit was
+	// never going to reach.
+	f.task.SetTotal(queued)
+	select {
+	case f.wake <- struct{}{}:
+	default:
+	}
+}
+
+// take pops up to n queued ids, and reports whether the crawl has finished announcing.
+func (f *crawlAuditFeed) take(n int) (batch []core.ExchangeID, sealed bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.pending) == 0 {
+		return nil, f.sealed
+	}
+	if n > len(f.pending) {
+		n = len(f.pending)
+	}
+	// Full three-index slice: the batch keeps its own cap, so a later append to pending cannot reach
+	// the ids a running audit is holding.
+	batch = f.pending[0:n:n]
+	f.pending = f.pending[n:]
+	return batch, false
+}
+
+// seal tells the consumer the crawl is done announcing and waits for it to drain the queue and close
+// out the task row. Called from the crawl goroutine once Run has returned, before the crawl's own
+// task is finished and before its context is cancelled.
+func (f *crawlAuditFeed) seal() {
+	f.mu.Lock()
+	f.sealed = true
+	f.mu.Unlock()
+	select {
+	case f.wake <- struct{}{}:
+	default:
+	}
+	<-f.done
+}
+
+// run is the consumer: batch, audit, repeat, until the crawl is sealed or the run is cancelled.
+func (f *crawlAuditFeed) run(ctx context.Context) {
+	defer close(f.done)
+	for ctx.Err() == nil {
+		batch, sealed := f.take(crawlAuditBatchLimit)
+		if len(batch) > 0 {
+			f.audit(ctx, batch)
+			continue
+		}
+		if sealed {
+			break
+		}
+		select {
+		case <-f.wake:
+		case <-ctx.Done():
+		}
+	}
+	f.finish(ctx)
+}
+
+// audit runs one batch and lands its findings immediately.
+//
+// Immediately, rather than accumulated and added at the end, is the whole deliverable: a finding
+// from the first page is on screen while the crawl is still walking the twentieth, and a scan the
+// operator stops early keeps everything it had already found.
+func (f *crawlAuditFeed) audit(ctx context.Context, ids []core.ExchangeID) {
+	cfg := f.cfg
+	// The queue, for the same reason the live sweep and the bulk paths attach it: an audit split into
+	// batches is exactly the caller that makes "which of these did the budget bound" answerable.
+	cfg.Items = f.s.auditItems
+	outcome, findings := f.s.activeScanner().AuditSession(ctx, ids, cfg)
+	f.task.Advance(uint64(len(ids)))
+	f.merge(outcome)
+	for _, finding := range findings {
+		f.s.findings.Add(f.s.activeFinding(finding, f.task.ID()))
+	}
+	f.task.SetNote(f.outcome.Summary())
+	f.s.live.notify(changeIssues)
+	f.s.live.notify(changeDashboard)
+}
+
+// merge folds one batch's outcome into the run's. Consumer-goroutine only, so it takes no lock.
+//
+// Everything SessionOutcome derives — Completed, NotAdmitted, AlreadyCovered, Summary, Breakdown —
+// folds over Items plus the scalars, so appending and summing gives the same answer one session over
+// the same ids would have given. DispatchUnits is the exception and is *replaced*, not added: it is
+// read off the ledger as a running total of the units that ledger has seen, and this run shares one
+// ledger across every batch, so summing it would count the first batch's units again in the second.
+func (f *crawlAuditFeed) merge(o *scanner.SessionOutcome) {
+	if o == nil {
+		return
+	}
+	f.outcome.Items = append(f.outcome.Items, o.Items...)
+	f.outcome.Findings += o.Findings
+	f.outcome.RequestsSent += o.RequestsSent
+	f.outcome.FailedItems += o.FailedItems
+	f.outcome.DispatchUnits = o.DispatchUnits
+	f.outcome.Paused = f.outcome.Paused || o.Paused
+	f.outcome.TimedOut = f.outcome.TimedOut || o.TimedOut
+}
+
+// finish closes the audit row out: the deferred second look, then the run's merged outcome.
+func (f *crawlAuditFeed) finish(ctx context.Context) {
+	f.mu.Lock()
+	queued, unaudited := f.queued, len(f.pending)
+	f.mu.Unlock()
+
+	if queued == 0 {
+		f.task.FinishWithNote(dash.Breakdown{}, "the crawl produced no exchanges to audit")
+		return
+	}
+	// The deferred half (gxbk), same guard and same reasoning as runBulkAudit's tail: settle only
+	// when a claim was actually registered, and before the task's finish call, because a finished
+	// task must not be cancellable and Handle.finish clears the cancel the re-fetch pass needs.
+	active := f.s.activeScanner()
+	if active.PendingCount() > 0 {
+		deferred, completion := active.FinishScan(ctx)
+		f.s.events.RecordFor(f.task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
+			"deferred phase of %s: %s (outstanding: %d)", f.target, completion.Pending, len(completion.Outstanding)))
+		for _, finding := range deferred {
+			f.s.findings.Add(f.s.activeFinding(finding, f.task.ID()))
+		}
+	}
+	// A cancelled run is reported as stopped, not done, and says how many announced fetches it never
+	// reached. Those two rows mean different things to the operator reading them — "the audit looked
+	// at all of it" and "someone stopped the scan with forty still queued" — and only one of them is
+	// a result.
+	if ctx.Err() != nil {
+		f.task.Stop(f.outcome.Breakdown(), fmt.Sprintf(
+			"stopped: %s; %d fetched exchange(s) never reached the audit", f.outcome.Summary(), unaudited))
+	} else {
+		f.task.FinishWithNote(f.outcome.Breakdown(), f.outcome.Summary())
+	}
+	f.s.events.RecordFor(f.task.ID(), dash.EventAuditBounded, auditOutcomeSeverity(&f.outcome), fmt.Sprintf(
+		"audit of %s: %s", f.target, f.outcome.Summary()))
+	f.s.logger.Debug("crawl audit",
+		zap.Uint64("exchanges", queued),
+		zap.Int("unaudited", unaudited),
+		zap.String("engine", f.outcome.Summary()))
+	if f.outcome.Paused || f.outcome.TimedOut {
+		f.s.logger.Warn("a crawl's audit was bounded before it finished",
+			zap.Uint64("exchanges", queued),
+			zap.Int("checks_not_admitted", f.outcome.NotAdmitted()),
+			zap.Bool("paused", f.outcome.Paused),
+			zap.Bool("timed_out", f.outcome.TimedOut))
+	}
+	f.s.live.notify(changeIssues)
+	f.s.live.notify(changeDashboard)
+}
+
+// auditFetchedExchanges runs the audit half of a scan whose fetches are all known before the audit
+// starts. One caller now: the API-only sweep.
+//
+// # Why the API scan stays a batch when the crawl no longer is
+//
+// A crawl discovers its attack surface as it walks, so its fetch list does not exist until it
+// finishes — which is what made auditing from the finished report a twenty-minute wait, and why the
+// crawl's half is now fed per fetch by crawlAuditFeed. An API-only scan's surface is the definition
+// it was handed: every request it will send is known before the first one goes out, and the run is a
+// fixed list walked once. There is nothing to overlap that is not already overlapping, so the extra
+// machinery would buy latency back from a run that never had it to lose.
+//
+// subject names the run for the task row. Kept as a parameter rather than inlined because this body
+// was shared before the crawl left it and is worth keeping shareable: two places that both "audit
+// these exchanges" is how one launched scan comes to audit less than another with nothing on screen
+// saying which.
 func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string) *scanner.SessionOutcome {
 	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
 	for _, f := range rep.Fetches {
@@ -485,16 +765,19 @@ func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report,
 	return s.runBulkAudit(ctx, task, target, ids, cfg, "the run produced no exchanges to audit")
 }
 
-// crawlAuditHost names a crawl for the audit's task row: the first seed's host, or the seed itself
+// seedAuditHost names a crawl for the audit's task row: the first seed's host, or the seed itself
 // when it has no parseable host, so the row is never blank.
-func crawlAuditHost(rep *crawler.Report) string {
-	if len(rep.Seeds) == 0 {
+//
+// It takes the seed list rather than the finished Report because the audit row now exists before the
+// report does — the row is registered as the crawl starts, not written from its outcome.
+func seedAuditHost(seeds []string) string {
+	if len(seeds) == 0 {
 		return "no seeds"
 	}
-	if u, err := url.Parse(rep.Seeds[0]); err == nil && u.Host != "" {
+	if u, err := url.Parse(seeds[0]); err == nil && u.Host != "" {
 		return u.Host
 	}
-	return rep.Seeds[0]
+	return seeds[0]
 }
 
 // availablePools names the saved pools for an error message, so a refusal says what *is* there.

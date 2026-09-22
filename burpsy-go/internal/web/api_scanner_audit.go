@@ -352,13 +352,18 @@ func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
 }
 
 // runBulkAudit runs one active scan over a fixed list of exchanges and reports it against the task it
-// was given. Shared by the two launch surfaces that audit many exchanges at once — the audit half of a
-// crawl-and-audit, and a selection — so the two cannot disagree about what a bulk audit does: the same
-// item queue attached, the same findings landed on the same task, the same bounded-run caveats logged.
+// was given. Shared by the launch surfaces that audit a known list all at once — a selection, and the
+// API-only scan through auditFetchedExchanges — so they cannot disagree about what a bulk audit does:
+// the same item queue attached, the same findings landed on the same task, the same bounded-run
+// caveats logged.
 //
-// It does not register the task, because both callers need the id before the run starts: one is inside
-// a goroutine belonging to a crawl that must finish its own report first, and the other has to answer
-// an HTTP request with the id while the scan continues.
+// It does not register the task, because its callers need the id before the run starts: the selection
+// launch has to answer an HTTP request with it while the scan continues, and the API scan's run is
+// inside a goroutine that must finish its own report first.
+//
+// The audit half of a crawl-and-audit no longer comes through here. It is fed one fetch at a time
+// while the crawl is still running (crawlAuditFeed), so it has no fixed list to be handed and its
+// task is finished by the feed rather than by this one call.
 func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target string, ids []core.ExchangeID, cfg scanner.AuditConfig, emptyNote string) *scanner.SessionOutcome {
 	// The task is finished even when there is nothing to audit, because "there was nothing to audit"
 	// and "the audit did not run" are different facts and only one of them is a problem. The callers
