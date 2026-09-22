@@ -134,6 +134,20 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Lineage. A proxied request and a crawled fetch both have no antecedent exchange; only a Repeater
 	// resend, an Intruder payload or a followed redirect does.
 	"ParentID": ruleAbsent,
+	// RequestFP is the request-content fingerprint the audit ledger keys changed-content re-audits
+	// on (burpsy-react-ui-6n4d), computed in scanner.Capture.Record — the same seam both legs go
+	// through — from the request bytes that leg recorded. That last clause is why it is not
+	// ruleIdentical: each producer fingerprints its OWN request. The proxied leg relays a client's
+	// request after stripping Proxy-* headers and correcting framing (see the UserEdited note below);
+	// the crawler's sender authors its own request from the seed URL. A fingerprint of each
+	// producer's own bytes is not a claim the two must agree, and asserting ruleIdentical here would
+	// be a claim that holds only for as long as a fixture's two requests happen to coincide — it
+	// would break the first time a client sent a header the crawler does not, which is not a
+	// regression in either producer.
+	//
+	// Not ruleAbsent either: zero means "not computed", and both legs do compute it at this seam, so
+	// an absent claim would be false. The field being populated is checked per leg below.
+	"RequestFP": ruleMayDiffer,
 	// Identical: both legs record through scanner.Capture.Record, which derives these from
 	// the response bytes in hand. The origin above serves a title and a cookie so the
 	// comparison is over real values, not two empty cells agreeing vacuously.
