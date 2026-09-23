@@ -1279,11 +1279,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 				// so the store's dedup by identity is what keeps the count single.
 				s.findings.Add(core.NewFinding{
 					Name:        f.Name,
-					Severity:     core.ParseSeverity(f.Severity),
-					Confidence:   core.ParseConfidence(f.Confidence),
+					Severity:    core.ParseSeverity(f.Severity),
+					Confidence:  core.ParseConfidence(f.Confidence),
 					Description: f.Description,
 					Remediation: f.Solution,
-					Param:        f.Param,
+					Param:       f.Param,
 					Target: core.FindingTarget{
 						Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path,
 					},
@@ -1411,7 +1411,7 @@ func (s *Server) auditGroupedByHost(ctx context.Context, ids []core.ExchangeID, 
 	}
 	s.liveAudit.recordHostSessions(uint64(len(order)))
 	type result struct {
-		outcome *scanner.SessionOutcome
+		outcome  *scanner.SessionOutcome
 		findings []*scanner.Finding
 	}
 	results := make([]result, len(order))
