@@ -35,7 +35,9 @@ func TestASkippedExchangeWhoseResponseLaterLandsIsAuditedOnceAsRetried(t *testin
 	s := auditableServer(t, target.URL)
 	host, port := targetHostPort(t, target.URL)
 
-	// The exchange whose response has not landed: id 0.
+	// The exchange whose response has not landed yet. The harness seeds two completed
+	// exchanges first, so ours is the last id — captured here, because the store's
+	// position-is-the-id rule is what the give-up files.
 	reqID, err := s.store.Put([]byte("GET /late HTTP/1.1\r\nHost: "+host+"\r\n\r\n"), core.DirectionRequest)
 	if err != nil {
 		t.Fatalf("put request: %v", err)
@@ -45,27 +47,43 @@ func TestASkippedExchangeWhoseResponseLaterLandsIsAuditedOnceAsRetried(t *testin
 		Host: host, Port: port, Method: "GET", Path: "/late",
 		Source: core.SourceProxy,
 	})
+	_, total := s.store.Count()
+	lateID := core.ExchangeID(total - 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	s.startLiveAuditSweep(ctx, sweepTick)
-	if rec := postJSON(t, s, "/api/scanner/live", map[string]bool{"enabled": true}); rec.Code != http.StatusOK {
-		t.Fatalf("POST /api/scanner/live: status = %d, want 200", rec.Code)
-	}
+	// Ticks are driven BY HAND, not by the sweep loop (a4ng). The background loop raced
+	// this test's own reads: the retry slot is a transient the sweep is entitled to clear
+	// on its very next tick — takePendingRetry clears it whether or not the response
+	// landed, the once-only contract — so a background tick 5ms after the give-up could
+	// empty the slot before the test observed it. The flake was the test losing that
+	// race, not the sweep misbehaving. Driving liveAuditTick directly, the way
+	// liveaudit_coverage_test.go does, puts every read between known ticks.
+	s.liveAudit.SetEnabled(true)
+	run := liveAuditRun{}
+	ctx := context.Background()
 
-	// Wait for the give-up: the response-less exchange is skipped.
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) && s.liveAudit.Skipped() == 0 {
-		time.Sleep(sweepTick)
+	// The give-up: liveAuditStallTicks stalled ticks in all, and the give-up fires inside
+	// the last of them. Skipped and the filed id are asserted TICK BY TICK, because both
+	// are facts of the give-up itself, not of a window after it.
+	// Tick 0 admits the two seeded exchanges ahead of /late and only then reaches it, so
+	// its stall counter starts empty: the give-up is the liveAuditStallTicks-th tick that
+	// makes NO progress, which is tick number liveAuditStallTicks+1 in all. Drive exactly
+	// that many, asserting nobody gives up early.
+	for i := 0; i < liveAuditStallTicks; i++ {
+		s.liveAuditTick(ctx, &run)
+		if s.liveAudit.Skipped() != 0 {
+			t.Fatalf("tick %d gave up early: skipped = %d, want the sweep still waiting on the response", i, s.liveAudit.Skipped())
+		}
 	}
-	if s.liveAudit.Skipped() == 0 {
-		t.Fatal("the sweep never gave up on the response-less exchange — control case missing")
+	s.liveAuditTick(ctx, &run)
+	if s.liveAudit.Skipped() != 1 {
+		t.Fatalf("skipped = %d after %d stalled ticks, want exactly 1", s.liveAudit.Skipped(), liveAuditStallTicks)
 	}
-	// ...and the retry slot holds that id — whichever it was; the harness's store may hold
-	// seeded exchanges before ours.
 	id, pending := s.liveAudit.pendingRetryID()
 	if !pending {
 		t.Fatal("pending retry slot is empty: the give-up must file the id it skipped")
+	}
+	if id != lateID {
+		t.Fatalf("pending retry = %d, want our response-less /late exchange at %d", id, lateID)
 	}
 	if ex, err := s.store.GetExchange(id); err != nil || ex.Path != "/late" {
 		t.Fatalf("pending retry = %d, which is not our response-less /late exchange (err=%v)", id, err)
@@ -86,19 +104,21 @@ func TestASkippedExchangeWhoseResponseLaterLandsIsAuditedOnceAsRetried(t *testin
 	ex.Response = &lateResp
 
 	// The next tick takes the retry: retried grows by exactly one, and the slot clears.
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && s.liveAudit.Retried() == 0 {
-		time.Sleep(sweepTick)
-	}
+	s.liveAuditTick(ctx, &run)
 	if got := s.liveAudit.Retried(); got != 1 {
 		t.Fatalf("retried = %d, want 1: the exchange whose response landed after the skip must be audited once on its second chance", got)
 	}
 	if _, stillPending := s.liveAudit.pendingRetryID(); stillPending {
 		t.Error("the retry slot did not clear after the one retry — the retry is once, not forever")
 	}
+	// And no third chance: a later tick must not re-file or re-take it.
+	s.liveAuditTick(ctx, &run)
+	if got := s.liveAudit.Retried(); got != 1 {
+		t.Errorf("retried = %d after another tick, want 1: the retry is once, not a standing re-audit", got)
+	}
 
-	// The operator view carries both numbers, because "gave up on 1" and "gave up on 1, took
-	// 1 back" are different coverage claims.
+	// The operator view carries both numbers, because "gave up on 1" and "gave up on 1,
+	// took 1 back" are different coverage claims.
 	view := s.liveAuditStatus()
 	if view.Skipped == 0 || view.Retried != 1 {
 		t.Errorf("view = skipped %d retried %d, want the skip visible AND the take-back visible", view.Skipped, view.Retried)
