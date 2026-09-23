@@ -497,8 +497,49 @@ type Report struct {
 	Skips SkipReport `json:"skips"`
 	// Limits says which bounds were hit and how many URLs went unfetched (CRAWL-07).
 	Limits LimitReport `json:"limits"`
+	// RenderedAudit is the browser's second look over the crawl's locations (burpsy-react-ui-xuim):
+	// which distinct locations were rendered in a headless browser, and at how many of them the
+	// page's own script produced content the wire response never contained. Nil when the pass did
+	// not run — no browser configured — which the crawl reports through Skips
+	// (SkipRenderUnavailable) rather than through this block, so a missing block is never
+	// mistaken for a pass that found nothing.
+	RenderedAudit *RenderedAuditReport `json:"rendered_audit,omitempty"`
 	// Elapsed is the crawl's wall-clock duration.
 	Elapsed time.Duration `json:"elapsed"`
+}
+
+// RenderedAuditReport is what the rendered-DOM audit over a crawl's locations managed to do
+// (burpsy-react-ui-xuim). The counters are the StoredDOMRenderOutcome shape, because the two
+// passes answer the same question over different inputs — "what did a browser see that the
+// HTTP pass did not" — and an operator reading both reports should not have to learn two
+// vocabularies for it.
+type RenderedAuditReport struct {
+	// Candidates is how many distinct location URLs existed to render.
+	Candidates int `json:"candidates"`
+	// NoScript is how many were skipped because their wire response carries no script: a page
+	// with no script renders to what it already was, so a browser cannot reveal anything new.
+	NoScript int `json:"no_script"`
+	// Capped is how many were dropped by MaxRenderedLocations and never looked at.
+	Capped int `json:"capped"`
+	// Rendered is how many pages were loaded in a browser.
+	Rendered int `json:"rendered"`
+	// Failed is how many could not be loaded.
+	Failed int `json:"failed"`
+	// ScriptOnly is how many rendered pages carried content the wire response never contained —
+	// the finding: content that exists only after the page's script runs is invisible to every
+	// wire-bytes check, including the crawl's own audit.
+	ScriptOnly int `json:"script_only"`
+	// Declined explains a pass that did not run for a reason that is not an error.
+	Declined string `json:"declined,omitempty"`
+}
+
+// Summary renders the outcome in the vocabulary a report can print.
+func (r RenderedAuditReport) Summary() string {
+	if r.Declined != "" {
+		return "no rendered-DOM audit: " + r.Declined
+	}
+	return fmt.Sprintf("%d of %d location(s) rendered in a browser, %d with content the wire response never carried",
+		r.Rendered, r.Candidates, r.ScriptOnly)
 }
 
 // Complete reports whether the crawl exhausted its frontier without hitting a bound. False means the

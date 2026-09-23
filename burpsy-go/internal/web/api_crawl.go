@@ -476,6 +476,14 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 			feed.start(ctx)
 		}
 		rep := c.Run(ctx)
+		// The rendered-DOM audit over the crawl's locations (burpsy-react-ui-xuim): the crawl
+		// captured wire bytes, so script-created content was never audited. This pass renders
+		// each distinct location in the same headless browser the audit's DOM checks use and
+		// reports the locations whose rendered DOM carried content the wire never contained.
+		// It runs before finish so the Report an operator reads carries it; a crawl without a
+		// browser gets SkipRenderUnavailable on the locations the pass would have rendered,
+		// counted by the pass itself below — never silent.
+		s.auditCrawlLocations(ctx, task.ID(), &rep)
 		s.crawls.finish(task.ID(), &rep, nil)
 		task.SetNote(fmt.Sprintf("%d fetched, %d refused, %d failed", rep.Fetched, rep.Refused, rep.Failed))
 		task.Advance(uint64(rep.Fetched))
@@ -496,6 +504,121 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	}()
 
 	return task.ID(), seeds, liveTaken, nil
+}
+
+// auditCrawlLocations runs the rendered-DOM audit over a finished crawl's distinct locations
+// and folds its outcome into the crawl's Report (burpsy-react-ui-xuim).
+//
+// Locations, not fetches: the crawl's location identity is the content fingerprint, but the
+// rendered pass asks about a URL, so the pass runs over the DISTINCT location URLs the crawl
+// fetched — one render per page, not one per redirect chain that ended on it. A URL is keyed by
+// the LAST fetch that captured it, so the wire body compared against is the one the crawl
+// actually ended up with.
+//
+// Honesty rules, same two as the discovery pass (nx7b):
+//   - A crawl with no browser does not get a silent nil block. The pass declines and the
+//     locations it would have rendered are recorded as SkipRenderUnavailable, so the report
+//     says what was not looked at rather than reading as a pass that found nothing. This is
+//     the bead's criterion 3: without -dom the crawl reports the omission honestly.
+//   - The findings are INFO and cite the crawl fetch's exchange, because "content exists only
+//     after script runs" is a visibility fact, not a vulnerability — it changes what the rest
+//     of the scan can claim to have covered, and the operator decides what that is worth.
+func (s *Server) auditCrawlLocations(ctx context.Context, taskID uint64, rep *crawler.Report) {
+	if rep == nil || len(rep.Fetches) == 0 {
+		return
+	}
+	// Distinct location URLs: a Fetch whose Fingerprint is empty was not a location (a
+	// redirect, an unreadable body), and the rendered pass asks about pages, not edges.
+	locations := make(map[string]core.ExchangeID)
+	for _, f := range rep.Fetches {
+		if f.Fingerprint == "" {
+			continue
+		}
+		locations[f.URL] = f.ExchangeID
+	}
+	if len(locations) == 0 {
+		return
+	}
+
+	active := s.activeScanner()
+	if active == nil || !active.DOMCapabilityConfigured() {
+		// No browser: the decline is REPORTED, never silent (criterion 3). The skip ledger's
+		// home is the crawler and this pass is the web layer's, so the omission is carried on
+		// the Report's own block — a Declined RenderedAudit with the candidate count is the
+		// honest shape: "N locations existed and none were looked at", which an absent block
+		// could never say. The task note names it too, because the report and the dashboard
+		// are two different operator views of the same fact.
+		rep.RenderedAudit = &crawler.RenderedAuditReport{
+			Candidates: len(locations),
+			Declined:   "no DOM execution capability is configured: the crawl's locations were not rendered",
+		}
+		return
+	}
+
+	// The wire bodies for the comparison, read from the store: the crawl captured them, so
+	// they are exactly the bytes the wire audit saw.
+	wireByURL := make(map[string][]byte, len(locations))
+	for u, id := range locations {
+		ex, err := s.store.GetExchange(id)
+		if err != nil || ex.Response == nil {
+			continue
+		}
+		msg, err := s.store.Get(*ex.Response)
+		if err != nil {
+			continue
+		}
+		wireByURL[u] = msg.Body()
+	}
+
+	summary, findings, err := active.AuditCrawlLocations(ctx, locations, wireByURL)
+	if err != nil {
+		s.events.RecordFor(taskID, dash.EventAuditBounded, dash.SeverityWarn, fmt.Sprintf(
+			"rendered-DOM audit of %s could not run: %v", rep.Seeds[0], err))
+		return
+	}
+	if summary.Declined != "" {
+		// A decline from the pass (the browser died mid-crawl, say) is the same honest
+		// omission as no provider at all: carried on the block, with the candidate count.
+		rep.RenderedAudit = &crawler.RenderedAuditReport{
+			Candidates: summary.Candidates, Declined: summary.Declined,
+		}
+		s.events.RecordFor(taskID, dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
+			"rendered-DOM audit declined: %s", summary.Declined))
+		return
+	}
+
+	// Fold into the Report: the counters block, then the findings, then the events. The task
+	// note and the events read from the summary so the operator's two views cannot disagree.
+	block := crawler.RenderedAuditReport{
+		Candidates: summary.Candidates, NoScript: summary.NoScript, Capped: summary.Capped,
+		Rendered: summary.Rendered, Failed: summary.Failed, ScriptOnly: summary.ScriptOnly,
+		Declined: summary.Declined,
+	}
+	rep.RenderedAudit = &block
+	for _, rf := range findings {
+		finding := core.NewFinding{
+			Name:     "Content visible only after script runs",
+			Severity: core.ParseSeverity("info"),
+			// Certain: the browser loaded the page and the text was observed in the rendered
+			// DOM and absent from the wire body — this is a measurement, not an inference.
+			Confidence: core.ParseConfidence("certain"),
+			TaskID:     taskID,
+			Target:     core.FindingTarget{Path: rf.URL},
+			Occurrences: []core.Occurrence{{
+				ExchangeID: rf.ExchangeID,
+			}},
+			Description: fmt.Sprintf(
+				"The rendered DOM at %s carries visible content the wire response never contained (wire body %d bytes, rendered %d). "+
+					"Every wire-bytes check, including this crawl's own audit, is blind to it: script-created content was never captured, "+
+					"so a crawl-only scan has not covered it. This row is a visibility fact, not a vulnerability — it says what the rest "+
+					"of the scan can honestly claim to have covered.",
+				rf.URL, rf.WireBodyLength, rf.RenderedBodyLength),
+		}
+		s.findings.Add(finding)
+	}
+	if summary.ScriptOnly > 0 {
+		s.events.RecordFor(taskID, dash.EventAuditBounded, dash.SeverityInfo, block.Summary())
+	}
 }
 
 // crawlAuditBatchLimit is how many exchanges one incremental audit batch covers.

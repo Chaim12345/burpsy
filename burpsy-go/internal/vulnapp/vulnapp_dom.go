@@ -308,6 +308,23 @@ func registerDOMFamily(mux *http.ServeMux) {
 	mux.HandleFunc("/dm/cookie-reflected", dmHandler(dmPageReflected, `try { document.cookie = 'k=' + taint; } catch (e) {}`))
 	mux.HandleFunc("/dm/safe/cookie-reflected", dmHandler(dmPageReflected, `document.getElementById('out').textContent = taint;`))
 
+	// Script-created content (burpsy-react-ui-xuim): the rendered-DOM audit's fixtures. These
+	// two exist for the CRAWL half, not the DOM check set: the wire response and the rendered
+	// DOM are the comparison's two halves, and a page that creates content in script is the
+	// case where the two differ.
+	//
+	// /dm/spa carries a script that fetches nothing and reflects nothing from the URL — it
+	// *creates* text: the labels and link a client-side router would build from inlined state.
+	// The wire response contains none of that text as visible content (it exists only inside
+	// the script element, which the comparison strips), so a browser-built DOM of this page
+	// says something the wire bytes never did.
+	//
+	// /dm/safe/spa is the static twin: no script-created content, the rendered DOM carries
+	// exactly the text the wire body also carries, and the pass must stay silent on it. A
+	// fixture with no silent twin cannot tell a detection from a false positive.
+	mux.HandleFunc("/dm/spa", dmSPAPage)
+	mux.HandleFunc("/dm/safe/spa", dmStaticPage)
+
 	// DOM-extra rows.
 	mux.HandleFunc("/dm/proto", dmHandler(dmPageHash, `try { Object.defineProperty(Object.prototype, taint, {value: 1, configurable: true}); } catch (e) {}`))
 	mux.HandleFunc("/dm/safe/proto", dmHandler(dmPageHash, `document.getElementById('out').textContent = taint;`))
@@ -315,4 +332,28 @@ func registerDOMFamily(mux *http.ServeMux) {
 	mux.HandleFunc("/dm/safe/template", dmSafeTemplatePage)
 	mux.HandleFunc("/dm/prssi", dmPRSSI)
 	mux.HandleFunc("/dm/safe/prssi", dmSafePRSSI)
+}
+
+// dmSPAPage is the script-created-content fixture (burpsy-react-ui-xuim): a page whose visible
+// text exists only after its own script runs. The script text itself is stripped from the
+// comparison by the audit's own rules (script bodies are code, not content), so the words
+// "client-rendered route" and the script-built link exist in the RENDERED document only.
+func dmSPAPage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html><html><body><h1>Shell</h1><div id="app"></div><script>
+		var app = document.getElementById('app');
+		var route = document.createElement('a');
+		route.href = '/items/42';
+		route.textContent = 'client-rendered route item the wire never carried';
+		app.appendChild(route);
+	</script></body></html>`)
+}
+
+// dmStaticPage is dmSPAPage's silent twin: every visible word is in the wire response, the
+// script only styles, and a rendered-DOM audit that fires on it is a false positive.
+func dmStaticPage(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!DOCTYPE html><html><body><h1>Static page</h1><p>this text is in the wire response</p><script>
+		document.getElementById && document.body.setAttribute('class', 'styled');
+	</script></body></html>`)
 }
