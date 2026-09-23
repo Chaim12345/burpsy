@@ -20,7 +20,7 @@ import (
 //
 // The invariant every test below leans on:
 //
-//	scanned + skipped_out_of_scope + skipped_no_response == matched
+//	scanned + skipped_out_of_scope + skipped_no_response + filtered == matched
 //
 // and the scope decision it encodes — the sweep filters by the CURRENT scope, which may be narrower
 // than the one those bytes were captured under, and says how many it refused for that reason rather
@@ -59,7 +59,7 @@ func passiveBranch(t *testing.T, s *Server, body string) passiveBranchResp {
 // assertPartition is the property that makes the report readable as coverage.
 func assertPartition(t *testing.T, r passiveBranchResp) {
 	t.Helper()
-	sum := r.Scanned + r.SkippedOutOfScope + r.SkippedNoResponse
+	sum := r.Scanned + r.SkippedOutOfScope + r.SkippedNoResponse + r.Filtered
 	if sum != r.Matched {
 		t.Errorf("the counts do not partition: scanned %d + out-of-scope %d + no-response %d = %d, "+
 			"but %d matched the branch. An operator cannot answer 'what happened to the other ones', "+
@@ -215,5 +215,92 @@ func TestPortZeroMeansEveryPort(t *testing.T) {
 	only443 := passiveBranchReq{Host: "target.test", Port: 443}
 	if branchContains(&core.Exchange{Host: "target.test", Port: 80, Path: "/x"}, only443) {
 		t.Error("a request naming port 443 matched port 80")
+	}
+}
+
+// ---- the pre-scan filter (burpsy-react-ui-a13) ---------------------------------------------
+//
+// Burp's scan wizard offers to remove duplicate items, items with no parameters, and items with
+// given extensions before the scan starts, each with a live count of what it removes. burpsy's
+// ACTIVE scan is a crawl from seeds — there is no item set to filter, and a crawl discovers unique
+// URLs by construction, so "remove duplicates" has nothing to remove. The passive branch sweep IS an
+// item set (every captured exchange under a host/path), it is where an operator spends a budget,
+// and it is the surface whose counts the operator already reads. So the filters landed here,
+// expressed in this package's own filter grammar rather than as a second predicate language.
+
+func TestThePreScanFilterRemovesWhatItNamesAndSaysHowMany(t *testing.T) {
+	s := passiveBranchServer(t)
+	captureExchange(t, s, "target.test", "/app/page", 200, "text/html")
+	captureExchange(t, s, "target.test", "/static/app.js", 200, "application/javascript")
+	captureExchange(t, s, "target.test", "/static/logo.png", 200, "image/png")
+	captureExchange(t, s, "target.test", "/app/api?id=1", 200, "text/html")
+
+	// Burp's shipped extension list, as a query over the grammar. The grammar gives extension =, !=
+	// and ~ only — no `in` — so a set of extensions is a disjunction of `=`, which is the same filter
+	// the wizard writes, and the server refusing a bad operator is the grammar's own guarantee.
+	r := passiveBranch(t, s, `{"host":"target.test","exclude":"not (extension = \"js\" or extension = \"png\")"}`)
+	assertPartition(t, r)
+
+	if r.Filtered != 2 {
+		t.Errorf("filtered %d, want the 2 static assets removed — the filter is the reason an "+
+			"operator aimed a bounded sweep at the pages instead", r.Filtered)
+	}
+	if r.Scanned != 2 {
+		t.Errorf("scanned %d, want the 2 pages that survived the filter", r.Scanned)
+	}
+	if r.Exclude == "" {
+		t.Error("the response does not echo the filter it applied, so a caller cannot state which rule shaped this sweep")
+	}
+}
+
+func TestAnEmptyPreScanFilterScansExactlyWhatItDidBefore(t *testing.T) {
+	s := passiveBranchServer(t)
+	captureExchange(t, s, "target.test", "/one", 200, "text/html")
+	captureExchange(t, s, "target.test", "/two", 200, "text/html")
+
+	r := passiveBranch(t, s, `{"host":"target.test","exclude":""}`)
+	assertPartition(t, r)
+	if r.Filtered != 0 || r.Scanned != 2 {
+		t.Errorf("an absent filter changed the sweep: filtered %d, scanned %d — every caller that "+
+			"predates the field must be unaffected by it", r.Filtered, r.Scanned)
+	}
+}
+
+func TestAMalformedPreScanFilterIsRefusedRatherThanIgnored(t *testing.T) {
+	s := passiveBranchServer(t)
+	captureExchange(t, s, "target.test", "/one", 200, "text/html")
+
+	rec := httptest.NewRecorder()
+	s.handlePassiveBranch(rec, httptest.NewRequest(http.MethodPost, "/api/scanner/passive-branch",
+		strings.NewReader(`{"host":"target.test","exclude":"extension in"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST with a malformed filter = %d, want 400: a filter the server cannot parse must "+
+			"not be answered with a sweep that silently ignored it", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "pre-scan filter") {
+		t.Errorf("the refusal does not say which field was wrong: %q", rec.Body.String())
+	}
+}
+
+func TestThePreScanFilterRunsBeforeTheSweepsOwnGates(t *testing.T) {
+	s := passiveBranchServer(t)
+	// No response, so the no-response bucket would claim it — unless the filter has already
+	// removed it. Counting it in both would break the partition and double-count the operator's
+	// budget decision.
+	id := captureExchange(t, s, "target.test", "/pending", 200, "text/html")
+	ex, err := s.store.GetExchange(core.ExchangeID(id))
+	if err != nil {
+		t.Fatalf("get exchange: %v", err)
+	}
+	ex.Response = nil
+
+	r := passiveBranch(t, s, `{"host":"target.test","exclude":"path = \"/pending\""}`)
+	assertPartition(t, r)
+	if r.Filtered != 1 {
+		t.Errorf("filtered %d, want the response-less exchange removed by the filter", r.Filtered)
+	}
+	if r.SkippedNoResponse != 0 {
+		t.Errorf("skipped_no_response %d, want 0: the filter is the operator's decision and runs "+
+			"first, so this exchange is filtered, not skipped", r.SkippedNoResponse)
 	}
 }

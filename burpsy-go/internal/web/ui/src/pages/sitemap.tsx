@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data";
 import { useCrawls, useDeleteSitemap, usePassiveScanBranch, useSitemapDetailed, useStartCrawl } from "../lib/data.observe";
@@ -8,6 +8,7 @@ import type { FindingDetail } from "../lib/types.attack";
 import { exchangeUrl, useSendShortcuts } from "../lib/actions";
 import { engagementToolsGroup, type EngagementSeed } from "../lib/engagement-menu";
 import { putSeed } from "../lib/page-seed";
+import { DEFAULT_PRESCAN_FILTERS, countFiltered, parseExtensions, prescanExclude, BURP_DEFAULT_HIDDEN_EXTENSIONS, type PrescanFilters } from "../lib/prescan-filters";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { requestSettingsSection } from "../lib/settings-sections";
 import { useApp } from "../lib/store";
@@ -18,7 +19,7 @@ import { CrawlLauncher } from "../ui/crawl";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Modal, Toolbar, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Modal, Textarea, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
@@ -488,6 +489,12 @@ export function SiteMapPage(): JSX.Element {
  };
 
  const selected = selectedId === null ? null : (index.get(selectedId) ?? null);
+ // The pre-scan filter dialog (a13), opened from the toolbar's "Passive scan branch" button. A node
+ // change closes it rather than re-pointing it at a branch the operator did not choose.
+ const [prescanOpen, setPrescanOpen] = useState(false);
+ useEffect(() => {
+  setPrescanOpen(false);
+ }, [selectedId]);
 
  /** The exchanges the selected node covers: a host node takes everything on that host, a path node
   * takes its own path and its descendants. */
@@ -1081,31 +1088,7 @@ export function SiteMapPage(): JSX.Element {
           variant="outline"
           size="small"
           disabled={!selected || passiveScan.isPending}
-          onClick={() => {
-           if (!selected) return;
-           passiveScan.mutate(
-            {
-             host: selected.host,
-             // A host node is the whole host; a path node is its own path and below.
-             path_prefix: selected.depth === 0 ? undefined : selected.node.path,
-            },
-            {
-             onSuccess: (result) => {
-              // The server's own summary, verbatim: it states the counts WITH their
-              // caveats, and rewording it here would be a second wording of the one
-              // thing that must not be optimistic.
-              if (result.loaded === 0) {
-               toast.error(result.summary);
-              } else if (result.findings > 0) {
-               toast.success(result.summary);
-              } else {
-               toast.info(result.summary);
-              }
-             },
-             onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
-            },
-           );
-          }}
+          onClick={() => setPrescanOpen(true)}
          >
           <ShieldCheck size={13} />
           {passiveScan.isPending ? "Scanning…" : "Passive scan branch"}
@@ -1118,6 +1101,41 @@ export function SiteMapPage(): JSX.Element {
      }
     />
     {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+    {prescanOpen && selected ? (
+     <PassiveScanDialog
+      node={{ host: selected.host, path: selected.depth === 0 ? "" : selected.node.path }}
+      items={nodeExchanges}
+      pending={passiveScan.isPending}
+      onClose={() => setPrescanOpen(false)}
+      onScan={(filters) => {
+       const exclude = prescanExclude(filters);
+       passiveScan.mutate(
+        {
+         host: selected.host,
+         // A host node is the whole host; a path node is its own path and below.
+         path_prefix: selected.depth === 0 ? undefined : selected.node.path,
+         ...(exclude ? { exclude } : {}),
+        },
+        {
+         onSuccess: (result) => {
+          setPrescanOpen(false);
+          // The server's own summary, verbatim: it states the counts WITH their caveats, and
+          // rewording it here would be a second wording of the one thing that must not be
+          // optimistic. Its filtered count is the sweep's, not this dialog's prediction.
+          if (result.loaded === 0) {
+           toast.error(result.summary);
+          } else if (result.findings > 0) {
+           toast.success(result.summary);
+          } else {
+           toast.info(result.summary);
+          }
+         },
+         onError: (err) => toast.error(`Could not run the passive scan: ${err instanceof Error ? err.message : String(err)}`),
+        },
+       );
+      }}
+     />
+    ) : null}
    </div>
    {view === "paths" ? (
     <CrawlPathsView runs={crawls.data?.crawls ?? []} />
@@ -1152,5 +1170,130 @@ export function SiteMapPage(): JSX.Element {
     </div>
    </Modal>
   </div>
+ );
+}
+
+/**
+ * Burp's pre-scan filter step (burpsy-react-ui-a13), on the surface where burpsy has an item set to
+ * filter: the passive branch sweep.
+ *
+ * The wizard it mirrors offers four filters, each with a live count of what it removes. Two of them
+ * exist here as written and one does not, and the dialog says which is which rather than showing a
+ * row that does nothing:
+ *
+ *   - extensions — the shipped Burp list, editable, counted live;
+ *   - no parameters — counted live;
+ *   - out-of-scope — NOT a switch: the sweep already refuses out-of-scope exchanges under the
+ *     CURRENT scope and reports how many, so a checkbox for a decision the server already makes
+ *     would be a control that cannot change anything;
+ *   - duplicates — NOT a switch, because a branch sweep walks stored exchanges and two rows with the
+ *     same URL and parameters are the same request seen twice, which is what the finding store's own
+ *     deduplication already collapses. There is nothing to remove, and the dialog says that in
+ *     words rather than offering a checkbox that would lie.
+ *
+ * The counts are the dialog's own prediction over the selected node's exchanges, and the sweep's
+ * numbers come back from the server. The prediction is what an operator needs before committing; the
+ * server's are the ones reported afterwards.
+ */
+function PassiveScanDialog({
+ node,
+ items,
+ pending,
+ onClose,
+ onScan,
+}: {
+ node: { host: string; path: string };
+ items: { path: string }[];
+ pending: boolean;
+ onClose: () => void;
+ onScan: (filters: PrescanFilters) => void;
+}): JSX.Element {
+ const [filters, setFilters] = useState<PrescanFilters>(DEFAULT_PRESCAN_FILTERS);
+ const [extensions, setExtensions] = useState<string>([...BURP_DEFAULT_HIDDEN_EXTENSIONS].join(", "));
+ const counts = countFiltered(items, filters);
+ const exclude = prescanExclude(filters);
+ const removes = counts.extensions + counts.noParameters;
+ const empty = items.length === 0;
+
+ return (
+  <Modal
+   open
+   onOpenChange={(open) => {
+    if (!open) onClose();
+   }}
+   title={`Passively scan ${node.host}${node.path}`}
+   description={`Filter the ${items.length.toLocaleString()} captured exchange${items.length === 1 ? "" : "s"} in this branch before the sweep reads them. Sends nothing — the responses are already captured.`}
+  >
+   <div className="stack">
+    <Field
+     label="Remove items with the following extensions"
+     hint={
+      counts.extensions > 0
+       ? `Removes ${counts.extensions.toLocaleString()} of the ${items.length.toLocaleString()} in this branch. Burp ships this list; edit it freely.`
+       : `Removes nothing in this branch — no captured path carries one of these extensions.`
+     }
+    >
+     {(id) => (
+      <Textarea
+       id={id}
+       aria-label="Extensions to remove before scanning, one per line or comma separated"
+       rows={2}
+       spellCheck={false}
+       value={extensions}
+       onChange={(event) => {
+        setExtensions(event.target.value);
+        setFilters((current) => ({ ...current, hiddenExtensions: parseExtensions(event.target.value) }));
+       }}
+      />
+     )}
+    </Field>
+
+    <div className="stack-tight">
+     <Checkbox
+      checked={filters.removeNoParameters}
+      onCheckedChange={(checked) => setFilters((current) => ({ ...current, removeNoParameters: checked }))}
+      label={`Remove items with no parameters${filters.removeNoParameters && counts.noParameters > 0 ? ` (${counts.noParameters.toLocaleString()})` : ""}`}
+     />
+     <span className="field-hint">
+      A path with no query string has no parameters to probe, so a bounded sweep aimed at the
+      parameterised pages spends its budget there.
+     </span>
+    </div>
+
+    <p className="field-hint">
+     <strong>Out-of-scope items are already removed</strong> by the sweep, under the scope in force now
+     rather than the one the bytes were captured under, and it reports how many it refused.
+     <strong> Duplicates cannot be removed</strong>: a branch sweep reads stored exchanges, and two
+     rows with the same URL and parameters are one request seen twice.
+     {empty ? " This branch has no captured exchanges, so every filter has nothing to act on." : null}
+    </p>
+
+    {exclude ? (
+     <p className="field-hint">
+      <code>{exclude}</code>
+     </p>
+    ) : null}
+
+    <div className="page-actions">
+     <Button
+      variant="outline"
+      size="small"
+      onClick={() => {
+       setExtensions([...BURP_DEFAULT_HIDDEN_EXTENSIONS].join(", "));
+       setFilters(DEFAULT_PRESCAN_FILTERS);
+      }}
+     >
+      Reset to Burp's defaults
+     </Button>
+     <Button
+      onClick={() => onScan(filters)}
+      disabled={empty || pending}
+     >
+      <ShieldCheck size={13} />
+      {pending ? "Scanning…" : removes > 0 ? `Scan ${(items.length - counts.total).toLocaleString()} of ${items.length.toLocaleString()}` : "Scan branch"}
+     </Button>
+    </div>
+   </div>
+  </Modal>
  );
 }

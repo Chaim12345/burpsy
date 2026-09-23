@@ -81,6 +81,10 @@ export interface PassiveBranchResult {
  skipped_out_of_scope: number;
  /** No response to scan. A request in flight is neither a failure nor a clean result. */
  skipped_no_response: number;
+ /** In the branch and removed by the operator's pre-scan filter before the sweep's own gates (a13). */
+ filtered: number;
+ /** The filter the sweep actually applied, echoed so a caller can state which rule shaped it. */
+ exclude?: string;
  findings: number;
  loaded: number;
  /** The server's own one-line statement of the counts and their caveats. Shown verbatim. */
@@ -96,7 +100,7 @@ export interface PassiveBranchResult {
 export function usePassiveScanBranch() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (body: { host: string; path_prefix?: string; port?: number }) =>
+  mutationFn: (body: { host: string; path_prefix?: string; port?: number; exclude?: string }) =>
    api<PassiveBranchResult>("/api/scanner/passive-branch", json("POST", body)),
   // Findings and the dashboard both move; the site map does not, because no traffic was captured.
   onSuccess: () => invalidate([["issues"], ["dashboard"], ["scanner"]]),
