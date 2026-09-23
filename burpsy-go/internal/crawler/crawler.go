@@ -316,6 +316,31 @@ type Config struct {
 	// while Fingerprint, DuplicateOf and RetentionExcluded are decided on branches below this point
 	// and are zero here. The matching entry in Report.Fetches carries the completed record.
 	OnFetch func(Fetch)
+	// Render, when set, is how the crawler sees the DOM a browser builds: it returns the
+	// rendered document for a URL, and the crawler extracts links from it that the wire
+	// markup never carried (burpsy-react-ui-nx7b).
+	//
+	// Burp has this shape as browser-based navigation
+	// (crawler.customization.browser_based_navigation_mode), and the reason is the same
+	// here: a single-page application's routes and script-built hrefs are structurally
+	// invisible to a parser over the wire response, and a crawl that never sees them
+	// under-reports coverage while looking complete.
+	//
+	// The function is a hook rather than a *domexec.Browser for two reasons. The crawler
+	// must not depend on chromedp at the point of use — the same discipline that keeps
+	// BrowserProvider an interface on the scanner — and the caller owns the browser's
+	// lifetime: the web layer hands the crawl the same lazy provider the audit's DOM
+	// checks use, so one process runs one browser, not one per subsystem.
+	//
+	// Honesty rules the caller must know. A nil Render is the previous crawl to the byte —
+	// no skip is recorded, because nothing was declined. A non-nil Render that fails is
+	// SkipRenderUnavailable, counted and sampled like any other refusal, so a crawl whose
+	// browser died says so instead of quietly claiming the wire parse was the whole story.
+	// The rendered pass runs AFTER the static parse of the same response and admits only
+	// links the wire parse did not already carry; its discoveries count in LinksFound like
+	// any other link and are depth-bounded by the same frontier gates, and MaxLocations
+	// still bounds the crawl as a whole.
+	Render func(ctx context.Context, url string) (string, error)
 	// MaxSkipRecords bounds the sampled refusal detail. Zero takes DefaultMaxSkipRecords; a negative
 	// value keeps counts only.
 	MaxSkipRecords int
@@ -391,6 +416,12 @@ type Fetch struct {
 	// a link with no text. Carried because "which of the four links to /logout was followed" is not
 	// answerable from the URL alone, and because a rendering needs something to label an edge with.
 	LinkText string `json:"link_text,omitempty"`
+	// FoundByRender marks a fetch whose link existed only in the DOM a browser built for the
+	// page it was discovered on (Config.Render) — invisible to the wire markup the static parse
+	// read (nx7b). The crawl-paths edge carries it so an operator can see which of the crawl's
+	// edges a browser-less crawl would not have found at all, which is the honest shape of the
+	// coverage claim a rendered pass adds.
+	FoundByRender bool `json:"found_by_render,omitempty"`
 }
 
 // Report is one crawl's whole outcome.
@@ -530,6 +561,11 @@ type frontierItem struct {
 	// an ordinary item — same rate limit, same scope gate, same capture — and differs only in that its
 	// body is read as a path list instead of as markup. See seedFromRobots.
 	robots bool
+	// renderedOrigin marks an item whose link existed only in the DOM a browser built for the
+	// page it came from (Config.Render) — invisible to the wire markup the static parse read
+	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
+	// crawl would not have found at all.
+	renderedOrigin bool
 }
 
 // Crawler runs one crawl. Not safe for concurrent Run calls: the frontier, the seen sets and the
@@ -1137,6 +1173,7 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	fetch := Fetch{
 		URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth,
 		FoundAt: item.foundAt, LinkText: item.text,
+		FoundByRender: item.renderedOrigin,
 	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
@@ -1304,6 +1341,12 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	staticTargets := make(map[string]bool, len(page.links))
+	for _, l := range page.links {
+		if u, err := resolveAgainst(item.url, l.raw); err == nil {
+			staticTargets[u.String()] = true
+		}
+	}
 	rep.LinksFound += len(page.links)
 	rep.FormsFound += len(page.forms)
 	for _, l := range page.links {
@@ -1311,6 +1354,52 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 	for _, f := range page.forms {
 		c.admitForm(f, item.url, item.depth+1, rep, lim)
+	}
+
+	// The rendered second pass (burpsy-react-ui-nx7b): the DOM a browser builds for this
+	// URL, read for links the wire markup never carried. An SPA's routes and a script-built
+	// href exist only after the page's own script has run, so the static parse above cannot
+	// see them no matter how well it parses — this is the whole reason Burp has a
+	// browser-based navigation mode, and it is why the pass runs only for HTML and only
+	// when the caller gave the crawler a browser.
+	//
+	// Ordering rules the shape of everything below:
+	//
+	//   - The rendered pass runs AFTER the static links were admitted, so a link present in
+	//     both readings is discovered once, by the wire parse, and attributed to it.
+	//   - The frontier gates apply unchanged: admit() is the same scope, destructive,
+	//     depth and dedup machinery any other link goes through, so a rendered discovery
+	//     gets no exemption and no second-class treatment.
+	//   - Failures are SkipRenderUnavailable, never silent: the rendered view is the only
+	//     place these links exist, so a render that did not happen narrows the coverage
+	//     claim, and a narrowed claim the operator cannot see is the defect this ledger
+	//     exists to prevent.
+	if c.cfg.Render != nil {
+		rendered, rerr := c.cfg.Render(ctx, item.url.String())
+		if rerr != nil {
+			c.skips.record(SkipRecord{
+				Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt,
+				Detail:  "the rendered-DOM pass failed: " + rerr.Error(),
+			})
+		} else {
+			renderedPage := parsePage([]byte(rendered), item.url, c.limits)
+			for _, l := range renderedPage.links {
+				if u, err := resolveAgainst(item.url, l.raw); err == nil {
+					if staticTargets[u.String()] {
+						continue
+					}
+				}
+				// The edge names the rendering as the origin (nx7b's honesty rule): a reader
+				// of the crawl paths must be able to tell that this link was invisible to
+				// the wire bytes and only the browser found it. The rendered document is
+				// tagged "rendered" and keeps the link's own text, so the edge reads the
+				// same as any other in every other respect.
+				l.foundAtRendered = true
+				rep.LinksFound++
+				c.admit(l, item.url, item.depth+1, rep, lim)
+			}
+		}
 	}
 	rep.Fetches = append(rep.Fetches, fetch)
 }
@@ -1486,7 +1575,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 		})
 		return
 	}
-	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text}, base.String(), lim)
+	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, renderedOrigin: l.foundAtRendered}, base.String(), lim)
 }
 
 // admitForm turns one discovered form into a request, or records why it did not.

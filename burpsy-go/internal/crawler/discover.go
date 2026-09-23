@@ -68,6 +68,11 @@ type discoveredLink struct {
 	text string
 	// tag is the element it came from, for reporting.
 	tag string
+	// foundAtRendered marks a link that existed only in the DOM a browser built for the page
+	// (Config.Render) — invisible to the wire markup the static parse reads (nx7b). The frontier
+	// item carries it onto the Fetch edge, so the crawl-paths view can say which edges a
+	// browser-less crawl would not have found at all.
+	foundAtRendered bool
 }
 
 // formField is one name/value pair a submitted form would carry.

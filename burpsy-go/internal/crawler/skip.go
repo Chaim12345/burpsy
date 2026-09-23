@@ -171,11 +171,18 @@ const (
 	// was refused, a recovery was attempted and did not succeed, and the two read very differently in a
 	// report.
 	SkipReloginFailed
+	// SkipRenderUnavailable means the response was HTML and would have had a rendered-DOM second
+	// pass, but the render hook the crawl was given failed for this URL — no browser, a dead browser,
+	// a navigation error. Its own reason rather than silence, because the rendered pass is the only
+	// place a single-page application's routes exist at all: a crawl that wanted the rendered view
+	// and did not get it is narrower than its counts say, and the operator must be able to see by how
+	// much. See Config.Render (burpsy-react-ui-nx7b).
+	SkipRenderUnavailable
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [29]Skip{
+var SkipAll = [30]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -205,6 +212,7 @@ var SkipAll = [29]Skip{
 	SkipRetentionExcluded,
 	SkipSessionExpired,
 	SkipReloginFailed,
+	SkipRenderUnavailable,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -270,6 +278,8 @@ func (s Skip) slot() int {
 		return 27
 	case SkipReloginFailed:
 		return 28
+	case SkipRenderUnavailable:
+		return 29
 	}
 	panic("unknown Skip")
 }
@@ -335,6 +345,8 @@ func (s Skip) String() string {
 		return "session-expired"
 	case SkipReloginFailed:
 		return "relogin-failed"
+	case SkipRenderUnavailable:
+		return "render-unavailable"
 	}
 	return "unknown"
 }
@@ -400,6 +412,8 @@ func (s Skip) Explanation() string {
 		return "the response is a login page or a template that flipped from 200, so its links were not followed: the session was gone and its links are not the application"
 	case SkipReloginFailed:
 		return "session expiry was detected and the login macro could not restore the session, so the request was not retried with a fresh cookie"
+	case SkipRenderUnavailable:
+		return "the response was HTML but the browser render failed, so links that exist only after the page's script runs were not discovered"
 	}
 	return "unknown skip"
 }
@@ -476,7 +490,8 @@ func (s Skip) Category() SkipCategory {
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
 		return CategoryLimit
 	case SkipNotHTML, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
-		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed:
+		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
+		SkipRenderUnavailable:
 		return CategoryResponse
 	}
 	panic("unknown Skip")
@@ -612,7 +627,7 @@ func (r SkipReport) Summary() string {
 // would be a data race whether or not it produced a wrong number.
 type skipLedger struct {
 	mu         sync.Mutex
-	counts     [29]uint64
+	counts     [30]uint64
 	records    []SkipRecord
 	dropped    int
 	maxRecords int

@@ -342,6 +342,31 @@ func scanKind(requested string) (string, error) {
 		"unknown scan kind %q; this build runs %q and %q", requested, crawlKindCrawl, crawlKindAudit)
 }
 
+// crawlRenderer is the browser hand-off the crawler's rendered-DOM pass runs on
+// (burpsy-react-ui-nx7b): the SAME lazy provider the audit's DOM checks use, so one process
+// runs one browser rather than one per subsystem, and a crawl started with no -dom gets a
+// nil function — which is the previous crawl to the byte, because a nil Render means no
+// rendered pass and no skip recorded (nothing was declined).
+//
+// Built per crawl rather than stored on the server, because the provider is the scanner's
+// capability, not the web layer's: the audit scanner is constructed with its browser at
+// startup (cmd/burpsy/main.go), and the crawl borrows it for exactly as long as the crawl
+// runs. A scan whose DOM checks declined for a missing browser reports the same decline to
+// the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
+// wire parse was the whole story.
+func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, error) {
+	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
+		return nil
+	}
+	return func(ctx context.Context, targetURL string) (string, error) {
+		browser, err := s.scanner.BrowserForRender(ctx)
+		if err != nil {
+			return "", err
+		}
+		return browser.RenderedDOM(ctx, targetURL)
+	}
+}
+
 func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, err error) {
 	kind, kerr := scanKind(req.Kind)
 	if kerr != nil {
@@ -417,6 +442,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		UserAgent:         req.UserAgent,
 		Headers:           req.Headers,
 		OnFetch:           onFetch,
+		Render:            s.crawlRenderer(),
 		Logger:            s.logger,
 	})
 	if err != nil {
