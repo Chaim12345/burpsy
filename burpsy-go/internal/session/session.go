@@ -1529,6 +1529,18 @@ type Coordinator struct {
 	// its host to it. Nil is a valid state, and the action reports it rather than doing nothing
 	// quietly — see actionWalk.invokeExtension.
 	extensionInvoker SessionActionInvoker
+
+	// validityCounters counts the requests each rule has handled, for Burp's
+	// `validate_every_num_requests` (us12): a check with an interval of N evaluates the session only
+	// on every Nth request. Per rule, because the field counts the requests the RULE handles, so two
+	// checks on one rule advance the same count once.
+	//
+	// Session state, not durable state: the count is a running cost decision, and restoring it from
+	// the database would make a rule's behaviour depend on when the process last stopped. A restart
+	// begins again at the first request, which is the safe direction — the next check comes no later
+	// than one interval.
+	validityCounters   map[RuleID]int64
+	validityCountersMu sync.Mutex
 }
 
 func NewCoordinator(logger *zap.Logger) *Coordinator {

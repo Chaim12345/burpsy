@@ -235,6 +235,10 @@ type sessionActionDto struct {
 	Replacement string `json:"replacement,omitempty"`
 	Regex       bool   `json:"regex,omitempty"`
 	Extension   string `json:"extension,omitempty"`
+	// ValidateEvery is Burp's `validate_every_num_requests` (us12): check the session only on every
+	// Nth request the rule handles. Zero is omitted from the wire, which is the pre-field behaviour
+	// and what a client reading an older server's rules sees.
+	ValidateEvery int `json:"validate_every,omitempty"`
 }
 
 // sessionActionKindDto is one entry of the action palette.
@@ -561,6 +565,10 @@ func actionToDto(a *session.Action) sessionActionDto {
 		Replacement: a.Replacement,
 		Regex:       a.Regex,
 		Extension:   a.Extension,
+		// Only a check carries it, so only a check reports it: a non-zero value on any other kind is
+		// refused by session.ValidateAction, and a rule that could not have been installed must not
+		// read back as carrying a setting.
+		ValidateEvery: validityCheckEvery(a),
 	}
 	// A macro action's own steps are emitted only when it carries them. An empty Macro means "the
 	// rule's own Steps", and emitting the rule's steps here instead would launder that reference into
@@ -578,6 +586,14 @@ func actionToDto(a *session.Action) sessionActionDto {
 	return d
 }
 
+// validityCheckEvery is the interval a check carries, or 0 for any other action kind.
+func validityCheckEvery(a *session.Action) int {
+	if a == nil || a.Kind != session.ActionCheckValidity {
+		return 0
+	}
+	return a.ValidateEvery
+}
+
 // actionsToModel is the read direction. An unrecognised kind is an error rather than a skipped
 // action: session.ParseActionKind's refusal names the accepted list, and silently dropping the entry
 // would leave a rule that looks like the operator's while missing the step that authenticated it.
@@ -589,16 +605,17 @@ func actionsToModel(dtos []sessionActionDto) ([]*session.Action, error) {
 			return nil, fmt.Errorf("action %d: %w", i+1, err)
 		}
 		a := &session.Action{
-			Kind:        kind,
-			Enabled:     d.Enabled,
-			Stop:        d.Stop,
-			Name:        d.Name,
-			Value:       d.Value,
-			In:          d.In,
-			Match:       d.Match,
-			Replacement: d.Replacement,
-			Regex:       d.Regex,
-			Extension:   d.Extension,
+			Kind:          kind,
+			Enabled:       d.Enabled,
+			Stop:          d.Stop,
+			Name:          d.Name,
+			Value:         d.Value,
+			In:            d.In,
+			Match:         d.Match,
+			Replacement:   d.Replacement,
+			Regex:         d.Regex,
+			ValidateEvery: d.ValidateEvery,
+			Extension:     d.Extension,
 		}
 		for _, s := range d.Macro {
 			headers := make(map[string]string, len(s.Headers))

@@ -170,6 +170,18 @@ type Action struct {
 	// Validity overrides the rule's own validity rule for a CheckValidity action. Nil means the
 	// rule's.
 	Validity *ValidityRule `json:"validity,omitempty"`
+	// ValidateEvery is Burp's `validate_every_num_requests` (recovered from burp.Zcfs in
+	// map_root.tsv, beside `issue_current_request` and `match_indicates`): validate the session
+	// only on every Nth request the rule handles, rather than on every one. The docs give the reason
+	// — "this helps you to avoid making unnecessary requests in cases where the application rarely
+	// invalidates your session" — which is a cost decision, so it is an opt-in on the check that
+	// spends the request.
+	//
+	// Zero means check every time, which is the pre-field behaviour and therefore every rule that
+	// predates it. A negative value is refused at configuration time rather than read as "every
+	// time" or "never", because "validate never" is a rule that silently stopped protecting the
+	// session — see ValidateRule.
+	ValidateEvery int `json:"validate_every,omitempty"`
 	// Then / Else are the sub-actions of a CheckValidity action: Then runs when the session is
 	// Valid, Else when it is Invalid *or* the check could not tell (Indeterminate). Burp's model
 	// nests here and nowhere else, which is exactly where conditionality belongs.
@@ -251,7 +263,15 @@ func ValidateAction(a *Action, path string) error {
 		if err := require(a.Extension, "extension registration name"); err != nil {
 			return err
 		}
-	case ActionRunMacro, ActionRunPostRequestMacro, ActionCheckValidity, ActionAddCookiesFromJar:
+	case ActionCheckValidity:
+		// A negative interval is refused rather than read as "always" (the zero value's job) or
+		// "never": "validate never" is a rule that has silently stopped protecting the session, and
+		// an operator who types -1 to mean something cannot see what the rule will do.
+		if a.ValidateEvery < 0 {
+			return fmt.Errorf("%s (%s): validate every must be 0 (check every request) or a positive "+
+				"number of requests, got %d", path, ActionKindLabel(a.Kind), a.ValidateEvery)
+		}
+	case ActionRunMacro, ActionRunPostRequestMacro, ActionAddCookiesFromJar:
 		// Nothing beyond the kind and its switches.
 	}
 	if a.Kind != ActionCheckValidity && (len(a.Then) > 0 || len(a.Else) > 0) {

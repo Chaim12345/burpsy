@@ -206,6 +206,12 @@ export interface SessionAction {
 	regex?: boolean;
 	/** InvokeExtension's target: a plugin registration id, which the server resolves to a plugin. */
 	extension?: string;
+	/**
+	 * Burp's `validate_every_num_requests` (us12): a CheckValidity action that checks the session
+	 * only on every Nth request the rule handles. Absent/0 is check every time, which is the
+	 * pre-field behaviour and what every rule written before it means.
+	 */
+	validate_every?: number;
 }
 
 /** One entry of the action palette, served so the editor cannot drift from what the server accepts. */

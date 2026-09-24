@@ -103,6 +103,13 @@ interface ActionDraft {
  regex: boolean;
  /** An InvokeExtension action's registration id. */
  extension: string;
+ /**
+  * A CheckValidity action's interval (us12): check the session only on every Nth request the rule
+  * handles. Empty means every request, the pre-field behaviour. A string because the editor collects
+  * text — a half-typed "1" is not a number the server should ever see, so actionOut sends it only
+  * once it parses to a positive integer.
+  */
+ validateEvery: string;
 }
 
 const VALIDITY_FIELDS: { key: "body_contains" | "body_not_contains" | "header_present" | "header_absent"; label: string; hint: string }[] = [
@@ -196,6 +203,7 @@ function actionIn(action: SessionAction): ActionDraft {
   replacement: action.replacement ?? "",
   regex: action.regex === true,
   extension: action.extension ?? "",
+  validateEvery: action.validate_every ? String(action.validate_every) : "",
  };
 }
 
@@ -216,6 +224,10 @@ function actionOut(draft: ActionDraft): SessionAction {
   const otherwise = draft.else.map(actionOut);
   if (then.length) out.then = then;
   if (otherwise.length) out.else = otherwise;
+  // Only a positive whole number: the server refuses a negative interval, and sending a half-typed
+  // "-" or "" as 0 would silently mean "check every request" for a field still being typed.
+  const every = Number(draft.validateEvery.trim());
+  if (Number.isInteger(every) && every > 0) out.validate_every = every;
  }
  switch (draft.kind) {
   case "set_cookie":
@@ -258,6 +270,7 @@ function emptyAction(kind: string): ActionDraft {
   replacement: "",
   regex: false,
   extension: "",
+  validateEvery: "",
  };
 }
 
@@ -920,6 +933,28 @@ function ActionCard({
       Evaluated against the rule&apos;s validity check below, unless this action states one of its
       own (in which case that one is used, and the section below is not consulted by this action).
      </small>
+     {/* Burp's "validate the session after a set number of requests" (us12,
+         validate_every_num_requests): a cost dial, not a correctness one, so it is stated as the
+         saving it makes — the probe is skipped entirely on the requests in between, and the
+         "valid" branch runs instead of an undecided check. Empty means every request, which is what
+         the field's absence has always meant. */}
+     <Field
+      label="Validate every N requests"
+      hint="Skip the check between, to avoid the extra request when the application rarely invalidates the session. Blank checks every request."
+     >
+      {(id) => (
+       <Input
+        id={id}
+        type="number"
+        min={1}
+        step={1}
+        placeholder="Every request"
+        value={action.validateEvery}
+        disabled={disabled}
+        onChange={(event) => patch({ validateEvery: event.target.value })}
+       />
+      )}
+     </Field>
      {branch("then")}
      {branch("else")}
     </>

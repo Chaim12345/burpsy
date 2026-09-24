@@ -140,6 +140,9 @@ func (c *Coordinator) runActions(rule *SessionRule, request MacroStep, response 
 		values: make(map[string]string),
 	}
 	original := cloneMacroStep(request)
+	// One request, one count: every validity check in this walk reads the same number, so two
+	// checks on one rule can never disagree about which request is due.
+	w.c.noteValidityCheckRequest(w.c.ruleIDOf(rule))
 	w.walk(rule.EffectiveActions())
 	return actionResult{
 		Request:         w.request,
@@ -225,6 +228,19 @@ func (w *actionWalk) checkValidity(a *Action) {
 		w.walk(a.Else)
 		return
 	}
+	// Burp's "validate the session after a set number of requests" (validate_every_num_requests,
+	// recovered from burp.Zcfs). Off this request, the check is treated as not run — not as
+	// "valid" and not as "invalid": a rule that never checked cannot claim a verdict, and walking
+	// the Else branch anyway would fire a login macro every Nth request for a session that is
+	// almost always fine, which is the cost the field exists to avoid. The Then branch runs
+	// instead, because "the session is presumed alive" is the only reading that asks for no request.
+	if !w.dueForValidityCheck(a) {
+		w.record(a.Kind, fmt.Sprintf(
+			"not checking the session on this request: the rule validates every %d request(s) (us12)",
+			a.ValidateEvery), false)
+		w.walk(a.Then)
+		return
+	}
 	verdict := rules.Evaluate(statusOf(w.response), headersOf(w.response), bodyOf(w.response), urlOf(w.response))
 	w.validity, w.checked = verdict, true
 	branch, name := a.Then, "then"
@@ -239,6 +255,50 @@ func (w *actionWalk) checkValidity(a *Action) {
 	w.branchValidity = rules
 	w.walk(branch)
 	w.branchValidity = previous
+}
+
+// dueForValidityCheck answers whether this check is due on the request being handled.
+//
+// The counter is per rule, not per action or per walk, and that is the whole reading of Burp's
+// wording: "validate the session after a set number of requests" counts the requests the rule
+// handles, so two checks on one rule share one count and a check nested under another does not keep
+// its own. Zero means due every time, which is what every rule that predates the field means.
+//
+// A counter that resets on process restart is the honest reading — the count is a running cost
+// decision, not session state, and restoring it from the database would make a rule's behaviour
+// depend on when the process last stopped.
+func (w *actionWalk) dueForValidityCheck(a *Action) bool {
+	if a.ValidateEvery <= 0 {
+		return true
+	}
+	return w.c.dueForValidityCheck(w.c.ruleIDOf(w.rule), a.ValidateEvery)
+}
+
+// dueForValidityCheck is the coordinator half: one counter per rule, advanced once per handled
+// request, and the check is due when that request's count is a multiple of the interval.
+//
+// The count is advanced by the WALK, not by this function. A rule may hold two checks (Burp nests
+// them freely), and a per-call increment would make the second check see a different count from
+// the first — so on request 1 the first would skip and the second would run, which is neither Burp's
+// behaviour nor anything an operator could reason about. Per rule, per request, decided once.
+func (c *Coordinator) dueForValidityCheck(id RuleID, every int) bool {
+	if every <= 0 {
+		return true
+	}
+	c.validityCountersMu.Lock()
+	defer c.validityCountersMu.Unlock()
+	return c.validityCounters[id]%int64(every) == 0
+}
+
+// noteValidityCheckRequest advances the rule's request count for this walk, so every check in one
+// walk reads the same number. Called once per action list run, before the first check is reached.
+func (c *Coordinator) noteValidityCheckRequest(id RuleID) {
+	c.validityCountersMu.Lock()
+	defer c.validityCountersMu.Unlock()
+	if c.validityCounters == nil {
+		c.validityCounters = make(map[RuleID]int64)
+	}
+	c.validityCounters[id]++
 }
 
 // runMacro runs a macro through the coordinator's single-flight login, so a rule whose macro action
