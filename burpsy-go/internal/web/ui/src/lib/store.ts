@@ -672,6 +672,12 @@ export const useApp = create<AppState>()(
     set((state) => ({
      ...capRepeaterTabs(
       [
+       // The EXISTING tabs, then the new one. Without the spread this call receives a
+       // one-element list on every open, so capRepeaterTabs keeps the newest tab and evicts
+       // everything else — the strip was replaced rather than appended to, and every Repeater tab
+       // except the last vanished on the next open. Measured as 7/7 failing in
+       // repeater-tab-cap.test.ts before this line and 7/7 passing after (uaq0).
+       ...state.repeaterTabs,
        {
         id,
         name,

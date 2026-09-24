@@ -77,6 +77,22 @@ describe("the Repeater tab cap", () => {
 
   // Below the cap nothing is touched. Without this the fix could be "always evict", which
   // would put a tab on the reopen stack on every single open and make reopen useless.
+
+  // The defect this file was written for, pinned where it can be re-broken: the cap tests exercise
+  // openRepeaterTab, so a version of openRepeaterTab that hands capRepeaterTabs only the new tab
+  // fails all of them — but the failure reads as "the cap is broken", not "the call site forgot
+  // the existing tabs". This one says it directly (uaq0).
+  test("opening a tab appends to the strip, and never replaces it", () => {
+    open("first");
+    open("second");
+    open("third");
+    expect(names(useApp.getState().repeaterTabs), "each open must keep what was already there").toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+  });
+
   test("below the cap nothing is evicted", () => {
     for (let i = 1; i <= CAP - 1; i++) open(`tab${i}`);
     const state = useApp.getState();
