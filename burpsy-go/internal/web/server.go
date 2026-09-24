@@ -37,6 +37,11 @@ type Server struct {
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
 	webBind   string
+	// reissue is the one-shot token table behind "request in browser"
+	// (burpsy-react-ui-7rk0): minted by the API the operator's right-click reaches, spent by
+	// the fetch their browser makes, swept by expiry. See api_browser_reissue.go for why the
+	// tokens are random, one-shot, and five minutes long.
+	reissue browserReissueTokens
 	// domEngine is the -dom flag value, reported by /api/stats. Empty means no engine was named.
 	domEngine string
 	// tlsInterception reports whether the server is configured for TLS
@@ -850,6 +855,12 @@ func (s *Server) setupRoutes() {
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
 	s.mux.HandleFunc("/api/repeater/ws-send", s.handleRepeaterWsSend)
+	s.mux.HandleFunc("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
+	// The re-issue fetch is served outside /api on purpose: it is the URL the operator's
+	// browser opens, and a URL the operator types should not look like a console API route.
+	// It is registered last so it cannot shadow an /api path, and its handler spends a token
+	// before anything else, so nothing here is reachable without one (burpsy-react-ui-7rk0).
+	s.mux.HandleFunc("/reissue/", s.handleBrowserReissueFetch)
 	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
 	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a

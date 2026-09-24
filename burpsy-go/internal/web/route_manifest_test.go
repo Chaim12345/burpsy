@@ -592,6 +592,15 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
 		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy",
 	},
+	"/api/repeater/browser-reissue": {
+		// riskEgress, the same class as the WS resend: it mints URLs that re-send one stored
+		// exchange, and both scope gates (host-level at mint, AuthoriseRaw on the bytes about
+		// to go out) defend it — the mint IS the operator's right-click, and it cannot mint
+		// for an authority the scope does not authorise.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "mint two one-shot URLs that re-issue a stored exchange in the original and in the " +
+			"current session, for the operator's own browser to open",
+	},
 	"/api/repeater/send": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",
@@ -902,6 +911,13 @@ var manifest = map[string]route{
 	"/ca.crt": {
 		methods: []string{"GET"}, risk: riskAsset,
 		summary: "the CA certificate the proxy signs leaves with, so a browser can be told to trust it",
+	}, "/reissue/": {
+		// The minted URL's fetch surface, outside /api on purpose: it is what the operator
+		// pastes into their browser, and it spends a token before anything else. riskEgress
+		// because the fetch is the send; the token is the operator's own mint.
+		methods: []string{"GET"}, risk: riskEgress, subPath: "token",
+		summary: "spend one one-shot re-issue token: re-send its exchange under the minted session " +
+			"variant, record the outcome, and answer with a page that names the variant",
 	},
 }
 
