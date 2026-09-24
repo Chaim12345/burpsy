@@ -1371,6 +1371,15 @@ export function HistoryPage(): JSX.Element {
       selectedId={selectedId === null ? null : String(selectedId)}
       onSelect={(row) => setSelectedId(row.id)}
       onActivate={(row) => void actions.sendToRepeater(row)}
+      // Burp: "Double-click an item to open it in a pop-up window" (wvcl). A SEPARATE handler from
+      // onActivate because that one is Enter-or-double-click and already means "send to Repeater" —
+      // rebinding it would take the keyboard chord away from an operator who has it. A row that is
+      // already selected opens the window; a row that is not is selected first, so the pop-up and the
+      // pane never disagree about which exchange they are about.
+      onDoubleActivate={(row) => {
+       setSelectedId(row.id);
+       openDetailWindow(row);
+      }}
       menuGroups={(row) =>
        actions.menu(row, [
         {
@@ -1597,4 +1606,5 @@ export function HistoryPage(): JSX.Element {
    </Modal>
   </div>
  );
-}
+}import { openDetailWindow } from "./detailwindow";
+

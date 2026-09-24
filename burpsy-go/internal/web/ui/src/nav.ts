@@ -42,6 +42,7 @@ import { SettingsPage } from "./pages/settings";
 import { ScopePage } from "./pages/scope";
 import { SiteMapPage } from "./pages/sitemap";
 import { WebSocketPage } from "./pages/wshistory";
+import { DetailWindowPage } from "./pages/detailwindow";
 
 /** One routable view. `id` is the URL hash and the routing key. */
 export interface NavLeaf {
@@ -49,6 +50,15 @@ export interface NavLeaf {
   label: string;
   description: string;
   page: ComponentType;
+  /**
+   * A routable leaf that is not a destination an operator chooses from the sub-tab row.
+   *
+   * The detached exchange window (wvcl) is the case: it has to be a ROUTE for the window to land
+   * on, but listing it beside HTTP history would offer "go to another detached window", which is
+   * not a navigation anyone wants. Routable and listed are separate questions, and this is the
+   * second one.
+   */
+  hidden?: boolean;
 }
 
 /**
@@ -127,6 +137,17 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "intercept", label: "Intercept", description: "Hold, edit, and release traffic in flight", page: InterceptPage },
       { id: "history", label: "HTTP history", description: "Every captured request and response", page: HistoryPage },
+      // Burp's detached detail (wvcl). Registered as a LEAF rather than a window type because this
+      // app is one mount driven by a hash: a window opened at #history?exchange=7 needs a route that
+      // renders one item, and a leaf is how a route exists. It carries no tab — the shell hides a
+      // leaf that is not its tool's sub-tab, so the window shows a page and not a second tab strip.
+      {
+        id: "exchange-detail",
+        label: "Exchange detail",
+        description: "One captured exchange on its own, for a window of its own",
+        page: DetailWindowPage,
+        hidden: true,
+      },
       { id: "wshistory", label: "WebSockets history", description: "Upgrade connections and frame payloads", page: WebSocketPage },
       {
         id: "matchreplace",

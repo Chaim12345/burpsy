@@ -7,6 +7,7 @@ import {
  Crosshair,
  Download,
  FileCode2,
+ ExternalLink,
  FileOutput,
  FolderTree,
  Globe,
@@ -21,6 +22,7 @@ import {
  ShieldCheck,
  Terminal,
  Waypoints, Activity } from "lucide-react";
+import { openDetailWindow } from "../pages/detailwindow";
 import { toast } from "sonner";
 import { useHotkeys } from "react-hotkeys-hook";
 import { api, copyToClipboard, downloadText, json } from "./api";
@@ -743,6 +745,20 @@ const showResponseInBrowser = (exchange: Exchange) => {
    actions: [
     { id: "organizer", label: "Add to Organizer", icon: NotebookPen, onSelect: () => void addToOrganizer(exchange) },
     { id: "site-map", label: "Add to site map", icon: Map, onSelect: () => void addToSiteMap(exchange) },
+    // Burp's "Show details in new window" (wvcl). In the ORGANISE group because that is where Burp
+    // puts window-level actions, and because the ones above it all move the item somewhere else
+    // rather than opening a second view of the item already selected.
+    {
+     id: "detail-window",
+     label: "Show details in new window",
+     icon: ExternalLink,
+     onSelect: () => {
+      // Synchronous and no `void`: window.open is one of the few browser calls that only counts as
+      // a user gesture inside the call stack that started it, so an await before it is the
+      // difference between a window and a blocked popup.
+      openDetailWindow(exchange);
+     },
+    },
     { id: "host", label: `Filter history by ${exchange.host}`, icon: FolderTree, onSelect: () => filterByHost(exchange) },
     { id: "browser", label: "Open URL in browser", icon: Globe, onSelect: () => requestInBrowser(exchange) },
     {

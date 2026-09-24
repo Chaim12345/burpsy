@@ -176,6 +176,16 @@ export interface VirtualTableProps<T> {
   selectedId?: string | null;
   onSelect?: (row: T) => void;
   /** Enter or double-click. Falls back to onSelect when omitted. */
+  /**
+   * Double-click ONLY, and distinct from onActivate on purpose.
+   *
+   * onActivate is Enter-or-double-click, so an operator who has bound Enter to "send to Repeater"
+   * must keep it: taking the double-click away from that would make the only way to open a detached
+   * window a gesture, and the keyboard path would then have no gesture left to share it with. A
+   * double-click that means one thing on one page and another on the next is worse than a missing
+   * affordance, which is why the split is here rather than in each page.
+   */
+  onDoubleActivate?: (row: T) => void;
   onActivate?: (row: T) => void;
   menuGroups?: (row: T) => MenuGroup[];
   rowClassName?: (row: T) => string | undefined;
@@ -219,6 +229,7 @@ export function VirtualTable<T>({
   selectedId,
   onSelect,
   onActivate,
+  onDoubleActivate,
   menuGroups,
   rowClassName,
   loading = false,
@@ -575,6 +586,7 @@ export function VirtualTable<T>({
                   className={rowClassName?.(row.original)}
                   onSelect={onSelect}
                   onActivate={onActivate}
+                  onDoubleActivate={onDoubleActivate}
                   menuGroups={menuGroups}
                 />
               );
@@ -604,6 +616,7 @@ function TableRow<T>({
   className,
   onSelect,
   onActivate,
+  onDoubleActivate,
   menuGroups,
 }: {
   row: Row<T>;
@@ -612,6 +625,7 @@ function TableRow<T>({
   className?: string;
   onSelect?: (row: T) => void;
   onActivate?: (row: T) => void;
+  onDoubleActivate?: (row: T) => void;
   menuGroups?: (row: T) => MenuGroup[];
 }): JSX.Element {
   const element = (
@@ -620,7 +634,10 @@ function TableRow<T>({
       aria-selected={selected}
       className={cn("data-row", selected && "selected-row", onSelect && "clickable", className)}
       onClick={() => onSelect?.(row.original)}
-      onDoubleClick={() => (onActivate ?? onSelect)?.(row.original)}
+      // Double-click prefers the dedicated handler, then onActivate, then plain selection — so a
+      // table that was not given one behaves exactly as it always did, and one that was gets the
+      // gesture it asked for without losing the other two.
+      onDoubleClick={() => (onDoubleActivate ?? onActivate ?? onSelect)?.(row.original)}
       // Right-clicking a row should act on that row, matching desktop tools.
       onContextMenu={() => onSelect?.(row.original)}
     >

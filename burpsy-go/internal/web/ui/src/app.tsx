@@ -1091,7 +1091,7 @@ function App(): JSX.Element {
         {/* Secondary row, only for tools that own more than one view. */}
         {hasSubTabs ? (
           <nav className="sub-tabs" aria-label={`${tool.label} views`}>
-            {tool.leaves.map((child) => {
+            {tool.leaves.filter((child) => !child.hidden).map((child) => {
               const current = child.id === route;
               return (
                 <button
