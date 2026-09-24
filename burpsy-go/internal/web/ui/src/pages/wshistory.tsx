@@ -202,6 +202,26 @@ export function WebSocketPage(): JSX.Element {
   () => [
    { accessorKey: "id", header: "#", size: 54, cell: (info) => <span className="cell-num">{info.getValue<number>()}</span> },
    {
+    // Burp's URL column: the connection's absolute address, not host+path for the operator to
+    // reassemble. Empty on an orphan frame, where a guess would be worse than a blank.
+    accessorKey: "url",
+    header: "URL",
+    size: 220,
+    cell: (info) => {
+     const url = info.getValue<string>() ?? "";
+     if (!url) return <span className="cell-dim">—</span>;
+     const m = url.match(/^([a-z]+):\/\/([^/]+)(.*)$/);
+     if (!m) return <code>{url}</code>;
+     return (
+      <span className="cell-url">
+       <span className="cell-dim">{m[1]}://</span>
+       {m[2]}
+       <span className="cell-dim">{m[3]}</span>
+      </span>
+     );
+    },
+   },
+   {
     accessorKey: "direction",
     header: "Dir",
     size: 82,
@@ -238,6 +258,45 @@ export function WebSocketPage(): JSX.Element {
     accessorFn: (row: WsRow) => row.edited,
     cell: (info) =>
      info.getValue<boolean>() ? <Badge tone="warn">edited</Badge> : <span className="cell-dim">—</span>,
+   },
+   {
+    // The capture's notes (Burp's Notes column): whatever the relay recorded about this frame —
+    // a dropped-extension note, a truncation caveat. `—` when silent, like every other column.
+    accessorKey: "note",
+    header: "Notes",
+    size: 160,
+    cell: (info) => {
+     const note = info.getValue<string>() ?? "";
+     return note ? <span className="cell-note" title={note}>{note}</span> : <span className="cell-dim">—</span>;
+    },
+   },
+   {
+    // TLS: the handshake's scheme. A wss connection shows the fact the same way history's TLS
+    // column does — one glyph, no prose.
+    accessorKey: "tls",
+    header: "TLS",
+    size: 56,
+    cell: (info) => (info.getValue<boolean>() ? <Badge tone="good">TLS</Badge> : <span className="cell-dim">—</span>),
+   },
+   {
+    // The listener the connection came in on. An operator running two listeners needs to see,
+    // per frame, which one captured it — that is what makes the column worth its width.
+    accessorKey: "listener_port",
+    header: "Listener port",
+    size: 110,
+    cell: (info) => {
+     const port = info.getValue<number>() ?? 0;
+     return port ? <span className="cell-num">{port}</span> : <span className="cell-dim">—</span>;
+    },
+   },
+   {
+    // Burp's "WebSocket ID": the connection's id. Shared by every frame of one connection,
+    // different between two connections to the same URL — the column that says which socket
+    // a frame rode, which the URL alone cannot.
+    accessorKey: "socket_id",
+    header: "WebSocket ID",
+    size: 104,
+    cell: (info) => <span className="cell-num">#{info.getValue<number>()}</span>,
    },
    { accessorKey: "at_ms", header: "Age", size: 90, cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span> },
   ],

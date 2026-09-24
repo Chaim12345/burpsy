@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,6 +40,27 @@ type wsRowView struct {
 	// as an empty column, and an absent key would make "not edited" indistinguishable from an older row
 	// that predates the field.
 	Edited bool `json:"edited"`
+
+	// The handshake-derived columns (burpsy-react-ui-sf8o). A frame's own row in the store names
+	// only its handshake exchange, so these are read from that exchange — the same rows
+	// WebSockets history has always had and the frame table never showed.
+	//
+	// URL, not host and path as separate columns: Burp's WebSockets history has one URL column,
+	// and a frame table where the operator has to reassemble an address from two fields is a
+	// table that made the data available without making it readable.
+	URL string `json:"url,omitempty"`
+	// TLS and ListenerPort come from the exchange because a WebSocket's authority is the
+	// handshake's: the frames carry no address of their own, and a frame row claiming a scheme
+	// the handshake did not use would misdescribe the connection.
+	TLS          bool   `json:"tls"`
+	ListenerPort uint16 `json:"listener_port,omitempty"`
+	// SocketID is Burp's "WebSocket ID": its internal id for the connection, not for the frame.
+	// burpsy's handshake exchange id is exactly that fact — every frame from one connection
+	// carries the same value, and two connections to the same URL carry different ones — so it
+	// is reported under the name an operator migrating from Burp will look for. `exchange`
+	// above carries the same number for the API's own callers; this one exists so the column
+	// has a name that says what it means on screen.
+	SocketID core.ExchangeID `json:"socket_id"`
 }
 
 // wsHistoryResp mirrors wshistory.ts's HistoryResp.
@@ -78,14 +100,15 @@ type wsConnectionView struct {
 // wsMaxLimit caps a history page. Matches /api/history's cap: the browser is what falls over first.
 const wsMaxLimit = 2000
 
-func wsRowFromMessage(m *core.WsMessage) wsRowView {
+func wsRowFromMessage(m *core.WsMessage, handshake *core.Exchange) wsRowView {
 	direction := "server_to_client"
 	if m.FromClient {
 		direction = "client_to_server"
 	}
-	return wsRowView{
+	row := wsRowView{
 		ID:        uint64(m.ID),
 		Exchange:  m.Exchange,
+		SocketID:  m.Exchange,
 		Payload:   uint64(m.Payload),
 		Direction: direction,
 		Opcode:    m.Opcode.Name(),
@@ -97,6 +120,38 @@ func wsRowFromMessage(m *core.WsMessage) wsRowView {
 		Note:      m.Note,
 		Edited:    m.UserEdited,
 	}
+	// A handshake the store cannot resolve leaves the derived columns empty rather than
+	// inventing them: the frame is real, its connection row is not there, and a row that
+	// guessed an address would be worse than a row that says nothing.
+	if handshake != nil {
+		row.TLS = handshake.TLS
+		row.ListenerPort = handshake.ListenerPort
+		row.URL = exchangeURL(handshake)
+	}
+	return row
+}
+
+// exchangeURL renders an exchange's absolute URL, or "" when it has no host to render.
+//
+// The scheme comes from the exchange's own TLS flag rather than from the port: a listener on a
+// non-standard TLS port is still https, and inferring from 443 would call it http.
+func exchangeURL(ex *core.Exchange) string {
+	if ex == nil || ex.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if ex.TLS {
+		scheme = "https"
+	}
+	authority := ex.Host
+	if ex.Port != 0 && !(ex.TLS && ex.Port == 443) && !(!ex.TLS && ex.Port == 80) {
+		authority = net.JoinHostPort(ex.Host, strconv.Itoa(int(ex.Port)))
+	}
+	path := ex.Path
+	if path == "" {
+		path = "/"
+	}
+	return scheme + "://" + authority + path
 }
 
 // handleWSConnections serves GET /api/ws/connections -> ConnectionView[], newest activity first.
@@ -227,7 +282,11 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		rows = append(rows, wsRowFromMessage(m))
+		// The handshake lookup is per row and O(1) (the store indexes exchanges by id), so a
+		// 300-row page costs 300 map reads rather than a scan. A frame whose handshake is gone
+		// gets its derived columns empty; see wsRowFromMessage.
+		handshake, _ := s.store.GetExchange(m.Exchange)
+		rows = append(rows, wsRowFromMessage(m, handshake))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -267,9 +326,10 @@ func (s *Server) handleWSMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	handshake, _ := s.store.GetExchange(m.Exchange)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(wsMessageResp{
-		wsRowView: wsRowFromMessage(m),
+		wsRowView: wsRowFromMessage(m, handshake),
 		Text:      string(payload),
 		Hex:       hexString(payload),
 		Close:     closeView,

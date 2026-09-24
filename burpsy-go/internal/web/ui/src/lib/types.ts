@@ -541,6 +541,19 @@ export interface WsRow {
   *  (burpsy-react-ui-d7bu). Non-optional because the Go handler always emits it — "edited":false is a
   *  stated fact, not an absent key, so an older client cannot mistake "not edited" for "unknown". */
  edited: boolean;
+ /** The connection's absolute URL, read off the handshake exchange (burpsy-react-ui-sf8o). Empty on a
+  *  frame whose handshake row is gone — an orphan frame is real and its address is not, and a guessed
+  *  URL would be worse than a blank. */
+ url?: string;
+ /** The handshake's scheme: wss frames show as TLS the same way history rows do. */
+ tls: boolean;
+ /** The listener port the connection came in on — the fact that distinguishes two listeners on one
+  *  machine, which is why it is a column rather than a detail. Zero when unknown. */
+ listener_port?: number;
+ /** Burp's "WebSocket ID": the connection's own id (burpsy's handshake exchange id), shared by every
+  *  frame on one connection and different between two connections to the same URL. Carried beside
+  *  `exchange` — same number, the name an operator migrating from Burp looks for on screen. */
+ socket_id: number;
 }
 
 export interface WsRepeaterSendResult {
