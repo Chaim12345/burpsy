@@ -1,3 +1,5 @@
+import type { CrawlRun } from "./types.observe";
+import type { LiveAuditState } from "./types.attack";
 import type { InterceptState } from "./types";
 
 /**
@@ -33,6 +35,17 @@ export interface AttentionSignal {
  */
 export interface AttentionSources {
   intercept?: InterceptState | undefined;
+  /**
+   * The live active-audit sweep's own state (ve2q). Carried whole rather than a pre-counted number so
+   * the judgement stays in this file, which is the only place a test can pin the rule without a query
+   * cache.
+   */
+  liveAudit?: LiveAuditState | undefined;
+  /**
+   * The dashboard's crawl runs, for the task-level signal (ve2q). Same reason: a run's own state is
+   * the fact, and this file decides what about it needs the operator.
+   */
+  crawls?: CrawlRun[] | undefined;
 }
 
 /**
@@ -58,7 +71,70 @@ export function attentionSignals(sources: AttentionSources): AttentionSignal[] {
       }`,
     });
   }
+  signals.push(...scannerSignals(sources.liveAudit));
+  signals.push(...dashboardSignals(sources.crawls));
   return signals;
+}
+
+/**
+ * The Scanner's signal: exchanges the live sweep gave up on (ve2q).
+ *
+ * `skipped` is the one number on that state that means the operator is needed rather than that the
+ * tool is busy. A sweep that is `behind` is working; a sweep that is `stalled_at` is working on one
+ * exchange. A skip is the sweep saying it will not look at these again, which is precisely a thing
+ * only an operator can resolve — by releasing the exchange, widening the source, or accepting the
+ * coverage gap on the record.
+ *
+ * `retried` is deliberately NOT counted: a retried exchange was taken back and audited, so it is the
+ * opposite of something waiting. `behind` is not counted either — a backlog is the tool doing its job.
+ */
+function scannerSignals(live: LiveAuditState | undefined): AttentionSignal[] {
+ // `?? 0`, not a fallback to `behind`: an absent `skipped` is a server too old to report skips, and
+ // answering with the backlog would put a number on the tab that counts something else entirely.
+ const skipped = live?.skipped ?? 0;
+ if (skipped <= 0) {
+  return [];
+ }
+ return [{
+  tool: "scanner",
+  count: skipped,
+  label: `${skipped} ${skipped === 1 ? "exchange" : "exchanges"} the live audit gave up on — open Scanner, then Live audit, to see what it skipped and why`,
+ }];
+}
+
+/**
+ * The Dashboard's signal: runs that did not finish (ve2q).
+ *
+ * A dashboard is an aggregation of other tools, so it has no state of its own to count — but it does
+ * have the one question only it can answer: which of the things the operator started did not
+ * complete. A failed run and an unfinished one are counted together because from any page but this one
+ * they are the same fact — something was started here and its result is not on the page it belongs
+ * on. A run that is merely `running` is NOT counted: the operator knows they started it, and the
+ * dashboard is the page they are already looking at.
+ *
+ * Deliberately not derived from the other tools' attention signals: a held request belongs to Proxy
+ * and a skipped exchange to Scanner, and mirroring either here would put the same number on two tabs
+ * and make the operator wonder which one to open. A run that failed is a fact about the run, not a
+ * duplicate of a tool's queue.
+ */
+function dashboardSignals(crawls: CrawlRun[] | undefined): AttentionSignal[] {
+ if (!crawls) {
+  return [];
+ }
+ let unfinished = 0;
+ for (const run of crawls) {
+  if (run.state === "failed" || (!run.finished && run.state === "running")) {
+   unfinished += 1;
+  }
+ }
+ if (unfinished === 0) {
+  return [];
+ }
+ return [{
+  tool: "dashboard",
+  count: unfinished,
+  label: `${unfinished} ${unfinished === 1 ? "task" : "tasks"} did not finish — open Dashboard to see which`,
+ }];
 }
 
 /** The signal for one tool, or undefined when that tool needs nothing. */

@@ -36,6 +36,8 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
 import { api, copyToClipboard, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useIntercept, useScope, useStats } from "./lib/data";
+import { useScannerLive } from "./lib/data.attack";
+import { useCrawls } from "./lib/data.observe";
 import { attentionFor, attentionSignals } from "./lib/attention";
 import { useCaCert } from "./lib/data.policy";
 import {
@@ -212,7 +214,18 @@ function App(): JSX.Element {
   // and the 1.5s poll is the floor under it. On a crawl or an audit the shell's own polling is one
   // small GET every 1.5s against a stream already coalescing hundreds of exchanges a second.
   const interceptQuery = useIntercept();
-  const attention = attentionSignals({ intercept: interceptQuery.data });
+  // The other two attention sources (ve2q). Both are queries the shell already has to keep warm
+  // for its own chrome: the live-audit state is what the Scanner tab's own summary reads, and the
+  // crawl list is what the dashboard's task tiles are made of. Neither is fetched for the badge —
+  // a badge that costs a poll the console was not already making is a badge that turns itself off
+  // under load, which is the opposite of what an attention indicator is for.
+  const liveAuditQuery = useScannerLive(4_000);
+  const crawlsQuery = useCrawls();
+  const attention = attentionSignals({
+    intercept: interceptQuery.data,
+    liveAudit: liveAuditQuery.data,
+    crawls: crawlsQuery.data?.crawls,
+  });
 
   const leaf = findLeaf(route);
   const tool = toolOf(route);
