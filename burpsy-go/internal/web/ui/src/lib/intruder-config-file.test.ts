@@ -73,6 +73,10 @@ function fullConfig(): IntruderConfig {
     retries: "2",
     retryDelayMS: "750",
     baseline: true,
+
+    setConnectionClose: true,
+
+    storePayloads: false,
   };
 }
 
@@ -213,5 +217,23 @@ describe("the saved file names itself", () => {
   test("the filename carries the save time and the .json suffix", () => {
     const name = attackConfigFilename(new Date(Date.UTC(2026, 8, 15, 10, 30, 0)));
     expect(name).toBe("burpsy-attack-2026-09-15T10-30-00-000.json");
+  });
+
+  // Burp's Set Connection header and Store full payloads (fmxv). A saved attack configuration is
+  // how an operator re-runs a tuned attack tomorrow, so a setting that exists in the editor and
+  // vanishes on save is a setting they cannot rely on — and one that reappears as "off" would send
+  // differently-shaped requests than the report describes.
+  test("the two fmxv settings survive a save and load", () => {
+    const cfg = { ...emptyIntruderConfig(), setConnectionClose: true, storePayloads: true };
+    const parsed = parseAttackConfig(serializeAttackConfig(cfg));
+    if (!parsed.ok) throw new Error(`the round trip refused a configuration this build wrote: ${parsed.reason}`);
+    expect(parsed.config.setConnectionClose, "Set Connection header did not survive the round trip").toBe(true);
+    expect(parsed.config.storePayloads, "Store full payloads did not survive the round trip").toBe(true);
+  });
+
+  test("both default off, which is what every attack saved before them meant", () => {
+    const fresh = emptyIntruderConfig();
+    expect(fresh.setConnectionClose).toBe(false);
+    expect(fresh.storePayloads).toBe(false);
   });
 });

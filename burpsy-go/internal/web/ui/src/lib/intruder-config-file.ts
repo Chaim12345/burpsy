@@ -153,6 +153,11 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   retries: str,
   retryDelayMS: str,
   baseline: bool,
+  // Burp's Set Connection header and Store full payloads (fmxv). Booleans, like baseline: an
+  // attack either sends Connection: close on every request or it does not, and there is no
+  // third state a saved configuration could be in.
+  setConnectionClose: bool,
+  storePayloads: bool,
 };
 
 /** The fields a saved attack configuration carries, in the order the store declares them. */

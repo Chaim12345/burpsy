@@ -1095,6 +1095,8 @@ export function IntruderPage(): JSX.Element {
     retries,
     retryDelayMS,
     baseline,
+    setConnectionClose,
+    storePayloads,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1121,6 +1123,12 @@ export function IntruderPage(): JSX.Element {
   // decides, exactly as an attack that never mentions it always has — so this control cannot
   // silently turn following on for an operator who only opened this tab to look at Grep.
   const [redirectMode, setRedirectMode] = useState<FollowRedirectsMode | "">("");
+  // Burp's other two attack settings (fmxv), written through the persisted config like every other
+  // attack setting: an operator who turns either on expects it still on when the tab is reopened, and
+  // a launch that silently loses the setting would send a differently-shaped request than the one on
+  // screen.
+  const setSetConnectionClose = field("setConnectionClose");
+  const setStorePayloads = field("storePayloads");
 
   /**
    * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
@@ -1556,6 +1564,11 @@ export function IntruderPage(): JSX.Element {
       // the standing policy — an absent field and an empty string must not become two different
       // wire shapes for "I did not choose", the same discipline url_encode_characters above holds.
       ...(redirectMode !== "" ? { follow_redirects: redirectMode } : {}),
+      // Set Connection header and Store full payloads (fmxv). Sent only when asked, for the same
+      // reason baseline above: the wire shape for "off" stays what every existing client posts, so
+      // a saved attack resumes byte-for-byte as it did.
+      ...(setConnectionClose ? { set_connection_close: true } : {}),
+      ...(storePayloads ? { store_full_payloads: true } : {}),
     };
     if (useSources) {
       body.payload_sources = payloadTypes.map((t, i) => {
@@ -2725,6 +2738,41 @@ export function IntruderPage(): JSX.Element {
               />
               <p className="cell-dim">
                 Issues the template with every position at its base value as item 0 — "Baseline request (no payloads)" — so the attack responses hang against a base response to compare with. Every result ordinal shifts by one.
+              </p>
+              {/* Burp's remaining two attack settings (fmxv). The engine has implemented both
+                  since 29a7ee3; this is the first path a request has to reach them, and the first
+                  time an operator can see either one at all. */}
+              <Checkbox
+                checked={setConnectionClose}
+                onCheckedChange={(v) => setSetConnectionClose(v)}
+                label="Set Connection header"
+              />
+              <p className="cell-dim">
+                Adds or updates <code>Connection: close</code> on every request this attack sends. Applied after the
+                payloads are spliced in, so an existing header keeps its spelling and spacing and only its value changes.
+              </p>
+              <Checkbox
+                checked={storePayloads}
+                onCheckedChange={(v) => setStorePayloads(v)}
+                label="Store full payloads"
+              />
+              <p className="cell-dim">
+                Keeps each result&apos;s full payload values, so the report can name the payloads behind a row instead of
+                an ordinal. Costs a small per-row slice header over the payload strings the attack already holds — the
+                bytes are shared, not copied.
+              </p>
+              {/* Burp's third attack setting, and the one this build does not implement. Said here
+                  rather than left to be discovered at the target: "Use denial-of-service mode" sends
+                  the request and deliberately does not read the response, which needs a fire-and-forget
+                  send AND every attempt-recording path to learn "no response was read" instead of
+                  counting a zero-length one. A checkbox that quietly reported an empty response as a
+                  zero-length 0 would be the exact lie this project treats as worse than the gap. */}
+              <p className="field-hint">
+                <strong>Use denial-of-service mode is not implemented.</strong> Burp sends each request and
+                deliberately does not read the response. Doing that honestly here needs a send that can
+                leave without reading, plus every place an attempt records its status, length and
+                reflection to carry &ldquo;no response was read&rdquo; rather than a zero — otherwise the
+                report would count a request it never saw an answer to.
               </p>
             </div>
             {poolName ? (

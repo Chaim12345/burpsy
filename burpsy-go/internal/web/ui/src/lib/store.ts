@@ -212,6 +212,16 @@ export interface IntruderConfig {
  retryDelayMS: string;
  /** Burp's "Make unmodified baseline request" (v34): the template as item 0. */
  baseline: boolean;
+ /**
+  * Burp's other two attack settings (burpsy-react-ui-fmxv): "Set Connection header"
+  * (add or update Connection: close on every request) and "Store full payloads" (keep the
+  * full payload values on each result row, so a report can name its own payloads).
+  *
+  * Both false by default, which is what every attack sent before this setting existed did; the
+  * engine implemented both in 29a7ee3 with no way for a request to reach them.
+  */
+ setConnectionClose: boolean;
+ storePayloads: boolean;
 }
 
 /**
@@ -333,6 +343,8 @@ export function emptyIntruderConfig(): IntruderConfig {
   retries: "",
   retryDelayMS: "",
   baseline: false,
+  setConnectionClose: false,
+  storePayloads: false,
  };
 }
 

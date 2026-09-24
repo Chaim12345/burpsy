@@ -577,6 +577,17 @@ type intruderRunReq struct {
 	// sender.FollowRedirectsAfterPolicy, which does not replay cookies, and a checkbox for a
 	// feature that does not exist would lie.
 	FollowRedirects *string `json:"follow_redirects"`
+	// SetConnectionClose and StorePayloads are Burp's other two attack settings
+	// (burpsy-react-ui-fmxv): "Set Connection header" (add or update Connection: close) and
+	// "Store full payloads" (retain the full payload values for each result). Both are the engine's
+	// Attack.SetConnectionClose / Attack.StorePayloads, reached here for the first time — the engine
+	// half landed in 29a7ee3 with no way to set either.
+	//
+	// Pointers so an absent field means "not asked for", which is what every attack sent before
+	// this means. A plain bool cannot tell that from an explicit false, and the difference is
+	// whether a client's saved attack resumes with the setting on or off.
+	SetConnectionClose *bool `json:"set_connection_close,omitempty"`
+	StorePayloads      *bool `json:"store_full_payloads,omitempty"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -1159,7 +1170,12 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
 		WithGrep(grep).
-		WithControl(control)
+		WithControl(control).
+		// Burp's other two attack settings (fmxv), attached only when the request names them, so
+		// an attack sent before this field set is byte-for-byte what it always was. A nil here is
+		// "off" at the engine, which is the same thing — the fields exist so the UI can ask.
+		WithSetConnectionClose(req.SetConnectionClose != nil && *req.SetConnectionClose).
+		WithStorePayloads(req.StorePayloads != nil && *req.StorePayloads)
 	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
 	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
 	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
