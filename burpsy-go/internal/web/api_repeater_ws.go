@@ -99,6 +99,29 @@ type repeaterWsMessage struct {
 	Len     int    `json:"len"`
 }
 
+// wsSchemeTarget translates a ws:// or wss:// target into the host:port form targetParts
+// speaks, reporting whether the scheme asked for TLS. A target with no ws scheme passes
+// through untouched (the bare host:port spelling the API also accepts).
+//
+// A malformed ws URL is refused rather than guessed at: "ws://" with nothing after it names
+// no host, and dialling localhost on the operator's behalf would be a send nobody asked for.
+func wsSchemeTarget(target string) (string, bool, error) {
+	trimmed := strings.TrimSpace(target)
+	if rest, ok := strings.CutPrefix(trimmed, "wss://"); ok {
+		if strings.TrimSpace(rest) == "" {
+			return "", false, fmt.Errorf("the target %q names no host", target)
+		}
+		return rest, true, nil
+	}
+	if rest, ok := strings.CutPrefix(trimmed, "ws://"); ok {
+		if strings.TrimSpace(rest) == "" {
+			return "", false, fmt.Errorf("the target %q names no host", target)
+		}
+		return rest, false, nil
+	}
+	return trimmed, false, nil
+}
+
 // handleRepeaterWsSend resends one WebSocket frame over a fresh connection.
 func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -192,9 +215,21 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 		}
 	}
 	if req.Target != "" {
-		h, p, t, terr := targetParts(req.Target)
+		// The ws spellings (burpsy-react-ui-6ex): a WebSocket target is written ws://host:port or
+		// wss://host:port, and the Repeater's own ws tab offers exactly that in its Target field.
+		// targetParts speaks the HTTP spellings only — widening IT would let an HTTP send be given
+		// a ws:// target and silently dial plaintext, so the translation lives here, on the one
+		// path where ws:// is what the operator meant.
+		wsTarget, wsTLS, wsErr := wsSchemeTarget(req.Target)
+		if wsErr != nil {
+			return "", 0, false, "", "", 0, nil, http.StatusBadRequest, wsErr
+		}
+		h, p, t, terr := targetParts(wsTarget)
 		if terr != nil {
 			return "", 0, false, "", "", 0, nil, http.StatusBadRequest, terr
+		}
+		if wsTLS {
+			t = true
 		}
 		host, port, tls = h, p, t
 	}

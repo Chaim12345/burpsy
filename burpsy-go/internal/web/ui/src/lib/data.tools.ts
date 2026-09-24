@@ -126,6 +126,8 @@ export interface RepeaterWsSendBody {
  /** "text" | "binary". */
  opcode: string;
  payload: string;
+ /** Burp's other direction. Refused by the wire with its reason — see the store's wsDirection. */
+ to_client?: boolean;
 }
 
 /**

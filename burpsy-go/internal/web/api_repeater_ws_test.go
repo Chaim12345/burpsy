@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -154,6 +155,82 @@ func repeaterWsTargetOf(t *httptest.Server) (host string, port uint16) {
 	parts := strings.Split(strings.TrimPrefix(t.URL, "http://"), ":")
 	p, _ := strconv.Atoi(parts[1])
 	return parts[0], uint16(p)
+}
+
+// The ws:// spelling the Repeater's own ws tab puts in its Target field (burpsy-react-ui-6ex).
+//
+// The UI offers "ws://host:port" and "wss://host:port" because that is what a WebSocket target
+// is called, and targetParts — the helper every HTTP send uses — accepts only the http spellings
+// and bare host:port. Before the translation existed, every send from the ws tab was refused
+// with `400 unknown scheme "ws"` before it dialled, and because that refusal reaches the pane as
+// an ordinary failed mutation the operator saw the idle placeholder: the feature looked like it
+// sent nothing rather than like it was misconfigured. Both spellings are asserted, plus wss
+// asking for TLS, plus the malformed one being refused rather than guessed at.
+func TestARepeaterWsSendAcceptsTheWsSchemesTheUiOffers(t *testing.T) {
+	target := wsEchoTarget(t)
+	host, port := repeaterWsTargetOf(target)
+
+	for _, tc := range []struct {
+		name   string
+		target string
+		wantOK bool
+	}{
+		{"ws:// with a port", fmt.Sprintf("ws://%s:%d", host, port), true},
+		{"ws:// with the default port", fmt.Sprintf("ws://%s:80", host), false},
+		{"bare host:port still works", fmt.Sprintf("%s:%d", host, port), true},
+		{"ws:// naming no host is refused", "ws://", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer()
+			s.scope.AddInclude(host)
+			rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+				"target":  tc.target,
+				"path":    "/",
+				"opcode":  "text",
+				"payload": "scheme probe",
+			})
+			if tc.wantOK && rec.Code != http.StatusOK {
+				t.Fatalf("POST with target %q: status = %d (%s) — the ws tab's own target spelling "+
+					"must reach the target, not be refused before the dial", tc.target, rec.Code, rec.Body.String())
+			}
+			if !tc.wantOK && rec.Code == http.StatusOK {
+				t.Fatalf("POST with target %q: status = 200, want a refusal — a target that names no "+
+					"host must not be dialled", tc.target)
+			}
+			if tc.wantOK {
+				var resp repeaterWsSendResp
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("decode reply: %v", err)
+				}
+				if len(resp.Messages) != 1 || resp.Messages[0].Payload != "echo: scheme probe" {
+					t.Errorf("reply messages = %+v, want the echo of the frame", resp.Messages)
+				}
+			}
+		})
+	}
+}
+
+// wss:// asks for TLS, which the plain-ws echo target cannot serve — so the assertion is that
+// the report is a DIAL failure and not "unknown scheme". The distinction matters: a target that
+// refuses TLS is a target problem the operator can act on, while a refused scheme reads as a
+// console that cannot do WebSockets at all.
+func TestAWssTargetIsNotRefusedAsAnUnknownScheme(t *testing.T) {
+	target := wsEchoTarget(t)
+	host, port := repeaterWsTargetOf(target)
+
+	s := newTestServer()
+	s.scope.AddInclude(host)
+	rec := postJSON(t, s, "/api/repeater/ws-send", map[string]any{
+		"target":  fmt.Sprintf("wss://%s:%d", host, port),
+		"path":    "/",
+		"opcode":  "text",
+		"payload": "tls probe",
+	})
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "unknown scheme") {
+		t.Fatalf("wss:// was refused as an unknown scheme (%s): the ws tab's secure spelling must be "+
+			"understood, and whether the target speaks TLS is the dial's answer, not the parser's",
+			rec.Body.String())
+	}
 }
 
 // A frame resent through the endpoint reaches the target, the reply comes back, and the whole

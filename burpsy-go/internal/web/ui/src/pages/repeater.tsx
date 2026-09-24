@@ -300,12 +300,17 @@ export function RepeaterPage(): JSX.Element {
       return;
     }
     const sentPayload = tab.wsPayload ?? "";
+    const toClient = (tab.wsDirection ?? "server") === "client";
     wsSend.mutate(
       {
         message: tab.fromExchange ?? 0,
         target: tab.target,
         opcode: tab.wsOpcode ?? "text",
         payload: sentPayload,
+        // The direction Burp offers as a choice. to-server is the half a fresh dial can do;
+        // to-client is sent as the flag the wire refuses with its reason, so choosing it shows
+        // exactly why it cannot run here instead of the control being absent.
+        ...(toClient ? { to_client: true } : {}),
       },
       {
         onSuccess: (result) => {
@@ -1294,6 +1299,45 @@ export function RepeaterPage(): JSX.Element {
           <Field label="Tab name" style={{ maxWidth: "var(--w-md)" }}>
             {(id) => <Input id={id} value={active.name} onChange={(event) => updateRepeaterTab(active.id, { name: event.target.value })} />}
           </Field>
+          {active.kind === "ws" ? (
+            /* The opcode as a visible control, not only a menu row: it decides whether the
+             * bytes go out as a text frame or a binary one, and that choice has to be legible
+             * while reading the payload it applies to (6ex). */
+            <Field label="Opcode" style={{ maxWidth: "var(--w-xs)" }}>
+              {(id) => (
+                <Select
+                  id={id}
+                  aria-label="WebSocket opcode"
+                  value={active.wsOpcode ?? "text"}
+                  onChange={(event) => updateRepeaterTab(active.id, { wsOpcode: event.target.value })}
+                >
+                  <option value="text">text</option>
+                  <option value="binary">binary</option>
+                </Select>
+              )}
+            </Field>
+          ) : null}
+          {active.kind === "ws" ? (
+            /* Burp's direction choice, on the tab that has it (6ex). Both directions are
+             * offered: "to client" is refused by the wire with the reason it cannot run on a
+             * fresh connection, and a chooser that hid half of Burp's choice would misstate
+             * what this tab can do. The refusal lands in the reply pane. */
+            <Field label="Direction" style={{ maxWidth: "var(--w-md)" }}>
+              {(id) => (
+                <Select
+                  id={id}
+                  aria-label="Which way the frame goes"
+                  value={active.wsDirection ?? "server"}
+                  onChange={(event) =>
+                    updateRepeaterTab(active.id, { wsDirection: event.target.value as "server" | "client" })
+                  }
+                >
+                  <option value="server">To server</option>
+                  <option value="client">To client (refused on a fresh connection)</option>
+                </Select>
+              )}
+            </Field>
+          ) : null}
           <Button variant="outline" onClick={() => void handOffToIntruder(active)} disabled={handingOff}>
             <Crosshair size={14} />
             {handingOff ? "Preparing…" : "To Intruder"}
@@ -1367,6 +1411,13 @@ export function RepeaterPage(): JSX.Element {
               result={wsResult ?? null}
               pending={wsSend.isPending}
               cancelled={wsSend.error instanceof SendCancelled}
+              /* The refusal text. A ws send that was refused before the dial (a bad target, a
+               * scope refusal) used to leave the idle placeholder on screen, which reads as
+               * "nothing happened" rather than "the send was refused, and here is why" — the
+               * exact shape the ws tab's own `unknown scheme "ws"` bug hid inside. */
+              failure={wsSend.error && !(wsSend.error instanceof SendCancelled)
+                ? wsSend.error instanceof Error ? wsSend.error.message : String(wsSend.error)
+                : null}
               exchangeId={httpResult?.exchange_id ?? null}
             />
           ) : finalResponse != null ? (
@@ -1389,21 +1440,23 @@ export function RepeaterPage(): JSX.Element {
               </Button>
             </div>
           ) : null}
-          <HttpEditor
-            label="Response"
-            readOnly
-            value={
-                  chainResponse ??
-                  httpResult?.response ??
-                  (send.isPending
-                    ? "Waiting for the response…"
-                    : send.error instanceof SendCancelled
-                      ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
-                      : "Send the request to see the response bytes.")
-                }
-            filename="repeater-response.txt"
-            menuGroups={messageMenu}
-          />
+          {active.kind === "ws" ? null : (
+            <HttpEditor
+              label="Response"
+              readOnly
+              value={
+                    chainResponse ??
+                    httpResult?.response ??
+                    (send.isPending
+                      ? "Waiting for the response…"
+                      : send.error instanceof SendCancelled
+                        ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
+                        : "Send the request to see the response bytes.")
+                  }
+              filename="repeater-response.txt"
+              menuGroups={messageMenu}
+            />
+          )}
         </div>
         {inspector ? (
           // Pointed at the response with nothing to show yet, it falls back to the
@@ -1448,20 +1501,26 @@ function WsReplyPane({
   result,
   pending,
   cancelled,
+  failure,
   exchangeId,
 }: {
   result: WsRepeaterSendResult | null;
   pending: boolean;
   cancelled: boolean;
+  failure: string | null;
   exchangeId: number | null;
 }): JSX.Element {
   if (pending) {
+    // The send's reply read runs to wsclient.ReplyDeadline (30s), on purpose: a WebSocket
+    // reply is often a burst and stopping at the first frame would drop the rest of what the
+    // target did. Saying so beats a spinner that looks hung — an operator who knows the wait
+    // is the read, not a stall, can tell a slow target from a broken send.
     return (
       <HttpEditor
         label="WebSocket"
         views={false}
         readOnly
-        value="Sending the frame…"
+        value={"Waiting for reply frames — the read runs up to 30s so a burst is not cut short. The frames that arrive are shown as they land."}
         filename="repeater-ws.txt"
       />
     );
@@ -1470,6 +1529,16 @@ function WsReplyPane({
     return (
       <div className="notice">
         Cancelled. No reply arrived, and no exchange was recorded — but the frame may have reached the target.
+      </div>
+    );
+  }
+  if (failure) {
+    // The refusal in full, in place of the frame that never went out. A ws send can be refused
+    // before the dial (an unusable target, a scope decision), and the pane is where the operator
+    // is looking — a toast is gone by the time they wonder what happened.
+    return (
+      <div className="notice notice-warn" role="status">
+        The send was refused: {failure}
       </div>
     );
   }

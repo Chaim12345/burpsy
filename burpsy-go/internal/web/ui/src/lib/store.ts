@@ -112,6 +112,15 @@ export interface RepeaterTab {
  wsPayload?: string;
  /** The frame's opcode ("text" | "binary"). Absent = "text". */
  wsOpcode?: string;
+ /**
+  * Which way the frame goes (burpsy-react-ui-6ex): Burp's "send to server" / "send to client"
+  * choice. Absent = "server", which is the half a fresh dial can actually do. "client" is
+  * offered and then refused by the wire with the reason ("a fresh connection has no client to
+  * send to … intercept the WebSocket first"), because a chooser that silently omits one of the
+  * two directions misstates what the tool offers — and a refusal the operator never sees is the
+  * same as no choice at all.
+  */
+ wsDirection?: "server" | "client";
  /** The exchange this tab was opened from, sent back as the resend's parent so lineage survives.
   *  Undefined for a tab the operator started by hand — there is no antecedent to record. */
  fromExchange?: number;
@@ -522,7 +531,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;
@@ -679,7 +688,7 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange, kind, wsPayload, wsOpcode }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
@@ -703,6 +712,7 @@ export const useApp = create<AppState>()(
         ...(kind ? { kind } : {}),
         ...(wsPayload !== undefined ? { wsPayload } : {}),
         ...(wsOpcode ? { wsOpcode } : {}),
+        ...(wsDirection ? { wsDirection } : {}),
        },
       ],
       state.closedRepeaterTabs,
