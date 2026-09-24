@@ -41,6 +41,15 @@ export interface SiteNodeDetail {
  mimes?: string[];
  /** False for a folder synthesised to hold children — nothing requested the path itself. */
  requested: boolean;
+ /**
+  * True for a node an operator added to the map themselves (amu), as against one traffic was
+  * observed on. The two are kept apart because the map's counts are all zero on an inserted node
+  * precisely because nothing was requested there, and a zero that reads as a clean observation
+  * would be a lie about coverage.
+  */
+ inserted?: boolean;
+ /** When the operator added it, in Unix milliseconds. Absent on an observed node. */
+ added_at?: number;
  /** Findings recorded at this exact path. */
  issues: number;
  /** Findings at this path and everything under it, so a collapsed branch still says what is inside. */

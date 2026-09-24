@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 )
@@ -74,10 +75,113 @@ type SiteMap struct {
 	// requested /api itself — the folder was synthesised, its children live at their own path keys,
 	// and only a prefix rule reaches them.
 	suppressed map[string]struct{}
+	// inserted is every host/path an operator added to the map themselves (amu). A SEPARATE map
+	// rather than entries in `hosts`, for the reason the decision recorded: the observed tree is
+	// rebuilt from the traffic store by Sync, so anything written into it would be erased on the next
+	// rebuild and would make reference.ts's disclosure ("a host on the map was observed at some
+	// point") false for every node on it. The two sets are merged on read, never on write.
+	inserted map[string]*InsertedNode
+}
+
+// InsertedNode is a host/path an operator put on the map without sending traffic to it.
+//
+// Carries no counts, no methods and no statuses, because there are none: nothing was observed here.
+// That absence IS the node's meaning, and the wire says so explicitly rather than rendering zeroes an
+// operator would read as observations.
+type InsertedNode struct {
+	Host  string
+	Port  uint16
+	TLS   bool
+	Path  string
+	Added time.Time
 }
 
 func New() *SiteMap {
-	return &SiteMap{hosts: make(map[string]*HostNode), suppressed: make(map[string]struct{})}
+	return &SiteMap{
+		hosts:      make(map[string]*HostNode),
+		suppressed: make(map[string]struct{}),
+		inserted:   make(map[string]*InsertedNode),
+	}
+}
+
+// Insert records a host/path an operator added to the map (amu).
+//
+// Idempotent on the exact node: adding the same one twice keeps the first Added time, because "when
+// did you add this" is a fact about the first time, and a re-add that moved it would make the
+// timestamp a record of the last click rather than of the decision.
+//
+// An inserted path that is ALREADY observed is recorded as nothing new: the observation is the
+// stronger fact about that node, the caller is told so, and the map does not gain a second entry
+// claiming a URL was never looked at when it was.
+func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added time.Time) (alreadyObserved bool) {
+	if host == "" {
+		return false
+	}
+	if path == "" && port == 0 {
+		// A host with no port cannot be named: HostKey folds the port into the key, and "app.test:0"
+		// would be a node that matches no authority. Refuse by returning, leaving the map unchanged.
+		return false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if observedLocked(sm.hosts, host, port, tls, path) {
+		return true
+	}
+	key := insertKey(host, port, tls, path)
+	if _, ok := sm.inserted[key]; ok {
+		return false
+	}
+	sm.inserted[key] = &InsertedNode{Host: host, Port: port, TLS: tls, Path: path, Added: added}
+	return false
+}
+
+// observedLocked reports whether the observed tree already holds that exact node. Callers hold sm.mu.
+func observedLocked(hosts map[string]*HostNode, host string, port uint16, tls bool, path string) bool {
+	hn := hosts[hostKey(host, port, tls)]
+	if hn == nil {
+		return false
+	}
+	if path == "" {
+		return true
+	}
+	_, ok := hn.Paths[path]
+	return ok
+}
+
+// Inserts returns every operator-added node, in a stable order so the UI and the API agree on what
+// the map contains. Callers hold sm.mu.
+func (sm *SiteMap) insertsLocked() []*InsertedNode {
+	out := make([]*InsertedNode, 0, len(sm.inserted))
+	for _, n := range sm.inserted {
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+// Inserts is the public read: every operator-added node, host and path alike.
+func (sm *SiteMap) Inserts() []*InsertedNode {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.insertsLocked()
+}
+
+// Inserted reports whether the operator added this exact node. A node that is also observed answers
+// false here: the observation is the fact the map will draw.
+func (sm *SiteMap) Inserted(host string, port uint16, tls bool, path string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	_, ok := sm.inserted[insertKey(host, port, tls, path)]
+	return ok
+}
+
+func insertKey(host string, port uint16, tls bool, path string) string {
+	return hostKey(host, port, tls) + "\x00" + path
 }
 
 // Sync rebuilds the sitemap from the traffic store's current exchanges.

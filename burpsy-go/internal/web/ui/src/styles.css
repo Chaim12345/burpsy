@@ -2915,6 +2915,26 @@ tbody td {
   white-space: nowrap;
 }
 
+/* An operator-added site-map node (amu). A dashed underline rather than a colour: the row is
+   marked as "you wrote this down, nothing was observed", which is a provenance fact, and a tint
+   would read as a severity. `outline` rather than `border-bottom` so the row's height does not
+   change by a pixel when a node is added to the map mid-session. */
+.tree-row-inserted {
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 2px;
+}
+
+/* The marker beside an inserted row, in the operator's own words rather than an icon: the whole
+   point is that a reader can tell what the node is without inferring it from a shape. */
+.tree-row-added {
+  color: var(--muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 /* One grid cell holding every trailing marker, so a row that gains a severity dot or a parameter
    list does not shift the column count out from under a row that has neither. */
 .tree-row-meta {

@@ -773,10 +773,15 @@ var manifest = map[string]route{
 		// removes a branch from the view an operator reasons and reports from, and a branch that
 		// stops being visible stops being worked. The same shape as DELETE /api/history. GET is
 		// riskRead unchanged.
-		methods: []string{"GET", "DELETE"}, risk: riskDestructive,
-		summary: "GET: the site map as a real tree, with per-subtree exchange counts. DELETE: " +
-			"suppress a host, branch or single node from the map — a view-level removal that keeps the " +
-			"underlying exchanges and stays out across rebuilds and re-captures",
+		// POST is riskLocal: it records a host/path the operator wrote down. It sends no traffic, so
+		// it cannot touch the target, and the nodes it adds live in their own store rather than in the
+		// observed tree — the map then answers "what did we see" and "what did you note" as two
+		// questions rather than pretending the second is the first (amu).
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskDestructive,
+		summary: "GET: the site map as a real tree, with per-subtree exchange counts. POST: " +
+			"record a host/path the operator added, kept separate from observed nodes and marked as " +
+			"such. DELETE: suppress a host, branch or single node from the map — a view-level removal " +
+			"that keeps the underlying exchanges and stays out across rebuilds and re-captures",
 	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,

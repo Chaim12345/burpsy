@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -76,7 +77,21 @@ type sitemapNodeView struct {
 	// /v1/ paths are authorised. The sitemap instead asks Contains per node, so it has the precision to
 	// light /v1/ and dim the host root. This value only decides what is greyed; authorisation stays on
 	// the bytes going out.
-	InScope      bool              `json:"in_scope"`
+	InScope bool `json:"in_scope"`
+	// HostName is the authority's host, carried on every node so the merge can group by it without
+	// parsing Key. Never serialised: Key already states the identity to a client, and a second
+	// spelling of the same fact on the wire is a second thing to keep right.
+	HostName string `json:"-"`
+	// Inserted marks a node the operator added themselves rather than one traffic was observed on
+	// (amu). The two are kept apart for the reason the decision recorded: a node on the map means
+	// either "we saw this" or "you wrote this down", and an operator reading the map needs to know
+	// which — the counts beside an inserted node are all zero precisely because nothing was
+	// requested, and saying so on the node is better than a node that looks observed and empty.
+	//
+	// Never omitempty: absent and false are the same JSON, and a client that read an absent
+	// `inserted` as "this is a stored fact" would label every observed node as added.
+	Inserted     bool              `json:"inserted"`
+	AddedAt      *int64            `json:"added_at,omitempty"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`
 	Children     []sitemapNodeView `json:"children,omitempty"`
@@ -110,11 +125,63 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.sitemapGet(w, r)
+	// "Add to site map" (amu): an operator records a URL they know about without sending traffic to
+	// it. POST, because it adds to the map and DELETE suppresses — the same verbs the two halves of
+	// Burp's site-map context menu already use.
+	case http.MethodPost:
+		s.sitemapInsert(w, r)
 	case http.MethodDelete:
 		s.sitemapDelete(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// sitemapInsert records one operator-added site-map node (amu).
+//
+// The response says which of the two things happened, because they are different facts an operator
+// needs to know: a node they added, or a node that was ALREADY on the map because traffic to it was
+// observed. Reporting the second as a success would tell an operator their URL was recorded when it
+// was on the map for a stronger reason, and the distinction is the whole point of keeping inserts
+// separate from observations.
+func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+		Port uint16 `json:"port"`
+		TLS  bool   `json:"tls"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"/p\"}",
+			http.StatusBadRequest)
+		return
+	}
+	req.Host = strings.TrimSpace(req.Host)
+	if req.Host == "" {
+		http.Error(w, "a host is required: the map is a tree of authorities, and a node with no host "+
+			"is not one", http.StatusBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		http.Error(w, "a port is required: a map node names one authority, and app.test:0 is not one. "+
+			"The row menu takes the port from the exchange it was invoked on", http.StatusBadRequest)
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path != "" && !strings.HasPrefix(req.Path, "/") {
+		req.Path = "/" + req.Path
+	}
+	already := s.sitemap.Insert(req.Host, req.Port, req.TLS, req.Path, time.Now())
+	body := map[string]any{
+		"inserted":     req.Host + req.Path,
+		"already_seen": already,
+	}
+	if already {
+		body["note"] = "that host and path are already on the map because traffic to them was observed, " +
+			"which is a stronger fact than a note to self"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
 }
 
 // sitemapDelete validates the node fields the UI sent and suppresses that host, branch or item.
@@ -203,6 +270,41 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Operator-added nodes (amu), merged in after the observed tree so the fold above never has to
+	// know about them. An insert naming a path that was already observed is not emitted: the
+	// observation is the stronger fact, and the caller was told exactly that at insert time.
+	insertedPaths := make([]sitemapNodeView, 0)
+	for _, in := range s.sitemap.Inserts() {
+		if hostFilter != "" && in.Host != hostFilter {
+			continue
+		}
+		if pathFilter != "" && !strings.Contains(in.Path, pathFilter) {
+			continue
+		}
+		if in.Path != "" && observedPath(s.sitemap, in) {
+			continue
+		}
+		nodeCount++
+		added := in.Added.UnixMilli()
+		insertedPaths = append(insertedPaths, sitemapNodeView{
+			Key:      nodeKey(in.Host, in.Port, in.TLS, in.Path),
+			HostName: in.Host,
+			Segment:  pathSegment(in.Path),
+			Path:     in.Path,
+			Port:     in.Port,
+			TLS:      in.TLS,
+			Depth:    len(ancestorPaths(in.Path)),
+			Inserted: true,
+			AddedAt:  &added,
+			Methods:  []string{},
+			Statuses: []int{},
+			Mimes:    []string{},
+			Recent:   []core.ExchangeID{},
+			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
+		})
+	}
+	tree, nodeCount = mergeInsertedIntoTree(tree, insertedPaths, nodeCount)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sitemapTreeResp{
 		Exchanges: len(exchanges),
@@ -211,6 +313,231 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 		InFlight:  0,
 		Tree:      tree,
 	})
+}
+
+// observedPath reports whether the observed tree already holds this exact path under its host. An
+// insert that names one is not a new node: the observation is the stronger fact about that URL.
+func observedPath(sm *sitemap.SiteMap, in *sitemap.InsertedNode) bool {
+	for _, host := range sm.Hosts() {
+		if host.Host != in.Host || host.Port != in.Port || host.TLS != in.TLS {
+			continue
+		}
+		clean, _ := splitPathQuery(in.Path)
+		if _, ok := host.Paths[clean]; ok {
+			return true
+		}
+		// A folder is observed when anything beneath it is: the fold synthesises ancestor folders, so
+		// an insert naming /api/ would otherwise produce a second /api/ node beside the synthesised one.
+		for _, pn := range host.Paths {
+			cleanPath, _ := splitPathQuery(pn.Path)
+			if clean == "/" || strings.HasPrefix(cleanPath, strings.TrimSuffix(clean, "/")+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathOrRoot is the path scope questions are asked about: an inserted host node has no path, and
+// Contains wants a real one.
+func pathOrRoot(p string) string {
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
+// mergeInsertedIntoTree grafts operator-added nodes onto the observed tree.
+//
+// The shape the map already has is host → path folders → leaves, and an insert can land anywhere in
+// it: under a host that was observed, under a host that was not, or at a folder level between two
+// observed nodes. Synthesising the missing ancestors is what keeps the tree a tree — an insert under
+// an unseen host needs a host row to sit under, and an insert of /api/v1/users needs /api and
+// /api/v1 above it or it would render as a root sibling of the host it belongs to.
+//
+// Returns the new tree and the node count, because synthesised folders are nodes and the count the
+// UI prints has to include them.
+func mergeInsertedIntoTree(tree []sitemapNodeView, inserts []sitemapNodeView, nodeCount int) ([]sitemapNodeView, int) {
+	if len(inserts) == 0 {
+		return tree, nodeCount
+	}
+	// Group the inserts by authority, then by path, so one place in the tree is touched once.
+	type group struct {
+		host  sitemapNodeView
+		paths map[string]sitemapNodeView
+	}
+	byHost := map[string]*group{}
+	var order []string
+	for _, in := range inserts {
+		key := nodeKey(in.HostName, in.Port, in.TLS, "")
+		g := byHost[key]
+		if g == nil {
+			g = &group{host: sitemapNodeView{
+				Key:      key,
+				Segment:  in.HostName,
+				Path:     in.HostName,
+				HostName: in.HostName,
+				Port:     in.Port,
+				TLS:      in.TLS,
+				Depth:    0,
+				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Recent: []core.ExchangeID{},
+			}, paths: map[string]sitemapNodeView{}}
+			byHost[key] = g
+			order = append(order, key)
+		}
+		g.paths[in.Path] = in
+	}
+
+	for _, key := range order {
+		g := byHost[key]
+		// Find the observed host row, if there is one: an insert under a host with traffic hangs on
+		// the host's own row, and its counts are the observed ones.
+		idx := -1
+		for i := range tree {
+			if tree[i].Key == key {
+				idx = i
+				break
+			}
+		}
+		var hostNode sitemapNodeView
+		if idx >= 0 {
+			hostNode = tree[idx]
+		} else {
+			hostNode = g.host
+			hostNode.Inserted = true
+			added := insertsAddedAt(inserts, hostNode.HostName, hostNode.Port, hostNode.TLS)
+			hostNode.AddedAt = added
+			nodeCount++
+		}
+		// Fold each inserted path into the host's children, synthesising the folders above it.
+		paths := make([]string, 0, len(g.paths))
+		for p := range g.paths {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			in := g.paths[p]
+			graftInserted(&hostNode, in, &nodeCount)
+		}
+		hostNode.SubtreeCount = hostNode.SubtreeCount + len(paths)
+		if idx >= 0 {
+			tree[idx] = hostNode
+		} else {
+			tree = append(tree, hostNode)
+		}
+	}
+	return tree, nodeCount
+}
+
+// insertsAddedAt is the earliest insert time under one authority, for the synthesised host row.
+func insertsAddedAt(inserts []sitemapNodeView, host string, port uint16, tls bool) *int64 {
+	var earliest *int64
+	for _, in := range inserts {
+		if in.HostName != host || in.Port != port || in.TLS != tls {
+			continue
+		}
+		if in.AddedAt == nil {
+			continue
+		}
+		if earliest == nil || *in.AddedAt < *earliest {
+			v := *in.AddedAt
+			earliest = &v
+		}
+	}
+	return earliest
+}
+
+// graftInserted puts one inserted node into a host's tree, creating the folders above it.
+//
+// Through a POINTER because the recursion walks a struct field: returning a modified slice from a
+// function whose parent was copied by value drops every append, which is how the first version of
+// this reported child_count 3 and rendered no children at all — a tree that counted what it did not
+// show.
+func graftInserted(host *sitemapNodeView, in sitemapNodeView, nodeCount *int) {
+	ancestors := ancestorPaths(in.Path)
+	current := &host.Children
+	for depth, anc := range ancestors {
+		found := -1
+		for i := range *current {
+			if (*current)[i].Path == anc {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			*nodeCount++
+			*current = append(*current, sitemapNodeView{
+				Key:        nodeKey(in.HostName, in.Port, in.TLS, anc),
+				Segment:    pathSegment(anc),
+				Path:       anc,
+				HostName:   in.HostName,
+				Port:       in.Port,
+				TLS:        in.TLS,
+				Depth:      depth,
+				Inserted:   true,
+				Methods:    []string{},
+				Statuses:   []int{},
+				Mimes:      []string{},
+				Recent:     []core.ExchangeID{},
+				ChildCount: len(ancestors) - depth - 1,
+			})
+			found = len(*current) - 1
+		}
+		current = &(*current)[found].Children
+	}
+	replaced := false
+	for i := range *current {
+		if (*current)[i].Path == in.Path {
+			(*current)[i] = in
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		*nodeCount++
+		*current = append(*current, in)
+	}
+	// The counts a parent reports must include what was grafted under it, or the row says it has
+	// three children and renders none.
+	for i := range host.Children {
+		countDescendants(&host.Children[i])
+	}
+	host.ChildCount = len(host.Children)
+	host.SubtreeCount = countLeaves(host.Children)
+}
+
+// countDescendants fills ChildCount and SubtreeCount for a grafted subtree, so every parent states
+// the same numbers the UI would count by walking it.
+func countDescendants(node *sitemapNodeView) {
+	node.ChildCount = len(node.Children)
+	leaves := 0
+	for i := range node.Children {
+		child := &node.Children[i]
+		if len(child.Children) > 0 {
+			countDescendants(child)
+		}
+		leaves += child.SubtreeCount
+	}
+	if leaves == 0 {
+		leaves = 1
+	}
+	node.SubtreeCount = leaves
+}
+
+// countLeaves is the number of leaf nodes in a children list.
+func countLeaves(children []sitemapNodeView) int {
+	if len(children) == 0 {
+		return 0
+	}
+	total := 0
+	for _, c := range children {
+		if len(c.Children) == 0 {
+			total++
+		} else {
+			total += countLeaves(c.Children)
+		}
+	}
+	return total
 }
 
 // anyInScope reports whether any node in these subtrees is in scope, so a host stays lit when only

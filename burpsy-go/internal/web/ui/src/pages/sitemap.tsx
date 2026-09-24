@@ -250,12 +250,20 @@ function TreeRow({
      {isHost ? <Globe size={12} /> : hasChildren ? expanded ? <FolderOpen size={12} /> : <Folder size={12} /> : null}
     </span>
     <span
-     className={cn("tree-row-label", inferred && "cell-dim")}
-     title={`${node.path}${inferred ? " (no request to this path itself)" : ""}${outOfScope ? " — out of scope: the tools will not touch this" : ""}`}
+     className={cn("tree-row-label", inferred && "cell-dim", node.inserted && "tree-row-inserted")}
+     title={`${node.path}${inferred ? " (no request to this path itself)" : ""}${node.inserted ? " — added by you: nothing has been requested here" : ""}${outOfScope ? " — out of scope: the tools will not touch this" : ""}`}
     >
      {node.segment || "/"}
     </span>
     <span className="tree-row-meta">
+     {/* An operator-added node is MARKED, not styled: the map answers two questions — what was
+         observed and what you wrote down — and a node whose counts are all zero because nothing was
+         requested must never read as a clean observation. (amu) */}
+     {node.inserted ? (
+      <span className="tree-row-scope tree-row-added" title="Added to the site map by you. No traffic has been observed here.">
+       added by you
+      </span>
+     ) : null}
      {outOfScope && isHost ? <span className="tree-row-scope">out of scope</span> : null}
      {node.subtree_issues ? (
       <span

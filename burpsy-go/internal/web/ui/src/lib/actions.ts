@@ -12,6 +12,7 @@ import {
  Globe,
  Highlighter,
  Link2,
+ Map,
  MessageSquarePlus,
  NotebookPen,
  Radar,
@@ -188,6 +189,10 @@ export function useExchangeActions(): {
  sendToSequencer: (exchange: Exchange) => Promise<void>;
  sendToComparer: (exchange: Exchange, slot: "a" | "b") => Promise<void>;
  addToOrganizer: (exchange: Exchange) => Promise<void>;
+ /** Burp's "Add to site map" (amu): record this URL on the map without sending traffic to it. The
+  *  server says whether it was new or already observed, and the toast says the same — "you noted
+  *  this" and "this was already on the map because we saw it" are different facts. */
+ addToSiteMap: (exchange: Exchange) => Promise<void>;
  copyUrl: (exchange: Exchange) => Promise<void>;
  copyCurl: (exchange: Exchange) => Promise<void>;
  filterByHost: (exchange: Exchange) => void;
@@ -308,6 +313,29 @@ export function useExchangeActions(): {
    toast.error(`Could not organize exchange: ${error instanceof Error ? error.message : String(error)}`);
   }
  };
+
+// "Add to site map" (amu). Burp's own wording for the row action, on the row's own host/port/path —
+// not a URL the operator types, because a map node names an authority and a path, and the exchange
+// already carries exactly that.
+//
+// The response's `already_seen` is what makes the toast honest: a URL the proxy has already seen is
+// on the map because of traffic, and telling an operator they "added" it would credit them with a
+// fact the map recorded for a stronger reason.
+const addToSiteMap = async (exchange: Exchange) => {
+ try {
+  const out = await api<{ inserted?: string; already_seen?: boolean; note?: string }>("/api/sitemap", {
+   method: "POST",
+   body: JSON.stringify({ host: exchange.host, port: exchange.port, tls: exchange.tls, path: exchange.path }),
+  });
+  if (out.already_seen) {
+   toast.message(`${exchange.path || "/"} is already on the site map — it was observed there, which is a stronger fact than a note to self`);
+  } else {
+   toast.success(`${exchange.host}${exchange.path} added to the site map — recorded by you, with nothing observed there yet`);
+  }
+ } catch (error) {
+  toast.error(`Could not add to the site map: ${error instanceof Error ? error.message : String(error)}`);
+ }
+};
 
  const copyUrl = async (exchange: Exchange) => {
   await copyToClipboard(exchangeUrl(exchange));
@@ -714,6 +742,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
    id: "organise",
    actions: [
     { id: "organizer", label: "Add to Organizer", icon: NotebookPen, onSelect: () => void addToOrganizer(exchange) },
+    { id: "site-map", label: "Add to site map", icon: Map, onSelect: () => void addToSiteMap(exchange) },
     { id: "host", label: `Filter history by ${exchange.host}`, icon: FolderTree, onSelect: () => filterByHost(exchange) },
     { id: "browser", label: "Open URL in browser", icon: Globe, onSelect: () => requestInBrowser(exchange) },
     {
@@ -751,6 +780,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
   sendToSequencer,
   sendToComparer,
   addToOrganizer,
+  addToSiteMap,
   copyUrl,
   copyCurl,
   filterByHost,
