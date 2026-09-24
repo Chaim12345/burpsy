@@ -849,6 +849,7 @@ func (s *Server) setupRoutes() {
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
+	s.mux.HandleFunc("/api/repeater/ws-send", s.handleRepeaterWsSend)
 	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
 	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a

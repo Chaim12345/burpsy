@@ -91,6 +91,18 @@ export interface RepeaterTab {
  target: string;
  protocol: string;
  request: string;
+ /**
+  * The tab's kind (burpsy-react-ui-6ex): Burp's Repeater opens each new HTTP **or WebSocket**
+  * message in a tab, and the two are first-class tab types ("Select either HTTP or WebSocket",
+  * burp's managing-tabs.html). "ws" tabs carry a frame payload instead of an HTTP request, and
+  * their Send dials a fresh WebSocket (one-shot, the same decision the send bead recorded).
+  * Absent = "http", so every existing tab and every older persisted draft reads as HTTP.
+  */
+ kind?: "http" | "ws";
+ /** The frame's payload for a "ws" tab — the bytes the editor shows and the send carries. */
+ wsPayload?: string;
+ /** The frame's opcode ("text" | "binary"). Absent = "text". */
+ wsOpcode?: string;
  /** The exchange this tab was opened from, sent back as the resend's parent so lineage survives.
   *  Undefined for a tab the operator started by hand — there is no antecedent to record. */
  fromExchange?: number;
@@ -489,7 +501,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;

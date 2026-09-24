@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, Plus, Repeat2, RotateCcw, Send, SlidersHorizontal, X } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
-import { api, formatDuration, json, statusTone, templateRequest } from "../lib/api";
+import { api, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
-import { SendCancelled, useRepeaterSend, useSendRepeaterGroup } from "../lib/data.tools";
+import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useSendRepeaterGroup } from "../lib/data.tools";
+import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
 import type {
@@ -22,6 +23,7 @@ import type {
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
+import { DetailList } from "../ui/json";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Tooltip } from "../ui/primitives";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "../ui/menu";
 import { SimpleTable } from "../ui/table";
@@ -117,7 +119,7 @@ export function RepeaterPage(): JSX.Element {
    * showing the live draft, so the operator could see that entry 2 behaved differently and not
    * which variation entry 2 was — the comparison the tool exists for.
    */
-  const [history, setHistory] = useState<Record<string, RepeaterHistoryEntry[]>>({});
+  const [history, setHistory] = useState<Record<string, (RepeaterHistoryEntry | RepeaterWsHistoryEntry)[]>>({});
   /** Which entry of the active tab's history is on screen. Null follows the newest. */
   const [viewing, setViewing] = useState<Record<string, number | null>>({});
   /**
@@ -147,6 +149,7 @@ export function RepeaterPage(): JSX.Element {
    */
   const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
+ const wsSend = useRepeaterWsSend();
   const groupSend = useSendRepeaterGroup();
   /**
    * The last group send's outcome, or null when this session has not made one.
@@ -194,13 +197,32 @@ export function RepeaterPage(): JSX.Element {
     if (active && active.id !== activeId) setActiveRepeaterTab(active.id);
   }, [active, activeId, tabs.length, setActiveRepeaterTab]);
 
-  const newTab = () => {
-    openRepeaterTab({
-      name: `Request ${tabs.length + 1}`,
-      target: DEFAULT_TARGET,
-      protocol: "https",
-      request: templateRequest("example.com"),
-    });
+  /**
+   * The two tab kinds (burpsy-react-ui-6ex), Burp's "Select either HTTP or WebSocket"
+   * (managing-tabs.html): a new HTTP request drafts a template request; a new WebSocket
+   * message drafts an empty text frame against a ws:// target the operator types. The
+   * dropdown rather than two buttons: the strip is already dense, and one trigger with the
+   * choice inside is how Burp ships it.
+   */
+  const newTab = (kind: "http" | "ws" = "http") => {
+    openRepeaterTab(
+      kind === "ws"
+        ? {
+            name: `WS message ${tabs.length + 1}`,
+            target: "ws://127.0.0.1:8080",
+            protocol: "http",
+            request: "",
+            kind: "ws",
+            wsPayload: "",
+            wsOpcode: "text",
+          }
+        : {
+            name: `Request ${tabs.length + 1}`,
+            target: DEFAULT_TARGET,
+            protocol: "https",
+            request: templateRequest("example.com"),
+          },
+    );
   };
 
   const submit = (tab: RepeaterTab) => {
@@ -244,6 +266,55 @@ export function RepeaterPage(): JSX.Element {
           // wire are gone, and pretending otherwise is the one thing this button must not do.
           if (error instanceof SendCancelled) {
             toast.info("Send cancelled — anything already written to the target was still sent");
+            return;
+          }
+          toast.error(error instanceof Error ? error.message : String(error));
+        },
+      },
+    );
+  };
+
+  /**
+   * The WS send (burpsy-react-ui-6ex): a "ws" tab's Send dials a fresh WebSocket, sends the
+   * frame and reads what comes back — one dial per send, not a held socket. The result rides
+   * the same per-tab history as an HTTP send's, so edit-and-resend is paging back, changing
+   * the payload and sending again; the honest note in the response pane says the frame went
+   * out on a NEW connection, which Burp's own "set automatically" also does once the original
+   * has closed. The direction choice is to-server here: the server refuses to-client with the
+   * reason in the body, and that refusal is surfaced, never hidden.
+   */
+  const submitWs = (tab: RepeaterTab) => {
+    if (viewing[tab.id] != null) {
+      toast.info("Viewing a past send — step to the newest entry to edit and resend the frame");
+      return;
+    }
+    const sentPayload = tab.wsPayload ?? "";
+    wsSend.mutate(
+      {
+        message: tab.fromExchange ?? 0,
+        target: tab.target,
+        opcode: tab.wsOpcode ?? "text",
+        payload: sentPayload,
+      },
+      {
+        onSuccess: (result) => {
+          setHistory((current) => ({
+            ...current,
+            [tab.id]: [
+              ...(current[tab.id] ?? []),
+              {
+                // The draft that went out, so paging back shows the frame as written.
+                request: sentPayload,
+                ws: result,
+              } satisfies RepeaterWsHistoryEntry,
+            ],
+          }));
+          setViewing((current) => ({ ...current, [tab.id]: null }));
+          toast.success(`${result.handshake} — ${result.messages.length} reply frame(s) in ${formatDuration(result.elapsed_ms)}`);
+        },
+        onError: (error) => {
+          if (error instanceof SendCancelled) {
+            toast.info("Send cancelled — the frame may have reached the target");
             return;
           }
           toast.error(error instanceof Error ? error.message : String(error));
@@ -339,7 +410,7 @@ export function RepeaterPage(): JSX.Element {
     sendChord,
     (event) => {
       event.preventDefault();
-      if (active) submit(active);
+      if (active) active.kind === "ws" ? submitWs(active) : submit(active);
     },
     { enableOnFormTags: true, enableOnContentEditable: true },
     [sendChord, active],
@@ -354,7 +425,10 @@ export function RepeaterPage(): JSX.Element {
     setHandingOff(true);
     try {
       const known = history[tab.id] ?? [];
-      let exchangeId = known[known.length - 1]?.exchange_id;
+      const last = known[known.length - 1];
+      // A ws send's entry has no HTTP exchange to hand off (its handshake exchange is the reply's,
+      // recorded for "view in WebSockets history"), so the hand-off resolves an HTTP entry's id.
+      let exchangeId = last && "status" in last ? last.exchange_id : undefined;
       if (!exchangeId) {
         const sent = await api<RepeaterResult>(
           "/api/repeater/send",
@@ -400,6 +474,10 @@ export function RepeaterPage(): JSX.Element {
   const activeHistory = active ? (history[active.id] ?? []) : [];
   const viewIndex = active ? (viewing[active.id] ?? activeHistory.length - 1) : 0;
   const result = activeHistory[viewIndex];
+  /** The HTTP entry's own fields, or null when the entry on screen is a ws send's (6ex). */
+  const httpResult = result && "status" in result ? result : null;
+  /** The ws entry's reply frames, or null when it is an HTTP send's. */
+  const wsResult = result && "ws" in result ? result.ws : null;
 
   /**
    * The request that produced the entry on screen, or null while the tab is following its newest
@@ -415,18 +493,18 @@ export function RepeaterPage(): JSX.Element {
   // landed on — the "final response" the toggle offers — and is null for a chain that followed
   // nothing, where the first response IS the final response and the toggle has nothing to offer.
   const lastFollowedHop =
-    result?.redirects?.hops.reduce<number | null>(
+    httpResult?.redirects?.hops.reduce<number | null>(
       (acc, hop, index) => (hop.followed && hop.response != null ? index : acc),
       null,
     ) ?? null;
-  const finalResponse = lastFollowedHop != null ? (result?.redirects?.hops[lastFollowedHop]?.response ?? null) : null;
+  const finalResponse = lastFollowedHop != null ? (httpResult?.redirects?.hops[lastFollowedHop]?.response ?? null) : null;
   const chainResponse =
-    typeof chainSide === "number" && result?.redirects ? (result.redirects.hops[chainSide]?.response ?? null) : null;
+    typeof chainSide === "number" && httpResult?.redirects ? (httpResult.redirects.hops[chainSide]?.response ?? null) : null;
 
   // A stale hop index must never show one send's bytes inside another's pane: whenever the result
   // under the pane changes — a new send, or paging back through the tab's history — the selection
   // returns to the first response, which is what the pane shows by default.
-  useEffect(() => setChainSide("first"), [result?.exchange_id, active?.id]);
+  useEffect(() => setChainSide("first"), [httpResult?.exchange_id, active?.id]);
 
   /**
    * The exchange this send produced, so the two message panes carry the same menu every other
@@ -438,7 +516,7 @@ export function RepeaterPage(): JSX.Element {
    * "Send to Comparer" on a request that has never left the browser would be sending bytes the
    * store has never seen under an id it does not have.
    */
-  const sentExchange = useExchange(result?.exchange_id ?? null);
+  const sentExchange = useExchange(httpResult?.exchange_id ?? null);
   const actions = usePluginExchangeActions();
   const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
 
@@ -451,7 +529,7 @@ export function RepeaterPage(): JSX.Element {
           title="No request open"
           detail="Start a blank request, or right-click any row in HTTP history and choose “Send to Repeater”."
           action={
-            <Button onClick={newTab}>
+            <Button onClick={() => newTab("http")}>
               <Plus size={14} />
               New request
             </Button>
@@ -564,6 +642,71 @@ export function RepeaterPage(): JSX.Element {
     if (from) setPreviousEncoding((current) => ({ ...current, [active.id]: from }));
     toast.success(`Body re-encoded as ${BODY_ENCODING_LABELS[target]}`);
   };
+
+  /**
+   * The ws frame's own menu (6ex): the opcode switch, and the send/decode/compare actions on
+   * the frame's bytes — the same matrix every other surface offers, built here from the draft
+   * because a frame is not an exchange until it has been sent.
+   */
+  const wsFrameMenu: MenuGroup[] = [
+    {
+      id: "ws-frame",
+      title: "WebSocket frame",
+      actions: [
+        ...(["text", "binary"] as const).map((opcode) => ({
+          id: `opcode-${opcode}`,
+          label: `Switch opcode to ${opcode}`,
+          disabled: (active.wsOpcode ?? "text") === opcode,
+          onSelect: () => updateRepeaterTab(active.id, { wsOpcode: opcode }),
+        })),
+        {
+          id: "send-to-repeater",
+          label: "Send to Repeater",
+          icon: Repeat2,
+          onSelect: () => {
+            openRepeaterTab({
+              name: `${active.name} (copy)`.slice(0, 42),
+              target: active.target,
+              protocol: active.protocol,
+              request: "",
+              kind: "ws",
+              wsPayload: active.wsPayload ?? "",
+              wsOpcode: active.wsOpcode ?? "text",
+            });
+            setRoute("repeater");
+            toast.success(`Copied to a new Repeater tab (from ${active.name})`);
+          },
+        },
+        {
+          id: "decoder",
+          label: "Send payload to Decoder",
+          icon: FileOutput,
+          onSelect: () => {
+            setDecoderSeed({ label: active.name, input: active.wsPayload ?? "" });
+            setRoute("decoder");
+          },
+        },
+        {
+          id: "compare-a",
+          label: "Send payload to Comparer (A)",
+          icon: Combine,
+          onSelect: () => {
+            setComparerSlot("a", active.wsPayload ?? "");
+            setRoute("comparer");
+          },
+        },
+        {
+          id: "compare-b",
+          label: "Send payload to Comparer (B)",
+          icon: ArrowRightLeft,
+          onSelect: () => {
+            setComparerSlot("b", active.wsPayload ?? "");
+            setRoute("comparer");
+          },
+        },
+      ],
+    },
+  ];
 
   const draftEncoding = detectBodyEncoding(active.request);
   const previous = previousEncoding[active.id];
@@ -710,7 +853,10 @@ export function RepeaterPage(): JSX.Element {
             aria-label="Tab name"
           />
         ) : (
-          <span>{tab.name}</span>
+          <span>
+            {tab.kind === "ws" ? <Repeat2 size={10} style={{ display: "inline", marginRight: 4, verticalAlign: "-1px" }} /> : null}
+            {tab.name}
+          </span>
         )}
         <button
           type="button"
@@ -747,37 +893,37 @@ export function RepeaterPage(): JSX.Element {
           actions={
             <>
               <Badge tone={schemeOf(active.target) === "https" ? "good" : "warn"}>{schemeOf(active.target)}</Badge>
-              {result ? (
+              {httpResult ? (
                 <>
-                  <Badge tone={statusTone(result.status)}>{result.status}</Badge>
+                  <Badge tone={statusTone(httpResult.status)}>{httpResult.status}</Badge>
                   {/* A single-connection group send has no per-request timing to report —
                       sender.SendKeepAlive owns the write/read loop — so this says "untimed" rather
                       than rendering the 0 it would otherwise have as though it were a measurement.
                       The group outcome panel carries the batch time, which is the real number. */}
-                  {result.duration_measured === false ? (
+                  {httpResult.duration_measured === false ? (
                     <Tooltip content="This request shared a socket with the rest of its group, and the shared-socket send reports no per-request timing. The group's total is in the group send panel.">
                       <Badge tone="warn">untimed</Badge>
                     </Tooltip>
                   ) : (
-                    <Badge>{formatDuration(result.duration_ms)}</Badge>
+                    <Badge>{formatDuration(httpResult.duration_ms)}</Badge>
                   )}
-                  {result.exchange_id ? <Badge>#{result.exchange_id}</Badge> : null}
+                  {httpResult.exchange_id ? <Badge>#{httpResult.exchange_id}</Badge> : null}
                   {/* Which send produced the entry on screen. An entry that rode a shared socket is
                       not comparable with one that dialled fresh, and that difference is the whole
                       subject of the test the mode exists for. */}
-                  {result.group_mode ? (
-                    <Tooltip content={groupModeLabel(result.group_mode)}>
+                  {httpResult.group_mode ? (
+                    <Tooltip content={groupModeLabel(httpResult.group_mode)}>
                       <Badge tone="info">
-                        {result.group_mode === "sequence_single_conn"
+                        {httpResult.group_mode === "sequence_single_conn"
                           ? "one socket"
-                          : result.group_mode === "parallel"
+                          : httpResult.group_mode === "parallel"
                             ? "group, parallel"
                             : "group, sequence"}
                       </Badge>
                     </Tooltip>
                   ) : null}
-                  {result.framing ? <Badge>framing: {result.framing}</Badge> : null}
-                  {result.response_complete === false ? (
+                  {httpResult.framing ? <Badge>framing: {httpResult.framing}</Badge> : null}
+                  {httpResult.response_complete === false ? (
                     <Tooltip content="The response was not read to a boundary burpsy is confident of — see the group send panel. On a shared socket that ambiguity is evidence, not a glitch.">
                       <Badge tone="warn">incomplete read</Badge>
                     </Tooltip>
@@ -867,11 +1013,11 @@ export function RepeaterPage(): JSX.Element {
                 <button
                   type="button"
                   className="button button-primary"
-                  onClick={() => submit(active)}
-                  disabled={send.isPending || groupSend.isPending || viewedRequest != null}
+                  onClick={() => (active.kind === "ws" ? submitWs(active) : submit(active))}
+                  disabled={send.isPending || wsSend.isPending || groupSend.isPending || viewedRequest != null}
                 >
                   <Send size={14} />
-                  {send.isPending ? "Sending…" : "Send"}
+                  {send.isPending || wsSend.isPending ? "Sending…" : "Send"}
                 </button>
               </Tooltip>
               {/* Burp grows a dropdown arrow beside Send exactly when the active tab belongs to a
@@ -913,9 +1059,22 @@ export function RepeaterPage(): JSX.Element {
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
           <div className="tabs-list" role="tablist" aria-label="Ungrouped Repeater requests">
             {ungrouped.map(renderTabTrigger)}
-            <IconButton label="New request" size="small" onClick={newTab}>
-              <Plus size={13} />
-            </IconButton>
+            <DropdownMenu
+              groups={[
+                {
+                  id: "new",
+                  actions: [
+                    { id: "new-http", label: "New HTTP request", icon: Plus, onSelect: () => newTab("http") },
+                    { id: "new-ws", label: "New WebSocket message", icon: Plus, onSelect: () => newTab("ws") },
+                  ],
+                },
+              ]}
+              trigger={
+                <IconButton label="New request" size="small">
+                  <Plus size={13} />
+                </IconButton>
+              }
+            />
           </div>
           {groups.map((group) => {
             const members = tabs.filter((tab) => tab.groupId === group.id);
@@ -990,7 +1149,7 @@ export function RepeaterPage(): JSX.Element {
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
                   event.preventDefault();
-                  submit(active);
+                  active.kind === "ws" ? submitWs(active) : submit(active);
                 }}
                 placeholder="https://host:443"
               />
@@ -1008,7 +1167,7 @@ export function RepeaterPage(): JSX.Element {
         {/* A cancellation is excluded: it is not a failed request, and an error notice inviting a
             retry would frame the operator's own decision as something that went wrong. */}
         {send.error && !(send.error instanceof SendCancelled) ? (
-          <ErrorNotice error={send.error} onRetry={() => submit(active)} />
+          <ErrorNotice error={send.error || wsSend.error} onRetry={() => (active.kind === "ws" ? submitWs(active) : submit(active))} />
         ) : null}
         {/* No retry button: retrying a group send is a choice of mode, and the last mode is not
             necessarily the one the operator wants after a failure. The dropdown is right there. */}
@@ -1023,8 +1182,8 @@ export function RepeaterPage(): JSX.Element {
           />
         ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
-        {result?.redirects ? (
-          <RedirectChain chain={result.redirects} chainSide={chainSide} onViewHop={setChainSide} />
+        {httpResult?.redirects ? (
+          <RedirectChain chain={httpResult.redirects} chainSide={chainSide} onViewHop={setChainSide} />
         ) : null}
       </div>
 
@@ -1033,17 +1192,48 @@ export function RepeaterPage(): JSX.Element {
             because it has already been sent and there is nothing left to change about it. The label
             carries the state: an editor that silently stopped accepting keystrokes would read as a
             broken editor. Following the newest send, it is the live draft, editable as always. */}
-        <HttpEditor
-          label={viewedRequest != null ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written` : "Request"}
-          value={viewedRequest ?? active.request}
-          readOnly={viewedRequest != null}
-          onChange={(value) => updateRepeaterTab(active.id, { request: value })}
-          filename="repeater-request.txt"
-          placeholder="GET / HTTP/1.1"
-          menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
-        />
+        {active.kind === "ws" ? (
+          /* The frame editor (6ex): a ws tab's payload is the message, not an HTTP request.
+           * views={false}: a frame has no head/body split, and the header decorations would be
+           * decorations of nothing. The send button above is the same Send — its dispatch on the
+           * tab kind is what makes it a ws send. */
+          <HttpEditor
+            label="WebSocket message"
+            views={false}
+            value={viewedRequest ?? (active.wsPayload ?? "")}
+            readOnly={viewedRequest != null}
+            onChange={(value) => updateRepeaterTab(active.id, { wsPayload: value })}
+            filename="repeater-ws-frame.txt"
+            placeholder="A text frame's payload, or switch the opcode to binary and paste bytes"
+            menuGroups={wsFrameMenu}
+          />
+        ) : (
+          <HttpEditor
+            label={viewedRequest != null ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written` : "Request"}
+            value={viewedRequest ?? active.request}
+            readOnly={viewedRequest != null}
+            onChange={(value) => updateRepeaterTab(active.id, { request: value })}
+            filename="repeater-request.txt"
+            placeholder="GET / HTTP/1.1"
+            menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
+          />
+        )}
         <div className="stack">
-          {finalResponse != null ? (
+          {active.kind === "ws" ? (
+            /* A ws tab's response pane (6ex): the handshake line, the reply frames the target
+             * sent back in order, and how the conversation ended. Not an HTTP response editor —
+             * a ws send has no status code or body to parse, and dressing frames up as one would
+             * misstate the wire. The honest note says the frame went out on a NEW connection:
+             * one dial per send, not a held socket — which is also what Burp's own "set
+             * automatically" does once the original has closed.
+             */
+            <WsReplyPane
+              result={wsResult ?? null}
+              pending={wsSend.isPending}
+              cancelled={wsSend.error instanceof SendCancelled}
+              exchangeId={httpResult?.exchange_id ?? null}
+            />
+          ) : finalResponse != null ? (
             <div className="toolbar" role="group" aria-label="Which chain response to show">
               <Button
                 variant={chainSide === "first" ? "outline" : "quiet"}
@@ -1051,7 +1241,7 @@ export function RepeaterPage(): JSX.Element {
                 aria-pressed={chainSide === "first"}
                 onClick={() => setChainSide("first")}
               >
-                First response ({result?.status})
+                First response ({httpResult?.status})
               </Button>
               <Button
                 variant={chainSide === lastFollowedHop ? "outline" : "quiet"}
@@ -1059,7 +1249,7 @@ export function RepeaterPage(): JSX.Element {
                 aria-pressed={chainSide === lastFollowedHop}
                 onClick={() => setChainSide(lastFollowedHop as number)}
               >
-                Final response ({result?.redirects?.final_status})
+                Final response ({httpResult?.redirects?.final_status})
               </Button>
             </div>
           ) : null}
@@ -1068,7 +1258,7 @@ export function RepeaterPage(): JSX.Element {
             readOnly
             value={
                   chainResponse ??
-                  result?.response ??
+                  httpResult?.response ??
                   (send.isPending
                     ? "Waiting for the response…"
                     : send.error instanceof SendCancelled
@@ -1097,7 +1287,7 @@ export function RepeaterPage(): JSX.Element {
             />
           ) : (
             <Inspector
-              raw={chainResponse ?? result.response}
+              raw={chainResponse ?? httpResult?.response ?? ""}
               label="Inspector · response"
               readOnlyNote="A response that has already arrived cannot be edited — change the request and send it again."
               onSwitch={() => setInspecting("request")}
@@ -1106,6 +1296,87 @@ export function RepeaterPage(): JSX.Element {
           )
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A ws tab's response pane (burpsy-react-ui-6ex): the handshake line, the reply frames the
+ * target sent back in order, and how the conversation ended. Not an HTTP response editor —
+ * a ws send has no status code or body to parse, and dressing frames up as one would
+ * misstate the wire. The honest note says the frame went out on a NEW connection: one dial
+ * per send, not a held socket — which is also what Burp's own "set automatically" does once
+ * the original has closed.
+ */
+function WsReplyPane({
+  result,
+  pending,
+  cancelled,
+  exchangeId,
+}: {
+  result: WsRepeaterSendResult | null;
+  pending: boolean;
+  cancelled: boolean;
+  exchangeId: number | null;
+}): JSX.Element {
+  if (pending) {
+    return (
+      <HttpEditor
+        label="WebSocket"
+        views={false}
+        readOnly
+        value="Sending the frame…"
+        filename="repeater-ws.txt"
+      />
+    );
+  }
+  if (cancelled) {
+    return (
+      <div className="notice">
+        Cancelled. No reply arrived, and no exchange was recorded — but the frame may have reached the target.
+      </div>
+    );
+  }
+  if (!result) {
+    return (
+      <HttpEditor
+        label="WebSocket"
+        views={false}
+        readOnly
+        value="Send the frame to see what the target replies."
+        filename="repeater-ws.txt"
+      />
+    );
+  }
+  return (
+    <div className="detail-panel">
+      <DetailList
+        rows={[
+          { label: "Handshake", value: result.handshake },
+          { label: "Sent on", value: `a new connection (one dial per send)` },
+          { label: "Exchange", value: exchangeId ? `#${exchangeId}` : "—" },
+          ...(result.closed_by_peer
+            ? [{ label: "Closed by peer", value: `${result.close_code ?? "?"}${result.close_reason ? ` (${result.close_reason})` : ""}` }]
+            : []),
+          { label: "Elapsed", value: formatDuration(result.elapsed_ms) },
+        ]}
+      />
+      {result.messages.length ? (
+        <div className="detail-actions" style={{ display: "grid", gap: 4 }}>
+          {result.messages.map((message, index) => (
+            <HttpEditor
+              key={index}
+              label={`Reply ${index + 1} · ${message.opcode} · ${formatBytes(message.len)}`}
+              views={false}
+              readOnly
+              value={message.payload}
+              filename={`repeater-ws-reply-${index + 1}.txt`}
+            />
+          ))}
+        </div>
+      ) : (
+        <Empty title="No reply frames" detail="The target accepted the frame and sent nothing back." />
+      )}
     </div>
   );
 }

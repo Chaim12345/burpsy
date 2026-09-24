@@ -408,6 +408,15 @@ export interface RepeaterHistoryEntry extends RepeaterResult {
  response_complete?: boolean;
 }
 
+/** A "ws" tab's send history entry (burpsy-react-ui-6ex): a ws send has no status code and no
+ *  response body — it has the handshake line, the reply frames, and how the conversation ended.
+ *  Its own shape rather than RepeaterResult-with-optional-fields, because a status of 0 would be
+ *  a fabricated measurement. The response pane dispatches on `ws` being present. */
+export interface RepeaterWsHistoryEntry {
+ request: string;
+ ws: WsRepeaterSendResult;
+}
+
 /**
  * How a Repeater tab group is sent — Burp's dropdown beside Send, which appears only when the active
  * tab belongs to a group.
@@ -521,6 +530,8 @@ export interface WsConnection {
 
 export interface WsRow {
  id: number;
+ /** The exchange whose upgrade opened the connection this frame belongs to; the resend's target. */
+ exchange: number;
  direction: string;
  opcode: string;
  len: number;
@@ -530,6 +541,19 @@ export interface WsRow {
   *  (burpsy-react-ui-d7bu). Non-optional because the Go handler always emits it — "edited":false is a
   *  stated fact, not an absent key, so an older client cannot mistake "not edited" for "unknown". */
  edited: boolean;
+}
+
+export interface WsRepeaterSendResult {
+ /** The recorded handshake exchange, so the result can offer "view in WebSockets history". */
+ exchange_id: number;
+ /** The 101's status line. */
+ handshake: string;
+ /** What the target sent back, in order. `payload` is the frame's bytes as text. */
+ messages: { opcode: string; payload: string; len: number }[];
+ closed_by_peer?: boolean;
+ close_code?: number;
+ close_reason?: string;
+ elapsed_ms: number;
 }
 
 export interface WsHistory {

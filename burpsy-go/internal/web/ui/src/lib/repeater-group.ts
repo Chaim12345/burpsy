@@ -1,4 +1,4 @@
-import type { RepeaterGroupSendResult, RepeaterHistoryEntry } from "./types";
+import type { RepeaterGroupSendResult, RepeaterHistoryEntry, RepeaterWsHistoryEntry } from "./types";
 
 /**
  * Fold a group send's results into the per-tab Repeater history (burpsy-react-ui-03z).
@@ -20,10 +20,10 @@ import type { RepeaterGroupSendResult, RepeaterHistoryEntry } from "./types";
  * separate updates in a loop would each close over the same snapshot and only the last would survive.
  */
 export function appendGroupResultsToHistory(
-  current: Record<string, RepeaterHistoryEntry[]>,
+  current: Record<string, (RepeaterHistoryEntry | RepeaterWsHistoryEntry)[]>,
   result: RepeaterGroupSendResult,
   sentRequests: Map<string, string>,
-): Record<string, RepeaterHistoryEntry[]> {
+): Record<string, (RepeaterHistoryEntry | RepeaterWsHistoryEntry)[]> {
   const next = { ...current };
   for (const item of result.items) {
     const sentRequest = sentRequests.get(item.tab_id);

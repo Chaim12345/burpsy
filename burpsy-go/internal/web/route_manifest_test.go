@@ -605,6 +605,18 @@ var manifest = map[string]route{
 		summary: "send a Repeater tab group in tab order on one shared socket, in tab order on separate " +
 			"connections, or all at once in parallel; every raw request is authorised individually",
 	},
+	"/api/repeater/ws-send": {
+		// riskEgress, the same class as /api/repeater/send: one operator-authored frame goes out on a
+		// connection this endpoint dials itself, and the handshake's bytes pass the same two scope
+		// gates the HTTP send applies. Not riskAttack — no scan is launched, nothing enumerates, and
+		// the frame is a single message the operator typed.
+		//
+		// To-client is answered 400 with the reason rather than attempted, so an unattended caller
+		// cannot reach the browser-facing half by omitting the direction.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "resend one WebSocket frame on a freshly dialled connection, recording the handshake " +
+			"exchange and the reply frames; to-client is refused with its reason",
+	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
 		summary: "export findings as json, sarif or html",

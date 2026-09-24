@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
+import type { WsRepeaterSendResult } from "./types";
 import type {
   RepeaterGroupSendItem,
   RepeaterGroupSendMode,
@@ -115,6 +116,46 @@ export interface RepeaterSendBody {
  * No exchange row is written for a cancelled send: the sender returns an error, so the handler logs
  * it to the tool log and never reaches the Put. The cancellation is recorded as what it was.
  */
+export interface RepeaterWsSendBody {
+ /** The wshistory frame id being resent, 0 for a frame authored from scratch. */
+ message?: number;
+ /** "host:port"; the scheme rides `tls`. Optional when `message` names a frame. */
+ target?: string;
+ tls?: boolean;
+ path?: string;
+ /** "text" | "binary". */
+ opcode: string;
+ payload: string;
+}
+
+/**
+ * The Repeater WebSocket send (burpsy-react-ui-6ex) — one dial per send, the wire half
+ * `/api/repeater/ws-send`. The server refuses a to-client direction with the reason in the
+ * body (a fresh dial has no client to send to), and records the handshake exchange so the
+ * result can offer "view in WebSockets history".
+ */
+export function useRepeaterWsSend() {
+ const inFlight = useRef<AbortController | null>(null);
+ const mutation = useMutation({
+  mutationFn: async (body: RepeaterWsSendBody) => {
+   const controller = new AbortController();
+   inFlight.current = controller;
+   try {
+    return await api<WsRepeaterSendResult>("/api/repeater/ws-send", {
+     ...json("POST", body),
+     signal: controller.signal,
+    });
+   } catch (failure) {
+    if (controller.signal.aborted) throw new SendCancelled();
+    throw failure;
+   } finally {
+    if (inFlight.current === controller) inFlight.current = null;
+   }
+  },
+ });
+ return mutation;
+}
+
 export function useRepeaterSend() {
   // One controller per hook instance, so the Cancel button can only ever abort this tab's send.
   const inFlight = useRef<AbortController | null>(null);

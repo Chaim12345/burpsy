@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Combine, Copy, ExternalLink, FileCode2, FileOutput, X } from "lucide-react";
+import { ArrowDownLeft, ArrowRightLeft, ArrowUpRight, Combine, Copy, ExternalLink, FileCode2, FileOutput, Repeat2, X } from "lucide-react";
 import { copyToClipboard, downloadText, formatBytes, relativeTime } from "../lib/api";
 import { useWsConnections, useWsHistory } from "../lib/data";
 import { useExchange, useWsMessageDetailed } from "../lib/data.observe";
@@ -70,7 +70,7 @@ function ConnectionRow({
 
 /** Renders one frame's payload. A frame is one of three disjoint shapes on the wire — text, hex, or
  * a close frame's {code, reason} — and each gets its own presentation rather than a generic dump. */
-function PayloadView({ message, isFetching }: { message: WsMessageDetail | undefined; isFetching: boolean }): JSX.Element {
+function PayloadView({ message, isFetching, detailMenu }: { message: WsMessageDetail | undefined; isFetching: boolean; detailMenu?: MenuGroup[] }): JSX.Element {
  if (isFetching && !message) return <Empty title="Loading payload…" detail="Fetching the frame's bytes." />;
  if (!message) return <Empty title="No frame selected" detail="Pick a row from the frame table to inspect its payload." />;
 
@@ -109,6 +109,7 @@ function PayloadView({ message, isFetching }: { message: WsMessageDetail | undef
    readOnly
    value={message.opcode === "text" ? message.text : message.hex}
    filename={`ws-message-${message.id}.${message.opcode === "text" ? "txt" : "hex"}`}
+   menuGroups={detailMenu}
   />
  );
 }
@@ -119,6 +120,32 @@ export function WebSocketPage(): JSX.Element {
  const setComparerSlot = useApp((state) => state.setComparerSlot);
  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
  const actions = usePluginExchangeActions();
+ const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+
+ /**
+  * Burp's "Send to Repeater" on a WebSocket frame (burpsy-react-ui-6ex): opens a Repeater
+  * tab seeded with the frame's payload and target, and records a one-shot ws-send there.
+  *
+  * The seed carries the connection's target and TLS (the upgrade handshake's host:port) so
+  * the tab's send goes back to the same authority the frame used, and the frame's opcode and
+  * payload prefill the editor — edit, then send, which is Burp's own flow. The direction
+  * choice is to-server on this path: burpsy cannot inject into a third party's client socket,
+  * and the server refuses to-client with the reason rather than pretending.
+  */
+ const sendFrameToRepeater = (row: WsRow) => {
+  const opcode = row.opcode === "text" ? "text" : row.opcode === "binary" ? "binary" : "text";
+  const host = selectedConn ? `${selectedConn.host}:${selectedConn.port}` : "";
+  openRepeaterTab({
+   name: `WS frame #${row.id}`.slice(0, 42),
+   target: host,
+   protocol: "http",
+   request: "", // the tab's WS send carries the frame; the HTTP request editor stays blank
+   // The frame's own connection, so the tab's send returns to the authority the frame used.
+   fromExchange: row.exchange,
+  });
+  setRoute("repeater");
+  toast.success(`Frame #${row.id} sent to Repeater (${opcode})`);
+ };
 
  const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
  const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);
@@ -249,6 +276,12 @@ export function WebSocketPage(): JSX.Element {
      payload === null
       ? []
       : [
+       {
+        id: "send-to-repeater",
+        label: "Send to Repeater",
+        icon: Repeat2,
+        onSelect: () => sendFrameToRepeater(row),
+       },
        {
         id: "copy-payload",
         label: isText ? "Copy payload text" : "Copy payload as hex",
@@ -518,7 +551,27 @@ export function WebSocketPage(): JSX.Element {
        </div>
        <TabsContent value="frame" className="tabs-fill">
         {selectedFrame ? (
-         <PayloadView message={frame.data} isFetching={frame.isFetching} />
+         <PayloadView
+         message={frame.data}
+         isFetching={frame.isFetching}
+         detailMenu={
+          selectedFrame && selectedFrame.opcode !== "close"
+           ? [
+            {
+             id: "payload-send",
+             actions: [
+              {
+               id: "send-to-repeater",
+               label: "Send to Repeater",
+               icon: Repeat2,
+               onSelect: () => sendFrameToRepeater(selectedFrame),
+              },
+             ],
+            },
+           ]
+           : undefined
+        }
+        />
         ) : (
          <Empty title="No frame selected" detail="Choose a row in the frame table to read its exact payload." />
         )}

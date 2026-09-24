@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "./repeater-group";
-import type { RepeaterGroupItemResult, RepeaterGroupSendResult, RepeaterHistoryEntry } from "./types";
+import type { RepeaterGroupItemResult, RepeaterGroupSendResult, RepeaterHistoryEntry, RepeaterWsHistoryEntry } from "./types";
 
 /** One group-send item result, with the boring fields filled in. */
 function item(tabID: string, over: Partial<RepeaterGroupItemResult> = {}): RepeaterGroupItemResult {
@@ -22,6 +22,15 @@ function outcome(items: RepeaterGroupItemResult[], over: Partial<RepeaterGroupSe
   };
 }
 
+/**
+ * Narrow a history entry to the HTTP one. A tab's history is a union since the WebSocket tab type
+ * landed (burpsy-react-ui-6ex): an HTTP entry carries a response, a WS entry carries a frame result,
+ * and the assertions in this file are about the HTTP fold, so they ask for the HTTP shape by name
+ * rather than casting. `asHttp(undefined)` is null, which is what an entry-less tab should read as.
+ */
+const asHttp = (entry: RepeaterHistoryEntry | RepeaterWsHistoryEntry | undefined): RepeaterHistoryEntry | null =>
+  entry && "status" in entry ? entry : null;
+
 describe("appendGroupResultsToHistory", () => {
   test("each tab's result lands in that tab's own history, not the active one's", () => {
     const sent = new Map([
@@ -35,8 +44,10 @@ describe("appendGroupResultsToHistory", () => {
     // The pair is the point: each entry carries the draft that produced it, not its neighbour's.
     expect(next["tab-a"]?.[0]?.request).toBe("GET /a HTTP/1.1\r\n\r\n");
     expect(next["tab-b"]?.[0]?.request).toBe("GET /b HTTP/1.1\r\n\r\n");
-    expect(next["tab-a"]?.[0]?.response).toContain("tab-a");
-    expect(next["tab-b"]?.[0]?.response).toContain("tab-b");
+    // Through the HTTP narrowing helper, because a tab's history is now a union (burpsy-react-ui-6ex
+    // added the WebSocket entry) and these assertions are about the HTTP fold specifically.
+    expect(asHttp(next["tab-a"]?.[0])?.response).toContain("tab-a");
+    expect(asHttp(next["tab-b"]?.[0])?.response).toContain("tab-b");
   });
 
   test("appends to a tab's existing history rather than replacing it", () => {
@@ -45,7 +56,7 @@ describe("appendGroupResultsToHistory", () => {
     };
     const next = appendGroupResultsToHistory(existing, outcome([item("tab-a")]), new Map([["tab-a", "GET /new HTTP/1.1\r\n\r\n"]]));
     expect(next["tab-a"]).toHaveLength(2);
-    expect(next["tab-a"]?.[0]?.response).toBe("old");
+    expect(asHttp(next["tab-a"]?.[0])?.response).toBe("old");
     expect(next["tab-a"]?.[1]?.request).toBe("GET /new HTTP/1.1\r\n\r\n");
     // The input is not mutated: the page hands this straight to a setState updater.
     expect(existing["tab-a"]).toHaveLength(1);
@@ -78,7 +89,8 @@ describe("appendGroupResultsToHistory", () => {
       ]),
       new Map([["tab-a", "POST / HTTP/1.1\r\n\r\n"]]),
     );
-    const entry = next["tab-a"]?.[0];
+    // Narrowed, because this entry is the HTTP one and the tab's history is a union.
+    const entry = asHttp(next["tab-a"]?.[0]);
     expect(entry?.response).toContain("short");
     expect(entry?.framing).toBe("content-length");
     expect(entry?.response_complete).toBe(false);
@@ -93,7 +105,7 @@ describe("appendGroupResultsToHistory", () => {
       outcome([item("tab-a")], { mode: "parallel", followed_redirects: true }),
       new Map([["tab-a", "GET /a HTTP/1.1\r\n\r\n"]]),
     );
-    const entry = next["tab-a"]?.[0];
+    const entry = asHttp(next["tab-a"]?.[0]);
     expect(entry?.group_mode).toBe("parallel");
     expect(entry?.duration_measured).toBe(true);
     expect(entry?.framing).toBeUndefined();
