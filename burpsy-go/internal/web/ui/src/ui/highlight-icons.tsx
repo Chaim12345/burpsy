@@ -25,3 +25,20 @@ export const HIGHLIGHT_ICONS: Record<string, ComponentType<{ size?: number }>> =
     return [name, Swatch];
   }),
 );
+
+/**
+ * The colours a Repeater tab can carry (burpsy-react-ui-fkj).
+ *
+ * The same palette the row highlights use, deliberately: a tab colour and a row highlight are the
+ * operator marking the same kind of thing — "this one, for now" — and two vocabularies would let
+ * "red" on a tab and "red" on a row be different colours. The value is the CSS custom property's
+ * name, resolved by the tab's own border, so changing the theme changes both together.
+ */
+export const TAB_COLOURS: { value: string; label: string; icon: ComponentType<{ size?: number }> }[] = [
+  { value: "", label: "No colour", icon: HIGHLIGHT_ICONS.none as ComponentType<{ size?: number }> },
+  ...HIGHLIGHTS.filter((name) => name !== "none").map((name) => ({
+    value: name,
+    label: name.charAt(0).toUpperCase() + name.slice(1),
+    icon: HIGHLIGHT_ICONS[name] as ComponentType<{ size?: number }>,
+  })),
+];

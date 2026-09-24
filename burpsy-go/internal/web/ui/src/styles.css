@@ -2634,6 +2634,47 @@ tbody td {
   scrollbar-width: none;
 }
 
+/* Burp's wrapped tab view (burpsy-react-ui-fkj): the strip's alternative to a scrollable row.
+   A single row with horizontal overflow costs no height and keeps the editor tall, which is why
+   scrolling is the default; wrapping trades that for every tab being visible at once, and an
+   engagement with forty tabs is where the trade starts to pay. */
+.tabs-list:has(.tabs-trigger-wrap) {
+  overflow-x: visible;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.tabs-trigger-wrap {
+  /* Wrapping only means anything if the tab may break internally, and a tab whose name is a URL
+     would otherwise force the row wider than the window — which is the horizontal scroll the wrapped
+     view exists to remove. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 22ch;
+  flex: 0 1 auto;
+}
+
+/* A tab's own colour, or its group's (fkj). `--tab-color` is set by the tab trigger and resolves
+   to a `--highlight-*` custom property, so a tab colour and a row highlight of the same name are
+   the same colour in either theme. A left rule rather than a background: the tab label stays
+   readable, and the strip reads as one row of tabs with markers rather than a stack of chips. */
+.tabs-trigger[style*="--tab-color"] {
+  box-shadow: inset 3px 0 0 0 var(--tab-color);
+}
+
+.tabs-trigger[data-drop-target] {
+  /* The row the dragged tab would land on. An outline rather than a background, so it does not
+     hide the tab it is marking, and `outline-offset` puts the mark between the two rows so the
+     landing place is legible without either row moving. */
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+}
+
+.tabs-trigger[data-dragging] {
+  opacity: 0.5;
+}
+
 .tabs-trigger {
   border: 0;
   border-bottom: var(--border-strong) solid transparent;

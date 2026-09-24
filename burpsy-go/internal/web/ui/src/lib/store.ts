@@ -99,6 +99,15 @@ export interface RepeaterTab {
   * Absent = "http", so every existing tab and every older persisted draft reads as HTTP.
   */
  kind?: "http" | "ws";
+ /**
+  * This tab's own colour (burpsy-react-ui-fkj). Burp colours a GROUP and its tabs take that
+  * colour; an ungrouped tab had no way to be marked at all, which is the gap — an operator pointing
+  * at the one request to attack next cannot colour a group to say so. A tab's own colour wins over
+  * its group's when both are set; `tabColour` in lib/repeater-tabs.ts says why.
+  *
+  * Empty (the default) means "inherit the group's", which is what every tab written before this
+  * field means, and it leaves an ungrouped tab uncoloured rather than inventing a colour for it.
+  color?: string;
  /** The frame's payload for a "ws" tab — the bytes the editor shows and the send carries. */
  wsPayload?: string;
  /** The frame's opcode ("text" | "binary"). Absent = "text". */
@@ -516,6 +525,12 @@ interface AppState {
  deleteRepeaterGroup: (id: string) => void;
  toggleRepeaterGroup: (id: string) => void;
  setRepeaterTabGroup: (tabId: string, groupId: string | null) => void;
+  /** Move one tab to `index` in the strip (fkj). A pure reorder: membership, colour and content
+   *  are untouched, so a drag cannot change which group a request belongs to by accident. */
+  moveRepeaterTab: (tabId: string, index: number) => void;
+  /** Set or clear one tab's own colour. Empty clears it, which sends the tab back to its group's
+   *  colour rather than to "no colour" — the same reading the model documents. */
+  setRepeaterTabColor: (tabId: string, color: string) => void;
  setRepeaterTabOptions: (tabId: string, options: RepeaterSendOptions) => void;
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
@@ -652,11 +667,26 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange, kind, wsPayload, wsOpcode }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
-      [...state.repeaterTabs, { id, name, target, protocol, request, fromExchange }],
+      [
+       {
+        id,
+        name,
+        target,
+        protocol,
+        request,
+        fromExchange,
+        // The ws half (6ex) rides the same spread: a tab that was opened as a frame must keep
+        // its kind and payload, or the strip shows a WS tab whose pane is an HTTP request editor
+        // — which is exactly what happened before this line existed.
+        ...(kind ? { kind } : {}),
+        ...(wsPayload !== undefined ? { wsPayload } : {}),
+        ...(wsOpcode ? { wsOpcode } : {}),
+       },
+      ],
       state.closedRepeaterTabs,
      ),
      activeRepeaterTab: id,
@@ -778,6 +808,28 @@ export const useApp = create<AppState>()(
     set((state) => ({
      repeaterTabs: state.repeaterTabs.map((tab) => (tab.id === tabId ? { ...tab, groupId: groupId ?? undefined } : tab)),
     })),
+   // Reorder and colour (fkj). The move takes the tab out and puts it back at `index`, which is what
+   // makes "drag the first tab to the end" move one tab rather than landing on its neighbour: the
+   // target index is computed against the list AFTER the removal, so a drop past the old position
+   // does not shift by one. Clamped, because a drop beyond the end is "last", not "lost".
+   moveRepeaterTab: (tabId, index) =>
+    set((state) => {
+     const from = state.repeaterTabs.findIndex((tab) => tab.id === tabId);
+     if (from < 0) return state;
+     const target = Math.max(0, Math.min(index, state.repeaterTabs.length - 1));
+     if (target === from) return state;
+     const next = [...state.repeaterTabs];
+     const [moved] = next.splice(from, 1);
+     if (moved === undefined) return state;
+     next.splice(target, 0, moved);
+     return { repeaterTabs: next };
+    }),
+   setRepeaterTabColor: (tabId, color) =>
+    set((state) => ({
+     repeaterTabs: state.repeaterTabs.map((tab) =>
+      tab.id === tabId ? { ...tab, color: color === "" ? undefined : color } : tab,
+     ),
+    })),
    setRepeaterTabOptions: (tabId, options) =>
     set((state) => ({
      repeaterTabs: state.repeaterTabs.map((tab) => (tab.id === tabId ? { ...tab, options } : tab)),
@@ -819,7 +871,7 @@ export const useApp = create<AppState>()(
   { name: "burpsy.workspace", partialize: persistedWorkspace },
  ),
 );
-
+  /** Move one tab to `index` in the strip (fkj). A pure reorder: membership, colour and content
 /** Resolve "system" against the OS preference so callers only deal with light/dark. */
 export function resolveTheme(theme: Theme): "light" | "dark" {
  if (theme !== "system") return theme;

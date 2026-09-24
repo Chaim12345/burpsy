@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, Plus, Repeat2, RotateCcw, Send, SlidersHorizontal, X } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, X } from "lucide-react";
+import { TAB_COLOURS } from "../ui/highlight-icons";
+import { cn } from "../lib/cn";
+import { reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
@@ -105,6 +108,14 @@ export function RepeaterPage(): JSX.Element {
   const toggleRepeaterGroup = useApp((state) => state.toggleRepeaterGroup);
   const setRepeaterTabGroup = useApp((state) => state.setRepeaterTabGroup);
   const setRepeaterTabOptions = useApp((state) => state.setRepeaterTabOptions);
+ // The tab strip's three view affordances (fkj): drag-to-reorder, a per-tab colour, and Burp's
+ // scrolling / wrapped view toggle. The decisions live in lib/repeater-tabs.ts; this owns the DOM
+ // and the drag events.
+ const moveRepeaterTab = useApp((state) => state.moveRepeaterTab);
+ const setRepeaterTabColor = useApp((state) => state.setRepeaterTabColor);
+ const [tabView, setTabView] = useState<TabView>("scrolling");
+ const [draggingTab, setDraggingTab] = useState<string | null>(null);
+ const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   /**
    * Every send a tab has made, oldest first — not just the latest. Held in memory only; the store
@@ -770,11 +781,42 @@ export function RepeaterPage(): JSX.Element {
    */
   const tabMenuGroups = (tab: RepeaterTab): MenuGroup[] => {
     const index = tabs.findIndex((t) => t.id === tab.id);
+    // The tab's own colour, read through the same structural type the rule takes. `RepeaterTab`
+    // declares `color`, and tabColour's own signature documents the same two fields; naming the
+    // shape here keeps the menu readable if the model ever grows another tab variant.
+    const ownColour = (tab as { color?: string }).color ?? "";
     return [
       {
         id: "edit",
         actions: [
           { id: "duplicate", label: "Duplicate tab", icon: Copy, onSelect: () => duplicateRepeaterTab(tab.id) },
+          // A tab's own colour (fkj). Burp colours a GROUP, and its tabs take that colour; the
+          // gap this closes is that an UNGROUPED tab had no way to be marked at all, so an operator
+          // pointing at the one request to attack next could not colour a whole group to say so.
+          // This tab's own colour wins over its group's — see tabColour for why.
+          {
+            id: "tab-colour",
+            label: "Tab colour",
+            icon: Palette,
+            submenu: [
+              {
+                id: "colours",
+                actions: [
+                  ...TAB_COLOURS.map((colour) => {
+                    const wire = colour.value === "" ? "" : colour.value;
+                    return {
+                      id: colour.value,
+                      label: colour.label,
+                      icon: colour.icon,
+                      disabled: ownColour === wire,
+                      onSelect: () => setRepeaterTabColor(tab.id, wire),
+                    };
+                  }),
+                ],
+              },
+            ],
+            onSelect: () => {},
+          },
           {
             id: "rename",
             label: "Rename",
@@ -822,7 +864,10 @@ export function RepeaterPage(): JSX.Element {
     ];
   };
 
-  const renderTabTrigger = (tab: RepeaterTab): JSX.Element => (
+  const renderTabTrigger = (tab: RepeaterTab): JSX.Element => {
+   // The tab's own colour wins over its group's; the rule and the reason are in lib/repeater-tabs.ts.
+   const colourForTab = tabColour(tab, groups);
+   return (
     // Keyed here rather than at the .map call sites because the key must sit on the element the
     // function returns: a wrapper added without one makes every multi-tab strip render unkeyed
     // children, which React answers with a console error the e2e suite refuses to ship with.
@@ -830,14 +875,63 @@ export function RepeaterPage(): JSX.Element {
       <div
         role="tab"
         aria-selected={tab.id === active.id}
-        className="tabs-trigger"
+        className={cn("tabs-trigger", tabView === "wrapped" && "tabs-trigger-wrap")}
         data-state={tab.id === active.id ? "active" : undefined}
+        // A tab's own colour, or its group's when it has none (fkj). Set as a custom property
+        // rather than a hard-coded border so the CSS decides what "coloured" looks like and the
+        // theme can change it in one place — the same shape the highlight swatches use.
+        style={colourForTab.color ? ({ "--tab-color": `var(--highlight-${colourForTab.color})` } as CSSProperties) : undefined}
+        draggable
+        onDragStart={(event) => {
+          setDraggingTab(tab.id);
+          event.dataTransfer.effectAllowed = "move";
+          // Firefox will not start a drag without payload; the id is what the drop reads back.
+          event.dataTransfer.setData("text/plain", tab.id);
+        }}
+        onDragEnd={() => {
+          setDraggingTab(null);
+          setDropTarget(null);
+        }}
+        onDragOver={(event) => {
+          if (!draggingTab || draggingTab === tab.id) return;
+          // preventDefault is what marks this row as a drop target; without it the browser refuses
+          // the drop and the drag ends with no feedback at all.
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setDropTarget(tab.id);
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          const source = draggingTab ?? event.dataTransfer.getData("text/plain");
+          setDraggingTab(null);
+          setDropTarget(null);
+          if (!source || source === tab.id) return;
+          // Dropping ON a row means "take its place". reorderTabWithinGroup keeps the move inside
+          // the source tab's own group, so a drag that merely crosses a group boundary does not
+          // silently re-file the request — that is the menu's "Move to …" job, and a distinct
+          // gesture.
+          const target = tabs.findIndex((entry) => entry.id === tab.id);
+          // The group's own ordering when both tabs are in one, the strip's otherwise: a drag
+          // between groups is not a reorder, and reorderTabWithinGroup refuses it rather than
+          // re-filing the request under a gesture aimed at position.
+          const sourceTab = tabs.find((entry) => entry.id === source);
+          if (sourceTab?.groupId && sourceTab.groupId === tab.groupId) {
+            reorderTabWithinGroup(tabs, source, target);
+          }
+          moveRepeaterTab(source, target);
+        }}
         onClick={() => setActiveRepeaterTab(tab.id)}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") setActiveRepeaterTab(tab.id);
         }}
         tabIndex={0}
-        title={tab.name}
+        title={
+          colourForTab.color
+            ? `${tab.name} — ${colourForTab.from === "tab" ? "this tab's colour" : "its group's colour"}`
+            : tab.name
+        }
+        data-dragging={draggingTab === tab.id ? true : undefined}
+        data-drop-target={dropTarget === tab.id ? true : undefined}
       >
         {renamingTab === tab.id ? (
           <Input
@@ -871,7 +965,8 @@ export function RepeaterPage(): JSX.Element {
         </button>
       </div>
     </ContextMenu>
-  );
+   );
+  };
 
   /** Bulk closes can orphan response history keys; the pruning effect above owns cleanup. */
   const commitTabRename = (id: string) => {
@@ -893,6 +988,47 @@ export function RepeaterPage(): JSX.Element {
           actions={
             <>
               <Badge tone={schemeOf(active.target) === "https" ? "good" : "warn"}>{schemeOf(active.target)}</Badge>
+              {/* Burp's tab-view toggle (fkj): one scrollable row with a dropdown of the open
+                  tabs, or tabs wrapped onto several rows. Scrolling is the default because a
+                  wrapped strip eats vertical space on a page whose editor needs height, and the
+                  dropdown means a tab forty positions along is still two clicks away rather than
+                  scrolled to. */}
+              <IconButton
+                label={tabView === "scrolling" ? "Switch to wrapped tab view" : "Switch to scrolling tab view"}
+                title={
+                  tabView === "scrolling"
+                    ? "Burp's wrapped view: tabs wrap onto several rows. Scrolling view keeps one row and puts the rest behind a dropdown."
+                    : "Burp's scrolling view: one scrollable row, with every open tab behind the dropdown."
+                }
+                size="small"
+                aria-pressed={tabView === "wrapped"}
+                onClick={() => setTabView((current) => (current === "scrolling" ? "wrapped" : "scrolling"))}
+              >
+                {tabView === "scrolling" ? <Rows3 size={13} /> : <List size={13} />}
+              </IconButton>
+              {tabView === "scrolling" && tabs.length > 1 ? (
+                <DropdownMenu
+                  groups={tabDropdownGroups(tabs, groups).map((entry) => ({
+                    id: entry.id === "" ? "ungrouped" : `group-${entry.id}`,
+                    title: entry.title,
+                    actions: entry.tabs.map((entryTab) => ({
+                      id: entryTab.id,
+                      label: entryTab.name,
+                      disabled: entryTab.id === active.id,
+                      onSelect: () => setActiveRepeaterTab(entryTab.id),
+                    })),
+                  }))}
+                  trigger={
+                    <IconButton
+                      label={`All open tabs (${tabs.length})`}
+                      title={`${tabs.length} open tabs — this lists them all, which is the point of the scrolling view`}
+                      size="small"
+                    >
+                      <List size={13} />
+                    </IconButton>
+                  }
+                />
+              ) : null}
               {httpResult ? (
                 <>
                   <Badge tone={statusTone(httpResult.status)}>{httpResult.status}</Badge>
