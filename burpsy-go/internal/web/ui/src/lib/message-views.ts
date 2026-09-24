@@ -15,7 +15,8 @@
  *     text it is with the parse error beside it.
  */
 
-import { bodyParamsOf, cookiesOf, headerValue, isResponse, parseMessage, parsePairs, queryOf } from "./message";
+import { bodyParamsOf, cookiesOf, headerValue, isResponse, parseMessage, parsePairs, pairSpans, queryOf, type Span } from "./message";
+import { htmlDecode, urlDecode } from "./transforms";
 
 /* ===========================================================================
    the byte model
@@ -574,4 +575,351 @@ export function breakGlyphs(text: string): string[] {
     glyphs.push(match[0] === "\r\n" ? "\u240d\u240a" : match[0] === "\n" ? "\u240a" : "\u240d");
   }
   return glyphs;
+}
+
+
+/* ==== the message editor's body tokenisation (burpsy-react-ui-6fq) ========
+ *
+ * Burp colourises the body by content type — JSON, HTML/XML, JavaScript, CSS — and
+ * distinguishes request parameters. This is that feature's data half: the same body the
+ * editor renders, tokenised into spans the editor turns into `Decoration.mark`s.
+ *
+ * Deliberately span-shaped rather than a CodeMirror language pack: a `@codemirror/lang-*`
+ * extension owns the WHOLE document, so applying one to a raw HTTP message would parse the
+ * start line and every header as the body's language and replace the header decorations.
+ * The body is a sub-region; these functions are too, and the editor scopes them behind
+ * `headerEnd`.
+ *
+ * Everything is bounded and refusal-first: a truncated or non-HTTP body tokenises to
+ * nothing rather than to spans that lie about it, and the cost is proportional to the
+ * text actually scanned, never to the document.
+ */
+
+/** TokenClass is the vocabulary the editor maps to decoration classes. */
+export type TokenClass =
+  | "json-key"
+  | "json-string"
+  | "json-number"
+  | "json-constant"
+  | "html-tag"
+  | "html-attr-name"
+  | "html-attr-value"
+  | "js-keyword"
+  | "js-string"
+  | "js-comment"
+  | "css-property"
+  | "css-value"
+  | "url-param-name"
+  | "url-param-value";
+
+export interface BodyToken extends Span {
+  cls: TokenClass;
+}
+
+const JS_KEYWORDS = new Set([
+ "async", "await", "break", "case", "catch", "class", "const", "continue", "debugger",
+ "default", "delete", "do", "else", "export", "extends", "finally", "for", "function",
+ "if", "import", "in", "instanceof", "let", "new", "return", "static", "super", "switch",
+ "this", "throw", "try", "typeof", "var", "void", "while", "with", "yield",
+]);
+
+const JSON_CONSTANTS = new Set(["true", "false", "null"]);
+
+/**
+ * The body's token spans, for the editor's colouring.
+ *
+ * One scan, dispatching on what the text actually is rather than on the header — the same
+ * negotiation `prettyMessage` does (Content-Type first, then a sniff), but over the body
+ * text the caller already chose. A body that is none of the four returns [] and the editor
+ * keeps the plain BODY_LINE: a flat colour that says "nothing to highlight here" is honest;
+ * spans that pretend a plain-text body was JSON are not.
+ */
+export function bodyTokens(body: string, contentType = ""): BodyToken[] {
+ const type = contentType.toLowerCase();
+ if (type.includes("json") || looksLikeJsonBody(body)) return jsonTokens(body);
+ if (type.includes("html") || type.includes("xhtml") || type.includes("svg") || /^\s*<[a-z!?]/i.test(body)) return htmlTokens(body);
+ if (type.includes("javascript") || type.includes("ecmascript") || type.includes("application/ecmascript")) return jsTokens(body);
+ if (type.includes("css")) return cssTokens(body);
+ return [];
+}
+
+function looksLikeJsonBody(body: string): boolean {
+ const trimmed = body.trim();
+ return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+}
+
+/** JSON: keys, strings, numbers and the three constants, over a well-formed document. */
+export function jsonTokens(body: string): BodyToken[] {
+ const out: BodyToken[] = [];
+ let i = 0;
+ const n = body.length;
+ const push = (cls: TokenClass, from: number, to: number) => {
+  if (to > from) out.push({ cls, start: from, end: to });
+ };
+ while (i < n) {
+  const ch = body[i]!;
+  if (ch === '"') {
+   // A quoted region: is it a key (a colon follows the closing quote) or a string value?
+   let j = i + 1;
+   while (j < n && body[j] !== '"') {
+    if (body[j] === "\\") j += 1;
+    j += 1;
+   }
+   if (j >= n) break;
+   let k = j + 1;
+   while (k < n && /\s/.test(body[k]!)) k += 1;
+   if (body[k] === ":") {
+    push("json-key", i, j + 1);
+   } else {
+    push("json-string", i, j + 1);
+   }
+   i = j + 1;
+   continue;
+  }
+  if (/[0-9-]/.test(ch)) {
+   let j = i;
+   while (j < n && /[0-9.eE+-]/.test(body[j]!)) j += 1;
+   // A number is a JSON member's value only when the preceding token was a key — but any
+   // bare number token outside a string is a number; classifying it as one cannot mislead.
+   push("json-number", i, j);
+   i = j;
+   continue;
+  }
+  if (/[a-zA-Z_$]/.test(ch)) {
+   let j = i;
+   while (j < n && /[a-zA-Z0-9_$]/.test(body[j]!)) j += 1;
+   const word = body.slice(i, j);
+   if (JSON_CONSTANTS.has(word)) push("json-constant", i, j);
+   i = j;
+   continue;
+  }
+  i += 1;
+ }
+ return out;
+}
+
+/** HTML/XML: tag names, attribute names and values. Comments and text stay undecorated. */
+export function htmlTokens(body: string): BodyToken[] {
+ const out: BodyToken[] = [];
+ let i = 0;
+ const n = body.length;
+ const push = (cls: TokenClass, from: number, to: number) => {
+  if (to > from) out.push({ cls, start: from, end: to });
+ };
+ while (i < n) {
+  const lt = body.indexOf("<", i);
+  if (lt < 0) break;
+  if (body.startsWith("<!--", lt)) {
+   const close = body.indexOf("-->", lt);
+   if (close < 0) break;
+   i = close + 3;
+   continue;
+  }
+  // A tag. The name runs to whitespace, '/', or '>'.
+  let j = lt + 1;
+  while (j < n && !/[\s/]/.test(body[j]!) && body[j] !== ">") j += 1;
+  const isClosing = body[lt + 1] === "/";
+  const nameEnd = isClosing ? j : j;
+  if (j > lt + 1) push("html-tag", lt + (isClosing ? 1 : 0), nameEnd);
+  if (isClosing) {
+   const gt = body.indexOf(">", j);
+   if (gt < 0) break;
+   i = gt + 1;
+   continue;
+  }
+  // Attributes until the tag closes.
+  while (j < n && body[j] !== ">") {
+   while (j < n && /\s/.test(body[j]!)) j += 1;
+   if (j >= n || body[j] === ">" || body[j] === "/") break;
+   const nameStart = j;
+   while (j < n && !/[=\s/]/.test(body[j]!) && body[j] !== ">") j += 1;
+   push("html-attr-name", nameStart, j);
+   while (j < n && /\s/.test(body[j]!)) j += 1;
+   if (body[j] === "=") {
+    j += 1;
+    while (j < n && /\s/.test(body[j]!)) j += 1;
+    const quote = body[j];
+    if (quote === '"' || quote === "'") {
+     const close = body.indexOf(quote, j + 1);
+     const end = close < 0 ? n : close + 1;
+     push("html-attr-value", j, end);
+     j = end;
+    } else {
+     const valueStart = j;
+     while (j < n && !/[\s>]/.test(body[j]!)) j += 1;
+     push("html-attr-value", valueStart, j);
+    }
+   }
+  }
+  const gt = body.indexOf(">", j);
+  if (gt < 0) break;
+  i = gt + 1;
+ }
+ return out;
+}
+
+/** JavaScript: keywords, strings and comments. A body that never parses still colourises —
+ *  this is display, not execution. */
+export function jsTokens(body: string): BodyToken[] {
+ const out: BodyToken[] = [];
+ let i = 0;
+ const n = body.length;
+ const push = (cls: TokenClass, from: number, to: number) => {
+  if (to > from) out.push({ cls, start: from, end: to });
+ };
+ while (i < n) {
+  const ch = body[i]!;
+  if (ch === "/" && body[i + 1] === "/") {
+   const end = body.indexOf("\n", i);
+   push("js-comment", i, end < 0 ? n : end);
+   i = end < 0 ? n : end + 1;
+   continue;
+  }
+  if (ch === "/" && body[i + 1] === "*") {
+   const end = body.indexOf("*/", i + 2);
+   push("js-comment", i, end < 0 ? n : end + 2);
+   i = end < 0 ? n : end + 2;
+   continue;
+  }
+  if (ch === '"' || ch === "'" || ch === "`") {
+   let j = i + 1;
+   while (j < n && body[j] !== ch) {
+    if (body[j] === "\\") j += 1;
+    j += 1;
+   }
+   push("js-string", i, Math.min(j + 1, n));
+   i = Math.min(j + 1, n);
+   continue;
+  }
+  if (/[a-zA-Z_$]/.test(ch)) {
+   let j = i;
+   while (j < n && /[a-zA-Z0-9_$]/.test(body[j]!)) j += 1;
+   if (JS_KEYWORDS.has(body.slice(i, j))) push("js-keyword", i, j);
+   i = j;
+   continue;
+  }
+  i += 1;
+ }
+ return out;
+}
+
+/** CSS: property names and values, one declaration per scan. Selectors stay undecorated —
+ *  a selector is markup, and colourising it as a property would misstate the document. */
+export function cssTokens(body: string): BodyToken[] {
+ const out: BodyToken[] = [];
+ let i = 0;
+ const n = body.length;
+ while (i < n) {
+  const open = body.indexOf("{", i);
+  if (open < 0) break;
+  const close = body.indexOf("}", open);
+  if (close < 0) break;
+  // Declarations inside the block: name: value;
+  let j = open + 1;
+  while (j < close) {
+   const colon = body.indexOf(":", j);
+   if (colon < 0 || colon >= close) break;
+   const nameStart = j;
+   while (j < close && /\s/.test(body[j]!)) j += 1;
+   const nameEnd = colon;
+   if (colon > nameStart) {
+    let from = nameStart;
+    while (from < close && /\s/.test(body[from]!)) from += 1;
+    if (nameEnd > from) out.push({ cls: "css-property", start: from, end: nameEnd });
+    const valueEnd = body.indexOf(";", colon);
+    const stop = valueEnd < 0 || valueEnd > close ? close : valueEnd;
+    let vFrom = colon + 1;
+    while (vFrom < stop && /\s/.test(body[vFrom]!)) vFrom += 1;
+    if (stop > vFrom) out.push({ cls: "css-value", start: vFrom, end: stop });
+    j = stop + 1;
+   } else {
+    j = colon + 1;
+   }
+  }
+  i = close + 1;
+ }
+ return out;
+}
+
+/* ==== hover decode (burpsy-react-ui-6fq) ==================================
+ *
+ * Burp's mouse-over popups: URL-decode in requests, HTML-decode in responses. The decoders
+ * are the transforms module's own; this is the decision half — which decoder applies, and
+ * when the popup exists at all.
+ *
+ * A no-op decode returns null: a plain ASCII token does not grow a popup that restates
+ * itself, because a popup whose text is the token verbatim says nothing the screen did not
+ * already say. The popup exists to make an encoded value readable.
+ */
+
+
+/**
+ * The URL-encoded parameter spans of a request's query string and form body, for the
+ * editor's parameter colouring and the hover decode.
+ *
+ * `pairSpans` already splits each pair into a decoded name and value; what the editor's
+ * two decorations and the hover popup additionally need is the *byte range* of each half
+ * inside the raw text, so hovering the NAME answers "what parameter is this" and hovering
+ * the VALUE decodes what it carries. A pair with no `=` is still reported as a name-only
+ * pair — a bare flag like `?debug` is a parameter Burp shows too.
+ */
+/**
+ * The hover decode (burpsy-react-ui-6fq): Burp's mouse-over popups, which URL-decode in
+ * requests and HTML-decode in responses.
+ *
+ * A no-op decode returns null, so a plain ASCII token does not grow a popup that restates
+ * itself — the popup exists to make an encoded value readable, and a popup whose text is
+ * the token verbatim says nothing the screen did not already say. The token's own byte
+ * range decides which half is being hovered, so the caller passes the spans it coloured.
+ */
+export function decodeHoverToken(
+ text: string,
+ from: number,
+ to: number,
+ isResponseMsg: boolean,
+ contentType = "",
+): string | null {
+ const token = text.slice(from, to);
+ if (token === "") return null;
+ // Form values and query values are both URL-encoded; a response body is HTML-escaped.
+ let decoded: string;
+ if (isResponseMsg && !contentType.toLowerCase().includes("application/x-www-form-urlencoded")) {
+  decoded = htmlDecode(token);
+ } else {
+  decoded = urlDecode(token);
+ }
+ return decoded === token ? null : decoded;
+}
+
+export function urlParamTokens(query: string, body: string, contentType = ""): BodyToken[] {
+ const out: BodyToken[] = [];
+ const add = (text: string, base: number) => {
+  for (const pair of pairSpans(text)) {
+   const from = pair.start;
+   const to = pair.end;
+   const eq = text.indexOf("=", from);
+   if (eq < 0 || eq >= to) {
+    out.push({ cls: "url-param-name", start: base + from, end: base + to });
+   } else {
+    out.push({ cls: "url-param-name", start: base + from, end: base + eq });
+    out.push({ cls: "url-param-value", start: base + eq + 1, end: base + to });
+   }
+  }
+ };
+ add(query, 0);
+ // Form params only when the body IS one: a JSON/multipart body's `&` is data, not a
+ // separator, and colourising inside it would misstate the document (the same refusal
+ // `bodyParamSpansEditable` makes).
+ if (contentType.toLowerCase().includes("application/x-www-form-urlencoded")) {
+  for (const pair of pairSpans(body)) {
+   const eq = body.indexOf("=", pair.start);
+   if (eq < 0 || eq >= pair.end) {
+    out.push({ cls: "url-param-name", start: pair.start, end: pair.end });
+   } else {
+    out.push({ cls: "url-param-name", start: pair.start, end: eq });
+    out.push({ cls: "url-param-value", start: eq + 1, end: pair.end });
+   }
+  }
+ }
+ return out;
 }

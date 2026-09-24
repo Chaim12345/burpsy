@@ -1,13 +1,17 @@
-import { EditorView, Decoration, ViewPlugin, WidgetType, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
+import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText , Percent , EyeOff } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
-import { breakGlyphs, byteOffsetToCharIndex, detectGraphQL, findJwts, paramsOf } from "../lib/message-views";
+import {
+ breakGlyphs, bodyTokens, byteOffsetToCharIndex, decodeHoverToken, detectGraphQL, findJwts, paramsOf,
+ type BodyToken, type TokenClass
+} from "../lib/message-views";
+import { pairSpans } from "../lib/message";
 import {
  base64Decode,
  base64Encode,
@@ -62,19 +66,177 @@ function headerEnd(view: EditorView): number {
  return view.state.doc.length;
 }
 
+const TOKEN_DECORATIONS: Record<TokenClass, Decoration> = {
+ "json-key": Decoration.mark({ class: "cm-tok-json-key" }),
+ "json-string": Decoration.mark({ class: "cm-tok-json-string" }),
+ "json-number": Decoration.mark({ class: "cm-tok-json-number" }),
+ "json-constant": Decoration.mark({ class: "cm-tok-json-constant" }),
+ "html-tag": Decoration.mark({ class: "cm-tok-html-tag" }),
+ "html-attr-name": Decoration.mark({ class: "cm-tok-html-attr-name" }),
+ "html-attr-value": Decoration.mark({ class: "cm-tok-html-attr-value" }),
+ "js-keyword": Decoration.mark({ class: "cm-tok-js-keyword" }),
+ "js-string": Decoration.mark({ class: "cm-tok-js-string" }),
+ "js-comment": Decoration.mark({ class: "cm-tok-js-comment" }),
+ "css-property": Decoration.mark({ class: "cm-tok-css-property" }),
+ "css-value": Decoration.mark({ class: "cm-tok-css-value" }),
+ "url-param-name": Decoration.mark({ class: "cm-tok-url-param-name" }),
+ "url-param-value": Decoration.mark({ class: "cm-tok-url-param-value" }),
+};
+
+/**
+ * Burp's mouse-over decode (6fq): hovering an encoded syntax item shows its decoded value —
+ * URL-decode in requests, HTML-decode in responses. The decoders are the transforms module's
+ * own; `decodeHoverToken` returns null when the decode is a no-op, so a plain ASCII token
+ * grows no popup that restates itself. Bounded to the body region: hovering a header is not
+ * a decode, and the tooltip exists only where the colouring does.
+ */
+function hoverDecodeTooltip(
+ messageIsResponse: boolean,
+ boundary: () => number,
+ queryRange: () => { from: number; to: number } | null,
+) {
+ return hoverTooltip((view, pos) => {
+  // The body region, or the request line's query: both are decode targets. A header value is
+  // neither — Burp decodes parameters and HTML entities, not header bytes — so the gate is a
+  // range test, not a "past the headers" one (the query lives IN the headers, and its values
+  // are exactly what a request's popup exists to decode).
+  const inBody = pos >= boundary();
+  const inQuery = (() => {
+   const range = queryRange();
+   return range ? pos >= range.from && pos < range.to : false;
+  })();
+  if (!inBody && !inQuery) return null;
+  const line = view.state.doc.lineAt(pos);
+  const token = tokenAt(pos, line);
+  if (!token) return null;
+  const contentType = contentTypeOf(view.state.doc.sliceString(0, boundary()));
+  const decoded = decodeHoverToken(line.text, token.from - line.from, token.to - line.from, messageIsResponse, contentType);
+  if (!decoded) return null;
+  return {
+   pos: token.from, create: () => {
+    const dom = document.createElement("div");
+    dom.className = "cm-hover-decode";
+    dom.textContent = decoded;
+    return { dom };
+   }
+  };
+ });
+}
+
+/** The encoded token under the pointer: a URL/query parameter value, or an HTML attribute
+ *  value — the spans the colouring already drew, consulted here so the popup and the colour
+ *  cannot disagree about what is a decode target. */
+function tokenAt(pos: number, line: { from: number; text: string }): { from: number; to: number } | null {
+ // The pointer sits inside a coloured span or on plain text. The span lookup is over the
+ // token shapes themselves, computed here against this line: a parameter value's bounds are
+ // its own `=` and `&`, an attribute value's are its quotes.
+ const rel = pos - line.from;
+ const text = line.text;
+ // Form/query parameter: scan pairs on this line.
+ const ampersands = [-1, ...[...text.matchAll(/&/g)].map((m) => m.index ?? -1)];
+ for (let i = 0; i < ampersands.length; i++) {
+  const from = ampersands[i]! + 1;
+  const to = i + 1 < ampersands.length ? ampersands[i + 1]! : text.length;
+  if (rel < from || rel >= to) continue;
+  const eq = text.indexOf("=", from);
+  if (eq < 0 || eq >= to) return null;
+  if (rel >= eq && rel < to) return { from: line.from + eq + 1, to: line.from + to };
+  return null;
+ }
+ // HTML attribute value: the nearest attr="..." pair the pointer falls inside.
+ const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("[^"]*"|'[^']*')/g;
+ for (const m of text.matchAll(attrRe)) {
+  const valueFrom = m.index! + m[0].indexOf(m[2]!);
+  const valueTo = valueFrom + m[2]!.length;
+  if (rel >= valueFrom && rel < valueTo) return { from: line.from + valueFrom, to: line.from + valueTo };
+ }
+ return null;
+}
+
+/**
+ * The body's token spans, computed for decoration only. Bounded like headerEnd: the body
+ * text is scanned only up to what is on screen (visibleRanges), so a megabyte body never
+ * tokenises whole. An empty set is normal — a plain-text body has nothing to highlight and
+ * keeps the flat body tint.
+ */
+function bodyTokenSpansFor(view: EditorView): BodyToken[] {
+ const boundary = headerEnd(view);
+ const doc = view.state.doc;
+ const contentType = contentTypeOf(doc.sliceString(0, boundary));
+ const out: BodyToken[] = [];
+ // Query params are the REQUEST's own colouring (Burp distinguishes request parameters):
+ // the start line's query is scanned here, and its spans are line-1 offsets already.
+ const firstLine = doc.line(1);
+ const qFrom = firstLine.text.indexOf("?");
+ if (qFrom >= 0) {
+  const space = firstLine.text.indexOf(" ", qFrom);
+  const query = firstLine.text.slice(qFrom, space < 0 ? firstLine.text.length : space);
+  for (const pair of pairSpans(query)) {
+   const eq = query.indexOf("=", pair.start);
+   const base = firstLine.from + qFrom;
+   if (eq < 0 || eq >= pair.end) {
+    out.push({ cls: "url-param-name", start: base + pair.start, end: base + pair.end });
+   } else {
+    out.push({ cls: "url-param-name", start: base + pair.start, end: base + eq });
+    out.push({ cls: "url-param-value", start: base + eq + 1, end: base + pair.end });
+   }
+  }
+ }
+ for (const { from, to } of view.visibleRanges) {
+  if (to <= boundary) continue;
+  const start = Math.max(from, boundary);
+  const text = doc.sliceString(start, Math.min(to, doc.length));
+  for (const token of bodyTokens(text, contentType)) {
+   out.push({ ...token, start: token.start + start, end: token.end + start });
+  }
+  if (to >= doc.length) break;
+ }
+ return out;
+}
+
 function buildDecorations(view: EditorView): DecorationSet {
  const builder = new RangeSetBuilder<Decoration>();
  const boundary = headerEnd(view);
  const doc = view.state.doc;
+ const tokens = bodyTokenSpansFor(view);
+ // Past the boundary: a tokenised body carries its own colouring, so the flat body tint is
+ // applied only when the body tokenised to nothing — a plain-text body keeps the tint, a
+ // colourised one does not get a second layer over it.
+ const tokenised = tokens.length > 0;
+ // A mark must not cross the header boundary (the token spans are body-relative already);
+ // the walk below adds them in document order interleaved with the line decorations, which
+ // is the order RangeSetBuilder requires.
+ let tokenIndex = 0;
 
  for (const { from, to } of view.visibleRanges) {
   let position = from;
   while (position <= to) {
    const line = doc.lineAt(position);
    if (line.from >= boundary) {
-    if (line.length > 0 || line.from > boundary) builder.add(line.from, line.from, BODY_LINE);
+    // Token marks falling inside this line are added before the line's own decoration.
+    while (tokenIndex < tokens.length && tokens[tokenIndex]!.start < line.to) {
+     const token = tokens[tokenIndex]!;
+     const tFrom = Math.max(token.start, line.from);
+     const tTo = Math.min(token.end, line.to);
+     if (tTo > tFrom) builder.add(tFrom, tTo, TOKEN_DECORATIONS[token.cls]!);
+     tokenIndex += 1;
+    }
+    if (!tokenised && (line.length > 0 || line.from > boundary)) builder.add(line.from, line.from, BODY_LINE);
    } else if (line.number === 1) {
+    // START_LINE first: RangeSetBuilder requires additions in increasing start order, and a
+    // token mark inside the line starts later than the line itself — adding the line's own
+    // mark after it would throw and kill every decoration this editor has (the exact
+    // regression a query-bearing Repeater request exposed in the live pass).
     if (line.length > 0) builder.add(line.from, line.to, START_LINE);
+    // The query params are line-1 tokens (the request's own colouring); they are consumed
+    // here, in document order, or the cursor below would be out of step for every later line.
+    while (tokenIndex < tokens.length && tokens[tokenIndex]!.start < line.to) {
+     const token = tokens[tokenIndex]!;
+     const tFrom = Math.max(token.start, line.from);
+     const tTo = Math.min(token.end, line.to);
+     if (tTo > tFrom) builder.add(tFrom, tTo, TOKEN_DECORATIONS[token.cls]!);
+     tokenIndex += 1;
+    }
    } else if (line.length > 0) {
     const colon = line.text.indexOf(":");
     if (colon > 0) {
@@ -313,10 +475,10 @@ const VIEW_LABELS: Record<MessageView, string> = {
  * Cookie header. Decides whether the Cookies tab exists for this message.
  */
 function cookiesToRead(value: string): { name: string; value: string }[] {
-  if (isResponse(value)) {
-    return cookiesOf(parseMessage(value).headers, true).map(([name, val]) => ({ name, value: val }));
-  }
-  return cookieSpans(value).map((pair) => ({ name: pair.name, value: pair.value }));
+ if (isResponse(value)) {
+  return cookiesOf(parseMessage(value).headers, true).map(([name, val]) => ({ name, value: val }));
+ }
+ return cookieSpans(value).map((pair) => ({ name: pair.name, value: pair.value }));
 }
 
 /**
@@ -486,6 +648,24 @@ export function HttpEditor({
   // does not exist" on this element, because every route has at least one.
   const base: Extension[] = [
    httpHighlight,
+   // The hover decode (6fq): Burp's mouse-over popups — URL-decode in requests,
+   // HTML-decode in responses, nothing when the decode is a no-op. Gated on `views` like
+   // Pretty: a payload blob with no head/body split has nothing for a popup to decode.
+   // The boundary closure re-reads the editor's own boundary so the tooltip is only
+   // offered past the headers, the same region the colouring is scoped to.
+   hoverDecodeTooltip(
+    isResponse(value),
+    () => (cmViewRef.current ? headerEnd(cmViewRef.current) : Number.MAX_SAFE_INTEGER),
+    () => {
+     const cm = cmViewRef.current;
+     if (!cm) return null;
+     const first = cm.state.doc.line(1);
+     const qFrom = first.text.indexOf("?");
+     if (qFrom < 0) return null;
+     const space = first.text.indexOf(" ", qFrom);
+     return { from: first.from + qFrom, to: first.from + (space < 0 ? first.text.length : space) };
+    },
+   ),
    burpEditorKeys,
    EditorView.contentAttributes.of({ "aria-label": label }),
    // Keeps the codec menu entries honest about whether they have anything to act on.
@@ -563,7 +743,7 @@ export function HttpEditor({
    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return `data:${contentType};base64,${btoa(binary)}`;
- }, [contentType, value, bodyBase64]);
+ }, [contentType, value, bodyBase64, label]);
 
  // The body's exact octets, regardless of which branch of messageView.Body64 produced them.
  // body_base64 IS the answer for a non-UTF-8 body — the only case the server ever sends it, per
@@ -619,9 +799,9 @@ export function HttpEditor({
    ? "utf-8"
    : charsetMode === "raw-bytes"
     ? // Burp calls this "ASCII", but true ASCII cannot represent a byte >= 0x80 at all. ISO-8859-1
-      // maps every one of the 256 byte values to its own code point with no loss and no
-      // substitution, which is what "one glyph per byte" actually requires.
-      "iso-8859-1"
+    // maps every one of the 256 byte values to its own code point with no loss and no
+    // substitution, which is what "one glyph per byte" actually requires.
+    "iso-8859-1"
     : charsetMode === "auto"
      ? headerCharset || "utf-8"
      : customCharset.trim().toLowerCase();
@@ -716,11 +896,11 @@ export function HttpEditor({
   ? []
   : charsetActive
    ? // Pretty/Render/GraphQL/JWT/Params all assume the platform-default decoding of `value`; showing
-     // them unchanged while the operator has deliberately asked to view the body under a different
-     // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
-     // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
-     // the same `value`, so they sit this out too.
-     (["raw", "hex"] as MessageView[])
+   // them unchanged while the operator has deliberately asked to view the body under a different
+   // charset would look like the charset applied everywhere when it only applies to Raw. Hex stays
+   // — it is a byte-exact view the charset choice was never about. The operator-added tabs read
+   // the same `value`, so they sit this out too.
+   (["raw", "hex"] as MessageView[])
    : ([
     ...(canPretty ? ["pretty"] : []),
     "raw",
@@ -772,13 +952,13 @@ export function HttpEditor({
  const clipboard =
   active === "pretty"
    ? hiding
-     ? hideHeadersIn(prettied, hideList)
-     : prettied
+    ? hideHeadersIn(prettied, hideList)
+    : prettied
    : active === "hex"
     ? hexDumpText
     : active === "raw" && charsetActive
-      ? (charsetOverride ?? value)
-      : value;
+     ? (charsetOverride ?? value)
+     : value;
 
  // A Hex selection handed to the Raw view. The byte range is mapped to a character
  // range on the way, because the two views index the same message differently.

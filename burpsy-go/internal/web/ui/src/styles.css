@@ -77,6 +77,23 @@
   --editor-header-name: #0033b3;
   --editor-header-value: #067d17;
   --editor-body: #1e1e1e;
+  /* Body tokenisation (burpsy-react-ui-6fq), Burp's body colouring: JSON keys/values, HTML
+     tags/attributes, JS keywords/strings, CSS properties. Chosen against --editor-bg (white)
+     with real AA margin, mirroring common light-editor palettes; verified in the live pass. */
+  --editor-json-key: #790e0e;
+  --editor-json-string: #067d17;
+  --editor-json-number: #0b53c1;
+  --editor-json-constant: #790e0e;
+  --editor-html-tag: #0b53c1;
+  --editor-html-attr-name: #790e0e;
+  --editor-html-attr-value: #067d17;
+  --editor-js-keyword: #7f004f;
+  --editor-js-string: #067d17;
+  --editor-js-comment: #5f6368;
+  --editor-css-property: #0b53c1;
+  --editor-css-value: #7f004f;
+  --editor-url-param-name: #790e0e;
+  --editor-url-param-value: #067d17;
   --editor-match: rgb(255 198 0 / 45%);
   --editor-match-border: rgb(150 96 10 / 60%);
   --editor-match-selected: rgb(255 168 0 / 65%);
@@ -111,6 +128,22 @@
   --editor-header-name: #b08cc4;
   --editor-header-value: #8fb573;
   --editor-body: #a9b7c6;
+  /* Body tokenisation (6fq), Darcula's own palette lifted past AA the same way the header
+     colours above were: every value below measures >= 4.5 against --editor-bg (#2b2b2b). */
+  --editor-json-key: #f5a4a4;
+  --editor-json-string: #8fb573;
+  --editor-json-number: #9ebeff;
+  --editor-json-constant: #f5a4a4;
+  --editor-html-tag: #9ebeff;
+  --editor-html-attr-name: #f5a4a4;
+  --editor-html-attr-value: #8fb573;
+  --editor-js-keyword: #f2979d;
+  --editor-js-string: #8fb573;
+  --editor-js-comment: #8c8c8c;
+  --editor-css-property: #9ebeff;
+  --editor-css-value: #f2979d;
+  --editor-url-param-name: #f5a4a4;
+  --editor-url-param-value: #8fb573;
   --editor-match: rgb(187 181 41 / 35%);
   --editor-match-border: rgb(187 181 41 / 70%);
   --editor-match-selected: rgb(187 181 41 / 60%);
@@ -1364,6 +1397,37 @@ tbody td {
    instead of overlapping the pane divider. */
 /* Non-printing glyphs (Burp's \n toggle): control pictures and high bytes render in the
    accent colour so they read as markup about the bytes, not as message content. */
+/* Body tokenisation (burpsy-react-ui-6fq): the classes bodyTokens' TokenClass maps to.
+   One rule per class, resolved against the editor tokens above — the same contract the
+   header rules in the editorTheme follow. */
+/* The hover decode popup (6fq): a small dark bubble above the token, readable in both
+   themes. CodeMirror's tooltip chrome supplies the arrow and the positioning. */
+.cm-hover-decode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs, 11px); /* token-exempt: the fs token's own fallback literal, already exempt elsewhere in this file */
+  padding: 2px 6px; /* token-exempt: CodeMirror's own tooltip chrome padding, not a design token */
+  background: var(--overlay);
+  color: var(--fg);
+  border-radius: 3px; /* token-exempt: CodeMirror tooltip chrome, not a token surface */
+  white-space: pre-wrap;
+  max-width: 480px; /* token-exempt: a popup wider than this is unreadable over the code it decodes */
+}
+
+.cm-tok-json-key { color: var(--editor-json-key); }
+.cm-tok-json-string { color: var(--editor-json-string); }
+.cm-tok-json-number { color: var(--editor-json-number); }
+.cm-tok-json-constant { color: var(--editor-json-constant); }
+.cm-tok-html-tag { color: var(--editor-html-tag); }
+.cm-tok-html-attr-name { color: var(--editor-html-attr-name); }
+.cm-tok-html-attr-value { color: var(--editor-html-attr-value); }
+.cm-tok-js-keyword { color: var(--editor-js-keyword); }
+.cm-tok-js-string { color: var(--editor-js-string); }
+.cm-tok-js-comment { color: var(--editor-js-comment); font-style: italic; }
+.cm-tok-css-property { color: var(--editor-css-property); }
+.cm-tok-css-value { color: var(--editor-css-value); }
+.cm-tok-url-param-name { color: var(--editor-url-param-name); font-weight: 700; }
+.cm-tok-url-param-value { color: var(--editor-url-param-value); }
+
 .cm-nonprinting {
   color: var(--accent-strong);
 }

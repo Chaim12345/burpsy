@@ -289,11 +289,73 @@ export function prettyMessage(raw: string): string {
     }
   } else if (type.includes("xml") || type.includes("html") || /^\s*<[a-z!?]/i.test(body)) {
     pretty = prettyMarkup(body);
+  } else if (type.includes("css") || looksLikeCss(body)) {
+    pretty = prettyCss(body);
+  } else if (type.includes("javascript") || type.includes("ecmascript") || looksLikeJs(body)) {
+    pretty = prettyJs(body);
   }
 
   if (pretty === null) return raw;
   void startLine;
   return raw.slice(0, bodyOffset) + pretty;
+}
+
+/** A CSS body: the text IS one when it looks like rules, so a text/css label is not required. */
+function looksLikeCss(body: string): boolean {
+  return /[{]\s*[-a-zA-Z]+\s*:/.test(body) || /[}][^{}]*[{]/.test(body);
+}
+
+/** A JavaScript body: sniffed from statements, since a label is often missing on responses. */
+function looksLikeJs(body: string): boolean {
+  const trimmed = body.trim();
+  return /\b(function|var|let|const|if|for|while|return|=>)\b/.test(trimmed) && !trimmed.startsWith("<");
+}
+
+/**
+ * CSS: one declaration per line, two-space indented inside its block. Selectors are kept
+ * verbatim — reformatting one would change what the document says.
+ */
+function prettyCss(body: string): string {
+  return body
+    .replace(/\s*{\s*/g, " {\n  ")
+    .replace(/;\s*(?=[^\s}])/g, ";\n  ")
+    .replace(/\s*}\s*/g, "\n}\n")
+    .replace(/\n\s*\n/g, "\n")
+    .trim() + "\n";
+}
+
+/**
+ * JavaScript: one statement per line where the break is safe — after `;` and `{`/`}` that
+ * are not inside a string literal. Statements are never re-indented (a guess that changes
+ * indentation changes nothing the bytes say, and can break a template literal's meaning).
+ */
+function prettyJs(body: string): string {
+  let out = "";
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    const ch = body[i]!;
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < n && body[j] !== ch) {
+        if (body[j] === "\\") j += 1;
+        j += 1;
+      }
+      out += body.slice(i, Math.min(j + 1, n));
+      i = Math.min(j + 1, n);
+      continue;
+    }
+    if (ch === "/" && body[i + 1] === "/") {
+      const end = body.indexOf("\n", i);
+      out += body.slice(i, end < 0 ? n : end);
+      i = end < 0 ? n : end;
+      continue;
+    }
+    out += ch;
+    if ((ch === ";" || ch === "{" || ch === "}") && body[i + 1] !== "\n") out += "\n";
+    i += 1;
+  }
+  return out;
 }
 
 function looksLikeJson(body: string): boolean {
