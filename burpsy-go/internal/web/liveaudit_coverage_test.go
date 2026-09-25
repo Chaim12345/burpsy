@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -159,26 +160,137 @@ func TestLiveAuditRecordsAnEventWhenItGivesUpOnAnExchange(t *testing.T) {
 
 // ---- the backlog: a sweep behind a crawl must say so -------------------------------------------
 
-// The sweep admits liveAuditBatchSize exchanges per tick, which a crawl outpaces easily. Swept alone
-// then keeps climbing while the gap grows, so the pane whose job is to demonstrate DASH-03 would be
-// the one violating it.
+// The sweep's admission is not a constant: it scales to the backlog it faces, bounded by
+// liveAuditCatchUpBatchMax (burpsy-react-ui-iosv). Swept alone would still be a number with nothing
+// saying how much was left, so the backlog is reported beside it — and a backlog larger than one
+// catch-up burst is the case that proves those are two different numbers rather than one.
 func TestLiveAuditReportsItsBacklogNotJustWhatItSwept(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
-	for i := 0; i < liveAuditBatchSize+25; i++ {
+	// Past the cap, so one tick cannot clear it however it scales.
+	recorded := liveAuditCatchUpBatchMax + 25
+	for i := 0; i < recorded; i++ {
 		proxiedCompleteExchange(t, s, "shop.test", "/p")
 	}
 
 	run := liveAuditRun{}
 	s.liveAuditTick(context.Background(), &run)
 
+	if got := s.liveAudit.BatchLimit(); got != liveAuditCatchUpBatchMax {
+		t.Errorf("batch limit = %d, want the catch-up cap %d — a backlog past the cap admits the cap, not the backlog",
+			got, liveAuditCatchUpBatchMax)
+	}
 	if behind := s.liveAudit.Behind(); behind != 25 {
 		t.Errorf("behind = %d, want 25 (%d recorded, %d admitted in one tick)",
-			behind, liveAuditBatchSize+25, liveAuditBatchSize)
+			behind, recorded, liveAuditCatchUpBatchMax)
 	}
 	// And it reaches zero once the sweep catches up, so "caught up" is a state the pane can show.
 	s.liveAuditTick(context.Background(), &run)
 	if behind := s.liveAudit.Behind(); behind != 0 {
 		t.Errorf("behind = %d after catching up, want 0", behind)
+	}
+}
+
+// A backlog the sweep is allowed to take in one tick must actually be taken, not merely counted. This
+// is the difference between the pane reporting a backlog and the sweep working it off: a batch that
+// stayed at the baseline would leave 25 of these behind, which is what this file used to assert.
+func TestLiveAuditClearsABacklogOneBurstCanHold(t *testing.T) {
+	s := newTestServer().WithLiveAudit(NewLiveAuditState())
+	recorded := liveAuditBatchSize + 25
+	for i := 0; i < recorded; i++ {
+		proxiedCompleteExchange(t, s, "shop.test", "/p")
+	}
+
+	run := liveAuditRun{}
+	s.liveAuditTick(context.Background(), &run)
+
+	if got := s.liveAudit.BatchLimit(); got != uint64(recorded) {
+		t.Errorf("batch limit = %d, want %d — the batch must scale to the backlog it faces", got, recorded)
+	}
+	if behind := s.liveAudit.Behind(); behind != 0 {
+		t.Errorf("behind = %d after one tick facing %d, want 0 — the backlog was counted but not worked off",
+			behind, recorded)
+	}
+}
+
+// The batch bound is a function of the backlog and nothing else, so it is pinned here rather than
+// inferred from a tick. Below the baseline it is the baseline, between the two it is the backlog
+// itself, and past the cap it is the cap — a backlog cannot be admitted in one tick however large it
+// grows, because the engine bounds the run the batch becomes.
+func TestLiveAuditTickBatchScalesWithTheBacklogAndStopsAtTheCap(t *testing.T) {
+	for _, tc := range []struct {
+		behind uint64
+		want   int
+	}{
+		{0, liveAuditBatchSize},
+		{1, liveAuditBatchSize},
+		{liveAuditBatchSize, liveAuditBatchSize},
+		{liveAuditBatchSize + 1, liveAuditBatchSize + 1},
+		{liveAuditCatchUpBatchMax - 1, liveAuditCatchUpBatchMax - 1},
+		{liveAuditCatchUpBatchMax, liveAuditCatchUpBatchMax},
+		{liveAuditCatchUpBatchMax + 1, liveAuditCatchUpBatchMax},
+		{1 << 40, liveAuditCatchUpBatchMax},
+	} {
+		if got := liveAuditTickBatch(tc.behind); got != tc.want {
+			t.Errorf("liveAuditTickBatch(%d) = %d, want %d", tc.behind, got, tc.want)
+		}
+	}
+}
+
+// Behind() says how much is left; BehindFor() says how long it has been left, which is the part that
+// separates a sweep keeping up with a busy moment from one that has stopped keeping up with anything.
+// Zero is the third state — caught up — and it is a duration of zero rather than an absent answer.
+func TestLiveAuditBacklogAgeSeparatesBehindFromIdle(t *testing.T) {
+	la := NewLiveAuditState()
+
+	if got := la.BehindFor(); got != 0 {
+		t.Errorf("behind-for = %s before any tick, want 0 — nothing has been recorded yet, so nothing is behind", got)
+	}
+
+	// Caught up: the cursor has reached everything recorded.
+	la.recordPosition(10, 10)
+	if got := la.BehindFor(); got != 0 {
+		t.Errorf("behind-for = %s while caught up, want 0", got)
+	}
+
+	// A backlog appears: the age starts, and stays anchored to that first tick rather than being
+	// restarted by every tick that finds it still there.
+	la.recordPosition(10, 40)
+	first := la.BehindFor()
+	if first <= 0 {
+		t.Fatalf("behind-for = %s with 30 exchanges unreached, want a positive age", first)
+	}
+	time.Sleep(2 * time.Millisecond)
+	la.recordPosition(11, 40)
+	if second := la.BehindFor(); second < first {
+		t.Errorf("behind-for went from %s to %s across a tick that left the backlog in place; "+
+			"the age must date the backlog, not the last tick", first, second)
+	}
+
+	// Caught up again: the age clears, so "idle" is distinguishable from "behind by a little".
+	la.recordPosition(40, 40)
+	if got := la.BehindFor(); got != 0 {
+		t.Errorf("behind-for = %s after catching up, want 0", got)
+	}
+}
+
+// The pane reads the age and the bound off the wire, so both have to be on it — and neither may be
+// omitempty: a zero age is "caught up" and must be distinguishable from a field that is missing.
+func TestLiveAuditStatusCarriesTheBacklogAgeAndBatchLimit(t *testing.T) {
+	s := newTestServer().WithLiveAudit(NewLiveAuditState())
+	s.liveAudit.Record(0, 0)
+	s.liveAudit.recordPosition(10, 40)
+	s.liveAudit.recordBatchLimit(liveAuditCatchUpBatchMax)
+	// The wire carries the age in whole milliseconds, so assert after it has had one to accumulate:
+	// an age read in the same millisecond it was stamped truncates to 0, which is a rounding artefact
+	// of the wire unit and not the answer the getter holds.
+	time.Sleep(5 * time.Millisecond)
+
+	v := liveAuditGet(t, s)
+	if v.BehindForMs <= 0 {
+		t.Errorf("behind_for_ms = %d with a backlog in place, want a positive age", v.BehindForMs)
+	}
+	if v.BatchLimit != liveAuditCatchUpBatchMax {
+		t.Errorf("batch_limit = %d, want %d", v.BatchLimit, liveAuditCatchUpBatchMax)
 	}
 }
 
@@ -203,7 +315,9 @@ func TestLiveAuditBacklogIsCurrentEvenWhileStalled(t *testing.T) {
 func TestDashboardLiveAuditSummaryCarriesTheBacklog(t *testing.T) {
 	s := newTestServer().WithLiveAudit(NewLiveAuditState())
 	s.liveAudit.SetEnabled(true)
-	for i := 0; i < liveAuditBatchSize+7; i++ {
+	// Past the catch-up cap, so the sweep is still behind after one tick and the summary has a
+	// backlog to carry.
+	for i := 0; i < liveAuditCatchUpBatchMax+7; i++ {
 		proxiedCompleteExchange(t, s, "shop.test", "/p")
 	}
 	run := liveAuditRun{}
