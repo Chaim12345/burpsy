@@ -200,7 +200,12 @@ function LiveAuditCard(): JSX.Element {
   };
 
   const gaps: string[] = [];
-  if (data && data.behind > 0) gaps.push(`${data.behind.toLocaleString()} not reached yet`);
+ // The backlog's age is the half of the number that says whether the sweep is keeping up: the same
+ // "400 behind" reads as a busy moment at forty seconds and as a stalled sweep at forty minutes
+ // (burpsy-react-ui-iosv). formatDuration renders "—" for a non-finite value, which cannot happen
+ // here because the field is only read when the backlog exists.
+ if (data && data.behind > 0)
+  gaps.push(`${data.behind.toLocaleString()} not reached yet (behind for ${formatDuration(data.behind_for_ms)})`);
   if (data?.skipped) gaps.push(`${data.skipped.toLocaleString()} given up on`);
   if (data?.stalled_at !== undefined) gaps.push(`waiting on #${data.stalled_at}`);
 
@@ -266,8 +271,12 @@ function LiveAuditCard(): JSX.Element {
           </div>
           <div className="chip-row">
             {data.behind > 0 ? (
-              <Badge tone="warn" title="captured but not yet reached by the sweep cursor">
-                {data.behind.toLocaleString()} not swept yet
+              <Badge
+               tone="warn"
+               title="captured but not yet reached by the sweep cursor — the age says whether the sweep is keeping up, the bound says how hard it is working at it"
+              >
+               {data.behind.toLocaleString()} not swept yet · behind {formatDuration(data.behind_for_ms)}
+               {data.batch_limit > 0 ? ` · sweeping ${data.batch_limit.toLocaleString()}/tick` : ""}
               </Badge>
             ) : null}
             {data.skipped ? (
