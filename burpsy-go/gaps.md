@@ -1305,3 +1305,44 @@ to the corresponding body kind by matching **name and value**.
 that rarely fires. Re-open if a real target shows a relocation the blanket clause
 move gets wrong.
 
+
+## G-reflected-xss-header-reach — the reflected-XSS row could not probe headers
+
+**Verified 2026-09-17 against HEAD, measured with `cmd/xsschallenge`.**
+
+The three core injection rows (SQL injection, reflected XSS, file path traversal) named their
+own insertion-point literal:
+
+    var coreInjectionKinds = []string{"query", "body", "cookie"}   // checks_core_injection.go:52
+
+Two consequences, both real:
+
+1. **No `header`.** A value reflected out of an HTTP header was structurally unreachable by the
+   reflected-XSS row, because no probe was ever sent into a header. `cmd/xsschallenge`'s
+   `/x/header` case (User-Agent reflected into the body) is exactly this shape.
+2. **The operator's configuration was ignored.** `scanner/insertion_point_types/*` reaches every
+   other probe site through `cc.ProbeInsertionKinds()`, but these three passed the literal
+   instead — so turning cookie insertion off changed what the audit queue displayed and not one
+   byte of what these rows sent.
+
+**Fix:** all three call sites now pass `cc.ProbeInsertionKinds()`, so the configured kinds govern
+and `header` is in the default set (`DefaultProbeInsertionKinds` at probe_harness.go:40).
+
+**Evidence — `cmd/xsschallenge`, before → after:**
+
+| | before | after |
+|---|---|---|
+| `header-user-agent` | **MISS** | **hit** (Cross-site scripting (reflected)) |
+| detection | 20/23 | **21/23 (91%)** |
+| false positives | 0/9 | 0/9 |
+
+The two remaining misses are unchanged and are separate capability gaps:
+
+- `stored` — the batch-audit cycle cannot close (checks_stored.go's own header documents this);
+  the deferred phase did not reach the `/x/stored/view` render in this run.
+- `cookie-pref` — NOT YET DIAGNOSED. An earlier draft of this note claimed the cookie
+  insertion point used a percent-encoding codec that escaped `<`/`>`; that is FALSE and was
+  retracted before landing. `percentEscape` (bcheck/insertion.go:1871-1884) escapes only
+  `& = + ; # %`, bytes `<= 0x20`, and bytes `>= 0x7f`. `<`, `>` and `"` are printable ASCII and
+  pass through raw, so a cookie point does carry markup and the kind is enumerated. The miss has
+  a different cause and needs its own diagnosis before anything is claimed about it.
