@@ -108,6 +108,151 @@ type ResolutionSettings struct {
 	Resolver string `json:"resolver"`
 	// TimeoutMS bounds one lookup. Zero means the resolver's own default.
 	TimeoutMS int `json:"timeout_ms"`
+	// Family is the address family the answer is filtered to, which is Burp's resolution-address
+	// preference (settings/network/dns.html:49-65): "because routing restrictions may permit only one
+	// family". ResolutionSystem is the default and returns the resolver's order untouched.
+	Family AddressFamily `json:"family"`
+	// Lookup is the name-resolution seam the family preference resolves through. Nil means the
+	// configured resolver, or the system one.
+	//
+	// It exists because the preference's whole job is choosing between two families, and a machine
+	// that resolves only one of them cannot demonstrate the choice: localhost is IPv4-only on most
+	// boxes, so a test that used it passed whether or not the transport honoured the setting. A test
+	// that answers for both families can, and a real resolver cannot be asked for both on demand.
+	//
+	// Not part of the wire shape — it has no json tag and no key, so a settings document cannot set
+	// it. It is a seam, not a setting, and the only writer is a test.
+	Lookup func(ctx context.Context, host string) ([]string, error) `json:"-"`
+}
+
+// AddressFamily is which family a hostname's answer is filtered to.
+type AddressFamily string
+
+const (
+	// FamilySystem leaves the resolver's ordering alone, which is what every dial did before the
+	// preference existed. The default because the system order encodes the operator's own routing
+	// preferences, and overriding them is a decision they have to make.
+	FamilySystem AddressFamily = "system"
+	// FamilyIPv4 keeps only A records.
+	FamilyIPv4 AddressFamily = "ipv4"
+	// FamilyIPv6 keeps only AAAA records. A dual-stack target reachable only over IPv6 is the shape
+	// this exists for; a target reachable over NEITHER is refused, which is the honest outcome.
+	FamilyIPv6 AddressFamily = "ipv6"
+)
+
+// familyValue is the Go constant a family names, and whether the family is a filter at all. System is
+// not a filter: it means the resolver's own order, and returning its answer untouched is the whole
+// point rather than a special case of preferring one family.
+func (f AddressFamily) familyValue() (uint32, bool) {
+	switch f {
+	case FamilyIPv4:
+		return 4, true
+	case FamilyIPv6:
+		return 6, true
+	default:
+		return 0, false
+	}
+}
+
+// String names the family for the settings document and a refusal message.
+func (f AddressFamily) String() string {
+	switch f {
+	case FamilyIPv4:
+		return "ipv4"
+	case FamilyIPv6:
+		return "ipv6"
+	default:
+		return "system"
+	}
+}
+
+// filterFamily returns the addresses of one family from a resolver's answer, in the resolver's order.
+//
+// It is a filter over an existing answer set rather than a resolver rewrite, for a reason that is
+// about correctness rather than taste: a per-family query (AAAA rather than A) can be answered
+// differently by a split-horizon resolver than a filtered answer to a question the operator actually
+// asked, and the engagement's own DNS is the thing that knows. RFC 6555's "filtered AAAA" exists for
+// deployments that want it; a security tool should not be one by default.
+func filterFamily(addrs []string, family AddressFamily) ([]string, bool) {
+	want, ok := family.familyValue()
+	if !ok {
+		return addrs, true
+	}
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			// A literal that is not an IP, or something the resolver returned that is neither, is kept
+			// out: this function filters to one family and an unparseable answer is not of either.
+			continue
+		}
+		if ip.To4() != nil {
+			if want == 4 {
+				out = append(out, addr)
+			}
+			continue
+		}
+		if want == 6 {
+			out = append(out, addr)
+		}
+	}
+	return out, len(out) > 0
+}
+
+// resolutionFailure names why a hostname could not be turned into a dialable address, and is what a
+// caller reports when the family filter found nothing.
+//
+// "no address of that family" is the whole reason this is a separate type rather than an empty list: a
+// dual-stack host with only an IPv6 route, asked for IPv4, is a routing problem the operator has to
+// see. A generic "could not resolve" would read as a DNS fault and send them to the wrong setting.
+type resolutionFailure struct {
+	host   string
+	family AddressFamily
+	empty  bool
+}
+
+func (e *resolutionFailure) Error() string {
+	if e.empty {
+		return "resolution.family is " + e.family.String() + " and " + e.host +
+			" has no address of that family; a host reachable over the other family only cannot be " +
+			"dialled, and setting resolution.family to system would return both"
+	}
+	return "resolution found no usable address for " + e.host
+}
+
+// resolveForDial turns a hostname into one address to dial, applying the override table and then the
+// family preference.
+//
+// # Why it resolves rather than handing the name to the dialer
+//
+// net.Dialer takes a hostname and does this work itself, but it also does it the OPERATOR's platform
+// way: it walks the resolver's answers and connects to the first that opens, and on a dual-stack host
+// whose AAAA is unroutable it may try the AAAA, wait out the connect timeout, and only then try the A.
+// The result is a request that takes the connect timeout to fail on a host that was reachable all
+// along, which is the shape burpsy-react-ui-mr83 part 2 records: an operator with no setting that
+// fixes it, who must override the hostname one address at a time.
+func (n NetworkSettings) resolveForDial(ctx context.Context, host string) (string, error) {
+	if addr, ok := n.Resolution.resolveHost(host); ok {
+		// An override is an operator naming one address. The family preference does not second-guess
+		// it: they said this address, and a filter here would silently discard the address they typed
+		// and dial somewhere they did not ask for.
+		return addr, nil
+	}
+	if _, isFilter := n.Resolution.Family.familyValue(); !isFilter {
+		return host, nil
+	}
+
+	// Only the filtering path needs to resolve here; the system path hands the hostname to the dialer
+	// exactly as it always did.
+	candidates, err := n.Resolution.lookup(ctx, host)
+	if err != nil {
+		return "", &resolutionFailure{host: host, family: n.Resolution.Family}
+	}
+	filtered, ok := filterFamily(candidates, n.Resolution.Family)
+	if !ok {
+		return "", &resolutionFailure{host: host, family: n.Resolution.Family, empty: true}
+	}
+	return filtered[0], nil
 }
 
 // TimeoutSettings splits what SenderConfig.Timeout used to conflate.
@@ -303,6 +448,12 @@ func (r ResolutionSettings) validate() error {
 		return fmt.Errorf("resolution.policy is %q, and the only lookup policies are %q and %q",
 			r.Policy, ResolutionSystem, ResolutionResolver)
 	}
+	switch r.Family {
+	case "", FamilySystem, FamilyIPv4, FamilyIPv6:
+	default:
+		return fmt.Errorf("resolution.family is %q, and the only preferences are %q, %q and %q",
+			r.Family, FamilySystem, FamilyIPv4, FamilyIPv6)
+	}
 	if r.Policy == ResolutionResolver {
 		if strings.TrimSpace(r.Resolver) == "" {
 			return fmt.Errorf("resolution.policy is %q but resolution.resolver names no address to query",
@@ -448,6 +599,13 @@ func (n NetworkSettings) Normalise() NetworkSettings {
 	// operator cannot reach is reported by the leg that tries to read it, naming the path.
 	out.TLS.RootCAPath = strings.TrimSpace(out.TLS.RootCAPath)
 
+	// An absent family is the system default, NOT an empty filter. Normalising it here is what keeps
+	// a settings document written before the field existed from resolving to nothing at all — the
+	// failure mode of a string-typed enum whose zero value is not a valid member.
+	if out.Resolution.Family == "" {
+		out.Resolution.Family = FamilySystem
+	}
+
 	if out.Redirects.Mode == "" {
 		out.Redirects.Mode = RedirectNever
 	}
@@ -484,12 +642,29 @@ func (r ResolutionSettings) resolveHost(host string) (string, bool) {
 	return "", false
 }
 
-// dialAddress is the address a dial to host:port should actually use, after the override table.
+// dialAddress is dialAddressFor with no context, for the callers that have none — the override
+// table's own tests, and anywhere the family preference is already the system one and cannot need a
+// lookup. It resolves against a background context, so a real send should prefer dialAddressFor.
 func (n NetworkSettings) dialAddress(host string, port uint16) string {
-	if addr, ok := n.Resolution.resolveHost(host); ok {
-		return net.JoinHostPort(addr, strconv.Itoa(int(port)))
+	return n.dialAddressFor(context.Background(), host, port)
+}
+
+// dialAddressFor is the address a dial to host:port should actually use, after the override table and
+// then the family preference.
+//
+// The family filter needs a resolver answer, which needs a context, so this takes one. The system
+// preference — the default — does no lookup at all and returns the hostname unchanged, so the ordinary
+// send is not paying for a resolution the dialer is about to do anyway.
+func (n NetworkSettings) dialAddressFor(ctx context.Context, host string, port uint16) string {
+	addr, err := n.resolveForDial(ctx, host)
+	if err != nil || addr == "" {
+		// A family filter that matched nothing resolves to the HOSTNAME, which then fails at the dial
+		// with the operating system's own error. resolveForDial's message is the useful one, so it is
+		// logged by the caller that can see it; here the address is simply not a rewrite, because
+		// inventing one would dial an address nobody named.
+		return net.JoinHostPort(host, strconv.Itoa(int(port)))
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+	return net.JoinHostPort(addr, strconv.Itoa(int(port)))
 }
 
 // overrideAddr rewrites a `host:port` string the way dialAddress rewrites a host and a port, for the
@@ -551,6 +726,31 @@ func normaliseResolver(raw string) (string, error) {
 			"of its own")
 	}
 	return net.JoinHostPort(trimmed, "53"), nil
+}
+
+// lookup answers one hostname, through the test seam when there is one and the configured resolver
+// otherwise.
+//
+// It returns STRING addresses rather than net.IPAddr because that is what the family filter and the
+// dialer both consume, and a net.IPAddr carries a zone name a filter would have to strip and a dialer
+// would have to put back.
+func (r ResolutionSettings) lookup(ctx context.Context, host string) ([]string, error) {
+	if r.Lookup != nil {
+		return r.Lookup(ctx, host)
+	}
+	resolver := r.resolver()
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, ip.IP.String())
+	}
+	return out, nil
 }
 
 // resolver returns the *net.Resolver these settings ask for, or nil for the system one.

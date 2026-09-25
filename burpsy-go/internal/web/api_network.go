@@ -39,6 +39,9 @@ type networkSettingsView struct {
 
 type networkAcceptedView struct {
 	ResolutionPolicies []string `json:"resolution_policies"`
+	// ResolutionFamilies is read from the engine, not hardcoded in the panel, so a family value can
+	// appear in the selector only if the engine accepts it — the same rule the policy list follows.
+	ResolutionFamilies []string `json:"resolution_families"`
 	RedirectModes      []string `json:"redirect_modes"`
 	MaxTimeoutMS       int      `json:"max_timeout_ms"`
 	MaxRedirectHops    int      `json:"max_redirect_hops"`
@@ -59,6 +62,11 @@ func networkAccepted() networkAcceptedView {
 	sort.Strings(keys)
 	return networkAcceptedView{
 		ResolutionPolicies: []string{string(sender.ResolutionSystem), string(sender.ResolutionResolver)},
+		// Read from the engine so the panel's selector can only offer a value Validate accepts, the
+		// same rule ResolutionPolicies and RedirectModes follow.
+		ResolutionFamilies: []string{
+			string(sender.FamilySystem), string(sender.FamilyIPv4), string(sender.FamilyIPv6),
+		},
 		RedirectModes: []string{
 			string(sender.RedirectNever), string(sender.RedirectOnSite),
 			string(sender.RedirectInScope), string(sender.RedirectAlways),
@@ -96,6 +104,18 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 				return fmt.Errorf("wants a policy name as a string")
 			}
 			n.Resolution.Policy = sender.ResolutionPolicy(s)
+			return nil
+		},
+		// Burp's resolution-address preference (settings/network/dns.html:49-65), which exists
+		// "because routing restrictions may permit only one family" (burpsy-react-ui-mr83 part 2).
+		// The refusal names the three values so a typo is a message rather than a silent filter that
+		// matches no address.
+		"family": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return fmt.Errorf("wants a family name as a string")
+			}
+			n.Resolution.Family = sender.AddressFamily(s)
 			return nil
 		},
 		"resolver": func(n *sender.NetworkSettings, raw json.RawMessage) error {

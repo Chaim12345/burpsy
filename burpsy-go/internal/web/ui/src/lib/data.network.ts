@@ -20,6 +20,8 @@ import { keys, useInvalidate, useResource } from "./data";
 import type { NetworkProxyUpdate, NetworkProxyView } from "./types.policy";
 
 export type ResolutionPolicy = "system" | "resolver";
+/** Which address family a resolved host is filtered to. `system` is the resolver's own order. */
+export type AddressFamily = "system" | "ipv4" | "ipv6";
 export type RedirectMode = "never" | "on_site" | "in_scope" | "always";
 
 export interface HostOverride {
@@ -34,6 +36,14 @@ export interface NetworkSettings {
     policy: ResolutionPolicy;
     resolver: string;
     timeout_ms: number;
+    /**
+     * Which address family a hostname's answer is filtered to. `system` leaves the resolver's order
+     * alone, which is the default: that order encodes the machine's own routing preferences.
+     *
+     * `null` on a document written before the field existed — a panel must not read `ipv4` off a
+     * missing key, nor infer a preference the operator never set.
+     */
+    family: AddressFamily | null;
   };
   timeouts: {
     connect_ms: number;
@@ -76,6 +86,8 @@ export interface NetworkSettings {
 /** What the server will accept, travelling with the state so the panel does not hardcode the arms. */
 export interface NetworkAccepted {
   resolution_policies: ResolutionPolicy[];
+  /** Read from the engine, so the selector can only offer a family the server accepts. */
+  resolution_families: AddressFamily[];
   redirect_modes: RedirectMode[];
   max_timeout_ms: number;
   max_redirect_hops: number;

@@ -5,7 +5,14 @@ import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
 import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
-import type { HostOverride, NetworkPatch, NetworkSettings, RedirectMode, ResolutionPolicy } from "../lib/data.network";
+import type {
+ AddressFamily,
+ HostOverride,
+ NetworkPatch,
+ NetworkSettings,
+ RedirectMode,
+ ResolutionPolicy,
+} from "../lib/data.network";
 import {
  useDeletePool,
  useDeleteSchedule,
@@ -937,6 +944,29 @@ function NetworkSection(): JSX.Element {
         >
          <option value="system">System resolver</option>
          <option value="resolver">A resolver I name</option>
+        </Select>
+       )}
+      </Field>
+      <Field
+       label="Address family"
+       hint="Filter the answer to one family"
+      >
+       {(id) => (
+        <Select
+         id={id}
+         // A document written before the field existed reads null, and that means "system" — the
+         // value the engine normalises it to. Anything else would show a preference nobody set.
+         value={draft.resolution.family ?? "system"}
+         onChange={(event) =>
+          patchSection("resolution", { family: event.target.value as AddressFamily })
+         }
+         style={{ maxWidth: "var(--w-sm)" }}
+        >
+         {(data.accepted.resolution_families ?? ["system", "ipv4", "ipv6"]).map((family) => (
+          <option key={family} value={family}>
+           {family === "system" ? "System order (both families)" : family.toUpperCase()}
+          </option>
+         ))}
         </Select>
        )}
       </Field>

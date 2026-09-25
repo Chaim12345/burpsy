@@ -249,7 +249,21 @@ func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
 				Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 				Base:    settings.dialer(),
 			}
-			return dialer.DialContext(ctx, network, settings.overrideAddr(addr))
+			// The family preference is applied here too, and on the same rule as the raw path's
+			// dialAddress: an override is an operator naming one address and is never second-guessed, and
+			// the system preference leaves the hostname for the dialer to resolve. Two dial paths that
+			// disagreed here would be a Repeater send that reached an IPv6-only host and a scanner probe
+			// on the same host that did not.
+			target := settings.overrideAddr(addr)
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				if resolved, rerr := settings.resolveForDial(ctx, host); rerr == nil && resolved != "" {
+					if _, _, perr := net.SplitHostPort(target); perr == nil {
+						_, resolvedPort, _ := net.SplitHostPort(target)
+						target = net.JoinHostPort(resolved, resolvedPort)
+					}
+				}
+			}
+			return dialer.DialContext(ctx, network, target)
 		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -420,7 +434,7 @@ func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.C
 		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 		Base:    settings.dialer(),
 	}
-	return dialer.DialContext(ctx, "tcp", settings.dialAddress(host, port))
+	return dialer.DialContext(ctx, "tcp", settings.dialAddressFor(ctx, host, port))
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -503,7 +517,7 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	if s.upstream != nil && !s.upstream.Empty() {
 		dialer.Carry = upstream.Dialer{Policy: s.upstream, Timeout: connect, Base: settings.dialer()}.DialContext
 	}
-	return dialer.Dial(ctx, host, settings.dialAddress(host, port), offer)
+	return dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
 }
 
 // Request represents a raw HTTP request.
