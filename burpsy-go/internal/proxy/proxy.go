@@ -55,6 +55,15 @@ const (
 	TlsPassthrough
 )
 
+// maxBufferedRequestBody bounds one buffered request body.
+//
+// readFullRequest holds a whole message in memory because the intercept hold, the
+// match-and-replace pass and the record all take one byte slice. A client-controlled bound is
+// therefore part of reading a request at all, and the chunked path is where it matters most: a
+// chunk stream can declare any size, so without a ceiling this reader is a memory-exhaustion
+// primitive. 64 MiB is far above any legitimate API request and far below what would hurt.
+const maxBufferedRequestBody = 64 << 20
+
 // TlsPolicy controls TLS interception behavior.
 type TlsPolicy struct {
 	mu               sync.RWMutex
@@ -2382,6 +2391,25 @@ func parseHostPort(hostPort string) (host string, port uint16) {
 // nothing calls would leave the reader-consuming shape available to the next caller
 // that needs a header early, which is exactly how the bug arrived.
 
+// readFullRequest reads one whole HTTP request off the client connection: the request line, the
+// header block, and the body under the framing the head actually declares.
+//
+// Both framings are handled, and the difference matters more than it looks. The previous version
+// recognised `Content-Length:` only, so a `Transfer-Encoding: chunked` upload was forwarded as a
+// header promising a body that had never been read — the origin sat waiting for bytes that would
+// never arrive, and the request recorded in history had no body at all (burpsy-react-ui-3tc7,
+// reproduced at 98 bytes in / 53 out).
+//
+// A malformed length or chunk stream returns the message without a body rather than a message with
+// a half-read one: a head that declares a body the reader could not read must not be forwarded
+// claiming it was read, which is the same failure the old code produced for every chunked request.
+//
+// A chunked body is DE-chunked and the head rewritten to `Content-Length`, rather than re-framed.
+// Everything downstream — the intercept hold, the match-and-replace pass, the operator's editor,
+// the record — takes one byte slice and works on whole messages, so a re-framed stream would have to
+// be decoded again at each of those. The rewiring is a rewrite of `Content-Length` alone; the
+// original chunk-size and chunk extensions are not preserved, because the head no longer advertises
+// them.
 func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 	var buf bytes.Buffer
 	buf.WriteString(requestLine)
@@ -2398,22 +2426,178 @@ func readFullRequest(requestLine string, reader *bufio.Reader) []byte {
 		}
 	}
 
-	// Read body if Content-Length present
-	headers := buf.String()
-	if clIndex := strings.Index(headers, "Content-Length:"); clIndex != -1 {
-		clStart := clIndex + 15
-		clEnd := clStart
-		for clEnd < len(headers) && headers[clEnd] != '\r' && headers[clEnd] != '\n' {
-			clEnd++
+	head := buf.String()
+	// Both header lookups fold case: "Content-Length:" and "content-length:" are the same field
+	// (RFC 9110 §5.1), and a request written in either case has a body this must read. The previous
+	// exact-case search meant a lower-case chunked or length-framed request was silently treated as
+	// bodyless.
+	length, lengthOK := headerInt(head, "content-length")
+	chunked := headerHasToken(head, "transfer-encoding", "chunked")
+
+	switch {
+	case lengthOK && length > 0:
+		body, ok := readExactly(reader, length)
+		if !ok {
+			// Short body: forward the head alone rather than a head promising bytes that are not
+			// there. The origin will reject it, and the record will not claim a body it never read.
+			return buf.Bytes()
 		}
-		if cl, err := strconv.Atoi(strings.TrimSpace(headers[clStart:clEnd])); err == nil && cl > 0 {
-			body := make([]byte, cl)
-			io.ReadFull(reader, body)
-			buf.Write(body)
+		buf.Write(body)
+	case chunked:
+		body, complete := readChunkedBody(reader)
+		if !complete {
+			// A chunk stream that ends early is not a body, and is certainly not one to forward.
+			return buf.Bytes()
 		}
+		rewritten := rewriteChunkedToLength(head, len(body))
+		if rewritten == "" {
+			return buf.Bytes()
+		}
+		buf.Reset()
+		buf.WriteString(rewritten)
+		buf.Write(body)
 	}
 
 	return buf.Bytes()
+}
+
+// readExactly reads n bytes or reports that the stream ended first. io.ReadFull's EOF is not enough
+// on its own here: a partial read that is then forwarded is the corruption this whole function
+// exists to prevent.
+func readExactly(reader *bufio.Reader, n int) ([]byte, bool) {
+	if n < 0 || n > maxBufferedRequestBody {
+		return nil, false
+	}
+	out := make([]byte, n)
+	read, err := io.ReadFull(reader, out)
+	if err != nil {
+		return nil, false
+	}
+	return out[:read], true
+}
+
+// readChunkedBody decodes a chunked stream into its payload, following RFC 9112 §7.1: a hex size, an
+// optional extension after ';', that many bytes, a CRLF, and finally the zero-size chunk with its
+// trailers.
+//
+// The completeness flag is the point. A stream that ends before its zero chunk is not a complete body,
+// and the caller must not forward a head that claims one.
+func readChunkedBody(reader *bufio.Reader) ([]byte, bool) {
+	var out bytes.Buffer
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, false
+		}
+		sizeText := strings.TrimSpace(line)
+		if i := strings.IndexByte(sizeText, ';'); i >= 0 {
+			sizeText = strings.TrimSpace(sizeText[:i])
+		}
+		size, err := strconv.ParseUint(sizeText, 16, 64)
+		if err != nil {
+			return nil, false
+		}
+		if size == 0 {
+			// The terminal chunk. Trailers, if any, run to the blank line; read and discard them so
+			// the next request on this connection starts at a message boundary.
+			for {
+				trailer, err := reader.ReadString('\n')
+				if err != nil {
+					return nil, false
+				}
+				if strings.TrimSpace(trailer) == "" {
+					return out.Bytes(), true
+				}
+			}
+		}
+		if uint64(out.Len())+size > maxBufferedRequestBody {
+			// A chunk stream that declares more than this is refused rather than buffered: the point
+			// of this path is to hold one request in memory for the intercept and edit surfaces, and
+			// an unbounded body would make that a memory-exhaustion primitive.
+			return nil, false
+		}
+		chunk, ok := readExactly(reader, int(size))
+		if !ok {
+			return nil, false
+		}
+		out.Write(chunk)
+		// The CRLF that ends every chunk's data is framing, not payload.
+		if crlf, err := reader.Peek(2); err == nil && string(crlf) == "\r\n" {
+			_, _ = reader.Discard(2)
+		} else if lf, err := reader.Peek(1); err == nil && string(lf) == "\n" {
+			_, _ = reader.Discard(1)
+		}
+	}
+}
+
+// rewriteChunkedToLength replaces the Transfer-Encoding header with a Content-Length carrying the
+// decoded body's size, leaving every other header byte untouched — the name's casing, the spacing,
+// the order. A rewritten header is the only head change the de-chunked body needs, and everything
+// after it is the same head the client wrote.
+func rewriteChunkedToLength(head string, bodyLen int) string {
+	lines := strings.Split(head, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name, _, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(name), "Transfer-Encoding") {
+			// Dropped, not rewritten: the remaining values (gzip, and so on) describe a transfer
+			// coding this body no longer uses. Keeping a partial value would be a lie about the
+			// framing.
+			continue
+		}
+		kept = append(kept, line)
+	}
+	// The Content-Length goes immediately before the blank line that ends the head, which is the
+	// last element of `lines`.
+	blank := len(kept) - 1
+	if blank < 0 {
+		return ""
+	}
+	kept = append(kept[:blank], append([]string{"Content-Length: " + strconv.Itoa(bodyLen)}, kept[blank:]...)...)
+	return strings.Join(kept, "\n")
+}
+
+// headerInt reads a numeric header, case-insensitively. ok is false when the field is absent or
+// unparseable, so a caller cannot mistake "no length" for "length zero".
+func headerInt(head, name string) (int, bool) {
+	value, ok := headerValueFold(head, name)
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// headerHasToken reports whether a comma-separated header carries token, case-insensitively. Used
+// for Transfer-Encoding, where "chunked" may be one of several codings and may carry parameters.
+func headerHasToken(head, name, token string) bool {
+	value, ok := headerValueFold(head, name)
+	if !ok {
+		return false
+	}
+	for _, part := range strings.Split(value, ",") {
+		if field, _, _ := strings.Cut(part, ";"); strings.EqualFold(strings.TrimSpace(field), token) {
+			return true
+		}
+	}
+	return false
+}
+
+// headerValueFold returns the first value of a named header, whatever case it was written in.
+func headerValueFold(head, name string) (string, bool) {
+	for _, line := range strings.Split(head, "\n") {
+		field, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(field), name) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // serverIPOf is the destination's resolved IP as this socket actually reached it, for history's IP
