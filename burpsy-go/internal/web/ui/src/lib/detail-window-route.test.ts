@@ -3,6 +3,8 @@
 // failure mode that looks fine until an operator loses the window: a leaf that is routable but
 // listed in the sub-tab row, and an id read from the wrong place in the URL.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { NAV_LEAVES, findLeaf, toolOf } from "../nav";
 
 describe("the detached exchange window's route", () => {
@@ -32,3 +34,16 @@ describe("the detached exchange window's route", () => {
     expect(duplicates, "two leaves with one id means one of them is unreachable").toEqual([]);
   });
 });
+
+  // The action's URL is what routes the window; a hash naming any other leaf mounts that leaf and
+  // the detail page is never reached (burpsy-react-ui-76ea). This reads the real builder rather than
+  // restating the hash, so the two cannot drift.
+  test("the URL the action opens names the detail leaf, not the history page", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "pages", "detailwindow.tsx"), "utf8");
+    const line = source.split("\n").find((entry) => entry.includes("exchange=${exchange.id}#"));
+    expect(line, "the URL builder moved: this test needs its new anchor").toBeDefined();
+    expect(
+      line,
+      "the opened URL must carry the detail leaf as its hash, or the window mounts whichever page the hash names",
+    ).toContain("#exchange-detail");
+  });

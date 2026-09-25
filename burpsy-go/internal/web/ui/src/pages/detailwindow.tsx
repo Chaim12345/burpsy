@@ -57,7 +57,11 @@ export function detailExchangeId(): number | null {
  * "new window" means to an operator who asked for one.
  */
 export function openDetailWindow(exchange: Exchange): boolean {
- const url = `${location.pathname}${location.search ? `${location.search}&` : "?"}exchange=${exchange.id}#history`;
+ // The hash is the ROUTE, so it must be the detail leaf — `#history` here mounted the ordinary
+// history table in the new window, with no exchange selected, and left this whole page unreachable
+// except by hand-typing the hash (burpsy-react-ui-76ea). The query carries the id; the hash names
+// the page that reads it.
+const url = `${location.pathname}${location.search ? `${location.search}&` : "?"}exchange=${exchange.id}#exchange-detail`;
  const opened = window.open(url, `burpsy-exchange-${exchange.id}`, "noopener,noreferrer");
  if (opened) return true;
  // A refused popup is not an error the operator can act on except by taking the fallback, so the
