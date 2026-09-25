@@ -643,8 +643,12 @@ func containsKind(kinds []string, kind string) bool {
 }
 
 // The issues_reported overlay must narrow the check set exactly as documented: passive off drops
-// the passive families, every active tier off drops the active families, JavaScript off drops the
-// DOM family, and any active tier true keeps the base switches alone.
+// the passive families, each active tier selects the checks carrying that rank, JavaScript off
+// drops the DOM family, and a key that was never set inherits the base switches.
+//
+// The three active keys are INDEPENDENT. That is the whole point of the tier ranking: before it,
+// "any tier true" left every base switch alone, so a preset that enabled only the light checks and
+// refused the intrusive ones still ran the intrusive ones. Each key now selects its own rank.
 func Test_issues_reported_gate_narrows_the_check_set(t *testing.T) {
 	allOn := &ScanConfig{
 		MaxConcurrency: 1,
@@ -675,9 +679,38 @@ func Test_issues_reported_gate_narrows_the_check_set(t *testing.T) {
 		t.Error("all active tiers off should leave the passive families running, not nothing")
 	}
 
-	oneTierOn := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(1)})
-	if len(oneTierOn) != baseCount {
-		t.Errorf("any tier true must leave the base switches alone: %d checks, want %d", len(oneTierOn), baseCount)
+	// The three keys select independent sets. Enabling only the light tier must exclude the
+	// intrusive checks even though their base switch is on — the assertion the old collapsed gate
+	// made impossible to write.
+	lightOnly := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(1), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(0)})
+	if len(lightOnly) >= baseCount {
+		t.Errorf("light-only left %d checks, want fewer than the base %d: the intrusive checks ran under a preset that disabled them", len(lightOnly), baseCount)
+	}
+	for _, c := range lightOnly {
+		// Passive rows are exempt: they hang from scan_type_passive and send no request, so no
+		// active tier selects or excludes them.
+		if !c.passive && c.invasiveness != TierLight {
+			t.Errorf("light-only admitted %q, which is ranked %s", c.name, c.invasiveness)
+		}
+	}
+
+	// Enabling only the intrusive tier excludes the light checks: the selection is by rank, not a
+	// suffix of the base order.
+	intrusiveOnly := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(1)})
+	if len(intrusiveOnly) >= baseCount {
+		t.Errorf("intrusive-only left %d checks, want fewer than the base %d", len(intrusiveOnly), baseCount)
+	}
+	for _, c := range intrusiveOnly {
+		if !c.passive && c.invasiveness != TierIntrusive {
+			t.Errorf("intrusive-only admitted %q, which is ranked %s", c.name, c.invasiveness)
+		}
+	}
+
+	// All three on reproduces the base set: the rank filter admits everything when every tier is
+	// enabled, so a full preset is not a narrower run than no preset.
+	allTiersOn := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(1), MediumActiveChecks: SomeUint32(1), IntrusiveActiveChecks: SomeUint32(1)})
+	if len(allTiersOn) < baseCount {
+		t.Errorf("all tiers on left %d checks, want at least the base %d", len(allTiersOn), baseCount)
 	}
 
 	noGate := s.enabledChecksUnder(AuditConfig{})

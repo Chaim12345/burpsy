@@ -559,11 +559,11 @@ func reflectionProbeChecksEnabled(c *ScanConfig) bool { return c != nil && c.Che
 // registry aggregates this with the other per-family descriptor functions into NativeCheckRegistry.
 func ReflectionProbeCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
-		nativeDescriptor(inputReflectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkInputReflection),
-		nativeDescriptor(openRedirectIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkOpenRedirect),
-		nativeDescriptor(linkManipulationIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkLinkManipulation),
-		nativeDescriptor(headerInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkHeaderInjection),
-		nativeDescriptor(codeInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkCodeInjection),
-		nativeDescriptor(ssiInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkSSIInjection),
+		mediumDescriptor(inputReflectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkInputReflection),
+		mediumDescriptor(openRedirectIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkOpenRedirect),
+		mediumDescriptor(linkManipulationIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkLinkManipulation),
+		mediumDescriptor(headerInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkHeaderInjection),
+		mediumDescriptor(codeInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkCodeInjection),
+		mediumDescriptor(ssiInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkSSIInjection),
 	}
 }

@@ -46,6 +46,15 @@ type activeCheck struct {
 	name    string
 	scope   DispatchScope
 	enabled func(*ScanConfig) bool
+	// invasiveness is the tier the `scan_type_*_active` keys select this check under. It is
+	// snapshotted with the set rather than looked up per dispatch, so a check cannot change tier
+	// between two items of one session.
+	invasiveness CheckInvasiveness
+	// passive marks a check that reads the request and its response without sending a probe of its
+	// own. Those hang from `scan_type_passive`, not from the three active tiers, so a preset that
+	// turns every active tier off still runs them — a passive check cannot change server state,
+	// which is the property the intrusive tier exists to protect.
+	passive bool
 	// run executes the check. The error is the evaluator's refusal, not a transport detail: a
 	// check the evaluator cannot run at all returns errCheckUnsupported so the audit engine
 	// counts it DispositionUnsupported (Skipped) rather than a clean miss, and any other error
@@ -104,38 +113,17 @@ var auditLevelPassiveFamilies = []string{
 	"CheckHeaders",
 }
 
-// auditLevelActiveFamilies are the ScanConfig switches every family that SENDS anything hangs
-// from. Burp's three active tiers (light/medium/intrusive) collapse onto them because this engine
-// has no per-check intrusiveness ranking — see auditLevelNotes.
-var auditLevelActiveFamilies = []string{
-	"CheckSqli",
-	"CheckXss",
-	"CheckPathTraversal",
-	"CheckSSRF",
-	"CheckXXE",
-	"CheckJwtWeak",
-	"CheckJSVulns",
-	"CheckCachePoisoning",
-	"CheckActiveInjection",
-	"CheckExtendedActive",
-	"CheckReflectionProbes",
-	"CheckResponseDependence",
-	"CheckExtendedCoverage",
-	"CheckOutOfBand",
-	"CheckStored",
-	"CheckCorpus",
-}
-
 // auditLevelJavaScriptFamilies is the DOM family.
 var auditLevelJavaScriptFamilies = []string{"CheckDOM"}
 
 // auditLevelNotesText is the honest statement of where the issues_reported overlay bends, reported
 // beside the resolved configuration so an operator comparing burpsy against Burp's own preview of
 // the same preset sees the difference explained rather than discovered.
-const auditLevelNotesText = "burpsy has no per-check intrusiveness ranking, so Burp's light/medium/intrusive " +
-	"active tiers collapse to one gate: every tier the configuration sets to false turns the active " +
-	"check families off, and any tier set to true leaves the base switch set alone. Per-issue " +
-	"selection (scan_only_selected_issues, select_individual_issues, selected_issues) is not applied."
+//
+// The light/medium/intrusive tiers are no longer part of it: each check carries a rank and each key
+// selects its own set. What remains is the per-issue selection trio, which has no representation in
+// this engine.
+const auditLevelNotesText = tieredEngineNote
 
 // auditLevelNotes reports the approximation text when the configuration narrows the check set, and
 // nothing when it does not — a run under the base switches has nothing to disclaim.
@@ -158,13 +146,12 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
 		zeroFamilies(&base, auditLevelPassiveFamilies)
 	}
-	if activeTiersAllOff(cfg) {
-		zeroFamilies(&base, auditLevelActiveFamilies)
-	}
 	if cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0 {
 		zeroFamilies(&base, auditLevelJavaScriptFamilies)
 	}
-	return s.enabledChecksIn(base)
+	// activeTiers returns nil when no tier key was set, which leaves the base switches alone; a
+	// non-nil set is three independent selections rather than one collapsed gate.
+	return s.enabledChecksInTiers(base, activeTiers(cfg))
 }
 
 // hasAuditLevelGate reports whether the configuration narrows the check set at all.
@@ -172,29 +159,42 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
 		return true
 	}
-	if activeTiersAllOff(cfg) {
+	if activeTiers(cfg) != nil {
 		return true
 	}
 	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0
 }
 
-// activeTiersAllOff is the collapsed tier gate: every tier the preset SET says false. A preset
-// that sets only the light tier to false genuinely disables its light checks under Burp; here it
-// disables every active check, which auditLevelNotes says out loud. Any tier set true means the
-// preset wants active checking, so the base switches stand.
-func activeTiersAllOff(cfg AuditConfig) bool {
-	anyTrue := false
-	anySet := false
-	for _, t := range []OptUint32{cfg.LightActiveChecks, cfg.MediumActiveChecks, cfg.IntrusiveActiveChecks} {
-		if !t.Set {
-			continue
-		}
-		anySet = true
-		if t.Value != 0 {
-			anyTrue = true
-		}
+// activeTiers is the tier selection a preset's three `scan_type_*_active` keys express. A tier set
+// to 0 is absent from the result; a tier never named is absent too, and its checks are excluded
+// because a key that was not written is an operator who said nothing about that tier, not one who
+// asked for it to be off.
+//
+// A nil result means no tier key was set at all, and the base switches stand unchanged — the
+// distinction matters because nil is the "inherit" signal enabledChecksInTiers reads, while an empty
+// non-nil map would be "every tier off".
+//
+// The old gate returned one bool, "are all three off?", which made a preset that disabled only the
+// light tier indistinguishable from one that disabled all three, and a preset that enabled light
+// while disabling intrusive indistinguishable from one that enabled everything. Each key now
+// selects its own set.
+func activeTiers(cfg AuditConfig) map[CheckInvasiveness]bool {
+	var light, medium, intrusive OptUint32
+	light, medium, intrusive = cfg.LightActiveChecks, cfg.MediumActiveChecks, cfg.IntrusiveActiveChecks
+	if !light.Set && !medium.Set && !intrusive.Set {
+		return nil
 	}
-	return anySet && !anyTrue
+	out := make(map[CheckInvasiveness]bool, 3)
+	if light.Set && light.Value != 0 {
+		out[TierLight] = true
+	}
+	if medium.Set && medium.Value != 0 {
+		out[TierMedium] = true
+	}
+	if intrusive.Set && intrusive.Value != 0 {
+		out[TierIntrusive] = true
+	}
+	return out
 }
 
 // zeroFamilies flips the named ScanConfig switches off in place.
@@ -251,6 +251,14 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 // scanner's own — the mechanism the audit-level gate overlays with. The ledger bit-stability rule
 // is unchanged: the set is snapshotted once per run, before any item is admitted.
 func (s *ActiveScanner) enabledChecksIn(cfg ScanConfig) []activeCheck {
+	return s.enabledChecksInTiers(cfg, nil)
+}
+
+// enabledChecksInTiers is enabledChecksIn under a tier selection. A nil tiers map admits every
+// check the base switches do, which is what a run with no `scan_type_*_active` key set means. A
+// non-nil map admits a check only when its OWN tier is in the set — so light and medium are
+// independent selections, and a preset that enables one does not inherit the others.
+func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInvasiveness]bool) []activeCheck {
 	if s == nil {
 		return nil
 	}
@@ -259,11 +267,23 @@ func (s *ActiveScanner) enabledChecksIn(cfg ScanConfig) []activeCheck {
 	s.mu.RUnlock()
 	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
 	for _, c := range activeCheckSet {
-		if c.enabled(&cfg) {
-			out = append(out, c)
+		if !c.enabled(&cfg) {
+			continue
 		}
+		// A passive check is not under the three active-tier keys at all: it hangs from
+		// `scan_type_passive`, and it sends no request, so "intrusive" has nothing to say about it.
+		// Excluding it because every active tier was off would be the collapsed gate's old mistake in
+		// a new place.
+		if tiers != nil && !c.passive && !tiers[c.invasiveness] {
+			continue
+		}
+		out = append(out, c)
 	}
 	if cfg.CheckCorpus {
+		// Corpus checks are loaded by the operator rather than declared in the registry, so they
+		// carry no rank. They join every tier: a preset that narrows the built-in checks has not
+		// said anything about an operator's own corpus, and dropping it would silently change what
+		// the corpus switch means.
 		out = append(out, s.corpusActiveChecks(corpus)...)
 	}
 	return out

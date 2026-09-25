@@ -738,17 +738,17 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 			crossDomainPolicyCheck("Silverlight cross-domain policy", "/clientaccesspolicy.xml", ParseSilverlightPolicy)),
 
 		nativeDescriptor("XML external entity injection", DispatchScopePerUrl, remainingChecksEnabled, checkXXE),
-		nativeDescriptor("XML entity expansion", DispatchScopePerUrl, remainingChecksEnabled, checkXMLEntityExpansion),
+		intrusiveDescriptor("XML entity expansion", DispatchScopePerUrl, remainingChecksEnabled, checkXMLEntityExpansion),
 
 		nativeDescriptor("File upload functionality", DispatchScopePerHost, remainingChecksEnabled, checkFileUploadFunctionality),
 		nativeDescriptor("OpenAPI definition found (passive scan check)", DispatchScopePerUrl, remainingChecksEnabled, checkOpenAPIDefinitionPassive),
 
-		nativeDescriptor("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("Out-of-band resource load (HTTP)", "http")),
-		nativeDescriptor("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("External service interaction (DNS)", "dns")),
-		nativeDescriptor("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("External service interaction (HTTP)", "http")),
+		descriptorWithTier("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("Out-of-band resource load (HTTP)", "http"), TierIntrusive, ""),
+		descriptorWithTier("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("External service interaction (DNS)", "dns"), TierIntrusive, ""),
+		descriptorWithTier("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("External service interaction (HTTP)", "http"), TierIntrusive, ""),
 
 		nativeDescriptor("React Server Components remote code execution (React2Shell)", DispatchScopePerUrl, remainingChecksEnabled, checkReact2Shell),
 		nativeDescriptor("SQL statement in request parameter", DispatchScopePerUrl, remainingChecksEnabled, checkSQLStatementInParameter),

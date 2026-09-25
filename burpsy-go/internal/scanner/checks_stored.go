@@ -354,10 +354,15 @@ func StoredCheckDescriptors() []CheckDescriptor {
 		{"Client-side HTTP parameter pollution (stored)", "low", contextInAttribute("src")},
 		{"SQL injection (second order)", "high", contextAnywhere},
 	}
+	// Every row here is intrusive, and not because of what it reads. A stored check only produces a
+	// finding after something was PLANTED: these evaluators are fed by canaries this engine put into
+	// the target, and one stays there after the scan. That is a lasting change to someone else's
+	// system, which is the distinction Burp's intrusive tier exists to draw, so the whole family is
+	// ranked there rather than split by severity.
 	out := make([]CheckDescriptor, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, nativeDescriptor(r.row, DispatchScopeStoredPerInsertionPoint,
-			storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx)))
+		out = append(out, descriptorWithTier(r.row, DispatchScopeStoredPerInsertionPoint,
+			storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx), TierIntrusive, ""))
 	}
 	return out
 }

@@ -33,6 +33,42 @@ const (
 	PhaseJavaScript
 )
 
+// CheckInvasiveness is a check's rank in Burp's light/medium/intrusive active tiers. It is the
+// per-check ranking the `scanner/issues_reported/scan_type_*_active` keys select on.
+//
+// The zero value is TierLight on purpose: a descriptor that does not declare a rank is admitted by
+// the lightest tier, so adding a check without a rank cannot silently exclude it from a run that
+// asked for the light tier. Raising a rank is a deliberate act with a test behind it; leaving one
+// unset is not.
+type CheckInvasiveness uint8
+
+const (
+	TierLight CheckInvasiveness = iota
+	TierMedium
+	TierIntrusive
+)
+
+// String names the tier for the configuration key matrix and the launch warning. The names are
+// Burp's, so an operator reading "intrusive" here and "scan_type_intrusive_active" in their preset
+// is reading the same word twice.
+func (i CheckInvasiveness) String() string {
+	switch i {
+	case TierLight:
+		return "light"
+	case TierMedium:
+		return "medium"
+	case TierIntrusive:
+		return "intrusive"
+	default:
+		return "unknown"
+	}
+}
+
+// checkTierNote is what the approximation note says when every active tier is on. Once the engine
+// ranks checks, the three keys are independent and this text is retired; the note remains only for
+// per-issue selection, which still has no representation here.
+const tieredEngineNote = "per-issue selection (scan_only_selected_issues, select_individual_issues, selected_issues) is not applied"
+
 // CheckContext is the stable boundary between dispatch and check logic. It carries
 // handles and shared services; evaluators must not own transport or persistence.
 type CheckContext struct {
@@ -226,6 +262,12 @@ type CheckDescriptor struct {
 	Enabled        func(*ScanConfig) bool
 	Run            CheckRunner
 	DeclineReason  string
+	Invasiveness   CheckInvasiveness
+	// Passive marks a check that reads a captured exchange without sending a probe of its own. Those
+	// hang from `scan_type_passive`, not from the three active tiers, so a preset that turns every
+	// active tier off still runs them — a passive check cannot change server state, which is the
+	// property the intrusive tier exists to protect.
+	Passive bool
 }
 
 func (d CheckDescriptor) Runnable() bool {

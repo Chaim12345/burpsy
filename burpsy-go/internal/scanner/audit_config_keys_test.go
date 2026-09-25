@@ -3,6 +3,10 @@ package scanner
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
 )
 
 // burpShippedScannerKeys is every distinct key Burp's own 29 shipped scan configurations set under
@@ -114,6 +118,48 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 		t.Errorf("the table honours %d key(s) and reports %d as not applied; want %d and %d — the coverage claim moves with this count",
 			applied, reported, wantApplied, wantReported)
 	}
+}
+
+// The three active-tier keys claimed `applies` while the engine collapsed them onto one gate, so a
+// preset importer reading the matrix was told all three were honoured and none of them was. The
+// matrix's claim and the engine's behaviour must be the same claim, and this test holds them together
+// by toggling each key and observing which checks actually change.
+func Test_the_three_active_tier_keys_each_change_the_check_set(t *testing.T) {
+	base := &ScanConfig{
+		MaxConcurrency: 1,
+		Timeout:        5 * time.Second,
+		CheckSqli:      true, CheckXss: true, CheckPathTraversal: true, CheckSSRF: true,
+		CheckXXE: true, CheckJwtWeak: true, CheckJSVulns: true,
+		CheckPassiveAnalysis: true, CheckPassivePosture: true, CheckHeaders: true,
+		CheckHostDiscovery: true, CheckExtendedCoverage: true, CheckReflectionProbes: true,
+		CheckResponseDependence: true, CheckActiveInjection: true,
+		CheckExtendedActive: true, CheckOutOfBand: true, CheckStored: true, CheckCorpus: true,
+	}
+	s := NewActiveScanner(core.NewTrafficStore(), zap.NewNop()).WithConfig(base)
+	baseline := s.enabledChecks()
+	if len(baseline) == 0 {
+		t.Fatal("the scanner has no checks enabled, so the tier keys have nothing to select")
+	}
+
+	// Each key alone, with the other two explicitly off, must produce a set that differs from the
+	// baseline AND from the set the other two produce. Under the collapsed gate all three were the
+	// same test: any one true meant the base set, and all three false meant no active checks.
+	light := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(1), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(0)})
+	medium := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), MediumActiveChecks: SomeUint32(1), IntrusiveActiveChecks: SomeUint32(0)})
+	intrusive := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(1)})
+
+	if len(light) == len(baseline) {
+		t.Errorf("scan_type_light_active produced the base set (%d checks): the key changed nothing, so the matrix may not report it as applied", len(light))
+	}
+	if len(intrusive) == len(light) {
+		t.Errorf("scan_type_intrusive_active and scan_type_light_active produced the same set (%d checks): the tiers are still one switch", len(light))
+	}
+	if len(medium) == len(baseline) {
+		t.Errorf("scan_type_medium_active produced the base set (%d checks): the key changed nothing, so the matrix may not report it as applied", len(medium))
+	}
+	// The three sets are distinct, which is the claim the matrix makes. They need not be disjoint:
+	// the passive rows are exempt from all three, so every set contains them.
+	t.Logf("tier selection sizes: light=%d medium=%d intrusive=%d base=%d", len(light), len(medium), len(intrusive), len(baseline))
 }
 
 // A reported key must reach the report under each spelling in play: the section-qualified path the

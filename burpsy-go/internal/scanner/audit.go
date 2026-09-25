@@ -547,10 +547,15 @@ type AuditConfig struct {
 	// ScanConfig switch set.
 	PassiveChecks OptUint32
 	// LightActiveChecks, MediumActiveChecks and IntrusiveActiveChecks are Burp's
-	// `scan_type_light_active`, `scan_type_medium_active` and `scan_type_intrusive_active`. This
-	// engine has no per-check intrusiveness ranking, so the three tiers collapse to one gate: every
-	// tier that is set to false turns the active families off; any tier set true leaves the base
-	// switch set alone. auditLevelNotes records the approximation.
+	// `scan_type_light_active`, `scan_type_medium_active` and `scan_type_intrusive_active`. Each
+	// selects the checks carrying that rank (CheckInvasiveness) and the three are independent: a
+	// preset that enables light and disables intrusive runs the light checks and leaves the
+	// intrusive ones out, which is what the three keys mean in Burp.
+	//
+	// A key that is not set says nothing about its tier. Setting all three to 0 admits no active
+	// check at all; setting none leaves the base ScanConfig switches untouched. A tier set to 0
+	// excludes that tier's checks even when its family switch is on, so the overlay narrows the
+	// base set rather than replacing it.
 	LightActiveChecks     OptUint32
 	MediumActiveChecks    OptUint32
 	IntrusiveActiveChecks OptUint32
@@ -970,8 +975,8 @@ var builtInConfigKeys = []struct {
 	},
 
 	// scanner/issues_reported — which check classes the run admits. The mapping is documented on
-	// AuditConfig and auditLevelNotes; per-check intrusiveness ranking does not exist here, so the
-	// three Burp tiers collapse to one active gate.
+	// AuditConfig; the three active tiers select checks by their CheckInvasiveness rank, so each key
+	// here changes engine behaviour on its own and the matrix can report all three as applied.
 	{
 		name:    "scan_type_passive",
 		burpKey: "scanner/issues_reported/scan_type_passive",
@@ -983,7 +988,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_light_active",
 		burpKey: "scanner/issues_reported/scan_type_light_active",
-		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		what:    "whether the light-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
 		read:    func(c BuiltInConfig) OptUint32 { return c.LightActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.LightActiveChecks = SomeUint32(v) },
 		applies: true,
@@ -991,7 +996,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_medium_active",
 		burpKey: "scanner/issues_reported/scan_type_medium_active",
-		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		what:    "whether the medium-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
 		read:    func(c BuiltInConfig) OptUint32 { return c.MediumActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.MediumActiveChecks = SomeUint32(v) },
 		applies: true,
@@ -999,7 +1004,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_intrusive_active",
 		burpKey: "scanner/issues_reported/scan_type_intrusive_active",
-		what:    "one of Burp's three active tiers; every tier set to 0 turns the active families off (0 here), any set to 1 leaves the base switches alone",
+		what:    "whether the intrusive-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
 		read:    func(c BuiltInConfig) OptUint32 { return c.IntrusiveActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.IntrusiveActiveChecks = SomeUint32(v) },
 		applies: true,
