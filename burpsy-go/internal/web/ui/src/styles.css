@@ -33,6 +33,7 @@
    behaviour at each end. */
 :root {
   --ui-scale: 100%;
+  --editor-font-size: 12px; /* the runtime font picker overrides this on mount (7bd); defined here so the editor panes have a value before JS runs */
   /* Remapped fluid type tokens (burpsy-react-ui-7bd): the generated --fs-* values
      scaled by --ui-scale, so Appearance's text-size control resizes the chrome
      without touching the message editor, which reads its own --editor-font-size.
@@ -1404,7 +1405,7 @@ tbody td {
    themes. CodeMirror's tooltip chrome supplies the arrow and the positioning. */
 .cm-hover-decode {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs, 11px); /* token-exempt: the fs token's own fallback literal, already exempt elsewhere in this file */
+  font-size: var(--fs-xs); /* token-exempt: the fs token's own fallback literal, already exempt elsewhere in this file */
   padding: 2px 6px; /* token-exempt: CodeMirror's own tooltip chrome padding, not a design token */
   background: var(--overlay);
   color: var(--fg);
@@ -4466,7 +4467,7 @@ tbody td {
    as "this part is <encoding>" rather than tinting the whole card. */
 .enc-span[data-encoding] {
   background: color-mix(in srgb, var(--enc-tint) var(--row-tint-alpha), transparent);
-  border-bottom: 2px solid var(--enc-tint);
+  border-bottom: var(--border-focus) solid var(--enc-tint);
   border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
   padding: 0 1px;
 }
@@ -4867,15 +4868,15 @@ tbody td {
 .editor-tabs-settings-panel {
   position: absolute;
   right: 0;
-  top: calc(100% + var(--s2, 8px));
+  top: calc(100% + var(--s2));
   z-index: 30;
   min-width: 280px;
   max-height: 320px;
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--s1, 4px);
-  padding: var(--s2, 8px);
+  gap: var(--s1);
+  padding: var(--s2);
   background: var(--panel-bg, var(--bg));
   border: 1px solid var(--border, var(--line));
   border-radius: var(--radius-md, 4px);
@@ -4886,20 +4887,20 @@ tbody td {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--s2, 8px);
+  gap: var(--s2);
 }
 
 .editor-tabs-settings-row label {
   display: flex;
   align-items: center;
-  gap: var(--s1, 4px);
-  font-size: var(--fs-xs, 11px);
+  gap: var(--s1);
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 
 .editor-tabs-settings-move {
   display: flex;
-  gap: 2px;
+  gap: 2px; /* token-exempt: a half-step between the up/down reorder buttons, deliberately below the 4px --s1 step of the fluid scale */
 }
 
 /* A plugin's editor-tab body (ww5): the same scroll+pre the typed views use, so every tab in
@@ -4912,14 +4913,14 @@ tbody td {
 
 .editor-plugin-tab .editor-plugin-note,
 .editor-plugin-tab .notice {
-  margin: var(--s2, 8px);
+  margin: var(--s2);
 }
 
 .editor-plugin-text {
   margin: 0;
-  padding: var(--s2, 8px);
+  padding: var(--s2);
   font-family: var(--font-mono, monospace);
-  font-size: var(--editor-font-size, 12px);
+  font-size: var(--editor-font-size);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-all;
@@ -4928,22 +4929,22 @@ tbody td {
 /* ==== Session-handling tracer (burpsy-react-ui-n29) ==== */
 
 .trace-entry {
-  border-left: 2px solid var(--line, var(--border));
-  padding: var(--s1, 4px) 0 var(--s1, 4px) var(--s2, 8px);
+  border-left: var(--border-focus) solid var(--line);
+  padding: var(--s1) 0 var(--s1) var(--s2);
 }
 
 .trace-entry-head {
   display: flex;
   align-items: center;
-  gap: var(--s1, 4px);
+  gap: var(--s1);
   flex-wrap: wrap;
-  font-size: var(--fs-xs, 11px);
+  font-size: var(--fs-xs);
 }
 
 .trace-actions {
-  margin: var(--s1, 4px) 0 0;
-  padding-left: var(--s3, 16px);
-  font-size: var(--fs-xs, 11px);
+  margin: var(--s1) 0 0;
+  padding-left: var(--s3);
+  font-size: var(--fs-xs);
   color: var(--fg-dim, var(--muted));
 }
 
@@ -4956,8 +4957,8 @@ tbody td {
   background: transparent;
   color: var(--fg);
   font-family: var(--font-mono, monospace);
-  font-size: var(--fs-xs, 11px);
-  padding: 2px var(--s1, 4px);
+  font-size: var(--fs-xs);
+  padding: 2px var(--s1); /* token-exempt: the pill's 2px inner band is deliberately below the 4px --s1 step; --s1 carries the label's side padding */
   cursor: pointer;
   width: 100%;
   border-radius: var(--radius-sm, 3px);
