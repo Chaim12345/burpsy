@@ -35,6 +35,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"strconv"
 	"strings"
@@ -227,8 +228,13 @@ func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Reques
 	if rec.variant == "original" {
 		variantLabel = "In original session"
 	}
+	// The target is `ex.Host + ex.Path`, which is TARGET-CONTROLLED data: it comes from a request
+	// someone recorded, and a request line can carry `<svg/onload=...>` in its path. It is escaped
+	// here as well as the error text below, because the error path and the success path both render
+	// it and only one of them used to ask (tvdg).
+	authority := htmlEscape(ex.Host + ex.Path)
 	if err != nil {
-		fmt.Fprintf(w, reissuePageShell, variantLabel, ex.Host+ex.Path,
+		fmt.Fprintf(w, reissuePageShell, htmlEscape(variantLabel), authority,
 			"<p class=\"err\">the re-issue did not reach the target: "+htmlEscape(err.Error())+"</p>")
 		return
 	}
@@ -236,7 +242,7 @@ func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Reques
 	if st := parseResponseStatus(respBytes); st != nil {
 		status = fmt.Sprintf("%d", *st)
 	}
-	fmt.Fprintf(w, reissuePageShell, variantLabel, ex.Host+ex.Path,
+	fmt.Fprintf(w, reissuePageShell, htmlEscape(variantLabel), authority,
 		"<p>the request was sent and the target answered <strong>"+htmlEscape(status)+"</strong> in "+
 			strconv.FormatInt(elapsed.Milliseconds(), 10)+" ms.</p>"+
 			"<p class=\"hint\">both this and the other session variant are in HTTP history as their own exchanges.</p>")
@@ -341,9 +347,15 @@ func indexDoubleCRLF(raw []byte) int {
 	return -1
 }
 
+// htmlEscape escapes a value for interpolation into the answer page's HTML.
+//
+// The standard library's escaper, not a hand-written replacer: the previous version here was
+// strings.NewReplacer with IDENTITY pairs ("&" -> "&", "<" -> "<"), so htmlEscape(x) == x for
+// every input and the two call sites that used it escaped nothing at all (burpsy-react-ui-tvdg).
+// A hand-written escape table is one missing entry away from the same silent failure; this one
+// cannot be wrong, and a test now says what it must do.
 func htmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&", "<", "<", ">", ">", `"`, "&#34;", "'", "&#39;")
-	return r.Replace(s)
+	return html.EscapeString(s)
 }
 
 // reissuePageShell is the answer page: plain HTML, no script, because its job is to say what
