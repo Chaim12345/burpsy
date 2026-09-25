@@ -608,6 +608,11 @@ type ProxyConfig struct {
 	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
 	// console reaches this leg without a restart — see internal/upstream.
 	upstream *upstreamproxy.Policy
+	// tlsVerify is the upstream-TLS policy the interception leg follows: whether the origin's
+	// certificate is verified, against which roots, and under which protocol floor. Nil — the
+	// default — attaches the default policy on first use, which verifies, so a proxy built without
+	// WithUpstreamTLS still verifies rather than silently accepting anything. See tls_policy.go.
+	tlsVerify *TLSPolicy
 	// platformAuth is the per-host credential lookup consulted before a request is forwarded, so a
 	// browser's traffic carries the credentials the operator configured under Settings → Network →
 	// Platform authentication. Nil — the default — forwards every request unauthenticated, which is
@@ -873,10 +878,12 @@ type Server struct {
 
 // NewServer creates a new proxy server.
 func NewServer(config *ProxyConfig) *Server {
-	// Touch the policy at construction so the field is non-nil from the first request. Not for
-	// behaviour — a policy with no hosts declared behaves exactly like none attached — but so no
-	// relay goroutine can be the first to find it nil and have to decide what to do about that.
+	// Touch both policies at construction so the fields are non-nil from the first request. Not for
+	// behaviour — a streaming policy with no hosts declared behaves exactly like none attached, and
+	// the default TLS policy verifies, which is the behaviour we want — but so no relay goroutine can
+	// be the first to find one nil and have to decide what to do about that.
 	_ = config.Streaming()
+	_ = config.TLS()
 	return &Server{
 		config:    config,
 		listeners: map[string]*boundListener{},

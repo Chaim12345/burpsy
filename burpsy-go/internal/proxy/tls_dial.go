@@ -78,10 +78,15 @@ func (s *Server) dialUpstreamAddr(ctx context.Context, addr string) (net.Conn, e
 // dialUpstreamTLS opens a TLS connection to the origin, offering exactly the ALPN
 // list derived from the client's own offer. Returns the negotiated protocol.
 //
-// Certificate verification is off on this leg deliberately: the proxy exists to reach targets whose
-// certificate an operator cannot fix, and the client leg is presented with burpsy's own CA anyway. A
-// sender's egress leg follows SenderConfig.TLSVerify instead, which is why the choice is a field on
-// alpn.Dialer rather than a constant inside it.
+// Certificate verification follows the proxy's TLSPolicy, which defaults to ON (burpsy-react-ui-f365).
+// It used to be hardcoded off here, on the reasoning that "the proxy exists to reach targets whose
+// certificate an operator cannot fix" — which is a real need, but it is answered by a custom CA or by
+// the explicit do-not-verify switch, both of which the operator chooses and can see. A proxy that
+// cannot verify anything cannot be told to, so an operator comparing two builds of the same app could
+// not tell from burpsy whether the certificate had changed.
+//
+// The client leg is presented with burpsy's own CA regardless, which is a separate fact and does not
+// bear on this one: the certificate verified HERE is the origin's, on a session burpsy opened itself.
 // clientCerts is the per-host client-certificate source, or nil. This is the leg that makes TLS
 // client authentication work through the proxy at all: the browser's own certificate cannot reach the
 // origin, because the browser is talking to burpsy's leaf and burpsy is opening a separate connection
@@ -93,7 +98,14 @@ func (s *Server) dialUpstreamAddr(ctx context.Context, addr string) (net.Conn, e
 // legs of this dial — which proxy carries it, and which certificate it presents — are per-server
 // state, and threading either as a parameter would let one call site forget it.
 func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*tls.Conn, string, error) {
-	dialer := alpn.Dialer{InsecureSkipVerify: true, ClientCerts: s.clientCertSource()}
+	policy := s.config.TLS()
+	dialer := alpn.Dialer{
+		InsecureSkipVerify: !policy.Verify(),
+		ClientCerts:        s.clientCertSource(),
+	}
+	// The pool and the protocol floor come from the same policy as the verify switch, so an operator
+	// who turned verification off and then on again has not silently lost the custom CA they added.
+	policy.applyTo(&dialer)
 	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}

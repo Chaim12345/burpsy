@@ -228,6 +228,7 @@ func TestLogOutOfScopeTLSExchangeWhenSwitchOff(t *testing.T) {
 	srv := NewServer(NewProxyConfig(store).
 		WithScope(scopeExcludingOrigin()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithOptions(options).
 		WithLogger(zap.NewNop()))
 
@@ -312,6 +313,7 @@ func TestDontLogOutOfScopeCountsTheTLSDrop(t *testing.T) {
 	srv := NewServer(NewProxyConfig(store).
 		WithScope(scopeExcludingOrigin()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithOptions(options).
 		WithLogger(zap.NewNop()))
 

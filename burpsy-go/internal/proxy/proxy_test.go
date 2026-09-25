@@ -143,6 +143,7 @@ func TestTLSInterceptionMITM(t *testing.T) {
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()).
 		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())).
 		WithFindings(findings))
@@ -263,6 +264,7 @@ func TestConnectPassthroughBlind(t *testing.T) {
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

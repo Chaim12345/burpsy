@@ -208,6 +208,7 @@ func TestDropOutOfScopeStopsTheTLSPathFromReachingAnExcludedOrigin(t *testing.T)
 	srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
 		WithScope(dropScopeExcludingOrigin()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

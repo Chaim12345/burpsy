@@ -77,6 +77,7 @@ func TestAnH2ClientDowngradedByInterceptionIsRecordedAsSuch(t *testing.T) {
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithIntercept(hold).
 		WithLogger(zap.NewNop()).
 		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())))

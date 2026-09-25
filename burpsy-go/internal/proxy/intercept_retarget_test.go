@@ -49,6 +49,10 @@ func retargetProxy(t *testing.T, scope *core.Scope, choose func(held *intercept.
 	srv := NewServer(NewProxyConfig(store).
 		WithScope(scope).
 		WithIntercept(engine).
+		// The scheme-change case retargets onto an httptest TLS server, whose certificate is
+		// self-signed. Declared here rather than left to the unconditional skip the proxy used to
+		// carry, so the test says what it needs (burpsy-react-ui-f365).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

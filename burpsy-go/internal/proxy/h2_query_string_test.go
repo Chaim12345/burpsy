@@ -147,6 +147,7 @@ func startH2ProxyAndOrigin(t *testing.T) (*core.TrafficStore, string, string, in
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()).
 		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())))
 

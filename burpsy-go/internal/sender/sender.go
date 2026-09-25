@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +37,12 @@ type Sender struct {
 	client *http.Client
 	config *SenderConfig
 	net    NetworkSettings
+	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
+	// the path. Building a CertPool parses every system root, and this is the handshake path for every
+	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
+	// written on the send path and read by nothing else — the dial builds its own copy of the value.
+	tlsMu  sync.Mutex
+	tlsCAs map[string]*x509.CertPool
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
 	// that preceded it share what either of them discovered — see protocol.go. Its own state is
@@ -468,8 +476,16 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// presented here too, which covers every raw-bytes TLS path in the package at once:
 	// SendRawOutcome, ProtocolFor's discovery handshake, dialOne's pipelining and desync probes, and
 	// dialForProgram's frame programs all funnel through this function.
+	// Verification follows the network settings, not the construction-time field, so one edit reaches
+	// every leg. SenderConfig.TLSVerify is still read, and is the fallback for a sender built without
+	// network settings applied — which is every test and every embedder that never called ApplyNetwork.
+	// burpsy-react-ui-f365: the setting existed on the sender and was invisible, which is half of why
+	// the proxy's permanent off looked like a design decision rather than a gap.
+	verify, roots, minVersion := s.tlsPolicy(settings)
 	dialer := alpn.Dialer{
-		InsecureSkipVerify: !s.config.TLSVerify,
+		InsecureSkipVerify: !verify,
+		RootCAs:            roots,
+		MinVersion:         minVersion,
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
 		ClientCerts:        s.config.ClientCerts,
@@ -1149,4 +1165,56 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	// every handshake, including one happening on another goroutine right now.
 	s.client = buildClient(s.config, s.net)
 	return s
+}
+
+// tlsPolicy resolves the verification decision, root pool and protocol floor for one dial.
+//
+// The root pool is built once per distinct CA path and cached, because it is expensive to construct
+// and it is on the handshake path for every TLS send. A path that fails to load resolves to no pool and
+// the system one — a send that cannot read the operator's CA still reaches the target, and says so by
+// failing verification if the target's issuer is not in the system pool, which is a clearer outcome
+// than refusing to dial at all.
+//
+// The cache is a mutex-guarded map rather than a sync.Once because the path can change while the sender
+// runs, which is the whole point of the setting being live.
+func (s *Sender) tlsPolicy(settings NetworkSettings) (verify bool, roots *x509.CertPool, minVersion uint16) {
+	verify = s.config.TLSVerify
+	minVersion = settings.TLS.MinVersion
+	path := strings.TrimSpace(settings.TLS.RootCAPath)
+	if path == "" {
+		return verify, nil, minVersion
+	}
+
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	if s.tlsCAs == nil {
+		s.tlsCAs = make(map[string]*x509.CertPool)
+	}
+	if pool, seen := s.tlsCAs[path]; seen {
+		return verify, pool, minVersion
+	}
+	pool := loadCABundle(path)
+	s.tlsCAs[path] = pool
+	return verify, pool, minVersion
+}
+
+// loadCABundle reads a PEM file into a pool that also holds the system roots, reporting nil when the
+// file cannot be read or contains no certificates.
+//
+// Nil rather than an error because a dial has no way to report "your CA file is missing" that is more
+// useful than the handshake failure it causes, and because refusing the dial would mean one missing
+// file silently disables every TLS send rather than only the targets it was meant to cover.
+func loadCABundle(path string) *x509.CertPool {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil
+	}
+	return pool
 }

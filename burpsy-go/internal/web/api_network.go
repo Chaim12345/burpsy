@@ -134,6 +134,23 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			return patchInt(raw, &n.Continue.ExpectTimeoutMS)
 		},
 	},
+	"tls": {
+		"verify": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.TLS.Verify)
+		},
+		"root_ca_path": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchString(raw, &n.TLS.RootCAPath)
+		},
+		"min_version": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var v uint16
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return fmt.Errorf("wants the TLS version number: 0x0301 for TLS 1.0, 0x0302 for 1.1, " +
+					"0x0303 for 1.2, 0x0304 for 1.3")
+			}
+			n.TLS.MinVersion = v
+			return nil
+		},
+	},
 	"streaming": {
 		"hosts": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			var out []string
@@ -273,6 +290,26 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 	// window, which Normalise has already rejected above, so this cannot fail on a document the sender
 	// accepted. The check is here so that if it ever can, the operator is told instead of the proxy
 	// silently keeping the previous list.
+	// The upstream-TLS policy, pushed to the proxy leg for the same reason the streaming settings are:
+	// one console edit, both legs. A refusal here is reported rather than swallowed — unlike the
+	// sender's CA load, a bundle that will not parse is the operator's mistake and saying so at the
+	// moment they save it is the difference between a fixable error and a handshake failure twenty
+	// minutes later (burpsy-react-ui-f365).
+	if s.proxyServer != nil {
+		tlsPolicy := s.proxyServer.TLS()
+		tlsPolicy.WithVerify(next.TLS.Verify)
+		if minErr := tlsPolicy.WithMinVersion(next.TLS.MinVersion); minErr != nil {
+			http.Error(w, minErr.Error(), http.StatusBadRequest)
+			return
+		}
+		if caPath := next.TLS.RootCAPath; caPath != "" {
+			if caErr := tlsPolicy.WithRootCAFile(caPath); caErr != nil {
+				http.Error(w, "tls.root_ca_path: "+caErr.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
 	if s.proxyServer != nil {
 		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))

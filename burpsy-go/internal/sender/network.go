@@ -2,6 +2,7 @@ package sender
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
@@ -34,6 +35,37 @@ type NetworkSettings struct {
 	Redirects  RedirectSettings   `json:"redirects"`
 	Continue   ContinueSettings   `json:"continue"`
 	Streaming  StreamingSettings  `json:"streaming"`
+	TLS        TLSSettings        `json:"tls"`
+}
+
+// TLSSettings is how the operator governs the certificate the TARGET presents.
+//
+// # Why it lives here rather than only on SenderConfig
+//
+// SenderConfig.TLSVerify has governed the sender's own egress leg since the codecs landed, but it is a
+// construction-time field with no settings surface behind it: an operator could not see it, could not
+// change it while running, and the proxy leg had no equivalent at all — every intercepted connection
+// was opened with verification off and nothing anywhere could say so (burpsy-react-ui-f365).
+//
+// Putting it in NetworkSettings gives it the same live, persisted, API-edited life as every other
+// network decision, and lets the same edit reach the sender and the proxy. The field is the SAME
+// setting, not a second one: an operator who turns verification off means it for every leg, and two
+// knobs that could disagree would be the overclaim this section exists to remove.
+//
+// Verify defaults to true, which is Burp's default and the only safe reading of a field whose absence
+// would otherwise mean "accept anything".
+type TLSSettings struct {
+	// Verify is whether the target's certificate is verified. True by default; false is the
+	// deliberate opt-out for a self-signed target, and it is the setting an assessor reaches for
+	// rather than one burpsy should choose on their behalf.
+	Verify bool `json:"verify"`
+	// RootCAPath is a PEM bundle added to the system pool for verification. Empty means the system
+	// pool alone. It is how an operator reaches a target whose issuer is private without giving up
+	// verification entirely.
+	RootCAPath string `json:"root_ca_path"`
+	// MinVersion is the lowest TLS version accepted, as Burp's protocol selection expresses it. Zero
+	// means Go's default, which is the floor Go considers safe.
+	MinVersion uint16 `json:"min_version"`
 }
 
 // ResolutionPolicy names where a hostname's address comes from.
@@ -206,6 +238,10 @@ func DefaultNetworkSettings() NetworkSettings {
 			Hosts:     nil,
 			TimeoutMS: 10_000,
 		},
+		// Verify ON. This is the default that matters most in the whole settings document: the
+		// alternative is a tool that accepts any certificate from any target and says nothing, which is
+		// the state burpsy-react-ui-f365 found the proxy permanently in.
+		TLS: TLSSettings{Verify: true},
 	}
 }
 
@@ -227,7 +263,26 @@ func (n NetworkSettings) Validate() error {
 	if err := n.Continue.validate(); err != nil {
 		return err
 	}
-	return n.Streaming.validate()
+	if err := n.Streaming.validate(); err != nil {
+		return err
+	}
+	return n.TLS.validate()
+}
+
+// validate refuses a TLS policy that cannot be applied, naming the field and the value.
+//
+// The min-version floor is the only check: there is no such thing as a TLS version below 1.0, and a
+// number claiming to be one is a corrupted document rather than a policy. The custom CA's CONTENTS are
+// not checked here — the path is read by whichever leg dials, and a bundle that turns out malformed is
+// reported at that handshake naming the path that produced it, which is the thing the operator has to
+// fix. Refusing the whole document because a file is temporarily unreadable would leave no way to save
+// an unrelated setting.
+func (t TLSSettings) validate() error {
+	if t.MinVersion != 0 && t.MinVersion < tls.VersionTLS10 {
+		return fmt.Errorf("tls.min_version is 0x%04x, which is below TLS 1.0: there is no protocol below "+
+			"it to select", t.MinVersion)
+	}
+	return nil
 }
 
 func (r ResolutionSettings) validate() error {
@@ -376,6 +431,11 @@ func (n NetworkSettings) Normalise() NetworkSettings {
 		overrides = nil
 	}
 	out.Resolution.Overrides = overrides
+
+	// The CA path is trimmed like every other free-text field, so a path pasted with a trailing
+	// newline does not become a file that does not exist. The value is otherwise untouched: a path the
+	// operator cannot reach is reported by the leg that tries to read it, naming the path.
+	out.TLS.RootCAPath = strings.TrimSpace(out.TLS.RootCAPath)
 
 	if out.Redirects.Mode == "" {
 		out.Redirects.Mode = RedirectNever

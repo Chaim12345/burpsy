@@ -31,6 +31,9 @@ func newCollectionServer(t *testing.T) *Server {
 	t.Helper()
 	return NewServer(NewProxyConfig(core.NewTrafficStore()).
 		WithScope(testScope()).
+		// The force-TLS case dials a self-signed origin, so the test declares that rather than
+		// relying on the unconditional skip the proxy used to carry (burpsy-react-ui-f365).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()))
 }
 

@@ -446,6 +446,12 @@ func main() {
 	// to reach the proxy leg on the same pass that reaches the sender, or an event stream would be
 	// honoured in Repeater and buffered through the proxy — the split burpsy-react-ui-wet3 records.
 	streamingPolicy := proxy.NewStreamingPolicy()
+	// The upstream-TLS policy, declared beside the streaming one and BEFORE the restore that replaces
+	// it, because the builder chain further down reads this variable. Attaching it in the chain would
+	// capture the pre-restore value and leave the proxy verifying against the default while the
+	// operator believed their restored setting applied -- the panel and the leg disagreeing, which is
+	// the state burpsy-react-ui-f365 found with the setting absent entirely.
+	restoredTLSPolicy := proxy.NewTLSPolicy()
 
 	proxyConfig := proxy.NewProxyConfig(store).
 		// The SAME credential store the sender holds, restored above. One store for both legs: two
@@ -487,6 +493,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Attached HERE rather than in the builder chain above, because the restore that replaces this
+	// policy runs between the two. A builder-chain attachment captures the pre-restore value and leaves
+	// the proxy verifying against the default while the operator believes their restored setting
+	// applied -- the panel and the leg disagreeing, which is the state burpsy-react-ui-f365 found with
+	// the setting absent entirely.
+	proxyConfig.WithUpstreamTLS(restoredTLSPolicy)
+
 	proxyServer := proxy.NewServer(proxyConfig)
 	go func() {
 		logger.Info("Starting proxy", zap.String("bind", *proxyBind))
@@ -527,6 +540,25 @@ func main() {
 				applied := httpSender.Network()
 				if err := streamingPolicy.Set(applied.Streaming.Hosts, time.Duration(applied.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 					logger.Warn("Proxy streaming policy refused the restored window", zap.Error(err))
+				}
+				// The TLS policy is restored on the same pass and for the same reason: a verification
+				// setting that only reached the sender would leave every intercepted connection
+				// verifying while the operator believed they had turned it off for a self-signed lab
+				// target — the panel's promise and the proxy's behaviour disagreeing, which is the state
+				// burpsy-react-ui-f365 found with the setting absent entirely.
+				// Mutating the policy the proxy already holds rather than replacing the variable. The
+				// builder chain attached this instance before the restore ran, so assigning a new one
+				// here would leave the proxy on the pre-restore default while the console reported the
+				// restored value -- the panel and the leg disagreeing, which is the state
+				// burpsy-react-ui-f365 found with the setting absent entirely.
+				restoredTLSPolicy.WithVerify(applied.TLS.Verify)
+				if minErr := restoredTLSPolicy.WithMinVersion(applied.TLS.MinVersion); minErr != nil {
+					logger.Warn("Proxy TLS policy refused the restored minimum version", zap.Error(minErr))
+				}
+				if caPath := applied.TLS.RootCAPath; caPath != "" {
+					if caErr := restoredTLSPolicy.WithRootCAFile(caPath); caErr != nil {
+						logger.Warn("Proxy TLS policy could not load the restored custom CA", zap.String("path", caPath), zap.Error(caErr))
+					}
 				}
 				logger.Info("Applied persisted network settings")
 			}

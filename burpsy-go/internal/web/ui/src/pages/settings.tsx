@@ -1142,6 +1142,63 @@ function NetworkSection(): JSX.Element {
        ? "No host is declared open-ended. Every response is read under the timeouts above."
        : `${streamingHosts.length} pattern${streamingHosts.length === 1 ? "" : "s"} declared open-ended.`}
      </p>
+
+   {/* Upstream TLS: every intercepted connection was opened with verification off and nothing could
+       turn it on (burpsy-react-ui-f365). On by default; the two escape hatches are named rather than
+       assumed, because "add their CA" and "turn verification off" are different decisions. */}
+   <Card>
+    <SectionHeading
+     title="Upstream TLS"
+     detail="How the certificate the target presents is treated, on Repeater sends, scanner probes and browser traffic through the proxy."
+    />
+    {draft !== null ? (
+     <>
+      <Toolbar>
+       <Field label="Verify target certificates" htmlFor="network-tls-verify">
+        <Switch
+         id="network-tls-verify"
+         label="Verify the certificate the target presents"
+         checked={draft.tls.verify}
+         onCheckedChange={(checked) => patchSection("tls", { verify: checked })}
+        />
+       </Field>
+       <Field label="Custom CA bundle (PEM path)">
+        {(id) => (
+         <Input
+          id={id}
+          value={draft.tls.root_ca_path}
+          onChange={(event) => patchSection("tls", { root_ca_path: event.target.value })}
+          placeholder="/etc/ssl/corporate-ca.pem"
+          style={{ maxWidth: "var(--w-lg)" }}
+         />
+        )}
+       </Field>
+       <Field label="Minimum TLS version">
+        {(id) => (
+         <Select
+          id={id}
+          value={String(draft.tls.min_version)}
+          onChange={(event) => patchSection("tls", { min_version: Number(event.target.value) })}
+        >
+          <option value="0">Go default</option>
+          <option value="769">TLS 1.0</option>
+          <option value="770">TLS 1.1</option>
+          <option value="771">TLS 1.2</option>
+          <option value="772">TLS 1.3</option>
+        </Select>
+        )}
+       </Field>
+      </Toolbar>
+      <p className="field-hint">
+       {draft.tls.verify
+        ? draft.tls.root_ca_path
+          ? `Verified against the system roots plus ${draft.tls.root_ca_path}. A target whose issuer is in neither is refused.`
+          : "Verified against the system roots. A self-signed target is refused — add its CA above, or turn verification off for it deliberately."
+        : "Verification is OFF: any certificate is accepted from any target. Use it for a self-signed lab target, not for a comparison between two builds — the certificate changing is the thing you are looking for."}
+      </p>
+     </>
+    ) : null}
+   </Card>
     </>
    ) : null}
   </Card>

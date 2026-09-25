@@ -53,6 +53,17 @@ export interface NetworkSettings {
     hosts: string[] | null;
     timeout_ms: number;
   };
+  /**
+   * How the certificate the TARGET presents is treated. `verify` defaults to true and was false on
+   * every intercepted connection before burpsy-react-ui-f365, with nothing anywhere able to change it.
+   */
+  tls: {
+    verify: boolean;
+    /** PEM bundle added to the system pool, so a private issuer is reachable without turning verification off. */
+    root_ca_path: string;
+    /** The lowest TLS version accepted, as a version number. 0 means Go's default. */
+    min_version: number;
+  };
 }
 
 /** What the server will accept, travelling with the state so the panel does not hardcode the arms. */

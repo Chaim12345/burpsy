@@ -36,6 +36,7 @@ package alpn
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"time"
@@ -134,10 +135,22 @@ type ClientCertSource interface {
 // caller (a proxy that must reach a target whose certificate it cannot validate, a sender whose
 // operator asked for verification) and not of an individual dial.
 type Dialer struct {
-	// InsecureSkipVerify skips certificate verification. True for the proxy's upstream leg, which
-	// exists to reach targets with certificates an operator cannot fix; a sender follows its own
-	// SenderConfig.TLSVerify.
+	// InsecureSkipVerify skips certificate verification. It is a CALLER's policy, not a package
+	// decision: the sender follows its own SenderConfig.TLSVerify and the proxy follows its
+	// TLSPolicy, both of which default to verifying (burpsy-react-ui-f365). This field is the last
+	// place the two legs could have drifted, because it is where the value becomes a tls.Config.
 	InsecureSkipVerify bool
+	// RootCAs is the pool the origin's certificate is verified against. Nil means the system pool,
+	// which is what both legs used before a custom CA was configurable.
+	//
+	// It belongs here rather than being loaded per Dial because the pool is expensive to build and
+	// because a per-dial load would mean reading a file on the handshake path — which is the hot path
+	// for every intercepted connection.
+	RootCAs *x509.CertPool
+	// MinVersion is the lowest TLS version accepted. Zero means Go's default, which is the floor Go
+	// itself considers safe; a caller lowering it is working around a legacy target and is saying so
+	// explicitly.
+	MinVersion uint16
 	// Timeout bounds the whole dial including the handshake. Zero means no timeout of its own — the
 	// context is then the only bound, which is what the proxy relies on.
 	Timeout time.Duration
@@ -182,6 +195,8 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 	cfg := &tls.Config{
 		ServerName:         serverName,
 		InsecureSkipVerify: d.InsecureSkipVerify,
+		RootCAs:            d.RootCAs,
+		MinVersion:         d.MinVersion,
 	}
 	if len(offer) > 0 {
 		cfg.NextProtos = offer
