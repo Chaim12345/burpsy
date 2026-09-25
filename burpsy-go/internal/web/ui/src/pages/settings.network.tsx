@@ -75,7 +75,7 @@ export function PlatformAuthSection(): JSX.Element {
     <Card>
       <SectionHeading
         title="Platform authentication"
-        detail="Credentials burpsy presents to a host that demands them. Rules are matched top to bottom and the first host match wins."
+        detail="Credentials burpsy presents to a host that demands them. Rules are matched top to bottom and the first host match wins. Presented on Repeater sends, scanner probes and browser traffic through the proxy — a browser's own Authorization header is never replaced. Digest needs the host's 401 challenge first, so the first request to a protected host is refused and the next one authenticates."
         actions={
           <>
             {data ? (

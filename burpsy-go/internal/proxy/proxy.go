@@ -608,6 +608,12 @@ type ProxyConfig struct {
 	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
 	// console reaches this leg without a restart — see internal/upstream.
 	upstream *upstreamproxy.Policy
+	// platformAuth is the per-host credential lookup consulted before a request is forwarded, so a
+	// browser's traffic carries the credentials the operator configured under Settings → Network →
+	// Platform authentication. Nil — the default — forwards every request unauthenticated, which is
+	// what this proxy did for its whole life before the wiring. See WithPlatformAuth and
+	// platform_auth.go for why the edit is a header insert and not a request rebuild.
+	platformAuth PlatformAuthSource
 	// streaming decides which hosts' responses are forwarded as they arrive rather than buffered to
 	// completion, and how long an open-ended read runs before what has arrived is recorded and sent.
 	//
@@ -1372,7 +1378,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		}
 
 		// Forward over the persistent upstream connection.
-		if _, err := upstream.Write(requestData); err != nil {
+		//
+		// The credential is attached here rather than at the read, so every downstream use of
+		// requestData — the forward, the record, the operator's own view in history — is the same
+		// bytes that went out. Rewriting it after the forward instead would make the row and the
+		// wire disagree, which is the one thing this proxy's record is not allowed to do.
+		if _, err := upstream.Write(s.withPlatformAuth(requestData, reqHost, method, path)); err != nil {
 			return
 		}
 
@@ -1471,6 +1482,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		if err != nil {
 			return
 		}
+
+		// A 401's challenge is the nonce a Digest credential has to be computed against, so it is
+		// recorded here and the NEXT request on this connection can answer it. This is the whole of
+		// Digest's reachability on the proxy leg: there is no retry, because re-sending a request the
+		// browser did not ask to repeat against a host that is refusing it is how an account gets
+		// locked out. One extra round trip on a connection that is already keep-alive is a fair price;
+		// a credential storm is not. See platform_auth.go.
+		learnFromChallenge(s.config.platformAuth, reqHost, platformAuthChallenges(head))
 
 		// An open-ended response is forwarded as it arrives rather than buffered to completion.
 		// Without this the client is sent nothing until the stream ends, and on an SSE feed or a
@@ -1932,7 +1951,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		// Forward without storing. path travels because the response-direction Match & Replace
 		// rules run on this path too and they need the target for their scope verdict — see
 		// forwardOnly.
-		s.forwardOnly(clientConn, reader, requestData, host, port, path, scheme)
+		s.forwardOnly(clientConn, reader, requestData, method, host, port, path, scheme)
 		return
 	}
 
@@ -2809,14 +2828,14 @@ func wsRetargetRefusalResponse() []byte {
 // (burpsy-react-ui-pfeg). This is the forward-but-do-not-record path, so an out-of-scope request
 // on such a listener used to be the one request that quietly went out in the clear — the
 // no-op the setting must not have.
-func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, host string, port uint16, path string, tls bool) {
+func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, requestData []byte, method, host string, port uint16, path string, tls bool) {
 	upstreamConn, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
 		return
 	}
 	defer upstreamConn.Close()
 
-	upstreamConn.Write(requestData)
+	upstreamConn.Write(s.withPlatformAuth(requestData, host, method, path))
 
 	// An upgrade request needs both directions for the life of the connection:
 	// after a 101 the client keeps talking, and a one-way copy would leave it
@@ -2917,7 +2936,7 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
-	if _, err := upstreamConn.Write(requestData); err != nil {
+	if _, err := upstreamConn.Write(s.withPlatformAuth(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
 		return nil, serverIP, time.Time{}, err
 	}
 
@@ -2925,6 +2944,14 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	// (Burp's "Start response timer") separately from the total. The caller takes the completion
 	// instant itself, right after this returns, which is when the last byte was read.
 	resp, firstByte, err := readHTTPResponse(upstreamConn)
+	if err == nil {
+		// Same reason as the keep-alive leg: a challenge learned here is what lets the NEXT request
+		// through this proxy authenticate. This path dials a fresh connection each time, so the
+		// learned nonce outlives the connection in the credential store rather than in a socket.
+		if headEnd := requestHeadEnd(resp); headEnd > 0 {
+			learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(resp[:headEnd]))
+		}
+	}
 	return resp, serverIP, firstByte, err
 }
 

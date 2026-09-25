@@ -448,6 +448,12 @@ func main() {
 	streamingPolicy := proxy.NewStreamingPolicy()
 
 	proxyConfig := proxy.NewProxyConfig(store).
+		// The SAME credential store the sender holds, restored above. One store for both legs: two
+		// would let the Settings panel describe rules that Repeater honours and the proxy does not,
+		// and the symptom would be an authenticated tool beside an unauthenticated browser
+		// (burpsy-react-ui-trcy). The NTLMv2 codec landed in 3fb2ce1 and was unreachable for the
+		// traffic that needed it until this line existed.
+		WithPlatformAuth(platformAuth).
 		WithStreaming(streamingPolicy).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).

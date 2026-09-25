@@ -35,6 +35,13 @@ export interface PlatformAuthResponse {
   unsupported: string[];
   /** Whether the sender these rules reach was actually built with them. False means stored but not presented. */
   presented_on_egress: boolean;
+  /**
+   * Whether the PROXY leg was built with them, so browser traffic through the listener presents
+   * these rules. Separate from `presented_on_egress` because a server can be assembled with one and
+   * not the other, and a panel claiming "configured" while the proxy is the surface the operator is
+   * watching would be the defect burpsy-react-ui-trcy records.
+   */
+  presented_on_proxy: boolean;
 }
 
 /** One client-certificate binding: metadata read off the leaf, no key material. */

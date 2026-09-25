@@ -231,7 +231,11 @@ func (s *Server) streamPlainResponse(
 		defer func() { _ = deadlineConn.SetReadDeadline(time.Time{}) }()
 	}
 
-	if _, err := upstreamConn.Write(requestData); err != nil {
+	// The credential is attached here for the same reason it is at the other two forward sites: this
+	// function owns the upstream connection and the write, so this is the last point at which the
+	// bytes going out can still be the bytes that were recorded. A platform credential the operator
+	// configured is part of those bytes (burpsy-react-ui-trcy).
+	if _, err := upstreamConn.Write(s.withPlatformAuth(requestData, host, method, path)); err != nil {
 		return
 	}
 
@@ -240,6 +244,14 @@ func (s *Server) streamPlainResponse(
 	if err != nil {
 		return
 	}
+
+	// A 401's challenge is the nonce a Digest credential is computed against, so it is recorded as
+	// soon as the head is in hand and the NEXT request can answer it. This is the whole of Digest's
+	// reachability on the proxy leg: there is no retry, because re-sending a request the browser did
+	// not ask to repeat against a host that is refusing it is how an account gets locked out. One
+	// refused request followed by an authenticated one is a fair price; a credential storm is not.
+	learnFromChallenge(s.config.platformAuth, host, platformAuthChallenges(head))
+
 	if !s.streamsResponse(host, head) {
 		// The origin framed the response after all, or answered with a status that carries no body.
 		// Reading it the ordinary way from the same buffered reader is correct and costs nothing: the
