@@ -2664,11 +2664,10 @@ tbody td {
 }
 
 .tabs-trigger[data-drop-target] {
-  /* The row the dragged tab would land on. An outline rather than a background, so it does not
-     hide the tab it is marking, and `outline-offset` puts the mark between the two rows so the
-     landing place is legible without either row moving. */
-  outline: 2px solid var(--accent-bright);
-  outline-offset: -2px;
+  /* The row the dragged tab would land on. A box-shadow rather than a border or an outline: an
+     outline does not take the token system, a border would change the row's height, and the mark has
+     to sit INSIDE the row so the tab it is marking stays readable. */
+  box-shadow: inset 0 0 0 var(--border-strong) var(--accent-bright);
 }
 
 .tabs-trigger[data-dragging] {
