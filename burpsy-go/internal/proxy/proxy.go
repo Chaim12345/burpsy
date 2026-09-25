@@ -1164,6 +1164,17 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		return
 	}
 
+	// The downgrade note is a property of the tunnel, not of any one exchange in it, so it is
+	// computed once here and carried into every row the tunnel records. A tunnel that carried h2
+	// gets ""; a tunnel interception moved off h2 gets the explanation on all of them, because an
+	// operator scrolling history must not have to infer the downgrade from one row and assume the
+	// rest share it.
+	downgrade := DowngradeNote(clientOffer, negotiated)
+	if downgrade != "" {
+		s.config.logger.Info("interception carried an HTTP/2 client over HTTP/1.1",
+			zap.String("host", host), zap.Strings("offered", clientOffer))
+	}
+
 	// Sign a leaf certificate for the host the client asked for — not the destination, when
 	// a redirect has moved them apart. See the signature comment.
 	leaf, err := s.config.tls.engine.GetCertificate(certName)
@@ -1330,7 +1341,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				return
 			}
 			completed := time.Now()
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited, downgrade) {
 				return
 			}
 			continue
@@ -1362,7 +1373,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				}
 				responseData := append(head, body...)
 				completed := time.Now()
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade) {
 					return
 				}
 				continue
@@ -1383,6 +1394,12 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 					Response: head,
 					Started:  startTime,
 					Duration: time.Since(startTime),
+					// HTTP/1.1, and provably so: the ALPN policy settled on http/1.1 for this tunnel
+					// (an h2 tunnel returns to relayH2 above and never opens this loop), which is
+					// why the 101 is read off a bufio reader rather than an h2 stream. Written as the
+					// constant rather than `protocol` because the value is not a choice here and a
+					// variable would invite a future h2 hold path to reach this line and stamp
+					// HTTP/1.1 on a multiplexed exchange.
 					Protocol: core.ProtocolHTTP1,
 
 					// The handshake's request stages. No response stages: a 101 has no body and the
@@ -1437,7 +1454,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		responseData := append(head, body...)
 		completed := time.Now()
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade) {
 			return
 		}
 	}
@@ -1462,7 +1479,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 // this function cannot see: the request hold resolved before the request was forwarded. It is
 // threaded in so the recorded row's "Edited" column reports an operator edit in either direction,
 // which is what Burp's flag means ("the request or response were modified by the user").
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool) bool {
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string) bool {
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -1565,7 +1582,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 			// operator's, which is the defect this replaces.
 			UserEdited: requestEdited || responseEdited,
 
-			Notes: notes,
+			Notes: withDowngradeNote(notes, downgrade),
 		})
 	} else {
 		s.config.options.NoteOutOfScopeDrop()
@@ -1892,7 +1909,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// hold completeResponse may do before it captures the row.
 	completed := time.Now()
 
-	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, firstByte, completed, heldNote, heldHighlight, serverIP, requestEdited)
+	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, firstByte, completed, heldNote, heldHighlight, serverIP, requestEdited, "")
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1921,7 +1938,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // closed by the forwarder, so this is the last point the address is still knowable.
 // requestEdited is whether the operator's own hold edited the request half of this exchange; see
 // handleTLSResponse, which threads the same value for the same reason.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, firstByte, completed time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, firstByte, completed time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool, downgrade string) {
 	// The response's stage boundaries (burpsy-react-ui-c05): stage 0 is the origin's bytes as the
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
@@ -2007,7 +2024,7 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		// Either direction being the operator's own work makes this row "Edited" (burpsy-react-ui-sd0d).
 		UserEdited: requestEdited || responseEdited,
 
-		Notes:     notes,
+		Notes:     withDowngradeNote(notes, downgrade),
 		Highlight: highlight,
 	})
 }
@@ -2139,6 +2156,25 @@ func (s *Server) matchReplaceApplies(dir matchreplace.Direction, host string, po
 // request asked for — and it is the same ordering stripWsHandshake already uses.
 func (s *Server) applyRequestRules(requestData []byte) []byte {
 	return s.config.options.ApplyRequest(requestData)
+}
+
+// withDowngradeNote merges the tunnel's protocol-downgrade explanation into whatever note the
+// exchange already carries, and returns nil when neither exists.
+//
+// A tunnel that downgraded carries the same fact on every row, but a row can also have a note of its
+// own — a held request the operator edited, a WebSocket handshake the proxy rewrote. Overwriting
+// would lose that; returning the downgrade alone would lose the other. So they are joined, and the
+// first clause is the tunnel's because it explains the protocol every row on this tunnel speaks.
+func withDowngradeNote(existing *string, downgrade string) *string {
+	if downgrade == "" {
+		return existing
+	}
+	if existing == nil || *existing == "" {
+		note := downgrade
+		return &note
+	}
+	note := downgrade + "; " + *existing
+	return &note
 }
 
 // record hands one completed exchange to scanner.Capture.Record: the shared

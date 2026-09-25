@@ -1329,7 +1329,19 @@ export function InterceptPage(): JSX.Element {
         onCheckedChange={toggle}
         label="Intercept is on"
        />
-       <span className="field-hint">Intercept is {data?.enabled ? "on" : "off"}</span>
+       {/* The protocol consequence belongs beside the switch, not only on the affected rows in
+        history. This switch is where the operator decides to intercept, and turning it on moves
+        every HTTP/2 client to HTTP/1.1 upstream because the hold queue holds whole HTTP/1-shaped
+        messages. An operator who reads that here is choosing; an operator who only finds it on a
+        history row has already been moved. burpsy-react-ui-y0l2. */}
+       {data?.enabled ? (
+        <span className="field-hint">
+         Intercept is on — intercepted traffic is carried as HTTP/1.1, including clients that offered HTTP/2. Held rows
+         from a downgraded client say so.
+        </span>
+       ) : (
+        <span className="field-hint">Intercept is off</span>
+       )}
       </>
      }
     />

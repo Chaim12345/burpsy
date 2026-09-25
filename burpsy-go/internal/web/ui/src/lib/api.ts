@@ -73,6 +73,21 @@ export function formatDuration(ms: number | undefined | null): string {
  return `${minutes}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
+/**
+ * Whether an exchange's note is the proxy's HTTP/2-downgrade explanation.
+ *
+ * The note is a free-text field the proxy composes (`DowngradeNote` in
+ * `internal/proxy/alpn.go`), so this matches its fixed opening clause rather than the whole string:
+ * a row whose note also carries a second clause — a held request the operator edited, say — is
+ * still a downgraded row, and an exact match would miss it. A note that merely mentions HTTP/2 is
+ * not one, which is why this tests the clause the proxy writes rather than searching for a keyword.
+ *
+ * burpsy-react-ui-y0l2.
+ */
+export function isProtocolDowngrade(notes: string | null | undefined): boolean {
+ return typeof notes === "string" && notes.startsWith("client offered HTTP/2;");
+}
+
 export function relativeTime(atMs: number, now = Date.now()): string {
  if (!Number.isFinite(atMs) || atMs <= 0) return "—";
  const seconds = Math.max(0, Math.round((now - atMs) / 1000));

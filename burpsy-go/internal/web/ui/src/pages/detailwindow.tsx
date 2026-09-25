@@ -26,7 +26,7 @@ import { ArrowLeft, Columns3, Combine, Crosshair, Repeat2, X } from "lucide-reac
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { exchangeUrl, useExchangeActions } from "../lib/actions";
-import { formatBytes, formatDuration } from "../lib/api";
+import { formatBytes, formatDuration, isProtocolDowngrade } from "../lib/api";
 import { useHistory, useMessage } from "../lib/data";
 import { useApp } from "../lib/store";
 import type { Exchange } from "../lib/types";
@@ -189,6 +189,15 @@ export function DetailWindowPage(): JSX.Element {
       </Badge>
       <Badge>{formatDuration(exchange.duration_ms)}</Badge>
       <Badge>{exchange.protocol}</Badge>
+     {/* The same downgrade signal the in-page detail head carries (burpsy-react-ui-y0l2). The
+      detached window is where an operator ends up when comparing two exchanges, and a protocol
+      badge that reads HTTP/1.1 on both sides of a comparison cannot distinguish a target that only
+      speaks HTTP/1.1 from one interception moved off h2. */}
+     {isProtocolDowngrade(exchange.notes) ? (
+      <Badge tone="warn" title={exchange.notes ?? undefined}>
+       HTTP/2 downgraded
+      </Badge>
+     ) : null}
       <Badge>{formatBytes(exchange.response_len ?? 0)}</Badge>
       <Button variant="outline" size="small" onClick={() => void actions.sendToRepeater(exchange)}>
        <Repeat2 size={13} />

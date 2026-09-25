@@ -213,7 +213,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), "", "", serverIPOf(upstream), requestEdited)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), "", "", serverIPOf(upstream), requestEdited, "")
 		return
 	}
 

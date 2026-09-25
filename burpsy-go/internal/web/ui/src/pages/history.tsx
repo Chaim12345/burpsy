@@ -3,7 +3,7 @@ import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, 
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
-import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, mimeLabel, relativeTime, statusTone } from "../lib/api";
+import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
@@ -1078,6 +1078,16 @@ export function HistoryPage(): JSX.Element {
      <Badge tone={statusTone(selected.status)}>{selected.status ?? "pending"}</Badge>
      <Badge>{formatDuration(selected.duration_ms)}</Badge>
      <Badge>{selected.protocol}</Badge>
+     {/* The protocol badge answers "what carried this". On a tunnel interception moved off HTTP/2 it
+      answers HTTP/1.1 truthfully and unhelpfully, because an HTTP/1.1-only target looks identical.
+      The note the proxy attaches is what says the client offered h2 and the switch is why it did not
+      get it (burpsy-react-ui-y0l2) — a warning-toned badge beside the protocol, not a replacement for
+      it, because the exchange really was carried over HTTP/1.1. */}
+     {isProtocolDowngrade(selected.notes) ? (
+      <Badge tone="warn" title={selected.notes ?? undefined}>
+       HTTP/2 downgraded
+      </Badge>
+     ) : null}
      <Button variant="outline" size="small" onClick={() => void actions.sendToRepeater(selected)}>
       <Repeat2 size={13} />
       Repeater
@@ -1606,5 +1616,5 @@ export function HistoryPage(): JSX.Element {
    </Modal>
   </div>
  );
-}import { openDetailWindow } from "./detailwindow";
+} import { openDetailWindow } from "./detailwindow";
 
