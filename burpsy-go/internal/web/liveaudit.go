@@ -73,6 +73,15 @@ type LiveAuditState struct {
 	// count with no idea how much it was behind.
 	reached  atomic.Uint64
 	recorded atomic.Uint64
+	// behindSince is when the current backlog began, as unix nanoseconds; 0 while the sweep is caught
+	// up. Behind() alone cannot tell a sweep twenty seconds behind a burst from one that has been
+	// behind since the crawl started — both show the same number — so the pane needs the age to say
+	// which, and "caught up" is the only state whose age is not a duration (burpsy-react-ui-iosv).
+	behindSince atomic.Int64
+	// batchLimit is the admission bound the last tick ran with. Recorded so the catch-up is legible: a
+	// sweep admitting 10,000 exchanges a tick is doing something the baseline 200 does not explain, and
+	// without this the pane would show a burst with nothing saying it was deliberate.
+	batchLimit atomic.Uint64
 	// seenMu guards seen: the cross-run request-content ledger (apfh). The sweep's AuditLedger
 	// lives on the run and dies with it — a restarted sweep or process re-audited every
 	// exchange it had already covered. This ledger lives on the state and on disk, keyed by
@@ -503,6 +512,29 @@ func (la *LiveAuditState) Behind() uint64 {
 	return recorded - reached
 }
 
+// BehindFor reports how long the current backlog has existed, or zero when the sweep is caught up.
+//
+// The age is anchored to the moment the backlog appeared and NOT restarted by every tick that finds it
+// still there: a sweep that has been behind for ten minutes is behind by ten minutes, and a number that
+// reset on each tick would make the worst case look like the newest one. Zero is the caught-up state —
+// a duration of zero, not an absent answer — which is why every reader treats it as a value.
+func (la *LiveAuditState) BehindFor() time.Duration {
+	since := la.behindSince.Load()
+	if since == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, since))
+}
+
+// BatchLimit reports the admission bound the last tick ran with, or zero before any tick has run.
+//
+// Zero is honest here in a way Behind's zero is not: a bound nobody has applied yet is not a bound of
+// zero, it is the absence of a measurement, and the pane renders the two differently.
+func (la *LiveAuditState) BatchLimit() uint64 { return la.batchLimit.Load() }
+
+// recordBatchLimit stores the bound a tick ran with, for the pane.
+func (la *LiveAuditState) recordBatchLimit(n int) { la.batchLimit.Store(uint64(n)) }
+
 // Collapsed reports checks the shared ledger refused as already covered. See the field doc: reported,
 // never a caveat.
 func (la *LiveAuditState) Collapsed() uint64 { return la.collapsed.Load() }
@@ -510,10 +542,21 @@ func (la *LiveAuditState) Collapsed() uint64 { return la.collapsed.Load() }
 // LedgerResets reports how many times the shared ledger was dropped at its unit cap.
 func (la *LiveAuditState) LedgerResets() uint64 { return la.ledgerResets.Load() }
 
-// recordPosition stores where the cursor reached and how much had been recorded when it got there.
+// recordPosition stores where the cursor reached and how much had been recorded when it got there, and
+// maintains the backlog's age anchor: the first tick that finds work outstanding stamps the time, every
+// later tick that still finds work outstanding leaves the stamp alone, and a tick that reaches
+// everything clears it. Anchoring here rather than in the tick keeps the age correct for every caller of
+// the position accounting, which is what makes it a property of the state and not of one code path.
 func (la *LiveAuditState) recordPosition(reached, recorded uint64) {
 	la.reached.Store(reached)
 	la.recorded.Store(recorded)
+	if reached >= recorded {
+		la.behindSince.Store(0)
+		return
+	}
+	// Only the tick that FINDS the backlog stamps it: a compare-and-swap from zero, so a later tick
+	// cannot restart the clock on a backlog that is already dated.
+	la.behindSince.CompareAndSwap(0, time.Now().UnixNano())
 }
 
 func (la *LiveAuditState) recordCollapsed(n uint64) { la.collapsed.Add(n) }
@@ -621,6 +664,13 @@ type liveAuditView struct {
 	// is caught up"), and omitting it would make caught-up indistinguishable from an older build that
 	// did not report a backlog at all.
 	Behind uint64 `json:"behind"`
+	// BehindForMs is how long that backlog has existed, in whole milliseconds, and BatchLimit is the
+	// admission bound the last tick ran with (burpsy-react-ui-iosv). Neither is omitempty: a zero age is
+	// the caught-up answer and a zero bound is "no tick has run yet", and omitting either would make
+	// those states indistinguishable from a build that does not report them at all — the same rule
+	// Behind's own field doc states.
+	BehindForMs int64  `json:"behind_for_ms"`
+	BatchLimit  uint64 `json:"batch_limit"`
 	// Collapsed is checks the shared ledger refused as already covered, and LedgerResets is how many
 	// times that ledger was dropped at its unit cap. Reported, never folded into a caveat: this work
 	// ran. See LiveAuditState's field docs.
@@ -689,12 +739,16 @@ func (s *Server) liveAuditStatus() liveAuditView {
 	}
 	_, querySrc := s.liveAudit.Query()
 	v := liveAuditView{
-		Wired:        true,
-		Enabled:      s.liveAudit.IsEnabled(),
-		Swept:        s.liveAudit.Swept(),
-		Findings:     s.liveAudit.FindingCount(),
-		Skipped:      s.liveAudit.Skipped(),
-		Behind:       s.liveAudit.Behind(),
+		Wired:    true,
+		Enabled:  s.liveAudit.IsEnabled(),
+		Swept:    s.liveAudit.Swept(),
+		Findings: s.liveAudit.FindingCount(),
+		Skipped:  s.liveAudit.Skipped(),
+		Behind:   s.liveAudit.Behind(),
+		// Milliseconds on the wire because that is the pane's unit: the age is a duration an operator
+		// reads, and a nanosecond field would be a precision nobody asked for in a JSON payload.
+		BehindForMs:  s.liveAudit.BehindFor().Milliseconds(),
+		BatchLimit:   s.liveAudit.BatchLimit(),
 		Collapsed:    s.liveAudit.Collapsed(),
 		LedgerResets: s.liveAudit.LedgerResets(),
 		Query:        querySrc,
@@ -921,13 +975,43 @@ func (s *Server) liveAuditAdmits(ex *core.Exchange) bool {
 // visible findings while the operator is still looking at the tab.
 const liveAuditSweepInterval = 3 * time.Second
 
-// liveAuditBatchSize bounds how many exchanges one tick admits.
+// liveAuditBatchSize is the sweep's BASELINE admission: how many exchanges one tick takes when there is
+// no backlog to work off.
 //
-// Named because it is half of the sweep's throughput ceiling — 200 every liveAuditSweepInterval is
-// about 66 exchanges a second, which a crawler outpaces without trying. The bound stays; what changed
-// is that LiveAuditState.Behind() now reports the backlog it creates, so the pane says "swept 400,
-// 9,000 behind" rather than "swept 400".
+// Named because it is the floor of the sweep's throughput — 200 every liveAuditSweepInterval is about
+// 66 exchanges a second, which a crawler outpaces without trying. Reporting that number beside the
+// backlog (Behind) says how far behind the sweep is; it does not reduce it, and a pane whose job is to
+// demonstrate DASH-03 was the one showing a gap that only ever widened (burpsy-react-ui-iosv). The
+// tick's admission therefore scales with the backlog it faces, up to the cap below.
 const liveAuditBatchSize = 200
+
+// liveAuditCatchUpBatchMax bounds how much one catch-up tick may admit.
+//
+// A backlog is worked off in bursts, but not in one unbounded burst: the batch becomes an audit run, and
+// a run is the unit the engine bounds (its own time budget and request cap), so admitting a hundred
+// thousand exchanges in a single tick would hand the scanner a run it can only abandon part-way — the
+// queue would look clear and the work would not have happened. Ten thousand is the ceiling that keeps a
+// catch-up honest under the engine's existing bounds: at the shipped interval it is a burst, not a
+// second sweep, and everything above it is still visible as Behind.
+const liveAuditCatchUpBatchMax = 10000
+
+// liveAuditTickBatch is the admission bound for a tick facing `behind` unreached exchanges.
+//
+// The shape is deliberately piecewise-linear rather than a formula: below the baseline the baseline
+// applies (a sweep with nothing behind it must not admit one exchange per tick because the arithmetic
+// says so), between the baseline and the cap the backlog itself is admitted (one tick clears a backlog
+// one burst can hold — this is the case the bead exists for), and past the cap the cap applies. A
+// function rather than an inline expression because the three regimes are the contract, and they are
+// pinned by TestLiveAuditTickBatchScalesWithTheBacklogAndStopsAtTheCap.
+func liveAuditTickBatch(behind uint64) int {
+	if behind < liveAuditBatchSize {
+		return liveAuditBatchSize
+	}
+	if behind > liveAuditCatchUpBatchMax {
+		return liveAuditCatchUpBatchMax
+	}
+	return int(behind)
+}
 
 // auditOutcomeSeverity grades a finished bulk audit for the event log. A run the breaker paused or the
 // budget bounded is a warning: for the live sweep the next tick starts again against a target that has
@@ -1121,7 +1205,19 @@ const liveAuditStallTicks = 10
 func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	cursor := &run.cursor
 	_, total := s.store.Count()
-	ids := make([]core.ExchangeID, 0, liveAuditBatchSize)
+	// The admission bound for THIS tick, from the backlog it faces right now (burpsy-react-ui-iosv): a
+	// sweep facing a backlog admits it in one burst up to the catch-up cap, and one with nothing behind
+	// it admits the baseline. Computed from the store's count and the cursor rather than from Behind(),
+	// which is only updated by a tick that has already run — so on the FIRST tick Behind() is still zero
+	// and a bound read from it would make every sweep start at the baseline no matter how far behind the
+	// capture already was. Recorded so the pane can say which bound produced the count it is showing.
+	behind := uint64(0)
+	if uint64(cursor.at) < uint64(total) {
+		behind = uint64(total) - uint64(cursor.at)
+	}
+	batch := liveAuditTickBatch(behind)
+	s.liveAudit.recordBatchLimit(batch)
+	ids := make([]core.ExchangeID, 0, batch)
 	// The skip's second chance (iyqg): if a response landed after the sweep gave up on its
 	// exchange, the id goes into this tick's batch ahead of the walk. Admitted by the same
 	// in-scope gate as everything else — a retry that bypassed scope would re-open an
@@ -1147,7 +1243,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// "ran out of exchanges": only the former is something the cursor can get permanently stuck on.
 	var waitingOn core.ExchangeID
 	waiting := false
-	for uint64(next) < uint64(total) && len(ids) < liveAuditBatchSize {
+	for uint64(next) < uint64(total) && len(ids) < batch {
 		ex, err := s.store.GetExchange(next)
 		if err != nil {
 			break
