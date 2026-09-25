@@ -209,6 +209,13 @@ func (a *AuthorisedSender) followChain(
 			return
 		}
 
+		// Whatever THIS response set is remembered before the next hop is built, so a login or SSO
+		// flow that sets a cookie on its 302 can carry it onward. Burp exposes this as a setting and
+		// burpsy had the absence documented in repeater_options.go; the operator who hit it saw a
+		// login page come back and had no way to tell a missing cookie from a broken app
+		// (burpsy-react-ui-mr83).
+		absorbHopCookies(a.net.CookieJar(), policy.ReplayCookies, current.host, current.port, current.tls, resp)
+
 		hop := RedirectHop{From: from, Status: resp.StatusCode, Location: location}
 
 		if location == "" {
@@ -273,6 +280,18 @@ func (a *AuthorisedSender) followChain(
 			result.Hops = append(result.Hops, hop)
 			return
 		}
+
+		// Cookies go on AFTER the render and BEFORE the scope gate, so the bytes the gate authorises
+		// are the bytes that go out — the same rule the operator's own platform credential follows on
+		// the proxy leg. A hop that already carries a Cookie header keeps it: an operator who typed
+		// one meant that one, and a jar replacing it would be the silent substitution that rule exists
+		// to refuse.
+		//
+		// The path is the hop's own request target, because a cookie jar scopes by Path: a cookie set
+		// with Path=/ does not go to /admin/secret, and asking for everything the host holds is the
+		// opposite of what the Location said.
+		rendered = applyHopCookies(rendered, a.net.CookieJar(), policy.ReplayCookies,
+			nextHost, nextPort, nextTLS, requestPathOf(candidate))
 
 		// Pre-flighting the same gate lets a refusal be reported as this hop's Reason rather than as an
 		// error that loses the chain. It is not the check that protects anything — hopSender.SendAs

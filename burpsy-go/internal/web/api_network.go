@@ -122,6 +122,12 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			return nil
 		},
 		"max_hops": func(n *sender.NetworkSettings, raw json.RawMessage) error { return patchInt(raw, &n.Redirects.MaxHops) },
+		// Burp's "Follow redirections and resubmit cookies" (settings/tools/repeater.html:143-145),
+		// which burpsy lacked entirely (burpsy-react-ui-mr83). Off by default here as it is there: a
+		// cookie the target set mid-chain is not something the operator asked to send.
+		"replay_cookies": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Redirects.ReplayCookies)
+		},
 	},
 	"continue": {
 		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {

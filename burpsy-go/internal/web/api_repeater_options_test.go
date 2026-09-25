@@ -165,6 +165,35 @@ func TestRedirectOverrideKeepsTheHopBudget(t *testing.T) {
 	}
 }
 
+// The same override must not silently revoke the operator's standing decision about carrying a
+// target-set cookie. A mode dropdown is not a statement about credentials, and a rebuild of the
+// settings struct field by field dropped ReplayCookies to false — so a send that named "always" read
+// as "always, but never replay a cookie" while the console showed the setting on
+// (burpsy-react-ui-mr83).
+//
+// This is the shape of the bug rather than its symptom: a field ADDED to RedirectSettings later
+// would default to false here for the same reason, so the assertion is on the whole struct.
+func TestRedirectOverrideKeepsTheStandingCookieReplayDecision(t *testing.T) {
+	standing := sender.RedirectSettings{
+		Mode:          sender.RedirectNever,
+		MaxHops:       7,
+		ReplayCookies: true,
+	}
+	got := (repeaterSendOptions{RedirectMode: "always"}).redirectPolicy(standing)
+	if !got.ReplayCookies {
+		t.Error("the per-send mode override cleared ReplayCookies; the operator's standing decision about " +
+			"carrying a target-set credential was revoked by a dropdown that says nothing about credentials")
+	}
+
+	// And the other way: an operator who turned it OFF does not get it back from a mode override.
+	standing.ReplayCookies = false
+	got = (repeaterSendOptions{RedirectMode: "always"}).redirectPolicy(standing)
+	if got.ReplayCookies {
+		t.Error("the override turned cookie replay ON; the standing decision is the operator's and an " +
+			"override has no business inverting it")
+	}
+}
+
 // TestProcessCookiesNeverOverridesTheOperator pins the precedence: a Cookie header the operator
 // wrote wins over the jar, and an empty jar adds nothing.
 func TestProcessCookiesNeverOverridesTheOperator(t *testing.T) {

@@ -156,6 +156,17 @@ type RedirectSettings struct {
 	Mode RedirectMode `json:"mode"`
 	// MaxHops bounds a chain. A redirect loop is the ordinary case, not the exotic one.
 	MaxHops int `json:"max_hops"`
+	// ReplayCookies makes a followed chain resubmit the cookies each hop's response set, to that
+	// hop's OWN authority. Burp exposes it as "Follow redirections and resubmit cookies"
+	// (settings/tools/repeater.html:143-145), and it is what makes a login or SSO flow that sets a
+	// cookie on a 302 work at all.
+	//
+	// Default OFF, unlike a browser's. burpsy sends what an operator wrote, and a cookie the target
+	// set mid-chain is not something they asked to send — a chain that suddenly carries a credential
+	// nobody typed is the surprise this setting exists to let an operator turn off. A target that sets
+	// throwaway cookies is the other reason: without a switch, following its redirects would keep
+	// resending them.
+	ReplayCookies bool `json:"replay_cookies"`
 }
 
 // ContinueSettings makes the 100-continue handling explicit.

@@ -1062,6 +1062,26 @@ function NetworkSection(): JSX.Element {
       </Field>
      </Toolbar>
 
+     <Toolbar>
+      <Field
+       label="Resubmit cookies"
+       htmlFor="network-replay-cookies"
+       hint="Burp's rule for following a login redirect"
+      >
+       <Switch
+        id="network-replay-cookies"
+        label="Resubmit the cookies each hop's response set"
+        checked={draft.redirects.replay_cookies === true}
+        onCheckedChange={(checked) => patchSection("redirects", { replay_cookies: checked })}
+       />
+      </Field>
+     </Toolbar>
+     <p className="field-hint">
+      {draft.redirects.replay_cookies === true
+       ? "A hop's Set-Cookie is carried to the next hop on the same host. Off by default: a credential the target set mid-chain is not one you asked to send, and a target that sets throwaway cookies would keep resending them."
+       : "Off. A login or SSO flow that sets a cookie on its 302 will arrive at the destination unauthenticated, which reads as a broken application rather than a missing cookie."}
+     </p>
+
      <h4>100-continue</h4>
      <div className="stack">
       <Switch

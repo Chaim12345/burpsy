@@ -732,6 +732,16 @@ func (s *Server) Tasks() *dash.Registry { return s.tasks }
 // WithSessionCoordinator sets the session coordinator.
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	s.sessionCoordinator = sc
+	// The same jar, handed to the sender as the store a followed redirect chain replays from
+	// (burpsy-react-ui-mr83). Without this a login performed by following a redirect lands in a jar
+	// nothing else reads, so the Session page would not show the session the chain just established and
+	// a later tool send would start from scratch.
+	// The sender is mutated in place rather than replaced: the same *sender.Sender is already held by
+	// every surface that was wired before this call, and handing one of them a copy would give the
+	// jar to some sends and not others.
+	if s.sender != nil {
+		withSessionCookieJar(s.sender, sc)
+	}
 	// The jar's monitored-tool set (burpsy-react-ui-sn3j): the web layer's own absorbing
 	// surfaces register here, the same wiring-time rule the proxy holds (it attaches itself in
 	// WithCookieJar). The Repeater's sends, the Intruder's stored exemplars and the audit's

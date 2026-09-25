@@ -43,6 +43,13 @@ export interface NetworkSettings {
   redirects: {
     mode: RedirectMode;
     max_hops: number;
+    /**
+     * Whether a followed chain resubmits the cookies each hop's response set (Burp's "Follow
+     * redirections and resubmit cookies"). Off by default: a cookie the target set mid-chain is not
+     * something the operator asked to send. `null` on a document written before the field existed,
+     * so a panel must not read `false` off a missing key and claim the operator declined it.
+     */
+    replay_cookies?: boolean | null;
   };
   continue: {
     understand_100_continue: boolean;

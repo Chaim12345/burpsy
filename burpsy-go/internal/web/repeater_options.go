@@ -86,8 +86,18 @@ func (o repeaterSendOptions) redirectPolicy(standing sender.RedirectSettings) se
 		return standing
 	}
 	// The hop budget is an anti-loop bound, not a policy choice, so the override keeps the
-	// standing budget and replaces only the mode.
-	return sender.RedirectSettings{Mode: sender.RedirectMode(o.RedirectMode), MaxHops: standing.MaxHops}
+	// standing budget and replaces only the mode. ReplayCookies is kept for the same reason: it is
+	// an operator's standing decision about whether a chain may carry a target-set credential, not a
+	// choice a per-send mode dropdown should silently revoke. Rebuilding the struct field by field
+	// is what lost it — the override read as "always, no cookies" when the operator had said
+	// otherwise in Settings, and nothing on screen said so (burpsy-react-ui-mr83).
+	//
+	// Copying the standing value and replacing one field is the shape that keeps a field ADDED to
+	// RedirectSettings later from defaulting to false here, which is the same class of bug as a
+	// struct literal quietly losing a new field.
+	policy := standing
+	policy.Mode = sender.RedirectMode(o.RedirectMode)
+	return policy
 }
 
 // applyToRequest returns the bytes to put on the wire: the operator's request with the enabled

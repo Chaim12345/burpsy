@@ -43,6 +43,16 @@ type Sender struct {
 	// written on the send path and read by nothing else — the dial builds its own copy of the value.
 	tlsMu  sync.Mutex
 	tlsCAs map[string]*x509.CertPool
+	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
+	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
+	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
+	// (burpsy-react-ui-mr83). See CookieJar for why this is an interface rather than the session
+	// package's own type, which imports this one.
+	//
+	// On the Sender rather than on AuthorisedSender because the choice is a NETWORK SETTING and every
+	// authorised sender shares this one: a setting that a caller had to pass to each of twenty
+	// construction sites is a setting half of them will forget.
+	jar CookieJar
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
 	// that preceded it share what either of them discovered — see protocol.go. Its own state is
@@ -1217,4 +1227,25 @@ func loadCABundle(path string) *x509.CertPool {
 		return nil
 	}
 	return pool
+}
+
+// WithCookieJar attaches the cookie store a followed redirect chain replays from, and returns the
+// sender so it can be chained onto construction.
+//
+// Nil is a no-op rather than a clear, matching every other With* here: a sender that never opted in
+// has no jar, and Redirects.ReplayCookies with no jar simply sends nothing, which is the honest
+// reading of a setting whose store is not there.
+func (s *Sender) WithCookieJar(jar CookieJar) *Sender {
+	if s != nil {
+		s.jar = jar
+	}
+	return s
+}
+
+// CookieJar returns the attached cookie store, or nil.
+func (s *Sender) CookieJar() CookieJar {
+	if s == nil {
+		return nil
+	}
+	return s.jar
 }
