@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
@@ -258,6 +259,24 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 	if err := s.sender.ApplyNetwork(next); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// The proxy leg reads the same streaming settings, and this is the one place they change.
+	//
+	// Without this the panel would describe a host list that only the sender obeyed, while browser
+	// traffic through the proxy kept buffering — the exact "a rule that silently lapses for part of
+	// the traffic" failure this file's other comments keep warning about, in the one surface where an
+	// operator is most likely to be reading the setting: an event stream that arrives empty
+	// (burpsy-react-ui-wet3).
+	//
+	// A refusal here is reported rather than swallowed, and it is not: Set only refuses a negative
+	// window, which Normalise has already rejected above, so this cannot fail on a document the sender
+	// accepted. The check is here so that if it ever can, the operator is told instead of the proxy
+	// silently keeping the previous list.
+	if s.proxyServer != nil {
+		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
+			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))
+		}
 	}
 
 	confirmed := s.sender.Network()

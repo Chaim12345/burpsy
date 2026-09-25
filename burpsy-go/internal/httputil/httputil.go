@@ -115,17 +115,92 @@ func readResponseHead(br *bufio.Reader, timed bool) ([]byte, time.Time, error) {
 	return head.Bytes(), firstByte, nil
 }
 
+// ResponseIsFrameless reports whether a response head says nothing about when its body ends — no
+// Content-Length and no Transfer-Encoding — and can therefore carry one that does not.
+//
+// This is the test the proxy's streaming path branches on (burpsy-react-ui-wet3). A response that
+// frames itself is buffered, because its end is knowable and the rules and the intercept hold are
+// entitled to see the whole message before any of it reaches the client. A response that does not
+// frame itself is open-ended by definition, and buffering it is what leaves a browser waiting for a
+// stream that never closes.
+//
+// A status that never carries a body is not frameless for this purpose: it has no body to frame, and
+// reading past a 101 would consume the first WebSocket frames as though they were an HTTP body.
+func ResponseIsFrameless(head []byte) bool {
+	if !responseHasBody(head) {
+		return false
+	}
+	headerBlock := head
+	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
+		headerBlock = headerBlock[idx+1:]
+	}
+	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
+	mimeHead, err := h.ReadMIMEHeader()
+	if err != nil {
+		// An unparseable head is not treated as frameless. Refusing to stream is the safe direction:
+		// the buffered path is what this proxy did for every response before streaming existed.
+		return false
+	}
+	if strings.TrimSpace(mimeHead.Get("Content-Length")) != "" {
+		return false
+	}
+	if strings.TrimSpace(mimeHead.Get("Transfer-Encoding")) != "" {
+		return false
+	}
+	return true
+}
+
+// ResponseIsChunked reports whether a response head declares chunked transfer encoding.
+//
+// It is the streaming path's second open-ended test, and it exists because a chunked response is not
+// a short one: a server-sent-event stream is chunk-framed and then never sends its terminal chunk,
+// so "this is chunked" says nothing about whether the response ends (burpsy-react-ui-wet3). What
+// makes it open-ended is the missing terminal chunk, which is known only once the read has run —
+// so this predicate admits the response to the streaming path and StreamResponse reports at the end
+// whether the framing completed.
+func ResponseIsChunked(head []byte) bool {
+	if !responseHasBody(head) {
+		return false
+	}
+	headerBlock := head
+	if idx := bytes.IndexByte(headerBlock, '\n'); idx != -1 {
+		headerBlock = headerBlock[idx+1:]
+	}
+	h := textproto.NewReader(bufio.NewReader(bytes.NewReader(headerBlock)))
+	mimeHead, err := h.ReadMIMEHeader()
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(mimeHead.Get("Transfer-Encoding")), "chunked")
+}
+
+// responseHasBody reports whether a response head can be followed by a body at all.
+//
+// Status codes that never carry one: every 1xx (including the 101 upgrade, whose bytes belong to
+// another protocol), 204, and 304. It is one predicate rather than the inline test ReadResponseBody
+// used to carry, because StreamResponse asks the identical question and a second copy of a status
+// rule is how the buffered and streaming paths start disagreeing about which responses have bodies —
+// one would stream a 204 and the other would not.
+//
+// The parse is positional on the status line, which is what "HTTP/1.1 204" puts at bytes 9..12, and
+// the length guard means a truncated first line reads as "no body" rather than indexing off the
+// end. A malformed status line therefore reads as bodiless, which is the same answer a bare LF gives
+// in ReadResponseBody's own caller path.
+func responseHasBody(head []byte) bool {
+	statusLine := head
+	if idx := bytes.IndexByte(statusLine, '\n'); idx >= 0 {
+		statusLine = statusLine[:idx]
+	}
+	return !(len(statusLine) >= 12 && (statusLine[9] == '1' || string(statusLine[9:12]) == "204" || string(statusLine[9:12]) == "304"))
+}
+
 // ReadResponseBody reads the body that follows a response head, per the
 // head's framing. head must be exactly what ReadResponseHead returned. A head
 // that never carries a body — 1xx including the 101 upgrade, 204, 304 — reads
 // nothing and returns an empty body, leaving whatever follows in br.
 func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
-	statusLine := string(bytes.SplitN(head, []byte("\r\n"), 2)[0])
-	// Status codes that never carry a body: 1xx, 204, 304.
-	noBody := len(statusLine) >= 12 && (statusLine[9] == '1' || statusLine[9:12] == "204" || statusLine[9:12] == "304")
-
 	var body bytes.Buffer
-	if !noBody {
+	if responseHasBody(head) {
 		// Skip the status line; ReadMIMEHeader expects headers only.
 		headerBlock := head
 		if idx := bytes.Index(headerBlock, []byte("\r\n")); idx != -1 {

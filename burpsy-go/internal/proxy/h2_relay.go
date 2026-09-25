@@ -106,14 +106,35 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	// An open-ended response is streamed: each chunk is written and flushed as it arrives, so a
+	// server-sent-event feed on an h2 origin reaches the browser while it is still being produced.
+	//
+	// io.ReadAll was here until burpsy-react-ui-wet3, and on an SSE stream it is the same defect the
+	// HTTP/1 legs had: ReadAll does not return until the body ends, and an event stream's body does
+	// not end, so the browser waited on a response that would never complete.
+	//
+	// The predicate is resp.ContentLength < 0, which Go's HTTP/2 client reports for a response whose
+	// length is unknown — the same "nothing says when this ends" fact the HTTP/1 legs read off the
+	// head, and knowable BEFORE any body byte is read. That ordering is what lets the head go out
+	// first: there is no need to read a byte to decide, so there is no risk of having to hold the
+	// head back until the first chunk arrives, and a browser can start rendering immediately.
 	for k, vals := range resp.Header {
 		for _, v := range vals {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(respBody)
+
+	var respBody []byte
+	streamed := resp.ContentLength < 0
+	if streamed {
+		window := s.config.Streaming().Window()
+		respBody = s.streamH2Body(resp.Body, w, window)
+		s.config.Streaming().NoteUnframed()
+	} else {
+		respBody, _ = io.ReadAll(resp.Body)
+		_, _ = w.Write(respBody)
+	}
 
 	// The response modification rules do not run here, and the count says so rather
 	// than a caveat in a doc file. This path does not have one response message it

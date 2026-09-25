@@ -608,6 +608,14 @@ type ProxyConfig struct {
 	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
 	// console reaches this leg without a restart — see internal/upstream.
 	upstream *upstreamproxy.Policy
+	// streaming decides which hosts' responses are forwarded as they arrive rather than buffered to
+	// completion, and how long an open-ended read runs before what has arrived is recorded and sent.
+	//
+	// It is a live holder rather than a plain value for the same reason upstream is: the operator
+	// edits the list in Settings → Network while the proxy is running, and a value read once at
+	// construction would make that edit a lie until a restart. See StreamingPolicy and
+	// WithStreaming.
+	streaming *StreamingPolicy
 }
 
 // NewProxyConfig creates a new proxy configuration.
@@ -859,10 +867,26 @@ type Server struct {
 
 // NewServer creates a new proxy server.
 func NewServer(config *ProxyConfig) *Server {
+	// Touch the policy at construction so the field is non-nil from the first request. Not for
+	// behaviour — a policy with no hosts declared behaves exactly like none attached — but so no
+	// relay goroutine can be the first to find it nil and have to decide what to do about that.
+	_ = config.Streaming()
 	return &Server{
 		config:    config,
 		listeners: map[string]*boundListener{},
 	}
+}
+
+// Streaming returns the live open-ended-response policy, so the web layer can push an operator's
+// edit into it at the same moment it reaches the sender.
+//
+// Never nil for the reason ProxyConfig.Streaming is never nil: the response path asks it a question
+// on every request, and a nil check at each of those sites is one of them eventually being forgotten.
+func (s *Server) Streaming() *StreamingPolicy {
+	if s == nil {
+		return nil
+	}
+	return s.config.Streaming()
 }
 
 // bootListener is the entry -proxy-bind opened, or nil before ListenAndServe has started.
@@ -1341,7 +1365,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				return
 			}
 			completed := time.Now()
-			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited, downgrade) {
+			if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIP, requestEdited, downgrade, false, nil) {
 				return
 			}
 			continue
@@ -1373,7 +1397,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 				}
 				responseData := append(head, body...)
 				completed := time.Now()
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade) {
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
 					return
 				}
 				continue
@@ -1447,6 +1471,24 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		if err != nil {
 			return
 		}
+
+		// An open-ended response is forwarded as it arrives rather than buffered to completion.
+		// Without this the client is sent nothing until the stream ends, and on an SSE feed or a
+		// long-poll it never does — the browser shows a hung request (burpsy-react-ui-wet3).
+		//
+		// The two paths are genuinely different operations, not one with a flag: the streamed one
+		// writes each chunk to the client as it lands, and only then offers the whole accumulated
+		// response to the hold, the rules and the record. So an intercepted open-ended response is
+		// forwarded live and NOT held for editing — which is the correct trade, because holding it
+		// would mean holding the stream open for the operator, and an operator cannot edit bytes that
+		// have not been sent yet. The alternative — buffering — is the defect.
+		if s.streamsResponse(reqHost, head) {
+			if !s.streamTLSResponse(tlsClient, upstream, upstreamBR, method, reqHost, reqPort, reqTLS, path, head, requestData, reqStages, inScope, startTime, firstByte, requestEdited, downgrade) {
+				return
+			}
+			continue
+		}
+
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
 		if err != nil {
 			return
@@ -1454,7 +1496,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		responseData := append(head, body...)
 		completed := time.Now()
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
 			return
 		}
 	}
@@ -1479,7 +1521,15 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 // this function cannot see: the request hold resolved before the request was forwarded. It is
 // threaded in so the recorded row's "Edited" column reports an operator edit in either direction,
 // which is what Burp's flag means ("the request or response were modified by the user").
-func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string) bool {
+// alreadyWritten says the caller has already sent these exact bytes to the client, one chunk at a
+// time, and this call is here only for the rules, the hold and the record.
+//
+// It is a parameter rather than a second recording function because the response half has four
+// steps that must agree with each other — Match & Replace, the blanket rules, the hold, the record
+// with its four stage boundaries — and a copy of those steps is how the two paths started disagreeing
+// about what a response row means. The write is the ONLY step streaming does differently, so it is
+// the only step this flag changes. See stream_response.go for why streaming cannot hold or rewrite.
+func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, inScope bool, responseData []byte, startTime time.Time, firstByte, completed time.Time, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool, extraNote *string) bool {
 	// The response's stage boundaries, by the same rule as completeResponse's
 	// (burpsy-react-ui-c05): stage 0 is the origin's bytes, stage 1 is after the automatic rules
 	// and before the hold. See messageStages.
@@ -1510,7 +1560,11 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	respStages.auto = responseData
 
 	// Intercept: hold the response before it reaches the client.
-	var notes *string
+	// Seeded with extraNote — the streaming path's "this never ended" — so a hold-drop below appends
+	// to it rather than replacing it. Both are facts about the same exchange and the row has room
+	// for both; a drop note that erased the streaming one would leave the operator unable to tell
+	// why the stream was cut.
+	notes := extraNote
 	keepServing := true
 	// responseEdited is the operator's own edit to the response half, paired below with the request
 	// half this function was handed.
@@ -1545,7 +1599,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// Return the response to the client. A write that fails ends the connection
 	// but not the capture: the origin answered, and that is worth recording
 	// whether or not the client was still listening.
-	if keepServing {
+	if keepServing && !alreadyWritten {
 		if _, err := clientConn.Write(responseData); err != nil {
 			keepServing = false
 		}
@@ -1898,18 +1952,18 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 		return
 	}
 
-	// Forward to upstream
-	responseData, serverIP, firstByte, err := s.forwardRequest(requestData, host, port, scheme)
-	if err != nil {
-		s.config.logger.Error("forward failed", zap.Error(err))
-		return
-	}
-	// The whole response has now been read, so this is the "End response timer" instant. Taken here
-	// rather than at the record site so the total is transfer time and not inflated by the intercept
-	// hold completeResponse may do before it captures the row.
-	completed := time.Now()
-
-	s.completeResponse(clientConn, method, host, port, scheme, path, requestData, reqStages, responseData, startTime, firstByte, completed, heldNote, heldHighlight, serverIP, requestEdited, "")
+	// An open-ended response is streamed rather than buffered to completion: forwardRequest reads the
+	// whole response before this function sees any of it, and on an SSE stream or a long-poll the
+	// whole response never exists (burpsy-react-ui-wet3). The branch has to be here, before the
+	// forward, because the streaming path owns the upstream connection for as long as the stream
+	// lasts — which is exactly what forwardRequest's defer Close() would not allow.
+	//
+	// Whether this response is open-ended is not knowable until the head arrives, so streamPlainResponse
+	// makes the call itself and falls back to the ordinary buffered read when the origin framed its
+	// response after all. That ordering — decide after the head, not before the dial — is what lets one
+	// request go through either path without the caller guessing.
+	s.streamPlainResponse(clientConn, requestData, host, port, scheme, path, method,
+		reqStages, inScope, startTime, heldNote, heldHighlight, "", requestEdited)
 }
 
 // completeResponse delivers one response to the client and captures the exchange.
@@ -1938,7 +1992,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 // closed by the forwarder, so this is the last point the address is still knowable.
 // requestEdited is whether the operator's own hold edited the request half of this exchange; see
 // handleTLSResponse, which threads the same value for the same reason.
-func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, firstByte, completed time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool, downgrade string) {
+func (s *Server) completeResponse(clientConn net.Conn, method string, host string, port uint16, tls bool, path string, requestData []byte, reqStages messageStages, responseData []byte, startTime time.Time, firstByte, completed time.Time, heldNote, heldHighlight, serverIP string, requestEdited bool, downgrade string, alreadyWritten bool) {
 	// The response's stage boundaries (burpsy-react-ui-c05): stage 0 is the origin's bytes as the
 	// forwarder read them, stage 1 is after the automatic rules and before the hold. The recorded
 	// bytes are stage 2. Same rule as the request side's — see messageStages.
@@ -1995,8 +2049,14 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 		responseData = forceConnectionClose(responseData)
 	}
 
-	// Send to client
-	if !dropped {
+	// Send to client.
+	//
+	// alreadyWritten says the streaming path has already put these bytes on the wire, chunk by
+	// chunk, and this call is here for the rules and the record. It is a parameter rather than a
+	// second recording function for the reason handleTLSResponse's is: the response half has four
+	// steps that must agree with each other, and a copy of them is how two paths start disagreeing
+	// about what a row means. See stream_response.go.
+	if !dropped && !alreadyWritten {
 		clientConn.Write(responseData)
 	}
 

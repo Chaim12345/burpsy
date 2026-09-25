@@ -33,6 +33,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
+	"time"
 )
 
 func main() {
@@ -440,7 +441,14 @@ func main() {
 	// moment the proxy starts, and the web server is constructed after that.
 	toolLog := toollog.New()
 
+	// One streaming policy, shared by the proxy's response path and the console that edits it. Built
+	// here because the restore below and the builder chain both need it: the persisted document has
+	// to reach the proxy leg on the same pass that reaches the sender, or an event stream would be
+	// honoured in Repeater and buffered through the proxy — the split burpsy-react-ui-wet3 records.
+	streamingPolicy := proxy.NewStreamingPolicy()
+
 	proxyConfig := proxy.NewProxyConfig(store).
+		WithStreaming(streamingPolicy).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithMatchReplace(matchReplaceRules).
@@ -505,6 +513,15 @@ func main() {
 			if err := httpSender.ApplyNetwork(*saved); err != nil {
 				logger.Warn("Saved network settings were refused; using defaults", zap.Error(err))
 			} else {
+				// The proxy leg reads the same streaming settings, and the sender's copy is the
+				// confirmed one — Normalise has already run, so this is what the operator's document
+				// actually became. Pushed here rather than at the API so a restart honours the setting
+				// for browser traffic too; without it, an event stream would be honoured in Repeater
+				// and buffered through the proxy, which is the split burpsy-react-ui-wet3 records.
+				applied := httpSender.Network()
+				if err := streamingPolicy.Set(applied.Streaming.Hosts, time.Duration(applied.Streaming.TimeoutMS)*time.Millisecond); err != nil {
+					logger.Warn("Proxy streaming policy refused the restored window", zap.Error(err))
+				}
 				logger.Info("Applied persisted network settings")
 			}
 		}
