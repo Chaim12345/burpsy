@@ -456,6 +456,10 @@ export interface RepeaterGroupItemResult {
  response_complete?: boolean;
  /** False when `result.duration_ms` is not a measurement. See RepeaterHistoryEntry.duration_measured. */
  duration_measured: boolean;
+ /** Parallel mode only: 1 for the response whose first byte was read first, next for the next.
+ * Absent for the sequence modes and for items that never got a response — an item with no
+ * arrival has no ordinal, and a missing field must not be read as "arrived first". */
+ arrival?: number;
 }
 
 export interface RepeaterGroupSendResult {

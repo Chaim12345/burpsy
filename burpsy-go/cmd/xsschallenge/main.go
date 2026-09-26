@@ -386,7 +386,7 @@ func seedOne(store *core.TrafficStore, client *http.Client, base, host string, p
 		return 0, err
 	}
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: port, TLS: false,
 		Method: http.MethodGet, Path: path,
 	}

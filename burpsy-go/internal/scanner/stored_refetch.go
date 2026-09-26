@@ -233,7 +233,7 @@ func (s *ActiveScanner) recordRefetch(t refetchTarget, body string) (*core.Excha
 		return nil, err
 	}
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: t.exchange.Host, Port: t.exchange.Port, TLS: t.exchange.TLS,
 		Method: "GET", Path: t.path,
 		// Read from the bytes actually stored above, which name no Content-Type — so this is "" and the

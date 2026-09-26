@@ -23,11 +23,11 @@ func TestExchangeDurationRoundTripsSubMillisecondAndUnmeasured(t *testing.T) {
 	req, resp := putPair(t, store)
 
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "fast.test", Port: 80, Method: "GET", Path: "/quick",
+		Request: core.MsgPtr(req), Response: &resp, Host: "fast.test", Port: 80, Method: "GET", Path: "/quick",
 		Duration: core.MeasuredDuration(400 * time.Microsecond),
 	})
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "untimed.test", Port: 80, Method: "GET", Path: "/unknown",
+		Request: core.MsgPtr(req), Response: &resp, Host: "untimed.test", Port: 80, Method: "GET", Path: "/unknown",
 		Duration: core.UnmeasuredDuration(),
 	})
 
@@ -62,7 +62,7 @@ func TestExchangeDurationRoundTripsAMeasuredMillisecondValue(t *testing.T) {
 	req, resp := putPair(t, store)
 
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "slow.test", Port: 80, Method: "GET", Path: "/",
+		Request: core.MsgPtr(req), Response: &resp, Host: "slow.test", Port: 80, Method: "GET", Path: "/",
 		Duration: core.MeasuredMicros(12_345),
 	})
 	loaded, err := p.LoadExchanges()

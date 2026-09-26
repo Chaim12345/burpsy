@@ -36,7 +36,7 @@ func seededSourceExchange(t *testing.T, s *Server, host string, port uint16, pat
 		t.Fatalf("put response: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: port, Method: "GET", Path: path,
 		Source: src,
 	})

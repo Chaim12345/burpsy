@@ -49,8 +49,8 @@ given host then
 	}
 	// The audit route rejects id 0 (the first capture of a session) as invalid, so the exchange
 	// under test is the second one — same shape as the existing audit endpoint tests.
-	store.AddExchange(&core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/"}
+	store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/"}
 	store.AddExchange(ex)
 
 	ps, err := scanner.LoadDir(dir, store, s.scope, zap.NewNop())

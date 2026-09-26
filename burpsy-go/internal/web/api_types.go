@@ -47,16 +47,32 @@ func ttfbMillis(d core.ExchangeDuration) *uint64 {
 // "<1 ms" for a measured zero and an em dash for null. Deliberately not done here — internal/web/ui/ is
 // owned elsewhere, and a JSON field no consumer reads is a shape change bought for nothing.
 type ExchangeView struct {
-	ID          core.ExchangeID `json:"id"`
-	Request     uint64          `json:"request"`
-	Response    *uint64         `json:"response"`
-	Host        string          `json:"host"`
-	Port        uint16          `json:"port"`
-	TLS         bool            `json:"tls"`
-	Method      string          `json:"method"`
-	Path        string          `json:"path"`
-	Status      *uint16         `json:"status"`
-	ResponseLen int             `json:"response_len"`
+	ID core.ExchangeID `json:"id"`
+	// Request is the message-store id of this exchange's request, or nil when it has none.
+	//
+	// A POINTER, and the reason is not style. The store's ids are a dense counter from zero, so 0 is a
+	// real, fetchable message — the first request the project ever captured. A blind CONNECT tunnel
+	// has no request bytes to record, so its field stays at the zero value, and emitting that zero
+	// told the UI "this row's request is message 0". The detail pane then rendered the project's
+	// first request under the label Request for a tunnel that has no request at all: another
+	// exchange's bytes, presented as this one's, with nothing on screen marking it
+	// (burpsy-react-ui-wtov).
+	//
+	// Response has always been a pointer for the same reason, so a consumer previously had to learn
+	// two different rules to ask "does this half exist". One rule, one type.
+	//
+	// Burp's own account agrees that the absence is the honest state rather than a gap:
+	// map_root.tsv:10859 says pass-through connections have "no details about requests or responses
+	// ... available in the Proxy ... history".
+	Request     *uint64 `json:"request"`
+	Response    *uint64 `json:"response"`
+	Host        string  `json:"host"`
+	Port        uint16  `json:"port"`
+	TLS         bool    `json:"tls"`
+	Method      string  `json:"method"`
+	Path        string  `json:"path"`
+	Status      *uint16 `json:"status"`
+	ResponseLen int     `json:"response_len"`
 	// Mime is the response's media type, parameters stripped and lowercased ("text/html"), or "" when
 	// the response declared none — or when there is no response, which `response: null` is what
 	// distinguishes. The UI's History MIME column and type filter are the consumers, and they had both
@@ -225,14 +241,24 @@ func protocolToken(p core.Protocol) string {
 }
 
 func exchangeView(ex *core.Exchange) *ExchangeView {
-	var resp *uint64
+	// Both halves are the same shape and for the same reason: a message id is only meaningful when
+	// there ARE bytes, and 0 is a real id rather than a sentinel. See ExchangeView.Request.
+	// The model already distinguishes the two states, so the view is a straight projection: a
+	// request-less row arrives with a nil Request and goes out as null, and a request whose id happens
+	// to be 0 arrives as a pointer to 0 and goes out as 0. See core.Exchange.Request for why the
+	// distinction cannot be made anywhere else.
+	var resp, req *uint64
 	if ex.Response != nil {
 		id := uint64(*ex.Response)
 		resp = &id
 	}
+	if ex.Request != nil {
+		id := uint64(*ex.Request)
+		req = &id
+	}
 	return &ExchangeView{
 		ID:          ex.ID,
-		Request:     uint64(ex.Request),
+		Request:     req,
 		Response:    resp,
 		Host:        ex.Host,
 		Port:        ex.Port,

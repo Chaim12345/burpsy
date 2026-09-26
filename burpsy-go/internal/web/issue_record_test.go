@@ -27,7 +27,7 @@ func putExchangeForRecord(t *testing.T, s *Server) uint64 {
 		TLS:     true,
 		Method:  "GET",
 		Path:    "/login",
-		Request: reqID,
+		Request: core.MsgPtr(reqID),
 	}
 	s.store.AddExchange(ex)
 	return uint64(ex.ID)
@@ -175,7 +175,7 @@ func TestASecondRecordWithTheSameNameMergesIntoTheFirst(t *testing.T) {
 
 	// Second exchange on the same host.
 	reqID, _ := s.store.Put([]byte("GET /admin HTTP/1.1\r\nHost: shop.test\r\n\r\n"), core.DirectionRequest)
-	ex2 := &core.Exchange{Host: "shop.test", Port: 443, TLS: true, Method: "GET", Path: "/admin", Request: reqID}
+	ex2 := &core.Exchange{Host: "shop.test", Port: 443, TLS: true, Method: "GET", Path: "/admin", Request: core.MsgPtr(reqID)}
 	s.store.AddExchange(ex2)
 
 	code1, out1 := recordIssue(t, s, map[string]any{"name": "TLS not enforced", "exchange_id": first})

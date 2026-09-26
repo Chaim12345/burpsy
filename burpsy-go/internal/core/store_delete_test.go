@@ -21,7 +21,7 @@ func putExchange(t *testing.T, store *TrafficStore, path string) ExchangeID {
 	if err != nil {
 		t.Fatalf("Put %s: %v", path, err)
 	}
-	store.AddExchange(&Exchange{Request: id, Host: "h", Port: 80, Method: "GET", Path: path})
+	store.AddExchange(&Exchange{Request: MsgPtr(id), Host: "h", Port: 80, Method: "GET", Path: path})
 	ex, err := store.GetExchange(ExchangeID(int(id)))
 	if err != nil {
 		t.Fatalf("exchange %d: %v", id, err)
@@ -49,7 +49,7 @@ func TestDeleteExchangesHidesTheTickedRowsWithoutRenumberingTheRest(t *testing.T
 	if err != nil {
 		t.Fatalf("the untouched exchange no longer resolves: %v", err)
 	}
-	msg, err := store.Get(live.Request)
+	msg, err := store.Get(MsgOrZero(live.Request))
 	if err != nil {
 		t.Fatalf("the untouched exchange's request message does not resolve: %v", err)
 	}

@@ -34,7 +34,7 @@ func (f *fixture) put(t *testing.T, path string, status uint16) {
 	if err != nil {
 		t.Fatalf("Put %s: %v", path, err)
 	}
-	f.store.AddExchange(&core.Exchange{Request: id, Host: "h", Port: 80, Method: "GET", Path: path, Status: &status})
+	f.store.AddExchange(&core.Exchange{Request: core.MsgPtr(id), Host: "h", Port: 80, Method: "GET", Path: path, Status: &status})
 }
 
 func (f *fixture) paths(t *testing.T) map[string]bool {

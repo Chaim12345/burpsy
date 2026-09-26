@@ -117,7 +117,7 @@ func TestARequestRewriteKeepsWhatTheClientSentAsTheOriginal(t *testing.T) {
 	}
 	ex := awaitExchangeFor(t, store, "/one", "proxy")
 
-	if got, _ := ex.VariantFor(core.DirectionRequest, core.VariantEdited); got != ex.Request {
+	if got, _ := ex.VariantFor(core.DirectionRequest, core.VariantEdited); got != core.MsgOrZero(ex.Request) {
 		t.Fatalf("the edited request reading is %d, want the recorded request %d", got, ex.Request)
 	}
 	if !ex.HasRetainedStage(core.DirectionRequest) {
@@ -127,7 +127,7 @@ func TestARequestRewriteKeepsWhatTheClientSentAsTheOriginal(t *testing.T) {
 	if !strings.Contains(original, "hunter2") {
 		t.Errorf("the original request reading is %q, want the client's bytes carrying hunter2", original)
 	}
-	if strings.Contains(messageText(t, store, ex.Request), "hunter2") {
+	if strings.Contains(messageText(t, store, core.MsgOrZero(ex.Request)), "hunter2") {
 		t.Error("the recorded request still carries the rule's input; the rule did not reach the stored bytes")
 	}
 }
@@ -254,7 +254,7 @@ func TestAnInterceptEditKeepsThePreEditBytesReadable(t *testing.T) {
 	if !strings.Contains(original, "as-sent") {
 		t.Errorf("the original request reading is %q, want the pre-edit bytes", original)
 	}
-	edited := messageText(t, store, ex.Request)
+	edited := messageText(t, store, core.MsgOrZero(ex.Request))
 	if !strings.Contains(edited, "as-edited") {
 		t.Errorf("the recorded request is %q, want the operator's edit", edited)
 	}

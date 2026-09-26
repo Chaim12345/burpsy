@@ -43,7 +43,7 @@ func TestASkippedExchangeWhoseResponseLaterLandsIsAuditedOnceAsRetried(t *testin
 		t.Fatalf("put request: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: nil,
+		Request: core.MsgPtr(reqID), Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/late",
 		Source: core.SourceProxy,
 	})
@@ -140,7 +140,7 @@ func TestTheRetryIsOnceASecondGiveUpStaysASkip(t *testing.T) {
 		t.Fatalf("put request: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: nil,
+		Request: core.MsgPtr(reqID), Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/never2",
 		Source: core.SourceProxy,
 	})
@@ -183,7 +183,7 @@ func TestTheOperatorRetryRewindsTheCursorAndCarriesTheStallBudget(t *testing.T) 
 		t.Fatalf("put request: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: nil,
+		Request: core.MsgPtr(reqID), Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/still-waiting",
 		Source: core.SourceProxy,
 	})

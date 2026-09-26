@@ -50,7 +50,7 @@ func addSearchExchange(t *testing.T, s *Server, name string, source core.Source)
 		status = 404
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request:     reqID,
+		Request:     core.MsgPtr(reqID),
 		Response:    &respID,
 		Host:        host,
 		Port:        443,
@@ -211,7 +211,7 @@ func TestSuiteSearchLocationNarrowsToRequestOrResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	s.store.AddExchange(&core.Exchange{Request: reqID, Host: "pending.test", Port: 80, Method: "GET", Path: "/pending", Source: core.SourceProxy})
+	s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Host: "pending.test", Port: 80, Method: "GET", Path: "/pending", Source: core.SourceProxy})
 
 	row := runSearch(t, s, "q=needle&location=response&tools=proxy")
 	for _, result := range row.Results {
@@ -398,7 +398,7 @@ func TestSuiteSearchCapsOffsetsPerMessageAndCountsThemAnyway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	s.store.AddExchange(&core.Exchange{Request: reqID, Host: "spam.test", Port: 80, Method: "POST", Path: "/spam", Source: core.SourceProxy})
+	s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Host: "spam.test", Port: 80, Method: "POST", Path: "/spam", Source: core.SourceProxy})
 
 	result := runSearch(t, s, "q=x&area=body")
 	if len(result.Results) != 1 {
@@ -427,7 +427,7 @@ func TestSuiteSearchSaysWhenTheLimitCutTheAnswerOff(t *testing.T) {
 		if err != nil {
 			t.Fatalf("put request: %v", err)
 		}
-		s.store.AddExchange(&core.Exchange{Request: id, Host: "h.test", Port: 80, Method: "GET", Path: fmt.Sprintf("/p%d", i), Source: core.SourceProxy})
+		s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(id), Host: "h.test", Port: 80, Method: "GET", Path: fmt.Sprintf("/p%d", i), Source: core.SourceProxy})
 	}
 
 	full := runSearch(t, s, "q=needle")

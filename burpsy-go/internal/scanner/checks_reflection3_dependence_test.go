@@ -63,7 +63,7 @@ func dependenceFixture(t *testing.T, handler http.HandlerFunc, path string) *Che
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: uint16(port),
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: uint16(port),
 		TLS: false, Method: "GET", Path: path}
 	store.AddExchange(ex)
 

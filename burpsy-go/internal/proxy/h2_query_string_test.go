@@ -71,7 +71,7 @@ func TestH2ExchangeRecordsTheQueryString(t *testing.T) {
 			}
 			// And it agrees with the request bytes the store holds, which is the property that
 			// actually broke: the two disagreed while each looked plausible alone.
-			msg, err := store.Get(ex.Request)
+			msg, err := store.Get(core.MsgOrZero(ex.Request))
 			if err != nil {
 				t.Fatalf("get request message: %v", err)
 			}

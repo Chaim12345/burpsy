@@ -247,7 +247,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	}
 	respOriginal, respAuto := c.storeStages("response", x.ResponseOriginal, x.ResponseAuto, x.Response, core.DirectionResponse)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 
 		RequestOriginal:  reqOriginal,

@@ -228,7 +228,7 @@ func (s *ActiveScanner) storeRenderedDocument(t refetchTarget, html string) (*co
 		return nil, err
 	}
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: t.exchange.Host, Port: t.exchange.Port, TLS: t.exchange.TLS,
 		Method: "GET", Path: t.path,
 		// Taken from the head written just above rather than hardcoded "text/html", so the row and the

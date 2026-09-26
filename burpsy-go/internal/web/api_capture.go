@@ -920,7 +920,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	// history gained Delete items and Clear.
 	v.Occurrences = []issueOccurrenceView{}
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err == nil {
 			if v.Host == "" {
 				v.Host = ex.Host
@@ -1368,7 +1368,7 @@ func (f filteredExchangeQuery) Status() int {
 // matching every untyped row — which is the right reading for both of those cases.
 func (f filteredExchangeQuery) Mime() string { return f.ex.Mime }
 func (f filteredExchangeQuery) Body() []byte {
-	msg, err := f.store.Get(f.ex.Request)
+	msg, err := f.store.Get(core.MsgOrZero(f.ex.Request))
 	if err != nil {
 		return nil
 	}

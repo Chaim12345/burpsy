@@ -22,17 +22,17 @@ func TestExchangeMimeRoundTrips(t *testing.T) {
 	req, resp := putPair(t, store)
 
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "typed.test", Port: 80, Method: "GET", Path: "/page",
+		Request: core.MsgPtr(req), Response: &resp, Host: "typed.test", Port: 80, Method: "GET", Path: "/page",
 		Mime: "text/html",
 	})
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "untyped.test", Port: 80, Method: "GET", Path: "/blob",
+		Request: core.MsgPtr(req), Response: &resp, Host: "untyped.test", Port: 80, Method: "GET", Path: "/blob",
 		Mime: "",
 	})
 	// No response at all — the blind-tunnel shape. Its Mime is empty for a different reason, and
 	// Response is what says so.
 	store.AddExchange(&core.Exchange{
-		Request: req, Host: "tunnel.test", Port: 443, TLS: true, Method: "CONNECT", Path: "tunnel.test:443",
+		Request: core.MsgPtr(req), Host: "tunnel.test", Port: 443, TLS: true, Method: "CONNECT", Path: "tunnel.test:443",
 	})
 
 	loaded, err := p.LoadExchanges()
@@ -142,7 +142,7 @@ func TestExchangeMimeStoresTheStrippedEssenceNotTheRawHeader(t *testing.T) {
 
 	raw := "HTTP/1.1 200 OK\r\nContent-Type: text/HTML; charset=utf-8\r\n\r\n<html>"
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "essence.test", Port: 80, Method: "GET", Path: "/",
+		Request: core.MsgPtr(req), Response: &resp, Host: "essence.test", Port: 80, Method: "GET", Path: "/",
 		Mime: core.MimeEssence([]byte(raw)),
 	})
 

@@ -25,7 +25,7 @@ func TestMimeFoldsOntoThePathNodeAndUnionsUpFolders(t *testing.T) {
 		}
 		status := uint16(200)
 		store.AddExchange(&core.Exchange{
-			Request: id,
+			Request: core.MsgPtr(id),
 			Host:    "h",
 			Port:    80,
 			Method:  "GET",

@@ -104,7 +104,15 @@ export function usePluginExchangeActions(): ReturnType<typeof useExchangeActions
           // ContextMenuItemsProvider is handed the selected request/response pair, and the request is
           // the half every such plugin reads first. `target.exchange` still travels, so a plugin that
           // only wants the id has it.
-          run(call, { ...target, message: exchange.request }),
+          //
+          // OMITTED rather than zero when the row has no request. A blind CONNECT tunnel has no
+          // request bytes, and handing a plugin `message: 0` would point it at the first request the
+          // project ever captured — a different exchange's bytes, acted on under this row's name
+          // (burpsy-react-ui-wtov). A plugin that needs the message reads `undefined` and can say so;
+          // one that only wants the id still has `target.exchange`.
+          run(call, exchange.request === null
+            ? { ...target, message: undefined }
+            : { ...target, message: exchange.request }),
         ),
       ]),
     [baseMenu, list, run],

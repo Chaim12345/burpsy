@@ -26,8 +26,8 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 	// Two exchanges, and the second one is audited, so the id under test is a non-zero one. Exchange 0
 	// is addressable now — that was HONEST-05, fixed with its own test in audit_exchange_zero_test.go;
 	// this test deliberately keeps exercising a mid-session id so the two cases stay separable.
-	s.store.AddExchange(&core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/shop"}
+	s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/shop"}
 	s.store.AddExchange(ex)
 
 	rec := postJSON(t, s, "/api/audit/"+strconv.FormatUint(uint64(ex.ID), 10), nil)

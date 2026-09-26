@@ -35,7 +35,7 @@ func postureFixture(t *testing.T, rawRequest, rawResponse string, tls bool) *Che
 	if tls {
 		port = 443
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "app.test", Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "app.test", Port: port,
 		TLS: tls, Method: method, Path: path}
 	store.AddExchange(ex)
 	return NewCheckContext(NewActiveScanner(store, zap.NewNop()), ex, nil)

@@ -62,7 +62,7 @@ func addTraffic(t *testing.T, store *core.TrafficStore, host, method, path strin
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     host,
 		Port:     80,

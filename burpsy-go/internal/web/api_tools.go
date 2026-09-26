@@ -205,7 +205,7 @@ func (s *Server) recordRepeaterExchange(
 		Mime:      core.MimeEssence(rawResp),
 		StartedMs: uint64(started.UnixMilli()),
 		Duration:  duration,
-		Request:   reqMsgID,
+		Request:   core.MsgPtr(reqMsgID),
 		Response:  &respMsgID,
 		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
 		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.

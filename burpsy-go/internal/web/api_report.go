@@ -181,7 +181,7 @@ func (s *Server) findingEvidence(f *core.Finding) []report.Evidence {
 	seen := map[string]bool{}
 	var out []report.Evidence
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err != nil {
 			continue
 		}
@@ -208,7 +208,7 @@ func (s *Server) findingHosts(f *core.Finding) []string {
 	seen := map[string]bool{}
 	var hosts []string
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err != nil {
 			continue
 		}

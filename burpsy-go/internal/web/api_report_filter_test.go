@@ -24,7 +24,7 @@ func seedReportFindings(t *testing.T, s *Server) {
 		if err != nil {
 			t.Fatalf("put: %v", err)
 		}
-		ex := &core.Exchange{Host: host, Port: 443, TLS: true, Method: "GET", Path: "/", Request: reqID}
+		ex := &core.Exchange{Host: host, Port: 443, TLS: true, Method: "GET", Path: "/", Request: core.MsgPtr(reqID)}
 		s.store.AddExchange(ex)
 		id := s.findings.Add(core.NewFinding{
 			Name:       name,
@@ -32,7 +32,7 @@ func seedReportFindings(t *testing.T, s *Server) {
 			Confidence: core.ConfidenceFirm,
 			Occurrences: []core.Occurrence{{
 				ExchangeID: ex.ID,
-				Request:    reqID,
+				Request:    core.MsgPtr(reqID),
 			}},
 			Target: core.FindingTarget{Host: host, Port: 443, TLS: true},
 		})

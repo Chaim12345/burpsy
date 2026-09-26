@@ -47,8 +47,8 @@ func configuredScannerServer(t *testing.T, base scanner.AuditConfig) (*Server, c
 	}
 	// Exchange id 0 is not addressable through the audit route (it has always rejected id 0), so seed a
 	// throwaway first.
-	s.store.AddExchange(&core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/shop"}
+	s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"})
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/shop"}
 	s.store.AddExchange(ex)
 	return s, ex.ID
 }

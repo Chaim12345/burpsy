@@ -39,13 +39,13 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 	}
 	status := uint16(200)
 	store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
+		Request: core.MsgPtr(reqID), Response: &respID, Host: "a", Port: 80, TLS: false,
 		Method: "GET", Path: "/", Status: &status, ResponseLen: 20,
 	})
 	// A tool-originated resend beside the proxy traffic: the mirror must restore each row's
 	// attribution exactly, because HTTP history's tool-traffic filter reads nothing but this field.
 	store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
+		Request: core.MsgPtr(reqID), Response: &respID, Host: "a", Port: 80, TLS: false,
 		Method: "GET", Path: "/repeated", Status: &status, ResponseLen: 20,
 		Source: core.SourceRepeater,
 	})
@@ -322,7 +322,7 @@ func TestRestore_RoundTripsMergedFinding(t *testing.T) {
 		id = findings.Add(core.NewFinding{
 			Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
 			Confidence: core.ConfidenceFirm, Param: param, Target: target,
-			Occurrences: []core.Occurrence{{ExchangeID: core.ExchangeID(i), Request: core.MsgId(i * 2)}},
+			Occurrences: []core.Occurrence{{ExchangeID: core.ExchangeID(i), Request: core.MsgPtr(core.MsgId(i * 2))}},
 		})
 	}
 
@@ -351,7 +351,7 @@ func TestRestore_RoundTripsMergedFinding(t *testing.T) {
 	got := restored.Add(core.NewFinding{
 		Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
 		Confidence: core.ConfidenceFirm, Param: "lang", Target: target,
-		Occurrences: []core.Occurrence{{ExchangeID: 9, Request: 18}},
+		Occurrences: []core.Occurrence{{ExchangeID: 9, Request: core.MsgPtr(core.MsgId(18))}},
 	})
 	if got != id {
 		t.Fatalf("Add after restore returned %d, want the restored finding %d", got, id)

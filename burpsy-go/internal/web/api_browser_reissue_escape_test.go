@@ -45,7 +45,7 @@ func TestTheAnswerPageNeverRendersAStoredPathAsMarkup(t *testing.T) {
 		t.Fatalf("put request: %v", err)
 	}
 	ex := &core.Exchange{
-		Request: reqID, Host: "target.test", Port: 80, Method: "GET", Path: payloadPath, Source: core.SourceProxy,
+		Request: core.MsgPtr(reqID), Host: "target.test", Port: 80, Method: "GET", Path: payloadPath, Source: core.SourceProxy,
 	}
 	s.store.AddExchange(ex)
 

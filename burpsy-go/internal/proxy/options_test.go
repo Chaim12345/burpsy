@@ -676,7 +676,7 @@ func Test_response_rules_rewrite_real_traffic_and_history_agrees(t *testing.T) {
 	if !strings.HasSuffix(recorded, got) {
 		t.Errorf("history's response body is not the bytes the client received.\nrecorded: %q\nclient:   %q", recorded, got)
 	}
-	storedReq, err := store.Get(ex.Request)
+	storedReq, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("stored request: %v", err)
 	}
@@ -748,7 +748,7 @@ func Test_invisible_proxying_forwards_the_headers_the_client_sent(t *testing.T) 
 	if ex.Path != "/probe" {
 		t.Errorf("recorded path = %q, want /probe", ex.Path)
 	}
-	stored, err := store.Get(ex.Request)
+	stored, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("stored request: %v", err)
 	}

@@ -20,7 +20,7 @@ func TestRetainedStagesSurviveSaveLoadRoundTrip(t *testing.T) {
 	reqOriginal, reqAuto := core.MsgId(11), core.MsgId(12)
 	respOriginal, respAuto := core.MsgId(21), core.MsgId(22)
 	ex := &core.Exchange{
-		Request: 10, Response: ptr(core.MsgId(20)),
+		Request: core.MsgPtr(core.MsgId(10)), Response: ptr(core.MsgId(20)),
 		Host: "stages.test", Port: 443, TLS: true, Method: "POST", Path: "/login",
 		RequestOriginal: &reqOriginal, RequestAuto: &reqAuto,
 		ResponseOriginal: &respOriginal, ResponseAuto: &respAuto,
@@ -67,7 +67,7 @@ func TestRetainedStagesSurviveSaveLoadRoundTrip(t *testing.T) {
 func TestAnUnmodifiedExchangeReloadsWithNoRetainedStages(t *testing.T) {
 	s := newTestStore(t)
 	s.SaveExchange(&core.Exchange{
-		Request: 10, Response: ptr(core.MsgId(20)),
+		Request: core.MsgPtr(core.MsgId(10)), Response: ptr(core.MsgId(20)),
 		Host: "plain.test", Port: 80, Method: "GET", Path: "/",
 	})
 
@@ -95,7 +95,7 @@ func TestOnlyTheDirectionThatWasRetainedComesBack(t *testing.T) {
 	s := newTestStore(t)
 	reqAuto := core.MsgId(12)
 	s.SaveExchange(&core.Exchange{
-		Request: 10, Response: ptr(core.MsgId(20)),
+		Request: core.MsgPtr(core.MsgId(10)), Response: ptr(core.MsgId(20)),
 		Host: "half.test", Port: 80, Method: "GET", Path: "/",
 		// A response-only rewrite, which is the ordinary shape of a Match & Replace response rule.
 		ResponseAuto: &reqAuto,

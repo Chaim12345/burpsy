@@ -601,8 +601,14 @@ func (s *Server) searchExchange(ex *core.Exchange, opts suiteSearchOptions, matc
 		}
 	}
 
+	// Both halves are guarded, and the request half's guard is the fix rather than symmetry: scanning
+	// ex.Request on a row that has none scanned message 0 — the first request the project ever
+	// captured — and reported its matches as this exchange's. The same shape as burpsy-react-ui-wtov's
+	// history pane, reached through search instead.
 	if opts.location == suiteSearchLocationBoth || opts.location == suiteSearchLocationRequest {
-		scan(ex.Request, "request")
+		if ex.Request != nil {
+			scan(*ex.Request, "request")
+		}
 	}
 	if (opts.location == suiteSearchLocationBoth || opts.location == suiteSearchLocationResponse) && ex.Response != nil {
 		scan(*ex.Response, "response")

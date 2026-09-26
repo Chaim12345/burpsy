@@ -37,7 +37,7 @@ func engagementSeed(t *testing.T, s *Server) *core.Exchange {
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "shop.test",
 		Port:     80,

@@ -47,7 +47,7 @@ func harnessAgainst(t *testing.T, handler http.HandlerFunc, path string) *CheckC
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		TLS: false, Method: "GET", Path: path}
 	store.AddExchange(ex)
 
@@ -273,7 +273,7 @@ func TestAnUnsentProbeIsInconclusiveNotCleanEvidence(t *testing.T) {
 	store := core.NewTrafficStore()
 	reqID, _ := store.Put([]byte(fmt.Sprintf("GET /s?q=1 HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)), core.DirectionRequest)
 	respID, _ := store.Put([]byte("HTTP/1.1 200 OK\r\n\r\nseed"), core.DirectionResponse)
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: "/s?q=1"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: "/s?q=1"}
 	store.AddExchange(ex)
 	s := NewActiveScanner(store, zap.NewNop()).WithSender(sender.NewSender(nil))
 	cc := NewCheckContext(s, ex, nil)

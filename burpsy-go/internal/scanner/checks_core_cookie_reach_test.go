@@ -67,7 +67,7 @@ func cookieOnlyXSSContext(t *testing.T) *CheckContext {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		TLS: false, Method: "GET", Path: "/x/cookie"}
 	store.AddExchange(ex)
 

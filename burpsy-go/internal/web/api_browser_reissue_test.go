@@ -77,7 +77,7 @@ func storedCookieExchange(t *testing.T, s *Server, target string, cookie string)
 	respID, _ := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), core.DirectionResponse)
 	portNum, _ := strconv.Atoi(u.Port())
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: u.Hostname(), Port: uint16(portNum), Method: "GET", Path: "/",
 	}
 	s.store.AddExchange(ex)
@@ -106,7 +106,7 @@ func TestTheOriginalSessionReissueSendsTheStoredCookieHeader(t *testing.T) {
 	// request's bytes are what went out, and they are the bytes the page deliberately does not
 	// re-render.
 	sent := lastReissueExchange(t, s, "original")
-	msg, err := s.store.Get(sent.Request)
+	msg, err := s.store.Get(core.MsgOrZero(sent.Request))
 	if err != nil {
 		t.Fatalf("the recorded request could not be read back: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestTheCurrentSessionReissueSendsTheJarCookieHeader(t *testing.T) {
 		t.Errorf("the answer page does not name its variant: %q", rec.Body.String())
 	}
 	sent := lastReissueExchange(t, s, "current")
-	msg, err := s.store.Get(sent.Request)
+	msg, err := s.store.Get(core.MsgOrZero(sent.Request))
 	if err != nil {
 		t.Fatalf("the recorded request could not be read back: %v", err)
 	}

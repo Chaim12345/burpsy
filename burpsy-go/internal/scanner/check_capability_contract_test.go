@@ -74,7 +74,7 @@ func bareContext(t *testing.T) *CheckContext {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "app.test", Port: 443,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "app.test", Port: 443,
 		TLS: true, Method: "GET", Path: "/"}
 	store.AddExchange(ex)
 	// Every per-family switch on, so no row is skipped by its own gate: the point is to reach
@@ -333,7 +333,7 @@ func deadServerContext(t *testing.T) *CheckContext {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		Method: "GET", Path: "/api?id=1"}
 	store.AddExchange(ex)
 	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(allChecksOn()).WithSender(sender.NewSender(nil))

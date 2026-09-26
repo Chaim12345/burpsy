@@ -55,7 +55,23 @@ export function exchangeAuthority(exchange: Pick<Exchange, "tls" | "host" | "por
  return `${schemeOf(exchange)}://${exchange.host}:${exchange.port}`;
 }
 
-export async function fetchRaw(messageId: number): Promise<string> {
+/**
+ * Fetch one stored message's raw bytes.
+ *
+ * `messageId` is `number | null` because an exchange can have no request at all: a blind CONNECT
+ * tunnel has no request bytes to record, and the wire now says so with null rather than with 0
+ * (burpsy-react-ui-wtov). Null here is a refusal with a reason an operator can act on, not a
+ * fallback to some other message — the earlier behaviour fetched message 0, which is the first
+ * request the project ever captured, and every one of these callers then operated on another
+ * exchange's bytes while believing they were this row's.
+ */
+export async function fetchRaw(messageId: number | null, what = "request"): Promise<string> {
+ if (messageId === null) {
+  throw new Error(
+   `This exchange has no ${what} to read — it is a blind tunnel, and burpsy did not look inside it. ` +
+   `Turn interception off for this host to relay its bytes untouched.`,
+  );
+ }
  const message = await api<MessageView>(`/api/message/${messageId}`);
  return message.text ?? "";
 }
@@ -432,7 +448,7 @@ const addToSiteMap = async (exchange: Exchange) => {
  const saveItems = async (exchange: Exchange) => {
   try {
    const request = await fetchRaw(exchange.request);
-   const response = exchange.response === null ? null : await fetchRaw(exchange.response);
+   const response = exchange.response === null ? null : await fetchRaw(exchange.response, "response");
    const name = `${exchange.method}-${exchange.host}${exchange.path}`.replace(/[^a-z0-9.\-/]+/gi, "_").slice(0, 80);
    downloadText(
     `${name}-exchange.txt`,

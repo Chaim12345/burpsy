@@ -26,11 +26,11 @@ func TestTheOperatorEditedFlagSurvivesSaveLoadRoundTrip(t *testing.T) {
 	req, resp := putPair(t, store)
 
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "edited.test", Port: 443, TLS: true, Method: "POST", Path: "/login",
+		Request: core.MsgPtr(req), Response: &resp, Host: "edited.test", Port: 443, TLS: true, Method: "POST", Path: "/login",
 		UserEdited: true,
 	})
 	store.AddExchange(&core.Exchange{
-		Request: req, Response: &resp, Host: "untouched.test", Port: 443, TLS: true, Method: "GET", Path: "/",
+		Request: core.MsgPtr(req), Response: &resp, Host: "untouched.test", Port: 443, TLS: true, Method: "GET", Path: "/",
 	})
 
 	loaded, err := p.LoadExchanges()

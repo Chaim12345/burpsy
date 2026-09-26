@@ -73,7 +73,7 @@ func headerOnlyXSSContext(t *testing.T) *CheckContext {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		TLS: false, Method: "GET", Path: "/echo"}
 	store.AddExchange(ex)
 
@@ -145,7 +145,7 @@ func TestACappedRowSaysHowManyPointsItDidNotProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		TLS: false, Method: "GET", Path: path}
 	store.AddExchange(ex)
 

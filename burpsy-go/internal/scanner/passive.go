@@ -207,7 +207,7 @@ func (s *PassiveScanner) scanBChecks(exchange *core.Exchange) []*Finding {
 	ctx.Port = exchange.Port
 	ctx.Path = exchange.Path
 	ctx.TLS = exchange.TLS
-	if req, err := s.store.Get(exchange.Request); err == nil {
+	if req, err := s.store.Get(core.MsgOrZero(exchange.Request)); err == nil {
 		ctx.Request = req.Raw()
 	}
 

@@ -72,7 +72,7 @@ func postExchangeAgainst(t *testing.T, store *core.TrafficStore, host string, po
 		t.Fatalf("put response: %v", err)
 	}
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     host,
 		Port:     port,

@@ -55,7 +55,7 @@ func seedVariantExchange(t *testing.T, s *Server, reqOriginal, reqAuto, respOrig
 	respID := put("HTTP/1.1 200 OK\r\n\r\nhello", core.DirectionResponse)
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "shop.test",
 		Port:     80,
@@ -243,7 +243,7 @@ func TestAnExchangeWithNoResponseOffersNoResponseReadings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Host: "shop.test", Port: 80, Method: "GET", Path: "/page"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Host: "shop.test", Port: 80, Method: "GET", Path: "/page"}
 	s.store.AddExchange(ex)
 
 	got := exchangeVariantWire(t, s, ex.ID)

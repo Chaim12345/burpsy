@@ -180,7 +180,7 @@ func TestARewrittenHandshakeDoesNotLookPristineInHistory(t *testing.T) {
 	}
 
 	// What history shows for the request must be what upstream received.
-	req, err := store.Get(ex.Request)
+	req, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("stored request: %v", err)
 	}

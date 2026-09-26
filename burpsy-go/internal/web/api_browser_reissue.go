@@ -106,7 +106,7 @@ func (s *Server) handleRepeaterBrowserReissue(w http.ResponseWriter, r *http.Req
 		http.Error(w, "refused: "+s.scope.Explain(ex.Host, ex.Port, ex.Path, ex.TLS), http.StatusForbidden)
 		return
 	}
-	msg, err := s.store.Get(ex.Request)
+	msg, err := s.store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		http.Error(w, "the stored request could not be read back", http.StatusInternalServerError)
 		return
@@ -166,7 +166,7 @@ func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "the exchange this URL was minted for is no longer in the store", http.StatusNotFound)
 		return
 	}
-	msg, err := s.store.Get(ex.Request)
+	msg, err := s.store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		http.Error(w, "the stored request could not be read back", http.StatusInternalServerError)
 		return
@@ -206,7 +206,7 @@ func (s *Server) handleBrowserReissueFetch(w http.ResponseWriter, r *http.Reques
 		status := parseResponseStatus(respBytes)
 		notes := "browser re-issue (" + rec.variant + " session)"
 		sent := &core.Exchange{
-			Request: reqID, Response: &respID,
+			Request: core.MsgPtr(reqID), Response: &respID,
 			Host: ex.Host, Port: ex.Port, TLS: ex.TLS,
 			Method: ex.Method, Path: ex.Path, Status: status,
 			Protocol:   core.ProtocolHTTP1,

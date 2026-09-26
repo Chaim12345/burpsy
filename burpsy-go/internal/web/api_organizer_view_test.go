@@ -52,7 +52,7 @@ func captureExchange(t *testing.T, s *Server, host, path string, status uint16, 
 	code := status
 	ex := &core.Exchange{
 		Host: host, Port: 443, TLS: true, Method: "GET", Path: path,
-		Request: reqID, Response: &respID, Status: &code,
+		Request: core.MsgPtr(reqID), Response: &respID, Status: &code,
 		Mime: core.MimeEssence([]byte(res)),
 	}
 	s.store.AddExchange(ex)
@@ -67,7 +67,7 @@ func captureRequestOnly(t *testing.T, s *Server, host, path string) int {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ex := &core.Exchange{Host: host, Port: 443, TLS: true, Method: "GET", Path: path, Request: reqID}
+	ex := &core.Exchange{Host: host, Port: 443, TLS: true, Method: "GET", Path: path, Request: core.MsgPtr(reqID)}
 	s.store.AddExchange(ex)
 	return int(ex.ID)
 }
@@ -138,7 +138,7 @@ func TestOrganizerRowCarriesRequestAndResponseMessageIds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/admin", Request: reqID, Response: &respID}
+	ex := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/admin", Request: core.MsgPtr(reqID), Response: &respID}
 	s.store.AddExchange(ex)
 	s.organizer.Add(int(ex.ID))
 
@@ -190,7 +190,7 @@ func TestOrganizerRowCarriesTheOriginatingTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	attributed := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/a", Request: reqID, Source: core.SourceIntruder}
+	attributed := &core.Exchange{Host: "app.test", Port: 443, TLS: true, Method: "GET", Path: "/a", Request: core.MsgPtr(reqID), Source: core.SourceIntruder}
 	s.store.AddExchange(attributed)
 	s.organizer.Add(int(attributed.ID))
 

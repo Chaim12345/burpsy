@@ -27,7 +27,7 @@ func inBrowserSeed(t *testing.T, s *Server, response string) core.ExchangeID {
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "shop.test",
 		Port:     80,
@@ -101,7 +101,7 @@ func TestResponseInBrowserNamesAMissingResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := uint16(200)
-	ex := &core.Exchange{Request: reqID, Host: "h", Port: 80, Method: "GET", Path: "/x", Status: &status}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Host: "h", Port: 80, Method: "GET", Path: "/x", Status: &status}
 	s.store.AddExchange(ex)
 
 	rec := httptest.NewRecorder()

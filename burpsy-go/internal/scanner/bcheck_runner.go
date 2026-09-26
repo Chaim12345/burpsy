@@ -144,7 +144,7 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	// The request is optional: a host-given check can run on the response
 	// alone, but an insertion-point or `send request` check needs the bytes and
 	// will refuse (SendFailed) rather than guess.
-	if req, err := s.store.Get(ex.Request); err == nil {
+	if req, err := s.store.Get(core.MsgOrZero(ex.Request)); err == nil {
 		bctx.Request = req.Raw()
 	}
 	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s)}

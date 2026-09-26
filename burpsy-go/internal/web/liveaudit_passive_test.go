@@ -47,7 +47,7 @@ func TestTheSweepRunsPassiveChecksOnCapturedTraffic(t *testing.T) {
 	reqID, _ := s.store.Put([]byte("GET /login HTTP/1.1\r\nHost: "+host+"\r\n\r\n"), core.DirectionRequest)
 	respID, _ := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<form action=\"http://"+host+"/login\" method=\"POST\"><input type=\"password\" name=\"password\"></form>"), core.DirectionResponse)
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: "/login",
+		Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: "/login",
 		Source: core.SourceProxy,
 	})
 
@@ -78,7 +78,7 @@ func TestTheActiveSessionMergesIntoTheSweepPassiveFinding(t *testing.T) {
 	rawResp := "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<form action=\"http://app.test/login\" method=\"POST\"><input type=\"password\" name=\"password\"></form>"
 	reqID, _ := store.Put([]byte("GET /login HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
 	respID, _ := store.Put([]byte(rawResp), core.DirectionResponse)
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "app.test", Port: 80, Method: "GET", Path: "/login"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "app.test", Port: 80, Method: "GET", Path: "/login"}
 	store.AddExchange(ex)
 
 	scan := scanner.NewActiveScanner(store, zap.NewNop()).WithConfig(&scanner.ScanConfig{MaxConcurrency: 1, CheckPassivePosture: true, CheckPassiveAnalysis: true})

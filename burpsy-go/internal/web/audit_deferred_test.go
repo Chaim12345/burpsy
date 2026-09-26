@@ -53,7 +53,7 @@ func TestAWEBLaunchedAuditSettlesItsStoredClaimsInTheSameRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("put response: %v", err)
 		}
-		ex := &core.Exchange{Request: reqID, Response: &respID,
+		ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID,
 			Host: host, Port: uint16(port), TLS: false, Method: "GET", Path: path}
 		store.AddExchange(ex)
 		ids = append(ids, ex.ID)
@@ -141,7 +141,7 @@ func TestASingleItemAuditReplyCarriesTheDeferredPhase(t *testing.T) {
 		if err != nil {
 			t.Fatalf("put response: %v", err)
 		}
-		ex := &core.Exchange{Request: reqID, Response: &respID,
+		ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID,
 			Host: host, Port: uint16(port), TLS: false, Method: "GET", Path: path}
 		store.AddExchange(ex)
 		if path == "/comment?comment=hello" {
@@ -188,7 +188,7 @@ func TestAnAuditThatPlantedNothingSendsNoSecondPassTraffic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put resp: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID,
 		Host: "h.test", Port: 80, TLS: false, Method: "GET", Path: "/shop"}
 	s.store.AddExchange(ex)
 

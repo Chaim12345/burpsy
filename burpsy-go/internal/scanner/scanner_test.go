@@ -41,7 +41,7 @@ func TestAuditSendsRealRequests(t *testing.T) {
 	respRaw := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<html><body>seed</body></html>")
 	respID, _ := store.Put(respRaw, core.DirectionResponse)
 	store.AddExchange(&core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "127.0.0.1",
 		Port:     uint16(portU64),
@@ -94,7 +94,7 @@ func TestAuditFallsBackToStoredResponse(t *testing.T) {
 	respRaw := []byte("HTTP/1.1 200 OK\r\n\r\n<html>hello root:x:0:0: world</html>")
 	respID, _ := store.Put(respRaw, core.DirectionResponse)
 	store.AddExchange(&core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "h",
 		Port:     80,

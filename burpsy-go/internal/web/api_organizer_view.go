@@ -129,7 +129,7 @@ func (s *Server) organizerView() []organizerItemView {
 		// serialise as `"request":0`, not be dropped by omitempty the way a bare zero value would be
 		// — the exact bug the package comment above (byRequest, ExchangeID 0) already guards against
 		// elsewhere in this codebase.
-		request := uint64(exchange.Request)
+		request := uint64(core.MsgOrZero(exchange.Request))
 		view.Request = &request
 		if exchange.Response != nil {
 			response := uint64(*exchange.Response)

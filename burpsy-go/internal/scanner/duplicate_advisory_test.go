@@ -41,7 +41,7 @@ func frameableExchange(t *testing.T, store *core.TrafficStore, respHeaders strin
 		t.Fatalf("put response: %v", err)
 	}
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "example.test",
 		Port:     80,

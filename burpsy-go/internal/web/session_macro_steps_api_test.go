@@ -39,7 +39,7 @@ func seedHistoryRow(t *testing.T, s *Server, host string, port uint16, tls bool,
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Host: host, Port: port, TLS: tls, Method: "GET", Path: "/"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Host: host, Port: port, TLS: tls, Method: "GET", Path: "/"}
 	s.store.AddExchange(ex)
 	return ex.ID
 }
@@ -151,7 +151,7 @@ func TestTheVariantSelectsWhichReadingOfTheRequestIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put original request: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, RequestOriginal: &origID, Host: "shop.test", Port: 80, Method: "GET", Path: "/page"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), RequestOriginal: &origID, Host: "shop.test", Port: 80, Method: "GET", Path: "/page"}
 	s.store.AddExchange(ex)
 
 	edited := postMacroSteps(t, s, map[string]any{"exchanges": []uint64{uint64(ex.ID)}})

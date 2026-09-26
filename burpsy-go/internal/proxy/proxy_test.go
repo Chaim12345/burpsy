@@ -306,7 +306,7 @@ func TestConnectPassthroughBlind(t *testing.T) {
 	if exchanges[0].Method != "CONNECT" || !exchanges[0].TLS {
 		t.Errorf("exchange = %+v, want CONNECT tunnel marked TLS", exchanges[0])
 	}
-	if _, err := store.Get(exchanges[0].Request); err == nil {
+	if _, err := store.Get(core.MsgOrZero(exchanges[0].Request)); err == nil {
 		t.Error("passthrough tunnel should not store request messages")
 	}
 }

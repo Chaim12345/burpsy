@@ -88,7 +88,7 @@ func scannerWithResponse(t *testing.T, path, rawResponse string) (*ActiveScanner
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 443, TLS: true, Method: "GET", Path: path}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 443, TLS: true, Method: "GET", Path: path}
 	store.AddExchange(ex)
 	s := NewActiveScanner(store, zap.NewNop())
 	return s, ex

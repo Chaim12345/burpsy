@@ -28,7 +28,7 @@ func seedCSRFExchange(t *testing.T, s *Server, rawRequest string, ex *core.Excha
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex.Request = reqID
+	ex.Request = core.MsgPtr(reqID)
 	ex.Response = &respID
 	s.store.AddExchange(ex)
 	return uint64(ex.ID)

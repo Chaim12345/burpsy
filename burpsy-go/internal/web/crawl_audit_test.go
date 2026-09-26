@@ -286,7 +286,7 @@ func recordCompleteExchange(t *testing.T, s *Server, host, path string) {
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     host,
 		Port:     80,

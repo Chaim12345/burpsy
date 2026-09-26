@@ -303,7 +303,7 @@ func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
 		}
 		// Both must have stored the request they sent, too: an exchange is a pair, and half of one is
 		// exactly what this refactor removed the ability to record.
-		if _, err := leg.store.Get(leg.ex.Request); err != nil {
+		if _, err := leg.store.Get(core.MsgOrZero(leg.ex.Request)); err != nil {
 			t.Errorf("%s: the request id does not resolve: %v", leg.name, err)
 		}
 	}

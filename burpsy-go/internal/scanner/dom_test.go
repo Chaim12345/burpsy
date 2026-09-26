@@ -720,7 +720,7 @@ func domExchangeWithBody(t *testing.T, store *core.TrafficStore, host, contentTy
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: 443, TLS: true, Method: "GET", Path: "/", Status: &status,
 	}
 	store.AddExchange(ex)

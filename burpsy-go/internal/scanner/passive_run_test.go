@@ -31,7 +31,7 @@ func passiveFixtureExchange(t *testing.T, store *core.TrafficStore, host string,
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port, Method: "POST", Path: "/login"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "POST", Path: "/login"}
 	store.AddExchange(ex)
 	return ex
 }
@@ -100,7 +100,7 @@ func TestRunPassiveChecksReadsTheCapturedExchangeOnly(t *testing.T) {
 	store := core.NewTrafficStore()
 	// No response: nothing for a passive row to read.
 	reqID, _ := store.Put([]byte("GET /x HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
-	ex := &core.Exchange{Request: reqID, Response: nil, Host: "app.test", Port: 80, Method: "GET", Path: "/x"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: nil, Host: "app.test", Port: 80, Method: "GET", Path: "/x"}
 	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: true, CheckPassiveAnalysis: true})
 	if got := s.RunPassiveChecks(context.Background(), ex); len(got) != 0 {
 		t.Fatalf("an exchange with no response produced %d findings — a passive row read bytes that do not exist", len(got))

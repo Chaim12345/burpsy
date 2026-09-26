@@ -42,7 +42,7 @@ func TestAReSeenIdenticalRequestIsDeduplicatedNotReAudited(t *testing.T) {
 		reqID, _ := s.store.Put(raw1, core.DirectionRequest)
 		respID, _ := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), core.DirectionResponse)
 		s.store.AddExchange(&core.Exchange{
-			Request: reqID, Response: &respID,
+			Request: core.MsgPtr(reqID), Response: &respID,
 			Host: host, Port: port, Method: "POST", Path: "/login",
 			RequestFP: core.RequestFingerprint(raw1),
 			Source:    core.SourceProxy,
@@ -85,7 +85,7 @@ func TestChangedContentAtTheSamePathStillAudits(t *testing.T) {
 		reqID, _ := s.store.Put(raw, core.DirectionRequest)
 		respID, _ := s.store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), core.DirectionResponse)
 		s.store.AddExchange(&core.Exchange{
-			Request: reqID, Response: &respID,
+			Request: core.MsgPtr(reqID), Response: &respID,
 			Host: host, Port: port, Method: "POST", Path: "/login",
 			RequestFP: core.RequestFingerprint(raw),
 			Source:    core.SourceProxy,

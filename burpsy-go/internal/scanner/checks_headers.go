@@ -302,7 +302,7 @@ func requestRaw(s *ActiveScanner, exchange *core.Exchange) string {
 	if s == nil || exchange == nil {
 		return ""
 	}
-	msg, err := s.store.Get(exchange.Request)
+	msg, err := s.store.Get(core.MsgOrZero(exchange.Request))
 	if err != nil {
 		return ""
 	}

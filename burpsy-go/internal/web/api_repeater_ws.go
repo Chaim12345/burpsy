@@ -210,7 +210,7 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 		// The subprotocol comes off the ORIGINAL request bytes: the server's answer to
 		// "which protocol" is a fact of the conversation, and re-offering exactly what the
 		// original offered is the only way a fresh dial speaks the same one.
-		if msg, rerr := s.store.Get(ex.Request); rerr == nil {
+		if msg, rerr := s.store.Get(core.MsgOrZero(ex.Request)); rerr == nil {
 			subprotocol = strings.TrimSpace(string(msg.Header("Sec-WebSocket-Protocol")))
 		}
 	}
@@ -288,7 +288,7 @@ func (s *Server) recordWsSend(
 	}
 	status := uint16(101)
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: port, TLS: tls, Method: "GET", Path: path,
 		Status: &status, Protocol: core.ProtocolHTTP1,
 	}

@@ -596,7 +596,7 @@ func TestWsConnectionsFoldsTheIndexAndJoinsToTheHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ts.AddExchange(&Exchange{Request: req, Host: "t.test", Port: 8443, TLS: true, Method: "GET", Path: "/chat"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(req), Host: "t.test", Port: 8443, TLS: true, Method: "GET", Path: "/chat"})
 	ex := ts.Exchanges()[0]
 
 	for i, m := range []struct {

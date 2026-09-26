@@ -18,7 +18,7 @@ func ptrMsg(id MsgId) *MsgId { return &id }
 // id it wanted rather than printing two opaque addresses.
 func fixedExchange() *Exchange {
 	return &Exchange{
-		Request:  MsgId(10),
+		Request:  MsgPtr(MsgId(10)),
 		Response: ptrMsg(MsgId(20)),
 	}
 }
@@ -105,7 +105,7 @@ func TestAMessageChangedTwiceKeepsThreeDistinctReadings(t *testing.T) {
 // with ok=true would make a viewer fetch message 0, which is a real message belonging to something
 // else.
 func TestAnExchangeWithNoResponseHasNoResponseReadings(t *testing.T) {
-	ex := &Exchange{Request: MsgId(10)}
+	ex := &Exchange{Request: MsgPtr(MsgId(10))}
 	for _, variant := range []Variant{VariantOriginal, VariantAutoModified, VariantEdited} {
 		if id, ok := ex.VariantFor(DirectionResponse, variant); ok {
 			t.Errorf("VariantFor(response, %s) = (%d, true), want ok=false for an exchange with no response", variant, id)

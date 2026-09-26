@@ -62,7 +62,7 @@ func seedRepetitiveExchange(t *testing.T, host string, port uint16, n int) *core
 		t.Fatalf("put response: %v", err)
 	}
 	store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: port, Method: "GET", Path: "/r",
 	})
 	return store
@@ -132,7 +132,7 @@ func TestADifferentKindOrHostIsNotTheSamePrior(t *testing.T) {
 	raw := fmt.Sprintf("GET /r?q0=x&q1=x HTTP/1.1\r\nHost: %s\r\nCookie: c=v\r\n\r\n", host)
 	reqID, _ := store.Put([]byte(raw), core.DirectionRequest)
 	respID, _ := store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nplain"), core.DirectionResponse)
-	store.AddExchange(&core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: "/r"})
+	store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: "/r"})
 
 	scan := NewActiveScanner(store, zap.NewNop()).WithSender(sender.NewSender(nil)).
 		WithConfig(&ScanConfig{MaxConcurrency: 1, CheckSqli: true})
@@ -189,7 +189,7 @@ func TestTheRunPriorAccumulatesAcrossItems(t *testing.T) {
 		raw := fmt.Sprintf("GET /r%d?q0=x&q1=x HTTP/1.1\r\nHost: %s\r\n\r\n", i, host)
 		reqID, _ := store.Put([]byte(raw), core.DirectionRequest)
 		respID, _ := store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nplain"), core.DirectionResponse)
-		store.AddExchange(&core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: fmt.Sprintf("/r%d", i)})
+		store.AddExchange(&core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: fmt.Sprintf("/r%d", i)})
 	}
 	scan := NewActiveScanner(store, zap.NewNop()).WithSender(sender.NewSender(nil)).
 		WithConfig(&ScanConfig{MaxConcurrency: 1, CheckSqli: true})

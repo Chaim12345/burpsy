@@ -33,7 +33,7 @@ func stalledExchange(t *testing.T, s *Server, host, path string) *core.Exchange 
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Host: host, Port: 80, Method: "GET", Path: path}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Host: host, Port: 80, Method: "GET", Path: path}
 	s.store.AddExchange(ex)
 	return ex
 }
@@ -60,7 +60,7 @@ func completeExchange(t *testing.T, s *Server, host, path string) *core.Exchange
 		t.Fatalf("put response: %v", err)
 	}
 	status := uint16(200)
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: 80, Method: "GET", Path: path, Status: &status}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: 80, Method: "GET", Path: path, Status: &status}
 	s.store.AddExchange(ex)
 	return ex
 }

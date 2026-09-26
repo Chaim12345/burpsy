@@ -68,7 +68,7 @@ func seedHostExchange(t *testing.T, s *Server, host string, port uint16, path st
 		t.Fatalf("put response: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: path,
+		Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: path,
 		Source: core.SourceProxy,
 	})
 	return core.ExchangeID(len(s.store.Exchanges())) - 1

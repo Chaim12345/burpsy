@@ -114,9 +114,13 @@ func ParseConfidence(v string) Confidence {
 // is also what keeps findings persisted before this field existed resolving correctly.
 type Occurrence struct {
 	ExchangeID ExchangeID
-	Request    MsgId
-	Response   *MsgId
-	Span       Span
+	// Request mirrors core.Exchange.Request, for the same reason and with the same hazard: message ids
+	// are a dense counter from zero, so a bare MsgId cannot say "no request" — its zero is the first
+	// message the project ever captured. A finding attributed to a request-less row would otherwise
+	// point at that message (burpsy-react-ui-wtov).
+	Request  *MsgId
+	Response *MsgId
+	Span     Span
 }
 
 // FindingTarget is the logical location a finding is about — the thing two findings must agree on

@@ -10,7 +10,7 @@ import (
 func TestCookiesTitleSurviveSaveLoadRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	ex := &core.Exchange{
-		Request: 1, Host: "roundtrip.test", Port: 80, Method: "GET", Path: "/",
+		Request: core.MsgPtr(core.MsgId(1)), Host: "roundtrip.test", Port: 80, Method: "GET", Path: "/",
 		Cookies: []string{"sid", "theme"}, Title: "Roundtrip Shop",
 	}
 	s.SaveExchange(ex)

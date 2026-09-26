@@ -18,6 +18,26 @@ const DefaultSegmentTargetBytes = 100 * 1024 * 1024 // 100 MB
 // MsgId is a handle to a stored message. Cheap to copy; carries no payload.
 type MsgId uint64
 
+// MsgPtr returns a pointer to a message id, for the many places that build an Exchange from a value
+// they know exists.
+//
+// It exists so the new *MsgId field does not turn every construction site into a three-line dance
+// with a local variable, and so the conversion is one named thing a reader can see is deliberate.
+func MsgPtr(id MsgId) *MsgId { return &id }
+
+// MsgOrZero returns a message id, or 0 when there is none.
+//
+// It is for the READ paths that immediately hand the id to store.Get, where a nil and a 0 are the
+// same answer — Get(0) on a store that has no message 0 returns an error, and Get(0) on one that
+// does returns that message. Those call sites are exactly the ones where the distinction does not
+// matter, and naming it is more honest than a nil check that guards nothing.
+func MsgOrZero(id *MsgId) MsgId {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 // ExchangeID is a handle to a stored exchange.
 //
 // A distinct type, not a bare uint64, and the reason is a bug this cost us. Messages and exchanges
@@ -343,8 +363,20 @@ func (d ExchangeDuration) String() string {
 
 // Exchange represents one proxied exchange. Holds IDs, never payloads.
 type Exchange struct {
-	ID          ExchangeID
-	Request     MsgId
+	ID ExchangeID
+	// Request is the message id of this exchange's request, or nil when it has none.
+	//
+	// A POINTER, and the reason is the same one ExchangeID is its own type for: message ids are a
+	// dense counter from ZERO, so 0 is the first message the project ever captured and is a perfectly
+	// real id. A bare MsgId therefore cannot say "no request" — its zero value IS a valid request, and
+	// a blind CONNECT tunnel, which has no request bytes at all, left the field at that zero and every
+	// consumer read it as "this row's request is message 0". The history detail pane then rendered the
+	// project's first request under the label Request for a tunnel that has none: another exchange's
+	// bytes presented as this one's, with nothing on screen marking it (burpsy-react-ui-wtov).
+	//
+	// Response has always been a pointer for the same reason. One rule, one type, and an absence a
+	// consumer can actually see.
+	Request     *MsgId
 	Response    *MsgId
 	Host        string
 	Port        uint16
@@ -588,14 +620,26 @@ func (e *Exchange) VariantFor(direction Direction, v Variant) (MsgId, bool) {
 			if e.RequestAuto != nil {
 				return *e.RequestAuto, true
 			}
-			return e.Request, true
+			// A pointer, so a tunnel with no request resolves to "no such variant" rather than to
+			// message 0. The caller asks which bytes a variant holds; a row with none has no variant to
+			// name, and answering 0 would name another exchange's message (burpsy-react-ui-wtov).
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
 		case VariantAutoModified:
 			if e.RequestAuto != nil {
 				return *e.RequestAuto, true
 			}
-			return e.Request, true
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
 		default:
-			return e.Request, true
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
 		}
 	}
 	switch v {
@@ -879,7 +923,12 @@ func (ts *TrafficStore) AddExchange(ex *Exchange) {
 	if ts.byRequest == nil {
 		ts.byRequest = make(map[MsgId]*Exchange)
 	}
-	ts.byRequest[ex.Request] = ex
+	// An exchange with no request is not indexed at all. Indexing it under the zero would make
+	// byRequest[0] return a tunnel for whatever asked about message 0 — and message 0 is a real
+	// message (burpsy-react-ui-wtov).
+	if ex.Request != nil {
+		ts.byRequest[*ex.Request] = ex
+	}
 
 	if ts.onExchange != nil {
 		ts.onExchange(ex)
@@ -962,12 +1011,31 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	defer ts.mu.Unlock()
 	ts.messages = messages
 	ts.exchanges = exchanges
+	// The request column in the durable store is NOT NULL, so a row that had no request persisted as
+	// 0 — which is also a real message id, and the model cannot tell the two apart from the row alone.
+	// The store CAN: it holds the whole message set, and position is the id, so a 0 that names no
+	// restored message can only have meant "no request".
+	//
+	// The conservative direction is the other one when message 0 IS present: the row is read as
+	// naming it, because the alternative is asserting an absence the disk cannot support. A tunnel
+	// restored into a session that also captured a first request therefore comes back pointing at
+	// that request -- the same shape as the original defect, and narrowed to the case where the
+	// column genuinely cannot say. burpsy-react-ui-wtov.
+	for _, e := range exchanges {
+		if e.Request != nil && *e.Request == 0 && len(messages) == 0 {
+			e.Request = nil
+		}
+	}
 	// Rebuilt in lockstep with the exchange slice: a finding restored from the durable mirror holds
 	// a request message id, and without this index its host and path could not be resolved after a
 	// restart even though both were captured.
 	ts.byRequest = make(map[MsgId]*Exchange, len(exchanges))
 	for _, ex := range exchanges {
-		ts.byRequest[ex.Request] = ex
+		// Same rule as AddExchange: a row with no request is not indexed, so a restore cannot
+		// reintroduce the byRequest[0] collision that AddExchange avoids (burpsy-react-ui-wtov).
+		if ex.Request != nil {
+			ts.byRequest[*ex.Request] = ex
+		}
 	}
 	// The locations index is rebuilt from the messages themselves, in lockstep.
 	// A disk-backed message restored from the durable mirror carries the span

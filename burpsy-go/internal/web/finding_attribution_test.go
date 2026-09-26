@@ -136,7 +136,7 @@ func TestExchangeByRequestResolvesTheOwnerNotTheSameNumberedExchange(t *testing.
 	}
 
 	for _, want := range exchanges {
-		got, err := store.ExchangeByRequest(want.Request)
+		got, err := store.ExchangeByRequest(core.MsgOrZero(want.Request))
 		if err != nil {
 			t.Fatalf("request message %d: %v", want.Request, err)
 		}

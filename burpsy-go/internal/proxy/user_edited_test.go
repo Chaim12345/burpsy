@@ -163,7 +163,7 @@ func TestBurbysOwnRequestRewritesDoNotMarkTheRowEdited(t *testing.T) {
 	}
 
 	ex := awaitExchangeFor(t, store, "/target", "proxy")
-	recorded := messageText(t, store, ex.Request)
+	recorded := messageText(t, store, core.MsgOrZero(ex.Request))
 	if recorded == fmt.Sprintf(sent, origin.Addr().String()) {
 		t.Fatalf("the recorded request is byte-for-byte what the client sent, so nothing was rewritten and the flag assertion below would pass vacuously:\n%s", recorded)
 	}

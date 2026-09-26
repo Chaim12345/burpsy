@@ -78,7 +78,7 @@ func (s *ActiveScanner) checkJWTWeak(ctx context.Context, exchange *core.Exchang
 	if err != nil {
 		return nil
 	}
-	req, err := s.store.Get(exchange.Request)
+	req, err := s.store.Get(core.MsgOrZero(exchange.Request))
 	if err != nil {
 		// Scan counts this: the request side was never examined, so Authorization headers were not
 		// looked at for this exchange.

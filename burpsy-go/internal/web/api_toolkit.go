@@ -884,7 +884,7 @@ func (s *Server) issuesByNode() map[string]*issueAgg {
 		rank := int(f.EffectiveSeverity())
 		// One finding seen at three places marks three nodes; that is what "where are my issues" means.
 		for _, occ := range f.Occurrences {
-			ex, err := s.store.ExchangeByRequest(occ.Request)
+			ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 			if err != nil {
 				continue // unresolvable: counted nowhere rather than blamed on a guess
 			}

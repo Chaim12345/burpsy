@@ -45,7 +45,7 @@ func addTestExchange(t *testing.T, s *Server) core.ExchangeID {
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/x"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/x"}
 	s.store.AddExchange(ex)
 	return ex.ID
 }

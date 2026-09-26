@@ -742,7 +742,16 @@ export function HistoryPage(): JSX.Element {
    <HttpEditor
     label="Request"
     readOnly
-    value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+    // A row with NO request says so, with the reason, the way the response pane already does. A
+    // blind CONNECT tunnel is the one case: the proxy relayed it without looking inside, and there
+    // are no request bytes to show. Before the wire made the absence a null this pane read message 0
+    // and displayed the project's first request under the label Request for this row — another
+    // exchange's bytes, with nothing marking it (burpsy-react-ui-wtov).
+    value={
+     selected.request === null
+      ? "No request was captured for this exchange — it is a blind tunnel, relayed without being read."
+      : (request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
+    }
     filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
     menuGroups={actions.menu(selected)}
     // The stored-message id behind this reading, so a loaded plugin's editor tab can render

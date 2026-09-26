@@ -671,7 +671,7 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
 		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
+		ex.ID, uint64(core.MsgOrZero(ex.Request)), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
 		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
@@ -841,9 +841,19 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		default:
 			ex.Duration = core.UnmeasuredDuration()
 		}
-		ex.Request = core.MsgId(request)
-		if v, ok := response.(int64); ok {
-			msg := core.MsgId(v)
+		// The response column is NULLable, so a NULL there is an absence the model can hold. The
+		// request column is NOT NULL -- SQLite cannot relax that with ALTER TABLE, and rebuilding the
+		// table to widen one column is a migration this change does not justify -- so a request-less
+		// row persists as 0.
+		//
+		// That 0 is AMBIGUOUS on disk: it is also a real message id. The model disambiguates on the
+		// way IN (a tunnel arrives with a nil Request) and cannot on the way OUT, because the column
+		// does not say which it was. So a restored row is asked which: if message 0 is not in the
+		// restored set, nothing can have meant it, and the row has no request. If it IS there, the
+		// column is read as naming it -- which is the conservative direction, because the alternative
+		// is asserting an absence the disk cannot support. burpsy-react-ui-wtov.
+		if response, ok := response.(int64); ok {
+			msg := core.MsgId(response)
 			ex.Response = &msg
 		}
 		ex.Port = uint16(port)

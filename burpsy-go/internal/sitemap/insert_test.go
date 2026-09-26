@@ -110,5 +110,5 @@ func sitemapExchange(t *testing.T, host string, port uint16, tls bool, path stri
 		t.Fatalf("put request: %v", err)
 	}
 	status := uint16(200)
-	return &core.Exchange{Request: id, Host: host, Port: port, TLS: tls, Method: "GET", Path: path, Status: &status}
+	return &core.Exchange{Request: core.MsgPtr(id), Host: host, Port: port, TLS: tls, Method: "GET", Path: path, Status: &status}
 }
