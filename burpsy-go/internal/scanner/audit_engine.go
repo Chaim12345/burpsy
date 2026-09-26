@@ -1115,6 +1115,16 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	if err != nil || ex == nil {
 		return refuse(nil, ItemStateUnauditable, "no such exchange")
 	}
+	// An operator's cancel, read here rather than in the session loop so every dispatch path gets it
+	// (AuditWithin and AuditMultiple both land in this function). Checked AFTER the exchange resolves
+	// and BEFORE scope, because a cancelled item is still a real item about a real request: the row
+	// must carry its host and path so the queue can show which URL the operator reclaimed, and a
+	// cancel that arrived before the engine got here must not lose the identity to save one lookup.
+	if run.cfg.Items.Cancelled(exchangeID) {
+		// The row already holds ItemStateCancelled from Cancel, so this returns the state the
+		// operator asked for rather than a second, differently-worded one.
+		return refuse(ex, ItemStateCancelled, "cancelled by the operator")
+	}
 	// Scope first, before a single byte is built. Sending unsolicited requests to a host outside the
 	// engagement is the one bug in this package that would matter outside the tool.
 	if s.scope != nil && !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {

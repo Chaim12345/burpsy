@@ -20,7 +20,7 @@ import { Badge, Button, Card, Empty, ErrorNotice, Metric, Tabs, TabsContent, Tab
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
-import { useAuditItemAgain, useAuditItems } from "../lib/data.auditqueue";
+import { useAuditItemAgain, useAuditItemCancel, useAuditItems } from "../lib/data.auditqueue";
 import { itemProgress, itemTiming } from "../lib/audit-queue-item";
 import { useHistory, useMessage } from "../lib/data";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
@@ -39,6 +39,7 @@ function stateTone(state: string): "good" | "bad" | "warn" | "info" {
 export function AuditQueuePage(): JSX.Element {
  const queue = useAuditItems();
  const again = useAuditItemAgain();
+ const cancel = useAuditItemCancel();
  const [expanded, setExpanded] = useState<number | null>(null);
  /** Selection is the queue row's seq: a refetch reorders nothing (seq is stable), ids survive it. */
  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
@@ -184,11 +185,34 @@ export function AuditQueuePage(): JSX.Element {
            >
             Audit again
            </Button>
+           {/* Cancel (burpsy-react-ui-exiu). Enabled only while the item is still queued, because that
+               is the only state the server will move it from — the button is present and disabled
+               with its reason rather than hidden, so a row that cannot be cancelled says so instead
+               of looking like a row whose control is missing. */}
+           <Button
+            variant="outline"
+            size="small"
+            disabled={cancel.isPending || item.state !== "pending"}
+            title={
+             item.state === "pending"
+              ? `Stop auditing exchange #${item.exchange_id} and nothing else`
+              : `This item is ${item.status_label || item.state}, so it cannot be cancelled`
+            }
+            onClick={(event) => {
+             event.stopPropagation();
+             cancel.mutate(item.exchange_id, {
+              onSuccess: (result) => toast.success(`Cancelled exchange #${item.exchange_id}: ${result.reason}`),
+              onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Cancel failed"),
+             });
+            }}
+           >
+            Cancel
+           </Button>
           </td>
          </tr>
          {expanded === item.seq && item.insertion_points?.length ? (
           <tr key={`${item.seq}-points`}>
-           <td colSpan={6}>
+           <td colSpan={9}>
             <div className="stack">
              <span className="cell-dim">
               {item.insertion_points.length} insertion point(s) recorded for seq {item.seq}

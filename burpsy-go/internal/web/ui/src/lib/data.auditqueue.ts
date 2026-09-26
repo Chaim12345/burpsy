@@ -92,6 +92,25 @@ export function useAuditItems(): ReturnType<typeof useQuery<AuditItemsResponse>>
 }
 
 /** Burp's auditItemContextMenuAuditAgain: re-run the whole check set against a live target. */
+/**
+ * Burp's `auditItemContextMenuCancel` (running-scans/results/audit-items/index.html:102-115).
+ *
+ * Stops ONE queued item and nothing else (burpsy-react-ui-exiu). The alternatives were waiting for
+ * a slow or heavily-guarded URL to exhaust its own bounds, or disabling the enclosing live task,
+ * which stops every item including the ones that were fine.
+ *
+ * A refusal surfaces rather than being swallowed: the server answers 409 with the reason — the item
+ * already finished, or the queue does not hold it — and a cancel that appeared to work while the
+ * item kept auditing is worse than a control nobody had.
+ */
+export function useAuditItemCancel() {
+  const client = useQueryClient();
+  return useMutation<{ status: string; reason: string }, Error, number>({
+    mutationFn: (exchangeId) => api<{ status: string; reason: string }>(`/api/scanner/audit-items/${exchangeId}/cancel`, json("POST", {})),
+    onSuccess: () => void client.invalidateQueries({ queryKey: keys.auditItems }),
+  });
+}
+
 export function useAuditItemAgain() {
   const client = useQueryClient();
   return useMutation<unknown, Error, number>({

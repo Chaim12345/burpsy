@@ -286,6 +286,48 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(view)
 }
 
+// cancelAuditItem serves POST /api/scanner/audit-items/{id}/cancel — Burp's
+// `auditItemContextMenuCancel` (running-scans/results/audit-items/index.html:102-115).
+//
+// It stops ONE item and nothing else, which is the whole reason it exists: the alternatives are
+// waiting for a slow or heavily-guarded URL to exhaust its own bounds, or disabling the enclosing
+// live task, which stops every item including the ones that were fine. A crawler that reached one
+// bad URL holds a slot and a thread until its budget runs out, and the queue had no way to reclaim
+// just that one (burpsy-react-ui-exiu).
+//
+// Not an attack, so it is not routed through runAudit and needs no config: it sends nothing. The
+// method check comes after the id parse for the same reason the sibling action's does — a URL that
+// names nothing should say so rather than answer "wrong verb".
+//
+// A refusal is a 409 with the reason, not a 400: the request was well-formed and the item simply is
+// not in a state that can be cancelled. Collapsing "no such item" and "this item already finished"
+// into one answer would leave the operator unable to tell a stale row from a live one.
+func (s *Server) cancelAuditItem(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// err != nil only, for the reason handleScannerAuditItemAction states: ids count from zero, so
+	// refusing 0 would make the very first capture the one row that cannot be cancelled.
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
+		return
+	}
+	ok, reason := s.auditItems.Cancel(core.ExchangeID(id))
+	if !ok {
+		// 409, not 404 and not 400: the request was well-formed and the item exists, it is simply not
+		// in a state that can be cancelled. The reason distinguishes "no such item" from "this one
+		// already finished", which an operator needs to tell a stale row from a live one.
+		http.Error(w, reason, http.StatusConflict)
+		return
+	}
+	// The refreshed row, so a client does not have to re-list to see the cancel it just caused — the
+	// same contract the sibling action keeps.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "reason": reason, "item": s.auditItemRow(core.ExchangeID(id))})
+}
+
 // handleScannerAuditItemAction serves POST /api/scanner/audit-items/{id}/again — Burp's
 // `auditItemContextMenuAuditAgain`.
 //
@@ -304,9 +346,14 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 	// The path is resolved before the method is checked, so a bogus segment answers 404 "no such
 	// action" whatever the verb — a truer answer than "wrong verb" for a URL that names nothing. The
 	// route manifest marks this pathValidatedFirst so its 405 test sends a valid segment.
-	if !ok || action != "again" {
-		http.Error(w, "no such audit-item action; the only one is POST /api/scanner/audit-items/{id}/again",
+	if !ok || (action != "again" && action != "cancel") {
+		http.Error(w, "no such audit-item action; the two are POST /api/scanner/audit-items/{id}/again "+
+			"and POST /api/scanner/audit-items/{id}/cancel",
 			http.StatusNotFound)
+		return
+	}
+	if action == "cancel" {
+		s.cancelAuditItem(w, r, idStr)
 		return
 	}
 	// `err != nil` only. Exchange ids are a dense counter from zero, so 0 names the first capture of

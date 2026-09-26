@@ -399,11 +399,24 @@ const (
 	// ItemStateUnauditable means there is nothing to audit: the exchange is missing or has no
 	// response yet.
 	ItemStateUnauditable
+	// ItemStateCancelled means an operator stopped this item and nothing else (burpsy-react-ui-exiu).
+	//
+	// Its own state rather than a flavour of ItemStateBounded, because the two are different facts
+	// about coverage and an operator reading one as the other reaches the wrong conclusion: bounded
+	// says the target was too expensive, cancelled says a person stopped it. Burp has CANCELLED for
+	// exactly this reason, and the audit-item context menu offers it (running-scans/results/
+	// audit-items/index.html:102-115).
+	//
+	// Reached only from ItemStatePending — cancelling work already in flight would mean abandoning
+	// a dispatched probe mid-exchange, which the engine cannot do without a per-item context it does
+	// not have. So a cancel lands on the next item's gate, which is where the queue is anyway.
+	ItemStateCancelled
 )
 
-// ItemStateAll is all eight, so a caller can build a histogram without hard-coding which states
-// exist — mirrors DispositionAll and CoverageStateAll for the same reason.
-var ItemStateAll = [8]ItemState{
+// ItemStateAll is all nine, so a caller can build a histogram without hard-coding which states
+// exist — mirrors DispositionAll and CoverageStateAll for the same reason. The array's length is the
+// count a caller would otherwise hand-code, so it is written out rather than derived.
+var ItemStateAll = [9]ItemState{
 	ItemStatePending,
 	ItemStateAuditing,
 	ItemStateAudited,
@@ -412,6 +425,7 @@ var ItemStateAll = [8]ItemState{
 	ItemStatePaused,
 	ItemStateOutOfScope,
 	ItemStateUnauditable,
+	ItemStateCancelled,
 }
 
 // IsTerminal is Burp's `NON_TERMINAL_STATUSES`, inverted: false while work is still outstanding on
@@ -461,6 +475,8 @@ func (s ItemState) Label() string {
 		return "out of scope"
 	case ItemStateUnauditable:
 		return "unauditable"
+	case ItemStateCancelled:
+		return "cancelled"
 	}
 	return "unknown state"
 }

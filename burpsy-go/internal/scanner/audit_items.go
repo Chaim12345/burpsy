@@ -84,6 +84,11 @@ func (s ItemState) BurpStatus() string {
 		return "LIMIT_EXCEEDED"
 	case ItemStateFailed:
 		return "FAILED_TO_SCAN"
+	case ItemStateCancelled:
+		// Burp's own constant, and the reason ItemStateCancelled is its own state: this is a
+		// decision, not a bound. Folding it into LIMIT_EXCEEDED would tell an operator the target was
+		// too expensive to audit when in fact a person stopped it, which is the opposite remedy.
+		return "CANCELLED"
 	}
 	return ""
 }
@@ -110,6 +115,12 @@ func (s ItemState) StatusLabel() string {
 		return "Paused by the failure breaker"
 	case ItemStateOutOfScope:
 		return "Skipped as out of scope"
+	case ItemStateCancelled:
+		// Burp's own string for CANCELLED, and the reason this state exists as its own: "we stopped
+		// this" and "this hit a bound" are different facts about coverage, and an operator reading a
+		// cancelled item as a bounded one concludes the target was too hard rather than that they
+		// stopped it.
+		return "Cancelled"
 	case ItemStateUnauditable:
 		return "Skipped as nothing to audit"
 	}
@@ -583,6 +594,60 @@ func (l *AuditItemLedger) Resolve(id core.ExchangeID, ex *core.Exchange, o Audit
 	l.setStateLocked(row, o.State, o.Cancelled, note)
 	resolvePoints(row, o)
 	row.UpdatedUnixMs = time.Now().UnixMilli()
+}
+
+// Cancel stops one queued item and nothing else (burpsy-react-ui-exiu).
+//
+// Burp's audit-item context menu has offered Cancel since running-scans/results/audit-items/
+// index.html:102-115, and without it the only way to stop one unwanted item is to disable the
+// enclosing live task, which stops everything including the items that are fine. A crawler that
+// reached a slow or heavily-guarded URL holds a slot and a thread until its own bounds expire, and
+// the queue offers no way to reclaim just that one.
+//
+// It only moves a PENDING item. Work already dispatched belongs to a probe in flight and the engine
+// has no per-item context to abandon it with; cancelling there would mean a half-sent request
+// counted as complete. So the cancel is recorded and the item's gate reads it before dispatch —
+// which is where a queued item is anyway, and which is why the state is reachable at all.
+//
+// An item that is not pending is refused rather than relabelled, because moving a finished row to
+// Cancelled would erase the outcome it recorded. "You cannot cancel this" is the honest answer for
+// an item that already finished, and it is different from "no such item".
+func (l *AuditItemLedger) Cancel(id core.ExchangeID) (bool, string) {
+	if l == nil {
+		return false, "no audit queue is being recorded"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	row, ok := l.rows[id]
+	if !ok {
+		return false, "no queued item for that exchange"
+	}
+	if row.State != ItemStatePending {
+		// Not refused as an error — the operator asked for a state and the item already has one. The
+		// reason says which, so the console can say "this item already finished" rather than a bare
+		// failure the operator cannot act on.
+		return false, "this item is already " + row.State.StatusLabel() + ", so it cannot be cancelled"
+	}
+	l.setStateLocked(row, ItemStateCancelled, false,
+		"Cancelled by the operator before this item was dispatched.")
+	row.UpdatedUnixMs = time.Now().UnixMilli()
+	return true, "cancelled"
+}
+
+// Cancelled reports whether an operator cancelled this item, which is the flag auditItem's gate reads
+// before it dispatches.
+//
+// A map on the ledger rather than a field on the row, because the state alone is not enough: the
+// engine sets the terminal state itself, and a cancelled item that has not been reached yet is
+// still Pending on the row while the gate must already say no.
+func (l *AuditItemLedger) Cancelled(id core.ExchangeID) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	row, ok := l.rows[id]
+	return ok && row.State == ItemStateCancelled
 }
 
 // identifyLocked fills in the request identity, when there is one to fill in.

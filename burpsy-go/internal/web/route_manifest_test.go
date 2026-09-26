@@ -639,13 +639,22 @@ var manifest = map[string]route{
 		summary: "the audit queue: per-item state, plan progress, dispositions and the insertion points each covers",
 	},
 	"/api/scanner/audit-items/": {
-		// POST {id}/again only — Burp's "Audit again". riskAttack rather than riskLocal because it is
-		// not a state change on a row: it starts an audit that sends real traffic, through the same
-		// runAudit as /api/audit/{id}. A verb in the path is what makes that classifiable by reading
-		// the route; a PATCH of a "state" field that happened to launch a scan would not be.
+		// Two actions, and they are NOT the same risk, which is the reason the manifest spells both
+		// out rather than inheriting one class for the prefix.
+		//
+		// {id}/again is riskAttack, not riskLocal: it is not a state change on a row, it starts an
+		// audit that sends real traffic, through the same runAudit as /api/audit/{id}. A verb in the
+		// path is what makes that classifiable by reading the route; a PATCH of a "state" field that
+		// happened to launch a scan would not be.
+		//
+		// {id}/cancel is riskLocal: it moves a queue row and sends nothing at all. Reading it as an
+		// attack would make an unattended caller ask a human to confirm the one queue action that
+		// cannot touch the target — and a control nobody can reach unattended is not much of a control
+		// when the queue is filling up unattended, which is the case it exists for.
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0/again",
 		pathValidatedFirst: true,
-		summary:            "re-audit one queued item: POST {id}/again, Burp's auditItemContextMenuAuditAgain",
+		summary: "one queued item: POST {id}/again re-audits it (Burp's auditItemContextMenuAuditAgain); " +
+			"POST {id}/cancel stops it before dispatch and sends nothing (auditItemContextMenuCancel)",
 	},
 	"/api/scanner/config": {
 		methods: []string{"GET", "PUT"}, risk: riskScope,
