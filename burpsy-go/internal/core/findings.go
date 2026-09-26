@@ -263,6 +263,17 @@ type NewFinding struct {
 	// (the first is Name). Zero means the producer did not resolve one, which disables merging for
 	// this finding. See FindingTarget.
 	Target FindingTarget
+	// MergeKey OVERRIDES the target as the second half of this finding's dedup key, for the rows
+	// whose identity is not a location (burpsy-react-ui-7tc1).
+	//
+	// Most rows are about a place, and Name+Target is the right question. A weak-JWT finding is not:
+	// the same key cracked on /api/session and on /login is ONE weakness reported twice, and keying
+	// on the target files it as two issues for one fact. The value here is the producer's own
+	// statement of what makes two of these the same issue — for JWT weak-HMAC, the secret that was
+	// recovered, which is the thing actually proven.
+	//
+	// Empty means the target is the key, which is every row's behaviour before this field existed.
+	MergeKey string
 }
 
 // Finding represents a security finding.
@@ -426,11 +437,26 @@ func (fs *FindingStore) rebuildIndexLocked() {
 // Query strings are deliberately not in the key. /search?q=a and /search?q=b are the same endpoint,
 // and merging across them is precisely the behaviour that turns five parameter hits into one issue.
 func (fs *FindingStore) dedupKeyLocked(name string, t FindingTarget) (string, bool) {
+	return fs.dedupKeyFor(name, t, "")
+}
+
+// dedupKeyFor is dedupKeyLocked with the producer's optional merge key. A non-empty mergeKey
+// REPLACES the target as the second half of the key rather than adding to it, which is the whole
+// point: for a row whose identity is not a location, keying on the location as well would file one
+// proven weakness as several issues.
+func (fs *FindingStore) dedupKeyFor(name string, t FindingTarget, mergeKey string) (string, bool) {
 	if name == "" || t.Host == "" {
 		return "", false
 	}
 	if dedupExemptRows[name] {
 		return "", false
+	}
+	if mergeKey != "" {
+		// Scoped by host as well as the merge key. Two hosts can each ship a JWT signed with the
+		// string "secret", and that is two findings: the weakness is only actionable on the
+		// application that issued the token, and reporting one host's weak key as another host's
+		// issue would be a claim about the wrong system.
+		return name + "\x00" + t.Host + "\x00" + mergeKey, true
 	}
 	if fs.policy != nil {
 		if fs.policy.Exempt[name] {
@@ -469,7 +495,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	key, mergeable := fs.dedupKeyLocked(finding.Name, finding.Target)
+	key, mergeable := fs.dedupKeyFor(finding.Name, finding.Target, finding.MergeKey)
 	if mergeable {
 		if existing, ok := fs.byKey[key]; ok {
 			fs.mergeLocked(existing, finding)

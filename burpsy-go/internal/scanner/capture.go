@@ -47,6 +47,34 @@ import (
 //
 // Copied by value at every call site: the four fields are handles to shared, internally-locked
 // objects, so a copy addresses the same store, the same scanner and the same finding store.
+// coreNewFindingFor converts one scanner finding into the store's shape, against the exchange it was
+// observed on.
+//
+// Named rather than inlined because this conversion is the ONLY place a scanner finding's identity
+// becomes the key the store merges on, and a conversion nothing can call is a conversion nothing can
+// test. Every test that reads a Finding field directly is reading one side of this: the check sets
+// MergeKey, core's store honours it, and deleting the single line that carries it between them left
+// every such test green (burpsy-react-ui-7tc1).
+func coreNewFindingFor(f *Finding, ex *core.Exchange) core.NewFinding {
+	nf := core.NewFinding{
+		Name:        f.Name,
+		Severity:    core.ParseSeverity(f.Severity),
+		Confidence:  core.ParseConfidence(f.Confidence),
+		Description: f.Description,
+		Remediation: f.Solution,
+		Param:       f.Param,
+		// The dedup target, taken from the exchange in hand rather than resolved later. This is
+		// the path that produces the most duplicates by far — a passive check re-fires on every
+		// response — so it is the one that most needs the store to be able to merge.
+		Target: core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path},
+		// A finding may state its own identity where the target is not it (7tc1). Empty for every
+		// row whose issue is a place, which is all of them except JWT weak-HMAC.
+		MergeKey: f.MergeKey,
+	}
+	nf.TaskID = ex.TaskID
+	return nf
+}
+
 type Capture struct {
 	// Store receives both messages and the exchange index row. Required by Record; ScanExchange
 	// needs it only for the DOM pass, which reads the response back out of it.
@@ -458,19 +486,7 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 
 	for _, f := range findings {
 		EnrichFinding(f)
-		nf := core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-			Param:       f.Param,
-			// The dedup target, taken from the exchange in hand rather than resolved later. This is
-			// the path that produces the most duplicates by far — a passive check re-fires on every
-			// response — so it is the one that most needs the store to be able to merge.
-			Target: core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path},
-		}
-		nf.TaskID = ex.TaskID
+		nf := coreNewFindingFor(f, ex)
 		if ex.Response != nil {
 			nf.Occurrences = []core.Occurrence{{
 				ExchangeID: ex.ID,

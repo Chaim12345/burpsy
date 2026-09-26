@@ -9,6 +9,7 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -477,5 +478,113 @@ func TestTheJwtCheckIsSkippedWhenItsConfigFlagIsOff(t *testing.T) {
 	s.config.CheckJwtWeak = false
 	if f := s.checkJWTWeak(nil, ex); len(f) != 0 {
 		t.Fatalf("a disabled check must produce nothing: %s", renderFindings(f))
+	}
+}
+
+// burpsy-react-ui-7tc1: the finding states its own identity, so one proven weak key is one finding
+// however many endpoints issue tokens under it. Burp's merger compares a fingerprint for exactly this
+// row (Zbvp.java:53-56); keying on the target instead files a session cookie set on /login,
+// /api/session and every other page as a separate High.
+func TestAJwtWeakFindingIdentifiesItselfByTheSecretItProvedNotTheEndpointItWasSeenOn(t *testing.T) {
+	c := BundledJwtWeakSecretCheck()
+	f := c.Scan(storedResponse(t, fmt.Sprintf(`{"t":%q}`, jwtToken("HS256", "secret"))), nil)
+	if len(f) != 1 {
+		t.Fatalf("got %d findings, want 1: %s", len(f), renderFindings(f))
+	}
+	if f[0].MergeKey != "secret" {
+		t.Errorf("merge key = %q, want the recovered secret %q; the finding's identity is which key was "+
+			"proven weak, and a target-keyed finding files one weakness once per endpoint that issues "+
+			"tokens under it", f[0].MergeKey, "secret")
+	}
+	// The target is still carried. The engine resolves it from the exchange at capture time
+	// (capture.go), so there is nothing on the check's own finding to assert here — but the field
+	// must not be a REPLACEMENT for Target, and core's own test pins that: with the merge key set
+	// and the target resolved, the occurrence survives. What is checkable here is that the merge key
+	// did not displace the description, which is the finding's only record of WHERE it was seen.
+	if !strings.Contains(f[0].Description, "secret") {
+		t.Errorf("the description no longer names the secret: %q", f[0].Description)
+	}
+}
+
+// Two tokens with byte-identical claims under DIFFERENT keys are one weakness only if the same key
+// was recovered. Claims identify the payload, not the key, so a merge keyed on claims would hide the
+// second weakness behind the first — the same class of defect the attack-side claim table documents.
+func TestAJwtWeakFindingOnASecondSecretIsNotMergedIntoTheFirst(t *testing.T) {
+	first := BundledJwtWeakSecretCheck()
+	f1 := first.Scan(storedResponse(t, fmt.Sprintf(`{"t":%q}`, jwtToken("HS256", "secret"))), nil)
+	second := BundledJwtWeakSecretCheck()
+	f2 := second.Scan(storedResponse(t, fmt.Sprintf(`{"t":%q}`, jwtToken("HS256", "jwt"))), nil)
+	if len(f1) != 1 || len(f2) != 1 {
+		t.Fatalf("want one finding each: %s / %s", renderFindings(f1), renderFindings(f2))
+	}
+	if f1[0].MergeKey == f2[0].MergeKey {
+		t.Errorf("both findings carry merge key %q; two different recovered secrets are two weaknesses, "+
+			"and merging them hides one behind a count", f1[0].MergeKey)
+	}
+}
+
+// The PASS-THROUGH, through the conversion the store actually receives (burpsy-react-ui-7tc1).
+//
+// Everything above reads the check's own Finding. That leaves the last link unobserved: whether
+// capture.go copies MergeKey into the core.NewFinding the store keys on. Deleting that one line
+// passes every other test in this file -- the check still sets the field, the core store still
+// honours it, and nothing in between carries it (verified: M1 in the mutation log).
+//
+// So this performs the same conversion capture.go performs -- scanner Finding -> core.NewFinding
+// with the target resolved from the exchange -- through the real Capture, and asks the STORE. The
+// assertion is a COUNT, because a merge that happened and a merge that did not are both invisible
+// at the Finding level and only one of them is a count.
+func TestOneWeakKeySeenOnTwoPathsReachesTheStoreAsOneFinding(t *testing.T) {
+	_, _, findings := newTestCapture()
+
+	for _, path := range []string{"/login", "/api/session"} {
+		token := jwtToken("HS256", "secret")
+		body := fmt.Sprintf(`{"t":%q}`, token)
+
+		store := core.NewTrafficStore()
+		reqID, err := store.Put([]byte("GET "+path+" HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
+		if err != nil {
+			t.Fatalf("put request: %v", err)
+		}
+		respRaw := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+			strconv.Itoa(len(body)) + "\r\n\r\n" + body
+		respID, err := store.Put([]byte(respRaw), core.DirectionResponse)
+		if err != nil {
+			t.Fatalf("put response: %v", err)
+		}
+		ex := &core.Exchange{
+			Request: core.MsgPtr(reqID), Response: &respID,
+			Host: "app.test", Port: 80, Method: "GET", Path: path,
+		}
+
+		// The check's own finding, then the conversion the store's key is computed from. Written
+		// out rather than calling an unexported helper so the test breaks if the FIELD is renamed,
+		// which is the thing M1 removes.
+		msg, mErr := store.Get(respID)
+		if mErr != nil {
+			t.Fatalf("get response: %v", mErr)
+		}
+		f := BundledJwtWeakSecretCheck().Scan(msg, nil)
+		if len(f) != 1 {
+			t.Fatalf("%s: got %d findings, want 1: %s", path, len(f), renderFindings(f))
+		}
+		// THE SAME conversion Capture.ScanExchange uses. Writing the literal struct here instead
+		// would test this file's copy of the conversion rather than the one the store keys on,
+		// which is how the pass-through went unobserved the first time (M1).
+		nf := coreNewFindingFor(f[0], ex)
+		nf.Occurrences = []core.Occurrence{{ExchangeID: ex.ID, Request: ex.Request, Response: ex.Response}}
+		findings.Add(nf)
+	}
+
+	var jwt int
+	for _, f := range findings.All() {
+		if f.Name == jwtIssue {
+			jwt++
+		}
+	}
+	if jwt != 1 {
+		t.Fatalf("one weak key seen on two paths produced %d JWT findings in the store, want 1; the "+
+			"finding reached the store without its merge key, so the same proven weakness is filed "+
+			"once per endpoint -- which is the defect this exists to catch", jwt)
 	}
 }

@@ -516,6 +516,25 @@ package.
 
 **Decline path:** none; closed.
 
+**Finding identity (landed 2026-09-27, burpsy-react-ui-7tc1).** A JWT weak-HMAC
+finding now states its own identity via `core.NewFinding.MergeKey`, set to the
+secret that was recovered. Burp's merger compares a fingerprint for exactly this
+row (`Zbvp.java:53-56`, `Zu / Zxi().ZZ()`); keying on the target instead filed one
+proven weakness as a separate High for every endpoint issuing tokens under it,
+which is the shape a long crawl produces. The key replaces the target rather than
+adding to it, and is still scoped by host: two hosts can each ship a JWT signed
+with the string `secret`, and that is two findings, because the weakness is only
+actionable on the application that issued the token.
+
+Empty is every other row's behaviour, so path-scoped and host-scoped keying are
+untouched. `core.NewFinding.MergeKey` is available to any future row whose identity
+is not a location.
+
+**Still not recovered:** Burp's merger has a *third* exemption clause — a
+fingerprint compared against a string constant at `Zbvp.java:62` that the
+obfuscator stripped. What it named is unrecoverable, and `dedup_policy.go` says so
+rather than guessing at it.
+
 ### 6. Intruder payload sets absent — COMPLETE
 
 **Rust:** `crates/intruder/src/payload.rs` — `PayloadSet:115`, `Numbers:179`,

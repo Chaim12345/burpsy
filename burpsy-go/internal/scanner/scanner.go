@@ -252,6 +252,11 @@ type Finding struct {
 	// enrich rule (enrich.go) already refuses for catalog severities. Nil = not investigated;
 	// triaged-not-investigated is the feature being off, not an empty verdict.
 	Triage *TriageNote `json:"triage,omitempty"`
+	// MergeKey overrides the dedup target as this finding's identity, for the rows whose identity is
+	// not a location (burpsy-react-ui-7tc1). JWT weak-HMAC sets it to the recovered secret: the
+	// target is where the token was seen, and one weak key seen on 200 pages is one finding, not 200.
+	// Empty — the behaviour for every other row — means the target is the key.
+	MergeKey string
 }
 
 // TriageNote is one LLM triage verdict attached to a finding (ei0v).
