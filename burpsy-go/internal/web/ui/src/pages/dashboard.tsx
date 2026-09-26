@@ -1,3 +1,4 @@
+import { taskActivityFindings } from "../lib/task-activity";
 import { useMemo, useRef, useState } from "react";
 import { parseSeeds } from "../lib/parse-seeds";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1088,9 +1089,14 @@ function TaskDetail({
  const run = useCrawlRun(task.id > 0 ? task.id : null);
  const focusIssue = useApp((state) => state.focusIssue);
  const setRoute = useApp((state) => state.setRoute);
- const activityFindings = useMemo(
-  () => [...(issuesDetailed.data?.findings ?? [])].sort((a, b) => b.id - a.id).slice(0, 20),
-  [issuesDetailed.data?.findings],
+ // Scoped to THIS task, through the tested module rather than a filter inline here
+ // (burpsy-react-ui-xwxd). The tab sits beside a task's name and answers "what did that scan
+ // find?"; it was the project-wide feed sorted and capped, which fails in two directions at once —
+ // a task that found nothing showing other runs' findings under its own name, and a busy task
+ // dropping its own older findings to the 20-cap while showing newer ones it never raised.
+ const { shown: activityFindings, hidden: activityHidden } = taskActivityFindings(
+  issuesDetailed.data?.findings ?? [],
+  task.id,
  );
  const openAdvisory = (finding: FindingDetail) => {
   // The Issues page is where an advisory opens; landing there with the finding selected is the
@@ -1130,7 +1136,7 @@ function TaskDetail({
      <Card>
       <SectionHeading
        title="Issue activity"
-       detail="Findings as they were raised, newest first. Each opens its advisory on the Issues page."
+       detail="Findings THIS task raised, newest first. Each opens its advisory on the Issues page."
       />
       {/* The fourth column shows the finding id — order in a dense counter, not a timestamp
           (FindingDetail carries no time), so the header must not say "Age". */}
@@ -1172,15 +1178,26 @@ function TaskDetail({
         ))}
        </SimpleTable>
       ) : (
+       /* Task-scoped, and it says so. This used to fall back to the project feed, so a scan that
+          found nothing displayed other runs' findings under its own name — the tab's whole
+          question is "what did THIS task find", and answering it with the project's answer is the
+          attribution failure this bead is about. An empty state scoped to the task is a fact. */
        <Empty
-        title="No issues recorded"
+        title="This task recorded no issues"
         detail={
          issuesEnabled
-          ? "Findings appear here as the audit and the live sweep raise them."
-          : "The scanner is disabled; findings below are historical — and there are none yet."
+          ? "Nothing was raised against this run. The Issues page carries every finding in the project, including the ones this task did not raise."
+          : "Nothing was raised against this run, and the scanner is disabled — so findings elsewhere are historical and none of them are this task's."
         }
        />
       )}
+      {/* A cap that reads as a total is the same defect one level up, so the pane says which it is. */}
+      {activityHidden > 0 ? (
+       <p className="field-hint">
+        Showing the {activityFindings.length} newest of {activityFindings.length + activityHidden} this task
+        raised. The rest are on the Issues page.
+       </p>
+      ) : null}
      </Card>
     </TabsContent>
 
@@ -1323,7 +1340,15 @@ function TaskDetail({
       </Card>
 
       <Card className="task-detail-wide">
-       <SectionHeading title="Coverage" detail="Findings are a floor, not a total. Skipped, errored and gated work is counted separately." />
+       {/* Project-wide, and the most misleading of the three without saying so (burpsy-react-ui-xwxd).
+          CoverageSummary carries no task id — the shape is {label, unit, work_unit, breakdown} — so
+          this roll-up cannot be attributed to the selected run, and a card reading "audit: 412
+          loaded" beside one task's name reads as that task's number. The honest half of the original
+          detail is kept: findings are a floor, not a total. */}
+      <SectionHeading
+       title="Coverage"
+       detail="Project-wide: every run's accounting, not this task's. Findings are a floor, not a total — skipped, errored and gated work is counted separately."
+      />
        {summaries.length ? (
         <div className="summary-grid">
          {summaries.map((summary) => (
@@ -1336,7 +1361,14 @@ function TaskDetail({
       </Card>
 
       <Card className="task-detail-wide">
-       <SectionHeading title="Traffic sources" detail="Where captured exchanges came from." />
+       {/* Project-wide, and now labelled as such (burpsy-react-ui-xwxd). The Sources histogram is
+          a dashboard-level roll-up with no task dimension at all (api_dashboard.go's Sources), so
+          it cannot be scoped to this task without the server building a per-task histogram it does
+          not keep. Labelling it is the honest option the bead names, and it costs a heading. */}
+      <SectionHeading
+       title="Traffic sources"
+       detail="Project-wide: where every captured exchange came from, not only this task's."
+      />
        {sources.length ? (
         <div className="metric-grid wide">
          {sources.map(([name, count]) => (
@@ -1404,7 +1436,13 @@ function TaskDetail({
 
     <TabsContent value="activity">
      <Card>
-      <SectionHeading title="Recent traffic" detail="What burpsy sent and what it relayed, newest first. The full log is on the Logger page." />
+      {/* Project-wide for the same reason, and for a second one: ToolLogRow carries no task_id, so
+          the rows cannot be attributed to a run at all (types.workbench.ts). An Intruder payload's
+          row in a crawl's pane is a misattribution the operator cannot see through. */}
+      <SectionHeading
+       title="Recent traffic"
+       detail="Project-wide: what burpsy sent and what it relayed across every tool, newest first. The full log is on the Logger page."
+      />
       <ActivityTable rows={activity.slice(0, 20)} />
      </Card>
     </TabsContent>

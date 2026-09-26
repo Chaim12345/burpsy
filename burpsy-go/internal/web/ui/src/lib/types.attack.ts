@@ -112,6 +112,16 @@ export interface FindingDetail {
   */
  params?: string[];
  times_seen: number;
+ /**
+  * The dashboard task that raised this finding, absent when nothing tracked it (a manual
+  * recording, a collaborator's result imported from elsewhere).
+  *
+  * It is what scopes a finding to a run, and the console needs it: a task's detail pane answers
+  * "what did that scan find?", and a project-wide feed under a task's name attributes another
+  * run's work to it (burpsy-react-ui-xwxd). Sent by the server as `task_id` and previously
+  * dropped here, so the pane could not have asked even if it wanted to.
+  */
+ task_id?: number;
  occurrences: Occurrence[];
  /** The catalogue entry this check resolved to, when it resolved to one. */
  advisory?: Advisory | null;
