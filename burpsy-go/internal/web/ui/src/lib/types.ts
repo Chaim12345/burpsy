@@ -80,7 +80,19 @@ export interface Scope {
 
 export interface Exchange {
  id: number;
- request: number;
+ /**
+  * The message-store id of this exchange's request, or null when it has none.
+  *
+  * Null and not 0, and the reason is that the store's ids are a dense counter from zero — so 0 is
+  * the first request the project ever captured and is a perfectly real id. A blind CONNECT tunnel
+  * has no request bytes, and reading its 0 as an id made the detail pane render the project's first
+  * request under the label Request for a row that has none: another exchange's bytes presented as
+  * this one's, with nothing marking it (burpsy-react-ui-wtov).
+  *
+  * `response` has always been nullable for the same reason, so this is one rule for both halves
+  * rather than two.
+  */
+ request: number | null;
  response: number | null;
  host: string;
  port: number;
