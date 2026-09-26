@@ -916,6 +916,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// Generate, then process, then done — all of it before the plan is built, so plan.Len() is
 	// the number of requests and a payload a rule dropped never occupies an ordinal.
 	resolved := make([]intruder.PayloadSet, 0, len(sources))
+	// copyFrom records, per position, the earlier position it mirrors. Handed to the plan below so
+	// the copied position is filled from its source's ordinal rather than its own
+	// (burpsy-react-ui-kwe0).
+	copyFrom := make(map[int]int)
 	for i, src := range sources {
 		// copy_other (2g13) is resolved here, against the sources already in `resolved`, rather
 		// than inside PayloadSource.Resolve: it has no generator of its own, and what it copies
@@ -1005,9 +1009,21 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if src.Type == "copy_other" {
-			if kind != intruder.AttackKindPitchfork {
+			// Cluster bomb is supported now, and the reason it was not is worth keeping: its mixed-radix
+			// Fill advances each position's set at a rate that depends on that position's place in the
+			// radix system, so aliasing the source's PAYLOADS and stepping the copy by its own ordinal
+			// made the two coincide on some requests and diverge on the rest — a copy that is right most
+			// of the time, which is the worst possible disguise for a correctness bug. The plan now
+			// decodes the SOURCE's digit for the copied position (plan.go's Fill), which is exact by
+			// construction, and that is what this payload type exists to guarantee
+			// (burpsy-react-ui-kwe0).
+			//
+			// Sniper and battering ram stay refused, and for a different reason than cluster bomb did:
+			// they advance ONE set across every position, so "another position's payload" has no
+			// per-position meaning to copy from.
+			if kind == intruder.AttackKindSniper || kind == intruder.AttackKindBatteringRam {
 				http.Error(w, fmt.Sprintf(
-					"payload set %d (copy_other): only supported in pitchfork, where every position advances in lockstep; %s does not guarantee the two positions match on every request",
+					"payload set %d (copy_other): %s advances one payload set across every position, so there is no per-position payload to copy; use pitchfork or cluster bomb",
 					i, kind), http.StatusBadRequest)
 				return
 			}
@@ -1023,6 +1039,11 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			}
 			copied := resolved[target]
 			copied.Kind = "copy_other"
+			// Recorded for the plan, which fills the copied position from its SOURCE's ordinal. The
+			// aliasing below is still what the request bytes are read from; the mapping is what makes
+			// the two positions receive the SAME payload on every request under a radix that advances
+			// each position at its own rate.
+			copyFrom[i] = target
 			resolved = append(resolved, copied)
 			continue
 		}
@@ -1068,7 +1089,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	for _, set := range resolved {
 		setLens = append(setLens, len(set.Items))
 	}
-	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound)
+	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound).WithCopies(copyFrom)
 
 	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
 	if req.TimeoutMS != nil {

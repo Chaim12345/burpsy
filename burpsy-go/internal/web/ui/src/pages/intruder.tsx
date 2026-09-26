@@ -2426,7 +2426,7 @@ export function IntruderPage(): JSX.Element {
                     ) : t === "copy_other" ? (
                       <Field
                         label="Position to copy (0-based)"
-                        hint="Pitchfork only — every position advances in lockstep there, which is what makes this position's payload match the named one on every request. Refused in cluster bomb, where that guarantee does not hold (see the server's own error)."
+                        hint="Pitchfork and cluster bomb. This position's payload is the named one's on every request — the case Burp documents it for: two parameters that must always match while the Cluster bomb varies the rest. Refused in sniper and battering ram, which advance one set across every position (see the server's own error)."
                       >
                         {(id) => <Input id={id} type="number" min={0} value={advField(index, "position", "0")} onChange={(e) => setAdvField(index, "position", e.target.value)} />}
                       </Field>

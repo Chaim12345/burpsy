@@ -101,7 +101,12 @@ type Assignment struct {
 // AttackPlan is the shape of an attack. It holds no requests and no payloads — just
 // enough to derive request i.
 type AttackPlan struct {
-	kind         AttackKind
+	kind AttackKind
+	// copyFrom maps a position to the position whose payloads it mirrors (Burp's Copy other
+	// payload). A position absent from the map uses its own ordinal; a position present in it is
+	// filled from ITS source's ordinal at the same request number, so the two agree on every request
+	// rather than on most of them (burpsy-react-ui-kwe0).
+	copyFrom     map[int]int
 	points       int
 	setLengths   []int
 	setsUsed     int
@@ -109,6 +114,36 @@ type AttackPlan struct {
 	saturated    bool
 	len          int
 	maxRequests  int
+}
+
+// WithCopies declares which positions mirror another, by position index, and returns the same plan.
+//
+// The validation is deliberately narrow: an out-of-range or forward-referencing source is REFUSED
+// rather than clamped, because a copy that silently resolved to the wrong position would produce
+// requests whose two "identical" fields differ — the exact failure this payload type exists to
+// prevent, and one that looks like an application bug rather than a misconfiguration.
+//
+// The source must be EARLIER in the list, which is the same rule the web layer applies when it
+// resolves the alias: the referenced position's payloads must already be known when the copy is
+// resolved, and a forward reference would need the copy resolved before its source.
+func (p *AttackPlan) WithCopies(copies map[int]int) *AttackPlan {
+	if p == nil || len(copies) == 0 {
+		return p
+	}
+	resolved := make(map[int]int, len(copies))
+	for point, source := range copies {
+		if source < 0 || source >= len(p.setLengths) {
+			continue
+		}
+		if source >= point {
+			// Forward or self reference: refused here, and the web layer names the position so the
+			// operator is told which of their rules is wrong rather than seeing a count change.
+			continue
+		}
+		resolved[point] = source
+	}
+	p.copyFrom = resolved
+	return p
 }
 
 // saturatingMul multiplies, capping at MaxUint64. The second return is true when the
@@ -251,8 +286,15 @@ func (p *AttackPlan) Fill(i int, out *Assignment) bool {
 			out.Slots = append(out.Slots, Slot{Point: pt, Set: 0, Payload: i})
 		}
 	case AttackKindPitchfork:
+		// Every position advances at the same index, so a copy is exact here for a different reason
+		// than cluster bomb's: there is one ordinal, not one per radix digit. The mapping is honoured
+		// anyway so the two attack kinds take the same path and a copy means the same thing in each.
 		for j := range p.setLengths {
-			out.Slots = append(out.Slots, Slot{Point: j, Set: j, Payload: i})
+			set := j
+			if src, copying := p.copyFrom[j]; copying && src >= 0 && src < len(p.setLengths) {
+				set = src
+			}
+			out.Slots = append(out.Slots, Slot{Point: j, Set: set, Payload: i})
 		}
 	case AttackKindClusterBomb:
 		// Mixed-radix decode with set 0 as the *fastest*-varying digit. With usernames
@@ -260,12 +302,30 @@ func (p *AttackPlan) Fill(i int, out *Assignment) bool {
 		// password 1 before password 2 — a spray, which is the lockout-safe ordering.
 		// The reverse ordering hammers one account with every password and locks it
 		// out first.
+		//
+		// A position that copies another (Burp's Copy other payload) takes the SOURCE's digit for
+		// this ordinal rather than its own. That is what makes the copy exact here: the radix weights
+		// differ per position, so a copy that used its own ordinal would coincide with its source on
+		// some requests and diverge on the rest — right most of the time, which is the worst possible
+		// disguise for a correctness bug. Reading the source's digit is exact by construction, and it
+		// is what burpsy refused to ship before (burpsy-react-ui-kwe0).
+		// weights[j] is the radix weight of set j, so the digit i decodes to at position j is
+		// (i / weights[j]) % setLengths[j]. Decoded once per Fill rather than per copied position, so
+		// a cluster bomb over twenty positions decodes twenty digits rather than up to four hundred.
 		weight := 1
+		weights := make([]int, len(p.setLengths))
 		for j, l := range p.setLengths {
-			out.Slots = append(out.Slots, Slot{Point: j, Set: j, Payload: (i / weight) % l})
+			weights[j] = weight
 			// Saturating: once the weight exceeds any reachable i, i/weight is 0,
 			// which is the correct digit anyway.
 			weight = saturatingIntMul(weight, l)
+		}
+		for j := range p.setLengths {
+			set, digit := j, (i/weights[j])%p.setLengths[j]
+			if src, copying := p.copyFrom[j]; copying && src >= 0 && src < len(p.setLengths) {
+				set, digit = src, (i/weights[src])%p.setLengths[src]
+			}
+			out.Slots = append(out.Slots, Slot{Point: j, Set: set, Payload: digit})
 		}
 	}
 	return true
