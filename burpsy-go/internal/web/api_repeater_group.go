@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 )
 
@@ -131,6 +133,17 @@ type repeaterGroupItemResult struct {
 	// per-exchange timing, so this endpoint has none to give, and writing the batch total onto each
 	// item would be a number that looks measured and is not. BatchDurationMs is the real one.
 	DurationMeasured bool `json:"duration_measured"`
+	// Arrival is this item's response-arrival ordinal within a Parallel group: 1 for the
+	// response whose first byte was read first, next for the next (burpsy-react-ui-ajp6).
+	// Burp's own docs make the ordinal part of the feature — the response pane shows the order
+	// responses arrived in — because it is the measurement the mode exists to produce. Zero for
+	// the sequence modes and for items that never got a response: an item with no arrival has
+	// no ordinal, and a zero here must not be read as "arrived first".
+	Arrival int `json:"arrival,omitempty"`
+	// arrivedAt is the wire-read moment Arrival ranks by. Unexported: it is an internal sort
+	// key, and the response carries the ordinal rather than a wall-clock the operator cannot
+	// compare across runs.
+	arrivedAt time.Time
 }
 
 func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request) {
@@ -265,17 +278,81 @@ func (s *Server) sendGroupSequentially(
 func (s *Server) sendGroupInParallel(
 	ctx context.Context, sent []repeaterGroupSendItem, specs []repeaterSendSpec,
 ) []repeaterGroupItemResult {
+	// Synchronized, not fan-out (burpsy-react-ui-ajp6). Burp's parallel mode promises the
+	// requests "arrive in full at the same time": for HTTP/1 it withholds each request's
+	// last byte and releases those bytes simultaneously, so request N does not leave at
+	// 10:00:00.001 merely because a goroutine was scheduled there. Plain fan-out cannot
+	// make that promise, and a Parallel label over fan-out reports a simultaneous send
+	// that never happened — a race test that tested nothing, the worst outcome this
+	// project names.
+	//
+	// The barrier: every item dials its own connection, writes its request minus the final
+	// byte, and signals readiness. When N signals are in — a failure on the way counts, or
+	// the group would wait on a connection that will never come — the last byte of every
+	// request goes out together.
+	//
+	// HTTP/2 is deliberately not synchronized (a synchronized group pins HTTP/1.1): there
+	// is no "final byte of the raw" once the h2 path re-encodes into frames, and the
+	// honest h2 equivalent is Burp's single-packet attack, a different mechanism with its
+	// own tier. The pin is visible in each result's protocol, not silent.
 	items := make([]repeaterGroupItemResult, len(specs))
+	ready := make(chan struct{}, len(specs))
+	release := make(chan struct{})
+	barrier := sender.SyncPoints{Ready: ready, Release: release}
+
 	var wg sync.WaitGroup
 	for i := range specs {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			items[i] = s.sendGroupItemOnItsOwnConnection(ctx, sent[i].TabID, specs[i])
+			items[i] = s.sendGroupItemSynchronized(ctx, sent[i].TabID, specs[i], barrier)
 		}(i)
 	}
+	for range len(specs) {
+		<-ready
+	}
+	close(release)
 	wg.Wait()
+
+	// Arrival order is the measurement the mode exists to produce: Burp's docs promise the
+	// response pane "shows the order in which responses arrived", and the operator running a
+	// race test wants tab 2's response to be able to beat tab 1's. Rank by the wire-read
+	// moment; ties keep tab order so the ordinal is stable.
+	ordered := make([]int, len(items))
+	for i := range ordered {
+		ordered[i] = i
+	}
+	sort.Slice(ordered, func(a, b int) bool {
+		ra, rb := items[ordered[a]].arrivedAt, items[ordered[b]].arrivedAt
+		if ra.Equal(rb) {
+			return ordered[a] < ordered[b]
+		}
+		return ra.Before(rb)
+	})
+	var next int64 = 1
+	for _, idx := range ordered {
+		if items[idx].Result != nil {
+			items[idx].Arrival = int(next)
+			next++
+		}
+	}
 	return items
+}
+
+// sendGroupItemSynchronized is one member of a synchronized Parallel group: the single send's
+// recording, over the barrier-aware wire path.
+func (s *Server) sendGroupItemSynchronized(
+	ctx context.Context, tabID string, spec repeaterSendSpec, sync sender.SyncPoints,
+) repeaterGroupItemResult {
+	sendStarted := time.Now()
+	rawResp, outcome, err := s.sender.SendSynchronized(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
+	elapsed := time.Since(sendStarted)
+	if err != nil {
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
+		return repeaterGroupItemResult{TabID: tabID, Error: err.Error()}
+	}
+	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	return repeaterGroupItemResult{TabID: tabID, Result: &resp, DurationMeasured: true, arrivedAt: time.Now()}
 }
 
 // sendGroupItemOnItsOwnConnection is one item of a separate-connection mode: the ordinary single send,

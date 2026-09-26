@@ -1712,10 +1712,29 @@ function GroupSendOutcome({
           <X size={11} />
         </IconButton>
       </div>
-      <SimpleTable headers={["Tab", "Status", "Response", "Framing", "Read", "Problem"]}>
+      {/* The arrival column exists only in Parallel mode: it is the ordinal the synchronized
+          release makes measurable, and a sequence mode has a trivially known order (tab order)
+          that a number would merely decorate. Items that never answered carry no ordinal, so
+          they render as a dash rather than a rank. */}
+      <SimpleTable
+        headers={
+          outcome.mode === "parallel"
+            ? ["Tab", "Arrived", "Status", "Response", "Framing", "Read", "Problem"]
+            : ["Tab", "Status", "Response", "Framing", "Read", "Problem"]
+        }
+      >
         {outcome.items.map((item) => (
           <tr key={item.tab_id}>
             <td>{tabName(item.tab_id)}</td>
+            {outcome.mode === "parallel" ? (
+              <td>
+                {item.arrival ? (
+                  <span className="cell-num">#{item.arrival}</span>
+                ) : (
+                  <span className="cell-dim">—</span>
+                )}
+              </td>
+            ) : null}
             <td>
               {item.result ? (
                 <Badge tone={statusTone(item.result.status)}>{item.result.status}</Badge>
