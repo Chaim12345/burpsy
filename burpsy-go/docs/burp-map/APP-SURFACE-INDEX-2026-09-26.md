@@ -93,9 +93,20 @@ page and no recorder (filed); `SUITE` has no settings section (filed).
 
 Stated so that no parity claim silently rests on a hole:
 
-- **72 lost method bodies** across 33 classes (`// $VF: Couldn't be decompiled`), every one
-  recoverable from `out/cfr2` or `out/cfr_fixed` — the merge pass skipped them. Filed as `xqlr`.
-  The worst is `burp.Zuq`, the insertion-point builder, with `Ze`, `Zp`, `ZG` unreadable.
+- **71 lost method bodies** across 33 classes (`// $VF: Couldn't be decompiled`). Measured
+  per-method against the definitions — an earlier pass of this document measured call sites and
+  over-counted what was recoverable, so the numbers here are the corrected ones:
+  **65 of the 71 are present and decompiled in `out/cfr_fixed`** (23 files fully clean there) but
+  were never merged, because `tools/merge_decompilers.sh:34` tests CFR cleanliness with an
+  unanchored `failed to decompile`, which matches the provenance comment every one of those CFR
+  files carries. Filed as `gl30`.
+  **6 bodies are lost by every decompiler on this machine**: `Zuq.ZG/Ze/Zy` (the insertion-point
+  builder), `Zrjq.e/j`, `Zx61.a`, `Zppj.l/n`, `Zr86.6/c/d`, `Zbp4.m`, `Zfj.U`, `Zgs4.d`,
+  `Zhub.y`, `Zm1u.S`. Filed as `xqlr`, re-scoped to recovery-or-honest-decline rather than a merge.
+  **What this means for a parity claim:** for `Zuq` in particular, "Burp enumerates insertion-point
+  kind X" rests on one of three things in decreasing strength — the parts of `Zuq` that DID
+  decompile, the Montoya javadoc, or `map_root.tsv` literals. A claim must say which it stands on,
+  because three of `Zuq`'s methods cannot be read at all on this machine.
 - **210 further files** carry only `// $VF: Irreducible bytecode was duplicated…` on a synthetic
   static initializer that rebuilds a ZKM string array. These are **not** losses — the literals are
   already restored into `out/strings/map_root.tsv`.
