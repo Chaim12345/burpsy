@@ -21,6 +21,7 @@ import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
 import { useAuditItemAgain, useAuditItems } from "../lib/data.auditqueue";
+import { itemProgress, itemTiming } from "../lib/audit-queue-item";
 import { useHistory, useMessage } from "../lib/data";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useApp } from "../lib/store";
@@ -88,11 +89,15 @@ export function AuditQueuePage(): JSX.Element {
       <SectionHeading
        title="Queue"
        detail={`${d.returned} row(s)${d.truncated ? ` of ${d.queue.retained} retained` : ""} · Burp status parity: ${d.parity.burp_statuses_modelled}/${d.parity.burp_statuses_declared} modelled${d.parity.burp_statuses_not_modelled?.length
-         ? ` (not modelled: ${d.parity.burp_statuses_not_modelled.map((gap) => gap.label || gap.status).filter(Boolean).join(", ")})`
-         : ""
+        ? ` (not modelled: ${d.parity.burp_statuses_not_modelled.map((gap) => gap.label || gap.status).filter(Boolean).join(", ")})`
+        : ""
         }`}
       />
-      <SimpleTable headers={["Seq", "Request", "State", "Attempts", "Note", ""]}>
+      {/* Progress and evidence are columns rather than a row's expansion because a partial audit is
+          diagnosed FROM THE TABLE: the question is "which items stopped early, and how far did they
+          get", and answering it needs every row's number visible at once. The data was already on
+          the wire — the endpoint hands out scanner.AuditItem wholesale (burpsy-react-ui-xdtx). */}
+      <SimpleTable headers={["Seq", "Request", "State", "Progress", "Points", "Timing", "Attempts", "Note", ""]}>
        {d.items.map((item) => (
         <Fragment key={item.seq}>
          <tr
@@ -115,6 +120,25 @@ export function AuditQueuePage(): JSX.Element {
            <Badge tone={stateTone(item.state)}>{item.status_label || item.state}</Badge>
            {item.burp_status ? <span className="cell-dim"> {item.burp_status}</span> : null}
           </td>
+          <td title="Steps that reached a disposition, out of the steps this item planned">
+           {itemProgress(item)}
+          </td>
+          <td
+           className="cell-num"
+           title={
+            item.point_kinds?.length
+             ? `Enumerated for: ${item.point_kinds.join(", ")}` +
+             (item.points_skipped ? ` · ${item.points_skipped} dropped at the per-request ceiling` : "") +
+             (item.points_declined_places ? ` · ${item.points_declined_places} places the enumerator refused` : "")
+             : "No insertion points were recorded for this item"
+           }
+          >
+           {item.points_enumerated ?? 0}
+           {item.points_skipped ? (
+            <span className="cell-dim"> +{item.points_skipped} at limit</span>
+           ) : null}
+          </td>
+          <td className="cell-dim">{itemTiming(item) || "—"}</td>
           <td className="cell-num">{item.attempts}</td>
           <td className="cell-dim">{item.note ?? "—"}</td>
           <td>

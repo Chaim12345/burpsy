@@ -136,18 +136,36 @@ const BurpAuditItemStatusCount = 15
 
 // BurpStatusesNotModelled is every `burp.Zq5` constant with no ItemState behind it.
 //
-// Nine of fifteen, which is the point of writing them down: a status vocabulary that listed only its
-// six matches would let a reader conclude the state machines agree. Four of the nine are absent
-// because this engine has no light-active pass and no per-issue selection; three because it has no
-// per-parameter-type or nesting-depth gate; one — NO_INSERTION_POINT_CHECKS — is not absent at all
-// but lives at point granularity instead, where it belongs (see AuditItemPointNoChecks).
+// Eight of fifteen, which is the point of writing them down: a status vocabulary that listed only its
+// seven matches would let a reader conclude the state machines agree. Two of the eight are the
+// light-audit ROWS, and they are absent for a reason that changed under this table's feet: the light
+// tier exists (burpsy-react-ui-7bkj) as a skip decision inside a running item, not as a separate
+// pass, so it has no item state of its own to finish in. Two more because this engine has no
+// per-issue selection; three because it has no per-parameter-type or nesting-depth gate; one —
+// NO_INSERTION_POINT_CHECKS — is not absent at all but lives at point granularity instead, where it
+// belongs (see AuditItemPointNoChecks).
+//
+// What the engine does with the repetitive-behaviour rule, since that row is no longer here and a
+// reader who came for it would find nothing: the light tier counts CLEAN same-(kind, host) points
+// across a run and, from the Nth, declines the rest of that type on that host. The decline lands
+// in the item's skipped total — the same place every other skip does — rather than as a state of
+// its own, because a skipped point is not a different kind of item. Burp's content-similarity half
+// is declined rather than half-built; see auditRun.lightAudit for why.
+//
+// The light rows are the reason this list was wrong once. It said "there is no light-active pass"
+// three times while audit_engine.go implemented one, and a disclosure that denies a capability the
+// engine has is worse than no disclosure at all: a reader who has just been wrong about light
+// auditing has no reason to believe the rows about selection or parameter types either
+// (burpsy-react-ui-xdtx). Every row here is now checked against the engine by a test — see
+// TestTheNotModelledTableAgreesWithWhatTheEngineCanReach — so the next stale row is a failing test
+// rather than a comment somebody has to remember to re-read.
 var BurpStatusesNotModelled = []BurpStatusGap{
 	{Status: "LIGHT_AUDITING", Label: "Light-auditing",
-		Why: "there is no light-active pass: every admitted check runs its full probe set or is refused"},
+		Why: "the light tier is not a pass an item is dispatched into; it is a skip decision taken while the item runs, so there is no window in which an item is light-auditing rather than auditing"},
 	{Status: "LIGHT_AUDITED", Label: "Light-audited",
-		Why: "there is no light-active pass, so no item can finish having had only one"},
+		Why: "for the same reason: a point the light tier declines is counted in the item's skipped total with SKIPPED_DUE_TO_REPETITIVE_BEHAVIOUR, and the item still finishes in the ordinary audited state"},
 	{Status: "NOT_LIGHT_AUDITED", Label: "",
-		Why: "there is no light-active pass to have been eligible for and skipped"},
+		Why: "a point is never 'eligible for the light pass and skipped by it' — it either runs, or the tier declines it for repetition, and both are visible on the item that raised it"},
 	{Status: "SKIPPED_PARAMETER_TYPE", Label: "Skipped",
 		Why: "insertion points are not gated by parameter type; the enumerator either builds a point or declines the place and says why"},
 	{Status: "SKIPPED_INSERTION_POINT_TYPE", Label: "Skipped",
@@ -158,8 +176,6 @@ var BurpStatusesNotModelled = []BurpStatusGap{
 		Why: "parameter relocation exists as six insertion-point kinds, but it is not a separately gated pass that can report having found no movement"},
 	{Status: "NO_NESTING_ALLOWED", Label: "",
 		Why: "nested insertion points are expanded unconditionally; there is no depth limit that could stop and be reported"},
-	{Status: "SKIPPED_DUE_TO_REPETITIVE_BEHAVIOUR", Label: "Skipped due to repetitive behavior",
-		Why: "there is no repetitive-response detector; identical work is refused by the admission ledger as already covered, which is reported as work that ran rather than as a skip"},
 }
 
 // AuditItemPointStatus is what became of one insertion point of one audit item.

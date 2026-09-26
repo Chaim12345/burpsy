@@ -22,6 +22,39 @@ export interface AuditItemRow {
   note?: string;
   attempts: number;
   insertion_points?: { kind: string; name: string; status: number; detail?: string }[];
+
+  /**
+   * The evidence the engine retained per item, which the page now renders (burpsy-react-ui-xdtx).
+   *
+   * Every one of these was already on the wire — the endpoint hands out `scanner.AuditItem`
+   * wholesale — and none of it was declared here, so the page reduced a diagnosable audit to six
+   * state totals. Burp's audit-item page exposes phase, requests, errors, insertion points scanned
+   * and start/end time precisely so a PARTIAL audit can be diagnosed; an item that stopped after
+   * two of five steps is finished and 40% audited, and both facts are needed at once.
+   *
+   * A missing field is absent rather than zero. `steps_planned` is zero for an item refused before
+   * planning, which is not the same as a plan of length zero that finished — a percentage over a
+   * zero denominator is undefined, and this type does not invite computing one.
+   */
+  /** How many (unit, check) steps this item planned, and how many reached a disposition. */
+  steps_planned?: number;
+  steps_done?: number;
+  /** The plan's shape: how many dispatch units the item was broken into. */
+  units_planned?: number;
+  /** The size of the enabled check set this item was measured against. */
+  checks?: number;
+  /** How many insertion points were enumerated, dropped at the per-request ceiling, and refused
+   *  outright — three counts that must never be collapsed into one. */
+  points_enumerated?: number;
+  points_skipped?: number;
+  points_declined_places?: number;
+  /** Which insertion-point kinds the points were enumerated for. "9 insertion points" is a claim
+   *  about these kinds, not about every place a payload could go. */
+  point_kinds?: string[];
+  /** When the item was queued and when its row last changed — the two timestamps Burp shows, and
+   *  the only way to tell a slow item from a stalled one. */
+  queued_unix_ms?: number;
+  updated_unix_ms?: number;
 }
 
 export interface AuditItemsResponse {
