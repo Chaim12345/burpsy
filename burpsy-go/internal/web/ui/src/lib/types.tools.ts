@@ -260,6 +260,7 @@ export type PayloadSourceType =
   | "bit_flipper"
   | "username"
   | "ecb_shuffler"
+  | "character_frobber"
   | "copy_other";
 
 export interface PayloadSourceList { type: "list"; items: string[] }
@@ -275,7 +276,11 @@ export interface PayloadSourceCharSubstitution { type: "char_substitution"; word
 export interface PayloadSourceCaseModification { type: "case_modification"; words: string[]; lower?: boolean; upper?: boolean; capitalize?: boolean }
 /** Burp's Illegal Unicode (2g13): overlong UTF-8 encodings of ASCII characters. */
 export interface PayloadSourceIllegalUnicode { type: "illegal_unicode"; chars: string; forms: ("overlong2" | "overlong3" | "overlong4")[]; percent_encode?: boolean }
-/** Burp's Character blocks / Character frobber (2g13): one payload per length, Chars cycled to fill it. */
+/**
+ * Burp's Character blocks (2g13): one payload per length, Chars cycled to fill it.
+ * NOT the Character frobber — that is a different generator over a different input, and
+ * `PayloadSourceCharacterFrobber` is the one that walks a value's characters (cd00).
+ */
 export interface PayloadSourceCharacterBlocks { type: "character_blocks"; chars: string; min_len: number; max_len: number; step: number }
 /** Burp's Bit flipper (2g13): one payload per bit of Base, that bit inverted. */
 export interface PayloadSourceBitFlipper { type: "bit_flipper"; base: string }
@@ -288,6 +293,13 @@ export interface PayloadSourceECBShuffler { type: "ecb_shuffler"; sample: string
  * for the same request. Pitchfork only — see internal/intruder/payload.go's CopyOtherSource
  * doc and api_tools.go's handleIntruderRun for why cluster bomb cannot honour this exactly.
  */
+/**
+ * Burp's Character frobber (cd00): one payload per (character position × alphabet) of `base`,
+ * with the rest of the value held fixed. NOT the same generator as character_blocks, which has
+ * no input value to vary — the console once labelled that one "Character blocks (frobber)", and
+ * the two names sharing a line is why the absence went unnoticed.
+ */
+export interface PayloadSourceCharacterFrobber { type: "character_frobber"; base: string; chars: string }
 export interface PayloadSourceCopyOther { type: "copy_other"; position: number }
 /**
  * Burp's Recursive grep (ztuu): the payload for request N+1 is extracted from the response to

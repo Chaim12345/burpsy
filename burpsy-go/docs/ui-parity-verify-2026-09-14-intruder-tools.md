@@ -21,7 +21,7 @@ Burp reference: `/root/burp-re/out/strings/map_root.tsv` — positive control `g
 ## Intruder → Payloads (audit: 6 HIGH, 3 LOW)
 | Claim | Status | Evidence |
 |---|---|---|
-| Payload type selector (12+) | CLOSED | `<select>` with **17** options: Simple list, Numbers, File (server path), Brute force, Dates, Custom iterator, Null payloads, Character substitution, Case modification, Illegal Unicode, Character blocks (frobber), Bit flipper, Username generator, ECB block shuffler, Copy other payload, Recursive grep, Collaborator payloads |
+| Payload type selector (12+) | CLOSED | `<select>` with **17** options: Simple list, Numbers, File (server path), Brute force, Dates, Custom iterator, Null payloads, Character substitution, Case modification, Illegal Unicode, Character blocks, Bit flipper, Username generator, ECB block shuffler, Copy other payload, Recursive grep, Collaborator payloads |
 | Payload count | CLOSED | `label "SET (5)"`; became `SET (25)` when I replaced the list |
 | Processing rules | CLOSED | `button "Add rule"` → rule-type select observed live: Add prefix, Add suffix, Match and replace, Uppercase, Lowercase, Encode, Decode, Hash, Skip if it matches |
 | Match/replace in list | CLOSED | **"Match and replace"** is one of the rule types above (observed, not inferred) |

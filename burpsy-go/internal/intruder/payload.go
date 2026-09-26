@@ -200,6 +200,11 @@ type PayloadSource struct {
 	CaseModification *CaseModification
 	IllegalUnicode   *IllegalUnicode
 	CharacterBlocks  *CharacterBlocks
+	// CharacterFrobber is Burp's Character frobber, which walks each character position of an input
+	// value through an alphabet. It is NOT the same generator as CharacterBlocks, which cycles an
+	// alphabet to fill repeated blocks of a chosen length and has no input value to vary — a
+	// distinction an earlier close reason papered over by naming them together (burpsy-react-ui-cd00).
+	CharacterFrobber *CharacterFrobber
 	BitFlipper       *BitFlipper
 	Username         *UsernameGenerator
 	ECBShuffler      *ECBShuffler
@@ -333,11 +338,15 @@ type IllegalUnicode struct {
 	PercentEncode bool `json:"percent_encode"`
 }
 
-// CharacterBlocks is Burp's Character blocks (also shipped under the name Character
-// frobber in older Burp releases — the same generator, renamed): one payload per length in a
+// CharacterBlocks is Burp's Character blocks: one payload per length in a
 // range, each consisting of Chars repeated (cycled) to fill exactly that length. Used to find
 // the block size that trips a buffer limit or a fixed-size field, by walking the length
 // upward until something breaks.
+//
+// This is NOT Burp's Character frobber, which is a different generator with a different input —
+// see CharacterFrobber below. An earlier version of this comment claimed they were "the same
+// generator, renamed", and that claim is what let a QA pass close the frobber as delivered
+// (burpsy-react-ui-cd00). If you are here to find the frobber, it is the next type down.
 type CharacterBlocks struct {
 	// Chars is the block alphabet, cycled to fill each block. A single character ("A") is
 	// Burp's ordinary use; a short repeating sequence is accepted too.
@@ -347,6 +356,35 @@ type CharacterBlocks struct {
 	MaxLen int `json:"max_len"`
 	// Step is the length increment between successive blocks.
 	Step int `json:"step"`
+}
+
+// CharacterFrobber is Burp's Character frobber
+// (tools/intruder/configure-attack/payload-types.html:590-595), which "modifies the value of each
+// character position of an input" and increments one character at a time.
+//
+// # Why this is not CharacterBlocks
+//
+// They are different generators and the earlier close that named them together ("character
+// blocks/frobber") is what made this look delivered. CharacterBlocks cycles an alphabet to fill
+// repeated blocks of a chosen LENGTH: it has an alphabet and MinLen/MaxLen/Step, and no input value
+// to vary. This one has the operator's CURRENT value as its defining input — a session token
+// captured from the target — and walks each position through an alphabet with the rest held fixed.
+//
+// That is the whole technique. Incrementing one character of a token at a time is how an operator
+// finds which position an authorization check, a signature or a parser actually depends on: a token
+// that validates at every position except one tells you exactly where the check reads. A
+// repeated-block generator cannot express it, because there is no value in it to increment.
+//
+// Base is held in RUNES rather than bytes, so a multi-byte character is one position rather than
+// several, and an alphabet is likewise walked per rune. Counting bytes would make "character
+// position 3" mean something different for a non-ASCII token than it does in the target's own
+// parameter, and the operator reading a payload list would have no way to map one to the other.
+type CharacterFrobber struct {
+	// Base is the operator's current value, and the input every payload is derived from.
+	Base string `json:"base"`
+	// Chars is the alphabet each position is walked through, in order. Empty means the printable
+	// ASCII range Burp sweeps by default, which is the case that matters for a token.
+	Chars string `json:"chars"`
 }
 
 // BitFlipper is Burp's Bit flipper: one payload per bit of Base, with exactly that bit
@@ -488,6 +526,12 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.CharacterBlocks = &cb
+	case "character_frobber":
+		var cf CharacterFrobber
+		if err := json.Unmarshal(b, &cf); err != nil {
+			return err
+		}
+		s.CharacterFrobber = &cf
 	case "bit_flipper":
 		var bf BitFlipper
 		if err := json.Unmarshal(b, &bf); err != nil {
@@ -698,6 +742,18 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		}
 		var err error
 		items, total, exact, trunc, err = resolveCharacterBlocks(s.CharacterBlocks, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "character_frobber":
+		// The frobber, not the blocks: one payload per (character position × alphabet) of the
+		// operator's CURRENT value, with the rest of the value held fixed. Distinct from
+		// character_blocks, which has no input value to vary at all (burpsy-react-ui-cd00).
+		if s.CharacterFrobber == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "character_frobber"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharacterFrobber(s.CharacterFrobber, cap)
 		if err != nil {
 			return nil, err
 		}
@@ -1481,6 +1537,79 @@ func resolveCharacterBlocks(cbk *CharacterBlocks, cap int) ([]string, uint64, bo
 	}
 	trunc := uint64(len(out)) < total
 	return out, total, true, trunc, nil
+}
+
+// resolveCharacterFrobber generates, for each character position of Base, one payload per
+// character of the alphabet at that position, with every other position held fixed.
+//
+// # The order, and why it is a position-major walk
+//
+// Position 0 across the whole alphabet, then position 1, and so on. A token's positions are not
+// independent — the first divergence from the valid token is the interesting one, and walking one
+// position to exhaustion before moving on is what surfaces it in the first few payloads rather than
+// after len(alphabet) × len(base) of them.
+//
+// Each position also emits the BASE's own character first, so the unmodified value is payload zero
+// of every position. That is deliberate: the operator can tell at a glance whether a position matters
+// by whether the request that changes nothing else still fails, and a generator whose every payload
+// differs from the base cannot answer that.
+func resolveCharacterFrobber(cf *CharacterFrobber, cap int) ([]string, uint64, bool, bool, error) {
+	alphabet := runesOf(cf.Chars)
+	if len(alphabet) == 0 {
+		alphabet = defaultFrobberAlphabet()
+	}
+	base := runesOf(cf.Base)
+	if len(base) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "base"}
+	}
+	if err := checkLen(len(base) * len(alphabet)); err != nil {
+		return nil, 0, false, false, err
+	}
+	// One payload per (position, character): positions × alphabet, INCLUDING the base's own
+	// character at each, which is why this is not positions × (alphabet − 1).
+	total := uint64(len(base)) * uint64(len(alphabet))
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for pos := range base {
+		var b strings.Builder
+		b.Grow(len(base) * 4)
+		for _, c := range alphabet {
+			// Rebuild the whole string for each character: the payload is a value, not a patch, and a
+			// generator that handed back an offset would make every consumer re-implement this loop.
+			b.Reset()
+			for i, r := range base {
+				if i == pos {
+					b.WriteString(c)
+				} else {
+					b.WriteString(r)
+				}
+			}
+			out = append(out, b.String())
+			if len(out) >= take {
+				// Every remaining position would produce the same count of payloads against a
+				// truncated budget, so stop here rather than iterate a twenty-position base for
+				// payloads the cap will drop.
+				break
+			}
+		}
+		if len(out) >= take {
+			break
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// defaultFrobberAlphabet is the printable ASCII range, which is what a token's characters come from
+// in the case this generator exists for. It is a function rather than a constant slice so the value is
+// built once and shared, rather than a package-level slice an accidental append could mutate.
+func defaultFrobberAlphabet() []string {
+	const first, last = 0x20, 0x7e
+	out := make([]string, 0, last-first+1)
+	for r := rune(first); r <= last; r++ {
+		out = append(out, string(r))
+	}
+	return out
 }
 
 // resolveBitFlipper generates len(Base)*8 payloads, each Base's bytes with exactly one bit

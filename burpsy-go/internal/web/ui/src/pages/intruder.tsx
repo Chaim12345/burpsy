@@ -1396,6 +1396,7 @@ export function IntruderPage(): JSX.Element {
         t === "case_modification" ||
         t === "illegal_unicode" ||
         t === "character_blocks" ||
+        t === "character_frobber" ||
         t === "bit_flipper" ||
         t === "username" ||
         t === "ecb_shuffler" ||
@@ -2094,7 +2095,8 @@ export function IntruderPage(): JSX.Element {
                             <option value="char_substitution">Character substitution</option>
                             <option value="case_modification">Case modification</option>
                             <option value="illegal_unicode">Illegal Unicode</option>
-                            <option value="character_blocks">Character blocks (frobber)</option>
+                            <option value="character_blocks">Character blocks</option>
+                            <option value="character_frobber">Character frobber</option>
                             <option value="bit_flipper">Bit flipper</option>
                             <option value="username">Username generator</option>
                             <option value="ecb_shuffler">ECB block shuffler</option>
@@ -2423,7 +2425,19 @@ export function IntruderPage(): JSX.Element {
                           {(id) => <Input id={id} type="number" min={1} value={advField(index, "block_size", "16")} onChange={(e) => setAdvField(index, "block_size", e.target.value)} />}
                         </Field>
                       </div>
-                    ) : t === "copy_other" ? (
+                    ) : t === "character_frobber" ? (
+      <div>
+        <Field
+          label="Base value"
+          hint="The current value to mutate, e.g. a session token. Each payload changes one character of it and holds the rest fixed, which is how you find which position the check depends on."
+        >
+          {(id) => <Input id={id} value={advField(index, "base", "")} onChange={(e) => setAdvField(index, "base", e.target.value)} placeholder="e.g. eyJhbGciOi..." />}
+        </Field>
+        <Field label="Characters" hint="Leave empty for the printable ASCII range (0x20-0x7e), which is what a token's characters come from.">
+          {(id) => <Input id={id} value={advField(index, "chars", "")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="0123456789abcdef" />}
+        </Field>
+      </div>
+    ) : t === "copy_other" ? (
                       <Field
                         label="Position to copy (0-based)"
                         hint="Pitchfork and cluster bomb. This position's payload is the named one's on every request — the case Burp documents it for: two parameters that must always match while the Cluster bomb varies the rest. Refused in sniper and battering ram, which advance one set across every position (see the server's own error)."
