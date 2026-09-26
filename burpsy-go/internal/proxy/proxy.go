@@ -608,6 +608,11 @@ type ProxyConfig struct {
 	// reference with internal/sender and with the /api/network/proxy handler, so an edit made in the
 	// console reaches this leg without a restart — see internal/upstream.
 	upstream *upstreamproxy.Policy
+	// upstreamCarrier is the global SOCKS layer the interception leg's upstream connection is opened
+	// through, beneath whatever proxy the destination rules selected. Shared by reference with
+	// internal/sender and with the console, so one Settings edit reaches every leg. See
+	// internal/upstream.Carrier.
+	upstreamCarrier *upstreamproxy.Carrier
 	// tlsVerify is the upstream-TLS policy the interception leg follows: whether the origin's
 	// certificate is verified, against which roots, and under which protocol floor. Nil — the
 	// default — attaches the default policy on first use, which verifies, so a proxy built without
@@ -707,6 +712,21 @@ func (c *ProxyConfig) WithUpstreamProxy(policy *upstreamproxy.Policy) *ProxyConf
 	}
 	return c
 }
+
+// WithUpstreamCarrier attaches the global SOCKS layer to the interception leg's upstream connection.
+//
+// The same instance must be handed to the sender and the console, for the reason WithUpstreamProxy
+// says: two carriers would let the panel describe a layer that only one surface honours
+// (burpsy-react-ui-mr83 part 3).
+func (c *ProxyConfig) WithUpstreamCarrier(carrier *upstreamproxy.Carrier) *ProxyConfig {
+	if carrier != nil {
+		c.upstreamCarrier = carrier
+	}
+	return c
+}
+
+// UpstreamCarrier returns the attached global SOCKS layer, or nil.
+func (c *ProxyConfig) UpstreamCarrier() *upstreamproxy.Carrier { return c.upstreamCarrier }
 
 // WithScanner sets the passive scanner used to check captured traffic.
 func (c *ProxyConfig) WithScanner(scanner *scanner.PassiveScanner) *ProxyConfig {

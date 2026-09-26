@@ -524,6 +524,39 @@ export interface NetworkProxyView {
  credentials_supported: boolean;
  /** Accepted URL schemes, named by the server's own parser. */
  schemes: string[];
+ /**
+  * The global SOCKS layer: a TCP hop EVERY outbound connection is opened through, beneath whichever
+  * proxy a rule selected. Reported apart from `rules` because it answers a different question —
+  * "which proxy carries this host" versus "what opens the socket to reach that proxy" — and showing
+  * one without the other is how an operator concludes the other is covered (burpsy-react-ui-mr83
+  * part 3).
+  */
+ carrier: NetworkCarrierView;
+}
+
+/** The global SOCKS layer as the panel sees it. */
+export interface NetworkCarrierView {
+ /** False when no hop is installed, which is every surface's state until an operator names one. */
+ configured: boolean;
+ /** The hop's redacted address, read from the live carrier rather than the settings document. */
+ socks: string;
+ /** Destination host patterns that skip the hop, in the same language a rule uses. */
+ bypass: string[];
+ /**
+  * Ask the SOCKS server to resolve destination names, which is what makes an internal-only hostname
+  * reachable through it. A SOCKS feature: the server refuses it for an HTTP hop rather than
+  * ignoring it, because a switch that silently does nothing is worse than one that refuses.
+  */
+ remote_resolve: boolean;
+ /** Egress surfaces holding this carrier, so the panel never implies coverage it cannot see. */
+ attached: string[];
+ /**
+  * What the carrier does NOT cover, in the operator's terms. Reported by the server because the
+  * limitation is a property of the dial path, not of the settings document: a panel that showed the
+  * layer as configured without saying what it skips would be the same overclaim in a different place
+  * (burpsy-react-ui-mr83 part 3).
+  */
+ limits: string[];
 }
 
 /** POST body. `default` omitted leaves the default alone; "" or "direct" clears it. */
@@ -531,6 +564,17 @@ export interface NetworkProxyUpdate {
  pattern?: string;
  proxy?: string;
  default?: string;
+ /**
+  * The carrier is edited by the same POST as the rules but is a different LAYER, so the panel sends
+  * it alone when only the layer changed. Sending it alongside a rule would apply the layer and then
+  * possibly fail the rule, leaving a half-applied edit that looks saved.
+  */
+ carrier?: {
+  /** Empty CLEARS the carrier, which is an operator removing the setting. */
+  socks: string;
+  bypass: string[];
+  remote_resolve: boolean;
+ };
 }
 
 /** One session-handling tracer entry (n29): a request a rule applied to, and what the

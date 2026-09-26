@@ -2410,6 +2410,13 @@ func (s *Store) LoadNetworkSettings() (*sender.NetworkSettings, error) {
 // settings row does not.
 const upstreamProxyKey = "network.proxy"
 
+// upstreamCarrierKey is the settings row the global SOCKS layer lives in.
+//
+// A separate row rather than a field inside the policy's snapshot, because the two are different
+// layers: a policy restored with a carrier attached to it would read as one thing, and an operator
+// who edits the rules would see the layer move with them.
+const upstreamCarrierKey = "network.carrier"
+
 // SaveUpstreamProxy mirrors the upstream proxy policy into the settings row, replacing whatever was
 // there.
 //
@@ -2421,6 +2428,45 @@ const upstreamProxyKey = "network.proxy"
 // included, so it is not a new secret-bearing artefact; it does mean the -db file must be treated as
 // engagement material. The API never serves these values back and no log line carries them — see
 // upstream.Proxy.Display, and upstream.Proxy.Raw for why this is the one caller that sees them.
+// SaveUpstreamCarrier persists the global SOCKS layer beside the policy it sits under.
+//
+// The same credentials-in-the-clear rule SaveUpstreamProxy states applies: a carrier restored without
+// its hop's credentials would come back looking configured and then fail authentication on every
+// connection, which is worse than not being configured at all because nothing on screen would say so.
+func (s *Store) SaveUpstreamCarrier(carrier *upstream.Carrier) {
+	raw, err := json.Marshal(carrier.Snapshot())
+	if err != nil {
+		s.log("upstream carrier marshal", err)
+		return
+	}
+	if err := s.setSetting(upstreamCarrierKey, string(raw)); err != nil {
+		s.log("upstream carrier", err)
+	}
+}
+
+// LoadUpstreamCarrier restores the global SOCKS layer, and reports whether a hop was in force.
+//
+// An absent row leaves the carrier untouched, which is the ordinary case: no row means no carrier was
+// ever configured, and that is not a failure to report. ok is false in that case so a caller can tell
+// "nothing was configured" from "a configured carrier was restored".
+func (s *Store) LoadUpstreamCarrier(carrier *upstream.Carrier) (bool, error) {
+	raw, err := s.getSetting(upstreamCarrierKey)
+	if err != nil || raw == "" {
+		return false, err
+	}
+	var snap upstream.CarrierSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	if snap.Socks == "" {
+		return false, nil
+	}
+	if err := carrier.Restore(snap); err != nil {
+		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	return true, nil
+}
+
 func (s *Store) SaveUpstreamProxy(policy *upstream.Policy) {
 	raw, err := json.Marshal(policy.Snapshot())
 	if err != nil {

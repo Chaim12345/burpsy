@@ -165,6 +165,12 @@ type Server struct {
 	// built without one, and the handler reports that rather than pretending an edit would take
 	// effect — see handleNetworkProxy.
 	upstreamProxy *upstream.Policy
+	// upstreamCarrier is the global SOCKS layer, shared with the sender and the proxy so one
+	// Settings edit reaches every egress surface. Distinct from upstreamProxy because it answers a
+	// different question — "which proxy carries this host" versus "what opens the socket to reach
+	// that proxy" — and because a surface can hold one without the other (burpsy-react-ui-mr83
+	// part 3).
+	upstreamCarrier *upstream.Carrier
 	// platformAuth and clientCerts are the Settings → Network stores: per-host HTTP
 	// credentials and per-host TLS client identities. Built lazily by platformAuthStore()
 	// and clientCertStore() so a directly-constructed Server never serves a nil one, and
@@ -519,6 +525,22 @@ func (s *Server) restorePools(p *persist.Store) {
 	// (200 each), so a diff would be more machinery than it saves.
 	s.pools.OnChange(func() { p.SavePools(s.pools.List()) })
 	s.schedules.OnChange(func() { p.SaveSchedules(s.schedules.List()) })
+}
+
+// WithUpstreamCarrier attaches the global SOCKS layer.
+//
+// The SAME instance must be handed to the sender and the proxy, for the reason WithUpstreamProxy
+// says: two carriers would let the panel describe a layer that only one surface honours.
+func (s *Server) WithUpstreamCarrier(carrier *upstream.Carrier) *Server {
+	if carrier != nil {
+		s.upstreamCarrier = carrier
+		// Attached here, the way WithUpstreamProxy does, so the panel's `attached` field reports the
+		// surfaces that actually carry the layer. A carrier reported as configured with no surface
+		// listed is the state an operator cannot act on: they cannot tell which dial paths the setting
+		// reaches (burpsy-react-ui-mr83 part 3).
+		carrier.Attach("web")
+	}
+	return s
 }
 
 // WithUpstreamProxy attaches the upstream proxy policy /api/network/proxy edits.

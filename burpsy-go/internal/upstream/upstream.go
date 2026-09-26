@@ -210,6 +210,67 @@ func (p Proxy) Addr() string {
 	return net.JoinHostPort(p.host, strconv.Itoa(int(p.port)))
 }
 
+// baseFor is the dialer a SOCKS hop opens its own socket with: the caller's when it supplied one,
+// and a fresh timeout-bounded dialer otherwise.
+//
+// The carrier is NOT applied here. Go's net.Dialer has no dialer-shaped field to override -- Dial and
+// DialContext are methods -- so a dialer carrying a carrier would silently ignore it. The carrier is
+// applied at the socket open instead, in openSocket, which every connection in this package goes
+// through.
+func baseFor(base *net.Dialer, timeout time.Duration) *net.Dialer {
+	if base == nil {
+		base = &net.Dialer{}
+	}
+	clone := *base
+	if timeout > 0 {
+		clone.Timeout = timeout
+	}
+	return &clone
+}
+
+// openSocket opens one TCP connection, honouring the carrier.
+//
+// Every socket in this package is opened here or through baseFor, so the layering is reached by
+// construction rather than by a call site remembering to ask for it.
+func openSocket(ctx context.Context, base *net.Dialer, carrier *Carrier, network, addr string) (net.Conn, error) {
+	if carrier == nil {
+		if base == nil {
+			base = &net.Dialer{}
+		}
+		return base.DialContext(ctx, network, addr)
+	}
+	return carrier.dialTCP(ctx, base, network, addr)
+}
+
+// hostOnly and portOnly are the proxy address split, for the carrier's self-exemption. The
+// exemption compares BOTH: matching on the host alone would exempt every other service on the same
+// interface, which is a carrier that silently does nothing for an operator whose SOCKS server and
+// targets share 127.0.0.1 — a dev box, and exactly where a bypass list is most wanted.
+func (p Proxy) hostOnly() string { return p.host }
+
+func (p Proxy) portOnly() string { return strconv.Itoa(int(p.port)) }
+
+// dialVia reaches a destination through a SOCKS hop, with the hop's own socket opened by base.
+//
+// It is the one place the carrier's layering happens, and it exists as a method rather than inline in
+// carrier.go so the SOCKS handshake itself stays with the SOCKS code that already knows how to speak
+// it. The only difference from dialSocks4/dialSocks5 is the socket: those open the proxy's address
+// themselves, and this one is handed a socket that already came through the layer beneath.
+func (p Proxy) dialVia(ctx context.Context, network, addr string, base *net.Dialer, remote bool) (net.Conn, error) {
+	if remote {
+		// The caller's choice wins over the URL scheme's default: a socks4a:// or socks5h:// address
+		// says resolve remotely, and the settings panel's checkbox says the same, so they agree. Where
+		// they disagree the carrier's explicit flag is the one an operator just set.
+		hopped := p
+		hopped.remoteResolve = true
+		return hopped.dialSocks5(ctx, network, addr, base.Timeout, base, nil)
+	}
+	// Otherwise the existing path opens the proxy socket itself, which is already the right layering:
+	// that dial goes to the SOCKS server's own address, and carrier.carries exempts it above so the
+	// recursion cannot form.
+	return p.dialSocks5(ctx, network, addr, base.Timeout, base, nil)
+}
+
 // HasCredentials reports whether a username (and possibly a password) was configured. Reported
 // instead of the values, so an operator can see that authentication is set up without the API ever
 // serving the secret.
@@ -265,19 +326,25 @@ func (p Proxy) URL() *url.URL {
 // The typed net/http path is the deliberate exception and does not come through here: net/http applies
 // an HTTP proxy itself, in absolute form for cleartext and CONNECT for TLS, which is the ordinary
 // client behaviour and involves no operator-authored bytes.
-func (p Proxy) DialContext(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+func (p Proxy) DialContext(ctx context.Context, network, addr string, timeout time.Duration, carrier *Carrier) (net.Conn, error) {
 	if !strings.HasPrefix(network, "tcp") {
 		return nil, fmt.Errorf("upstream proxy %s cannot carry %q connections", p.Display(), network)
 	}
 	switch p.Kind() {
 	case KindDirect:
-		return (&net.Dialer{Timeout: timeout}).DialContext(ctx, network, addr)
+		// Through the carrier, and this arm is the one that matters most: an operator who configures
+		// a SOCKS layer and NO upstream proxy — which is the ordinary case for that setting, and the
+		// one the live pass exercised — has a policy whose resolved proxy is Direct, so every
+		// connection in the process arrives here. Opening a bare net.Dialer here made the carrier
+		// configured, reported as configured, and inert on exactly the path it exists for
+		// (burpsy-react-ui-mr83 part 3).
+		return openSocket(ctx, baseFor(nil, timeout), carrier, network, addr)
 	case KindHTTP, KindHTTPS:
-		return p.dialConnect(ctx, network, addr, timeout)
+		return p.dialConnect(ctx, network, addr, timeout, carrier)
 	case KindSOCKS5:
-		return p.dialSocks5(ctx, network, addr, timeout)
+		return p.dialSocks5(ctx, network, addr, timeout, nil, carrier)
 	case KindSOCKS4:
-		return p.dialSocks4(ctx, network, addr, timeout)
+		return p.dialSocks4(ctx, network, addr, timeout, nil, carrier)
 	default:
 		// Unreachable: Parse is the only constructor and it refuses every other scheme. Named rather
 		// than falling through to a direct dial, because "the proxy was ignored" is the one failure
@@ -287,26 +354,37 @@ func (p Proxy) DialContext(ctx context.Context, network, addr string, timeout ti
 }
 
 // dialConnect opens the carrier connection to an HTTP-family proxy and tunnels to addr with CONNECT.
-func (p Proxy) dialConnect(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: timeout}
-	var carrier net.Conn
+// carrier is the global SOCKS layer, applied to the socket opened to reach THIS proxy. That is the
+// case the carrier exists for: an HTTP proxy that is itself only reachable through a SOCKS hop is
+// the ordinary corporate shape, and opening this socket any other way makes the setting silently
+// not apply to the one path an operator most often needs it on (burpsy-react-ui-mr83 part 3).
+func (p Proxy) dialConnect(ctx context.Context, network, addr string, timeout time.Duration, globalCarrier *Carrier) (net.Conn, error) {
+	dialer := baseFor(nil, timeout)
+	var hop net.Conn
 	var err error
 	if p.kind == KindHTTPS {
 		// Verified, deliberately. This leg goes to the operator's own proxy, not to an engagement
 		// target whose certificate nobody can fix, so skipping verification here would give away the
 		// credentials in the CONNECT below to whoever answered.
+		//
+		// NOT carried, and the limit is deliberate and stated rather than hidden: crypto/tls calls
+		// DialContext on the net.Dialer it is handed, and Go's net.Dialer has no field a carrier can
+		// replace, so there is no way to put a SOCKS hop under an HTTPS proxy without reimplementing
+		// the TLS dial here. An operator whose upstream is HTTPS gets a carrier that covers every
+		// other leg, and this one direct — which is reported rather than left to be discovered as a
+		// hang (burpsy-react-ui-mr83 part 3).
 		td := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{ServerName: p.host}}
-		carrier, err = td.DialContext(ctx, network, p.Addr())
+		hop, err = td.DialContext(ctx, network, p.Addr())
 	} else {
-		carrier, err = dialer.DialContext(ctx, network, p.Addr())
+		hop, err = openSocket(ctx, dialer, globalCarrier, network, p.Addr())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("upstream proxy %s unreachable: %w", p.Display(), err)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		carrier.SetDeadline(deadline)
+		hop.SetDeadline(deadline)
 	} else if timeout > 0 {
-		carrier.SetDeadline(time.Now().Add(timeout))
+		hop.SetDeadline(time.Now().Add(timeout))
 	}
 
 	var req strings.Builder
@@ -316,24 +394,24 @@ func (p Proxy) dialConnect(ctx context.Context, network, addr string, timeout ti
 		fmt.Fprintf(&req, "Proxy-Authorization: Basic %s\r\n", token)
 	}
 	req.WriteString("\r\n")
-	if _, err := carrier.Write([]byte(req.String())); err != nil {
-		carrier.Close()
+	if _, err := hop.Write([]byte(req.String())); err != nil {
+		hop.Close()
 		return nil, fmt.Errorf("writing CONNECT to %s: %w", p.Display(), err)
 	}
-	status, err := readConnectReply(carrier)
+	status, err := readConnectReply(hop)
 	if err != nil {
-		carrier.Close()
+		hop.Close()
 		return nil, fmt.Errorf("reading CONNECT reply from %s: %w", p.Display(), err)
 	}
 	if status < 200 || status > 299 {
-		carrier.Close()
+		hop.Close()
 		return nil, fmt.Errorf("upstream proxy %s answered %d to CONNECT %s", p.Display(), status, addr)
 	}
 	// The handshake's deadline must not become the connection's: the caller sets its own for the
 	// exchange it is about to run, and leaving this one armed would kill a long-lived tunnel — a
 	// WebSocket relay, an intercepted keep-alive connection — at the dial timeout.
-	carrier.SetDeadline(time.Time{})
-	return carrier, nil
+	hop.SetDeadline(time.Time{})
+	return hop, nil
 }
 
 // readConnectReply reads exactly the CONNECT response head off conn and returns its status code.
@@ -379,12 +457,14 @@ func readConnectReply(conn net.Conn) (int, error) {
 // the standard library itself vendors for Transport's socks5 support. Re-implementing RFC 1928's
 // method negotiation and RFC 1929's auth sub-negotiation would be a second copy of code that is
 // already here and already tested.
-func (p Proxy) dialSocks5(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+// base is the dialer that opens the socket to the SOCKS server itself. Nil opens one bounded only
+// by timeout; see dialSocks4's note.
+func (p Proxy) dialSocks5(ctx context.Context, network, addr string, timeout time.Duration, base *net.Dialer, carrier *Carrier) (net.Conn, error) {
 	var auth *xproxy.Auth
 	if p.user != "" {
 		auth = &xproxy.Auth{User: p.user, Password: p.pass}
 	}
-	dialer, err := xproxy.SOCKS5(network, p.Addr(), auth, &net.Dialer{Timeout: timeout})
+	dialer, err := xproxy.SOCKS5(network, p.Addr(), auth, baseFor(base, timeout))
 	if err != nil {
 		return nil, fmt.Errorf("upstream proxy %s: %w", p.Display(), err)
 	}
@@ -424,7 +504,10 @@ const (
 // therefore resolves the destination here, locally, and a name that resolves only to IPv6 is refused
 // rather than silently dialled somewhere else — socks4a:// is the spelling that hands the name to the
 // proxy instead.
-func (p Proxy) dialSocks4(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+// base is the dialer that opens the socket to the SOCKS server itself. Nil opens one bounded only
+// by timeout, which is what every caller before the carrier passed; the carrier passes its own
+// resolved base so a proxied dial keeps the operator's resolver and connect bound all the way down.
+func (p Proxy) dialSocks4(ctx context.Context, network, addr string, timeout time.Duration, base *net.Dialer, carrier *Carrier) (net.Conn, error) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("upstream proxy %s: destination %q is not host:port", p.Display(), addr)
@@ -456,7 +539,7 @@ func (p Proxy) dialSocks4(ctx context.Context, network, addr string, timeout tim
 		copy(dst[:], addrs[0].To4())
 	}
 
-	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, network, p.Addr())
+	conn, err := openSocket(ctx, base, carrier, network, p.Addr())
 	if err != nil {
 		return nil, fmt.Errorf("upstream proxy %s unreachable: %w", p.Display(), err)
 	}
@@ -760,6 +843,15 @@ type Dialer struct {
 	// proxy" would quietly also mean "and stop honouring my resolver". Nil keeps the old behaviour:
 	// a fresh dialer bounded only by Timeout.
 	Base *net.Dialer
+	// Carrier is the global SOCKS layer, applied BENEATH whatever the policy resolved: a connection
+	// to an HTTP upstream proxy, to a SOCKS rule proxy, or straight to an origin, is all opened
+	// through the carrier when it carries that destination. Nil is no carrier, which is what every
+	// caller in this tree passes and what the settings are when no hop is configured.
+	//
+	// It is a field rather than a global because a process can hold more than one egress surface
+	// (the proxy listener, the sender, a scanner), and a carrier is per-surface configuration the
+	// operator sets on the panel that owns it.
+	Carrier *Carrier
 }
 
 // base returns the dialer to open TCP with, honouring Base when the caller supplied one.
@@ -782,13 +874,29 @@ func (d Dialer) base() *net.Dialer {
 // The HTTP-family proxies are skipped for one specific address: the proxy's own, which is what
 // net/http hands this dialer once Transport.Proxy has returned a URL. See Policy.isHTTPProxyAddr.
 func (d Dialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	base := d.base()
+	// The carrier is applied on EVERY path, and that is the feature: a destination with no proxy rule
+	// goes through the SOCKS hop, a destination behind an HTTP proxy goes through the SOCKS hop to
+	// REACH that proxy, and the proxy's own connection is exempt from the carrier so the hop cannot
+	// dial itself. Routing the direct path around the carrier would leave the global setting meaning
+	// "proxy through SOCKS", which is not what Burp's setting says -- it says every outbound
+	// connection (settings/network/connections.html:177-199).
 	if d.Policy == nil {
-		return d.base().DialContext(ctx, network, addr)
+		return openSocket(ctx, base, d.Carrier, network, addr)
 	}
 	if d.Policy.isHTTPProxyAddr(addr) {
-		return d.base().DialContext(ctx, network, addr)
+		// The address of a proxy this policy configures. It skips the POLICY, deliberately: the
+		// check exists so a proxy connection is not resolved against a rule and tunnelled through
+		// another proxy (see isHTTPProxyAddr's comment), and a chain nobody asked for is the failure it
+		// prevents.
+		//
+		// It does NOT skip the CARRIER, and that is the whole feature. An HTTP upstream proxy that is
+		// itself only reachable through a SOCKS hop is the ordinary corporate shape, and this is the
+		// socket that has to carry the hop — exempting it would leave the global setting applying to
+		// nothing that matters (burpsy-react-ui-mr83 part 3).
+		return openSocket(ctx, base, d.Carrier, network, addr)
 	}
-	return d.Policy.ForAddr(addr).DialContext(ctx, network, addr, d.Timeout)
+	return d.Policy.ForAddr(addr).DialContext(ctx, network, addr, d.Timeout, d.Carrier)
 }
 
 // Dial satisfies the one-shot form some callers want. Equivalent to DialContext with a background

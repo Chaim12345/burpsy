@@ -298,12 +298,24 @@ func main() {
 	// already in the database replaces it in place rather than becoming a second, unreachable copy.
 	// Doing this the other way round would have Restore wipe the flags entirely.
 	upstreamPolicy := upstream.NewPolicy()
+	// The global SOCKS layer, one instance shared by every egress surface — the sender, the proxy
+	// listener and the console. One instance rather than a copy per surface because the setting is
+	// global: a carrier the sender honours and the proxy does not is a panel that looks right and a
+	// browser that goes out the wrong way (burpsy-react-ui-mr83 part 3).
+	upstreamCarrier := upstream.NewCarrier()
 	if persistStore != nil {
 		// Fatal, not a warning. Starting under a proxy policy we could not read means starting with
 		// traffic going somewhere the operator did not choose — including straight to the target — and
 		// that is not a decision to make behind their back.
 		if err := persistStore.LoadUpstreamProxy(upstreamPolicy); err != nil {
 			log.Fatalf("Failed to restore the upstream proxy policy: %v", err)
+		}
+		// The carrier is restored in the same block and for the same reason, and FATAL on a refusal
+		// for the same reason: starting with a layer the operator configured but this process could
+		// not read means traffic going out a way they did not choose, and the failure mode is
+		// indistinguishable from "the SOCKS proxy is down".
+		if _, cerr := persistStore.LoadUpstreamCarrier(upstreamCarrier); cerr != nil {
+			log.Fatalf("Could not read the saved SOCKS carrier: %v", cerr)
 		}
 	}
 	applyUpstreamFlags(upstreamPolicy, upstreamFlags)
@@ -479,6 +491,7 @@ func main() {
 		// it an operator sets a corporate proxy, watches the scanner's traffic take it, and never
 		// learns that everything their browser drove through the listener went out direct.
 		WithUpstreamProxy(upstreamPolicy).
+		WithUpstreamCarrier(upstreamCarrier).
 		// The upstream leg of an intercepted TLS connection. Without this, an app requiring
 		// a client certificate could only be reached by putting its host on the TLS
 		// passthrough list — which is to say by giving up interception, which is the one
@@ -517,7 +530,14 @@ func main() {
 	// sender.go's own comment on the protocol cache asks for: "an intruder run and the scan that
 	// preceded it share what either of them discovered". Sharing is safe because Sender guards its
 	// config and client behind a mutex and its protocol cache is atomic.
-	httpSender := sender.NewSender(egressSenderConfig(upstreamPolicy, platformAuth, clientCerts))
+	// The carrier goes ON THE CONFIG, not just on the sender afterwards. The transport's client is
+	// built during construction and captures the carrier then, so a WithUpstreamCarrier that only
+	// set the field would leave the client holding a nil layer — and the live pass found exactly
+	// that: the console reported the carrier configured, every dial site read the field, and the
+	// connection still went out direct.
+	senderConfig := egressSenderConfig(upstreamPolicy, platformAuth, clientCerts)
+	senderConfig.UpstreamCarrier = upstreamCarrier
+	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
 	// as the scan-config restore below: what the operator set through the API in a previous run is a
@@ -690,6 +710,11 @@ func main() {
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
 		WithUpstreamProxy(upstreamPolicy).
+		// The same carrier the proxy and the senders hold, so /api/network/proxy's carrier edit
+		// reaches the dial path rather than a copy — and so its `attached` field can report every
+		// surface truthfully. Without it the panel would accept a carrier edit, report the layer as
+		// configured, and nothing would be carried (burpsy-react-ui-mr83 part 3).
+		WithUpstreamCarrier(upstreamCarrier).
 		// The same pointers the proxy and every sender above hold, so the panel edits what
 		// the wire presents. The notes carry the bindings that could not be rebuilt, so a
 		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a

@@ -56,7 +56,24 @@ func (s *Server) clientCertSource() alpn.ClientCertSource {
 // connect timeout, the same as the net.Dial calls this replaced — and inventing one now would change
 // when a slow origin gives up on a path unrelated to proxying.
 func (s *Server) upstreamDialer() upstreamproxy.Dialer {
-	return upstreamproxy.Dialer{Policy: s.upstreamPolicy()}
+	return upstreamproxy.Dialer{
+		Policy: s.upstreamPolicy(),
+		// The global SOCKS layer, applied beneath whatever the policy resolved — the layer that makes
+		// an HTTP upstream proxy reachable only through a SOCKS hop expressible, and that carries a
+		// direct dial too because the setting says every outbound connection
+		// (burpsy-react-ui-mr83 part 3). Nil on a proxy built without one, which is the behaviour
+		// every leg here had before the layer existed.
+		Carrier: s.carrier(),
+	}
+}
+
+// carrier is the global SOCKS layer, or nil. A method so every leg in this file reads it the same
+// way and a nil Server is the same answer as a Server with no carrier.
+func (s *Server) carrier() *upstreamproxy.Carrier {
+	if s == nil || s.config == nil {
+		return nil
+	}
+	return s.config.upstreamCarrier
 }
 
 // dialUpstream opens a TCP connection to host:port, through whatever upstream proxy the configured

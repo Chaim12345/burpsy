@@ -2081,6 +2081,15 @@ function UpstreamProxySection(): JSX.Element {
 
  const busy = save.isPending || remove.isPending || clear.isPending;
 
+ // The carrier draft, adopted from the server's own view rather than from a local default, so what
+ // the panel shows before a save is what is in force — and so a setting another tab changed appears
+ // here without a reload.
+ const [carrierDraft, setCarrierDraft] = useState({ socks: "", bypass: [] as string[], remote_resolve: false });
+ useEffect(() => {
+  if (!data) return;
+  setCarrierDraft({ socks: data.carrier.socks, bypass: data.carrier.bypass, remote_resolve: data.carrier.remote_resolve });
+ }, [data]);
+
  return (
   <Card>
    <SectionHeading
@@ -2236,6 +2245,96 @@ function UpstreamProxySection(): JSX.Element {
      ))}
     </SimpleTable>
    ) : null}
+
+   {/*
+    The global SOCKS layer, below the rules and above the modal. The order is the meaning: a rule
+    answers "which proxy carries this host" and the carrier answers "what opens the socket to reach
+    that proxy", so the layer that sits UNDERNEATH them is listed after them. A panel that showed the
+    rules and not this would let an operator conclude their HTTP proxy is reachable from anywhere
+    (burpsy-react-ui-mr83 part 3).
+   */}
+   <h4>Global SOCKS carrier</h4>
+   <div className="notice">
+    <span>
+     A TCP layer under every connection this tool opens, including the connections to an upstream proxy
+     above — so an HTTP proxy that is itself only reachable through a SOCKS hop works without giving
+     up the proxy. Hosts you list below skip it.{" "}
+     <code>remote DNS</code> asks the SOCKS server to resolve names, which is what makes an
+     internal-only hostname reachable through it; it is refused for an HTTP hop, where it would
+     otherwise be silently ignored.
+    </span>
+   </div>
+   <Toolbar>
+    <Field label="SOCKS proxy" hint="Blank means no carrier">
+     {(id) => (
+      <Input
+       id={id}
+       value={carrierDraft.socks}
+       onChange={(event) => setCarrierDraft((d) => ({ ...d, socks: event.target.value }))}
+       placeholder="socks5://127.0.0.1:1080"
+       style={{ maxWidth: "var(--w-lg)" }}
+      />
+     )}
+    </Field>
+    <Field label="Bypass hosts" hint="Comma separated; *.example.com">
+     {(id) => (
+      <Input
+       id={id}
+       value={carrierDraft.bypass.join(", ")}
+       onChange={(event) =>
+        setCarrierDraft((d) => ({
+         ...d,
+         bypass: event.target.value
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry !== ""),
+        }))
+       }
+       placeholder="intranet.example.test, *.internal.test"
+       style={{ maxWidth: "var(--w-lg)" }}
+      />
+     )}
+    </Field>
+    <Field label="Remote DNS" htmlFor="network-carrier-remote">
+     <Switch
+      id="network-carrier-remote"
+      label="Let the SOCKS server resolve destination names"
+      checked={carrierDraft.remote_resolve}
+      onCheckedChange={(checked) => setCarrierDraft((d) => ({ ...d, remote_resolve: checked }))}
+     />
+    </Field>
+    <Button
+     variant="outline"
+     size="small"
+     onClick={() =>
+      save.mutate(
+       { carrier: carrierDraft },
+       {
+        onSuccess: (answer) => {
+         setCarrierDraft({ socks: answer.carrier.socks, bypass: answer.carrier.bypass, remote_resolve: answer.carrier.remote_resolve });
+         toast.success(answer.carrier.configured ? "SOCKS carrier applied" : "SOCKS carrier cleared");
+        },
+        onError: (failure: unknown) => fail(failure, "The SOCKS carrier could not be applied"),
+       },
+      )
+     }
+     disabled={busy}
+    >
+     Apply carrier
+    </Button>
+   </Toolbar>
+   <p className="field-hint">
+    {data?.carrier.configured
+     ? `Carried by ${data.carrier.attached.length || "no"} surface(s) — ${
+       data.carrier.attached.join(", ") || "none, so nothing is going through it"
+      }.`
+     : "No carrier is installed: every connection dials directly, and any upstream proxy above is reached directly too."}
+   </p>
+   {data?.carrier.limits.map((limit) => (
+    <p key={limit} className="field-hint">
+     <strong>Not carried:</strong> {limit}.
+    </p>
+   ))}
 
    <Modal
     open={confirmClear}

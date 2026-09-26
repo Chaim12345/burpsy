@@ -53,6 +53,10 @@ type Sender struct {
 	// authorised sender shares this one: a setting that a caller had to pass to each of twenty
 	// construction sites is a setting half of them will forget.
 	jar CookieJar
+	// carrier is the global SOCKS layer this sender's egress legs are opened through. Nil means no
+	// carrier, which is the behaviour every send had before it existed. See
+	// internal/upstream.Carrier.
+	carrier *upstream.Carrier
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
 	// that preceded it share what either of them discovered — see protocol.go. Its own state is
@@ -104,6 +108,12 @@ type SenderConfig struct {
 	// credential store. Held here rather than on Sender because both dial paths need it and both read
 	// their knobs from the config.
 	ClientCerts alpn.ClientCertSource
+	// UpstreamCarrier is the global SOCKS layer this sender's egress legs are opened through.
+	// Nil means no carrier, which is the behaviour every send had before the layer existed.
+	//
+	// It is here rather than only on the Sender because the client is built during construction, from
+	// the config, before a Sender exists to hold anything.
+	UpstreamCarrier *upstream.Carrier
 	// PlatformAuth, when set, is consulted for an Authorization header to present on the typed send
 	// path — Burp's Settings → Network → Platform authentication.
 	//
@@ -175,8 +185,9 @@ func NewSender(config *SenderConfig) *Sender {
 	}
 	settings := networkFromConfig(config)
 	policy, policyErr := resolveUpstream(config)
+	carrier := config.UpstreamCarrier
 	return &Sender{
-		client:      buildClient(config, settings),
+		client:      buildClient(config, settings, carrier),
 		config:      config,
 		net:         settings,
 		protocols:   newProtocolCache(),
@@ -221,7 +232,7 @@ func networkFromConfig(config *SenderConfig) NetworkSettings {
 // fields would both race with in-flight sends and leave already-idle connections on the old values. A
 // fresh transport per settings change costs one connection pool, which is the honest price of a
 // timeout change that actually takes effect.
-func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
+func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstream.Carrier) *http.Client {
 	// Resolved here rather than passed in because every caller of buildClient already holds the
 	// config this derives from, and threading it through four call sites would let one of them
 	// forget. A policy that cannot be built is carried, not swallowed: see the Proxy hook below.
@@ -248,6 +259,10 @@ func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
 				Policy:  policy,
 				Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 				Base:    settings.dialer(),
+				// The global SOCKS layer, applied beneath whatever the policy resolved. The same
+				// instance the proxy leg and the console hold, so one Settings edit reaches every
+				// surface (burpsy-react-ui-mr83 part 3).
+				Carrier: carrier,
 			}
 			// The family preference is applied here too, and on the same rule as the raw path's
 			// dialAddress: an override is an operator naming one address and is never second-guessed, and
@@ -361,7 +376,7 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.net = normalised
-	s.client = buildClient(s.config, normalised)
+	s.client = buildClient(s.config, normalised, s.carrier)
 	return nil
 }
 
@@ -430,7 +445,12 @@ func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.C
 	// meant that configuring a proxy silently stopped honouring the operator's resolver.
 	settings := s.Network()
 	dialer := upstream.Dialer{
-		Policy:  s.upstream,
+		Policy: s.upstream,
+		// The global SOCKS layer. Every dial in this package carries it, not just the transport's:
+		// the raw path — which is the one Repeater sends through, and therefore the one an operator
+		// exercising the setting from the UI actually uses — would otherwise go direct and make the
+		// setting look installed and inert (burpsy-react-ui-mr83 part 3).
+		Carrier: s.carrier,
 		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 		Base:    settings.dialer(),
 	}
@@ -514,8 +534,19 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		Resolver:           settings.dialer().Resolver,
 		ClientCerts:        s.config.ClientCerts,
 	}
-	if s.upstream != nil && !s.upstream.Empty() {
-		dialer.Carry = upstream.Dialer{Policy: s.upstream, Timeout: connect, Base: settings.dialer()}.DialContext
+	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
+	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
+	// configured — the ordinary case for an operator who only wants a SOCKS hop — the raw path opened
+	// a bare socket, so the layer was configured, reported as configured, and never carried a single
+	// connection. Burp's setting says "every outbound connection", and the gate made it mean "every
+	// connection to an upstream proxy" (burpsy-react-ui-mr83 part 3).
+	if s.upstream != nil && !s.upstream.Empty() || s.carrier != nil {
+		dialer.Carry = upstream.Dialer{
+			Policy:  s.upstream,
+			Carrier: s.carrier,
+			Timeout: connect,
+			Base:    settings.dialer(),
+		}.DialContext
 	}
 	return dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
 }
@@ -1176,7 +1207,7 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 	if total := s.net.Timeouts.TotalMS; total > 0 && s.net.Timeouts.ConnectMS > total {
 		s.net.Timeouts.ConnectMS = total
 	}
-	s.client = buildClient(s.config, s.net)
+	s.client = buildClient(s.config, s.net, s.carrier)
 	return s
 }
 
@@ -1187,7 +1218,7 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	s.config.TLSVerify = verify
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
-	s.client = buildClient(s.config, s.net)
+	s.client = buildClient(s.config, s.net, s.carrier)
 	return s
 }
 
@@ -1262,4 +1293,37 @@ func (s *Sender) CookieJar() CookieJar {
 		return nil
 	}
 	return s.jar
+}
+
+// WithUpstreamCarrier attaches the global SOCKS layer to this sender's egress legs.
+//
+// The SAME instance must be handed to the proxy and the web server, for the reason the upstream
+// policy's own wiring says: two carriers would let the panel describe a layer only one surface
+// honours.
+func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
+	if s == nil {
+		return s
+	}
+	s.carrier = carrier
+	// The config too, because the next client rebuild reads from there rather than from the Sender —
+	// a WithTLSVerify or a settings change would otherwise drop the carrier silently.
+	if s.config != nil {
+		s.config.UpstreamCarrier = carrier
+	}
+	// And the CLIENT is rebuilt now, not on the next edit. The client captured the carrier at
+	// construction, so setting the field afterwards would leave the transport dialling through a nil
+	// layer while the field reported one — the live pass caught exactly that: the console reported the
+	// carrier configured, every dial site read the field, and the connection still went out direct.
+	s.mu.Lock()
+	s.client = buildClient(s.config, s.net, carrier)
+	s.mu.Unlock()
+	return s
+}
+
+// UpstreamCarrier returns the attached global SOCKS layer, or nil.
+func (s *Sender) UpstreamCarrier() *upstream.Carrier {
+	if s == nil {
+		return nil
+	}
+	return s.carrier
 }
