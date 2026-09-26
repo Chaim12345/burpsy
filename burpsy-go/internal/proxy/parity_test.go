@@ -148,6 +148,15 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Not ruleAbsent either: zero means "not computed", and both legs do compute it at this seam, so
 	// an absent claim would be false. The field being populated is checked per leg below.
 	"RequestFP": ruleMayDiffer,
+	// The same shape, for the same reason (burpsy-react-ui-7py5): the count is derived from the raw
+	// REQUEST bytes, and the proxy relays them verbatim while the crawler's sender re-renders what it
+	// parsed. For the parity body above neither carries a body, so the two counts agree at 0 and this
+	// rule is not exercised by that fixture — which is exactly why asserting ruleIdentical here would
+	// be a claim that holds only while a fixture's two requests happen to coincide.
+	//
+	// Not ruleAbsent: both legs go through Capture.Record, which computes it, so an absent claim
+	// would be false. The field being populated is checked per leg below.
+	"RequestParams": ruleMayDiffer,
 	// Identical: both legs record through scanner.Capture.Record, which derives these from
 	// the response bytes in hand. The origin above serves a title and a cookie so the
 	// comparison is over real values, not two empty cells agreeing vacuously.
