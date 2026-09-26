@@ -169,6 +169,49 @@ func (a RuleAction) String() string {
 	return "hold"
 }
 
+// RuleOp is how one rule combines with the rules ABOVE it in the list.
+//
+// Burp has this column and this is why (settings/tools/proxy.html:246-268): "Each rule is
+// combined to the rules above in order, using the selected boolean operator." Without it a
+// conjunction cannot be written at all — "hold requests to host A and path /admin" is two rules
+// that evaluate as a disjunction, so the operator either over-holds or writes one brittle rule
+// that has to enumerate both facts in a single matcher. It is the most-written interception rule
+// after "hold on this host".
+//
+// The default is RuleOpOr, and that default is not a convenience: it is what every list written
+// before this field existed evaluates as, so the fold below reproduces the old first-matching-rule
+// behaviour exactly when no rule says AND. See evaluate.
+type RuleOp int
+
+const (
+	// RuleOpOr combines with the rules above by disjunction. The zero value, and therefore the
+	// answer for a rule decoded from a document written before the field existed.
+	RuleOpOr RuleOp = iota
+	// RuleOpAnd combines by conjunction: every rule up to and including this one must match.
+	RuleOpAnd
+)
+
+func (o RuleOp) String() string {
+	if o == RuleOpAnd {
+		return "and"
+	}
+	return "or"
+}
+
+// ParseRuleOp reads the wire spelling, defaulting anything unrecognised to OR.
+//
+// Defaulting rather than refusing is the same choice the action parser makes, and for the same
+// reason: an unknown operator in a saved list must not stop the list working, and OR is the
+// behaviour every pre-existing list has.
+func ParseRuleOp(s string) RuleOp {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "and":
+		return RuleOpAnd
+	default:
+		return RuleOpOr
+	}
+}
+
 // Rule is one hold condition. Enabled rules are ANDed with the list switch;
 // a list with any enabled rule holds only matching messages, a list with no
 // enabled rules holds everything (unconditional).
@@ -179,6 +222,10 @@ type Rule struct {
 	Enabled     bool
 	Comment     string
 	Action      RuleAction
+	// Op combines THIS rule with the rules above it. It is ignored for the first enabled rule, which
+	// has nothing above it — there is nothing to combine with — so setting AND on the top rule is
+	// ignored rather than an error, which is what an operator who typed it expects.
+	Op RuleOp
 
 	re *regexp.Regexp
 }
@@ -469,9 +516,17 @@ type Engine struct {
 	// frame would have been matched against the response rules and held or released on the wrong
 	// operator's intent. Indexing makes the direction the address instead of a branch, so adding
 	// one cannot land in the wrong list.
-	lists  [DirectionCount]List
-	nextID uint64
-	held   map[uint64]*Held
+	lists [DirectionCount]List
+	// newlines is Burp's pair of newline corrections for an edited interception, both OFF by default
+	// because each one rewrites bytes the operator wrote and neither is a correction anyone would
+	// want applied to a request they did not edit (burpsy-react-ui-80tg). It is an engine setting
+	// rather than a per-forward argument for the same reason fixContentLength is a per-forward
+	// argument and these are not: they are part of how the interception tool behaves, an operator sets
+	// them once, and threading them through Forward would put a setting on every call site that could
+	// forget it.
+	newlines NewlineCorrection
+	nextID   uint64
+	held     map[uint64]*Held
 	// pending one-shot response holds (burpsy-react-ui-v6jw): Burp's "Do intercept >
 	// Response to this request". Each names the request it was armed from; the first
 	// response with identical attributes is held and the entry consumed, so arming
@@ -646,6 +701,26 @@ func (e *Engine) SetEnabled(v bool) {
 	e.enabled = v
 }
 
+// SetNewlineCorrection sets Burp's two newline fixes for edited interceptions
+// (burpsy-react-ui-80tg). Both default off; see NewlineCorrection for why each is a separate switch
+// and why the trailing-newline one only touches a urlencoded body.
+func (e *Engine) SetNewlineCorrection(n NewlineCorrection) {
+	e.mu <- struct{}{}
+	// Registered before the unlock defer, so LIFO runs it after: the signal must never be delivered
+	// with this lock held. Same two lines as every other mutation here.
+	defer e.signalChange()
+	defer func() { <-e.mu }()
+	e.newlines = n
+}
+
+// NewlineCorrections reports the configured corrections, so a surface can show what is on rather
+// than assuming the defaults.
+func (e *Engine) NewlineCorrections() NewlineCorrection {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.newlines
+}
+
 // SetRules replaces one direction's list. A malformed regex is refused and the
 // list is left unchanged, matching Burp's save-time compilation.
 func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
@@ -671,6 +746,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 				Enabled:     r.Enabled,
 				Comment:     r.Comment,
 				Action:      r.Action,
+				Op:          r.Op,
 				re:          re,
 			})
 			continue
@@ -682,6 +758,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 			Enabled:     r.Enabled,
 			Comment:     r.Comment,
 			Action:      r.Action,
+			Op:          r.Op,
 		})
 	}
 
@@ -764,18 +841,49 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if len(enabled) == 0 {
 		return false
 	}
-	// First matching rule wins (burpsy-react-ui-35i4): Burp's per-rule Do/Don't
-	// intercept. A list of hold-only rules behaves exactly as before — the first
-	// match holds, and reaching the end means no rule matched — so every list
-	// written before actions existed evaluates identically. The default below is
-	// deliberately not "hold": with enabled rules present and nothing matching,
-	// the list passes, which is the same default the loop above implemented.
+	// Left-to-right fold over the enabled rules, each combined with what is above it by its own
+	// operator (burpsy-react-ui-80tg, matching settings/tools/proxy.html:246-268).
+	//
+	// An all-OR list folds to exactly the old "first matching rule wins" behaviour (35i4): the first
+	// rule that matches short-circuits and decides, and reaching the end means nothing matched. So
+	// every list written before Op existed evaluates identically, which is why the default is OR and
+	// not a special case in the code.
+	//
+	// An AND short-circuits the other way — a rule that does not match cannot be rescued by anything
+	// below it — so the fold returns false as soon as one fails, rather than continuing to a later
+	// rule that might hold.
+	// A rule that combines with AND is only meaningful once something above it has held. Until then
+	// there is no conjunction for it to extend, so it is treated as its own standalone condition
+	// rather than silently becoming the accumulator: a lone "and path /admin" on an empty list above
+	// it should read as "hold /admin", not as a chain with a missing first link.
+	//
+	// The accumulator is the OR-fold over everything reached so far. An AND rule ANDs into it: the
+	// chain holds only if the accumulator is already true AND this rule matches.
+	acc := false
+	started := false
 	for _, r := range enabled {
-		if r.Match(m) {
-			return r.Action == RuleActionHold
+		matched := r.Match(m)
+		if r.Op == RuleOpAnd && started {
+			if !matched {
+				return false
+			}
+			// Every rule so far matched and this one does too, so the hold stands. The action here is
+			// irrelevant: an AND rule narrows an existing hold, it does not create one.
+			continue
 		}
+		// First rule, or an OR rule: the accumulator is the disjunction of every OR-rule matched so
+		// far. An OR rule that matches decides immediately when it HOLDS, which is what makes
+		// "hold this host, but pass that path" expressible; a matching PASS rule short-circuits to
+		// false, because a disjunction is satisfied by exactly one positive term.
+		if matched {
+			if r.Action == RuleActionPass && r.Op != RuleOpAnd {
+				return false
+			}
+			acc = true
+		}
+		started = true
 	}
-	return false
+	return acc
 }
 
 // Hold evaluates a message and, if it should be held, queues it and returns the
@@ -893,6 +1001,14 @@ func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool, targe
 	raw := h.Raw
 	if edited != nil {
 		raw = []byte(*edited)
+	}
+	// Burp's two newline corrections (settings/tools/proxy.html:273-292), and only on an EDITED
+	// message. Untouched traffic is already well-formed by construction — it came off the wire — so
+	// rewriting it could only change bytes the target accepted as they were. An edit is where the
+	// operator introduces the defect: dropping the blank line after the headers, or leaving a trailing
+	// newline in a form body.
+	if edited != nil && !h.Direction.IsWebSocket() {
+		raw = e.newlines.Apply(raw)
 	}
 	if fixContentLength && !h.Direction.IsWebSocket() {
 		raw = rewriteContentLength(raw)
@@ -1060,6 +1176,205 @@ func (e *Engine) DropAll(reason string) int {
 	<-e.mu
 	e.signalChange()
 	return len(dropped)
+}
+
+// NewlineCorrection is Burp's pair of newline fixes for an edited interception
+// (settings/tools/proxy.html:273-292): add a missing blank line after the headers, and remove
+// trailing newlines from a URL-encoded body.
+//
+// # Why both, and why they are not one setting
+//
+// They are two different defects with two different symptoms, and an operator who has edited a
+// request and watched the target reject it has no way to tell which they made. The missing blank
+// line is a framing error — the target reads the first body byte as a header name. The trailing
+// newline in a form body is a value error — the field parses with a trailing CR or LF glued to the
+// last character, which a signature or an equality check then fails. Fixing one does not fix the
+// other, so they are separate switches and either can be on alone.
+//
+// # Why the trailing-newline fix is scoped to urlencoded
+//
+// Because that is what Burp scopes it to, and the scoping is the point: a trailing newline in a
+// JSON body is ordinary and meaningful inside a string, and silently trimming it would corrupt
+// payloads the operator wrote deliberately. The Content-Type decides, not the body — an
+// unparseable or absent header is left alone rather than guessed at, because guessing wrong here
+// changes bytes without saying so.
+type NewlineCorrection struct {
+	// AddMissingBlankLine inserts the CRLFCRLF an edit dropped between the headers and the body.
+	AddMissingBlankLine bool
+	// TrimTrailingNewlinesInURLEncodedBody strips trailing CR/LF from a urlencoded body only.
+	TrimTrailingNewlinesInURLEncodedBody bool
+}
+
+// Apply runs the enabled corrections over a raw HTTP message, in the order that makes them
+// independent: the blank line is restored first, because the trailing-newline fix reads the body
+// boundary and would otherwise see headers where there should be a body.
+func (n NewlineCorrection) Apply(raw []byte) []byte {
+	if !n.AddMissingBlankLine && !n.TrimTrailingNewlinesInURLEncodedBody {
+		return raw
+	}
+	headEnd := indexCRLFCRLF(raw)
+	if headEnd < 0 {
+		// No blank line anywhere, which is exactly the case AddMissingBlankLine exists for: an edit
+		// that dropped it leaves the header block running into the body with nothing to separate them.
+		// The LAST CRLF is the boundary -- everything before it is headers, everything after is what
+		// the target would misread as a header name.
+		//
+		// A message with no CRLF at all is not an HTTP message this can repair, and inventing a
+		// boundary would produce bytes no client wrote.
+		if !n.AddMissingBlankLine {
+			return raw
+		}
+		// The boundary is the LAST line ending of the header block. Header lines are
+		// "Name: value" or continuations, so the run of lines that all look like headers ends at the
+		// first line that does not -- and that line is the start of the body.
+		//
+		// Guessing "last CRLF" instead truncates the body by two bytes, which is worse than the
+		// defect being repaired: the operator would see a request whose body silently lost its first
+		// characters and no reason why. Guessing "first CRLF" throws the headers away. So this walks
+		// the lines and asks what each one is.
+		text := string(raw)
+		head, body, ok := splitAtHeaderBlockEnd(text)
+		if !ok {
+			// Nothing that looks like a header block, so there is no boundary to restore and
+			// inventing one would produce bytes no client wrote.
+			return raw
+		}
+		// Content-Length is recomputed here too: a body the target could not previously find has
+		// usually also been mis-measured, and announcing the old length would be a second rejection
+		// on top of the first.
+		if rewritten, ok := setContentLength(head, len(body)); ok {
+			head = rewritten
+		}
+		return append([]byte(head+"\r\n\r\n"), body...)
+	}
+	head := string(raw[:headEnd])
+	body := raw[headEnd+4:]
+	changed := false
+
+	if n.TrimTrailingNewlinesInURLEncodedBody && isURLEncoded(head) {
+		if trimmed := trimTrailingNewlines(body); len(trimmed) != len(body) {
+			body = trimmed
+			changed = true
+		}
+	}
+	// Content-Length is recomputed after every body change, or a trimmed body would be announced
+	// with the length of the untrimmed one. Rewriting it here rather than leaving it to the
+	// caller's toggle is deliberate: a correction that changes the body and leaves a now-wrong
+	// length behind is a request the target will reject for a reason the operator cannot see.
+	if changed {
+		if rewritten, ok := setContentLength(head, len(body)); ok {
+			head = rewritten
+		}
+	}
+	if !changed {
+		return raw
+	}
+	return append([]byte(head+"\r\n\r\n"), body...)
+}
+
+// isURLEncoded reports whether the header block declares a urlencoded body.
+//
+// Only the exact media types Burp's own setting is about: application/x-www-form-urlencoded and the
+// multipart form type that shares its trailing-newline sensitivity. Anything else — including a
+// missing Content-Type — is false, because this correction rewrites bytes and must not do that to a
+// body whose format it has not recognised.
+func isURLEncoded(head string) bool {
+	for _, line := range strings.Split(head, "\r\n") {
+		colon := strings.Index(line, ":")
+		if colon < 0 {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(line[:colon]), "content-type") {
+			continue
+		}
+		value := strings.ToLower(strings.TrimSpace(line[colon+1:]))
+		mediaType := value
+		if semi := strings.Index(value, ";"); semi >= 0 {
+			mediaType = strings.TrimSpace(value[:semi])
+		}
+		return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+	}
+	return false
+}
+
+// trimTrailingNewlines removes trailing CR and LF bytes, and nothing else. A body that is nothing
+// but newlines becomes empty rather than keeping one, because a form with no fields is empty and a
+// form with a newline is a field whose name is a line break.
+func trimTrailingNewlines(body []byte) []byte {
+	end := len(body)
+	for end > 0 && (body[end-1] == '\r' || body[end-1] == '\n') {
+		end--
+	}
+	return body[:end]
+}
+
+// setContentLength rewrites the header's Content-Length to n, reporting whether there was one to
+// rewrite. A message with no Content-Length is left alone: this is a correction to what the operator
+// wrote, not a decision to start framing their request.
+func setContentLength(head string, n int) (string, bool) {
+	lines := strings.Split(head, "\r\n")
+	for i, line := range lines {
+		if len(line) >= 15 && strings.EqualFold(strings.TrimSpace(line[:15]), "Content-Length:") {
+			lines[i] = "Content-Length: " + strconv.Itoa(n)
+			return strings.Join(lines, "\r\n"), true
+		}
+	}
+	return head, false
+}
+
+// splitAtHeaderBlockEnd splits a message whose blank line is missing into its header block and its
+// body, reporting false when there is no header block to find.
+//
+// A header line is "Name: value" — a colon before any space that would make it a body line — or a
+// folded continuation, which begins with whitespace. The block ends at the first line that is
+// neither, or at the end of the message when every line is a header.
+func splitAtHeaderBlockEnd(text string) (head, body string, ok bool) {
+	lines := strings.Split(text, "\r\n")
+	if len(lines) == 0 {
+		return "", "", false
+	}
+	// The request line is not a header line and must not end the block.
+	sawHeader := false
+	for idx := 1; idx < len(lines); idx++ {
+		line := lines[idx]
+		if line == "" {
+			// An explicit empty line IS the boundary — the message was well formed after all and this
+			// function was called on a path that already knew otherwise.
+			return strings.Join(lines[:idx], "\r\n"), strings.Join(lines[idx+1:], "\r\n"), true
+		}
+		if isHeaderLine(line) {
+			sawHeader = true
+			continue
+		}
+		return strings.Join(lines[:idx], "\r\n"), strings.Join(lines[idx:], "\r\n"), sawHeader
+	}
+	if !sawHeader {
+		return "", "", false
+	}
+	return strings.Join(lines, "\r\n"), "", true
+}
+
+// isHeaderLine reports whether one line of a request head looks like a header rather than the first
+// line of a body.
+//
+// The colon test is deliberately strict: a body line like "name=bob" has no colon and is correctly
+// not a header, while a JSON body's opening line "{"a":"b"}" has a colon and would be misread — which
+// is why the caller only reaches this for a message that ALREADY has no blank line, where the
+// alternative is a request the target cannot parse at all.
+func isHeaderLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	if line[0] == ' ' || line[0] == '\t' {
+		return true // folded continuation
+	}
+	colon := strings.Index(line, ":")
+	if colon <= 0 {
+		return false
+	}
+	// A space or tab BEFORE the colon means it is not a header name — that is how a body line like
+	// "a b: c" avoids being read as one.
+	return strings.IndexAny(line[:colon], " \t") < 0
 }
 
 // fixContentLength rewrites the Content-Length header to match the body. If the

@@ -411,6 +411,19 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "Burp's \"Only intercept in-scope messages\": filter the hold queue to the engagement scope",
 	},
+	"/api/intercept/newline-correction": {
+		// riskLocal, and the reasoning is the same as the in-scope switch below for a different
+		// reason: this rewrites the bytes the OPERATOR is about to send, and the whole feature is
+		// that they chose to. It is not burpsy sending anything of its own, and it is not a decision
+		// about what may be touched — it is a correction to a request the operator is already holding
+		// and has already edited. Both corrections default OFF, so the risk is opt-in twice over.
+		//
+		// GET as well as PUT because the surface must read what is in force rather than assume the
+		// defaults: a plugin or a previous session may have set one, and a checkbox showing the wrong
+		// state is a control that lies about what it is doing.
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "Burp's two newline fixes for an EDITED interception: add a missing blank line after the headers, and strip trailing newlines from a urlencoded body",
+	},
 	"/api/intercept/rules/": {
 		// "requests" and "responses", plural — see directionFor. The singular was a guess when this
 		// entry was first written, and it answered 404 "Unknown direction" for every verb, which the

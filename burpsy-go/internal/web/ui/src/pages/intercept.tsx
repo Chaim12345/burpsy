@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useHotkeys } from "react-hotkeys-hook";
+import { useInterceptNewlineCorrection, useSetInterceptNewlineCorrection, type InterceptNewlineCorrection } from "../lib/data.tools";import { useHotkeys } from "react-hotkeys-hook";
 import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, MessageSquare, Pencil, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
@@ -262,6 +262,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
         <th style={{ width: "18%" }}>Field</th>
         <th>Match</th>
         <th style={{ width: "12%" }}>Kind</th>
+        <th style={{ width: "9%" }}>Combine</th>
         <th style={{ width: "14%" }}>Action</th>
         <th style={{ width: "18%" }}>Comment</th>
         <th style={{ width: "10%" }}>Order</th>
@@ -271,7 +272,7 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
       <tbody>
        {rules.length === 0 ? (
         <tr>
-         <td colSpan={8} className="cell-dim">
+         <td colSpan={9} className="cell-dim">
           no rules — every {noun} is held while this list is on
          </td>
         </tr>
@@ -329,6 +330,31 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
               {c.label}
              </option>
             ))}
+           </Select>
+          </td>
+          <td>
+           {/* Burp's boolean column (burpsy-react-ui-80tg). The title says what the choice does
+               rather than restating the option, because "combine with the rules above" is not
+               self-explanatory in a table row that has no rules above it on screen. */}
+           <Select
+            aria-label={`Combine rule ${index + 1}`}
+            title={
+             index === 0
+              ? "The first rule has nothing above it to combine with, so this choice is ignored"
+              : rule.op === "and"
+              ? "Hold only when this rule AND every rule above it match"
+              : "Hold when this rule matches, whatever the rules above decided"
+            }
+            disabled={index === 0}
+            value={rule.op ?? "or"}
+            onChange={(event) =>
+             update((list) =>
+              list.map((r, i) => (i === index ? { ...r, op: event.target.value as "and" | "or" } : r)),
+             )
+            }
+           >
+            <option value="or">OR</option>
+            <option value="and">AND</option>
            </Select>
           </td>
           <td>
@@ -495,6 +521,12 @@ function TargetEditor({
  );
 }
 
+/** Both corrections are off by default, and the page shows exactly what the server reports. */
+const NO_NEWLINE_CORRECTION: InterceptNewlineCorrection = {
+ add_missing_blank_line: false,
+ trim_trailing_newlines_urlencoded_body: false,
+};
+
 export function InterceptPage(): JSX.Element {
  const { data, error, isFetching, refetch } = useInterceptDetailed();
  // Enable and drop come from the shared controls; forward has its own hook because the shared one
@@ -529,6 +561,18 @@ export function InterceptPage(): JSX.Element {
  const [confirmDropAll, setConfirmDropAll] = useState(false);
  const [raw, setRaw] = useState("");
  const [fixContentLength, setFixContentLength] = useState(true);
+ // Burp's two newline corrections (80tg), read from the server rather than seeded with the
+ // defaults: both are OFF by default and a previous session or a plugin may have set one, so a
+ // checkbox seeded here would show the wrong state for a control that rewrites bytes.
+ const newlineQuery = useInterceptNewlineCorrection();
+ const setNewlinesRaw = useSetInterceptNewlineCorrection();
+ const newlines = newlineQuery.data ?? NO_NEWLINE_CORRECTION;
+ const setNewlines = (next: typeof NO_NEWLINE_CORRECTION) => {
+  setNewlinesRaw.mutate(next, {
+   onSuccess: () => void newlineQuery.refetch(),
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save that setting"),
+  });
+ };
  const [directionFilter, setDirectionFilter] = useState<HeldDirectionFilter>("all");
  const [inspector, setInspector] = useState(true);
  /**
@@ -1157,6 +1201,24 @@ export function InterceptPage(): JSX.Element {
       checked={fixContentLength}
       onCheckedChange={setFixContentLength}
       label="Fix Content-Length when forwarding"
+     />
+     {/* Burp's two newline corrections for an EDITED interception (80tg). Two switches rather than
+         one because they are two different defects with two different symptoms: the missing blank
+         line is a framing error the target reads as a header name, and the trailing newline in a form
+         body is a value error a signature then fails. Fixing one does not fix the other, and an
+         operator whose forward was rejected has no way to tell which they made.
+
+         Both apply only to a request the operator EDITED. Untouched traffic came off the wire and is
+         well-formed by construction, so rewriting it could only change bytes the target accepted. */}
+     <Checkbox
+      checked={newlines.add_missing_blank_line}
+      onCheckedChange={(v) => setNewlines({ ...newlines, add_missing_blank_line: v })}
+      label="Add a missing blank line after the headers when forwarding an edit"
+     />
+     <Checkbox
+      checked={newlines.trim_trailing_newlines_urlencoded_body}
+      onCheckedChange={(v) => setNewlines({ ...newlines, trim_trailing_newlines_urlencoded_body: v })}
+      label="Remove trailing newlines from a URL-encoded body when forwarding an edit"
      />
      {/* Burp's "Only intercept in-scope messages" (burpsy-react-ui-cz1). Disabled with the
               reason shown when no scope is attached, rather than offered as a control that silently

@@ -74,6 +74,17 @@ export interface InterceptRuleSpec {
   * written before actions existed reads back unchanged.
   */
  action?: "hold" | "pass";
+ /**
+  * How THIS rule combines with the rules above it: Burp's boolean column
+  * (settings/tools/proxy.html:246-268 — "Each rule is combined to the rules above in order,
+  * using the selected boolean operator").
+  *
+  * Absent means "or", the wire omits it, and the server defaults it — which is also the behaviour
+  * every list written before this column existed evaluates as, so adding it changes nothing until an
+  * operator opts in (burpsy-react-ui-80tg). Without it a conjunction cannot be written at all:
+  * "hold host A AND path /admin" would be two rules behaving as a disjunction.
+  */
+ op?: "and" | "or";
 }
 
 /** GET/PUT body for /api/intercept/rules/{requests|responses} — Go's `interceptListState`. */

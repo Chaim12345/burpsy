@@ -997,6 +997,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/in-scope-only", s.handleInterceptInScopeOnly)
+
+	// Burp's two newline corrections for an EDITED interception (80tg). riskLocal: they rewrite the
+	// bytes the operator is about to send, and the whole point of the feature is that the operator
+	// chose to. The wire route above is the same shape, so this one is classified the same way.
+	s.mux.HandleFunc("/api/intercept/newline-correction", s.handleInterceptNewlineCorrection)
 	s.mux.HandleFunc("/api/scanner/passive-branch", s.handlePassiveBranch)
 	s.mux.HandleFunc("/api/intercept/forward-all", s.handleInterceptForwardAll)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)

@@ -29,6 +29,10 @@ type interceptRuleSpec struct {
 	// action. Absent means hold, so every list written before actions existed reads back
 	// unchanged.
 	Action string `json:"action,omitempty"`
+	// Op is "and" or "none needed" — how THIS rule combines with the rules above it. Absent or
+	// unrecognised means OR, so a list written before the boolean column existed reads back and
+	// re-evaluates identically (burpsy-react-ui-80tg).
+	Op string `json:"op,omitempty"`
 }
 
 // interceptListState mirrors intercept.ts's ListState (the PUT body and the GET rules body).
@@ -230,6 +234,44 @@ func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+// handleInterceptNewlineCorrection serves GET and PUT /api/intercept/newline-correction — Burp's
+// two newline fixes for an EDITED interception (settings/tools/proxy.html:273-292,
+// burpsy-react-ui-80tg).
+//
+// Its own endpoint rather than two fields on the forward body because they are not properties of a
+// forward: they are how the interception tool behaves, an operator sets them once, and putting them
+// on every forward would make a caller that forgot them silently rewrite nothing.
+//
+// GET reports what is in force rather than assuming the defaults, so a surface cannot show a
+// control as off when a plugin or a previous session turned it on.
+func (s *Server) handleInterceptNewlineCorrection(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+	case http.MethodPut:
+		var req struct {
+			AddMissingBlankLine                bool `json:"add_missing_blank_line"`
+			TrimTrailingNewlinesURLEncodedBody bool `json:"trim_trailing_newlines_urlencoded_body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		s.intercept.SetNewlineCorrection(intercept.NewlineCorrection{
+			AddMissingBlankLine:                  req.AddMissingBlankLine,
+			TrimTrailingNewlinesInURLEncodedBody: req.TrimTrailingNewlinesURLEncodedBody,
+		})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	current := s.intercept.NewlineCorrections()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{
+		"add_missing_blank_line":                 current.AddMissingBlankLine,
+		"trim_trailing_newlines_urlencoded_body": current.TrimTrailingNewlinesInURLEncodedBody,
+	})
+}
+
 // handleInterceptForwardAll serves POST /api/intercept/forward-all and resolves every
 // held message as forwarded, unmodified, in one round trip — the queue toolbar's
 // "Forward all", the safe half of the pair whose destructive half is above. The
@@ -321,6 +363,7 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 			return nil, err
 		}
 		rules = append(rules, intercept.Rule{
+			Op:          intercept.ParseRuleOp(sp.Op),
 			Field:       field,
 			Category:    cat,
 			StringMatch: sp.Match,

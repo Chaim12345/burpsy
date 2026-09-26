@@ -254,6 +254,42 @@ export function useSendRepeaterGroup() {
   };
 }
 
+/**
+ * Burp's two newline corrections for an EDITED interception (settings/tools/proxy.html:273-292,
+ * burpsy-react-ui-80tg): add a missing blank line after the headers, and strip trailing newlines
+ * from a urlencoded body.
+ *
+ * Its own route rather than two fields on the forward body, because they are not properties of a
+ * forward: they are how the interception tool behaves, an operator sets them once, and a caller that
+ * forgot them on a forward would silently rewrite nothing.
+ *
+ * The read is not optional decoration. Both default OFF, and a plugin or a previous session may have
+ * set one — so a checkbox that showed the defaults rather than the in-force values would be a control
+ * lying about what it is doing, which is the same defect as a missing panel.
+ */
+export interface InterceptNewlineCorrection {
+  add_missing_blank_line: boolean;
+  trim_trailing_newlines_urlencoded_body: boolean;
+}
+
+export function useInterceptNewlineCorrection() {
+  return useQuery({
+    queryKey: ["intercept", "newline-correction"],
+    queryFn: ({ signal }) => api<InterceptNewlineCorrection>("/api/intercept/newline-correction", { signal }),
+    // The settings do not change on their own, and the page already polls the queue; refetching this
+    // on the same cadence would be a second request per poll for a value that only changes when the
+    // operator changes it.
+    staleTime: 30_000,
+  });
+}
+
+export function useSetInterceptNewlineCorrection() {
+  return useMutation({
+    mutationFn: (next: InterceptNewlineCorrection) =>
+      api<InterceptNewlineCorrection>("/api/intercept/newline-correction", json("PUT", next)),
+  });
+}
+
 export function useIntruderPoints() {
   return useMutation({
     mutationFn: (body: { msg_id: number; all: boolean }) =>
