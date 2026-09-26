@@ -203,6 +203,15 @@ export interface BuiltInConfigKey {
  what: string;
  value?: number;
  set: boolean;
+ /**
+  * This engine honours the key through a REDUCED form of Burp's value: the control works, and the
+  * parts of the value it cannot read do not (burpsy-react-ui-86le).
+  *
+  * The third state, and reporting it as either of the other two is the defect: a settings page that
+  * says this control is unsupported while it silently works, or one that claims full support for a
+  * value shape that cannot be read. `what` is where the operator reads what is missing.
+  */
+ partial?: boolean;
 }
 
 export interface BuiltInConfigView {

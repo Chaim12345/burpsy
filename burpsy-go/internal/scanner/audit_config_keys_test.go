@@ -99,24 +99,47 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 
 	// The counts are pinned: promoting a key from reported to applied, or dropping a row, has to
 	// change this claim rather than quietly shifting what the project says it honours.
-	const wantApplied, wantReported = 27, 28
-	applied, reported := 0, 0
+	// The counts are pinned, and there are THREE of them: promoting a key from reported to
+	// applied, from reported to partial, or dropping a row, has to change this claim rather than
+	// quietly shifting what the project says it honours.
+	//
+	// The partial bucket exists because "we support this, but not the way you probably meant" is a
+	// third answer. skip_all_tests_for_parameters is it: the engine honours a list of parameter
+	// NAMES and cannot read Burp's list of match rules, and reporting it as either "not applied" (a
+	// settings page telling an operator their skip list is unsupported while it silently works) or
+	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
+	// in an operator-facing table either way (burpsy-react-ui-86le).
+	const wantApplied, wantPartial, wantReported = 27, 1, 27
+	applied, partial, reported := 0, 0, 0
 	for _, k := range builtInConfigKeys {
-		if k.applies {
+		switch {
+		case k.listShaped:
+			partial++
+			// A partial row must NOT carry a scalar reader: it is applied through a different shape
+			// entirely, and a read here would make ApplyWithReport treat it as a boolean.
+			if k.read != nil {
+				t.Errorf("%s is partial but carries a scalar reader; the list-shaped path and the "+
+					"OptUint32 path cannot both own it", k.name)
+			}
+			if !strings.HasPrefix(k.what, "partly applied: ") {
+				t.Errorf("%s is partial but its description does not say so: %q", k.name, k.what)
+			}
+		case k.applies:
 			applied++
-			continue
-		}
-		reported++
-		if k.read != nil {
-			t.Errorf("%s is reported as not applying but has a field to read; an unapplied row must not silently carry state", k.name)
-		}
-		if !strings.HasPrefix(k.what, "not applied: ") {
-			t.Errorf("%s is unapplied but its description does not say so: %q", k.name, k.what)
+		default:
+			reported++
+			if k.read != nil {
+				t.Errorf("%s is reported as not applying but has a field to read; an unapplied row must not silently carry state", k.name)
+			}
+			if !strings.HasPrefix(k.what, "not applied: ") {
+				t.Errorf("%s is unapplied but its description does not say so: %q", k.name, k.what)
+			}
 		}
 	}
-	if applied != wantApplied || reported != wantReported {
-		t.Errorf("the table honours %d key(s) and reports %d as not applied; want %d and %d — the coverage claim moves with this count",
-			applied, reported, wantApplied, wantReported)
+	if applied != wantApplied || partial != wantPartial || reported != wantReported {
+		t.Errorf("the table honours %d key(s) in full, %d in a reduced form and reports %d as not "+
+			"applied; want %d, %d and %d — the coverage claim moves with these counts",
+			applied, partial, reported, wantApplied, wantPartial, wantReported)
 	}
 }
 

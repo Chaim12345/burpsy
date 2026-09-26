@@ -826,6 +826,13 @@ var builtInConfigKeys = []struct {
 	min uint32
 	// applies reports whether the key changes engine behaviour when set.
 	applies bool
+	// listShaped marks a key whose Burp value is not a scalar: the control IS honoured, but through
+	// a reduced form of Burp's value. Such a row is neither in the applied count nor in the
+	// "not applied" list an operator reads as "unsupported" — it appears as its own category, because
+	// "we support this, but not the way you probably meant" is a third answer and reporting it as
+	// either of the other two is what burpsy-react-ui-86le was (burpsy-react-ui-86le fixed the row
+	// that said "not applied" for a control the engine honours).
+	listShaped bool
 }{
 	{
 		name:    "consecutive_check_failures_to_abandon_unit",
@@ -1174,8 +1181,22 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "skip_all_tests_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_all_tests_for_parameters",
-		what:    "not applied: Burp's value is not a name list but a list of match rules ({enabled, parameter, item, match_type, expression} - e.g. match_type matches_regex over an xml_attribute name), and this engine has neither a rule matcher over parameter type and item nor a list-valued key: every row here reads through OptUint32, so the key has no shape to land in",
-		applies: false,
+		// PARTLY applied, and saying "not applied" was a false statement in an operator-facing table
+		// (burpsy-react-ui-86le). The control IS honoured: /api/scanner/config accepts
+		// skip_all_tests_for_parameters as a list of parameter names, AuditConfig carries it, and
+		// the enumerator drops a matching point from every kind as a bcheck.Declined. What is not
+		// ported is Burp's VALUE SHAPE — a list of match rules ({enabled, parameter, item,
+		// match_type, expression}, e.g. matches_regex over an xml_attribute name) rather than a list
+		// of names — so a rule that matched by expression or by item arrives here as a name that
+		// matches nothing.
+		//
+		// So this is not a row that does not apply, and it is not a row that fully applies either.
+		// listShaped marks it as the second, which keeps it OUT of the "not applied" list an
+		// operator reads as "this control is unsupported" while keeping the reason text naming what
+		// is genuinely missing.
+		what:       "partly applied: a parameter NAME in this list has its insertion points dropped from every check. Burp's own value is a list of match rules ({parameter, item, match_type, expression}), and this engine has no matcher over item or expression, so a rule that matched by expression arrives as a name that matches nothing",
+		listShaped: true,
+		applies:    true,
 	},
 	{
 		name:    "skip_server_side_injection_for_parameters",
@@ -1259,6 +1280,15 @@ type BuiltInConfigKey struct {
 	// anyway — a shipped configuration loads without silently dropping keys — and Apply reports
 	// them as unapplied.
 	Applies bool `json:"applies"`
+	// Partial marks a key this engine honours through a REDUCED form of Burp's value: the control
+	// works, and the parts of the value it does not understand do not (burpsy-react-ui-86le).
+	//
+	// It is the third answer, and reporting it as either of the other two is the defect: `Applies:
+	// false` on a control the engine honours is a settings page telling an operator their skip list
+	// is unsupported while it silently works, and `Applies: true` would be the reverse — claiming
+	// full support for a value shape this engine cannot read. A consumer showing "unsupported"
+	// should exclude a Partial row; one showing what is missing should read What.
+	Partial bool `json:"partial"`
 }
 
 // BuiltInConfigKeys returns every key this engine's scan-configuration table knows, each carrying
@@ -1276,6 +1306,7 @@ func BuiltInConfigKeys() []BuiltInConfigKey {
 			BurpKey: k.burpKey,
 			What:    k.what,
 			Applies: k.applies,
+			Partial: k.listShaped,
 		})
 	}
 	return out
@@ -1302,6 +1333,7 @@ func (c BuiltInConfig) Keys() []BuiltInConfigKey {
 			Value:   v.Value,
 			Set:     v.Set,
 			Applies: k.applies,
+			Partial: k.listShaped,
 		})
 	}
 	return out
@@ -1472,6 +1504,11 @@ func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string)
 	var unapplied []string
 	for _, k := range builtInConfigKeys {
 		switch {
+		case k.listShaped:
+			// Honoured through a reduced form of Burp's value, and named nowhere in the unapplied list
+			// because that list reads as "this control is unsupported" (burpsy-react-ui-86le). The
+			// row's own text is where the operator reads what is missing.
+			continue
 		case k.read == nil:
 			if parsed[strings.TrimPrefix(k.burpKey, "scanner/")] || parsed[k.name] {
 				unapplied = append(unapplied, k.name)

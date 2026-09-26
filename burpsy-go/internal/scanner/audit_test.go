@@ -550,8 +550,22 @@ func Test_every_built_in_config_field_has_a_key_row(t *testing.T) {
 			t.Errorf("two rows are named %q", k.name)
 		}
 		seen[k.name] = true
-		if k.read == nil && k.applies {
-			t.Errorf("key row %q has no read but claims to apply: an unrepresentable key must be honest about it", k.name)
+		// Three states, and the rule is that a row's claim must match how it is applied:
+		//
+		//   applies && read != nil  -- a scalar key this engine overlays
+		//   applies && read == nil  -- LIST-shaped: honoured through a different path entirely
+		//   !applies && read == nil -- genuinely unrepresentable
+		//   !applies && read != nil -- the impossible one, and a silent-state lie
+		//
+		// The third is what burpsy-react-ui-86le was: the row claimed NOT applied while the engine
+		// honoured the control through a list-valued field this oracle cannot see. So a row with no
+		// scalar read must not silently claim the plain two-state answer.
+		if k.read == nil && k.applies && !k.listShaped {
+			t.Errorf("key row %q has no read and is not list-shaped but claims to apply: an "+
+				"unrepresentable key must be honest about it", k.name)
+		}
+		if k.read == nil && k.listShaped && !strings.HasPrefix(k.what, "partly applied: ") {
+			t.Errorf("key row %q is list-shaped but its description does not say so: %q", k.name, k.what)
 		}
 	}
 }
@@ -846,6 +860,17 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				got = present
 				wantSet = uint64(k.Value)
 				wantUnset = 0
+			case "skip_all_tests_for_parameters":
+				// A LIST-shaped key: applied through a path this oracle cannot see, and named here
+				// rather than left in the default arm precisely because the guard below refuses an
+				// applying key it cannot check. What is checked is the half that matters: the control
+				// does not reach a scalar, and a PRESET cannot carry a list-valued key at all -- the
+				// value is set on the run (burpsy-react-ui-86le).
+				if len(applied.SkipAllTestsForParameters) != 0 {
+					t.Errorf("preset %q reported %s as applied but a preset cannot carry a "+
+						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 0, 0, 0
 			default:
 				// A key with no field and no apply path can only be reported, never overlaid, so the
 				// contract this test checks for it is that it did not reach a scalar. Naming all of
