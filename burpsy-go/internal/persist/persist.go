@@ -486,6 +486,20 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "title", "TEXT"); err != nil {
 		return err
 	}
+	// exchanges gained request_params so the History "Parameterized requests" filter can mean what
+	// Burp's does (burpsy-react-ui-7py5). It counts the query string AND a form body, which is the
+	// half the path-only filter could not see because a history row carries no request body.
+	//
+	// NULLABLE, and NOT NULL DEFAULT 0 would be the wrong shape here for a reason the sibling columns
+	// do not share: for them a legacy row's zero is the honest reading (an unmeasured duration, no
+	// annotation, no source). For this one, zero means "certainly no parameters" — and a row written
+	// before the column existed was certainly NOT examined for parameters. Reading it as zero would
+	// keep it out of the filter and report a clean answer about a request nobody looked at, which is
+	// the same overclaim as an unreadable body counting zero. NULL reads back as -1, "not computed",
+	// and the filter treats a -1 as unknown rather than as none.
+	if err := s.addColumn("exchanges", "request_params", "INTEGER"); err != nil {
+		return err
+	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
 	// target is the second half of the dedup key, so without it a restored finding cannot attract new
 	// occurrences after a restart — it would start a second finding beside itself. params is the set
@@ -648,6 +662,33 @@ func (s *Store) SaveMessage(m *core.StoredMessage) {
 // means a build older than this column still reads a sane row out of the same database, and it costs
 // four bytes; dropping it would silently turn every exchange into a zero-duration one over there. Which
 // column a *reader* trusts is decided in LoadExchanges.
+// requestParamValue is the one place the "not computed" reading is spelled, shared by the writer and
+// the reader so the two cannot disagree about what -1 means.
+//
+// core.Exchange.RequestParams is 0 or more, and -1 is the sentinel for a row that was never examined.
+// It lives in persist rather than in core because only persistence can produce it: a row this build
+// wrote always carries a real count, and the exchange it came from was built at the capture seam.
+const requestParamsUnknown = -1
+
+// requestParamValue maps an in-memory count onto the column. A negative count cannot occur at the
+// capture seam, so it is written as NULL rather than as a negative number a reader would have to
+// interpret.
+func requestParamValue(n int) any {
+	if n < 0 {
+		return nil
+	}
+	return n
+}
+
+// requestParamValueFromScan is the inverse: NULL becomes the unknown sentinel, and a stored count
+// becomes itself.
+func requestParamValueFromScan(v sql.NullInt64) int {
+	if !v.Valid {
+		return requestParamsUnknown
+	}
+	return int(v.Int64)
+}
+
 func (s *Store) SaveExchange(ex *core.Exchange) {
 	related, err := json.Marshal(ex.Related)
 	if err != nil {
@@ -669,14 +710,14 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
 		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
-		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited, request_params)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ex.ID, uint64(core.MsgOrZero(ex.Request)), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
 		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
 		nullMsg(ex.RequestOriginal), nullMsg(ex.RequestAuto), nullMsg(ex.ResponseOriginal), nullMsg(ex.ResponseAuto),
-		boolInt(ex.UserEdited))
+		boolInt(ex.UserEdited), requestParamValue(ex.RequestParams))
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -775,7 +816,7 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
 		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
-		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited
+		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited, request_params
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -804,13 +845,17 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		// written by this build for an unmodified exchange carries. See the migrate note.
 		var reqOriginal, reqAuto, respOriginal, respAuto sql.NullInt64
 		var userEdited int
+		// -1 rather than 0 for a row written before the column existed: see the migrate note. A legacy
+		// row was never examined for parameters, and 0 would be a claim about it that nobody made.
+		var requestParams sql.NullInt64
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
 			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title,
-			&reqOriginal, &reqAuto, &respOriginal, &respAuto, &userEdited); err != nil {
+			&reqOriginal, &reqAuto, &respOriginal, &respAuto, &userEdited, &requestParams); err != nil {
 			return nil, err
 		}
 		ex.UserEdited = userEdited != 0
+		ex.RequestParams = requestParamValueFromScan(requestParams)
 		ex.RequestOriginal = msgIDPtr(reqOriginal)
 		ex.RequestAuto = msgIDPtr(reqAuto)
 		ex.ResponseOriginal = msgIDPtr(respOriginal)

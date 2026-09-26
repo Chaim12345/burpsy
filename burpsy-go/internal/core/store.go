@@ -459,6 +459,17 @@ type Exchange struct {
 	// semantics changed and the checks run again. Zero means "not computed" — an exchange
 	// minted without the capture seam has no fingerprint and keys the way it always did.
 	RequestFP uint64
+	// RequestParams is how many parameters this exchange's request carries, in Burp's sense: the
+	// query string's, plus a form body's when there is one (burpsy-react-ui-7py5). Computed once at
+	// capture by RequestParameterCount, at the same seam as RequestFP and for the same reason — a
+	// history row carries no request body, so a consumer that wanted this would have to read the
+	// bytes back, which is the cost the history/message split exists to prevent.
+	//
+	// The number is EXACT for a urlencoded or multipart body and a lower bound otherwise: a body this
+	// cannot parse is counted as one rather than zero, because reporting zero would tell an operator a
+	// request has no parameters when nobody examined it. Zero therefore means "certainly no
+	// parameters", which is a weaker claim than it looks and is the honest one.
+	RequestParams int
 	// Cookies names the cookies the response set, in first-seen order. Computed once at
 	// capture by CookieNames, for the same reason Mime is: listing history must never read
 	// response bytes. Nil means none were set — like Mime, only Response separates "none

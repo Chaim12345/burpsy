@@ -101,6 +101,14 @@ type ExchangeView struct {
 	Highlight string `json:"highlight"`
 	Related   []any  `json:"related"`
 	Protocol  string `json:"protocol"`
+	// RequestParams is how many parameters this request carries, in Burp's sense (burpsy-react-ui-7py5).
+	// A single number rather than the body it came from, so the index-row rule still holds: a list
+	// endpoint that carried bodies would re-pay the store for bytes the capture already paid for once.
+	//
+	// No omitempty, and that is deliberate. Zero here means "certainly no parameters" — a real answer
+	// for a request with no query string and no body — and omitting it would make the console unable to
+	// tell that from a row the projection never reached.
+	RequestParams int `json:"request_params"`
 	// TaskID is the run that produced this exchange, omitted for traffic no task owns.
 	TaskID uint64 `json:"task_id,omitempty"`
 	// ParentID is the exchange this one was derived from — a Repeater resend's original, an Intruder
@@ -274,16 +282,17 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		DurationMs: ex.Duration.Millis(),
 		// nil when this producer never timed the first byte, so "unmeasured" cannot be read as an
 		// instantaneous one. See the field's comment on ExchangeView.
-		TtfbMs:    ttfbMillis(ex.TTFB),
-		Notes:     ex.Notes,
-		Highlight: ex.Highlight,
-		Related:   []any{},
-		Protocol:  protocolToken(ex.Protocol),
-		TaskID:    ex.TaskID,
-		ParentID:  ex.ParentID,
-		Cookies:   ex.Cookies,
-		Title:     ex.Title,
-		ServerIP:  ex.ServerIP,
+		TtfbMs:        ttfbMillis(ex.TTFB),
+		Notes:         ex.Notes,
+		Highlight:     ex.Highlight,
+		Related:       []any{},
+		Protocol:      protocolToken(ex.Protocol),
+		RequestParams: ex.RequestParams,
+		TaskID:        ex.TaskID,
+		ParentID:      ex.ParentID,
+		Cookies:       ex.Cookies,
+		Title:         ex.Title,
+		ServerIP:      ex.ServerIP,
 		// uint16 on the wire so the column cannot render a negative or out-of-range port; the
 		// engine's own field is the same width for the same reason.
 		ListenerPort: ex.ListenerPort,

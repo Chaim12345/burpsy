@@ -100,6 +100,17 @@ export interface Exchange {
  path: string;
  status: number | null;
  response_len: number;
+ /**
+  * How many parameters this request carries, in Burp's sense: the query string's plus a form body's
+  * (burpsy-react-ui-7py5). The server computes it at the capture seam, because a history row is an
+  * index entry and carries no request body.
+  *
+  * EXACT for a urlencoded or multipart body and a LOWER BOUND otherwise: a body this cannot parse
+  * is counted as one rather than zero, because reporting zero would tell an operator a request has
+  * no parameters when nobody examined it. So 0 means "certainly no parameters" and -1 means "this
+  * row predates the count" — the filter must keep both, and must not treat either as a clean answer.
+  */
+ request_params: number;
  started_ms: number;
  duration_ms: number;
  /**

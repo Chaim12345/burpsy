@@ -659,8 +659,12 @@ export function HistoryPage(): JSX.Element {
    // when it could, the server already returned only in-scope rows and this is a no-op re-check.
    if (scopeOnly && !scopeFragment && !isHostInScope(row.host, scope.data)) return false;
 
-   const { extension, queryCount } = pathParts(row.path);
-   if (onlyParameterized && queryCount === 0) return false;
+   const { extension } = pathParts(row.path);
+   // request_params, not the path: the server counts the query string AND a form body, which is
+   // Burp's semantics (7py5) and the half a path-based check could not see. A -1 is a row written
+   // before the count existed -- nobody examined it -- so it is KEPT rather than filtered out, and the
+   // hint below says how many such rows are on screen.
+   if (onlyParameterized && (row.request_params ?? 0) <= 0) return false;
    // A listener filter is an allow-list like the extension ones: empty shows every row, so leaving it
    // blank is the same "I did not choose" reading every other filter on this page uses.
    //
@@ -683,6 +687,12 @@ export function HistoryPage(): JSX.Element {
   data, method, statusSet, mimeSet, filterOn, hideNoResponse, scopeOnly, scopeFragment, scope.data,
   onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
  ]);
+
+ // How many rows the parameterized filter cannot have a verdict about: a row written before the
+ // server began counting carries -1, which is "never examined" rather than "no parameters". Counted
+ // only while the filter is on, because that is the only time it changes what the operator is looking
+ // at — and it is the reason the filter KEEPS those rows rather than dropping them.
+ const neverCounted = useMemo(() => (data ?? []).filter((row) => (row.request_params ?? 0) < 0).length, [data]);
 
  // CSV export — client-side from the loaded rows; no server endpoint needed
  // because the page already holds the index rows in memory. The CSV shape is
@@ -967,8 +977,11 @@ export function HistoryPage(): JSX.Element {
     cell: (info) => <span className="cell-dim">{info.getValue<string>() || "—"}</span>,
    },
    {
-    // "Query", not Burp's "Params": this counts query parameters only, because body
-    // parameters are not on the index row. See pathParts.
+    // "Query", not Burp's "Params", and the column name says why: this is the query-string
+    // count read off the path, which is the only half visible without the body. The FILTER counts
+    // both halves and the hint under it says so (burpsy-react-ui-7py5) — this column is a quick read
+    // of one part, and calling it "Params" would put a number beside the filter that disagrees
+    // with it.
     id: "query",
     header: "Query",
     size: 68,
@@ -1553,16 +1566,23 @@ export function HistoryPage(): JSX.Element {
     <div className="stack">
      <div>
       <div className="shortcut-group">Show only</div>
-      <Checkbox checked={onlyParameterized} onCheckedChange={setOnlyParameterized} label="Requests with query parameters" />
+      <Checkbox checked={onlyParameterized} onCheckedChange={setOnlyParameterized} label="Parameterized requests" />
       <Checkbox checked={onlyCommented} onCheckedChange={setOnlyCommented} label="Commented items" />
       <Checkbox checked={onlyHighlighted} onCheckedChange={setOnlyHighlighted} label="Highlighted items" />
       <p className="field-hint">
-       <strong>Query parameters only.</strong> Burp counts a request with parameters when either the
-       URL or the body carries one, so a body-only POST — a JSON or form submission, a multipart
-       upload — is parameterized traffic here and is not shown. The label says &quot;query&quot; because
-       that is what the filter measures: a history row is an index entry and carries no request
-       body, and reading every body to classify a row is the cost the history/message split exists to
-       avoid (internal/web/AGENTS.md). Filter on the body with the Search box, which does read bytes.
+       A request is parameterized when its URL or its body carries a parameter, so a form post, a
+       JSON API call or a multipart upload is kept — counted on the server at capture, because a
+       history row carries no request body to read.
+       {onlyParameterized && neverCounted > 0 ? (
+        <>
+         {" "}
+         <strong>
+          {neverCounted} row{neverCounted === 1 ? " predates" : "s predate"} this count
+         </strong>{" "}
+         and {neverCounted === 1 ? "was" : "were"} never examined, so {neverCounted === 1 ? "it is" : "they are"} kept
+         rather than reported as having no parameters.
+        </>
+       ) : null}
       </p>
      </div>
 

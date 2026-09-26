@@ -277,10 +277,15 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// place the raw bytes are in hand, and a consumer that had to read them back would
 		// re-pay the store for bytes it already paid for once.
 		RequestFP: core.RequestFingerprint(x.Request),
-		Cookies:   core.CookieNames(x.Response),
-		Title:     core.ResponseTitle(x.Response),
-		Notes:     x.Notes,
-		Highlight: x.Highlight,
+		// Same seam and same reason as RequestFP: the request bytes are here, so the count history
+		// filters on is decided here rather than by a consumer reading them back. This is what makes
+		// the "Parameterized requests" filter mean what Burp's does (burpsy-react-ui-7py5) — before it,
+		// the filter could only see the query string and dropped every body-only parameterized request.
+		RequestParams: core.RequestParameterCount(x.Request),
+		Cookies:       core.CookieNames(x.Response),
+		Title:         core.ResponseTitle(x.Response),
+		Notes:         x.Notes,
+		Highlight:     x.Highlight,
 		// The per-exchange source wins when it is set, so a surface with a default can still record one
 		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
 		// the other when both are unset — unattributed is a real answer, see above.
