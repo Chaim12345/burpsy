@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { ApiError, api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
 import { fetchRaw } from "../lib/actions";
 import {
   intruderExportFilenames,
@@ -1086,6 +1086,11 @@ export function IntruderPage(): JSX.Element {
     grepMatchList,
     grepMatchCaseSensitive,
     grepMatchExcludeHeaders,
+    autoPauseEnabled,
+    autoPauseMode,
+    autoPauseExpressions,
+    autoPauseSimple,
+    autoPauseCaseSensitive,
     poolName,
     maxRequests,
     maxInFlight,
@@ -1159,6 +1164,14 @@ export function IntruderPage(): JSX.Element {
   const setGrepMatchList = field("grepMatchList");
   const setGrepMatchCaseSensitive = field("grepMatchCaseSensitive");
   const setGrepMatchExcludeHeaders = field("grepMatchExcludeHeaders");
+  // Auto-pause is five draft fields, not one switch: the expressions and the mode are the attack's
+  // own settings, so an operator who turns the switch off and on again must find their list intact
+  // rather than retyping it. The switch decides only whether the block is SENT (burpsy-react-ui-2cvk).
+  const setAutoPauseEnabled = field("autoPauseEnabled");
+  const setAutoPauseMode = field("autoPauseMode");
+  const setAutoPauseExpressions = field("autoPauseExpressions");
+  const setAutoPauseSimple = field("autoPauseSimple");
+  const setAutoPauseCaseSensitive = field("autoPauseCaseSensitive");
   const setPoolName = field("poolName");
   const setMaxRequests = field("maxRequests");
   const setMaxInFlight = field("maxInFlight");
@@ -1497,8 +1510,17 @@ export function IntruderPage(): JSX.Element {
     }),
   });
 
+  /**
+   * A launch refused because of auto-pause, shown next to the expressions rather than only in the
+   * Results tab. The server compiles these with RE2 and answers 400 for one that does not compile
+   * (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did nothing is the
+   * wrong place for it: the operator's next action is to edit the expression, not to read a report.
+   */
+  const [autoPauseError, setAutoPauseError] = useState<string | null>(null);
+
   const onRun = async () => {
     setStoredRun(null);
+    setAutoPauseError(null);
     setMyTaskId(null);
     // Snapshot the attacks already running, so the one that appears next is unambiguously ours even
     // if an identical attack is running elsewhere. Best-effort: if the list cannot be read, fall
@@ -1542,6 +1564,21 @@ export function IntruderPage(): JSX.Element {
         ? { grep_match: grepMatchMode === "simple" ? quoteRegex(grepMatch.trim()) : grepMatch.trim() }
         : {}),
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
+      // Auto-pause (burpsy-react-ui-2cvk). The block is sent only when the switch is on, and only
+      // with expressions in it, for the same reason every other optional field here is omitted
+      // rather than sent empty: an absent field and an empty expression list must not be two wire
+      // shapes for "I did not choose". An enabled switch with nothing typed sends nothing, and says
+      // so in the control's own hint rather than letting the server refuse it at launch.
+      ...(autoPauseEnabled && autoPauseExpressions.some((e) => e.trim())
+        ? {
+            auto_pause: {
+              expressions: autoPauseExpressions.map((e) => e.trim()).filter(Boolean),
+              missing: autoPauseMode === "missing",
+              simple: autoPauseSimple,
+              ...(autoPauseSimple && autoPauseCaseSensitive ? { case_sensitive: true } : {}),
+            },
+          }
+        : {}),
       // A named pool states rps, concurrency and throttling itself; the server refuses a request
       // that carries both, so the inline pair is omitted rather than sent and dropped.
       ...(usePool
@@ -1685,7 +1722,18 @@ export function IntruderPage(): JSX.Element {
           toast.success("Attack finished");
         }
       },
-      onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      onError: (error) => {
+        // A launch refused because of auto-pause is also shown next to the expressions rather than
+        // only here. The server compiles them with RE2 and answers 400 for one that does not
+        // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
+        // nothing is the wrong place for it: the operator's next action is to edit the expression.
+        // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
+        // form, and blaming the expressions would send the operator to the wrong control.
+        if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
+          setAutoPauseError(error.message);
+        }
+        toast.error(error instanceof Error ? error.message : String(error));
+      },
     });
   };
 
@@ -2879,6 +2927,85 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Auto-pause"
+              detail="Burp's tools/intruder/configure-attack/settings.html auto-pause: stop the attack on a signal in the responses, instead of watching it and pressing Pause."
+            />
+            <div className="form-grid">
+              <Checkbox
+                checked={autoPauseEnabled}
+                onCheckedChange={(v) => setAutoPauseEnabled(v)}
+                label="Enable auto-pause"
+              />
+              <p className="cell-dim">
+                The engine has always implemented this (burpsy-react-ui-8f2) and the report has
+                always counted what it paused on; until now there was no control that could set it,
+                so the only way to halt a spray was the manual pause — which requires watching the
+                attack. The switch decides only whether the block below is sent: your expressions are
+                kept whether it is on or off.
+              </p>
+              {autoPauseEnabled ? (
+                <>
+                  <Field
+                    label="Pause when"
+                    hint="Appears: pause as soon as one of these appears in a response. Missing: pause when none of them does — the &quot;the spray stopped working&quot; signal, which is the one you cannot see by watching."
+                  >
+                    {(id) => (
+                      <Select
+                        id={id}
+                        value={autoPauseMode}
+                        onChange={(event) => setAutoPauseMode(event.target.value as "appears" | "missing")}
+                      >
+                        <option value="appears">An expression appears</option>
+                        <option value="missing">No expression appears</option>
+                      </Select>
+                    )}
+                  </Field>
+                  <Field
+                    label="Expressions (one per line)"
+                    hint={
+                      autoPauseExpressions.some((e) => e.trim())
+                        ? `${autoPauseExpressions.filter((e) => e.trim()).length} expression(s). Simple mode matches the text exactly; regex mode is RE2.`
+                        : "Nothing sent until you type at least one. An enabled switch with no expression has no condition to test, and the server would refuse it — so the field is omitted rather than sent empty."
+                    }
+                  >
+                    {(id) => (
+                      <Textarea
+                        id={id}
+                        value={autoPauseExpressions.join("\n")}
+                        onChange={(event) => setAutoPauseExpressions(event.target.value.split("\n"))}
+                        placeholder={"account locked\ntoo many attempts\n429"}
+                      />
+                    )}
+                  </Field>
+                  {autoPauseError ? (
+                    <p className="field-hint" role="alert">
+                      <strong>The server refused this auto-pause:</strong> {autoPauseError}
+                    </p>
+                  ) : null}
+                  <div className="row-list">
+                    <Checkbox
+                      checked={autoPauseSimple}
+                      onCheckedChange={(v) => setAutoPauseSimple(v)}
+                      label="Simple string (rather than regular expression)"
+                    />
+                    <Checkbox
+                      checked={autoPauseCaseSensitive}
+                      onCheckedChange={(v) => setAutoPauseCaseSensitive(v)}
+                      label="Case sensitive (simple-string mode only)"
+                    />
+                  </div>
+                  <p className="cell-dim">
+                    {autoPauseSimple
+                      ? "Simple mode is case-folded unless you tick the box above. In regex mode the expression carries its own case flags, the way Go's regexp does, so this switch does not apply."
+                      : "Regex mode (RE2). Each expression carries its own case behaviour, so the case-sensitive switch above does not apply here."}
+                  </p>
+                </>
+              ) : null}
             </div>
           </Card>
 

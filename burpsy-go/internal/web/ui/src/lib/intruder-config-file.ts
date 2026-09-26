@@ -28,6 +28,9 @@ export interface AttackConfigFile {
 /** A field check: null when the value is restorable, otherwise the reason it is not. */
 type Check = (value: unknown) => string | null;
 
+/** Burp's auto-pause condition: pause when an expression APPEARS, or when it stops appearing. */
+export const AUTO_PAUSE_MODES = ["appears", "missing"] as const;
+
 const ATTACK_MODE_VALUES = ATTACK_MODES.map((mode) => mode.value) as string[];
 const PAYLOAD_RULE_VALUES = PAYLOAD_RULES.map((rule) => rule.value) as string[];
 const PAYLOAD_TYPE_VALUES = [
@@ -158,6 +161,14 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   // third state a saved configuration could be in.
   setConnectionClose: bool,
   storePayloads: bool,
+  // Burp's auto-pause (2cvk). The block is saved whole, enabled flag first, because a saved
+  // configuration that dropped it would resume as a different attack that looks like the saved
+  // one — the exact failure this file exists to prevent, and the one fmxv's settings had.
+  autoPauseEnabled: bool,
+  autoPauseMode: oneOf([...AUTO_PAUSE_MODES]),
+  autoPauseExpressions: arrayOf(str),
+  autoPauseSimple: bool,
+  autoPauseCaseSensitive: bool,
 };
 
 /** The fields a saved attack configuration carries, in the order the store declares them. */

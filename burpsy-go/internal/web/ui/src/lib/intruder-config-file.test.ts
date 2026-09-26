@@ -77,6 +77,13 @@ function fullConfig(): IntruderConfig {
     setConnectionClose: true,
 
     storePayloads: false,
+  // Non-default on purpose: every field the format guards has to be tested with a value a
+  // mistaken implementation would get wrong, and defaults would survive almost any bug.
+  autoPauseEnabled: true,
+  autoPauseMode: "missing",
+  autoPauseExpressions: ["account locked", "", "429"],
+  autoPauseSimple: false,
+  autoPauseCaseSensitive: true,
   };
 }
 

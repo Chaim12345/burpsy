@@ -33,6 +33,21 @@ export interface IntruderRunRequest {
    * additionally server-side, since a request containing them cannot be delivered.
    */
   url_encode_characters?: string;
+  /**
+   * Burp's auto-pause (burpsy-react-ui-2cvk). Omitted entirely when the operator has not turned it
+   * on, which is the point: an absent field and a present-but-empty expression list must not be two
+   * wire shapes for "I did not choose", so the console sends neither. Expressions are compiled by
+   * RE2 on the server and an uncompilable one is a 400, which surfaces next to the field.
+   */
+  auto_pause?: {
+    expressions: string[];
+    /** Pause when none of them appears, rather than when one does. */
+    missing: boolean;
+    /** Simple strings are matched literally and case-folded; false means RE2. */
+    simple: boolean;
+    /** Only meaningful with `simple`: regex entries carry their own case flags. */
+    case_sensitive?: boolean;
+  };
   /** Regular expressions, compiled by RE2 on the server — never literal strings. */
   grep_match?: string;
   grep_extract?: string;

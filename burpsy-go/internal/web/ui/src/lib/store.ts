@@ -4,6 +4,7 @@ import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS } from "./message";
+import type { MessageVariant } from "../ui/variant-picker";
 
 export type Theme = "light" | "dark" | "system";
 export type Density = "comfortable" | "compact";
@@ -204,6 +205,14 @@ export interface IntruderConfig {
  grepMatchCaseSensitive: boolean;
  /** Burp's "Exclude HTTP headers" — the list searches the response body only. */
  grepMatchExcludeHeaders: boolean;
+ /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
+  *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
+  *  two different requests rather than one request that means both. */
+ autoPauseEnabled: boolean;
+ autoPauseMode: "appears" | "missing";
+ autoPauseExpressions: string[];
+ autoPauseSimple: boolean;
+ autoPauseCaseSensitive: boolean;
  /** Empty means the inline limits below apply; a name binds the attack to a saved pool. */
  poolName: string;
  maxRequests: number;
@@ -343,6 +352,11 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepMatchList: [],
   grepMatchCaseSensitive: false,
   grepMatchExcludeHeaders: false,
+ autoPauseEnabled: false,
+ autoPauseMode: "appears",
+ autoPauseExpressions: [],
+ autoPauseSimple: true,
+ autoPauseCaseSensitive: false,
   poolName: "",
   maxRequests: 1000,
   maxInFlight: 8,
@@ -459,6 +473,18 @@ interface AppState {
   *  with the eye already on. Off by default, so a reader who never asked for it sees every
   *  header. */
  hideHeadersByDefault: boolean;
+ /**
+  * Burp's `user_options.proxy.default_display_message` (ngcj): which reading the history
+  * message editors show a newly selected row by default — Original, Edited, or
+  * Auto-modified. Burp's own out-of-box default is ORIGINAL (recovered from the obfuscated
+  * jar: burp.Zblz initialises both its request and response config values to Zpg8.ORIGINAL),
+  * and a migrated operator's habits expect exactly that. Per-direction would be Burp's
+  * `.request`/`.response` split; one setting serves burpsy's picker, which an operator sets
+  * per pane anyway — the default is only the starting point, never a forced reading.
+  */
+ defaultMessageVariant: MessageVariant;
+ /** Replace the default reading. */
+ setDefaultMessageVariant: (variant: MessageVariant) => void;
  /** Replace one direction's list. Names are normalised by `parseHeaderNames` — the same
   *  function the settings textarea uses — so the stored list and the text the operator typed
   *  cannot disagree about folding or duplicates. */
@@ -610,6 +636,9 @@ export function persistedWorkspace(state: AppState) {
   hideRequestHeaders: state.hideRequestHeaders,
   hideResponseHeaders: state.hideResponseHeaders,
   hideHeadersByDefault: state.hideHeadersByDefault,
+  // The default message reading (ngcj): same class of once-curated layout choice as the
+  // hide-headers lists above, and Burp persists it too (user_options.proxy.*).
+  defaultMessageVariant: state.defaultMessageVariant,
   repeaterTabs: state.repeaterTabs,
   activeRepeaterTab: state.activeRepeaterTab,
   // Groups are layout the operator curates — same persistence class as tab drafts.
@@ -651,6 +680,8 @@ export const useApp = create<AppState>()(
   hideRequestHeaders: [...DEFAULT_HIDE_REQUEST_HEADERS],
   hideResponseHeaders: [...DEFAULT_HIDE_RESPONSE_HEADERS],
   hideHeadersByDefault: false,
+  defaultMessageVariant: "original",
+  setDefaultMessageVariant: (defaultMessageVariant) => set({ defaultMessageVariant }),
   setHideHeaders: (kind, names) =>
    set(kind === "request" ? { hideRequestHeaders: names } : { hideResponseHeaders: names }),
   setHideHeadersByDefault: (hideHeadersByDefault) => set({ hideHeadersByDefault }),
