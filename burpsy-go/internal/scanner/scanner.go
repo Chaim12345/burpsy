@@ -210,6 +210,18 @@ type ScanConfig struct {
 	// later exchange, so they need a StoredLedger. Off by default.
 	CheckStored    bool
 	CustomPayloads []string
+
+	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
+	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
+	// this configuration uses, and the one that keeps a preset that never mentions selection
+	// behaving exactly as before.
+	//
+	// Burp's dispatch is a two-stage filter for precisely this: the family switches (below), then a
+	// per-check predicate over the selected issue types (Zwy6.java:36-75, and lambda$isEnabled$1 at
+	// :170-184). Without the second stage a run cannot be narrowed past its families, so the ordinary
+	// workflow — fix a bug, re-audit for that one issue class — is unreachable
+	// (burpsy-react-ui-kvmx).
+	IssueTypes []uint32
 }
 
 // Finding represents a security finding.

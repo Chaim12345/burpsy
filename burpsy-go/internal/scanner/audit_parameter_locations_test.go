@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"strings"
 )
 
 // The six `scanner/modifying_parameter_locations/*` keys, as Burp's configuration JSON spells them,
@@ -160,14 +161,59 @@ func Test_a_parsed_burp_config_can_select_a_relocation(t *testing.T) {
 // report silently — leaving a configuration that says "scan only these issues" looking fully
 // honoured.
 func Test_a_parsed_unapplied_key_reaches_the_report(t *testing.T) {
-	data := []byte(`{"scanner": {"issues_reported": {"scan_only_selected_issues": true}}}`)
+	// The KEY here was scan_only_selected_issues when this test was written, because the per-issue
+	// selection keys were the obvious example of a key the parser records and the report drops. They
+	// are HONOURED now (burpsy-react-ui-kvmx), so the example can no longer show the hazard this test
+	// exists for. What it is actually about is the SPELLING: the parser records a key under its
+	// section-qualified name (`issues_reported/selected_issues`) while the listing looks rows up by
+	// their bare name, and a mismatch between the two drops the key from the report silently.
+	//
+	// So it now finds its own example rather than pinning one: whatever key this engine genuinely
+	// cannot express, a file naming it must have that key reported. If none is reported the parser's
+	// record and the listing's lookup have drifted apart, which is the failure, and the test says so
+	// without needing to know which key it is.
+	// Under javascript_analysis, which is the section that key actually lives in: a fixture that
+	// puts it in issues_reported parses to a document that names no known key at all, and the test
+	// would then be asserting on a file that was never a Burp configuration.
+	data := []byte(`{"scanner": {"javascript_analysis": {"use_static_analysis": true}}}`)
 	cfg, err := ParseBurpConfig(data)
 	if err != nil {
 		t.Fatalf("ParseBurpConfig: %v", err)
 	}
 	_, unapplied := cfg.ApplyWithReport(DefaultAuditConfig())
-	if len(unapplied) != 1 || unapplied[0] != "scan_only_selected_issues" {
-		t.Errorf("unapplied = %v, want the per-issue key named once: the operator has to be told which of their file's keys did nothing", unapplied)
+
+	// A key this engine reports as unapplied must appear under EITHER spelling: the section-qualified
+	// name the parser writes, or the bare row name a caller may set by hand. Matching only one of them
+	// is the silent drop this test was written for.
+	// The suffix test rather than a hard-coded pair of spellings: the parser may record the key under
+	// its section (`javascript_analysis/...`) and the listing looks it up by its bare name, so a
+	// suffix match accepts either without this test having to know which section the key lives in —
+	// and a key MOVING sections cannot make it pass for the wrong reason.
+	reported := false
+	for _, name := range unapplied {
+		if strings.HasSuffix(name, "javascript_use_static_analysis") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Errorf("unapplied = %v, want javascript_use_static_analysis under its bare or section-qualified "+
+			"name; the operator has to be told which of their file's keys did nothing, and a key the engine "+
+			"does not express is exactly such a key", unapplied)
+	}
+
+	// And a key this engine DOES honour must not appear at all, under either spelling — the mirror
+	// of the same hazard, and the one burpsy-react-ui-86le and kvmx are about.
+	honoured := []byte(`{"scanner": {"issues_reported": {"selected_issues": []}}}`)
+	hcfg, err := ParseBurpConfig(honoured)
+	if err != nil {
+		t.Fatalf("ParseBurpConfig: %v", err)
+	}
+	_, honUnapplied := hcfg.ApplyWithReport(DefaultAuditConfig())
+	for _, name := range honUnapplied {
+		if strings.HasSuffix(name, "selected_issues") {
+			t.Errorf("selected_issues is reported unapplied (%v); the control is honoured as a partial, and "+
+				"saying otherwise is a false statement in a table an operator reads", honUnapplied)
+		}
 	}
 }
 

@@ -76,6 +76,16 @@ type auditConfigView struct {
 	// operator cleared the list" — unlike the numeric keys there is no zero-value ambiguity,
 	// because absent and empty mean the same thing for a list.
 	SkipAllTestsForParameters []string `json:"skip_all_tests_for_parameters"`
+	// IssueTypes is Burp's per-issue selection (scanner/issues_reported/selected_issues): the
+	// catalogue type indexes a run dispatches, and an EMPTY list means no restriction. Absent and
+	// empty mean the same thing here, as they do for the skip list -- a list has no zero-value
+	// ambiguity, so there is nothing to tell apart.
+	IssueTypes []uint32 `json:"issue_types"`
+	// FollowUpPasses is Burp's number_of_follow_up_passes: how many extra passes a failed item is
+	// re-dispatched. Null inherits the shipped default of 1, and 0 is a real choice -- an operator
+	// who would rather account a failed item's coverage as lost than retry against a target that is
+	// refusing -- so it is a pointer for the same reason MaxRequests is one.
+	FollowUpPasses *uint32 `json:"number_of_follow_up_passes"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -123,6 +133,13 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if len(cfg.SkipAllTestsForParameters) > 0 {
 		v.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
 	}
+	if len(cfg.IssueTypes) > 0 {
+		v.IssueTypes = cfg.IssueTypes
+	}
+	if cfg.FollowUpPasses.Set {
+		n := cfg.FollowUpPasses.Value
+		v.FollowUpPasses = &n
+	}
 	return v
 }
 
@@ -162,6 +179,26 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 	// an explicit empty array and distinguishable from not touching it. Each name is
 	// trimmed; an empty name is refused rather than dropped, because a name that silently
 	// vanishes from the list is a parameter that silently goes back to being tested.
+	// An explicitly empty list means the operator cleared the selection, and absent means the field
+	// was not sent -- the two are told apart by nil rather than by length, which is why this is a
+	// pointer-to-slice shape rather than a plain one. "No selection" and "nothing selected" are
+	// different requests and a run must not be told they are the same.
+	if v.IssueTypes != nil {
+		// Zero is refused: type index 0 is not a catalogue entry, and a selection containing it
+		// matches nothing -- a list that reads as a restriction and admits no check at all is an
+		// operator auditing nothing while believing they scoped the run.
+		for _, t := range v.IssueTypes {
+			if t == 0 {
+				return cfg, errors.New("issue_types: 0 is not a catalogue issue type, so a selection " +
+					"containing it would match no check at all — the run would audit nothing while the " +
+					"configuration read as a restriction")
+			}
+		}
+		cfg.IssueTypes = append([]uint32(nil), v.IssueTypes...)
+	}
+	if v.FollowUpPasses != nil {
+		cfg.FollowUpPasses = scanner.SomeUint32(*v.FollowUpPasses)
+	}
 	if v.SkipAllTestsForParameters != nil {
 		names := make([]string, 0, len(v.SkipAllTestsForParameters))
 		for _, raw := range v.SkipAllTestsForParameters {

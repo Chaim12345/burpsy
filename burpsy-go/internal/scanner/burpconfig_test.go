@@ -67,10 +67,26 @@ func Test_parse_burp_config_applies_like_a_preset(t *testing.T) {
 // A preset that turns passive checking off must report both the gate it applies and the keys it
 // could not apply, so nothing vanishes silently.
 func Test_apply_with_report_names_unapplied_keys(t *testing.T) {
-	perIssueOnly := BuiltInConfig{UnrepresentableKeys: []string{"scan_only_selected_issues"}}
-	_, unapplied := perIssueOnly.ApplyWithReport(DefaultAuditConfig())
-	if len(unapplied) != 1 || unapplied[0] != "scan_only_selected_issues" {
-		t.Errorf("unapplied = %v, want the recorded per-issue key", unapplied)
+	// A key that is genuinely unrepresentable is reported by name. The three per-issue selection
+	// keys are NOT the example any more: they are honoured (burpsy-react-ui-kvmx), so naming one as
+	// unapplied would be the lie this bead was about. A key the engine really cannot express keeps
+	// that behaviour.
+	realGap := BuiltInConfig{UnrepresentableKeys: []string{"javascript_use_static_analysis"}}
+	_, unapplied := realGap.ApplyWithReport(DefaultAuditConfig())
+	if len(unapplied) != 1 || unapplied[0] != "javascript_use_static_analysis" {
+		t.Errorf("unapplied = %v, want the recorded key", unapplied)
+	}
+
+	// And a key that IS honoured stays out of that list, even when a file named it — which is the
+	// half of the old test above that no longer holds.
+	perIssue := BuiltInConfig{UnrepresentableKeys: []string{"scan_only_selected_issues"}}
+	_, perIssueUnapplied := perIssue.ApplyWithReport(DefaultAuditConfig())
+	for _, name := range perIssueUnapplied {
+		if name == "scan_only_selected_issues" {
+			t.Errorf("a selection key is reported unapplied (%v); the control is honoured as a partial, "+
+				"and a report saying otherwise is the false statement 86le and kvmx are both about",
+				perIssueUnapplied)
+		}
 	}
 
 	// Without the parser's record, a field-less key is simply not present.

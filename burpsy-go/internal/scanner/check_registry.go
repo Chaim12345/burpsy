@@ -124,6 +124,7 @@ func nativeActiveCheckSet() []activeCheck {
 		}
 		out = append(out, activeCheck{
 			name:         d.Name,
+			typeIndex:    d.TypeIndex,
 			scope:        d.Scope,
 			enabled:      d.Enabled,
 			invasiveness: d.Invasiveness,

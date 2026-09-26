@@ -43,9 +43,20 @@ import (
 // run is nil for a check that is configurable but not implemented. Such a check is still counted —
 // see the file header for why that is the point rather than an oversight.
 type activeCheck struct {
-	name    string
-	scope   DispatchScope
-	enabled func(*ScanConfig) bool
+	name string
+	// typeIndex is the catalogue's issue type, which is what an operator's SELECTED ISSUES list
+	// names. Check names are the labels Burp's own UI shows and are stable enough to select by, but
+	// the type index is the identity the catalogue and its coverage accounting use, so a selection
+	// made against the catalogue and one made against the UI are the same selection rather than two
+	// vocabularies that have to be kept in step (burpsy-react-ui-kvmx).
+	//
+	// Zero for a check the catalogue does not describe — a synthesized corpus entry with no type
+	// index of its own. Such a check is NOT selectable and NOT excludable by a list, and the doc on
+	// SelectedIssueTypes says so, because "a list that silently did not apply to half the check set"
+	// is the failure this exists to remove.
+	typeIndex uint32
+	scope     DispatchScope
+	enabled   func(*ScanConfig) bool
 	// invasiveness is the tier the `scan_type_*_active` keys select this check under. It is
 	// snapshotted with the set rather than looked up per dispatch, so a check cannot change tier
 	// between two items of one session.
@@ -93,6 +104,41 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 	}
 	if cfg.CheckCorpus {
 		out = append(out, s.corpusActiveChecks(corpus)...)
+	}
+	// The per-issue selection, applied LAST and to BOTH sources. Burp's dispatch is a two-stage
+	// filter (Zwy6.java:36-75, with the per-check predicate at :170-184), so the type filter sits
+	// after the family switches rather than inside them: a run restricted to SQLi and path traversal
+	// still has to be able to turn the SQLi FAMILY off and select nothing of it, and the reverse.
+	//
+	// Applied here rather than in each source so a corpus check is subject to the same selection as a
+	// native one. A list that filtered the built-in table and not the corpus would be a selection
+	// with a hole in it exactly where the operator least expects one.
+	return filterByIssueTypes(out, cfg.IssueTypes)
+}
+
+// filterByIssueTypes narrows a check set to the issue types an operator selected.
+//
+// An empty or unset selection means "no restriction" — the same reading every optional field on
+// this configuration uses, and the one that keeps a preset that does not mention selection behaving
+// exactly as before.
+//
+// A check with NO type index is EXCLUDED whenever a selection is in force, because it is not
+// selectable and a selection that cannot name something must not silently keep it. That is the
+// conservative direction: the operator asked for a set, and a check they could not have chosen
+// either way is better reported as unselected than as selected.
+func filterByIssueTypes(checks []activeCheck, selected []uint32) []activeCheck {
+	if len(selected) == 0 {
+		return checks
+	}
+	allow := make(map[uint32]bool, len(selected))
+	for _, t := range selected {
+		allow[t] = true
+	}
+	out := make([]activeCheck, 0, len(checks))
+	for _, c := range checks {
+		if c.typeIndex != 0 && allow[c.typeIndex] {
+			out = append(out, c)
+		}
 	}
 	return out
 }
@@ -151,7 +197,12 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	}
 	// activeTiers returns nil when no tier key was set, which leaves the base switches alone; a
 	// non-nil set is three independent selections rather than one collapsed gate.
-	return s.enabledChecksInTiers(base, activeTiers(cfg))
+	//
+	// The per-issue filter is applied here as well as on the no-gate path, and must be LAST: it is
+	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
+	// or neither.
+	checks := s.enabledChecksInTiers(base, activeTiers(cfg))
+	return filterByIssueTypes(checks, cfg.IssueTypes)
 }
 
 // hasAuditLevelGate reports whether the configuration narrows the check set at all.
@@ -160,6 +211,14 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 		return true
 	}
 	if activeTiers(cfg) != nil {
+		return true
+	}
+	// The per-issue selection is itself a narrowing of the check set, so a configuration that
+	// ONLY selects issue types has a gate. Leaving it out of this predicate is the difference
+	// between a selection that applies and one that is computed and discarded, and it is invisible
+	// from every other test: a preset with no family switch and a selection would quietly audit
+	// everything (burpsy-react-ui-kvmx).
+	if len(cfg.IssueTypes) > 0 {
 		return true
 	}
 	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0

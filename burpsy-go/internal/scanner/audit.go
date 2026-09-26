@@ -637,6 +637,41 @@ type AuditConfig struct {
 	// have a failed item's coverage accounted as lost than pay for a retry against a target that is
 	// refusing — and must not read as "unset", which is why this is an OptUint32 like the breakers.
 	FollowUpPasses OptUint32
+
+	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is restricted
+	// to, empty meaning no restriction. Burp's dispatch is a two-stage filter for exactly this —
+	// the family switches first, then a per-check predicate over the selected issue types
+	// (Zwy6.java:36-75, and lambda$isEnabled$1 at :170-184) — and without the second stage a run
+	// cannot be narrowed past its families, so "confirm one issue class after a fix" is impossible
+	// (burpsy-react-ui-kvmx).
+	//
+	// It is a set of type indexes rather than names because the catalogue is the identity: a name is
+	// a label, and a label an operator typed against Burp's own UI has to mean the same thing here.
+	IssueTypes []uint32
+}
+
+// IssueTypesFrom is the per-run selection carried over from a scanner's live configuration, so the
+// audit engine and the check-set builder read ONE list rather than two that can disagree.
+func (cfg ScanConfig) IssueTypesFrom() []uint32 { return cfg.IssueTypes }
+
+// IsIssueTypeSelected reports whether a catalogue type is in the operator's selection. On a
+// ScanConfig, because that is what the live configuration and the coverage report both read.
+//
+// An EMPTY selection is "no restriction", not "nothing selected" — the reading every optional field
+// on this configuration uses. The two are only told apart by Set, because a configuration that
+// named no selection and one that selected nothing have to behave differently: the first is what a
+// preset that never mentions this key means, and the second is what an operator who cleared the list
+// means.
+func (cfg ScanConfig) IsIssueTypeSelected(typeIndex uint32) bool {
+	if len(cfg.IssueTypes) == 0 {
+		return true
+	}
+	for _, t := range cfg.IssueTypes {
+		if t == typeIndex {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultFollowUpPasses is Burp's shipped default for number_of_follow_up_passes (Zp0d.java:120-121).
@@ -1075,22 +1110,34 @@ var builtInConfigKeys = []struct {
 		applies: true,
 	},
 	{
-		name:    "scan_only_selected_issues",
-		burpKey: "scanner/issues_reported/scan_only_selected_issues",
-		what:    "not applied: this engine has no per-issue selection to restrict a scan to",
-		applies: false,
+		// Burp's three selection keys form ONE control: scan_only_selected_issues says the run is
+		// restricted to a list, select_individual_issues says the operator picked issues by hand, and
+		// selected_issues IS the list (Zwy6.java:36-75, and the per-check predicate at :170-184).
+		//
+		// So the first two are BOOLEANS and the third is the value. Reporting all three as "not
+		// applied" was a false statement in an operator-facing table for a control that now works,
+		// and the two booleans are the shape this engine's list-valued path cannot carry — so they are
+		// PARTIAL: honoured as far as a boolean can be (selecting is the one state that matters, and
+		// an empty list means no restriction), and named as such rather than claimed or denied flat.
+		name:       "scan_only_selected_issues",
+		burpKey:    "scanner/issues_reported/scan_only_selected_issues",
+		what:       "partly applied: true is the default reading — an empty selected_issues list means no restriction — so a configuration that only sets this is unchanged; false is not distinguishable here from an empty list",
+		listShaped: true,
+		applies:    true,
 	},
 	{
-		name:    "select_individual_issues",
-		burpKey: "scanner/issues_reported/select_individual_issues",
-		what:    "not applied: this engine has no per-issue selection, only family switches",
-		applies: false,
+		name:       "select_individual_issues",
+		burpKey:    "scanner/issues_reported/select_individual_issues",
+		what:       "partly applied: the operator DID pick the set, and this engine honours it — the flag itself carries nothing further, because a selection is expressed by which issues are in selected_issues",
+		listShaped: true,
+		applies:    true,
 	},
 	{
-		name:    "selected_issues",
-		burpKey: "scanner/issues_reported/selected_issues",
-		what:    "not applied: this engine has no per-issue selection, only family switches",
-		applies: false,
+		name:       "selected_issues",
+		burpKey:    "scanner/issues_reported/selected_issues",
+		what:       "partly applied: a run dispatches only these catalogue issue types, and an empty list means no restriction. Burp's value also carries a per-issue enabled flag; here the presence of a type IS the enable",
+		listShaped: true,
+		applies:    true,
 	},
 
 	// The rest of Burp's scanner keys, listed so that a configuration naming one is told which key
