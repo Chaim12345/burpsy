@@ -638,6 +638,23 @@ type AuditConfig struct {
 	// refusing — and must not read as "unset", which is why this is an OptUint32 like the breakers.
 	FollowUpPasses OptUint32
 
+	// The eight `scanner/frequently_occurring_insertion_points/quick_scan_*` keys, carried on the RUN
+	// as well as on the preset: they are applied per run, and the set they resolve to is what the
+	// light tier's gate reads.
+	QuickScanURLParams       OptUint32
+	QuickScanBodyParams      OptUint32
+	QuickScanCookies         OptUint32
+	QuickScanHTTPHeaders     OptUint32
+	QuickScanParamName       OptUint32
+	QuickScanURLPathFilename OptUint32
+	QuickScanURLPathFolders  OptUint32
+	QuickScanEntireBody      OptUint32
+
+	// LightAuditKinds is the DERIVED set the light tier's gate reads. Not computed per dispatch: the
+	// eight keys above are the input and this is their output, rebuilt whenever one is applied, so
+	// that a later overlay can take back what an earlier one gave (see rebuildLightAuditKinds).
+	LightAuditKinds LightAuditKinds
+
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is restricted
 	// to, empty meaning no restriction. Burp's dispatch is a two-stage filter for exactly this —
 	// the family switches first, then a per-check predicate over the selected issue types
@@ -653,6 +670,44 @@ type AuditConfig struct {
 // IssueTypesFrom is the per-run selection carried over from a scanner's live configuration, so the
 // audit engine and the check-set builder read ONE list rather than two that can disagree.
 func (cfg ScanConfig) IssueTypesFrom() []uint32 { return cfg.IssueTypes }
+
+// rebuildLightAuditKinds derives the light tier's per-kind set from the eight keys just applied.
+//
+// DERIVED rather than accumulated, and that is the whole point of the polarity: a key set to FALSE
+// removes its kinds, and a key left UNSET says nothing. Accumulating across an overlay would make a
+// later preset unable to un-tick something an earlier one ticked, and "set to false" would mean
+// "was never mentioned" for every key applied after the first.
+func (a *AuditConfig) rebuildLightAuditKinds() {
+	fields := []struct {
+		set OptUint32
+		key string
+	}{
+		{a.QuickScanURLParams, "quick_scan_url_params"},
+		{a.QuickScanBodyParams, "quick_scan_body_params"},
+		{a.QuickScanCookies, "quick_scan_cookies"},
+		{a.QuickScanHTTPHeaders, "quick_scan_http_headers"},
+		{a.QuickScanParamName, "quick_scan_param_name"},
+		{a.QuickScanURLPathFilename, "quick_scan_url_path_filename"},
+		{a.QuickScanURLPathFolders, "quick_scan_url_path_folders"},
+		{a.QuickScanEntireBody, "quick_scan_entire_body"},
+	}
+	any := LightAuditKinds{}
+	// The kinds explicitly taken OUT, not the ones ticked in. See LightApplies: the eight keys are a
+	// deny list, and building the inverse would mean ticking url params silently removed cookies
+	// from the light pass.
+	var out []string
+	for _, f := range fields {
+		if !f.set.Set {
+			continue
+		}
+		any.Set = true
+		if f.set.Value == 0 {
+			out = append(out, quickScanKeyKinds[f.key]...)
+		}
+	}
+	any.kinds = out
+	a.LightAuditKinds = any
+}
 
 // IsIssueTypeSelected reports whether a catalogue type is in the operator's selection. On a
 // ScanConfig, because that is what the live configuration and the coverage report both read.
@@ -788,6 +843,70 @@ func AuditConfigWithoutBreakers() AuditConfig {
 //
 // A field is unset when the source file does not set the key. That is not the same as zero: zero
 // disables a breaker, unset inherits DefaultAuditConfig.
+// LightAuditKinds is the set of insertion-point kinds the light-audit tier is opted into.
+//
+// Burp's own control for this is the `scanner/frequently_occurring_insertion_points/quick_scan_*`
+// family, and its panel says what it is: "runs a lighter audit ... Select the insertion point types
+// this applies to" (Zrdr.java:26), with the per-kind gate at Zb1q.java:111-118.
+//
+// The zero value — no key mentioned — means EVERY kind is in the light pass, which is the behaviour
+// before this field existed. That direction is the safe one: a configuration that never mentions
+// these keys gets what it always got.
+type LightAuditKinds struct {
+	// Set records that the source file mentioned at least one of the eight keys. It is what separates
+	// "this configuration said nothing about quick scans" from "this configuration turned them off",
+	// which are different requests and a zero alone cannot tell apart.
+	Set bool
+	// kinds are the point classes taken OUT of the light pass, in the same vocabulary the enumerator
+	// uses (query, body, cookie, header, …). A deny list, because that is the polarity the eight keys
+	// have; see LightApplies.
+	kinds []string
+}
+
+// LightApplies reports whether kind is in the light pass.
+//
+// The polarity is the one Burp's own eight keys have, and it is a DENY list: a key set to TRUE adds
+// its kinds, a key set to FALSE removes them, and a key the file never mentioned leaves them alone.
+// So once any key is set, a kind is in the light pass unless something explicitly took it OUT.
+//
+// Getting that backwards is the bug this comment is here for. Reading the set as an allow-list --
+// "only the ticked kinds are in" -- means that ticking url params takes COOKIES out of the light
+// pass, which is the opposite of what the operator asked and of what their configuration file says.
+// The first version of this did exactly that, and the test for it is in quick_scan_kinds_test.go.
+func (l LightAuditKinds) LightApplies(kind string) bool {
+	if !l.Set {
+		return true
+	}
+	for _, k := range l.kinds {
+		if k == kind {
+			return false
+		}
+	}
+	return true
+}
+
+// ExcludedKinds is the deny list as a list, for the settings surface and for a report that has to
+// name what the configuration took out of the light pass. A run with nothing excluded still has
+// every kind in the light tier, so this is empty rather than "all kinds" in the common case.
+func (l LightAuditKinds) ExcludedKinds() []string { return append([]string(nil), l.kinds...) }
+
+// quickScanKeyKinds maps each of Burp's eight quick_scan_* keys to the point classes it governs. The
+// same vocabulary the insertion_point_types rows use, because they gate the SAME classes at a
+// different stage -- which is the distinction the key table's comment is about.
+//
+// Declared here rather than in the key table so the table's rows and the engine's gate read one
+// mapping, and a key moved to the wrong class could not leave the two disagreeing.
+var quickScanKeyKinds = map[string][]string{
+	"quick_scan_url_params":        {"query"},
+	"quick_scan_body_params":       {"body"},
+	"quick_scan_cookies":           {"cookie"},
+	"quick_scan_http_headers":      {"header"},
+	"quick_scan_param_name":        {"param_name_url", "param_name_body"},
+	"quick_scan_url_path_filename": {"url_path_filename"},
+	"quick_scan_url_path_folders":  {"url_path_folder"},
+	"quick_scan_entire_body":       {"entire_body"},
+}
+
 type BuiltInConfig struct {
 	Name                                  string
 	ConsecutiveCheckFailuresToAbandonUnit OptUint32
@@ -808,6 +927,23 @@ type BuiltInConfig struct {
 	InsertURLPathFilename OptUint32
 	InsertURLPathFolders  OptUint32
 	InsertEntireBody      OptUint32
+
+	// The eight `scanner/frequently_occurring_insertion_points/quick_scan_*` keys: which insertion
+	// point classes get the LIGHT pass. True keeps the kind in the light tier, false takes it out and
+	// gives it the full pass.
+	//
+	// A separate decision from the eight insertion_point_types keys above, which choose which points
+	// are ENUMERATED at all. Declining these as redundant with those was factually wrong, and it is what
+	// left an operator unable to say "light for URL params, full for body params"
+	// (burpsy-react-ui-02qi).
+	QuickScanURLParams       OptUint32
+	QuickScanBodyParams      OptUint32
+	QuickScanCookies         OptUint32
+	QuickScanHTTPHeaders     OptUint32
+	QuickScanParamName       OptUint32
+	QuickScanURLPathFilename OptUint32
+	QuickScanURLPathFolders  OptUint32
+	QuickScanEntireBody      OptUint32
 
 	// The six `scanner/modifying_parameter_locations/*` keys: whether the run also probes a
 	// parameter that has been *moved* to another location, which is how Burp finds checks that
@@ -1210,50 +1346,106 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "quick_scan_url_params",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_params",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether URL parameters get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether URL parameters get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanURLParams },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanURLParams = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_body_params",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_body_params",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether body parameters get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether body parameters get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanBodyParams },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanBodyParams = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_cookies",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_cookies",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether cookies get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether cookies get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanCookies },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanCookies = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_http_headers",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_http_headers",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether HTTP headers get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether HTTP headers get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanHTTPHeaders },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanHTTPHeaders = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_param_name",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_param_name",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether parameter names get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether parameter names get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanParamName },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanParamName = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_entire_body",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_entire_body",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether the entire body get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether the entire body get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanEntireBody },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanEntireBody = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_url_path_filename",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_path_filename",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether URL path filenames get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether URL path filenames get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanURLPathFilename },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanURLPathFilename = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "quick_scan_url_path_folders",
 		burpKey: "scanner/frequently_occurring_insertion_points/quick_scan_url_path_folders",
-		what:    "not applied: quick-scan point classes are selected here through scanner/insertion_point_types/*; a second key set naming the same classes would be a second control for one decision",
-		applies: false,
+		// whether URL path folders get the light pass. This is a DIFFERENT decision from the insertion_point_types
+		// key of the same name: that one chooses whether the points are enumerated at all, this one
+		// whether the enumerated ones get the cheap pass or the full one. Declining these as
+		// redundant was factually wrong, and it is what left an operator unable to ask for a light
+		// audit of some kinds and a full audit of others (burpsy-react-ui-02qi, Zrdr.java:26).
+		what:    "whether URL path folders get the light audit tier rather than the full pass for every point of that kind",
+		read:    func(c BuiltInConfig) OptUint32 { return c.QuickScanURLPathFolders },
+		apply:   func(a *AuditConfig, v uint32) { a.QuickScanURLPathFolders = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "skip_all_tests_for_parameters",
@@ -1596,6 +1788,12 @@ func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string)
 			k.apply(&base, k.read(c).Value)
 		}
 	}
+	// The light tier's per-kind set is derived from the eight quick_scan_* fields, so it is built
+	// HERE rather than by each row. Doing it per row looks tidier and is untestable: the rebuild reads
+	// the whole set, so eight of them produce the same answer as one and a row that stopped rebuilding
+	// would be indistinguishable from one that did. A single rebuild after the loop is both cheaper
+	// and the only version a test can pin.
+	base.rebuildLightAuditKinds()
 	return base, unapplied
 }
 

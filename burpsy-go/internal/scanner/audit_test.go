@@ -788,6 +788,30 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 		for _, k := range c.Keys() {
 			var got, wantSet, wantUnset uint64
 			switch k.Name {
+			case "quick_scan_url_params", "quick_scan_body_params", "quick_scan_cookies",
+				"quick_scan_http_headers", "quick_scan_param_name",
+				"quick_scan_url_path_filename", "quick_scan_url_path_folders",
+				"quick_scan_entire_body":
+				// The eight per-kind light-tier keys, checked through the DERIVED set rather than
+				// the scalar: the claim is about which point classes reach the light pass, and a
+				// test that read the OptUint32 would pass while the derived set was wrong -- which is
+				// the shape of bug burpsy-react-ui-iueb is the precedent for.
+				//
+				// A preset that sets none of them leaves LightAuditKinds.Set false, and every kind is
+				// in the light pass. That IS the assertion for a preset that does not mention them.
+				if k.Set {
+					if !applied.LightAuditKinds.Set {
+						t.Errorf("%s sets %s but the derived light-audit set says nothing was configured; "+
+							"the key was applied and then ignored, which is the failure this exists to catch",
+							c.Name, k.Name)
+						break
+					}
+				} else if applied.LightAuditKinds.Set {
+					t.Errorf("%s does not set %s but the derived set is configured; an unset key must say "+
+						"nothing, or a preset that never mentions quick scans narrows the light pass",
+						c.Name, k.Name)
+					break
+				}
 			case "number_of_follow_up_passes":
 				// Set and NOT set both resolve through followUpPasses rather than the raw OptUint32,
 				// so the overlay oracle checks the resolved count: a preset that sets 2 must leave the

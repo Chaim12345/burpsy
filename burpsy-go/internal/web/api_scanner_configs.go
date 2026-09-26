@@ -76,6 +76,15 @@ type auditConfigView struct {
 	// operator cleared the list" — unlike the numeric keys there is no zero-value ambiguity,
 	// because absent and empty mean the same thing for a list.
 	SkipAllTestsForParameters []string `json:"skip_all_tests_for_parameters"`
+	// LightAuditKinds is the DERIVED per-kind set the light-audit tier is gated on
+	// (burpsy-react-ui-02qi). Reported rather than set: the eight quick_scan_* keys are the operator's
+	// control, and this is what they resolved to, so a console can show "your light audit covers
+	// everything except body parameters" without re-deriving it from eight booleans.
+	//
+	// A deny list, because that is the polarity those keys have. An empty list means every kind is in
+	// the light pass, which is the behaviour before the keys existed — NOT "no kind is", which is
+	// what an allow-list reading would say.
+	LightAuditKindsExcluded []string `json:"light_audit_kinds_excluded,omitempty"`
 	// IssueTypes is Burp's per-issue selection (scanner/issues_reported/selected_issues): the
 	// catalogue type indexes a run dispatches, and an EMPTY list means no restriction. Absent and
 	// empty mean the same thing here, as they do for the skip list -- a list has no zero-value
@@ -135,6 +144,9 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	}
 	if len(cfg.IssueTypes) > 0 {
 		v.IssueTypes = cfg.IssueTypes
+	}
+	if excluded := cfg.LightAuditKinds.ExcludedKinds(); len(excluded) > 0 {
+		v.LightAuditKindsExcluded = excluded
 	}
 	if cfg.FollowUpPasses.Set {
 		n := cfg.FollowUpPasses.Value

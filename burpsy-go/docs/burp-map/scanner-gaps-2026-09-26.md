@@ -169,7 +169,7 @@ a rule matcher over parameter type and item nor a list-valued key"*).
 | Nested **depth** limit (`Zq5.NO_NESTING_ALLOWED`) | **MISSING** |
 | Operator skip list — name matching | **PARTIAL** (landed) |
 | Operator skip list — per-kind + rule engine (`Zs4k`) | **MISSING** |
-| `quick_scan_*` as a *distinct* light-audit selector | **PARTIAL — and the key table's stated reason is wrong** |
+| `quick_scan_*` as a *distinct* light-audit selector | **LANDED (burpsy-react-ui-02qi, 2026-09-27)** — eight `OptUint32` fields, a derived deny list, per-kind gate |
 
 **Gap 1 — the skip-list key table's `what` text is now false.**
 `audit.go:1177` says the key has *"no shape to land in"* because *"every row here
@@ -183,6 +183,24 @@ honours a *different* spelling of the same idea and ignores the one the file use
 **One sentence:** burpsy honours `skip_all_tests_for_parameters` under a
 Go-API-only field name that the key table still reports as "not applied", so an
 operator's own config file is told a working control did nothing.
+
+**Gap 2 — RESOLVED (burpsy-react-ui-02qi, 2026-09-27).** The eight rows now apply, and the
+reason they carried was removed rather than reworded.
+
+> **How it landed.** `BuiltInConfig` and `AuditConfig` each grew the eight
+> `OptUint32` fields the gap below called for, and `AuditConfig` grew
+> `LightAuditKinds` — a *derived* set holding the kinds explicitly **excluded**
+> from the light pass, rebuilt once in `ApplyWithReport` after the key loop. The
+> deny-list polarity is the load-bearing part and the thing the first
+> implementation got backwards: reading the set as an allow-list means ticking
+> URL params silently takes *cookies* out of the light pass, the opposite of what
+> the configuration file says. The gate itself is the `LightApplies` check inside
+> `auditItem`'s `shouldSkip` closure, and `checks_injection.go:81` consumes it
+> unchanged. The wire reports the derived list as
+> `light_audit_kinds_excluded`, omitted when empty so the unset case cannot be
+> misread as an empty allow-list.
+
+**The gap, as originally recorded:**
 
 **Gap 2 — the `quick_scan_*` rows carry a factually incorrect reason.**
 `audit.go:1129` (and its seven siblings) says these keys are not applied because
@@ -822,7 +840,7 @@ Sections where burpsy applies nothing:
 | # | gap | verdict | burp evidence | burpsy evidence | proposed bead title |
 |---|---|---|---|---|---|
 | 1 | `skip_all_tests_for_parameters` is honoured under a Go-only name while the key table still reports it unapplied | **PARTIAL** | `Zwh1.java:8-13`, `Zs4k.java:199-206` | `audit.go:1174-1179` (`applies: false`) vs `audit.go:622-632` + `insertion.go:396,735` (honoured) | scanner: the `skip_all_tests_for_parameters` key row says "not applied" while the engine honours the same control under a Go-API-only name |
-| 2 | the 8 `quick_scan_*` rows claim to be redundant with `insertion_point_types`; they gate a *different* stage | **MISSING** | `Zrdr.java:26` ("runs a lighter audit … Select the insertion point types this applies to"), `Zb1q.java:111-118` | `audit.go:1126-1173` (all `applies: false`, reason false) | scanner: the light-audit tier has no per-kind opt-in, and the 8 `quick_scan_*` key rows are declined for a reason Burp's own UI text contradicts |
+| 2 | the 8 `quick_scan_*` rows claim to be redundant with `insertion_point_types`; they gate a *different* stage | **LANDED** | `Zrdr.java:26` ("runs a lighter audit … Select the insertion point types this applies to"), `Zb1q.java:111-118` | `audit.go` eight rows now `applies: true`; `AuditConfig.LightAuditKinds`; `audit_engine.go` gate | scanner: the eight `quick_scan_*` keys now gate the light tier per insertion-point kind, resolved as a derived deny list; the incorrect "redundant with insertion_point_types" reason is removed |
 | 3 | no manual insertion points — a hand-marked request is not audited where the operator marked it | **MISSING** | `Zuq.java:178-197` (`ZQ`, `Zbg8.MANUAL_INSERTION_POINT`), short-circuit at `:68-71` | `insertion.go:76-108` (17 kinds, no manual member) | scanner: an audit has no manual insertion points, so a hand-marked request is re-guessed by the enumerator |
 | 4 | no nesting-depth limit → `NO_NESTING_ALLOWED` | **DECLINED (accurate)** | `Zq5.java:12` | `audit_items.go:183-184` | — (decline is honest; no bead) |
 | 5 | no per-phase pass state (`Zekf` nibble / 7 `Zbef` values) | **MISSING** | `Zekf.java:85-98`, `Zbef.java:5-11,53-55` | `check_contract.go:28-33` (6-value label enum, no state) | scanner: an audit records nothing about which phases ran, ran twice, or were not applicable |

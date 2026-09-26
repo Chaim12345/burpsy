@@ -1234,6 +1234,19 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	var lightSkipped int32
 	lightHandle := &RunLightAudit{
 		shouldSkip: func(kind, host string) bool {
+			// The per-kind opt-in, checked BEFORE the repetition threshold (burpsy-react-ui-02qi). A kind
+			// the operator did not tick gets the FULL pass for every point of that kind -- which is the
+			// whole control these eight keys are, and it is a different decision from
+			// insertion_point_types: that one chooses WHICH points to enumerate, this one chooses which of
+			// the enumerated ones get the cheap pass.
+			//
+			// A light run therefore narrows to the ticked kinds rather than being all-or-nothing, and an
+			// operator who wants a light audit of URL parameters and a full audit of body parameters can
+			// finally say so. Before this, the key table declined all eight as "redundant with
+			// insertion_point_types", which is factually wrong -- they gate a different stage.
+			if !run.cfg.LightAuditKinds.LightApplies(kind) {
+				return false
+			}
 			return run.lightAuditShouldSkip(kind, host, lightThreshold)
 		},
 		recordClean: run.lightAuditRecordClean,
