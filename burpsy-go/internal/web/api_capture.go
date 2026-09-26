@@ -849,6 +849,26 @@ type issueFindingView struct {
 	// TaskID is the run that produced this finding, omitted when nothing tracked it. It is what ties
 	// a coverage summary to the findings that came out of the same run.
 	TaskID uint64 `json:"task_id,omitempty"`
+	// TimestampUnixMs is when the finding was first raised, set by FindingStore.Add. Projected here
+	// for the first time in burpsy-react-ui-exiu: the store has kept it since the beginning, and
+	// without it the Issues list is an unordered set of rows from every producer in the project, so
+	// an operator cannot tell a finding from ten minutes ago from one from last month.
+	//
+	// It is the FIRST observation's time and is never rewritten by a merge — a later sighting of the
+	// same issue is evidence about the issue, not a new time of day, and moving the timestamp would
+	// make an old finding look continuously re-discovered.
+	TimestampUnixMs int64 `json:"timestamp_unix_ms"`
+	// Source is this finding's provenance, derived rather than stored. There is no provenance field
+	// on core.Finding, and inventing one would be a schema change to answer a display question; what
+	// the finding actually knows is enough for the two states an operator needs to tell apart.
+	//
+	// "scan" means a run raised it (TaskID names which), and "manual" means nothing tracked it — a
+	// recording an operator added, or a collaborator result imported from elsewhere. Those two are
+	// the distinction that matters, because "the scanner found this" and "a person found this" are
+	// different claims with different follow-ups. It deliberately does NOT distinguish BCheck from a
+	// native check: the finding does not record which, and guessing from the check name would put an
+	// unverifiable claim in a column an operator would filter on.
+	Source string `json:"source"`
 	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding
 	// (burpsy-react-ui-m97j): "promoted", "retired", "unavailable" or "unsupported-source",
 	// omitted for every finding the tier never saw. Carried so the issues list can show which
@@ -863,6 +883,20 @@ type issueFindingView struct {
 	Triage *core.TriageNote `json:"triage,omitempty"`
 }
 
+// issueSource classifies a finding by what raised it, from what the finding knows.
+//
+// Two states, and only two, because only two are knowable without inventing a provenance field the
+// store does not have: a TaskID names a run, and its absence means nothing tracked it. Burp splits
+// this further into BCheck / Scan check / Extension / manually generated, and this does not pretend
+// to — see the field's own doc on why a guess from the check name would be worse than the
+// admission.
+func issueSource(f *core.Finding) string {
+	if f.TaskID > 0 {
+		return "scan"
+	}
+	return "manual"
+}
+
 // findingToIssueView converts a stored finding into the UI shape. Host is derived from the first
 // occurrence's request message when the store can resolve it, otherwise the exchange host is left
 // empty rather than guessed.
@@ -875,19 +909,21 @@ type issueFindingView struct {
 // whole value of a finding, so the lookup that cannot silently mismatch is the only one used here.
 func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	v := issueFindingView{
-		ID:          f.ID,
-		CheckName:   f.Name,
-		IssueName:   nil,
-		Severity:    f.EffectiveSeverity().String(),
-		Confidence:  f.EffectiveConfidence().String(),
-		Detail:      strPtr(f.Description),
-		Remediation: strPtr(f.Remediation),
-		Param:       f.Param,
-		Params:      f.Params,
-		TimesSeen:   len(f.Occurrences),
-		TaskID:      f.TaskID,
-		Confirm:     f.Confirm,
-		Triage:      f.Triage,
+		ID:              f.ID,
+		CheckName:       f.Name,
+		IssueName:       nil,
+		Severity:        f.EffectiveSeverity().String(),
+		Confidence:      f.EffectiveConfidence().String(),
+		Detail:          strPtr(f.Description),
+		Remediation:     strPtr(f.Remediation),
+		Param:           f.Param,
+		Params:          f.Params,
+		TimesSeen:       len(f.Occurrences),
+		TaskID:          f.TaskID,
+		TimestampUnixMs: int64(f.Timestamp),
+		Source:          issueSource(f),
+		Confirm:         f.Confirm,
+		Triage:          f.Triage,
 	}
 	if f.SeverityOverride != nil {
 		over := f.SeverityOverride.String()
