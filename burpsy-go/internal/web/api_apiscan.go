@@ -41,6 +41,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
 
@@ -88,6 +89,10 @@ type apiScanSummary struct {
 
 // apiScanReq is the POST body.
 type apiScanReq struct {
+	// LoginPagePattern is the login-page recogniser, exactly as on a crawl (burpsy-react-ui-nc9s).
+	// Carried on both request types because both launch the same engine in a different mode, and a
+	// session rule that keeps a crawl alive should keep an API scan alive for the same reason.
+	LoginPagePattern string `json:"login_page_pattern,omitempty"`
 	// Definition is the document itself, as text. JSON or YAML; see apidoc. Required.
 	Definition string `json:"definition"`
 	// BaseURL overrides the document's own `servers`. Required when the document declares none, and
@@ -202,33 +207,7 @@ func (s *Server) startAPIScan(req apiScanReq) (uint64, *apiScanSummary, error) {
 	// nothing is ever discovered to deepen the frontier. Named because a reader comparing this config to
 	// the crawl's will look for it.
 
-	c, err := crawler.New(crawler.Config{
-		SeedsOnly:    true,
-		SeedRequests: requests,
-		Scope:        s.scope,
-		Sender:       s.sender,
-		// SourceCrawl, deliberately, and not a source of its own. `Source` answers "which surface
-		// produced this exchange", and the honest answer is the crawler: this *is* the crawl engine, in
-		// the mode where the frontier is given rather than discovered. A source of its own would also
-		// have to be taught to every surface that enumerates sources — the capture histogram, the
-		// suite-search tool filter, HTTP history's exclusions — and a half-taught enum value is a
-		// traffic class that quietly disappears from a view. Which of the two crawler modes produced a
-		// row is answered where it belongs: by the run record's kind and Definition, and by the task
-		// row's kind.
-		Capture: scanner.Capture{
-			Store:    s.store,
-			Scanner:  s.passiveScanner,
-			Findings: s.findings,
-			Logger:   s.logger,
-			Source:   core.SourceCrawl,
-		},
-		Limits:            limits,
-		RequestsPerSecond: req.RequestsPerSecond,
-		Pool:              poolLimit,
-		UserAgent:         req.UserAgent,
-		Headers:           req.Headers,
-		Logger:            s.logger,
-	})
+	c, err := crawler.New(s.apiScanConfig(req, requests, limits, poolLimit))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -486,4 +465,48 @@ func scopePort(u *url.URL) uint16 {
 		return 443
 	}
 	return 80
+}
+
+// apiScanConfig is the crawler configuration an API scan runs under, extracted for the same reason as
+// crawlConfig (burpsy-react-ui-nc9s): a field missing from a struct literal nobody inspects is
+// invisible, and this literal was missing the re-login seam exactly as the crawl's was.
+//
+// Both modes go through the same coordinator, so a session rule that keeps a crawl alive keeps an
+// API scan alive — and there is one place that knows how a re-login happens rather than two that
+// can disagree.
+func (s *Server) apiScanConfig(req apiScanReq, requests []crawler.SeedRequest, limits crawler.Limits, poolLimit *intruder.RateLimit) crawler.Config {
+	return crawler.Config{
+		SeedsOnly:    true,
+		SeedRequests: requests,
+		Scope:        s.scope,
+		Sender:       s.sender,
+		// SourceCrawl, deliberately, and not a source of its own. `Source` answers "which surface
+		// produced this exchange", and the honest answer is the crawler: this *is* the crawl engine, in
+		// the mode where the frontier is given rather than discovered. A source of its own would also
+		// have to be taught to every surface that enumerates sources — the capture histogram, the
+		// suite-search tool filter, HTTP history's exclusions — and a half-taught enum value is a
+		// traffic class that quietly disappears from a view. Which of the two crawler modes produced a
+		// row is answered where it belongs: by the run record's kind and Definition, and by the task
+		// row's kind.
+		Capture: scanner.Capture{
+			Store:    s.store,
+			Scanner:  s.passiveScanner,
+			Findings: s.findings,
+			Logger:   s.logger,
+			Source:   core.SourceCrawl,
+		},
+		Limits:            limits,
+		RequestsPerSecond: req.RequestsPerSecond,
+		Pool:              poolLimit,
+		UserAgent:         req.UserAgent,
+		Headers:           req.Headers,
+		Logger:            s.logger,
+		// The re-login seam, for the same reason the crawl config has it (burpsy-react-ui-nc9s): an
+		// API scan walks exactly the routes a crawl would, and a session that dies partway through
+		// leaves it enumerating authenticated endpoints from the login redirect onwards. Both crawl
+		// modes go through the same coordinator, so there is one place that knows how a re-login
+		// happens rather than two that can disagree.
+		SessionCoordinator: s.crawlSessionCoordinator(),
+		LoginPagePattern:   req.LoginPagePattern,
+	}
 }

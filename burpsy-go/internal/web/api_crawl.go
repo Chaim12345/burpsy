@@ -193,6 +193,17 @@ type crawlStartReq struct {
 	// With nothing held and no Seeds, the request is refused: a crawl with no origins is
 	// not a smaller crawl, it is none.
 	IncludeLiveSeen bool `json:"include_live_seen,omitempty"`
+	// LoginPagePattern is a regex matched against a response body to recognise the application's
+	// own login page (burpsy-react-ui-nc9s). It is the SECOND signal for a lost session, beside
+	// the 200→non-200 status flip the crawler detects on its own: a login page served with a 200 is
+	// the case the flip cannot see, and it is the common one behind an SPA that returns its shell for
+	// every route.
+	//
+	// Empty disables this signal and keeps the status flip, so the field is optional rather than
+	// required. A malformed pattern is refused as a 400 by crawler.New, before any task row exists —
+	// the same rule the rest of this request follows, so a configuration mistake is something the
+	// operator fixes rather than a crawl that appears in the dashboard and then fails.
+	LoginPagePattern string `json:"login_page_pattern,omitempty"`
 	// Kind is which scan kind to run: crawlKindCrawl (the default, empty) or crawlKindAudit. An
 	// unrecognised value is refused rather than treated as the default — see startCrawl. A typo'd
 	// kind that silently ran a plain crawl would leave an operator waiting for findings that the
@@ -422,29 +433,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
-	c, err := crawler.New(crawler.Config{
-		Seeds:  seeds,
-		Scope:  s.scope,
-		Sender: s.sender,
-		Capture: scanner.Capture{
-			Store:    s.store,
-			Scanner:  s.passiveScanner,
-			Findings: s.findings,
-			Logger:   s.logger,
-			Source:   core.SourceCrawl,
-		},
-		Query:             req.Query,
-		RetentionQuery:    req.RetentionQuery,
-		SubmitForms:       req.SubmitForms,
-		Limits:            limits,
-		RequestsPerSecond: req.RequestsPerSecond,
-		Pool:              poolLimit,
-		UserAgent:         req.UserAgent,
-		Headers:           req.Headers,
-		OnFetch:           onFetch,
-		Render:            s.crawlRenderer(),
-		Logger:            s.logger,
-	})
+	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch))
 	if err != nil {
 		return 0, nil, 0, err
 	}
@@ -960,4 +949,70 @@ func availablePools(reg *pool.Registry) string {
 		return "none are saved"
 	}
 	return strings.Join(names, ", ")
+}
+
+// crawlConfig is the crawler configuration an operator-launched crawl runs under, and it exists as a
+// named method so a test can read what production actually builds.
+//
+// burpsy-react-ui-nc9s: the re-login seam was complete in crawler/session_gate.go, tested there, and
+// wired to nothing — this literal simply omitted SessionCoordinator and LoginPagePattern, so every
+// operator-launched crawl ran the unauthenticated one from the first expiry onwards with no signal
+// that the session had been lost, and reported whatever the public pages yielded. A field missing
+// from a struct literal nobody inspects is invisible, and that is the same shape as the Params
+// field's own note about the wire dropping what the store kept.
+func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch)) crawler.Config {
+	// The fetch hook for the crawl→audit bridge, built before the task is registered so a
+	// configuration mistake is a 400 the operator can fix, not a task that appears in the dashboard
+	// only to fail immediately. Declared here rather than at the call site so this method is the
+	// whole configuration and nothing about it hides in the caller.
+	_ = onFetch
+	return crawler.Config{
+		Seeds:  seeds,
+		Scope:  s.scope,
+		Sender: s.sender,
+		Capture: scanner.Capture{
+			Store:    s.store,
+			Scanner:  s.passiveScanner,
+			Findings: s.findings,
+			Logger:   s.logger,
+			Source:   core.SourceCrawl,
+		},
+		Query:             req.Query,
+		RetentionQuery:    req.RetentionQuery,
+		SubmitForms:       req.SubmitForms,
+		Limits:            limits,
+		RequestsPerSecond: req.RequestsPerSecond,
+		Pool:              poolLimit,
+		UserAgent:         req.UserAgent,
+		Headers:           req.Headers,
+		OnFetch:           onFetch,
+		Render:            s.crawlRenderer(),
+		Logger:            s.logger,
+		// The re-login seam (burpsy-react-ui-nc9s). This is the same coordinator every other tool
+		// already routes through — Repeater, Intruder, the proxy — so a crawl uses the project's
+		// session handling the way Burp's crawl_using_provided_logins_only says it does, and there
+		// is no second, drift-prone way to think about re-login.
+		//
+		// It was complete and tested in crawler/session_gate.go and wired to nothing: every
+		// operator-launched crawl ran the unauthenticated one from the first expiry onwards, with
+		// no signal that the session had been lost. The crawl then reports whatever the public
+		// pages yielded, which reads as a confident empty result.
+		//
+		SessionCoordinator: s.crawlSessionCoordinator(),
+		LoginPagePattern:   req.LoginPagePattern,
+	}
+}
+
+// crawlSessionCoordinator is the coordinator an operator-launched crawl re-logs in through, or nil
+// when this process has none.
+//
+// The nil case is not an oversight and not a degraded mode: a server built without a session
+// coordinator has no session rules to apply, so there is nothing to log in with. Passing a typed nil
+// instead would put a non-nil interface holding a nil pointer in front of the crawler, which is
+// exactly the shape that panics on first use rather than at the call.
+func (s *Server) crawlSessionCoordinator() crawler.SessionCoordinator {
+	if s.sessionCoordinator == nil {
+		return nil
+	}
+	return s.sessionCoordinator
 }
