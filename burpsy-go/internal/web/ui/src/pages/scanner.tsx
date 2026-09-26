@@ -463,8 +463,14 @@ export function ScannerPage(): JSX.Element {
     id: "report",
     title: "Report",
     actions: [
-     // The whole-scan exports, not a per-issue one: /api/report/{fmt} reports the scan, and
-     // there is no per-finding report endpoint to point a single-issue entry at.
+     // THIS finding, with the bytes behind it (burpsy-react-ui-exiu). The scan-wide exports below
+     // describe the whole scan and their Evidence entries carry only a method, host, path and
+     // status — a description of a finding is not evidence for it, and an assessor handed one still
+     // has to assemble the request and response by hand. This one carries them.
+     { id: "this-finding", label: "Export this issue (with evidence)", icon: FileDown, onSelect: () => window.open(`/api/report/finding/${finding.id}`, "_blank") },
+     // The whole-scan exports, unchanged: a scan of a large project has thousands of rows and
+     // their request bodies between them, and inlining those would make the document unusable as a
+     // document. That split is why the entry above exists.
      { id: "html", label: "Export scan report (HTML)", icon: FileDown, onSelect: () => window.open("/api/report/html", "_blank") },
      { id: "json", label: "Export scan report (JSON)", icon: FileDown, onSelect: () => window.open("/api/report/json", "_blank") },
      { id: "sarif", label: "Export scan report (SARIF)", icon: FileDown, onSelect: () => window.open("/api/report/sarif", "_blank") },
