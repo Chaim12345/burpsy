@@ -178,11 +178,19 @@ const (
 	// and did not get it is narrower than its counts say, and the operator must be able to see by how
 	// much. See Config.Render (burpsy-react-ui-nx7b).
 	SkipRenderUnavailable
+	// SkipSitemapUnparsed means a response that LOOKED like a sitemap — by its content type or by
+	// the element names in its own body — could not be decoded as one. It is a distinct reason
+	// because the alternative is the defect this bead is about: a sitemap fetched, stored, scanned
+	// and reported as a non-HTML body, indistinguishable from a target that published no URL list
+	// at all. The operator's two possible causes (a gzipped sitemap, a truncated fetch) are both
+	// things they can see and act on, so the crawl must be able to tell them apart
+	// (burpsy-react-ui-qjtx).
+	SkipSitemapUnparsed
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [30]Skip{
+var SkipAll = [31]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -213,6 +221,7 @@ var SkipAll = [30]Skip{
 	SkipSessionExpired,
 	SkipReloginFailed,
 	SkipRenderUnavailable,
+	SkipSitemapUnparsed,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -280,6 +289,8 @@ func (s Skip) slot() int {
 		return 28
 	case SkipRenderUnavailable:
 		return 29
+	case SkipSitemapUnparsed:
+		return 30
 	}
 	panic("unknown Skip")
 }
@@ -347,6 +358,8 @@ func (s Skip) String() string {
 		return "relogin-failed"
 	case SkipRenderUnavailable:
 		return "render-unavailable"
+	case SkipSitemapUnparsed:
+		return "sitemap-unparsed"
 	}
 	return "unknown"
 }
@@ -412,6 +425,8 @@ func (s Skip) Explanation() string {
 		return "the response is a login page or a template that flipped from 200, so its links were not followed: the session was gone and its links are not the application"
 	case SkipReloginFailed:
 		return "session expiry was detected and the login macro could not restore the session, so the request was not retried with a fresh cookie"
+	case SkipSitemapUnparsed:
+		return "the response looked like a sitemap — by its content type or the element names in its body — and could not be parsed as one, so the URLs it publishes were not followed"
 	case SkipRenderUnavailable:
 		return "the response was HTML but the browser render failed, so links that exist only after the page's script runs were not discovered"
 	}
@@ -489,7 +504,7 @@ func (s Skip) Category() SkipCategory {
 		return CategoryDuplicate
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
 		return CategoryLimit
-	case SkipNotHTML, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
+	case SkipNotHTML, SkipSitemapUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
 		SkipRenderUnavailable:
 		return CategoryResponse
@@ -626,8 +641,11 @@ func (r SkipReport) Summary() string {
 // goroutine is the whole point of being able to snapshot mid-crawl, and a racy read of the counts
 // would be a data race whether or not it produced a wrong number.
 type skipLedger struct {
-	mu         sync.Mutex
-	counts     [30]uint64
+	mu sync.Mutex
+	// Sized from SkipAll rather than written as a number, because the two were hand-maintained and
+	// drifted: SkipAll's length is checked by the compiler, this one is not, and a Skip value added
+	// to the first and forgotten in the second panics on the first decline rather than at build.
+	counts     [len(SkipAll)]uint64
 	records    []SkipRecord
 	dropped    int
 	maxRecords int

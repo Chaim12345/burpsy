@@ -475,6 +475,16 @@ type Report struct {
 	// them, the target asked for them not to be visited, and that request was deliberately not
 	// honoured. An operator reviewing a crawl should be able to see how much of it came from there.
 	RobotsPathsFound int `json:"robots_paths_found"`
+	// SitemapsParsed counts sitemap documents read, and SitemapLocationsFound the URLs they named.
+	// Reported together because either alone is unreadable: a count of documents with no locations
+	// says the operator's target publishes empty sitemaps, and a count of locations with no documents
+	// says nothing about where they came from (burpsy-react-ui-qjtx).
+	SitemapsParsed        int `json:"sitemaps_parsed"`
+	SitemapLocationsFound int `json:"sitemap_locations_found"`
+	// SitemapIndexesFollowed counts <sitemapindex> documents whose entries were themselves sitemaps.
+	// A large site publishes a handful of sitemaps pointing at the rest, so this is the difference
+	// between "read one file" and "read the list the operator published".
+	SitemapIndexesFollowed int `json:"sitemap_indexes_followed"`
 	// HeadersWithheld counts requests sent without Config.Headers because their origin was not one the
 	// operator seeded. Non-zero means the crawl left the origins it was given credentials for, so any
 	// "nothing found" beyond that point is unauthenticated coverage rather than a clean result — which
@@ -1329,6 +1339,20 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	// A sitemap, admitted from a robots.txt `Sitemap:` line (burpsy-react-ui-qjtx). It arrives here
+	// looking exactly like the defect it replaces: fetched, stored, scanned, and about to be recorded
+	// as a non-HTML body — indistinguishable from a target that published no URL list at all.
+	//
+	// A SIBLING of the HTML gate, not a relaxation of it. isHTML exists for HTML extraction — the
+	// link walk, form submit, base-href resolution — and none of that applies here; admitting XML
+	// through that gate would hand every non-HTML response to the HTML extractor looking for anchors
+	// it will never find. A PDF below still records SkipNotHTML exactly as before.
+	if LooksLikeSitemap(contentType, body) {
+		c.consumeSitemap(item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
 	if !isHTML(contentType) {
 		fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 		c.recordLocation(fetch.Fingerprint, item.url.String(), &fetch, rep)
@@ -1545,6 +1569,41 @@ func (c *Crawler) seedFromRobots(body []byte, item frontierItem, rep *Report, li
 			rep.RobotsPathsFound++
 			c.admit(discoveredLink{raw: value, tag: "robots-sitemap"}, item.url, 1, rep, lim)
 		}
+	}
+}
+
+// consumeSitemap reads one sitemap document and admits what it names.
+//
+// Every <loc> enters as a DISCOVERED LINK rather than a seed, for the same reason robots.txt paths
+// do: a target-supplied URL passes the destructive-action check, the scope gate and the crawl-scope
+// query like anything else the response contained. A sitemap naming /admin/purge-all must not
+// become a privileged request just because the target wrote it down.
+//
+// A <sitemapindex> entry is re-admitted as a sitemap to fetch — depth-limited like any other link —
+// because its <loc>s are sitemaps rather than pages, and following only the index would find every
+// one of them empty.
+func (c *Crawler) consumeSitemap(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	entries, _, failure := ParseSitemap(body)
+	if failure != "" {
+		// A parse failure is REPORTED, not folded into "0 locations". A gzipped sitemap, a truncated
+		// fetch and a document that was never a sitemap are three different facts, and an operator
+		// seeing "0 locations" has no way to tell which they are looking at.
+		c.skips.record(SkipRecord{
+			Reason: SkipSitemapUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: failure,
+		})
+		return
+	}
+	rep.SitemapsParsed++
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+
+	for _, e := range entries {
+		rep.SitemapLocationsFound++
+		if e.IsIndex {
+			rep.SitemapIndexesFollowed++
+		}
+		c.admit(discoveredLink{raw: e.Loc, tag: "sitemap", text: e.LastMod}, item.url, item.depth+1, rep, lim)
 	}
 }
 
