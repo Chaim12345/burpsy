@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, X } from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
@@ -8,7 +8,6 @@ import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
 import { useScopeView } from "../lib/data.policy";
-import { compileHistorySearch } from "../lib/history-search";
 import { QUERY_PANEL } from "../lib/reference";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, type Exchange } from "../lib/types";
@@ -431,6 +430,11 @@ export function HistoryPage(): JSX.Element {
  // Burp's remaining row-type filters (proxyHttpShowOnly*Checkbox). Each is "show only", so all
  // off means no restriction -- the same polarity Burp uses, so a fresh page hides nothing.
  const [onlyParameterized, setOnlyParameterized] = useState(false);
+ // Burp's "Filter by listener" (http-history/filter-settings.html:109-116): "You can show items
+ // received on a specific listener port. This can be useful when testing access controls." The
+ // column was rendered and not filterable (80tg), and a column that cannot be filtered forces the
+ // predicate to be reconstructed as DSL.
+ const [listenerPorts, setListenerPorts] = useState("");
  const [onlyCommented, setOnlyCommented] = useState(false);
  const [onlyHighlighted, setOnlyHighlighted] = useState(false);
  // burpsy-react-ui-c13: Burp pins history to the newest rows as traffic arrives.
@@ -483,7 +487,26 @@ export function HistoryPage(): JSX.Element {
  const [note, setNote] = useState("");
 
  const debouncedTerm = useDebounced(term, 260);
- const { data, error, isFetching, refetch } = useHistory(debouncedTerm, limit);
+ const debouncedSearchText = useDebounced(searchText, 260);
+ // The Search box runs on the server (ngcj). Burp's doc for that box: "The search applies to the
+ // underlying data, regardless of any filters you have applied" — the capture, not the rows this
+ // page happens to hold, and not just the five columns a history row carries. The server scans
+ // every row column AND both messages' bytes (the old client-side pass saw neither a response
+ // body nor a row past the row-limit window), applies the three Burp checkboxes, and returns the
+ // matching rows newest-first before the cap. A bad regex can no longer silently match nothing:
+ // the endpoint refuses it and the error renders below instead of an emptied table.
+ // Burp's master Filter toggle governs "both the filter and the search bar" (index.html:140), so
+ // suspension sends the DSL q to the server as no-filter either: with the toggle off, the fetch
+ // reads the whole capture and the values wait underneath (ovow). Before ngcj only the
+ // More-filters clauses were suspended — the q went on narrowing invisibly behind a filter bar
+ // claiming to show everything, the exact half-implemented state the ovow bead's close missed
+ // because its live pass compared row counts with the DSL empty.
+ const suspended = !filterOn;
+ const historySearch =
+  suspended || debouncedSearchText.trim() === ""
+   ? undefined
+   : { term: debouncedSearchText, caseSensitive: searchCase, regex: searchRegex, negate: searchNegate };
+ const { data, error, isFetching, refetch } = useHistory(suspended ? "" : debouncedTerm, limit, historySearch);
  // The captured total, so a limit-truncated view cannot read as the whole capture. DESIGN.md is
  // explicit that a count the data does not support is a defect, and "500 rows" on a 12,000-row
  // capture is exactly that -- the operator concludes they have seen everything.
@@ -556,21 +579,22 @@ export function HistoryPage(): JSX.Element {
   raw.split(",").map((e) => e.trim().toLowerCase().replace(/^\./, "")).filter((e) => e !== "");
  const showList = useMemo(() => parseExtList(showExtensions), [showExtensions]);
  const hideList = useMemo(() => parseExtList(hideExtensions), [hideExtensions]);
+ // Listener ports, normalised the same way and for the same reason: " 8080, 8080 " is one entry,
+ // and a non-numeric segment is dropped rather than coercing to 0 — coercing would silently make
+ // the filter match every row that came from a producer with no listener, which is the opposite of
+ // what the operator typed.
+ const listenerPortSet = useMemo(() => parseListenerPorts(listenerPorts), [listenerPorts]);
 
  // The search field compiled into a predicate, plus the reason it could not be. It is debounced
  // on its own clock, exactly like the DSL box, so typing does not recompile per keystroke. An
  // invalid regex is the case that matters: silently matching nothing would read as "no such
  // traffic", which is the difference between an empty result and a broken filter.
- const debouncedSearchText = useDebounced(searchText, 260);
- const { matcher: searchMatcher, error: searchError } = useMemo(
-  () => compileHistorySearch(debouncedSearchText, { caseSensitive: searchCase, regex: searchRegex }),
-  [debouncedSearchText, searchCase, searchRegex],
- );
+
 
  const filtersActive =
   (onlyParameterized ? 1 : 0) + (onlyCommented ? 1 : 0) + (onlyHighlighted ? 1 : 0) +
   (showList.length > 0 ? 1 : 0) + (hideList.length > 0 ? 1 : 0) +
-  (searchMatcher ? 1 : 0);
+  (searchText.trim() !== "" ? 1 : 0);
 
  /**
   * Every narrowing currently in force, named as an operator would name it.
@@ -603,7 +627,7 @@ export function HistoryPage(): JSX.Element {
   }
   if (hideNoResponse) names.push("hiding rows with no response");
   if (scopeOnly) names.push("in-scope only");
-  if (searchMatcher) names.push(`search "${debouncedSearchText}"${searchNegate ? " (inverted)" : ""}`);
+  if (searchText.trim() !== "") names.push(`search "${debouncedSearchText}"${searchNegate ? " (inverted)" : ""}`);
   if (onlyParameterized) names.push("with query parameters");
   if (onlyCommented) names.push("commented");
   if (onlyHighlighted) names.push("highlighted");
@@ -611,7 +635,7 @@ export function HistoryPage(): JSX.Element {
   if (hideList.length > 0) names.push(`hiding ${hideList.join(", ")}`);
   return names;
  }, [
-  debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchMatcher, searchNegate, debouncedSearchText,
+  debouncedTerm, method, mimeSet, statusSet, hideNoResponse, scopeOnly, searchText, searchNegate, debouncedSearchText,
   onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
  ]);
  // ovow: names describe the *applied* filters; suspended, there are none to name no matter
@@ -637,25 +661,27 @@ export function HistoryPage(): JSX.Element {
 
    const { extension, queryCount } = pathParts(row.path);
    if (onlyParameterized && queryCount === 0) return false;
+   // A listener filter is an allow-list like the extension ones: empty shows every row, so leaving it
+   // blank is the same "I did not choose" reading every other filter on this page uses.
+   //
+   // Zero is NOT matchable. It is what a row from a producer with no listener carries (Repeater,
+   // Intruder, a crawl), and offering it as a selectable listener would be inventing a port that
+   // does not exist.
+   if (listenerPortSet.size > 0 && !listenerPortSet.has(row.listener_port ?? 0)) return false;
    if (onlyCommented && (row.notes ?? "").trim() === "") return false;
    if (onlyHighlighted && (row.highlight ?? "") === "") return false;
    if (showList.length > 0 && !showList.includes(extension)) return false;
    if (hideList.length > 0 && hideList.includes(extension)) return false;
 
-   if (searchMatcher) {
-    // Search runs over the fields a row actually carries. It deliberately does NOT reach into
-    // request or response bodies: those are not on the index row, and fetching 500 of them to
-    // colour a filter would undo the split that makes a 100k-row history cheap. The label on
-    // the control says so.
-    const haystack = `${row.method} ${row.host} ${row.path} ${row.mime ?? ""} ${row.notes ?? ""}`;
-    const hit = searchMatcher(haystack);
-    if (hit === searchNegate) return false;
-   }
+   // The Search box no longer filters here: the server has already applied it, over the row
+   // columns AND both messages' bytes, before the cap (ngcj). Re-filtering client-side would
+   // both duplicate the work and undo the point — a response-body term is not visible on the
+   // row, so a second pass over the fetched rows would drop every hit the scan found.
    return true;
   });
  }, [
   data, method, statusSet, mimeSet, filterOn, hideNoResponse, scopeOnly, scopeFragment, scope.data,
-  onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList, searchMatcher, searchNegate,
+  onlyParameterized, onlyCommented, onlyHighlighted, showList, hideList,
  ]);
 
  // CSV export — client-side from the loaded rows; no server endpoint needed
@@ -686,16 +712,25 @@ export function HistoryPage(): JSX.Element {
  // request and the response are independent: an operator can edit a held request and leave the
  // response alone, so forcing one choice on both panes would make one of them show bytes under a
  // label that does not describe them.
- const [requestVariant, setRequestVariant] = useState<MessageVariant>("edited");
- const [responseVariant, setResponseVariant] = useState<MessageVariant>("edited");
+ // Seeded from the store so the FIRST selection this mount ever makes opens on the configured
+ // reading too, not on a literal the effect would only correct one render later.
+ const seedVariant = useApp.getState().defaultMessageVariant;
+ const [requestVariant, setRequestVariant] = useState<MessageVariant>(seedVariant);
+ const [responseVariant, setResponseVariant] = useState<MessageVariant>(seedVariant);
 
- // Every selection starts on the bytes that travelled, which is the reading an operator wants by
- // default and the only one every row has. Reset on selection change so a comparison made on one
- // row does not silently carry to the next, where that reading may not even exist.
+ // Every selection starts on the configured default reading (ngcj): Burp's
+ // user_options.proxy.default_display_message, which its settings panel describes as "choose
+ // whether the Proxy history message editor displays auto-modified, manually edited, or original
+ // messages by default". Out of the box Burp shows Original, and a migrated operator's habits
+ // expect exactly that — so the default is the store's, not this file's. Reset on selection
+ // change so a comparison made on one row does not silently carry to the next, where that
+ // reading may not even exist; the fallback inside variantMessageId means a row with no earlier
+ // reading still opens on the bytes that travelled, which is the one reading every row has.
+ const defaultMessageVariant = useApp((state) => state.defaultMessageVariant);
  useEffect(() => {
-  setRequestVariant("edited");
-  setResponseVariant("edited");
- }, [selectedId]);
+  setRequestVariant(defaultMessageVariant);
+  setResponseVariant(defaultMessageVariant);
+ }, [selectedId, defaultMessageVariant]);
 
  const requestVariants = availableVariants(selected?.variants?.request_original, selected?.variants?.request_auto_modified);
  const responseVariants = availableVariants(selected?.variants?.response_original, selected?.variants?.response_auto_modified);
@@ -1518,16 +1553,33 @@ export function HistoryPage(): JSX.Element {
     <div className="stack">
      <div>
       <div className="shortcut-group">Show only</div>
-      <Checkbox checked={onlyParameterized} onCheckedChange={setOnlyParameterized} label="Parameterized requests" />
+      <Checkbox checked={onlyParameterized} onCheckedChange={setOnlyParameterized} label="Requests with query parameters" />
       <Checkbox checked={onlyCommented} onCheckedChange={setOnlyCommented} label="Commented items" />
       <Checkbox checked={onlyHighlighted} onCheckedChange={setOnlyHighlighted} label="Highlighted items" />
       <p className="field-hint">
-       Parameterized counts query parameters only — the body is not on a history row, so a body-only
-       POST does not match.
+       <strong>Query parameters only.</strong> Burp counts a request with parameters when either the
+       URL or the body carries one, so a body-only POST — a JSON or form submission, a multipart
+       upload — is parameterized traffic here and is not shown. The label says &quot;query&quot; because
+       that is what the filter measures: a history row is an index entry and carries no request
+       body, and reading every body to classify a row is the cost the history/message split exists to
+       avoid (internal/web/AGENTS.md). Filter on the body with the Search box, which does read bytes.
       </p>
      </div>
 
      <div className="form-grid">
+      <Field
+       label="Filter by listener"
+       hint="Comma-separated listener ports, e.g. 8080,8443. Empty shows every row. Burp's &quot;This can be useful when testing access controls&quot; — several listeners receiving the same host is the case a column alone cannot answer. Non-numeric entries are ignored, and 0 is not a port: it is what a Repeater, Intruder or crawl row carries because no listener received it."
+      >
+       {(id) => (
+        <Input
+         id={id}
+         value={listenerPorts}
+         onChange={(event) => setListenerPorts(event.target.value)}
+         placeholder="8080,8443"
+        />
+       )}
+      </Field>
       <Field label="Show only extensions" hint="Comma-separated, e.g. php,asp. Empty shows every extension.">
        {(id) => (
         <Input id={id} value={showExtensions} onChange={(event) => setShowExtensions(event.target.value)} placeholder="php,asp,jsp" />
@@ -1546,7 +1598,7 @@ export function HistoryPage(): JSX.Element {
                 own input, not the top-bar box: that box is a DSL statement the server evaluates,
                 and a regex tick over it turned `host ~ "api" AND status = 200` into a pattern that
                 matches nothing — the defect this field exists to remove (burpsy-react-ui-vlf). */}
-      <Field label="Search for" hint="Text or pattern over method, host, path, MIME and comment. Separate from the filter box above — the modifiers apply only here.">
+      <Field label="Search for" hint="Text or pattern over the whole capture — every row column and both messages' bytes. Separate from the filter box above — the modifiers apply only here.">
        {(id) => (
         <Input
          id={id}
@@ -1563,13 +1615,12 @@ export function HistoryPage(): JSX.Element {
        onCheckedChange={setSearchNegate}
        label="Negative match — show rows that do NOT match"
       />
-      {searchError ? (
-       <ErrorNotice error={new Error(`Search regex rejected: ${searchError}`)} />
-      ) : null}
       <p className="field-hint">
-       Searches method, host, path, MIME and comment. Not request or response bodies: those are not
-       carried on a history row, and fetching them per row to colour a filter would undo what makes a
-       large capture cheap to list.
+       Searches the underlying data, not just this page: every column of a row (including the page
+       title and your comment) and BOTH messages' bytes, headers and body, across the whole capture —
+       so a term in a response body is findable even though no column shows it, and so is a row
+       older than the row limit. A rejected regular expression is reported by the server and shows
+       in the page's error strip rather than emptying the table.
       </p>
      </div>
 
