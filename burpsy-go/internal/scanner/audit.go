@@ -630,6 +630,29 @@ type AuditConfig struct {
 	// partition into server-side-injection versus rest, and a skip list that could not name
 	// what it exempts would be a control silently testing more than it claims to skip.
 	SkipAllTestsForParameters []string
+	// FollowUpPasses is Burp's scanner/error_handling/number_of_follow_up_passes: how many extra
+	// passes a FAILED item is re-dispatched (Zxdx.java:27,36; shipped default 1 at Zp0d.java:120-121).
+	//
+	// Unset inherits DefaultFollowUpPasses. Zero is a real choice — an operator who would rather
+	// have a failed item's coverage accounted as lost than pay for a retry against a target that is
+	// refusing — and must not read as "unset", which is why this is an OptUint32 like the breakers.
+	FollowUpPasses OptUint32
+}
+
+// DefaultFollowUpPasses is Burp's shipped default for number_of_follow_up_passes (Zp0d.java:120-121).
+//
+// One, not zero: a follow-up pass exists for the TRANSIENT failure — a timeout, a 502 from a
+// backend mid-restart, a dropped connection — and one retry catches it without turning a
+// permanently-broken target into double the traffic.
+const DefaultFollowUpPasses = 1
+
+// followUpPasses resolves the configured count, with the same unset-means-default rule every other
+// OptUint32 knob uses.
+func (cfg AuditConfig) followUpPasses() int {
+	if cfg.FollowUpPasses.Set {
+		return int(cfg.FollowUpPasses.Value)
+	}
+	return DefaultFollowUpPasses
 }
 
 // enumerateOptions is how this configuration tunes the insertion-point enumerator.
@@ -761,6 +784,9 @@ type BuiltInConfig struct {
 	RelocateURLToCookie  OptUint32
 	RelocateCookieToBody OptUint32
 	RelocateCookieToURL  OptUint32
+
+	// FollowUpPasses is `scanner/error_handling/number_of_follow_up_passes`.
+	FollowUpPasses OptUint32
 
 	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured; the three
 	// per-issue selection keys (scan_only_selected_issues, select_individual_issues, selected_issues)
@@ -1079,8 +1105,12 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "number_of_follow_up_passes",
 		burpKey: "scanner/error_handling/number_of_follow_up_passes",
-		what:    "not applied: an audit item's checks run once per dispatch unit; this engine has no follow-up pass to repeat them",
-		applies: false,
+		// how many extra passes a FAILED item is re-dispatched (Burp's shipped default is 1)
+		what:    "how many extra passes a failed item is re-dispatched; 0 is a real choice — an operator who would rather account the item's coverage as lost than retry against a target that is refusing",
+		min:     0,
+		read:    func(c BuiltInConfig) OptUint32 { return c.FollowUpPasses },
+		apply:   func(a *AuditConfig, v uint32) { a.FollowUpPasses = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "consolidate_passive_issues",
@@ -1728,6 +1758,17 @@ type itemBreaker struct {
 	consecutiveCheckFailures uint32
 	consecutiveUnitFailures  uint32
 	itemFailed               bool
+	// failedUnits records, per dispatch unit, the checks whose probe could not be sent. Burp's
+	// follow-up pass consults this before it re-dispatches: a check that failed because the
+	// TRANSPORT failed is worth retrying, and a check that failed because the response said so is not
+	// (Zwy6.java's Zz — `failedForEntireInsertionPoint < 1L` returns true, meaning "skip", for
+	// exactly this case).
+	//
+	// The distinction is the whole value of a follow-up pass. Without it, a re-pass re-sends
+	// everything the first pass sent, including the checks whose failure the response cannot fix, and
+	// a broken target gets N times the traffic for the same coverage. burpsy's Admit was a single bit
+	// with no failure memory at all, so there was nothing to consult (burpsy-react-ui-5efx).
+	failedUnits map[string]map[string]bool
 }
 
 func newItemBreaker(cfg AuditConfig) *itemBreaker {
@@ -1740,11 +1781,63 @@ func newItemBreaker(cfg AuditConfig) *itemBreaker {
 // checkSucceeded records a check that completed without a transport failure.
 func (b *itemBreaker) checkSucceeded() { b.consecutiveCheckFailures = 0 }
 
-// checkFailed records a check whose probe could not be sent. Returns true when the rest of the unit
-// is abandoned.
-func (b *itemBreaker) checkFailed() bool {
+// checkFailed records that check could not be sent within unit, and returns true when the rest of
+// the unit is abandoned.
+//
+// unit and check are recorded so a follow-up pass can ask whether this check already failed for a
+// reason the response will not change. They are looked up on every dispatch of every unit, so the
+// map is created lazily — the common case, a run where nothing fails, allocates nothing.
+func (b *itemBreaker) checkFailed(unit, check string) bool {
 	b.consecutiveCheckFailures++
+	if unit != "" && check != "" {
+		if b.failedUnits == nil {
+			b.failedUnits = make(map[string]map[string]bool)
+		}
+		checks := b.failedUnits[unit]
+		if checks == nil {
+			checks = make(map[string]bool)
+			b.failedUnits[unit] = checks
+		}
+		checks[check] = true
+	}
 	return b.abandonUnitAfter > 0 && b.consecutiveCheckFailures >= b.abandonUnitAfter
+}
+
+// beginPass starts a follow-up pass: the consecutive counters reset so a pass is measured against the
+// same thresholds rather than inheriting the count that stopped the last one, while the failure
+// MEMORY is kept -- that memory is exactly what narrows the pass.
+//
+// itemFailed deliberately survives. An item that tripped the breaker is still failed after a pass
+// that did not clear it, and clearing the flag here would make the engine's final verdict depend on
+// whether a retry happened rather than on whether the work succeeded -- so a pass that fixed
+// nothing would report the item as merely BOUNDED, which is a claim this engine does not make.
+func (b *itemBreaker) beginPass() {
+	b.consecutiveCheckFailures = 0
+	b.consecutiveUnitFailures = 0
+}
+
+// AlreadyFailed reports whether this check has failed within this unit on an earlier pass of this
+// item.
+//
+// The predicate Burp's re-pass driver consults before re-dispatching, and the reason a follow-up
+// pass is bounded work rather than more of the same: a check that already could not be sent is
+// either going to be sent now (a transient 502, a dropped connection) or fail identically (a
+// connection the target refuses outright), and the response cannot tell the two apart, so the
+// honest thing is to try once more and count the retry rather than to assume.
+func (b *itemBreaker) AlreadyFailed(unit, check string) bool {
+	if b.failedUnits == nil || unit == "" || check == "" {
+		return false
+	}
+	return b.failedUnits[unit][check]
+}
+
+// FailedCheckCount is how many checks have failed within unit across this item's passes, which is
+// what Burp's `failedForEntireInsertionPoint` counts.
+func (b *itemBreaker) FailedCheckCount(unit string) int {
+	if b.failedUnits == nil {
+		return 0
+	}
+	return len(b.failedUnits[unit])
 }
 
 // unitFinished records that a dispatch unit finished. Returns true when the item is failed.

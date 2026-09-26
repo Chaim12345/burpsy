@@ -184,19 +184,19 @@ func Test_the_ledger_tracks_check_indices_beyond_one_bitmap_word(t *testing.T) {
 
 func Test_two_consecutive_check_failures_abandon_the_unit_and_two_units_fail_the_item(t *testing.T) {
 	b := newItemBreaker(DefaultAuditConfig())
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("one failure is not enough")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit")
 	}
 	if b.unitFinished(true) {
 		t.Error("one abandoned unit is not enough to fail the item")
 	}
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("the streak restarted with the unit, so this is failure one again")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit again")
 	}
 	if !b.unitFinished(true) {
@@ -209,14 +209,14 @@ func Test_two_consecutive_check_failures_abandon_the_unit_and_two_units_fail_the
 
 func Test_a_success_between_failures_resets_the_unit_breaker(t *testing.T) {
 	b := newItemBreaker(DefaultAuditConfig())
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("one failure is not enough")
 	}
 	b.checkSucceeded()
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("the streak restarted, so this is failure one again")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit")
 	}
 }
@@ -240,7 +240,7 @@ func Test_a_healthy_unit_resets_the_item_breaker(t *testing.T) {
 func Test_zero_disables_a_breaker_as_the_shipped_never_stop_preset_does(t *testing.T) {
 	b := newItemBreaker(AuditConfigWithoutBreakers())
 	for i := 0; i < 50; i++ {
-		if b.checkFailed() {
+		if b.checkFailed("u", "c") {
 			t.Fatalf("with the breaker off no failure count abandons the unit (failure %d)", i+1)
 		}
 	}
@@ -788,6 +788,16 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 		for _, k := range c.Keys() {
 			var got, wantSet, wantUnset uint64
 			switch k.Name {
+			case "number_of_follow_up_passes":
+				// Set and NOT set both resolve through followUpPasses rather than the raw OptUint32,
+				// so the overlay oracle checks the resolved count: a preset that sets 2 must leave the
+				// run on 2, and a preset that does not set it must leave the base's (burpsy-react-ui-5efx).
+				if k.Set {
+					got = uint64(applied.followUpPasses())
+					wantSet = uint64(k.Value)
+				} else {
+					got, wantUnset = uint64(applied.followUpPasses()), uint64(base.followUpPasses())
+				}
 			case "consecutive_check_failures_to_abandon_unit":
 				got, wantSet, wantUnset = uint64(applied.ConsecutiveCheckFailuresToAbandonUnit), uint64(k.Value), uint64(base.ConsecutiveCheckFailuresToAbandonUnit)
 			case "consecutive_unit_failures_to_fail_item":

@@ -109,7 +109,7 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 27, 1, 27
+	const wantApplied, wantPartial, wantReported = 28, 1, 26
 	applied, partial, reported := 0, 0, 0
 	for _, k := range builtInConfigKeys {
 		switch {

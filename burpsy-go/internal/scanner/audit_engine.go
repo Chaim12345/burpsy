@@ -654,6 +654,10 @@ type AuditOutcome struct {
 	// threshold that failed it.
 	UnitsPlanned   int `json:"units_planned"`
 	UnitsAbandoned int `json:"units_abandoned"`
+	// FollowUpPasses is how many extra passes a failed item was re-dispatched. Zero is the common
+	// case and means the item failed and stopped, which is a coverage loss an operator has to be able
+	// to see rather than infer from a request count.
+	FollowUpPasses int `json:"follow_up_passes"`
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
@@ -1198,7 +1202,30 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	var found []*Finding
 	var stop Disposition
 	stopped := false
+
+	// Follow-up passes (burpsy-react-ui-5efx). Burp re-dispatches a FAILED item, bounded by
+	// number_of_follow_up_passes (Zxdx.java:27,36; default 1 at Zp0d.java:120-121) through a
+	// re-pass driver (Zeeu.java:119,239-241, Zfkz.java:57,69-81). Without it a transient failure — a
+	// timeout, a 502 from a backend mid-restart, a dropped connection — permanently loses that item's
+	// coverage and is indistinguishable from a check that found nothing.
+	//
+	// The narrowing is the part that makes the loop safe, and it is why this lands after the
+	// breaker's failure memory rather than with it: a pass REPEATS the dispatch, and without asking
+	// the breaker which checks already failed, a re-pass would re-send every check the first pass
+	// sent — including the ones whose failure the response cannot change — and multiply the traffic
+	// against a broken target by the number of passes. Burp's own predicate is
+	// `failedForEntireInsertionPoint < 1L` (Zwy6.java's Zz), which is the same question asked
+	// per insertion point rather than per dispatch unit.
+	//
+	// So a pass resumes at the first step whose check has NOT already failed in this unit, and a
+	// check that failed once is not tried again. What a pass buys is the retry of a check that was
+	// blocked behind a FAILED one, which is the transient case the feature exists for.
+	passes := run.cfg.followUpPasses()
+	pass := 0
 	pos := 0
+	// The plan is exhausted, not merely re-entered: the condition is the ORIGINAL loop's, and it is
+	// what makes `goto dispatch` safe. Without it a pass that ran out of steps would index past the
+	// end, and a failed item whose last step is the failure is the common case, not a rare one.
 	for pos < len(steps) {
 		unitIx := steps[pos].unit
 		abandoned := false
@@ -1257,6 +1284,14 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				o.AlreadyCovered++
 				continue
 			}
+			// The narrowing that makes a follow-up pass bounded work rather than more of the same: a
+			// check that already failed in this unit is not tried again (burpsy-react-ui-5efx). Burp asks
+			// the same question per insertion point (Zwy6.java's Zz); this asks it per (unit, check),
+			// which is the granularity the dispatch plan has.
+			if pass > 0 && breaker.AlreadyFailed(units[unitIx].key, checks[check].name) {
+				pos++
+				continue
+			}
 
 			before := meter.snapshot()
 			verdict, runErr := checks[check].run(s, ictx, ex)
@@ -1301,7 +1336,9 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 						zap.Uint64("exchange_id", uint64(exchangeID)),
 						zap.Error(runErr))
 				}
-				abandoned = breaker.checkFailed()
+				// The unit and check names go in so a follow-up pass can tell a check that
+				// already failed here from one that has not been tried (burpsy-react-ui-5efx).
+				abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
 				continue
 			}
 
@@ -1318,7 +1355,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 						zap.Uint64("exchange_id", uint64(exchangeID)),
 						zap.Int("dropped", len(verdict)))
 				}
-				abandoned = breaker.checkFailed()
+				// The same failure as above by a different cause: the check ran and every
+				// probe it placed was refused. Recorded against the unit so a re-pass does not
+				// re-send it blind.
+				breaker.checkFailed(units[unitIx].key, checks[check].name)
 				continue
 			}
 			o.Ran++
@@ -1341,6 +1381,31 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		}
 	}
 
+	// The retry decision. A pass is worth spending only when the item FAILED and some step is still
+	// retryable — which, after the narrowing above, means some check in this item has never been tried.
+	//
+	// A budget-spent item is NOT retried: the second pass would run out of the same budget, and
+	// "retried once" would teach an operator nothing the run's own bounds had not already said.
+	if breaker.failed() && pass < passes && pos < len(steps) {
+		retryable := false
+		for i := pos; i < len(steps); i++ {
+			if !breaker.AlreadyFailed(units[steps[i].unit].key, checks[steps[i].check].name) {
+				retryable = true
+				break
+			}
+		}
+		if retryable {
+			pass++
+			pos = 0
+			// The breaker's CONSECUTIVE counters start clean so a pass is measured against the same
+			// thresholds, while its failure MEMORY is kept -- that memory is what narrows the pass.
+			breaker.beginPass()
+			goto dispatch
+		}
+	}
+	o.FollowUpPasses = pass
+
+dispatch:
 	// Everything left in the plan is work this engine chose not to admit. Attributing it is what
 	// turns a bound into something a caller can see. The breaker owns whether the item failed; stop
 	// owns why dispatch ended.
