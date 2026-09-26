@@ -85,6 +85,23 @@ const (
 	FieldURL
 	FieldStatusCode
 	FieldContentType
+	// The four below are the axes burpsy had no way to write a rule about, so "hold requests to
+	// port 8443" and "hold the response whose body contains X" were not expressible at all
+	// (burpsy-react-ui-1cuc). Burp's rule dialog offers 18 match types (Zero.java:18-54, an 18-case
+	// factory; the dialog's own labels at map_root.tsv:27646-27661) and burpsy had seven.
+	//
+	// Appended, never inserted: a Field is a wire value, and an operator's saved rule names one.
+	// Re-numbering the existing seven would silently re-point every rule already written.
+	//
+	// Port and Protocol are request-shaped facts the message already carries. RequestBody and
+	// ResponseBody read the message's own bytes, and are the only additions that make a rule's
+	// DEPEND on content — which is the point: in a high-volume stream the response that matters is
+	// usually the one carrying a token or a stack trace, and a rule that cannot see bodies cannot
+	// hold it.
+	FieldPort
+	FieldProtocol
+	FieldRequestBody
+	FieldResponseBody
 )
 
 func (f Field) String() string {
@@ -101,6 +118,14 @@ func (f Field) String() string {
 		return "url"
 	case FieldStatusCode:
 		return "status_code"
+	case FieldPort:
+		return "port"
+	case FieldProtocol:
+		return "protocol"
+	case FieldRequestBody:
+		return "request_body"
+	case FieldResponseBody:
+		return "response_body"
 	default:
 		return "content_type"
 	}
@@ -123,6 +148,14 @@ func ParseField(s string) (Field, error) {
 		return FieldStatusCode, nil
 	case "content_type":
 		return FieldContentType, nil
+	case "port":
+		return FieldPort, nil
+	case "protocol":
+		return FieldProtocol, nil
+	case "request_body":
+		return FieldRequestBody, nil
+	case "response_body":
+		return FieldResponseBody, nil
 	default:
 		return FieldHost, fmt.Errorf("unknown match field %q", s)
 	}
@@ -313,9 +346,37 @@ type Message struct {
 	Opcode string
 }
 
+// DirectionHasField reports whether a message in direction d can supply field f at all.
+//
+// This is the dead-weight rule: a rule naming a field its direction cannot supply matches NOTHING,
+// silently, and a rule that can never match is indistinguishable from a target that never sends it.
+// So the two are told apart here and the caller can say so — a response list whose rule matches on
+// RequestBody is a rule the operator wrote wrong, not a quiet one.
+//
+// The request/response split is the shape that matters: a request has no status code, content type
+// or response body, and a response has no request body. Port, protocol, host, path, extension,
+// method and url are supplied by BOTH, so a rule on those works in either list.
+func (d Direction) HasField(f Field) bool {
+	switch f {
+	case FieldStatusCode, FieldContentType, FieldResponseBody:
+		return d == DirectionResponse
+	case FieldRequestBody:
+		return d == DirectionRequest
+	case FieldHost, FieldPath, FieldExtension, FieldMethod, FieldURL, FieldPort, FieldProtocol:
+		return true
+	default:
+		return false
+	}
+}
+
 // FieldValue returns the message's value for a rule field, or "" when the
 // direction has none (a request has no status code or content type).
 func (m *Message) FieldValue(f Field) string {
+	// A field this direction cannot supply is "" before any lookup, so every caller gets the same
+	// answer and the dead-weight check above is the only place that has to know the split.
+	if !m.Direction.HasField(f) {
+		return ""
+	}
 	switch f {
 	case FieldHost:
 		return m.Host
@@ -334,9 +395,70 @@ func (m *Message) FieldValue(f Field) string {
 		return strconv.Itoa(*m.Status)
 	case FieldContentType:
 		return m.ContentType
+	case FieldPort:
+		if m.Port == 0 {
+			return ""
+		}
+		return strconv.Itoa(int(m.Port))
+	case FieldProtocol:
+		// "http" or "https", which is the axis an operator means by protocol when holding traffic
+		// to one service rather than the other. A WebSocket frame's own protocol is not this: the
+		// question a rule asks is which listener received it.
+		if m.TLS {
+			return "https"
+		}
+		return "http"
+	case FieldRequestBody:
+		return bodyOf(m.Raw, DirectionRequest)
+	case FieldResponseBody:
+		return bodyOf(m.Raw, DirectionResponse)
 	default:
 		return ""
 	}
+}
+
+// bodyOf is the body half of a raw HTTP message, or "" when the bytes are not an HTTP message at
+// all (a WebSocket frame, an unreadable message).
+//
+// A bounded read rather than the whole tail: a rule matching a body is asking a question about
+// content, and a 12 MB upload answered with a copy of itself per evaluation is a cost a LIST endpoint
+// is not supposed to pay. The bound is generous enough for the JSON, HTML and stack-trace bodies
+// these rules are written for, and a body past it matches nothing rather than matching its prefix —
+// which is stated rather than silent because a rule that stops matching at 1 MB would otherwise look
+// like the target changed.
+const ruleBodyReadLimit = 1 << 20
+
+func bodyOf(raw []byte, want Direction) string {
+	dir, body, ok := splitRawMessage(raw)
+	if !ok || dir != want {
+		return ""
+	}
+	if len(body) > ruleBodyReadLimit {
+		body = body[:ruleBodyReadLimit]
+	}
+	return string(body)
+}
+
+// splitRawMessage answers which direction a raw message is and where its body starts, reusing the
+// same tolerant CRLF-or-LF split the engine parses with — two splitters would eventually disagree
+// about where a body begins, and a body rule matching one boundary while the capture used the other is
+// a rule that works in testing and not against a real target.
+func splitRawMessage(raw []byte) (Direction, []byte, bool) {
+	headEnd, sep := indexCRLFCRLF(raw), 4
+	if headEnd < 0 {
+		// Bare LF, because a client that does not use CRLF is a real one and its body must be
+		// matchable — a body rule that worked in testing against a hand-written fixture and never
+		// against that client is worse than no rule, because it reads as configured.
+		headEnd, sep = indexLFLF(raw), 2
+	}
+	if headEnd < 0 {
+		return DirectionRequest, nil, false
+	}
+	dir := DirectionRequest
+	if bytes.HasPrefix(raw, []byte("HTTP/")) {
+		dir = DirectionResponse
+	}
+	return dir, raw[headEnd+sep:], true
 }
 
 // URL reconstructs the absolute URL for the url field.
@@ -1400,6 +1522,19 @@ func rewriteContentLength(raw []byte) []byte {
 		return raw
 	}
 	return append([]byte(strings.Join(lines, "\r\n")+"\r\n\r\n"), body...)
+}
+
+// indexLFLF finds a bare-LF header terminator, for the client that does not use CRLF. Scanned only
+// after indexCRLFCRLF has failed, so a well-formed message never pays for it.
+func indexLFLF(b []byte) int {
+	for i := 0; i+1 < len(b); i++ {
+		// A CRLF contains an LF, so the byte BEFORE a candidate is checked to avoid finding the tail
+		// of a CRLFCRLF that indexCRLFCRLF already rejected for a different reason.
+		if b[i] == '\n' && b[i+1] == '\n' && (i == 0 || b[i-1] != '\r') {
+			return i
+		}
+	}
+	return -1
 }
 
 func indexCRLFCRLF(b []byte) int {

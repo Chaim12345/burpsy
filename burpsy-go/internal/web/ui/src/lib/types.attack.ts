@@ -63,7 +63,29 @@ export interface InterceptStateDetail {
 
 /** One condition in an interception rule list. Mirrors intercept.ts's RuleSpec / `interceptRuleSpec`. */
 export interface InterceptRuleSpec {
- field: "host" | "path" | "extension" | "method" | "url" | "status_code" | "content_type";
+ /**
+  * What a rule matches against. Burp's rule dialog offers 18 match types; these are eleven of them
+  * — the seven burpsy always had plus port, protocol, request body and response body
+  * (burpsy-react-ui-1cuc).
+  *
+  * The request/response split is a real constraint and not a UI nicety: a request has no status
+  * code, no content type and no response body, so a rule naming one of those in a REQUEST list can
+  * never match. The server says so (intercept.Direction.HasField) rather than letting the rule sit
+  * there looking configured, and the field list marks them per direction so the two cannot drift
+  * into disagreeing about what a list can see.
+  */
+ field:
+ | "host"
+ | "path"
+ | "extension"
+ | "method"
+ | "url"
+ | "status_code"
+ | "content_type"
+ | "port"
+ | "protocol"
+ | "request_body"
+ | "response_body";
  category: "regex" | "literal";
  string_match: string;
  enabled: boolean;

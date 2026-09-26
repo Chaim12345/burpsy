@@ -308,8 +308,16 @@ func TestHeld_StatusField(t *testing.T) {
 		t.Fatalf("request status_code should be empty")
 	}
 	code := 500
-	m.Status = &code
-	if got := m.FieldValue(FieldStatusCode); got != "500" {
+	// A RESPONSE is where a status code comes from, and the field now says so from the DIRECTION
+	// rather than from whether the pointer happens to be set. The old shape read whatever was on the
+	// struct, so a message carrying a status it could not have had answered a rule written against a
+	// request — a rule that matched a field the direction does not supply, which is the dead-weight
+	// case burpsy-react-ui-1cuc says must stay visible (1cuc).
+	if got := m.FieldValue(FieldStatusCode); got != "" {
+		t.Fatalf("a REQUEST carrying a status pointer answered %q; a request has no status code", got)
+	}
+	r := respMessage("a.test", "GET", "/", code, nil)
+	if got := r.FieldValue(FieldStatusCode); got != "500" {
 		t.Fatalf("status_code = %q", got)
 	}
 }

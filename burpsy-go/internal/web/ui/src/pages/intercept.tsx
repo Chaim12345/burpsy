@@ -50,14 +50,23 @@ import {
 import { VirtualTable, type Column } from "../ui/table";
 import type { MenuGroup } from "../ui/menu";
 
-const FIELDS: { value: InterceptRuleSpec["field"]; label: string }[] = [
+// Burp's rule dialog offers 18 match types; these are eleven (burpsy-react-ui-1cuc). `requests`
+// marks the fields a REQUEST list can supply, because a request has no status code, no content type
+// and no response body — a rule naming one of those there can never match, and offering it
+// unlabelled would be a control that looks configured and is dead weight. The server agrees
+// (intercept.Direction.HasField), so the two cannot drift into disagreeing about what a list can see.
+const FIELDS: { value: InterceptRuleSpec["field"]; label: string; requests?: false }[] = [
  { value: "host", label: "Host" },
  { value: "path", label: "Path" },
  { value: "extension", label: "File extension" },
  { value: "method", label: "Method" },
  { value: "url", label: "URL" },
- { value: "status_code", label: "Status code" },
- { value: "content_type", label: "Content type" },
+ { value: "port", label: "Port" },
+ { value: "protocol", label: "Protocol" },
+ { value: "status_code", label: "Status code", requests: false },
+ { value: "content_type", label: "Content type", requests: false },
+ { value: "request_body", label: "Request body" },
+ { value: "response_body", label: "Response body", requests: false },
 ];
 
 const CATEGORIES: { value: InterceptRuleSpec["category"]; label: string }[] = [
