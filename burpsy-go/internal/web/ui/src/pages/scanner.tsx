@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { filterByIssueSource, ISSUE_SOURCE_FILTERS, type IssueSourceFilter } from "../lib/issue-source-filter";
+import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
 import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal , Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
@@ -22,6 +24,7 @@ import {
  ErrorNotice,
  Input,
  LinkButton,
+ Select,
  Tabs,
  TabsContent,
  TabsList,
@@ -190,6 +193,9 @@ export function ScannerPage(): JSX.Element {
  const [severities, setSeverities] = useState<Set<string>>(new Set());
  const [confidences, setConfidences] = useState<Set<string>>(new Set());
  const [hideFalsePositives, setHideFalsePositives] = useState(false);
+ // The source facet (burpsy-react-ui-exiu): which producer raised a finding. Two states only —
+ // see lib/issue-source-filter for why this does not split BCheck from a native check.
+ const [sourceFilter, setSourceFilter] = useState<IssueSourceFilter>("");
  // A host substring for the report export only (burpsy-react-ui-8r6): "the findings on this
  // host" without reshaping the tree.
  const [hostReportFilter, setHostReportFilter] = useState("");
@@ -241,7 +247,9 @@ export function ScannerPage(): JSX.Element {
  const { data: history } = useHistory("", 1000);
 
  const rows = useMemo(() => {
-  const all = issues?.findings ?? [];
+  // The source facet narrows the pool before anything else reads it, so every other filter — and
+  // the tree, and the empty state — sees one list.
+  const all = filterByIssueSource(issues?.findings ?? [], sourceFilter);
   const needle = debouncedTerm.trim().toLowerCase();
   return all
    // Burp's "Show only" checkboxes (burpsy-react-ui-4d5c): an empty set shows everything, a
@@ -256,7 +264,7 @@ export function ScannerPage(): JSX.Element {
     const haystack = `${f.check_name ?? ""} ${f.issue_name ?? ""} ${f.host} ${f.detail ?? ""}`.toLowerCase();
     return haystack.includes(needle);
    });
- }, [issues, severities, confidences, hideFalsePositives, debouncedTerm]);
+ }, [issues, severities, confidences, hideFalsePositives, sourceFilter, debouncedTerm]);
 
  const groups = useMemo(() => groupFindings(rows), [rows]);
 
@@ -476,12 +484,29 @@ export function ScannerPage(): JSX.Element {
      onChange={(event) => setTerm(event.target.value)}
      placeholder="Filter by check, issue, host or detail"
     />
+    {/* The source facet (burpsy-react-ui-exiu). "Manual" means nothing tracked it — a recording a
+        person added, or a result imported from elsewhere — which is a different claim from "a run
+        raised this" and had no way to be told apart before. Burp splits this further by BCheck /
+        Scan check / Extension; this does not, because the finding does not record which and a guess
+        from the check name would be an unverifiable claim in a filter. */}
+    <Select
+     aria-label="Filter by source"
+     title="Filter by what raised the finding"
+     value={sourceFilter}
+     onChange={(event) => setSourceFilter(event.target.value as IssueSourceFilter)}
+    >
+     {ISSUE_SOURCE_FILTERS.map((option) => (
+      <option key={option.value || "all"} value={option.value}>
+       {option.label}
+      </option>
+     ))}
+    </Select>
    </Toolbar>
    {isFetching && !issues ? (
     <LoadingPanel />
    ) : groups.length === 0 ? (
     <Empty
-     title={term || severities.size > 0 || confidences.size > 0 || hideFalsePositives ? "No finding matches this filter" : "No findings yet"}
+     title={term || severities.size > 0 || confidences.size > 0 || hideFalsePositives || sourceFilter ? "No finding matches this filter" : "No findings yet"}
      detail={issues?.hint ?? "Captured and audited traffic has not produced findings."}
     />
    ) : (
@@ -591,6 +616,25 @@ export function ScannerPage(): JSX.Element {
                   </span>
                  ) : null}
                  <span className="cell-dim tree-row-params">{leaf.finding.confidence}</span>
+                {/* When it was found and what found it (burpsy-react-ui-exiu). Without these the list
+                    is an unordered set of rows from every producer in the project: an operator cannot
+                    tell which of three tasks raised an issue, cannot separate a person's recording
+                    from the scanner's, and cannot order by when something turned up. */}
+                <span
+                 className="cell-dim tree-row-params"
+                 title={
+                  leaf.finding.source === "manual"
+                   ? "Recorded outside a run — no task raised this"
+                   : leaf.finding.task_id
+                   ? `Raised by task ${leaf.finding.task_id}`
+                   : "Raised by a run that did not record which"
+                 }
+                >
+                 {leaf.finding.source === "manual" ? "manual" : "scan"}
+                </span>
+                <span className="cell-dim tree-row-params" title={foundAtTitle(leaf.finding.timestamp_unix_ms)}>
+                 {formatFoundAt(leaf.finding.timestamp_unix_ms)}
+                </span>
                 </span>
                </div>
               </ContextMenu>

@@ -122,6 +122,24 @@ export interface FindingDetail {
   * dropped here, so the pane could not have asked even if it wanted to.
   */
  task_id?: number;
+ /**
+  * When the finding was FIRST raised, in Unix milliseconds. Set by FindingStore.Add and never
+  * rewritten by a merge: a later sighting of the same issue is evidence about the issue, not a new
+  * time of day, and moving the timestamp would make an old finding look continuously re-discovered.
+  *
+  * Zero means the store has no time for it — rendered as an em dash rather than as 1970, because a
+  * plausible-looking date in a column an operator orders by is worse than an obvious gap.
+  */
+ timestamp_unix_ms?: number;
+ /**
+  * What raised this finding: "scan" when a run did (task_id names which), "manual" when nothing
+  * tracked it — a recording an operator added, or a result imported from elsewhere.
+  *
+  * Deliberately only two values. Burp splits this further into BCheck / Scan check / Extension /
+  * manually generated, and this does not pretend to: the finding does not record which, and guessing
+  * from the check name would put an unverifiable claim in a column an operator filters on.
+  */
+ source?: "scan" | "manual";
  occurrences: Occurrence[];
  /** The catalogue entry this check resolved to, when it resolved to one. */
  advisory?: Advisory | null;
