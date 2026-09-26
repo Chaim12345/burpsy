@@ -193,6 +193,17 @@ type crawlStartReq struct {
 	// With nothing held and no Seeds, the request is refused: a crawl with no origins is
 	// not a smaller crawl, it is none.
 	IncludeLiveSeen bool `json:"include_live_seen,omitempty"`
+	// Config is a scan configuration by name, applied to the CRAWL half of it (burpsy-react-ui-3ok6).
+	//
+	// A Burp configuration carries a `scanner` object and a `crawler` object, and importing one is a
+	// first-class migration path. Until now only the scanner half arrived: the crawler object present
+	// in 9 of Burp's 29 shipped configurations, ten keys across them, was parsed into nothing, so a
+	// third of a shipped configuration silently did not.
+	//
+	// Empty is the default and is not an error, exactly as on the audit path. The reply names the
+	// keys the configuration set that this engine did not apply, so the loss is visible rather than
+	// inferred from a crawl that behaved like the defaults.
+	Config string `json:"config,omitempty"`
 	// LoginPagePattern is a regex matched against a response body to recognise the application's
 	// own login page (burpsy-react-ui-nc9s). It is the SECOND signal for a lost session, beside
 	// the 200→non-200 status flip the crawler detects on its own: a login page served with a 200 is
@@ -272,7 +283,7 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	taskID, seeds, liveTaken, err := s.startCrawl(req)
+	taskID, seeds, liveTaken, unapplied, err := s.startCrawl(req)
 	if err != nil {
 		http.Error(w, err.Error(), crawlStartStatus(err))
 		return
@@ -294,6 +305,12 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		// same whether or not the audit half was accepted could not be told apart from one that
 		// accepted the kind and ran a plain crawl.
 		"kind": kind,
+		// The keys the named configuration set that this engine did not apply, the same
+		// not-silent half the audit path reports (burpsy-react-ui-3ok6). Present because the crawler
+		// object in a shipped Burp configuration was previously parsed into nothing at all: an
+		// operator importing one had no way to know a third of it had not arrived.
+		"config_name":           req.Config,
+		"config_unapplied_keys": unapplied,
 	})
 }
 
@@ -378,10 +395,10 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 	}
 }
 
-func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, err error) {
+func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, unapplied []string, err error) {
 	kind, kerr := scanKind(req.Kind)
 	if kerr != nil {
-		return 0, nil, 0, kerr
+		return 0, nil, 0, nil, kerr
 	}
 	seeds = make([]string, 0, len(req.Seeds))
 	for _, seed := range req.Seeds {
@@ -399,17 +416,27 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	}
 	if len(seeds) == 0 {
 		if req.IncludeLiveSeen {
-			return 0, nil, 0, errors.New("no seed URLs and no live-captured URLs held: the live audit has not admitted any in-scope traffic to seed from yet")
+			return 0, nil, 0, nil, errors.New("no seed URLs and no live-captured URLs held: the live audit has not admitted any in-scope traffic to seed from yet")
 		}
-		return 0, nil, 0, errors.New("At least one seed URL is required")
+		return 0, nil, 0, nil, errors.New("At least one seed URL is required")
 	}
 
 	poolLimit, err := s.resolveRunRate(req.Pool, req.RequestsPerSecond)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 
 	limits := crawler.DefaultLimits()
+	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
+	// field the operator typed on this request still wins over the file they also named. The other
+	// order would make a configuration silently override the request that named it.
+	crawlCfgName, crawlUnapplied, cerr := s.resolveCrawlConfig(req.Config)
+	if cerr != nil {
+		return 0, nil, 0, nil, cerr
+	}
+	if req.Config != "" {
+		limits = s.crawlLimitsFromConfig(crawlCfgName)
+	}
 	if req.MaxRequests > 0 {
 		limits.MaxRequests = req.MaxRequests
 	}
@@ -435,7 +462,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// not a task that appears in the dashboard only to fail immediately.
 	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch))
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
 	// nil-receiver safe, so a process with no task registry attaches a gate that never holds.
@@ -492,7 +519,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		s.live.notify(changeDashboard)
 	}()
 
-	return task.ID(), seeds, liveTaken, nil
+	return task.ID(), seeds, liveTaken, crawlUnapplied, nil
 }
 
 // auditCrawlLocations runs the rendered-DOM audit over a finished crawl's distinct locations
@@ -1001,6 +1028,92 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		SessionCoordinator: s.crawlSessionCoordinator(),
 		LoginPagePattern:   req.LoginPagePattern,
 	}
+}
+
+// resolveCrawlConfig resolves a scan configuration name for its CRAWL half: the limits it sets, and
+// every `crawler/*` key it names that this engine has nowhere to put.
+//
+// Empty is the default and is not an error, and an unknown name is refused carrying the known ones —
+// silently crawling under the defaults would run settings the operator did not ask for and report a
+// successful crawl, which is the same class of lie as a skipped check reporting as a pass.
+//
+// The resolution lives here rather than at the two call sites so every path that can crawl under a
+// name resolves that name the same way, and so the name the run records is the one that was applied.
+func (s *Server) resolveCrawlConfig(name string) (string, []string, error) {
+	if name == "" {
+		return "", nil, nil
+	}
+	doc, found := s.savedScanConfigDocument(name)
+	if !found {
+		return "", nil, &unknownConfigError{Name: name, Known: s.knownConfigNames()}
+	}
+	cfg, err := crawler.ParseBurpCrawlConfig(doc)
+	if err != nil {
+		return "", nil, err
+	}
+	return name, append(cfg.UnrepresentableKeys, sectionPrefixes(cfg.UnknownSections)...), nil
+}
+
+// crawlLimitsFromConfig reads the crawler half of a named configuration and returns the limits it
+// sets, over the defaults rather than over the caller's own — the caller merges the two in the
+// order that lets an explicit request field win.
+func (s *Server) crawlLimitsFromConfig(name string) crawler.Limits {
+	limits := crawler.DefaultLimits()
+	doc, found := s.savedScanConfigDocument(name)
+	if !found {
+		return limits
+	}
+	cfg, err := crawler.ParseBurpCrawlConfig(doc)
+	if err != nil {
+		// Unreachable: resolveCrawlConfig already parsed this document and refused it on error, so a
+		// failure here means the store changed underneath two calls in one request. The defaults are
+		// the honest fallback; the name was already refused to the operator if it was mistyped.
+		return limits
+	}
+	overlayCrawlLimits(&limits, cfg.Limits)
+	return limits
+}
+
+// overlayCrawlLimits copies every field the configuration actually named. A field left at its zero
+// value in cfg.Limits was not in the file and must not overwrite the caller's value with zero — which
+// is the failure an overlay written as a struct copy always produces.
+func overlayCrawlLimits(dst *crawler.Limits, src crawler.Limits) {
+	if src.MaxRequests != 0 {
+		dst.MaxRequests = src.MaxRequests
+	}
+	if src.MaxDepth != 0 {
+		dst.MaxDepth = src.MaxDepth
+	}
+	if src.MaxDuration != 0 {
+		dst.MaxDuration = src.MaxDuration
+	}
+	if src.MaxLocations != 0 {
+		dst.MaxLocations = src.MaxLocations
+	}
+}
+
+// sectionPrefixes names unknown crawler sub-objects the way a key is named, so the unapplied list
+// reads as one vocabulary rather than two.
+func sectionPrefixes(sections []string) []string {
+	out := make([]string, 0, len(sections))
+	for _, s := range sections {
+		out = append(out, s+" (whole section)")
+	}
+	return out
+}
+
+// savedScanConfigDocument returns the raw text of a saved configuration, which is what both halves of
+// the loader parse. burpsy stores a configuration as the document the operator exported or authored,
+// so the crawler half is read from the same bytes the scanner half is.
+func (s *Server) savedScanConfigDocument(name string) ([]byte, bool) {
+	if s.persist == nil {
+		return nil, false
+	}
+	doc, found, err := s.persist.LoadScanConfigLibrary(name)
+	if err != nil || !found {
+		return nil, false
+	}
+	return []byte(doc), true
 }
 
 // crawlSessionCoordinator is the coordinator an operator-launched crawl re-logs in through, or nil

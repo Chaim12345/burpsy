@@ -62,7 +62,7 @@ func (s *Server) handleTaskAgain(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, reason, http.StatusConflict)
 		return
 	}
-	if _, _, _, err := s.startCrawl(crawlStartReq{Seeds: []string{task.Target}}); err != nil {
+	if _, _, _, _, err := s.startCrawl(crawlStartReq{Seeds: []string{task.Target}}); err != nil {
 		http.Error(w, err.Error(), crawlStartStatus(err))
 		return
 	}
