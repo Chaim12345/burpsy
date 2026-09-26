@@ -16,6 +16,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -382,16 +383,34 @@ func scanKind(requested string) (string, error) {
 // runs. A scan whose DOM checks declined for a missing browser reports the same decline to
 // the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
 // wire parse was the whole story.
-func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, error) {
+func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
 	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
+		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
+		// function that returns "" would be a render that always produced nothing -- which the engine
+		// cannot tell from a page that genuinely had none, and would report as SkipRenderUnavailable
+		// on every URL of a crawl that was never supposed to render one.
 		return nil
 	}
-	return func(ctx context.Context, targetURL string) (string, error) {
+	return func(ctx context.Context, targetURL string) (string, crawler.RenderOutcome, error) {
 		browser, err := s.scanner.BrowserForRender(ctx)
 		if err != nil {
-			return "", err
+			return "", crawler.RenderOutcome{}, err
 		}
-		return browser.RenderedDOM(ctx, targetURL)
+		// The OUTCOME form, so a render that reached its cap is reported as capped. The previous
+		// call read the DOM after a fixed 300 ms and said nothing about whether the page had settled
+		// (burpsy-react-ui-efra): a client-rendered route populating after load contributed no links
+		// and the crawl reported the application as having almost no locations, which is a confident
+		// wrong answer rather than a missing feature.
+		html, outcome, err := browser.RenderedDOMWithOptions(ctx, targetURL, domexec.RenderOptions{
+			DOMQuiet:    domexec.DefaultDOMQuiet,
+			NetworkIdle: domexec.DefaultNetworkIdle,
+			MaxWait:     domexec.DefaultMaxRenderWait,
+		})
+		return html, crawler.RenderOutcome{
+			Settled: outcome.Settled,
+			Capped:  outcome.Capped,
+			Waited:  outcome.Waited,
+		}, err
 	}
 }
 
@@ -1013,7 +1032,9 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		UserAgent:         req.UserAgent,
 		Headers:           req.Headers,
 		OnFetch:           onFetch,
-		Render:            s.crawlRenderer(),
+		Render:            nil,
+		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
+		RenderWithOutcome: s.crawlRenderer(),
 		Logger:            s.logger,
 		// The re-login seam (burpsy-react-ui-nc9s). This is the same coordinator every other tool
 		// already routes through — Repeater, Intruder, the proxy — so a crawl uses the project's

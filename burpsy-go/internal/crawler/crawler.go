@@ -341,11 +341,90 @@ type Config struct {
 	// any other link and are depth-bounded by the same frontier gates, and MaxLocations
 	// still bounds the crawl as a whole.
 	Render func(ctx context.Context, url string) (string, error)
+	// RenderWithOutcome is Render plus HOW the render ended. It is the optional form: a caller that
+	// only has Render is still wired, and a caller that supplies this one gets a capped page reported
+	// as capped rather than presented as an empty one (burpsy-react-ui-efra).
+	//
+	// A render that reaches its cap has read the DOM while the page was still changing, so whatever
+	// content it had not yet produced is MISSING rather than absent — and a crawl that counted it as
+	// an empty page reports an application as having fewer locations than it has. That is the
+	// confident wrong answer this field exists to prevent, and it is why RenderWithOutcome is
+	// preferred at every call site in this repository.
+	RenderWithOutcome func(ctx context.Context, url string) (string, RenderOutcome, error)
+	// RenderOptions tunes the wait. Zero-valued takes the package defaults, which are NON-ZERO: the
+	// floor of this feature is the fixed sleep the previous implementation used, so a crawl
+	// configured with nothing waits at least as long as it always did and no crawl gets slower.
+	RenderOptions RenderOptions
 	// MaxSkipRecords bounds the sampled refusal detail. Zero takes DefaultMaxSkipRecords; a negative
 	// value keeps counts only.
 	MaxSkipRecords int
 	// Logger is optional.
 	Logger *zap.Logger
+}
+
+// RenderOptions is what a render waits for before it reads the DOM. Mirrored rather than imported
+// from internal/domexec, because the crawler must not depend on chromedp at the point of use — the
+// same discipline that keeps the render a hook rather than a *domexec.Browser.
+type RenderOptions struct {
+	// DOMQuiet is how long the DOM must be UNCHANGED before the page counts as settled.
+	// Non-positive takes DefaultRenderDOMQuiet.
+	DOMQuiet time.Duration
+	// NetworkIdle is how long no request may be in flight before the page counts as settled.
+	// Non-positive takes DefaultRenderNetworkIdle.
+	NetworkIdle time.Duration
+	// MaxWait is the hard cap on the whole wait. Non-positive takes DefaultRenderMaxWait; without it
+	// a page that never goes quiet — a websocket, a polling dashboard — waits forever.
+	MaxWait time.Duration
+}
+
+// The render defaults, and why none of them is zero. The previous implementation slept a fixed
+// 300 ms, so that is the FLOOR this feature may not go below: a crawl configured with nothing must
+// wait at least as long as it always did. Zero would mean "read at the load event", which is the
+// defect (burpsy-react-ui-efra).
+const (
+	// DefaultRenderDOMQuiet is the settle window for the DOM.
+	//
+	// 300 ms, not shorter, and that is the floor rather than a preference: the implementation this
+	// replaces slept a fixed 300 ms before reading the DOM, so a crawl configured with nothing must
+	// not read the DOM EARLIER than it always did. The wait is now conditional — a page that settles
+	// early returns as soon as it does, so the common case is FASTER than the old fixed sleep and the
+	// 300 ms only applies to a page that keeps changing.
+	DefaultRenderDOMQuiet = 300 * time.Millisecond
+	// DefaultRenderNetworkIdle is the settle window for in-flight requests. Longer than the DOM
+	// window because a pending request is a stronger signal that something is coming.
+	DefaultRenderNetworkIdle = 500 * time.Millisecond
+	// DefaultRenderMaxWait caps the whole wait. Ten seconds is longer than any first paint an operator
+	// will sit through and short enough that a thousand-page crawl does not spend hours on the ones
+	// that never settle.
+	DefaultRenderMaxWait = 10 * time.Second
+)
+
+func (o RenderOptions) withDefaults() RenderOptions {
+	if o.DOMQuiet <= 0 {
+		o.DOMQuiet = DefaultRenderDOMQuiet
+	}
+	if o.NetworkIdle <= 0 {
+		o.NetworkIdle = DefaultRenderNetworkIdle
+	}
+	if o.MaxWait <= 0 {
+		o.MaxWait = DefaultRenderMaxWait
+	}
+	return o
+}
+
+// RenderOutcome says how a render ended.
+//
+// Settled and Capped are opposites on purpose: exactly one is true for a render that returned. A
+// caller that checks neither is assuming every page it rendered was complete, which is the claim that
+// makes a thin crawl look like a small application.
+type RenderOutcome struct {
+	// Settled reports that the page went quiet inside MaxWait.
+	Settled bool
+	// Capped reports that MaxWait was reached first, so the DOM was read while the page was still
+	// changing. What it did not have yet is missing, not absent.
+	Capped bool
+	// Waited is how long the render actually took.
+	Waited time.Duration
 }
 
 // SeedRequest is one concrete request a seeds-only run sends: what one operation of an API
@@ -1439,8 +1518,20 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	//     place these links exist, so a render that did not happen narrows the coverage
 	//     claim, and a narrowed claim the operator cannot see is the defect this ledger
 	//     exists to prevent.
-	if c.cfg.Render != nil {
-		rendered, rerr := c.cfg.Render(ctx, item.url.String())
+	// The outcome form when the caller supplied one, so a CAPPED render is reported as capped. The
+	// plain form still works and still reports nothing about settling, because a caller that wired
+	// only Render has not told this engine it cares (burpsy-react-ui-efra).
+	render := c.cfg.Render
+	var renderOutcome *RenderOutcome
+	if c.cfg.RenderWithOutcome != nil {
+		render = func(ctx context.Context, url string) (string, error) {
+			html, outcome, err := c.cfg.RenderWithOutcome(ctx, url)
+			renderOutcome = &outcome
+			return html, err
+		}
+	}
+	if render != nil {
+		rendered, rerr := render(ctx, item.url.String())
 		if rerr != nil {
 			c.skips.record(SkipRecord{
 				Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
@@ -1448,6 +1539,19 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 				Detail:  "the rendered-DOM pass failed: " + rerr.Error(),
 			})
 		} else {
+			// A render that hit its cap was read while the page was still changing. Its links are
+			// still admitted -- they are real -- but the page is also recorded as capped, because
+			// whatever it had not rendered yet is missing rather than absent, and a crawl that
+			// presents a capped page as an empty one reports the application as smaller than it is.
+			if renderOutcome != nil && renderOutcome.Capped {
+				c.skips.record(SkipRecord{
+					Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
+					FoundAt: item.foundAt,
+					Detail: "the rendered-DOM pass reached its " +
+						c.cfg.RenderOptions.withDefaults().MaxWait.String() +
+						" cap while the page was still changing, so its links are incomplete",
+				})
+			}
 			renderedPage := parsePage([]byte(rendered), item.url, c.limits)
 			for _, l := range renderedPage.links {
 				if u, err := resolveAgainst(item.url, l.raw); err == nil {
