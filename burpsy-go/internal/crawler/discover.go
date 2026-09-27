@@ -206,6 +206,43 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: n.Data})
 					}
 				}
+			// button/input[formaction] (burpsy-react-ui-u967). A styled button carrying its form
+			// target in formaction is how a modern app submits without a form element, so a page
+			// whose only action is such a button contributed no link at all. `formaction`
+			// OVERRIDES the enclosing form's action for that control, which is why it is read as a
+			// navigation target in its own right rather than folded into the form signature.
+			case "button", "input":
+				if fa, ok := attr(n, "formaction"); ok && fa != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, fa))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: fa, text: linkText(n), tag: n.Data + "[formaction]"})
+					}
+				}
+			// math[href] — MathML's own link element, which the HTML walk never saw.
+			case "math":
+				if href, ok := attr(n, "href"); ok {
+					linkTargets = append(linkTargets, resolvedTarget(effective, href))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: href, text: linkText(n), tag: "math"})
+					}
+				}
+			// object[data] and embed[src] carry embedded documents — a PDF viewer, an SVG, a
+			// Flash-era movie. They are fetches the crawler never made, and the embedded document
+			// has its own locations.
+			case "object":
+				if data, ok := attr(n, "data"); ok && data != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, data))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: data, text: linkText(n), tag: "object"})
+					}
+				}
+			case "embed":
+				if src, ok := attr(n, "src"); ok && src != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, src))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: "embed"})
+					}
+				}
 			case "form":
 				f := readForm(n)
 				// A form's signature: method, its action resolved but untemplated, and its field
@@ -240,6 +277,21 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 // `action` is here rather than in the raw target list because a form's action is part of its
 // signature; the raw list covers navigational links.
 var structuralAttrs = [...]string{"name", "type", "method", "action", "rel"}
+
+// What is deliberately NOT read (burpsy-react-ui-u967), and why:
+//
+//   - `onclick` and the other inline handlers. Burp's own handling of an inline handler is not
+//     recoverable from the evidence base, and a guessed JavaScript URL parser would invent
+//     locations: `onclick="doThing()"` is not a URL, `onclick="location='/x'"` is. Reading some
+//     and not others, on a heuristic this project cannot cite, is exactly the fabrication the
+//     refusal-first design exists to prevent. A handler-delivered link is found by the rendered
+//     pass instead (nx7b), which executes the page and reads the DOM a browser produced.
+//   - `<meta http-equiv="refresh">`. Redirect handling here is explicit (`understand_meta_refresh_tag`
+//     is a Burp config key burpsy does not implement), and following it would make the crawl's
+//     fetch list disagree with the redirect policy the rest of the tree enforces.
+//   - `classid`, `archive` and `codebase` on `<object>`. They name plugin binaries and Java
+//     archives, not web locations, and a crawl that fetched them would be requesting files the
+//     application never exposed as URLs.
 
 // sortedFieldSignature is a form's `name:type` pairs, sorted, with no values.
 //
