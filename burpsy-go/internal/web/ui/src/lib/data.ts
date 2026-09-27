@@ -43,7 +43,8 @@ export const keys = {
  stats: ["stats"] as const,
  scope: ["scope"] as const,
  dashboard: ["dashboard"] as const,
- history: (q: string, limit: number) => ["history", q, limit] as const,
+ history: (q: string, limit: number, search?: HistorySearch) =>
+  ["history", q, limit, ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : [])] as const,
  message: (id: number) => ["message", id] as const,
  exchange: (id: number) => ["exchange", id] as const,
  issues: ["issues"] as const,
@@ -262,8 +263,24 @@ export const useMatchReplace = () => useResource<MatchReplaceResponse>(keys.rule
 export const useSessionRules = () => useResource<SessionRules>(keys.sessionRules, "/api/session/rules");
 export const useWsConnections = () => useResource<WsConnection[]>(keys.wsConnections, "/api/ws/connections");
 
-export const useHistory = (q: string, limit = 500) =>
- useResource<Exchange[]>(keys.history(q, limit), `/api/history${query({ limit, q })}`);
+/** The Search box's server-side modifiers (ngcj). Same names and truthy spellings as the
+ * endpoint's query string, so a search a test replays through the API and one an operator types
+ * in the box cannot diverge in what they mean.
+ *
+ * `term` blank means no search is active, whatever the modifiers hold — the same contract
+ * compileHistorySearch documents, kept because the endpoint answers the same way. */
+export interface HistorySearch {
+ term: string;
+ caseSensitive?: boolean;
+ regex?: boolean;
+ negate?: boolean;
+}
+
+export const useHistory = (q: string, limit = 500, search?: HistorySearch) =>
+ useResource<Exchange[]>(
+  keys.history(q, limit, search),
+  `/api/history${query({ limit, q, ...(search && search.term !== "" ? { search: search.term, search_case: search.caseSensitive ?? false, search_regex: search.regex ?? false, search_negate: search.negate ?? false } : {}) })}`,
+ );
 
 // `id >= 0`, not `id > 0`: the stores are position-is-the-id counters from zero, so message 0,
 // exchange 0 and ws message 0 are all real rows. Guarding on `> 0` disabled the fetch for the

@@ -46,6 +46,7 @@ import {
 } from "../lib/settings-sections";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
 import { useApp, type Density, type EditorFont, type Theme, type UiScale } from "../lib/store";
+import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
@@ -72,6 +73,14 @@ const UI_SCALES: { value: UiScale; label: string }[] = [
  { value: "110%", label: "110%" },
  { value: "125%", label: "125%" },
  { value: "150%", label: "150%" },
+];
+
+/** Burp's three readings, in the order its settings panel lists them (ngcj). Labels are its
+ * own: Original / Edited / Auto-modified (map_root.tsv: configPanelProxyMessageDisplay*). */
+const MESSAGE_VARIANT_OPTIONS: { value: MessageVariant; label: string }[] = [
+ { value: "original", label: "Original (Burp's default)" },
+ { value: "edited", label: "Edited" },
+ { value: "auto-modified", label: "Auto-modified" },
 ];
 
 const EDITOR_FONTS: { value: EditorFont; label: string }[] = [
@@ -1502,6 +1511,8 @@ function AppearanceSection(): JSX.Element {
  * sections name the other and say which is which.
  */
 function MessageEditorSection(): JSX.Element {
+ const defaultVariant = useApp((state) => state.defaultMessageVariant);
+ const setDefaultVariant = useApp((state) => state.setDefaultMessageVariant);
  const request = useApp((state) => state.hideRequestHeaders);
  const response = useApp((state) => state.hideResponseHeaders);
  const byDefault = useApp((state) => state.hideHeadersByDefault);
@@ -1577,6 +1588,20 @@ function MessageEditorSection(): JSX.Element {
       checked={byDefault}
       onCheckedChange={setHideHeadersByDefault}
      />
+    )}
+   </Field>
+   <Field
+    label="Default message reading"
+    hint="Which reading a newly selected Proxy history row opens on: the message as modified (Edited), as the peer sent it (Original), or as Match & Replace rewrote it (Auto-modified). Burp's own default is Original."
+   >
+    {(id) => (
+     <Select id={id} value={defaultVariant} onChange={(event) => setDefaultVariant(event.target.value as MessageVariant)}>
+      {MESSAGE_VARIANT_OPTIONS.map((option) => (
+       <option key={option.value} value={option.value}>
+        {option.label}
+       </option>
+      ))}
+     </Select>
     )}
    </Field>
    <p className="field-hint">

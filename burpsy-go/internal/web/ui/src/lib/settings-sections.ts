@@ -143,8 +143,8 @@ export const SETTINGS_SECTIONS = [
   {
     id: "message-editor",
     title: "Message editor",
-    summary: "Which headers the message editor's eye button hides in Pretty. Stored in this browser.",
-    keywords: "hide headers eye pretty uninteresting eye request response",
+    summary: "Which headers the eye button hides in Pretty, and which reading (Original / Edited / Auto-modified) a history row opens on. Stored in this browser.",
+    keywords: "hide headers eye pretty uninteresting request response default display message reading original edited auto-modified",
   },
   {
     id: "uninteresting-headers",

@@ -57,9 +57,20 @@ func (s *Server) historyDelete(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"removed": removed, "requested": len(req.IDs)})
 }
 
-// historyGet serves GET /api/history?limit=N[&q=query]. The UI expects a bare array of
-// exchanges, newest first, capped at `limit` (default 300). `q`, when present, is a burpsy-query
-// filter compiled against each exchange's host/path/method/status.
+// historyGet serves GET /api/history?limit=N[&q=query][&search=term&search_case&search_regex&search_negate].
+// The UI expects a bare array of exchanges, newest first, capped at `limit` (default 300). `q`, when
+// present, is a burpsy-query filter compiled against each exchange's host/path/method/status.
+//
+// `search` is Burp's Search box (burpsy-react-ui-ngcj), and it is deliberately NOT the DSL: the
+// Search box's three modifiers (case-sensitive, regex, negative — Burp's proxyHttpSearch*
+// checkboxes) have no spelling in the query grammar, and the grammar's `body` field searches the
+// REQUEST's bytes only, so a page title in a response body would stay unfindable no matter how the
+// box was routed. Burp's doc states the load-bearing promise: "The search applies to the underlying
+// data, regardless of any filters you have applied" — the capture, not the page of rows a browser
+// happens to hold. So the scan runs here, over the store, before the cap: every row column the
+// table can show (including notes and the page title the Proxy recorded), plus both messages'
+// bytes, headers and body. The bytes half reuses the suite-search matcher (vs9k) verbatim; the
+// only thing this endpoint adds to it is the row-column haystack, which no bytes scan can see.
 func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 	limit := 300
 	if raw := r.URL.Query().Get("limit"); raw != "" {
@@ -83,6 +94,28 @@ func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The Search box, compiled the same way /api/search compiles its own (same error text, same
+	// linear-time regex, same folded-literal fast path) so two searches that look identical to
+	// the operator cannot behave differently because they were typed in different boxes.
+	var search *historySearch
+	if raw := r.URL.Query().Get("search"); strings.TrimSpace(raw) != "" {
+		opts := suiteSearchOptions{
+			term:          raw,
+			caseSensitive: truthy(r.URL.Query().Get("search_case")),
+			regex:         truthy(r.URL.Query().Get("search_regex")),
+		}
+		if len(opts.term) > suiteSearchMaxTermLen {
+			http.Error(w, fmt.Sprintf("The search term is longer than the %d bytes this search accepts.", suiteSearchMaxTermLen), http.StatusBadRequest)
+			return
+		}
+		matcher, err := newSuiteSearchMatcher(opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		search = &historySearch{matcher: matcher, negate: truthy(r.URL.Query().Get("search_negate"))}
+	}
+
 	// Proxy history is proxy traffic — plus crawled traffic, which travels the identical
 	// capture path (CRAWL-02), and anything no producer claimed, which hiding would make
 	// invisible rather than absent. Tool-originated sends — Repeater resends, Intruder
@@ -100,6 +133,9 @@ func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if filter != nil && !filter.match(ex) {
+			continue
+		}
+		if search != nil && !s.historySearchMatch(search, ex) {
 			continue
 		}
 		views = append(views, exchangeView(ex))
@@ -1349,6 +1385,84 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 func strPtr(s string) *string { return &s }
 
 // ---- query filter ------------------------------------------------------------------------------
+
+// ---- the Search box (burpsy-react-ui-ngcj) -------------------------------------------------------
+
+// historySearch is the Search box's compiled form: the vs9k byte matcher plus the negative flag.
+// The matcher itself lives in api_search.go with the suite dialog that owns it; what lives here is
+// the half /api/history adds — the row-column haystack no bytes scan can see — and the wiring that
+// runs both halves for every row before the cap.
+type historySearch struct {
+	matcher *suiteSearchMatcher
+	negate  bool
+}
+
+// historyRowColumns is the non-bytes half of the Search box's haystack: the fields a history row
+// renders as columns. The five the old client-side filter could see (method, host, path, MIME,
+// comment) are joined by the ones it structurally could not: the recorded page Title (which lives
+// on the row, not in any message), the highlight annotation, the server IP, and the listener port
+// (Burp's own filter dialog calls that one out as "useful when testing access controls", and an
+// operator's search for the port they remember is a search over exactly this field). Every field
+// the bytes half already covers is absent on purpose: matching a header twice would make a
+// negative search answer a question it was never asked.
+func historyRowColumns(ex *core.Exchange) string {
+	var b strings.Builder
+	b.WriteString(ex.Method)
+	b.WriteByte(' ')
+	b.WriteString(ex.Host)
+	b.WriteByte(' ')
+	b.WriteString(ex.Path)
+	if ex.Mime != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Mime)
+	}
+	// Notes is a pointer because absent is not empty here: a row nobody annotated must not
+	// contribute a lone space to the haystack, and dereferencing nil to find out would be the
+	// whole crash.
+	if ex.Notes != nil && *ex.Notes != "" {
+		b.WriteByte(' ')
+		b.WriteString(*ex.Notes)
+	}
+	if ex.Title != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Title)
+	}
+	if ex.Highlight != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Highlight)
+	}
+	if ex.ServerIP != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.ServerIP)
+	}
+	if ex.ListenerPort != 0 {
+		b.WriteString(fmt.Sprintf(" :%d", ex.ListenerPort))
+	}
+	return b.String()
+}
+
+// match answers whether one exchange passes the Search box. The row-column half goes through the
+// SAME matcher as the bytes, so a regex is one regex everywhere; the bytes half scans both
+// directions, headers and body, with the vs9k region logic — including its no-request guard, which
+// searches a request-less row for what it does have rather than scanning message 0 and reporting
+// another exchange's matches (the wtov defect, reached through search; the guard is borrowed, not
+// re-implemented).
+func (s *Server) historySearchMatch(h *historySearch, ex *core.Exchange) bool {
+	if h == nil {
+		return true
+	}
+	hit := len(h.matcher.allIn([]byte(historyRowColumns(ex)))) > 0
+	if !hit {
+		// Both directions, whole messages: headers and body, the way Burp's "across all columns"
+		// reads when the column is the bytes a message carried.
+		_, total := s.searchExchange(ex, suiteSearchOptions{area: suiteSearchAreaBoth}, h.matcher)
+		hit = total > 0
+	}
+	if hit == h.negate {
+		return false
+	}
+	return true
+}
 
 // queryFilter is a compiled burpsy-query expression evaluated against exchanges. Reuses the query
 // package's parser and evaluator; this type adapts a stored exchange to its Queryable interface.
