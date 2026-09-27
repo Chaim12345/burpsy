@@ -52,6 +52,7 @@ import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, useApp } from
 import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
+import { usePluginHotkeys } from "./lib/plugin-hotkeys";
 import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
@@ -190,6 +191,10 @@ function App(): JSX.Element {
  useDocumentTitle();
  useHashRoute();
  useEventStream();
+ // A loaded plugin's declared hotkeys are installed here, at the shell, because a hotkey is
+ // suite-wide by construction (wsu4): the keydown has to reach it from every tool, which no
+ // single page can promise, and the palette-equivalent action it runs is the shell's too.
+ usePluginHotkeys();
 
  const stats = useStats();
  const scope = useScope();

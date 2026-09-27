@@ -51,11 +51,15 @@ function stateBadge(row: ExtensionView): JSX.Element {
   return <Badge tone={STATE_TONE[row.state]}>{STATE_LABEL[row.state]}</Badge>;
 }
 
-/** The plugin's own words for a registration kind. */
+/** The plugin's own words for a registration kind. Same five the wire carries; a
+ * Record over the union so a sixth kind on the wire fails this build rather than
+ * rendering a blank cell. */
 const KIND_LABEL: Record<Registration["kind"], string> = {
   "context-menu": "Context-menu item",
   menu: "Menu action",
   "editor-tab": "Message-editor tab",
+  "session-action": "Session-handling action",
+  hotkey: "Hotkey",
 };
 
 function timeOf(atMs: number): string {
@@ -162,7 +166,16 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
       <SimpleTable headers={["Kind", "Label", "Id", "Hint", ""]}>
         {plugin.registrations.map((registration) => (
           <tr key={registration.id}>
-            <td>{KIND_LABEL[registration.kind]}</td>
+            <td>
+              {KIND_LABEL[registration.kind]}
+              {/* The chord the plugin asked for, so a hotkey row says what fires it. Burp's
+                  spelling, exactly as declared: the console normalises it at install time, and
+                  showing a different spelling here than the one the plugin declared would be a
+                  second opinion the operator cannot reconcile with the plugin's own docs. */}
+              {registration.kind === "hotkey" && registration.chord ? (
+                <> <code>{registration.chord}</code></>
+              ) : null}
+            </td>
             <td>{registration.label}</td>
             <td>
               <code>{registration.id}</code>
@@ -171,7 +184,10 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
               <span className="cell-dim">{registration.hint ?? "—"}</span>
             </td>
             <td>
-              {registration.kind === "menu" ? (
+              {registration.kind === "menu" || registration.kind === "hotkey" ? (
+                // A hotkey is runnable from here for the same reason a menu action is: no
+                // exchange and no message stand behind it. The chord does the same thing
+                // without the click; this is the click.
                 <Button
                   variant="outline"
                   size="small"
@@ -185,7 +201,7 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
                 // Not offered rather than offered and broken: both other kinds are invoked with a
                 // message, and this tab selects none. They are reachable from POST
                 // /api/extensions/invoke with an exchange or a message id.
-                <Tooltip content="This kind is invoked with a message, which this tab does not select. Use POST /api/extensions/invoke with an exchange or message id.">
+                <Tooltip content="This kind is invoked with a message, which this tab does not select. Use POST /api/extensions/invoke with an exchange or a message id.">
                   <span className="cell-dim">needs a message</span>
                 </Tooltip>
               )}

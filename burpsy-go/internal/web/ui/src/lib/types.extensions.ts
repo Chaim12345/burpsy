@@ -14,14 +14,18 @@ export type ConsoleStream = "output" | "error";
 /** Who produced a console line. `plugin` is what it logged; the other three are not its words. */
 export type ConsoleSource = "plugin" | "stderr" | "host" | "protocol";
 
-/** One of the three registration points that have an honest web analogue. */
-export type RegistrationKind = "context-menu" | "menu" | "editor-tab";
+/** The five registration points that have an honest web analogue. */
+export type RegistrationKind = "context-menu" | "menu" | "editor-tab" | "session-action" | "hotkey";
 
 export interface Registration {
   id: string;
   kind: RegistrationKind;
   label: string;
   hint?: string;
+  /** The binding a hotkey registration asked for, in Burp's Settings spelling ("Ctrl+Shift+P").
+   * The host refuses a hotkey registration whose chord it cannot install, so a hotkey row that
+   * reaches the console always carries one. */
+  chord?: string;
 }
 
 export interface ExitInfo {

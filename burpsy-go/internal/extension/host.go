@@ -431,6 +431,11 @@ func (h *Host) Load(name string) (PluginView, error) {
 	return view, nil
 }
 
+// fmtChordRefused is the refusal for a hotkey whose chord this console cannot spell. A
+// format string constant rather than an inline literal, because the message names the
+// rule and the rule is one sentence, not two spellings of it.
+const fmtChordRefused = "%q asks for %q, which this console cannot spell as a binding (mod or alt, plus shift, plus exactly one key)"
+
 // validate keeps the registrations that mean something and counts the rest.
 //
 // Refusing the whole load over one bad row would be harsher than useful — a plugin
@@ -459,6 +464,10 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
+		case reg.Kind == KindHotKey && reg.Chord == "":
+			refuse(fmt.Sprintf("%q is a hotkey with no chord; there is nothing to install", reg.ID))
+		case reg.Kind == KindHotKey && NormaliseChord(reg.Chord) == "":
+			refuse(fmt.Sprintf(fmtChordRefused, reg.ID, reg.Chord))
 		default:
 			seen[reg.ID] = true
 			kept = append(kept, reg)
@@ -588,6 +597,8 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "editor.render", params, &result)
 	case KindSessionAction:
 		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
+	case KindHotKey:
+		err = sess.call(callCtx, "hotkey.invoke", params, &result)
 	default:
 		// Unreachable: validate() refuses any other kind at load. Kept as a real
 		// error rather than a panic so a future kind added to validKinds and not

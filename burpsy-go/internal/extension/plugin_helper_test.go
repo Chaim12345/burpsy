@@ -81,6 +81,15 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "unlabelled", "kind": "menu", "label": ""},
 			},
 		}
+	case "bad-hotkeys":
+		return map[string]any{
+			"name": "hasty", "version": "0.3", "type": "python", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "no-chord", "kind": "hotkey", "label": "No chord declared"},
+				{"id": "meta-chord", "kind": "hotkey", "label": "Asks for the meta key", "chord": "Meta+K"},
+				{"id": "survives", "kind": "menu", "label": "An unrelated action"},
+			},
+		}
 	case "no-registrations":
 		return map[string]any{"name": "quiet", "version": "1.0", "type": "shell", "protocol": ProtocolVersion}
 	default:
@@ -90,6 +99,7 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "ctx", "kind": "context-menu", "label": "Inspect exchange", "hint": "on a selected row"},
 				{"id": "act", "kind": "menu", "label": "Run the action"},
 				{"id": "tab", "kind": "editor-tab", "label": "Derived view"},
+				{"id": "key", "kind": "hotkey", "label": "Run from the keyboard", "chord": "Ctrl+Shift+K"},
 			},
 		}
 	}
@@ -154,7 +164,7 @@ func runHelperPlugin(behaviour string) {
 				os.Exit(9)
 			}
 
-		case "contextMenu.invoke", "menu.invoke":
+		case "contextMenu.invoke", "menu.invoke", "hotkey.invoke", "sessionAction.invoke":
 			if behaviour == "invoke-fails" {
 				emit(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(msg.ID),
 					"error": map[string]any{"code": -32000, "message": "the plugin declined"}})

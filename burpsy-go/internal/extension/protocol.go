@@ -46,6 +46,8 @@ package extension
 import (
 	"encoding/json"
 	"time"
+
+	"strings"
 )
 
 // ProtocolVersion is the version the host announces in `initialize` and expects
@@ -106,6 +108,22 @@ const (
 	// send its own request unchanged, which is a rule reporting success while doing
 	// nothing — the failure the invoke-extension action refuses rather than hides.
 	KindSessionAction Kind = "session-action"
+	// KindHotKey is the analogue of registerHotKeyHandler: a chord that invokes a
+	// registration without a selection, the way Burp's own hotkeys do. The chord is
+	// declared at the handshake in Burp's Settings spelling ("Ctrl+Shift+P" — see
+	// burp.api.montoya.ui.hotkey.HotKey: "Hotkeys are defined in the same format as
+	// within Burp's Settings"), and the host normalises it to the web console's
+	// vocabulary (mod/alt/shift+key) before installing it, refusing what it cannot
+	// spell rather than installing a chord that would never fire.
+	//
+	// Burp's five HotKeyContexts (HTTP message editor, Proxy history, Intruder
+	// results, Organizer entries, Site map) are not carried: the console's global
+	// dispatch cannot scope a DOM keydown to one table's rows without each surface
+	// opting in, and a hotkey that fires only sometimes — or worse, fires on the
+	// page the operator did not mean — is worse than one that fires everywhere. A
+	// hotkey here is a suite-wide binding, which is also what Burp's context-less
+	// overload means ("it will fire for any supported context").
+	KindHotKey Kind = "hotkey"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
@@ -113,6 +131,118 @@ const (
 // UI is indistinguishable from a working one.
 var validKinds = map[Kind]bool{
 	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
+	KindHotKey: true,
+}
+
+// NormaliseChord spells a Burp-Settings hotkey ("Ctrl+Shift+P") in the console's own
+// vocabulary ("mod+shift+p"), or returns "" for a binding this console cannot install.
+//
+// The console's rule is validateChord's, in Go: a binding must carry mod (Ctrl/Cmd) or alt,
+// because a bare key would fire while the operator types, and it may add shift, and it names
+// exactly one non-modifier key. Burp's spelling is lenient about case, order and the separators
+// (+, -, space, or none — "Ctrl+Shift+P", "ctrl shiftp" and "ctrl-shift p" all name one
+// binding), so this reads modifiers by prefix rather than by splitting: "ctrlp" is ctrl+p and
+// not some key called "ctrlp".
+//
+// What is refused, and why that is the honest answer: Burp's meta key ("Cmd" on macOS) has no
+// web spelling the console can promise cross-platform — mod is already the platform's own
+// primary modifier, so a plugin asking for meta is asking for a chord that would silently
+// never fire. F5 and friends (function keys, media keys) are refused for the same reason the
+// shipped bindings avoid them: the browser or the OS owns them. A refused chord is counted on
+// the wire like every other refused registration, rather than installed as a binding that
+// looks registered and never fires.
+func NormaliseChord(burp string) string {
+	rest := strings.ToLower(strings.TrimSpace(burp))
+	if rest == "" {
+		return ""
+	}
+	var mods []string
+	var key string
+	for rest != "" {
+		switch {
+		case strings.HasPrefix(rest, "ctrl"), strings.HasPrefix(rest, "cmd"), strings.HasPrefix(rest, "control"):
+			if strings.HasPrefix(rest, "control") {
+				rest = strings.TrimPrefix(rest, "control")
+			} else if strings.HasPrefix(rest, "ctrl") {
+				rest = strings.TrimPrefix(rest, "ctrl")
+			} else {
+				rest = strings.TrimPrefix(rest, "cmd")
+			}
+			mods = appendUnique(mods, "mod")
+		case strings.HasPrefix(rest, "shift"):
+			rest = strings.TrimPrefix(rest, "shift")
+			mods = appendUnique(mods, "shift")
+		case strings.HasPrefix(rest, "alt"), strings.HasPrefix(rest, "option"):
+			if strings.HasPrefix(rest, "option") {
+				rest = strings.TrimPrefix(rest, "option")
+			} else {
+				rest = strings.TrimPrefix(rest, "alt")
+			}
+			mods = appendUnique(mods, "alt")
+		case strings.HasPrefix(rest, "meta"), strings.HasPrefix(rest, "super"), strings.HasPrefix(rest, "windows"):
+			return ""
+		default:
+			// The key: everything up to the next separator, or the whole remainder.
+			sep := strings.IndexAny(rest, "+- ")
+			if sep == 0 {
+				// A leading separator the modifier scan did not consume: skip it, it names nothing.
+				rest = rest[1:]
+				continue
+			}
+			if sep < 0 {
+				key, rest = rest, ""
+			} else {
+				key, rest = rest[:sep], rest[sep:]
+			}
+		}
+	}
+	if key == "" {
+		return ""
+	}
+	// Exactly one non-modifier key, and it must not itself be a modifier name ("ctrl+shift" is
+	// not a binding).
+	switch key {
+	case "ctrl", "cmd", "control", "shift", "alt", "option", "meta", "super", "windows":
+		return ""
+	}
+	// Function and media keys are the browser's and the OS's; a plugin cannot have them.
+	if len(key) == 2 && key[0] == 'f' && key[1] >= '1' && key[1] <= '9' {
+		return ""
+	}
+	if key == "f10" || key == "f11" || key == "f12" {
+		return ""
+	}
+	if !hasModOrAlt(mods) {
+		return ""
+	}
+	order := []string{"mod", "alt", "shift"}
+	var out []string
+	for _, m := range order {
+		for _, have := range mods {
+			if have == m {
+				out = append(out, m)
+			}
+		}
+	}
+	return strings.Join(append(out, key), "+")
+}
+
+func appendUnique(in []string, v string) []string {
+	for _, have := range in {
+		if have == v {
+			return in
+		}
+	}
+	return append(in, v)
+}
+
+func hasModOrAlt(mods []string) bool {
+	for _, m := range mods {
+		if m == "mod" || m == "alt" {
+			return true
+		}
+	}
+	return false
 }
 
 // Registration is one thing a plugin declared at handshake.
@@ -124,6 +254,12 @@ type Registration struct {
 	// with no name.
 	Label string `json:"label"`
 	Hint  string `json:"hint,omitempty"`
+	// Chord is the keyboard binding a hotkey registration asks for, in Burp's
+	// Settings spelling ("Ctrl+Shift+P"). Only KindHotKey reads it; the host
+	// refuses a hotkey registration whose chord is missing or unspellable, and
+	// ignores the field on the other kinds rather than letting it imply a
+	// binding that was never installed.
+	Chord string `json:"chord,omitempty"`
 }
 
 // Manifest is what a plugin answers `initialize` with.
@@ -298,7 +434,7 @@ var MethodSpecs = []MethodSpec{
 		Name: "initialize", Direction: HostToPlugin, Call: "request",
 		Params: `{"protocol": 1, "host": "burpsy", "plugin": "<allowlist name>"}`,
 		Result: `{"name": string, "version": string, "type": string, "protocol": 1, ` +
-			`"registrations": [{"id": string, "kind": "context-menu"|"menu"|"editor-tab", "label": string, "hint"?: string}]}`,
+			`"registrations": [{"id": string, "kind": "context-menu"|"menu"|"editor-tab"|"session-action"|"hotkey", "label": string, "hint"?: string, "chord"?: string}]}`,
 		Why: "The handshake, and the only place registrations are declared. A protocol number " +
 			"that does not match the host's refuses the load rather than half-working.",
 	},
@@ -342,6 +478,16 @@ var MethodSpecs = []MethodSpec{
 			"structured rather than raw because the answer is a request: a raw round trip would need a " +
 			"serialiser and a parser on each side of the boundary, each able to disagree with the sender " +
 			"that actually dials.",
+	},
+	{
+		Name: "hotkey.invoke", Direction: HostToPlugin, Call: "request", Kind: KindHotKey,
+		Params: `{"registration": string}`,
+		Result: `{"output"?: string}`,
+		Why: "The analogue of registerHotKeyHandler: the console dispatches the registration's " +
+			"declared chord to this method. No exchange and no message are passed, because a " +
+			"hotkey fires with no selection behind it — the same shape as menu.invoke, reached " +
+			"from the keyboard instead of a menu. The plugin asked for the binding at the " +
+			"handshake; this is the host keeping its end.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",

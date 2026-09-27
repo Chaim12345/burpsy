@@ -158,6 +158,7 @@ var kindLabels = map[Kind]string{
 	KindMenu:          "Menu action",
 	KindEditorTab:     "Message-editor tab",
 	KindSessionAction: "Session-handling action",
+	KindHotKey:        "Hotkey",
 }
 
 var kindMontoya = map[Kind]string{
@@ -165,6 +166,7 @@ var kindMontoya = map[Kind]string{
 	KindMenu:          "registerMenuBarItem",
 	KindEditorTab:     "registerHttpRequestEditorProvider (read-only half only)",
 	KindSessionAction: "registerSessionHandlingAction",
+	KindHotKey:        "registerHotKeyHandler",
 }
 
 func kindViews() []KindView {
