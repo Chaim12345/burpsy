@@ -513,6 +513,14 @@ const DefaultLightAuditSamplePerKind uint32 = 20
 // still makes progress inside a normal run's time budget.
 const DefaultAutoBackoffMs uint32 = 2000
 
+// DefaultMaxItemsInProgress is the inherited admission cap on audit items in flight at once
+// (burpsy-react-ui-3ymo) — Burp's own shipped default for
+// scanner/audit_optimization/max_items_in_progress. It bounds the resident set of concurrently
+// dispatching items independently of ScanConfig.MaxConcurrency's worker-pool size: a session with
+// more workers than this cap still holds only this many items past admission at once, the rest
+// waiting rather than being refused.
+const DefaultMaxItemsInProgress uint32 = 10
+
 type AuditConfig struct {
 	// TimeBudget is the wall-clock ceiling for the whole run.
 	TimeBudget time.Duration
@@ -612,6 +620,35 @@ type AuditConfig struct {
 	// real choice (an engagement that must pay full price for every point, e.g. a
 	// compliance sweep, can say so) and must not read as unset.
 	LightAuditSamplePerKind OptUint32
+	// SkipIneffectiveChecks is Burp's
+	// `scanner/audit_optimization/skip_ineffective_checks`: drop an insertion point the engine
+	// cannot get an interesting response from, before its probes are sent.
+	//
+	// The key row for this used to read "not applied: this engine infers nothing about a
+	// check's effectiveness, so it has nothing to skip on", which was false — Burp's gate is
+	// PER INSERTION POINT, not per check (Zfhb.java:81-83, burpsy-react-ui-y4om), and the
+	// point-level seam the gate needs is the one the light-audit tier already occupies one
+	// loop away. The two are different decisions and both exist: the light tier asks whether
+	// this point's TYPE has behaved uniformly on this host across the run, this one asks
+	// whether THIS point responds to anything at all.
+	//
+	// Unset is the Burp default (on). Set-and-zero turns the gate off, which is a real choice
+	// for an engagement that must pay full price for every point — the same set/unset
+	// distinction every other OptUint32 knob on this struct uses.
+	SkipIneffectiveChecks OptUint32
+	// PointEffective is the oracle skip_ineffective_checks asks, supplied by the dispatcher
+	// (which owns the run's per-point ledger). It takes the CHECK as well as the point,
+	// because the prior is keyed per (check, kind, name, host): one check finding nothing
+	// at a place is not evidence about another check, and Burp's own gate is a per-message-
+	// class probe, so a prior shared across checks would gate away a check that had never
+	// looked. Not an operator-facing field: nil means no oracle and therefore no skips, which
+	// is what a context built outside a dispatched audit gets — the light tier's nil-safe
+	// reading, for the same reason.
+	PointEffective func(check string, p bcheck.InsertionPoint) bool
+	// CheckName is the row name the effectiveness prior is keyed by, set by the check that is
+	// enumerating (runInjection does it). Not operator-facing: a check's own name is not a
+	// setting, and an empty value is its own bucket rather than a shared one.
+	CheckName string
 	// AutoBackoffMs is the per-step delay the dispatch loop applies after a probe came back
 	// 429 or 503 (burpsy-react-ui-fkl8) — Burp's resource-pool auto_backoff, in the
 	// smallest honest shape: a counter and a sleep, not a resource-pool rewrite. Unset
@@ -619,6 +656,15 @@ type AuditConfig struct {
 	// a real choice (an operator who knows the target's limiter resets per-minute may
 	// prefer to let the request budget eat the 429s) and must not read as "unset".
 	AutoBackoffMs OptUint32
+	// MaxItemsInProgress is Burp's scanner/audit_optimization/max_items_in_progress
+	// (burpsy-react-ui-3ymo): the ceiling on audit items admitted past the Auditing gate at
+	// once, enforced independently of ScanConfig.MaxConcurrency's worker-pool size. An item
+	// over the cap waits for a slot rather than being refused — the cap governs how many are
+	// simultaneously in flight, not how many are ever audited. Unset inherits
+	// DefaultMaxItemsInProgress; set-and-zero is treated as the smallest real cap (1) rather
+	// than as "unbounded", because zero would admit nothing and every worker would block
+	// forever waiting for a slot that never opens.
+	MaxItemsInProgress OptUint32
 	// SkipAllTestsForParameters is Burp's
 	// scanner/ignored_insertion_points/skip_all_tests_for_parameters: parameters an operator
 	// exempted from testing entirely, by name. A named parameter's points are dropped from
@@ -764,6 +810,15 @@ func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
 	// harness, audit-item ledger and check context — because enumerateOptions is the one
 	// place all three read.
 	opts.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
+	// The per-point effectiveness gate (burpsy-react-ui-y4om) rides the same path. It is a
+	// FUNCTION rather than a value because the oracle needs the run's own state: a point
+	// counts as effective when the run has seen it answer something, which is a per-run
+	// fact no configuration can carry. Unset is Burp's default (on); set-and-zero turns the
+	// gate off. The predicate itself is installed by the dispatcher, which owns the run.
+	if cfg.PointEffective != nil {
+		opts.PointEffective = cfg.PointEffective
+	}
+	opts.CheckName = cfg.CheckName
 	return opts
 }
 
@@ -803,6 +858,18 @@ func (cfg AuditConfig) insertionKinds() []string {
 		return cfg.InsertionKinds
 	}
 	return DefaultProbeInsertionKinds
+}
+
+// resolvedMaxItemsInProgress is MaxItemsInProgress with the shipped default filled in and the
+// deadlock case guarded, following the same set/zero/unset reading as MaxItemsInProgress itself.
+func (cfg AuditConfig) resolvedMaxItemsInProgress() uint32 {
+	if !cfg.MaxItemsInProgress.Set {
+		return DefaultMaxItemsInProgress
+	}
+	if cfg.MaxItemsInProgress.Value == 0 {
+		return 1
+	}
+	return cfg.MaxItemsInProgress.Value
 }
 
 // DefaultAuditConfig is the shipped default.
@@ -915,6 +982,8 @@ type BuiltInConfig struct {
 	PauseSessionAtFailedItemPercentage    OptUint32
 	// MaximumAuditTimeMinutes is `scanner/audit_optimization/maximum_crawl_and_audit_time`.
 	MaximumAuditTimeMinutes OptUint32
+	// MaxItemsInProgress is `scanner/audit_optimization/max_items_in_progress`.
+	MaxItemsInProgress OptUint32
 
 	// The eight `scanner/insertion_point_types/*` keys. Each is one point class the run enumerates;
 	// true keeps it, false removes it from the engine default set. The mapping to bcheck kinds is
@@ -975,6 +1044,10 @@ type BuiltInConfig struct {
 	// Burp ships them as 30 and true.
 	MaxInsertionPointsPerRequest OptUint32
 	UseNestedInsertionPoints     OptUint32
+	// SkipIneffectiveChecks is `scanner/audit_optimization/skip_ineffective_checks` (y4om): the
+	// per-insertion-point effectiveness gate. Burp ships it true in 3 of its 29 configurations,
+	// so a loaded configuration has to be able to say either.
+	SkipIneffectiveChecks OptUint32
 
 	// UnrepresentableKeys records keys a parsed source named that this engine has no field for — the
 	// per-issue selection trio. Only ParseBurpConfig fills it; the six transcribed presets never do.
@@ -1070,6 +1143,15 @@ var builtInConfigKeys = []struct {
 		what:    "the wall-clock ceiling for the whole run, in minutes",
 		read:    func(c BuiltInConfig) OptUint32 { return c.MaximumAuditTimeMinutes },
 		apply:   func(a *AuditConfig, v uint32) { a.TimeBudget = time.Duration(v) * time.Minute },
+		applies: true,
+	},
+	{
+		name:    "max_items_in_progress",
+		burpKey: "scanner/audit_optimization/max_items_in_progress",
+		what:    "the ceiling on audit items admitted past the auditing gate at once; an item over the cap waits for a slot rather than being refused (Burp's shipped default is 10)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.MaxItemsInProgress },
+		apply:   func(a *AuditConfig, v uint32) { a.MaxItemsInProgress = SomeUint32(v) },
+		min:     1,
 		applies: true,
 	},
 
@@ -1328,7 +1410,28 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "skip_ineffective_checks",
 		burpKey: "scanner/audit_optimization/skip_ineffective_checks",
-		what:    "not applied: this engine infers nothing about a check's effectiveness, so it has nothing to skip on",
+		// Applied, and per INSERTION POINT rather than per check — which is what Burp does
+		// (Zfhb.java:81-83 gates the per-insertion-point dispatch filter on the point's own
+		// effectiveness, Zfhb.java:81-83 via Zcgg.Zw → point.Zp(new Zc3c())). The old row said
+		// the engine "infers nothing about a check's effectiveness", which was the wrong
+		// subject: the gate never asked about a check. What the model cannot recover from the
+		// tree is Burp's exact predicate, so the row says so rather than claiming a match —
+		// the decision is ported, the metric is ours (point_effectiveness.go).
+		what:    "applied per insertion point: a place this run has probed without a single answer is dropped from the next dispatch (the predicate is ours, not Burp's — see point_effectiveness.go)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.SkipIneffectiveChecks },
+		apply:   func(a *AuditConfig, v uint32) { a.SkipIneffectiveChecks = SomeUint32(v) },
+		applies: true,
+	},
+	{
+		name:    "parallel_crawl_and_audit",
+		burpKey: "scanner/audit_optimization/parallel_crawl_and_audit",
+		what:    "not applied: crawling and auditing are already separate operator-triggered actions here, not one task with a run-together/sequential switch to flip",
+		applies: false,
+	},
+	{
+		name:    "logging_enabled",
+		burpKey: "scanner/audit_optimization/logging_enabled",
+		what:    "not applied: this engine has no separate per-audit request log to switch; every probe an audit sends is already recorded in the traffic store",
 		applies: false,
 	},
 	{

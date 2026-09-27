@@ -57,7 +57,7 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
 		return offline, err
 	}
-	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
+	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
 		})
@@ -275,7 +275,7 @@ func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Findi
 	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures); isOffline {
 		return offline, err
 	}
-	res, err := runInjection(ctx, cc, cc.ProbeInsertionKinds(),
+	res, err := runInjection(ctx, cc, "FilePathTraversalCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
 		})

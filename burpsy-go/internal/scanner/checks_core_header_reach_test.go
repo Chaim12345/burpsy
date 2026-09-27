@@ -153,7 +153,7 @@ func TestACappedRowSaysHowManyPointsItDidNotProbe(t *testing.T) {
 	cc := NewCheckContext(s, ex, nil)
 
 	// runInjection is what every injection row uses, so its coverage is the row's coverage.
-	res, err := runInjection(context.Background(), cc, cc.ProbeInsertionKinds(),
+	res, err := runInjection(context.Background(), cc, "HeaderReach", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe { return nil })
 	if err != nil {
 		t.Fatalf("runInjection: %v", err)

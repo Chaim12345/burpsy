@@ -102,6 +102,18 @@ type CheckContext struct {
 	// as "the tier is off" — a unit test or a direct check call must not skip points on the
 	// strength of a run it never joined. Set by the dispatcher to the run's own state.
 	LightAudit *RunLightAudit
+	// PointEffectiveness is the run's per-insertion-point effectiveness ledger
+	// (burpsy-react-ui-y4om, Burp's skip_ineffective_checks). nil in a context built outside a
+	// dispatched audit, which the checks read as "the gate is off" — a unit test or a direct
+	// check call must not skip points on the strength of a run it never joined. Set by the
+	// dispatcher, the same way LightAudit is.
+	PointEffectiveness *pointEffectiveness
+	// PointEffectiveCheck names the check this context is enumerating FOR, because the
+	// effectiveness prior is keyed per check (y4om): a place one check found nothing at is
+	// still worth probing with another. Set by runInjection before the harness enumerates,
+	// because ProbeEnumerateOptions reads it there — naming the check on a COPY of the run
+	// configuration instead would arrive after the enumeration that needed it.
+	PointEffectiveCheck string
 }
 
 // RunLightAudit is what a check context sees of the audit run's light-audit tier: the
@@ -162,7 +174,14 @@ func (cc *CheckContext) ProbeEnumerateOptions() bcheck.EnumerateOptions {
 	if cc == nil {
 		return bcheck.EnumerateOptions{}
 	}
-	return cc.EnumerateOptions
+	opts := cc.EnumerateOptions
+	// The check asking is named here, not on a run-configuration copy: the harness enumerates
+	// through this method, and the effectiveness prior is keyed per check (y4om), so a name
+	// that arrived after this call would ask about a bucket nothing has ever written to.
+	if opts.CheckName == "" {
+		opts.CheckName = cc.PointEffectiveCheck
+	}
+	return opts
 }
 
 // ProbeInsertionKinds is the point classes an active probe may use: the audit configuration's when
@@ -224,6 +243,7 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 	// state on, so every check the run dispatches sees one prior. Absent (a context built
 	// outside an audit) reads nil, which the RunLightAudit methods treat as off.
 	cc.LightAudit = lightAuditFrom(ctx)
+	cc.PointEffectiveness = pointEffectivenessFrom(ctx)
 	return cc
 }
 
@@ -243,6 +263,26 @@ func lightAuditFrom(ctx context.Context) *RunLightAudit {
 	}
 	la, _ := ctx.Value(lightAuditKeyCtx{}).(*RunLightAudit)
 	return la
+}
+
+// pointEffectivenessKeyCtx is the context key for the run's per-point effectiveness ledger
+// (burpsy-react-ui-y4om). Unexported struct key so no other package can collide with it.
+type pointEffectivenessKeyCtx struct{}
+
+// withPointEffectiveness attaches the run's ledger to a dispatch context. A run with the gate
+// off attaches nothing, and the checks read the absent ledger as "no gate" — the same nil-safe
+// reading the light-audit tier uses, and the reason no enabled flag is needed here.
+func withPointEffectiveness(ctx context.Context, pe *pointEffectiveness) context.Context {
+	return context.WithValue(ctx, pointEffectivenessKeyCtx{}, pe)
+}
+
+// pointEffectivenessFrom reads it back; nil when absent.
+func pointEffectivenessFrom(ctx context.Context) *pointEffectiveness {
+	if ctx == nil {
+		return nil
+	}
+	pe, _ := ctx.Value(pointEffectivenessKeyCtx{}).(*pointEffectiveness)
+	return pe
 }
 
 // CheckRunner evaluates one admitted check unit. A refusal is represented by the

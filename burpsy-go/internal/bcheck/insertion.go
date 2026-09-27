@@ -351,6 +351,11 @@ const (
 	// skip_all_tests_for_parameters (Zwh1). Internal/scanner classifies queue rows by
 	// matching these literals, so a wording change here reclassifies rows there.
 	DeclinedSkippedParamWhat = "insertion points on operator-skipped parameters"
+	// DeclinedIneffectiveWhat names the places the effectiveness gate dropped
+	// (burpsy-react-ui-y4om). Distinct from DeclinedSkippedParamWhat — an operator's
+	// parameter skip list and an engine-judged ineffective point are two different
+	// decisions, and the operator reading the queue needs to know which one applies.
+	DeclinedIneffectiveWhat = "insertion points judged ineffective"
 )
 
 // EnumerateOptions is the per-run tuning an audit configuration carries into the
@@ -394,6 +399,32 @@ type EnumerateOptions struct {
 	// half-built: a list that exempted a parameter from checks this engine cannot
 	// name would be a control that silently tests more than it claims to skip.
 	SkipAllTestsForParameters []string
+	// PointEffective is the per-insertion-point effectiveness oracle behind Burp's
+	// `scanner/audit_optimization/skip_ineffective_checks` (burpsy-react-ui-y4om).
+	//
+	// Burp's gate is PER POINT, not per check: Zfhb.java:81-83 is
+	//
+	//	return var1 != null && (!this.Z_.Zip() || var1.Zh()) && …
+	//
+	// where Zip() is skip_ineffective_checks and Zh() is the point's own effectiveness probe
+	// (Zcgg.Zw → point.Zp(new Zc3c())). So a point Burp judges ineffective is dropped before
+	// its payloads are sent — the largest request saving the key buys, and the reason the key
+	// is worth modelling even though the predicate's own body is not recoverable from the tree
+	// (Zc3c is two trivial cases; the interestingness is computed inside the point).
+	//
+	// CheckName names the check this enumeration is for, because the effectiveness prior is
+	// keyed per check as well as per place: a parameter one check found nothing at is still
+	// worth probing with another (burpsy-react-ui-y4om). Empty outside an audit, which is its
+	// own bucket rather than a shared one.
+	CheckName string
+	//
+	// The check name is part of the question because the prior is keyed per check too: a
+	// parameter one check found nothing at is still worth probing with another (burpsy-react-ui-y4om).
+	//
+	// nil means the caller has no oracle, which is NOT the same as "every point is
+	// ineffective": a nil predicate skips nothing, so a unit test or a direct call cannot lose
+	// points on the strength of a run it never joined.
+	PointEffective func(check string, p InsertionPoint) bool
 }
 
 // Enumerate returns every insertion point of the requested kinds, capped at
@@ -740,6 +771,22 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 		})
 	}
 
+	// The per-point effectiveness gate (burpsy-react-ui-y4om, Burp's
+	// skip_ineffective_checks). Placed after the operator's skip list and before nested
+	// expansion for the same reason the cap sits there: a point the gate drops must not
+	// also spend budget on children, and an operator exemption must not read as an engine
+	// judgement. The count is returned as one Declined rather than one per point, matching how
+	// the cap and the operator list report — a run's coverage line names how many places it
+	// gave up, not each of them separately.
+	if dropped := dropIneffectivePoints(&out, opts.PointEffective, opts.CheckName); dropped > 0 {
+		declined = append(declined, Declined{
+			What: DeclinedIneffectiveWhat,
+			Reason: fmt.Sprintf("%d point(s) were not probed: the point did not respond to anything the "+
+				"effectiveness gate sends, so probing it again would only cost requests",
+				dropped),
+		})
+	}
+
 	nested := expandNested(out)
 	var droppedNested int
 	if opts.NoNested {
@@ -783,6 +830,26 @@ func skipNamedPoints(pts *[]InsertionPoint, names []string) int {
 	removed := 0
 	for _, p := range *pts {
 		if skip[strings.ToLower(p.Name)] {
+			removed++
+			continue
+		}
+		kept = append(kept, p)
+	}
+	*pts = kept
+	return removed
+}
+
+// dropIneffectivePoints removes every point the oracle judges ineffective, returning how many it
+// dropped. A nil oracle drops nothing: "the caller cannot judge" and "this point is
+// ineffective" are different facts, and only one of them is a reason to spend no requests here.
+func dropIneffectivePoints(pts *[]InsertionPoint, effective func(string, InsertionPoint) bool, check string) int {
+	if effective == nil || len(*pts) == 0 {
+		return 0
+	}
+	kept := (*pts)[:0]
+	removed := 0
+	for _, p := range *pts {
+		if !effective(check, p) {
 			removed++
 			continue
 		}

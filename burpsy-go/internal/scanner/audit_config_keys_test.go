@@ -21,8 +21,11 @@ import (
 var burpShippedScannerKeys = []string{
 	"scanner/audit_optimization/consolidate_passive_issues",
 	"scanner/audit_optimization/follow_redirections",
+	"scanner/audit_optimization/logging_enabled",
 	"scanner/audit_optimization/maintain_session",
+	"scanner/audit_optimization/max_items_in_progress",
 	"scanner/audit_optimization/maximum_crawl_and_audit_time",
+	"scanner/audit_optimization/parallel_crawl_and_audit",
 	"scanner/audit_optimization/scan_accuracy",
 	"scanner/audit_optimization/scan_speed",
 	"scanner/audit_optimization/skip_ineffective_checks",
@@ -97,6 +100,25 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 		t.Errorf("%d key(s) Burp ships have no row, so a configuration naming one cannot report it: %v", len(missing), missing)
 	}
 
+	// The reverse direction: a row this table carries but the shipped list does not name is exactly
+	// the defect that let max_items_in_progress, parallel_crawl_and_audit and logging_enabled go
+	// unrowed for as long as they did (burpsy-react-ui-3ymo). Scanner keys only: builtInConfigKeys
+	// also carries rows for other sections that burpShippedScannerKeys deliberately does not track.
+	pinned := make(map[string]bool, len(burpShippedScannerKeys))
+	for _, key := range burpShippedScannerKeys {
+		pinned[key] = true
+	}
+	var unpinned []string
+	for _, k := range builtInConfigKeys {
+		if strings.HasPrefix(k.burpKey, "scanner/") && !pinned[k.burpKey] {
+			unpinned = append(unpinned, k.burpKey)
+		}
+	}
+	if len(unpinned) > 0 {
+		t.Errorf("%d row(s) exist for keys the pinned shipped-key list does not name, so the list is no "+
+			"longer the true denominator every row is measured against: %v", len(unpinned), unpinned)
+	}
+
 	// The counts are pinned: promoting a key from reported to applied, or dropping a row, has to
 	// change this claim rather than quietly shifting what the project says it honours.
 	// The counts are pinned, and there are THREE of them: promoting a key from reported to
@@ -109,7 +131,10 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 36, 4, 15
+	const wantApplied, wantPartial, wantReported = 38, 4, 16
+	// 38/4/16 since burpsy-react-ui-y4om: skip_ineffective_checks moved from reported to applied,
+	// which is the one change this table exists to make visible. A key that stops reporting as
+	// unapplied without the count moving is the silent-coverage-change defect the pin prevents.
 	applied, partial, reported := 0, 0, 0
 	for _, k := range builtInConfigKeys {
 		switch {

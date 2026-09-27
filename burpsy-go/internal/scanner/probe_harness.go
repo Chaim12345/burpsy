@@ -260,6 +260,13 @@ type ProbeCoverage struct {
 	// same honesty at a different scope: skipped points are NOT tested and must never read
 	// as clean.
 	PointsSkippedRepetitive int
+	// PointsJudgedIneffective counts probes spent on points that answered nothing
+	// (burpsy-react-ui-y4om). Not a skip count — those points WERE probed, which is the
+	// difference the two tiers draw: the light tier declines a point on the behaviour of its
+	// type, this one records the point's own evidence. Reported so a run whose point count
+	// fell is legible: without it, points the gate later drops read as points that were never
+	// enumerated.
+	PointsJudgedIneffective int
 }
 
 // Coverage summarises a probe set for reporting.

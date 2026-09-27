@@ -127,6 +127,13 @@ func isNumericBurpKey(burpKey string) bool {
 	if burpKey == "scanner/misc_insertion_point_options/max_insertion_points_per_base_request" {
 		return true
 	}
+	// audit_optimization is the same shape and needs the same treatment: it carries minutes and
+	// counts BESIDE one boolean, so the prefix rule would read Burp's own
+	// `"skip_ineffective_checks": true` as a number and reject the whole file. Named rather than
+	// section-matched, exactly as above.
+	if burpKey == "scanner/audit_optimization/skip_ineffective_checks" {
+		return false
+	}
 	return strings.HasPrefix(burpKey, "scanner/error_handling/") ||
 		strings.HasPrefix(burpKey, "scanner/audit_optimization/")
 }
@@ -146,10 +153,14 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.PauseSessionAtFailedItemPercentage = val
 	case "maximum_audit_time_minutes":
 		c.MaximumAuditTimeMinutes = val
+	case "max_items_in_progress":
+		c.MaxItemsInProgress = val
 	case "max_insertion_points_per_base_request":
 		c.MaxInsertionPointsPerRequest = val
 	case "use_nested_insertion_points":
 		c.UseNestedInsertionPoints = val
+	case "skip_ineffective_checks":
+		c.SkipIneffectiveChecks = val
 	case "insert_url_params":
 		c.InsertURLParams = val
 	case "insert_body_params":

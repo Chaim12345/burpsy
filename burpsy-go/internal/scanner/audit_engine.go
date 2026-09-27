@@ -33,6 +33,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"go.uber.org/zap"
 )
@@ -536,6 +537,25 @@ type auditRun struct {
 	// requestsSent counts probes from items that have already finished. The current item's probes
 	// are counted separately, because its meter is still live.
 	requestsSent uint32
+
+	// admission is the MaxItemsInProgress gate (burpsy-react-ui-3ymo): a buffered channel used as a
+	// counting semaphore, sized to the run's resolved cap. Acquiring blocks the caller rather than
+	// refusing the item — an item over the cap is waiting to be admitted, not declined — and it is
+	// sized once at run construction because the cap is a property of this run, same as the deadline.
+	admission chan struct{}
+
+	// pointEffectiveness is the per-insertion-point effectiveness prior (y4om) and
+	// pointEffective is the oracle handed to the enumerator — nil when the gate is off,
+	// which is what makes "the operator turned it off" and "no run" indistinguishable
+	// to a check, and correctly so.
+	//
+	// On the run for the reason lightAudit is: a place is only worth judging once
+	// something has already probed it, so the evidence spans items. Per item it
+	// could never fire.
+	pointEffectiveness pointEffectiveness
+	// gateEnabled is the resolved SkipIneffectiveChecks state, kept so the item that builds
+	// the oracle does not have to re-read the unset-means-default rule.
+	gateEnabled bool
 }
 
 // newAuditRun starts a run. A zero or negative TimeBudget means "no time budget", not "no time":
@@ -550,11 +570,40 @@ func newAuditRun(cfg AuditConfig) *auditRun {
 	if ledger == nil {
 		ledger = NewAuditLedger()
 	}
-	r := &auditRun{cfg: cfg, ledger: ledger}
+	r := &auditRun{cfg: cfg, ledger: ledger, admission: make(chan struct{}, cfg.resolvedMaxItemsInProgress())}
+	// The per-point effectiveness prior (y4om) is the RUN's, beside the light-audit counter
+	// and for the same reason: it has to survive from one item to the next, because a place is
+	// only worth judging once something has already probed it. Per item it could never fire.
+	//
+	// Set-and-zero is the operator saying "pay full price for every point"; unset is Burp's
+	// shipped default, which is the gate on. A nil oracle skips nothing, which is also what a
+	// context built outside a dispatched audit gets.
+	// The gate's ledger is the run's; the ORACLE that reads it is made per item, because the
+	// host is a property of the exchange and not of the run. Set-and-zero is the operator saying
+	// "pay full price for every point"; unset is Burp's shipped default, which is the gate on.
+	r.gateEnabled = !cfg.SkipIneffectiveChecks.Set || cfg.SkipIneffectiveChecks.Value != 0
 	if cfg.TimeBudget > 0 {
 		r.deadline = time.Now().Add(cfg.TimeBudget)
 	}
 	return r
+}
+
+// acquireAdmission blocks until a slot under MaxItemsInProgress is free, or ctx ends first. False
+// means the wait was cancelled: no slot was taken, no state changed, and the caller must treat the
+// item as never claimed rather than as a failed check.
+func (r *auditRun) acquireAdmission(ctx context.Context) bool {
+	select {
+	case r.admission <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// releaseAdmission frees the slot acquireAdmission took. Called exactly once per successful
+// acquireAdmission, via defer, so a panic mid-check still returns the slot.
+func (r *auditRun) releaseAdmission() {
+	<-r.admission
 }
 
 // lightAuditKey identifies one insertion-point type on one host: the light-audit tier's
@@ -663,6 +712,12 @@ type AuditOutcome struct {
 	// points because 20 clean ones came before has still been considered, run, and
 	// answered; what it has not done is TEST the 22, and that is what this number says.
 	PointsSkippedRepetitive int `json:"points_skipped_repetitive"`
+	// PointsJudgedIneffective counts the probes the per-point effectiveness gate spent on places
+	// that answered nothing (burpsy-react-ui-y4om). Beside PointsSkippedRepetitive and not in
+	// Considered(): the gate drops places on the NEXT dispatch, so the probes this run already
+	// paid are neither a check disposition nor a skip — they are the run's own evidence, and a
+	// request count that fell without this number says nothing about why.
+	PointsJudgedIneffective int `json:"points_judged_ineffective"`
 	// RequestBudgetSpent counts checks not admitted because the outbound-request budget was spent.
 	RequestBudgetSpent int `json:"request_budget_spent"`
 	// UnitAbandoned counts checks not admitted because consecutive failures abandoned their dispatch
@@ -808,6 +863,10 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.PointsSkippedRepetitive > 0 {
 		fmt.Fprintf(&b, "; %d point(s) skipped as repetitive (light audit)", o.PointsSkippedRepetitive)
+	}
+	if o.PointsJudgedIneffective > 0 {
+		fmt.Fprintf(&b, "; %d probe(s) on places the target did not answer (ineffective-point gate)",
+			o.PointsJudgedIneffective)
 	}
 	if o.Unmeasurable > 0 {
 		fmt.Fprintf(&b, "; %d check(s) undecided, not clean", o.Unmeasurable)
@@ -1219,6 +1278,17 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// see a canary that surfaced in it.
 	s.ObserveStoredCanaries(ex)
 
+	// The MaxItemsInProgress gate (burpsy-react-ui-3ymo), claimed here rather than at the queue's
+	// own scheduling point: everything above this line is a cheap refusal check that allocates
+	// nothing, so an item that was going to be refused anyway (out of scope, no response, cancelled)
+	// never counts against the cap. A cap applied after this line would already have flipped the
+	// item to Auditing and started its meter, i.e. already have allocated the resources the cap
+	// exists to bound — so it must gate the claim itself, not something claimed a moment earlier.
+	if !run.acquireAdmission(ctx) {
+		return refuse(ex, ItemStateCancelled, "cancelled while waiting for an admission slot")
+	}
+	defer run.releaseAdmission()
+
 	o.State = ItemStateAuditing
 	meter := &probeMeter{}
 	// The run's configuration travels with the dispatch context so every check enumerates under the
@@ -1253,7 +1323,31 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		recordSkip:  func() {},
 		skipped:     &lightSkipped,
 	}
-	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), run.cfg)
+	// The run's configuration plus this item's oracle. Copied rather than shared because the
+	// oracle is a FUNCTION: sharing the AuditConfig would share the closure, and that closure
+	// is one item's binding of the run's prior to this item's host.
+	itemCfg := run.cfg
+	// Nil when the gate is off, which the checks read as "no gate" — the same nil-safe reading
+	// the light-audit tier uses, for the same reason.
+	//
+	// The oracle closes over the item's own host, so the same parameter on two hosts is two
+	// applications' handling and neither judges the other.
+	if run.gateEnabled {
+		host := ex.Host
+		prior := &run.pointEffectiveness
+		itemCfg.PointEffective = func(check string, pt bcheck.InsertionPoint) bool {
+			return prior.effective(check, pt, host)
+		}
+	}
+
+	// The effectiveness ledger rides the context ONLY when the gate is on. A run with
+	// skip_ineffective_checks set to zero must not even BUILD a prior: recording evidence
+	// nobody will act on is not free, and the count it produced would then be reported
+	// alongside a request count the gate never shaped.
+	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg)
+	if run.gateEnabled {
+		ictx = withPointEffectiveness(ictx, &run.pointEffectiveness)
+	}
 	breaker := newItemBreaker(run.cfg)
 
 	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
@@ -1267,7 +1361,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions())
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), itemCfg.insertionKinds(), itemCfg.enumerateOptions())
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 
@@ -1531,6 +1625,10 @@ dispatch:
 	// this number says how many points they did not test, and rides the outcome beside the
 	// rate-limiting count.
 	o.PointsSkippedRepetitive = int(lightHandle.SkippedPoints())
+	// The effectiveness gate's own accounting (y4om), folded the same way. Counted per ITEM
+	// and summed into the run's outcome, because the gate's evidence is spread across the
+	// items that probed and the items whose places it then dropped.
+	o.PointsJudgedIneffective += run.pointEffectiveness.Count()
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

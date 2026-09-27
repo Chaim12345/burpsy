@@ -244,6 +244,16 @@ const (
 	// engagement, the other is a global audit configuration, and the operator reading the
 	// queue needs to know which setting to change.
 	AuditItemPointSkippedOperator
+	// AuditItemPointSkippedIneffective is Burp's skip_ineffective_checks gate
+	// (burpsy-react-ui-y4om): the engine judged this place does not respond to anything, so no
+	// payload was sent here.
+	//
+	// A fourth "deliberate" status beside SkippedNested and SkippedOperator because the
+	// question the operator has to answer to change it is a different one in each case: a
+	// setting (this key), a run-config toggle (nesting), a named parameter (the skip list), or
+	// the engine's own reading of the target (this one — which no setting turns off except
+	// the key itself).
+	AuditItemPointSkippedIneffective
 )
 
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
@@ -271,6 +281,8 @@ func (s AuditItemPointStatus) Label() string {
 		return "Skipped as nested insertion points not enabled"
 	case AuditItemPointSkippedOperator:
 		return "Skipped by the operator's parameter skip list"
+	case AuditItemPointSkippedIneffective:
+		return "Skipped as ineffective (the target did not respond here)"
 	}
 	return "Unknown"
 }
@@ -279,7 +291,8 @@ func (s AuditItemPointStatus) Label() string {
 // statuses are properties of the place; the rest describe what the audit did with it.
 func (s AuditItemPointStatus) IsSkip() bool {
 	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined ||
-		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator
+		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator ||
+		s == AuditItemPointSkippedIneffective
 }
 
 // MarshalJSON writes the label rather than the ordinal, matching DispatchScope and Disposition — the
@@ -541,7 +554,13 @@ func (l *AuditItemLedger) Begin(id core.ExchangeID, ex *core.Exchange, cfg Audit
 		switch {
 		case p.Status == AuditItemPointSkippedLimit:
 			row.PointsSkipped++
-		case p.Status == AuditItemPointSkippedDeclined:
+		case p.Status == AuditItemPointSkippedDeclined, p.Status == AuditItemPointSkippedIneffective:
+			// Both are places the enumerator declined to build a point for, so both belong in
+			// the same bucket: the row's "places" total, which is the honest denominator for
+			// "how much of this request could not be tested at all". The effectiveness gate
+			// (y4om) joins the unbuildable set because from the queue's point of view the two
+			// are the same fact — no point was made for this place — while the two statuses
+			// keep the two reasons apart for an operator who has to change one of them.
 			row.PointsPlaces++
 		default:
 			row.PointsEnumerated++
@@ -879,6 +898,8 @@ func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) (
 			status = AuditItemPointSkippedNested
 		case strings.HasPrefix(d.What, bcheck.DeclinedSkippedParamWhat):
 			status = AuditItemPointSkippedOperator
+		case strings.HasPrefix(d.What, bcheck.DeclinedIneffectiveWhat):
+			status = AuditItemPointSkippedIneffective
 		}
 		out = append(out, AuditItemPoint{Name: d.What, Status: status, Detail: d.Reason})
 	}
