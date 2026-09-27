@@ -1247,7 +1247,12 @@ removes only its scheme; armless rules match both), `scope_restore_test.go`
 
 ## Scanner-logic research declines (2026-09-17)
 
-The Burp scanner-decision-layer research (`/tmp/smartscan-report.md`, §1–§7) ported
+The Burp scanner-decision-layer research (2026-09-17 pass; the original
+`/tmp/smartscan-report.md` is gone — the findings were re-derived from the Burp tree on
+2026-09-27 and the load-bearing citations are now `Zfhb.java:81-83` (skip_ineffective),
+`Zeze.java:17` (queue dedup), `Zm58.java:88-98` (admission cap), the
+`project_options.resource_pools.*` keys (`map_root.tsv:17469-17504,23192-23213`) and
+`Zrwf.java:74-84` (audit bus)) ported
 the gaps that were worth porting and, per the honest-counting rule, records what it
 deliberately did **not** port and why. Each entry names the Burp evidence, so a
 future reader can re-open the decision rather than re-derive it.

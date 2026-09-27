@@ -100,7 +100,10 @@
   --editor-match-selected: rgb(255 168 0 / 65%);
 }
 
-/* --- dark: Burp's Darcula palette --------------------------------------- */
+/* --- dark: burpsy's own dark palette. NOT Burp's Darcula: grep -ri darcula /root/burp-re/out
+   returns 0 hits (the only org.jetbrains matches there are Vineflower decompiler stack
+   traces), and Burp's own dark editor palette is out/theme/resources/DarkTheme.json:264-313
+   (headerName #D1E8F9, literalString #93C763) — a different palette from a different vendor. */
 [data-theme="dark"] {
   color-scheme: dark;
 
@@ -121,16 +124,14 @@
      Found by the e2e a11y suite's first real run (axe-core). */
   --editor-active-line: rgb(255 102 51 / 2%);
   --editor-selection: #214283;
-  /* Syntax palette for the message viewer. Darcula's own purple (#9876aa) and green (#6a8759)
-     measure 3.71 and 3.52 against the editor background — below AA, on the request and response
-     bytes, which is the surface this whole tool exists to let someone read. Lifted within the same
-     hue family so the editor still reads as Darcula: 4.99 and 6.09. */
+  /* Syntax palette for the message viewer. Not Darcula (see the block header): these are
+     burpsy's own choices, lifted to real AA margin against --editor-bg (#2b2b2b) — the
+     measured values are in the comment each family carries. */
   --editor-start: #ff8659;
   --editor-header-name: #b08cc4;
   --editor-header-value: #8fb573;
   --editor-body: #a9b7c6;
-  /* Body tokenisation (6fq), Darcula's own palette lifted past AA the same way the header
-     colours above were: every value below measures >= 4.5 against --editor-bg (#2b2b2b). */
+  /* Body tokenisation (6fq): every value below measures >= 4.5 against --editor-bg (#2b2b2b). */
   --editor-json-key: #f5a4a4;
   --editor-json-string: #8fb573;
   --editor-json-number: #9ebeff;

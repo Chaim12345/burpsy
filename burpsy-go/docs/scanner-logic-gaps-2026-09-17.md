@@ -100,8 +100,20 @@ behavioral light-audit tier. The pieces, with citations:
    `:785-843`). These are judgment calls about what an app actually reads.
 
 9. **Behavioral light-audit tier (the smartest piece).** Status strings recovered for
-   `burp.Zq5` (the per-insertion-point audit status enum — decompilation GAP: no `Zq5.java` in
-   clean/root and no `burp/Zq5.class` in burp_only.jar, so the tsv is the only evidence; note the
+   `burp.Zq5` (the per-insertion-point audit status enum — **UPDATE 2026-09-27: now
+   decompiled**, `out/clean/jdt_src/burp/Zq5.java` (124 lines, via the CFR worklist run that
+   decompiled all 39 want-not-got classes; 0 failure markers). The enum's structure is
+   code-proven: 15 constants `PENDING, AUDITED, LIGHT_AUDITED, SKIPPED_PARAMETER_TYPE,
+   LIMIT_EXCEEDED, FAILED_TO_SCAN, AUDITING, LIGHT_AUDITING, NOT_LIGHT_AUDITED,
+   NO_PARAMETER_MOVEMENT, SKIPPED_INSERTION_POINT_TYPE, NO_INSERTION_POINT_CHECKS,
+   NO_NESTING_ALLOWED, CANCELLED, SKIPPED_BY_SELECTION`, and two label builders:
+   `Zd(Zuzp)` (`Zq5.java:48-62`) formats `NO_PARAMETER_MOVEMENT` with **two** insertion-point
+   types (a from→to pair: `this.Zs(var1.Z_()), this.Zs(var1.Zr())`) and
+   `SKIPPED_INSERTION_POINT_TYPE` with one (`Zhs3.Zd(var1).Zr()`), so the skip label *names
+   the parameter type*; `Zs(Zbg8)` (`Zq5.java:65-85`) is the complete IPType→English table
+   (URL parameters, body parameters, cookies, HTTP headers, XML parameters, XML attributes,
+   multipart parameter attributes, URL path folders, URL path filenames, JSON parameters,
+   parameter names (ordinals 12-14), the entire body, manual insertion points). The
    distinct `burp.agentic.Zq5` is an unrelated confidence/severity ordinal table): "Light-audited"
    (:283,:287), "Light-auditing" (:286,:289,:331,:333), "Burp Scanner is sending a small number of
    requests to this insertion point, to determine whether it behaves similarly to other insertion
