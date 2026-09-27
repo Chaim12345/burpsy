@@ -186,11 +186,17 @@ const (
 	// things they can see and act on, so the crawl must be able to tell them apart
 	// (burpsy-react-ui-qjtx).
 	SkipSitemapUnparsed
+	// SkipJSONUnparsed means a response that looked like JSON — by its content type or by its own
+	// opening brace — could not be decoded as one, so the locations it might name were not
+	// followed. Distinct from SkipNotHTML for the same reason SkipSitemapUnparsed is: "this is
+	// not JSON" and "this is JSON I could not read" have different remedies, and folding them
+	// together is the defect mz1n is about (burpsy-react-ui-mz1n).
+	SkipJSONUnparsed
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [31]Skip{
+var SkipAll = [32]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -222,6 +228,7 @@ var SkipAll = [31]Skip{
 	SkipReloginFailed,
 	SkipRenderUnavailable,
 	SkipSitemapUnparsed,
+	SkipJSONUnparsed,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -291,6 +298,8 @@ func (s Skip) slot() int {
 		return 29
 	case SkipSitemapUnparsed:
 		return 30
+	case SkipJSONUnparsed:
+		return 31
 	}
 	panic("unknown Skip")
 }
@@ -360,6 +369,8 @@ func (s Skip) String() string {
 		return "render-unavailable"
 	case SkipSitemapUnparsed:
 		return "sitemap-unparsed"
+	case SkipJSONUnparsed:
+		return "json-unparsed"
 	}
 	return "unknown"
 }
@@ -425,6 +436,8 @@ func (s Skip) Explanation() string {
 		return "the response is a login page or a template that flipped from 200, so its links were not followed: the session was gone and its links are not the application"
 	case SkipReloginFailed:
 		return "session expiry was detected and the login macro could not restore the session, so the request was not retried with a fresh cookie"
+	case SkipJSONUnparsed:
+		return "the response looked like JSON — by its content type or its opening brace — and could not be parsed as one, so any locations it names were not followed"
 	case SkipSitemapUnparsed:
 		return "the response looked like a sitemap — by its content type or the element names in its body — and could not be parsed as one, so the URLs it publishes were not followed"
 	case SkipRenderUnavailable:
@@ -504,7 +517,7 @@ func (s Skip) Category() SkipCategory {
 		return CategoryDuplicate
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
 		return CategoryLimit
-	case SkipNotHTML, SkipSitemapUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
+	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
 		SkipRenderUnavailable:
 		return CategoryResponse

@@ -560,6 +560,12 @@ type Report struct {
 	// says nothing about where they came from (burpsy-react-ui-qjtx).
 	SitemapsParsed        int `json:"sitemaps_parsed"`
 	SitemapLocationsFound int `json:"sitemap_locations_found"`
+	// JSONDocumentsRead counts JSON bodies scanned for locations, and JSONLocationsFound the
+	// locations they named (burpsy-react-ui-mz1n). Reported together for the same reason the
+	// sitemap pair is: documents with no locations and locations with no documents are
+	// different facts about a target, and one number cannot carry both.
+	JSONDocumentsRead  int `json:"json_documents_read"`
+	JSONLocationsFound int `json:"json_locations_found"`
 	// SitemapIndexesFollowed counts <sitemapindex> documents whose entries were themselves sitemaps.
 	// A large site publishes a handful of sitemaps pointing at the rest, so this is the difference
 	// between "read one file" and "read the list the operator published".
@@ -1432,6 +1438,20 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	// A JSON document that names its own endpoints (burpsy-react-ui-mz1n), branch (b) of the
+	// same shape as the sitemap sibling above: a SIBLING of the HTML gate, not a relaxation of
+	// it. Burp reads non-HTML for locations (its API / DISCOVERED_CONTENT action kinds), and a
+	// documented API reachable from the crawled HTML contributed nothing here before this.
+	//
+	// The JSON reader is deliberately narrow: it takes URLs, slash-rooted paths, and relative
+	// references only under a key that names a link. A bare word is not a path — guessing that
+	// an arbitrary string is one is how a crawler invents URLs nobody observed.
+	if LooksLikeJSON(contentType, body) {
+		c.consumeJSON(item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
 	if !isHTML(contentType) {
 		fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 		c.recordLocation(fetch.Fingerprint, item.url.String(), &fetch, rep)
@@ -1708,6 +1728,41 @@ func (c *Crawler) consumeSitemap(item frontierItem, contentType string, body []b
 			rep.SitemapIndexesFollowed++
 		}
 		c.admit(discoveredLink{raw: e.Loc, tag: "sitemap", text: e.LastMod}, item.url, item.depth+1, rep, lim)
+	}
+}
+
+// consumeJSON reads one JSON document and admits the locations it names.
+//
+// Every location enters as a DISCOVERED LINK rather than a seed, going through the same gates a
+// sitemap's <loc> does — destructiveness, scope, the crawl-scope query, depth, dedup, capacity —
+// because a URL a target published is exactly as untrusted as one it linked from a page. A JSON
+// body naming /admin/purge-all must not become a privileged request because the API documented it.
+//
+// A document that parses but names nothing records NO skip: SkipNotHTML used to fire for it and
+// told an operator nothing true, since the response was read and simply had no locations in it.
+// A document that fails to parse records SkipJSONUnparsed, whose remedy is different from
+// "this is not HTML" (burpsy-react-ui-mz1n).
+func (c *Crawler) consumeJSON(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	locs, failure := ParseJSONLocations(body)
+	if failure != "" {
+		// Only a body that CLAIMED to be JSON and then failed gets the distinct reason. A
+		// response whose content type is JSON but whose body is HTML at an /api path is a
+		// target quirk, and reporting it as a parse failure would be noise; the branch only
+		// runs when LooksLikeJSON already said the body announces itself as one, so a failure
+		// here is real.
+		c.skips.record(SkipRecord{
+			Reason: SkipJSONUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: failure,
+		})
+		rep.JSONDocumentsRead++
+		return
+	}
+	rep.JSONDocumentsRead++
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	for _, loc := range locs {
+		rep.JSONLocationsFound++
+		c.admit(discoveredLink{raw: loc.Raw, tag: "json:" + loc.Key}, item.url, item.depth+1, rep, lim)
 	}
 }
 
