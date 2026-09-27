@@ -23,8 +23,13 @@ type interceptRuleSpec struct {
 	Field    string `json:"field"`
 	Category string `json:"category"`
 	Match    string `json:"string_match"`
-	Enabled  bool   `json:"enabled"`
-	Comment  string `json:"comment"`
+	// Member is the header or cookie NAME a header/cookie rule matches against (ajpn):
+	// "Cookie: session" on the request-cookie rule names the Cookie member and matches its
+	// value against Match. Empty for every other field, and refused non-empty for them —
+	// a member on a host rule is a rule that cannot mean anything.
+	Member  string `json:"member,omitempty"`
+	Enabled bool   `json:"enabled"`
+	Comment string `json:"comment"`
 	// Action is "hold" (Do intercept) or "pass" (Don't intercept), Burp's per-rule
 	// action. Absent means hold, so every list written before actions existed reads back
 	// unchanged.
@@ -354,6 +359,16 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 		if err != nil {
 			return nil, err
 		}
+		if sp.Member != "" && !field.IsMember() {
+			// A member name on a field that is not a list (host, path, body, …) is a rule
+			// that cannot mean anything: the engine would silently ignore the member and
+			// match the field's whole value, which is a match the operator never asked
+			// for. Refused here, at the wire, so the console's rule editor can say why.
+			return nil, fmt.Errorf("rule field %q does not name a list, so it cannot carry a member name (use the member only on request/response header or cookie rules)", sp.Field)
+		}
+		if sp.Member == "" && field.IsMember() {
+			return nil, fmt.Errorf("rule field %q names a list and needs a member: the header or cookie name to match against", sp.Field)
+		}
 		cat := intercept.CategoryRegex
 		if sp.Category == "literal" {
 			cat = intercept.CategoryLiteral
@@ -367,6 +382,7 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 			Field:       field,
 			Category:    cat,
 			StringMatch: sp.Match,
+			Member:      sp.Member,
 			Enabled:     sp.Enabled,
 			Comment:     sp.Comment,
 			Action:      action,
@@ -386,6 +402,7 @@ func rulesToSpecs(rules []*intercept.Rule) []interceptRuleSpec {
 			Field:    r.Field.String(),
 			Category: cat,
 			Match:    r.StringMatch,
+			Member:   r.Member,
 			Enabled:  r.Enabled,
 			Comment:  r.Comment,
 			Action:   r.Action.String(),

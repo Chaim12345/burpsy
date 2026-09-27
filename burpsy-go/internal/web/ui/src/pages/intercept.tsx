@@ -50,12 +50,18 @@ import {
 import { VirtualTable, type Column } from "../ui/table";
 import type { MenuGroup } from "../ui/menu";
 
-// Burp's rule dialog offers 18 match types; these are eleven (burpsy-react-ui-1cuc). `requests`
-// marks the fields a REQUEST list can supply, because a request has no status code, no content type
-// and no response body — a rule naming one of those there can never match, and offering it
-// unlabelled would be a control that looks configured and is dead weight. The server agrees
+// Burp's rule dialog offers 18 match types; these are fifteen (burpsy-react-ui-1cuc + ajpn).
+// `requests` marks the fields a REQUEST list can supply, because a request has no status code, no
+// content type and no response body — a rule naming one of those there can never match, and offering
+// it unlabelled would be a control that looks configured and is dead weight. The server agrees
 // (intercept.Direction.HasField), so the two cannot drift into disagreeing about what a list can see.
-const FIELDS: { value: InterceptRuleSpec["field"]; label: string; requests?: false }[] = [
+//
+// `member` marks the four fields that name a MEMBER of a list rather than a whole value: a header
+// or a cookie. They are the same split Burp uses — the field says which list (Zpkq = the header
+// list, Zpky/Zpkc = a cookie's name/value) and a second control says which one (Zero.java:16-62) —
+// so the rule editor grows a member input exactly when one of these is chosen, and a rule that
+// names no member matches nothing rather than matching the first header it finds.
+const FIELDS: { value: InterceptRuleSpec["field"]; label: string; requests?: false; member?: string }[] = [
  { value: "host", label: "Host" },
  { value: "path", label: "Path" },
  { value: "extension", label: "File extension" },
@@ -67,7 +73,16 @@ const FIELDS: { value: InterceptRuleSpec["field"]; label: string; requests?: fal
  { value: "content_type", label: "Content type", requests: false },
  { value: "request_body", label: "Request body" },
  { value: "response_body", label: "Response body", requests: false },
+ { value: "request_header", label: "Request header", member: "Header name" },
+ { value: "response_header", label: "Response header", requests: false, member: "Header name" },
+ { value: "request_cookie", label: "Request cookie", member: "Cookie name" },
+ { value: "response_cookie", label: "Response cookie", requests: false, member: "Cookie name" },
 ];
+
+/** The member-control placeholder for a field, or undefined when the field has no members. */
+function memberLabelOf(field: InterceptRuleSpec["field"]): string | undefined {
+ return FIELDS.find((f) => f.value === field)?.member;
+}
 
 const CATEGORIES: { value: InterceptRuleSpec["category"]; label: string }[] = [
  { value: "regex", label: "Regex" },
@@ -301,20 +316,58 @@ function RuleEditor({ direction }: { direction: InterceptDirection }): JSX.Eleme
            <Select
             aria-label={`Field for rule ${index + 1}`}
             value={rule.field}
-            onChange={(event) =>
+            onChange={(event) => {
+             const field = event.target.value as InterceptRuleSpec["field"];
+             // The member is cleared when the new field has none: a member name on a field that
+             // cannot carry one is refused by the server (intercept.NewMemberRule), and a UI that
+             // can produce a refused rule is a UI that hands the operator a 400 with no clue why.
              update((list) =>
-              list.map((r, i) => (i === index ? { ...r, field: event.target.value as InterceptRuleSpec["field"] } : r)),
-             )
-            }
+              list.map((r, i) =>
+               i === index
+                ? memberLabelOf(field) === undefined
+                  ? { ...r, field, member: undefined }
+                  : { ...r, field }
+                : r,
+              ),
+             );
+            }}
            >
             {FIELDS.map((f) => (
-             <option key={f.value} value={f.value}>
+             // Every field is listed, and the ones this direction cannot supply are DISABLED with
+             // the reason rather than hidden: a saved rule naming one is dead weight the operator
+             // has to be able to see and change, and a hidden option would render its value blank
+             // — which reads as a corrupt rule rather than as one the server will never match.
+             <option
+              key={f.value}
+              value={f.value}
+              disabled={f.requests === false && direction === "requests"}
+              title={
+               f.requests === false && direction === "requests"
+                ? `A request carries no ${f.label.toLowerCase()}, so this rule could never match here`
+                : undefined
+              }
+             >
               {f.label}
              </option>
             ))}
            </Select>
           </td>
           <td>
+           {/* The member control, shown exactly when the chosen field names a member of a list
+               (ajpn). Burp's dialog has the same shape — a match type plus the thing being
+               matched — and a header rule with no header named matches nothing, which is what
+               the empty state says rather than leaving the operator to wonder. */}
+           {memberLabelOf(rule.field) ? (
+            <Input
+             aria-label={`${memberLabelOf(rule.field)} for rule ${index + 1}`}
+             value={rule.member ?? ""}
+             placeholder={memberLabelOf(rule.field)}
+             style={{ marginBottom: 4 }}
+             onChange={(event) =>
+              update((list) => list.map((r, i) => (i === index ? { ...r, member: event.target.value } : r)))
+             }
+            />
+           ) : null}
            <Input
             aria-label={`Match pattern for rule ${index + 1}`}
             value={rule.string_match}

@@ -102,7 +102,34 @@ const (
 	FieldProtocol
 	FieldRequestBody
 	FieldResponseBody
+	// The four below are Burp's cookie/header match types (ajpn): a rule cannot name an
+	// individual header or a cookie without them. Burp offers them as four ordinals (Zpkq = the
+	// header list, request and response; Zpky = the cookie NAME, request and response; Zpkc =
+	// the cookie VALUE, request and response) — Zero.java:16-62, an 18-case factory. burpsy
+	// models them as four Fields with the NAME carried in the rule's own text, which is what
+	// "Cookie: session" reads as: the field says which list, the rule says which member.
+	//
+	// Appended, never inserted: a Field is a wire value, and an operator's saved rule names
+	// one. Re-numbering the existing eleven would silently re-point every rule already written.
+	FieldRequestHeader
+	FieldResponseHeader
+	FieldRequestCookie
+	FieldResponseCookie
 )
+
+// IsMember reports whether a field names a MEMBER of a list rather than a whole message value:
+// a named header or a named cookie (ajpn). Only those can carry a Member.
+//
+// Exported because the wire layer validates with it (a member on a host rule is refused rather
+// than stored and ignored) and because the console's field table mirrors the same split — one
+// definition, so the two cannot come to different conclusions about which fields have members.
+func (f Field) IsMember() bool {
+	switch f {
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		return true
+	}
+	return false
+}
 
 func (f Field) String() string {
 	switch f {
@@ -126,6 +153,14 @@ func (f Field) String() string {
 		return "request_body"
 	case FieldResponseBody:
 		return "response_body"
+	case FieldRequestHeader:
+		return "request_header"
+	case FieldResponseHeader:
+		return "response_header"
+	case FieldRequestCookie:
+		return "request_cookie"
+	case FieldResponseCookie:
+		return "response_cookie"
 	default:
 		return "content_type"
 	}
@@ -156,6 +191,14 @@ func ParseField(s string) (Field, error) {
 		return FieldRequestBody, nil
 	case "response_body":
 		return FieldResponseBody, nil
+	case "request_header":
+		return FieldRequestHeader, nil
+	case "response_header":
+		return FieldResponseHeader, nil
+	case "request_cookie":
+		return FieldRequestCookie, nil
+	case "response_cookie":
+		return FieldResponseCookie, nil
 	default:
 		return FieldHost, fmt.Errorf("unknown match field %q", s)
 	}
@@ -259,6 +302,12 @@ type Rule struct {
 	// has nothing above it — there is nothing to combine with — so setting AND on the top rule is
 	// ignored rather than an error, which is what an operator who typed it expects.
 	Op RuleOp
+	// Member is the header or cookie NAME a member field matches against (ajpn): the field says
+	// which list, this says which member of it. Empty for every non-member field, and a member
+	// field with an empty Member matches nothing — a rule that names no header has no header to
+	// read, and the alternative (match the first one) would report a match the operator never
+	// asked for. The name folds, like every HTTP field name and cookie name.
+	Member string
 
 	re *regexp.Regexp
 }
@@ -266,8 +315,35 @@ type Rule struct {
 // NewRule compiles a rule, refusing a malformed regex (matching Burp, which
 // reports a bad pattern when the list is saved rather than when it fires).
 func NewRule(field Field, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
+	return NewMemberRule(field, "", cat, match, enabled, comment, action)
+}
+
+// newRule compiles a Rule literal, validating it the same way NewMemberRule does. It is the
+// test-facing constructor: a test that writes the struct directly would otherwise skip the
+// member validation and could assert a rule the wire layer refuses.
+func newRule(r Rule) (*Rule, error) {
+	return NewMemberRule(r.Field, r.Member, r.Category, r.StringMatch, r.Enabled, r.Comment, r.Action)
+}
+
+// NewMemberRule is NewRule with the member name a header/cookie rule matches against (ajpn).
+//
+// A separate constructor rather than a parameter on NewRule: the member is meaningless for the
+// other eleven fields, and a caller that has to pass "" for eleven of them is a caller that can
+// pass the name on the wrong one. Empty is the correct value for every field that is not a member
+// of a list, and it is what NewRule supplies.
+func NewMemberRule(field Field, member string, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
+	if member != "" && !field.IsMember() {
+		return nil, fmt.Errorf("%s does not name a member, so it cannot carry the member %q", field, member)
+	}
+	if member == "" && field.IsMember() {
+		// A member field with no member has nothing to look up. Refused here as well as at the
+		// wire, because the engine is reachable from more than one caller and a rule that
+		// matches nothing while looking configured is the failure this field exists to avoid.
+		return nil, fmt.Errorf("%s names a list, so a rule on it needs the member name to match against", field)
+	}
 	r := &Rule{
 		Field:       field,
+		Member:      member,
 		Category:    cat,
 		StringMatch: match,
 		Enabled:     enabled,
@@ -291,7 +367,7 @@ func (r *Rule) Match(m *Message) bool {
 	if !r.Enabled || r.StringMatch == "" {
 		return false
 	}
-	value := m.FieldValue(r.Field)
+	value := r.value(m)
 	if value == "" {
 		return false
 	}
@@ -299,6 +375,20 @@ func (r *Rule) Match(m *Message) bool {
 		return strings.Contains(strings.ToLower(value), strings.ToLower(r.StringMatch))
 	}
 	return r.re.MatchString(value)
+}
+
+// value reads the rule's field from the message, dispatching on whether the field names a MEMBER
+// of a list (a header, a cookie) rather than a whole value (ajpn).
+//
+// The split is the rule's own: a member field has no single value to return, so the name travels
+// with the rule and the lookup happens here rather than in FieldValue — which has no rule to read
+// a name from and is also what the console renders a field's current value with.
+func (r *Rule) value(m *Message) string {
+	switch r.Field {
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		return m.MemberValue(r.Field, r.Member)
+	}
+	return m.FieldValue(r.Field)
 }
 
 // List is one direction's rule set plus its master switch.
@@ -358,9 +448,9 @@ type Message struct {
 // method and url are supplied by BOTH, so a rule on those works in either list.
 func (d Direction) HasField(f Field) bool {
 	switch f {
-	case FieldStatusCode, FieldContentType, FieldResponseBody:
+	case FieldStatusCode, FieldContentType, FieldResponseBody, FieldResponseHeader, FieldResponseCookie:
 		return d == DirectionResponse
-	case FieldRequestBody:
+	case FieldRequestBody, FieldRequestHeader, FieldRequestCookie:
 		return d == DirectionRequest
 	case FieldHost, FieldPath, FieldExtension, FieldMethod, FieldURL, FieldPort, FieldProtocol:
 		return true
@@ -412,9 +502,156 @@ func (m *Message) FieldValue(f Field) string {
 		return bodyOf(m.Raw, DirectionRequest)
 	case FieldResponseBody:
 		return bodyOf(m.Raw, DirectionResponse)
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		// A member field has no single value: "the request header" is a list, and which
+		// member a rule means is the RULE's business, not the message's. So the value is the
+		// whole head (so a rule that names no member can still be seen to match nothing rather
+		// than silently matching the first header), and Rule.Match calls MemberValue for the
+		// named lookup. See MemberValue.
+		return headOf(m.Raw, headerSide(f))
 	default:
 		return ""
 	}
+}
+
+// MemberValue returns the named member's value for a header or cookie field (ajpn), or "" when the
+// message does not carry it.
+//
+// The name folds (RFC 9110 §5.1): "SESSION" and "session" are the same cookie, and an operator who
+// typed the wrong case must not get a rule that silently matches nothing. An empty member returns
+// "" rather than the first member found — a rule that names no member has nothing to look up, and
+// the caller reports that as a dead rule rather than guessing which one was meant.
+func (m *Message) MemberValue(f Field, member string) string {
+	if !m.Direction.HasField(f) || member == "" {
+		return ""
+	}
+	switch f {
+	case FieldRequestHeader, FieldResponseHeader:
+		return headerValueOf(m.Raw, headerSide(f), member)
+	case FieldRequestCookie, FieldResponseCookie:
+		return cookieValueOf(m.Raw, cookieSide(f), member)
+	default:
+		return ""
+	}
+}
+
+// headerSide and cookieSide name which end of the exchange a member lookup reads. Both are the
+// direction's own split: a request header comes from the request bytes and a response header from
+// the response bytes, and the engine already knows which is which.
+func headerSide(f Field) Direction {
+	if f == FieldResponseHeader {
+		return DirectionResponse
+	}
+	return DirectionRequest
+}
+
+func cookieSide(f Field) Direction {
+	if f == FieldResponseCookie {
+		return DirectionResponse
+	}
+	return DirectionRequest
+}
+
+// headOf returns the header block of a raw HTTP message in the wanted direction, or "".
+//
+// The head is the region before the blank line that ends it, which is the same boundary
+// splitRawMessage finds — reusing it rather than a second splitter, because two splitters
+// eventually disagree about where a body begins.
+func headOf(raw []byte, want Direction) string {
+	dir, _, ok := splitRawMessage(raw)
+	if !ok || dir != want {
+		return ""
+	}
+	headEnd := indexCRLFCRLF(raw)
+	if headEnd < 0 {
+		headEnd = indexLFLF(raw)
+	}
+	if headEnd < 0 {
+		return string(raw)
+	}
+	return string(raw[:headEnd])
+}
+
+// headerLines splits a head into its header lines, dropping the start line. Folded
+// continuation lines (a line starting with SP or HTAB) are joined onto the header above them,
+// because a value split across lines is one header and a rule reading it must see the whole
+// value — Burp's own parser does the same.
+func headerLines(head string) []string {
+	lines := strings.Split(strings.ReplaceAll(head, "\r\n", "\n"), "\n")
+	if len(lines) <= 1 {
+		return nil
+	}
+	out := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		if (line[0] == ' ' || line[0] == '\t') && len(out) > 0 {
+			out[len(out)-1] += " " + strings.TrimSpace(line)
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// headerFromHead returns the named header's value from a head, or "" when the message does not
+// carry it. The name folds (RFC 9110 §5.1); first match wins.
+func headerFromHead(head, name string) string {
+	for _, line := range headerLines(head) {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// headerValueOf returns the named header's value from raw, or "".
+//
+// First match wins, and the search stops at the end of the head: a header name appearing in a
+// body is not a header, and a rule matching it would be a false positive that only shows up on
+// a body that happens to contain the name.
+func headerValueOf(raw []byte, want Direction, name string) string {
+	return headerFromHead(headOf(raw, want), name)
+}
+
+// cookieValueOf returns the named cookie's value from raw, or "".
+//
+// A request carries one `Cookie:` header of `name=value; name2=value2` pairs; a response carries
+// one `Set-Cookie:` per cookie, each `name=value; attributes…`. The two are handled separately
+// because one parser for both would read the first attribute of a Set-Cookie as a second cookie —
+// which is the bug that makes a rule on `session` match a response carrying `session=; Path=/`.
+func cookieValueOf(raw []byte, want Direction, name string) string {
+	head := headOf(raw, want)
+	if head == "" {
+		return ""
+	}
+	if want == DirectionRequest {
+		for _, pair := range strings.Split(headerFromHead(head, "cookie"), ";") {
+			key, value, found := strings.Cut(pair, "=")
+			if found && strings.EqualFold(strings.TrimSpace(key), name) {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+	for _, line := range headerLines(head) {
+		key, value, found := strings.Cut(line, ":")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "set-cookie") {
+			continue
+		}
+		// The first pair only: everything after the first `;` is attributes.
+		pair, _, _ := strings.Cut(value, ";")
+		ckKey, ckValue, ckFound := strings.Cut(pair, "=")
+		if ckFound && strings.EqualFold(strings.TrimSpace(ckKey), name) {
+			return strings.TrimSpace(ckValue)
+		}
+	}
+	return ""
 }
 
 // bodyOf is the body half of a raw HTTP message, or "" when the bytes are not an HTTP message at
@@ -863,6 +1100,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 			}
 			compiled = append(compiled, &Rule{
 				Field:       r.Field,
+				Member:      r.Member,
 				Category:    r.Category,
 				StringMatch: r.StringMatch,
 				Enabled:     r.Enabled,
@@ -875,6 +1113,7 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 		}
 		compiled = append(compiled, &Rule{
 			Field:       r.Field,
+			Member:      r.Member,
 			Category:    r.Category,
 			StringMatch: r.StringMatch,
 			Enabled:     r.Enabled,

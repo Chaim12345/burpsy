@@ -85,9 +85,24 @@ export interface InterceptRuleSpec {
  | "port"
  | "protocol"
  | "request_body"
- | "response_body";
+ | "response_body"
+ // The four member axes (ajpn): a named header or cookie. Burp offers them as four match types
+ // (Zpkq the header list, Zpky/Zpkc a cookie's name and value) and they are the last ones an
+ // operator reaches for on a real engagement — the proxy-header injection and the session being
+ // re-issued are both rules about a named member, not about the message as a whole.
+ | "request_header"
+ | "response_header"
+ | "request_cookie"
+ | "response_cookie";
  category: "regex" | "literal";
  string_match: string;
+ /**
+  * The header or cookie NAME a member field matches against (ajpn). Empty means the rule names
+  * no member, which matches nothing — the server says so (intercept.Rule.value) rather than
+  * guessing which header was meant, because matching the first header found is a match the
+  * operator never asked for. Refused non-empty for every field that is not a member of a list.
+  */
+ member?: string;
  enabled: boolean;
  comment: string;
  /**
