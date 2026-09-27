@@ -59,6 +59,20 @@ type crawlRun struct {
 	// of scan was that" for a run an operator started this morning, and so the 202 reply echoes the
 	// kind the server took rather than the kind the caller hoped it sent.
 	Kind string `json:"kind"`
+	// Limits is the effective bound set this run was launched with, after defaults were filled in
+	// and any named configuration overlaid (burpsy-react-ui-qzzy).
+	//
+	// Carried on the run rather than only inside the finished Report, because a crawl that is still
+	// running — or one that found nothing and reported no report — is exactly the case where an
+	// operator asks "what was this bounded by" and the answer has to exist. A bound that fires with
+	// no control behind it is indistinguishable from a bug, and the eight bounds that had no wire
+	// field at all were all in that position.
+	//
+	// Marshalled through crawlLimitsView rather than as crawler.Limits directly, because the Go struct
+	// has no json tags and would publish as "MaxLocations" while every other bound on this endpoint
+	// is snake_case (max_requests, max_depth). One endpoint with two conventions is an endpoint a
+	// console has to special-case, and the run record is the wrong place to discover that.
+	Limits *crawlLimitsView `json:"limits,omitempty"`
 	// Definition is the API-scan half: the document a seeds-only run was built from, what it had to
 	// invent, and the endpoints it sent. Nil for the two crawl kinds, which were given URLs and have no
 	// definition to describe.
@@ -97,10 +111,27 @@ func newCrawlRuns() *crawlRuns {
 	return &crawlRuns{byID: map[uint64]*crawlRun{}}
 }
 
-func (c *crawlRuns) start(taskID uint64, seeds []string, kind string) *crawlRun {
+// CrawlDefaults is the engine's own default bound set, published on GET /api/crawl so a console can
+// mark "which bounds are not the default" without keeping a second table.
+//
+// Added because the console's first version carried its own copy and got MaxRelogins wrong (10 in the
+// table, 5 in the engine) — verified by reading a live run, which showed a bound the operator never
+// set presented as one they had. A duplicate source of truth for eleven numbers is a defect waiting
+// for the first default to change, and there is no way to test a hard-coded table against the thing
+// it is supposed to describe.
+var CrawlDefaults = newCrawlLimitsView(crawler.DefaultLimits())
+
+func (c *crawlRuns) start(taskID uint64, seeds []string, kind string, limits crawler.Limits) *crawlRun {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	run := &crawlRun{TaskID: taskID, Seeds: seeds, Kind: kind, State: "running", Started: time.Now()}
+	// Aliased, not copied. Checked rather than assumed: startCrawl applies every field and then makes
+	// no further write to `limits` before calling this, and the caller does not outlive the call, so
+	// a defensive copy would be provably a no-op — and an untestable one, since a mutation that
+	// removed it changes nothing (verified: M3 in the mutation log).
+	run := &crawlRun{
+		TaskID: taskID, Seeds: seeds, Kind: kind, State: "running", Started: time.Now(),
+		Limits: newCrawlLimitsView(limits),
+	}
 	c.byID[taskID] = run
 	c.order = append(c.order, taskID)
 	for len(c.order) > crawlRunsKept {
@@ -229,10 +260,50 @@ type crawlStartReq struct {
 	RetentionQuery string `json:"retention_query"`
 	// SubmitForms defaults off, and that is a requirement rather than a default: a crawl that submits
 	// forms writes to the application.
-	SubmitForms     bool `json:"submit_forms"`
-	MaxRequests     int  `json:"max_requests"`
-	MaxDepth        int  `json:"max_depth"`
-	MaxDurationSecs int  `json:"max_duration_secs"`
+	SubmitForms bool `json:"submit_forms"`
+	// The three bounds that predate the rest, kept as plain ints, and the eight that joined them as
+	// POINTERS. The difference is load-bearing and it is the iueb shape the scanner keys already
+	// refused (burpsy-react-ui-qzzy).
+	//
+	// Every bound is a COUNT or a LENGTH, so 0 is a real value: zero locations is a crawl that
+	// fetched one page and admitted nothing, and zero max-links-per-page is a crawl that follows no
+	// link at all. `if n > 0` reads 0 as "unset" and silently runs the DEFAULT instead, so an operator
+	// who asked for a bounded-nothing crawl gets five hundred requests and a report saying the
+	// default stopped it — a confident wrong answer, and the exact defect the limits module exists to
+	// avoid. A pointer separates "not set" from "set to zero" the way OptUint32 does on the audit
+	// path, and a caller who sends nothing keeps the default.
+	//
+	// The three below are left as ints for compatibility with every caller predating this change,
+	// and they carry the same 0-means-default rule. That asymmetry is deliberate and visible rather
+	// than silently wrong: converting them is a wire break for a field the UI has always sent.
+	MaxRequests     int `json:"max_requests"`
+	MaxDepth        int `json:"max_depth"`
+	MaxDurationSecs int `json:"max_duration_secs"`
+	// MaxLocations caps distinct content fingerprints. The bound that stops an application whose
+	// URLs are unbounded but whose pages are not — a calendar generating a URL per month.
+	MaxLocations *int `json:"max_locations,omitempty"`
+	// MaxFrontier caps queued-but-unfetched URLs. Bounds the queue's memory; links arriving at a
+	// full frontier are dropped and counted rather than silently discarded.
+	MaxFrontier *int `json:"max_frontier,omitempty"`
+	// MaxLinksPerPage caps links and forms taken from one response. A generated index page can carry
+	// a hundred thousand links, and admitting them all fills the frontier from one document.
+	MaxLinksPerPage *int `json:"max_links_per_page,omitempty"`
+	// MaxParseBytes caps the bytes of a response body examined for links. The body is still stored
+	// and scanned in full; the tail is only never examined for links.
+	MaxParseBytes *int `json:"max_parse_bytes,omitempty"`
+	// MaxTemplateVisits caps fetches of one URL template. The honest cutoff for the infinite-
+	// application shape: twenty samples of one shape is enough to see whether it behaves consistently.
+	MaxTemplateVisits *int `json:"max_template_visits,omitempty"`
+	// MaxCaptureBytes caps the size of a response that is stored and scanned at all. Past it the
+	// response is neither stored nor scanned, which is why it has its own stop and is not folded
+	// into the parse bound.
+	MaxCaptureBytes *int `json:"max_capture_bytes,omitempty"`
+	// MaxFingerprints caps each of the two request-identity tables. Reached, further unseen URLs are
+	// refused admission rather than remembered, and the crawl says so via StopFingerprintBudget.
+	MaxFingerprints *int `json:"max_fingerprints,omitempty"`
+	// MaxRelogins caps session-recovery attempts. Each costs a full login round trip, so a target
+	// whose session keeps expiring spends the crawl on logins rather than on pages.
+	MaxRelogins *int `json:"max_relogins,omitempty"`
 	// Pool names a saved resource pool to run under. Empty leaves the crawl on this package's own
 	// documented defaults, which is what every caller predating pools sends.
 	//
@@ -246,6 +317,95 @@ type crawlStartReq struct {
 	RequestsPerSecond float64           `json:"requests_per_second"`
 	UserAgent         string            `json:"user_agent"`
 	Headers           map[string]string `json:"headers"`
+}
+
+// validateCrawlBounds refuses a bound that is not a bound.
+//
+// REFUSED rather than clamped, and the distinction is the point. A negative limit is not "no limit"
+// and not "the default" — it is a request that cannot be honoured, and the three answers available
+// to the engine (treat it as the default, treat it as zero, treat it as unlimited) each produce a
+// crawl that reports a result nobody asked for. Clamping to the default would be the worst of the
+// three: the crawl runs, fills its frontier, stops on the default, and the report names a stop the
+// operator never chose.
+//
+// Zero is ACCEPTED, which is why the eight fields are pointers. Zero is a real answer for every
+// bound in this set — zero locations, zero links per page, zero re-logins — and the only way to tell
+// it from "not set" is the pointer. This is the iueb shape the audit path's OptUint32 already
+// refuses to flatten, applied to the crawler.
+func validateCrawlBounds(req crawlStartReq) error {
+	// name/value pairs, in the order the request declares them, so a request naming several bad
+	// bounds is answered with all of them rather than one per attempt.
+	bad := make([]string, 0, 4)
+	for _, b := range []struct {
+		name  string
+		value *int
+	}{
+		{"max_requests", intPtr(req.MaxRequests)}, {"max_depth", intPtr(req.MaxDepth)},
+		{"max_locations", req.MaxLocations}, {"max_frontier", req.MaxFrontier},
+		{"max_links_per_page", req.MaxLinksPerPage}, {"max_parse_bytes", req.MaxParseBytes},
+		{"max_template_visits", req.MaxTemplateVisits}, {"max_capture_bytes", req.MaxCaptureBytes},
+		{"max_fingerprints", req.MaxFingerprints}, {"max_relogins", req.MaxRelogins},
+	} {
+		if b.value != nil && *b.value < 0 {
+			bad = append(bad, fmt.Sprintf("%s: %d is negative; a bound is a count of what may happen "+
+				"and a negative one cannot be honoured — send 0 for none, or omit it for the default", b.name, *b.value))
+		}
+	}
+	if req.MaxDurationSecs < 0 {
+		bad = append(bad, fmt.Sprintf("max_duration_secs: %d is negative; a negative duration is not "+
+			"a shorter crawl", req.MaxDurationSecs))
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(bad, "; "))
+}
+
+// intPtr lifts a plain int field to the pointer shape the eight optional bounds use, so one loop
+// validates both. Nil for the three legacy fields when they are zero, which is exactly their
+// "unset" reading and keeps them out of the negative check.
+func intPtr(v int) *int {
+	if v == 0 {
+		return nil
+	}
+	return &v
+}
+
+// crawlLimitsView is the effective bound set as the wire spells it: snake_case, seconds for the
+// duration, and every field present.
+//
+// Present rather than omitempty, so a run record names every bound that bounded it instead of the
+// console having to know which ones it may assume. MaxDuration is seconds because that is what the
+// launch request takes (max_duration_secs) and what an operator reads; the engine's time.Duration is
+// nanoseconds, and publishing those would be a number nobody asked for.
+type crawlLimitsView struct {
+	MaxRequests       int `json:"max_requests"`
+	MaxDepth          int `json:"max_depth"`
+	MaxDurationSecs   int `json:"max_duration_secs"`
+	MaxLocations      int `json:"max_locations"`
+	MaxFrontier       int `json:"max_frontier"`
+	MaxLinksPerPage   int `json:"max_links_per_page"`
+	MaxParseBytes     int `json:"max_parse_bytes"`
+	MaxTemplateVisits int `json:"max_template_visits"`
+	MaxCaptureBytes   int `json:"max_capture_bytes"`
+	MaxFingerprints   int `json:"max_fingerprints"`
+	MaxRelogins       int `json:"max_relogins"`
+}
+
+func newCrawlLimitsView(l crawler.Limits) *crawlLimitsView {
+	return &crawlLimitsView{
+		MaxRequests:       l.MaxRequests,
+		MaxDepth:          l.MaxDepth,
+		MaxDurationSecs:   int(l.MaxDuration / time.Second),
+		MaxLocations:      l.MaxLocations,
+		MaxFrontier:       l.MaxFrontier,
+		MaxLinksPerPage:   l.MaxLinksPerPage,
+		MaxParseBytes:     l.MaxParseBytes,
+		MaxTemplateVisits: l.MaxTemplateVisits,
+		MaxCaptureBytes:   l.MaxCaptureBytes,
+		MaxFingerprints:   l.MaxFingerprints,
+		MaxRelogins:       l.MaxRelogins,
+	}
 }
 
 // handleCrawl serves POST /api/crawl (start) and GET /api/crawl (list, or one by ?task=).
@@ -275,7 +435,7 @@ func (s *Server) handleCrawlGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, run)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"crawls": s.crawls.list()})
+	writeJSON(w, http.StatusOK, map[string]any{"crawls": s.crawls.list(), "default_limits": CrawlDefaults})
 }
 
 func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
@@ -415,6 +575,9 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 }
 
 func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, unapplied []string, err error) {
+	if berr := validateCrawlBounds(req); berr != nil {
+		return 0, nil, 0, nil, berr
+	}
 	kind, kerr := scanKind(req.Kind)
 	if kerr != nil {
 		return 0, nil, 0, nil, kerr
@@ -465,6 +628,34 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	if req.MaxDurationSecs > 0 {
 		limits.MaxDuration = time.Duration(req.MaxDurationSecs) * time.Second
 	}
+	// The eight bounds added in burpsy-react-ui-qzzy, each applied on the POINTER's presence rather
+	// than on the value being positive, so a 0 is the operator's answer and not a synonym for "unset".
+	// A negative is refused outright by applyCrawlBounds below rather than clamped: a bound of -1 is
+	// not a bound, and silently reading it as the default would answer a question nobody asked.
+	if req.MaxLocations != nil {
+		limits.MaxLocations = *req.MaxLocations
+	}
+	if req.MaxFrontier != nil {
+		limits.MaxFrontier = *req.MaxFrontier
+	}
+	if req.MaxLinksPerPage != nil {
+		limits.MaxLinksPerPage = *req.MaxLinksPerPage
+	}
+	if req.MaxParseBytes != nil {
+		limits.MaxParseBytes = *req.MaxParseBytes
+	}
+	if req.MaxTemplateVisits != nil {
+		limits.MaxTemplateVisits = *req.MaxTemplateVisits
+	}
+	if req.MaxCaptureBytes != nil {
+		limits.MaxCaptureBytes = *req.MaxCaptureBytes
+	}
+	if req.MaxFingerprints != nil {
+		limits.MaxFingerprints = *req.MaxFingerprints
+	}
+	if req.MaxRelogins != nil {
+		limits.MaxRelogins = *req.MaxRelogins
+	}
 
 	// The audit half's producer, built before the crawler because it is one of the crawler's
 	// collaborators now rather than something applied to the report afterwards. It registers nothing
@@ -488,7 +679,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	c.WithSuiteGate(s.tasks.GateCheck)
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
-	s.crawls.start(task.ID(), seeds, kind)
+	s.crawls.start(task.ID(), seeds, kind, limits)
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser

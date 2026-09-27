@@ -219,7 +219,9 @@ func (s *Server) startAPIScan(req apiScanReq) (uint64, *apiScanSummary, error) {
 	}
 	target := apiScanTarget(summary, base, len(requests))
 	task := s.tasks.Start(dash.KindAPIScan, target, uint64(limits.MaxRequests))
-	s.crawls.start(task.ID(), seedURLs(requests), runKindAPIScan)
+	// The effective bounds, for the same reason a crawl records them (qzzy): an operator asking what
+	// stopped an API sweep needs an answer that exists before the run finishes.
+	s.crawls.start(task.ID(), seedURLs(requests), runKindAPIScan, limits)
 	s.crawls.setDefinition(task.ID(), summary)
 	c.WithTaskID(task.ID())
 

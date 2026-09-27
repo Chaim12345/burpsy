@@ -145,6 +145,29 @@ export interface CrawlReport {
  fetches?: CrawlFetch[];
 }
 
+/**
+ * One crawl's effective bound set, as the run record publishes it.
+ *
+ * A named type rather than an inline shape because the server publishes the SAME eleven fields twice
+ * — once as each run's effective bounds, once as the engine defaults — and a console that compares
+ * the two needs one type for both. The index signature is what lets a row say "name every bound that
+ * differs from the default" without a hand-written switch over eleven fields.
+ */
+export interface CrawlLimits {
+ max_requests?: number;
+ max_depth?: number;
+ max_duration_secs?: number;
+ max_locations?: number;
+ max_frontier?: number;
+ max_links_per_page?: number;
+ max_parse_bytes?: number;
+ max_template_visits?: number;
+ max_capture_bytes?: number;
+ max_fingerprints?: number;
+ max_relogins?: number;
+ [bound: string]: number | undefined;
+}
+
 export interface CrawlRun {
  /** The dashboard task id that produced this crawl — one identity, not two numbers to correlate. */
  task_id: number;
@@ -159,6 +182,16 @@ export interface CrawlRun {
  report?: CrawlReport;
  /** Present only for an API-only scan: the document it was built from and what it sent. */
  definition?: APIScanDefinition;
+ /**
+  * The effective bound set this run was launched with, after defaults were filled in and any named
+  * configuration overlaid (burpsy-react-ui-qzzy).
+  *
+  * On the run rather than only inside the finished report, because a crawl that is still running — or
+  * one that found nothing and reported no report — is exactly when an operator asks "what was this
+  * bounded by", and the answer has to exist then. Every field is a count or a length and every one of
+  * them is optional here because the engine fills in its documented default for anything unset.
+  */
+ limits?: CrawlLimits;
 }
 
 /**

@@ -47,7 +47,7 @@ export const useWsMessageDetailed = (id: number | null | undefined) =>
  * design (it outlives the request that started it), so the list is the only way its progress and its
  * final coverage report reach the page. */
 export const useCrawls = () => {
- const q = useResource<{ crawls: CrawlRun[] }>(keys.crawls, "/api/crawl");
+ const q = useResource<{ crawls: CrawlRun[]; default_limits?: CrawlRun["limits"] }>(keys.crawls, "/api/crawl");
  const running = (q.data?.crawls ?? []).some((c) => c.state === "running");
  return { ...q, running };
 };
@@ -233,6 +233,22 @@ export function useStartCrawl() {
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;
+    /**
+     * The eight bounds the engine had but the wire did not (burpsy-react-ui-qzzy).
+     *
+     * Omitted means the engine's documented default. A 0 is sent as 0 and means the operator's answer
+     * — zero locations, zero links per page — which is why the console omits a BLANK field rather than
+     * sending 0 for it. That distinction is the server's pointer-typed fields; here it is `undefined`
+     * versus 0, which `Number(x) || undefined` cannot express.
+     */
+    max_locations?: number;
+    max_frontier?: number;
+    max_links_per_page?: number;
+    max_parse_bytes?: number;
+    max_template_visits?: number;
+    max_capture_bytes?: number;
+    max_fingerprints?: number;
+    max_relogins?: number;
    requests_per_second?: number;
    submit_forms?: boolean;
    query?: string;
