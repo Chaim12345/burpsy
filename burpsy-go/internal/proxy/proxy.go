@@ -28,6 +28,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	upstreamproxy "github.com/burpsy-go/burpsy/internal/upstream"
@@ -632,6 +633,76 @@ type ProxyConfig struct {
 	// construction would make that edit a lie until a restart. See StreamingPolicy and
 	// WithStreaming.
 	streaming *StreamingPolicy
+	// network is the same sender.NetworkSettings the sender (Repeater, Intruder, the scanner) holds,
+	// shared by reference so one Settings edit reaches every egress (burpsy-react-ui-o1eu).
+	//
+	// Two of its settings decide how THIS leg behaves and neither was consulted before:
+	//
+	//   - Resolution overrides and the address-family policy. A split-horizon engagement reaches an
+	//     internal host by an address DNS does not point at, and an operator who set that override
+	//     while browsing through the proxy got a dial to the real DNS answer — the override silently
+	//     did not apply to the tool they were using most.
+	//   - ContinueSettings: an origin answering `Expect: 100-continue` with a 100, and whether to
+	//     strip the Expect header on the way out.
+	//
+	// A pointer and not a value for the same reason streaming is: the operator edits these while the
+	// proxy is running, and a copy read once at construction would make the edit a lie until a
+	// restart. Nil — the default — leaves every previous behaviour in place (dial the name, forward
+	// the bytes), which is what an embedder with no console gets.
+	// network is the resolution and 100-continue half of the sender's NetworkSettings, held by VALUE
+	// and updated in place by the console when the operator saves the Network panel
+	// (burpsy-react-ui-o1eu).
+	//
+	// Two of its settings decide how THIS leg behaves and neither was consulted before:
+	//
+	//   - Resolution overrides and the address-family policy. A split-horizon engagement reaches an
+	//     internal host by an address DNS does not point at, and an operator who set that override
+	//     while browsing through the proxy got a dial to the real DNS answer — the override silently
+	//     did not apply to the tool they were using most.
+	//   - ContinueSettings: whether an interim 1xx is read past, and whether `Expect: 100-continue`
+	//     is stripped on the way out.
+	//
+	// A pointer to a holder rather than a pointer to the sender's own struct: Sender.Network()
+	// returns a COPY, so a pointer to it would freeze at the values in force at construction and
+	// every later edit would be a lie. Nil — the default — leaves every previous behaviour in place
+	// (dial the name, forward the bytes), which is what an embedder with no console gets. See
+	// WithNetworkSettings and NetworkSettings().
+	network *NetworkSettings
+}
+
+// NetworkSettings is the live holder for the resolution and 100-continue settings this leg follows.
+// Never nil after NewProxyConfig, so a caller can set it without a nil check; the zero value is
+// every previous behaviour.
+type NetworkSettings struct {
+	Resolution sender.ResolutionSettings
+	Continue   sender.ContinueSettings
+}
+
+// NewNetworkSettings returns the live holder with the defaults this leg has always had plus the one
+// that is a correction: Understand100 on, because returning an interim 1xx as a result is wrong for
+// any client and Burp does the same (burpsy-react-ui-o1eu).
+func NewNetworkSettings() *NetworkSettings {
+	return &NetworkSettings{
+		Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+	}
+}
+
+// Set replaces the resolution and continue settings this leg follows, in place. The console calls
+// this on every Network-panel save, so one edit reaches both legs (burpsy-react-ui-o1eu).
+func (n *NetworkSettings) Set(resolution sender.ResolutionSettings, cont sender.ContinueSettings) {
+	if n == nil {
+		return
+	}
+	n.Resolution = resolution
+	n.Continue = cont
+}
+
+// Network returns the live holder, for the console to update in place.
+func (s *Server) Network() *NetworkSettings {
+	if s.config == nil {
+		return nil
+	}
+	return s.config.network
 }
 
 // NewProxyConfig creates a new proxy configuration.
@@ -642,6 +713,15 @@ func NewProxyConfig(store *core.TrafficStore) *ProxyConfig {
 		scope:   core.NewScopeAllowEverything(),
 		options: NewOptions(),
 		logger:  zap.NewNop(), // Default to nop logger
+		// Never nil, so the console can push a Network-panel edit without a nil check and the
+		// dial paths can read it unconditionally. The zero value is every previous behaviour:
+		// no override, dial the name as given, and forward interim bytes verbatim
+		// (burpsy-react-ui-o1eu). Understand100 is seeded ON because returning an interim status
+		// as a result is wrong for any client — Burp's own default, and the sender's
+		// (sender.DefaultNetworkSettings).
+		network: &NetworkSettings{
+			Continue: sender.ContinueSettings{Understand100: true, ExpectTimeoutMS: 1_000},
+		},
 	}
 	// On, matching Burp's default. A proxy that let permessage-deflate be
 	// negotiated would record DEFLATE blocks and call them messages, so the
@@ -869,6 +949,18 @@ func (c *ProxyConfig) WithOptions(options *Options) *ProxyConfig {
 func (c *ProxyConfig) Options() *Options { return c.options }
 
 // WithLogger sets the logger.
+// WithNetworkSettings points this leg at the same network settings the sender holds, so the
+// hostname-resolution overrides, the address-family preference and the 100-continue handling apply
+// to proxied traffic and not only to the tools that send their own requests
+// (burpsy-react-ui-o1eu).
+//
+// Shared by reference: the console edits these while the proxy runs, and a value copied at
+// construction would stop honouring an edit the moment it was made.
+func (c *ProxyConfig) WithNetworkSettings(n *NetworkSettings) *ProxyConfig {
+	c.network = n
+	return c
+}
+
 func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
 	c.logger = logger
 	return c
@@ -1410,7 +1502,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// requestData — the forward, the record, the operator's own view in history — is the same
 		// bytes that went out. Rewriting it after the forward instead would make the row and the
 		// wire disagree, which is the one thing this proxy's record is not allowed to do.
-		if _, err := upstream.Write(s.withPlatformAuth(requestData, reqHost, method, path)); err != nil {
+		if _, err := upstream.Write(s.forForwarding(requestData, reqHost, method, path)); err != nil {
 			return
 		}
 
@@ -2862,7 +2954,7 @@ func (s *Server) forwardOnly(clientConn net.Conn, clientReader *bufio.Reader, re
 	}
 	defer upstreamConn.Close()
 
-	upstreamConn.Write(s.withPlatformAuth(requestData, host, method, path))
+	upstreamConn.Write(s.forForwarding(requestData, host, method, path))
 
 	// An upgrade request needs both directions for the life of the connection:
 	// after a 101 the client keeps talking, and a one-way copy would leave it
@@ -2948,7 +3040,14 @@ func (s *Server) dialUpstreamFor(ctx context.Context, host string, port uint16, 
 	// head itself and is not negotiating a multiplexed connection), and offering h2 while
 	// writing an HTTP/1.1 request line is how an origin that accepts h2 answers with a
 	// protocol error.
-	conn, _, err := s.dialUpstreamTLS(host, net.JoinHostPort(host, strconv.Itoa(int(port))), nil)
+	// The same address the plaintext path computes, so a hostname override is not silently bypassed
+	// by the TLS leg (burpsy-react-ui-o1eu). The SNI stays `host`: an override replaces the lookup,
+	// not the name the origin is asked for.
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	if n := s.config.network; n != nil {
+		addr = n.Resolution.DialAddress(context.Background(), host, port)
+	}
+	conn, _, err := s.dialUpstreamTLS(host, addr, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2963,14 +3062,21 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 	defer upstreamConn.Close()
 	serverIP := serverIPOf(upstreamConn)
 
-	if _, err := upstreamConn.Write(s.withPlatformAuth(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
+	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, requestMethod(requestData), requestURI(requestData))); err != nil {
 		return nil, serverIP, time.Time{}, err
 	}
 
 	// The first-byte instant is read here so a caller building an exchange row can report TTFB
 	// (Burp's "Start response timer") separately from the total. The caller takes the completion
 	// instant itself, right after this returns, which is when the last byte was read.
-	resp, firstByte, err := readHTTPResponse(upstreamConn)
+	// The operator's 100-continue handling decides whether an interim head is read past; on by
+	// default, which is Burp's own default and the only correct answer when the client is a browser
+	// (burpsy-react-ui-o1eu).
+	understand100 := true
+	if n := s.config.network; n != nil {
+		understand100 = n.Continue.Understand100
+	}
+	resp, firstByte, err := readHTTPResponseSkippingInterim(upstreamConn, understand100)
 	if err == nil {
 		// Same reason as the keep-alive leg: a challenge learned here is what lets the NEXT request
 		// through this proxy authenticate. This path dials a fresh connection each time, so the
@@ -2988,6 +3094,69 @@ func (s *Server) forwardRequest(requestData []byte, host string, port uint16, tl
 // first response byte arrived, for a caller reporting time-to-first-byte.
 func readHTTPResponse(conn net.Conn) ([]byte, time.Time, error) {
 	return httputil.ReadHTTPResponseTimed(conn)
+}
+
+// readHTTPResponseSkippingInterim is readHTTPResponse with the operator's 100-continue handling
+// applied (burpsy-react-ui-o1eu): when Understand100 is on — the default, and Burp's — an interim
+// 1xx head is read past and the FINAL response is returned, so a browser that sends
+// `Expect: 100-continue` is not handed a bare "100 Continue" as the answer. A 101 is never skipped:
+// it is the last HTTP response on that connection and the bytes after it belong to the upgraded
+// protocol.
+//
+// Interim heads are counted and bounded, and the bound mirrors the sender's own (read.go:17): a peer
+// that answers with interim statuses forever is keeping the connection busy for nothing, and needs a
+// floor rather than a spin. The error names the count, so an operator can tell a misbehaving peer
+// from a slow one.
+func readHTTPResponseSkippingInterim(conn net.Conn, understand100 bool) ([]byte, time.Time, error) {
+	if !understand100 {
+		return readHTTPResponse(conn)
+	}
+	br := bufio.NewReader(conn)
+	firstByte := time.Time{}
+	for interim := 0; ; interim++ {
+		head, at, err := httputil.ReadResponseHeadTimed(br)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if firstByte.IsZero() {
+			firstByte = at
+		}
+		body, err := httputil.ReadResponseBody(br, head)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		raw := make([]byte, 0, len(head)+len(body))
+		raw = append(raw, head...)
+		raw = append(raw, body...)
+		if !isInterimResponseHead(head) {
+			return raw, firstByte, nil
+		}
+		if interim+1 >= maxInterimResponses {
+			return raw, firstByte, fmt.Errorf("peer sent %d interim responses without a final one", maxInterimResponses)
+		}
+		// A 1xx carries no body, so br sits at the start of the next head.
+	}
+}
+
+// maxInterimResponses bounds how many interim heads this leg reads past before treating the peer as
+// misbehaving. The same value the sender uses, for the same reason.
+const maxInterimResponses = 8
+
+// isInterimResponseHead reports whether a head is a 1xx that is not 101. Parsed off the status line
+// rather than assumed from an offset, because this decides whether more bytes are read off the
+// socket: reading again after a final response blocks until the peer's next response.
+func isInterimResponseHead(head []byte) bool {
+	if len(head) < 12 {
+		return false
+	}
+	code := 0
+	for _, b := range head[9:12] {
+		if b < '0' || b > '9' {
+			return false
+		}
+		code = code*10 + int(b-'0')
+	}
+	return code >= 100 && code < 200 && code != 101
 }
 
 // The proxy's own status-line parser used to live here. It is gone rather than

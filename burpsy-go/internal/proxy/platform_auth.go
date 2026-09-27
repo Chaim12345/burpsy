@@ -312,6 +312,24 @@ var _ PlatformAuthSource = (*netauth.Credentials)(nil)
 // a host with no matching rule all return the input unchanged. Every one of those is an ordinary
 // answer, not a failure: the proxy's job is to forward what the browser sent, and a credential is
 // something it adds when it may.
+// forForwarding is the single place a request's bytes are adapted before they go upstream: the
+// operator's Expect-header policy, then the platform credential (burpsy-react-ui-o1eu).
+//
+// One function rather than the same two calls at each egress leg, because the legs have already
+// drifted once — the platform credential was wired into one path and not another — and a caller that
+// remembered only one of the two would be the same defect again. Each step is a splice that returns
+// its input unchanged when it has nothing to do, so the common case costs a comparison and the bytes
+// on the wire are the bytes the browser sent.
+func (s *Server) forForwarding(requestData []byte, host, method, uri string) []byte {
+	if s == nil {
+		return requestData
+	}
+	if n := s.config.network; n != nil && n.Continue.RemoveExpect {
+		requestData = withoutExpectHeader(requestData)
+	}
+	return s.withPlatformAuth(requestData, host, method, uri)
+}
+
 func (s *Server) withPlatformAuth(requestData []byte, host, method, uri string) []byte {
 	if s == nil {
 		return requestData
@@ -333,4 +351,47 @@ func requestMethod(requestData []byte) string {
 func requestURI(requestData []byte) string {
 	_, uri := requestMethodAndURI(requestData)
 	return uri
+}
+
+// withoutExpectHeader removes every `Expect` header line from a request's head
+// (burpsy-react-ui-o1eu), returning the bytes unchanged when the header is not there.
+//
+// The operator asked for this under Settings → Network → "Strip Expect: 100-continue from outbound
+// requests", and the reason is a peer that STALLS on the header rather than answering it: the client
+// waits for a 100 that never comes, and the request goes nowhere. The sender honours the setting on
+// its typed path (sender.go:770); this is the same setting applied to traffic a browser is driving,
+// which is the leg where the stall is most visible.
+//
+// A splice, not a rebuild, for the same reason applyPlatformAuth is: every byte outside the removed
+// line — the request line, the other headers, their order and spacing, the body — is the byte the
+// browser sent, and this proxy's record is only trustworthy while that is true. The line ending is
+// the head's own, so a bare-LF request stays bare-LF.
+func withoutExpectHeader(requestData []byte) []byte {
+	insertAt := requestHeaderInsertPoint(requestData)
+	if insertAt < 0 {
+		return requestData
+	}
+	head := string(requestData[:insertAt])
+	crlf := strings.Contains(head, "\r\n")
+	eol := "\n"
+	if crlf {
+		eol = "\r\n"
+	}
+	lines := strings.Split(head, eol)
+	kept := make([]string, 0, len(lines))
+	removed := false
+	for _, line := range lines {
+		field, _, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(field), "Expect") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		return requestData
+	}
+	out := []byte(strings.Join(kept, eol))
+	out = append(out, requestData[insertAt:]...)
+	return out
 }

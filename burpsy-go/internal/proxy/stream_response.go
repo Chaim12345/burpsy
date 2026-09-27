@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -235,12 +236,12 @@ func (s *Server) streamPlainResponse(
 	// function owns the upstream connection and the write, so this is the last point at which the
 	// bytes going out can still be the bytes that were recorded. A platform credential the operator
 	// configured is part of those bytes (burpsy-react-ui-trcy).
-	if _, err := upstreamConn.Write(s.withPlatformAuth(requestData, host, method, path)); err != nil {
+	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, method, path)); err != nil {
 		return
 	}
 
 	br := bufio.NewReader(upstreamConn)
-	head, firstByte, err := httputil.ReadResponseHeadTimed(br)
+	head, firstByte, err := readStreamingHead(br, s.config.network)
 	if err != nil {
 		return
 	}
@@ -347,6 +348,34 @@ func (s *Server) streamH2Body(body io.Reader, w http.ResponseWriter, window time
 		}
 		if err != nil {
 			return out.Bytes()
+		}
+	}
+}
+
+// readStreamingHead reads one response head, reading past interim 1xx heads when the operator's
+// 100-continue handling says to (burpsy-react-ui-o1eu).
+//
+// The streaming leg needs this for the same reason the buffered leg does, and it is the leg where
+// the failure is worst: a declared streaming host that answers `Expect: 100-continue` with a 100
+// would have the interim head recorded and relayed as the whole response, and the event stream the
+// operator declared the host for never reaches the client. A 101 is never skipped — it is an upgrade
+// and the bytes after it belong to the other protocol.
+func readStreamingHead(br *bufio.Reader, n *NetworkSettings) ([]byte, time.Time, error) {
+	understand100 := n == nil || n.Continue.Understand100
+	firstByte := time.Time{}
+	for interim := 0; ; interim++ {
+		head, at, err := httputil.ReadResponseHeadTimed(br)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if firstByte.IsZero() {
+			firstByte = at
+		}
+		if !understand100 || !isInterimResponseHead(head) {
+			return head, firstByte, nil
+		}
+		if interim+1 >= maxInterimResponses {
+			return head, firstByte, fmt.Errorf("peer sent %d interim responses without a final one", maxInterimResponses)
 		}
 	}
 }

@@ -340,6 +340,12 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))
 		}
+		// The resolution and 100-continue half, pushed for exactly the same reason: without it a
+		// hostname override would apply to Repeater and silently not to the browser traffic the
+		// operator is driving through the proxy, and an interim 100 would be handed to the client
+		// as its response (burpsy-react-ui-o1eu). Set cannot fail — the document was validated
+		// above — so there is no refusal to report here.
+		s.proxyServer.Network().Set(next.Resolution, next.Continue)
 	}
 
 	confirmed := s.sender.Network()

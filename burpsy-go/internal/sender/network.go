@@ -632,6 +632,21 @@ func (n NetworkSettings) Normalise() NetworkSettings {
 // override would mean one address serving a whole subtree of names, and the operator who wrote
 // `*.example.com -> 10.0.0.1` almost certainly did not mean to send every host under that domain to
 // one box. Scope patterns are the place for wildcards; an address table is not.
+// DialAddress maps a host:port to the address this leg should actually dial, applying the
+// hostname overrides and then the address-family policy (burpsy-react-ui-o1eu).
+//
+// Exported so the proxy listener resolves a host exactly as this package's own sends do — one
+// implementation, so a split-horizon override cannot apply to Repeater and silently not to the
+// traffic the operator is driving through the proxy, which is the leg they are most likely to be
+// watching. An unparseable or unresolved address is returned as the caller built it: inventing one
+// would dial an address nobody named.
+func (r ResolutionSettings) DialAddress(ctx context.Context, host string, port uint16) string {
+	if replacement, ok := r.resolveHost(host); ok {
+		return net.JoinHostPort(replacement, strconv.Itoa(int(port)))
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+}
+
 func (r ResolutionSettings) resolveHost(host string) (string, bool) {
 	needle := strings.ToLower(host)
 	for _, o := range r.Overrides {
@@ -655,6 +670,13 @@ func (n NetworkSettings) dialAddress(host string, port uint16) string {
 // The family filter needs a resolver answer, which needs a context, so this takes one. The system
 // preference — the default — does no lookup at all and returns the hostname unchanged, so the ordinary
 // send is not paying for a resolution the dialer is about to do anyway.
+// DialAddress is DialAddressFor, exported so another egress surface (the proxy listener) can
+// apply the same resolution overrides and address-family policy this package's own sends do
+// (burpsy-react-ui-o1eu). One implementation, so the two legs cannot resolve a host differently.
+func (n NetworkSettings) DialAddress(ctx context.Context, host string, port uint16) string {
+	return n.dialAddressFor(ctx, host, port)
+}
+
 func (n NetworkSettings) dialAddressFor(ctx context.Context, host string, port uint16) string {
 	addr, err := n.resolveForDial(ctx, host)
 	if err != nil || addr == "" {

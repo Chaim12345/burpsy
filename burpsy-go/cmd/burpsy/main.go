@@ -465,7 +465,14 @@ func main() {
 	// the state burpsy-react-ui-f365 found with the setting absent entirely.
 	restoredTLSPolicy := proxy.NewTLSPolicy()
 
+	// The listener's live resolution/100-continue holder. Declared here, before the builder chain,
+	// for the same reason restoredTLSPolicy is: the chain would otherwise capture a value built
+	// later, and the restore below would write into a holder the server never reads
+	// (burpsy-react-ui-o1eu).
+	proxyNetwork := proxy.NewNetworkSettings()
+
 	proxyConfig := proxy.NewProxyConfig(store).
+		WithNetworkSettings(proxyNetwork).
 		// The SAME credential store the sender holds, restored above. One store for both legs: two
 		// would let the Settings panel describe rules that Repeater honours and the proxy does not,
 		// and the symptom would be an authenticated tool beside an unauthenticated browser
@@ -561,6 +568,11 @@ func main() {
 				if err := streamingPolicy.Set(applied.Streaming.Hosts, time.Duration(applied.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 					logger.Warn("Proxy streaming policy refused the restored window", zap.Error(err))
 				}
+				// The resolution overrides and 100-continue handling, restored onto the listener for
+				// the same reason: a restart must honour what the operator saved, or their
+				// split-horizon override works in Repeater and not in the browser they browse
+				// through the proxy with (burpsy-react-ui-o1eu).
+				proxyNetwork.Set(applied.Resolution, applied.Continue)
 				// The TLS policy is restored on the same pass and for the same reason: a verification
 				// setting that only reached the sender would leave every intercepted connection
 				// verifying while the operator believed they had turned it off for a self-signed lab

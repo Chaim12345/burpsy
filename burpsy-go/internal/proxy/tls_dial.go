@@ -83,7 +83,15 @@ func (s *Server) carrier() *upstreamproxy.Carrier {
 // have no context of their own pass context.Background() explicitly so the absence is visible at the
 // call site rather than buried in this helper.
 func (s *Server) dialUpstream(ctx context.Context, host string, port uint16) (net.Conn, error) {
-	return s.dialUpstreamAddr(ctx, net.JoinHostPort(host, strconv.Itoa(int(port))))
+	// The address comes from the shared network settings when the console handed them over, so a
+	// hostname override or an address-family preference applies to proxied traffic exactly as it
+	// applies to a Repeater send (burpsy-react-ui-o1eu). Without them the name is dialled as given,
+	// which is what this leg did for its whole life before the wiring.
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	if n := s.config.network; n != nil {
+		addr = n.Resolution.DialAddress(ctx, host, port)
+	}
+	return s.dialUpstreamAddr(ctx, addr)
 }
 
 // dialUpstreamAddr is dialUpstream for a caller that already holds a host:port string — the blind
