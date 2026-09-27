@@ -150,6 +150,18 @@ func API() APIView {
 	}
 }
 
+// KindCount is how many registration points the protocol offers.
+//
+// Exported so a caller can assert the contract view carries all of them without restating the
+// number. The hardcoded 4 this replaced was already stale — KindHotKey landed (burpsy-react-ui-wsu4)
+// and the assertion kept counting four, so a correct implementation read as a broken one. That is
+// the shape of a pin against a literal where a table exists: it cannot tell "the route dropped one"
+// from "the table gained one", and it fails for the second.
+//
+// Derived from kindLabels rather than from validKinds, because kindLabels is what the view is BUILT
+// from (kindViews) — asserting against the input rather than the source of the rendering.
+func KindCount() int { return len(kindLabels) }
+
 // kindLabels and kindMontoya name each registration point for an operator and say
 // which Montoya call it is the analogue of, so the APIs tab can be read next to
 // Burp's own documentation.

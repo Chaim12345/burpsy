@@ -112,8 +112,13 @@ func Test_the_apis_route_serves_the_protocol_contract(t *testing.T) {
 		t.Errorf("served %d method(s) against %d in the table — the tab renders this, so it has to be all of it",
 			len(view.Methods), len(extension.MethodSpecs))
 	}
-	if len(view.Kinds) != 4 {
-		t.Errorf("served %d registration kind(s), want the four with an honest web analogue", len(view.Kinds))
+	// Against the package's own count, not a literal. The literal was 4 and went stale the moment a
+	// fifth kind landed (burpsy-react-ui-wsu4): the implementation was right and the pin read it as
+	// broken. A count that moves WITH the table is the only kind of pin that can distinguish "the
+	// route dropped one" from "the table gained one" — and this failure was the second.
+	if len(view.Kinds) != extension.KindCount() {
+		t.Errorf("served %d registration kind(s), want every one the protocol offers (%d)",
+			len(view.Kinds), extension.KindCount())
 	}
 	if len(view.Unsupported) == 0 {
 		t.Error("nothing is declared unsupported, so the BApp Store's absence is left to be inferred")

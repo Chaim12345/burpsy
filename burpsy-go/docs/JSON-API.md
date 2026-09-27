@@ -11,6 +11,41 @@ with the code, the code wins and the doc is a defect; please file it back.
 > or change what the engagement is allowed to touch. Only drive them against
 > targets you are authorized to test.
 
+## Who may call this API (burpsy-react-ui-s19k)
+
+**There is no authentication and no token.** The console binds to `127.0.0.1` by
+default, and that is the *whole* of the access control. What the server does
+instead is refuse any **mutating** request — `POST`, `PUT`, `PATCH`, `DELETE` —
+that did not come from the console's own page:
+
+| Check | Refuses | Forgeable by page script? |
+|---|---|---|
+| `Host` must be loopback | DNS rebinding to `127.0.0.1` | no — the browser sends the real name |
+| `Sec-Fetch-Site` must be `same-origin`/`same-site`/`none` | ordinary CSRF | no — set by the browser |
+| `Origin`, when present, must match `Host` | CSRF in older browsers | no |
+
+`GET` is not gated: a cross-origin `GET` cannot change server state, and gating
+it would break the CA certificate download and every page reload.
+
+Three consequences worth stating plainly:
+
+- **A non-loopback bind (`-web 0.0.0.0:8081`) needs the host named**, or the
+  console refuses the operator's own browser along with everything else. Name it
+  with `WithAllowedHosts` (the `-web` flag's caller). With no name configured only
+  loopback is accepted, which is the safe default and the one that stops rebinding.
+- **Anyone who can reach a non-loopback bind can still READ the console** — history,
+  cookies, session material, findings. The gate stops browser-driven attacks; it is
+  not authentication, and it is not a substitute for it. If you bind off this
+  machine, put it behind something that authenticates.
+- **A non-browser client is unaffected.** Anything that can open a TCP connection
+  can drive the API; `Sec-Fetch-Site` and `Origin` are browser-supplied. That is
+  the intended shape — your scripts are the operator.
+
+Implementation: `internal/web/api_sameorigin.go`. It is installed over the
+finished mux in `setupRoutes`, not in `ListenAndServe`, so a route added later
+cannot be registered outside it and no new handler's author has to remember
+anything.
+
 ## Conventions
 
 - Base URL: `http://<web-addr>` (default `http://127.0.0.1:8081`).

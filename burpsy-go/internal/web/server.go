@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -48,9 +49,22 @@ type Server struct {
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
 	mux             *http.ServeMux
-	sender          *sender.Sender
-	scanner         *scanner.ActiveScanner
-	passiveScanner  *scanner.PassiveScanner
+	// allowedHosts are the Host header values this console answers to for MUTATING requests
+	// (burpsy-react-ui-s19k). Empty means loopback only, which is the setting that stops a DNS
+	// rebinding attack; a non-empty set is an operator who deliberately bound the console to
+	// something reachable and has named what they reachable it as.
+	//
+	// Absent from the default on purpose: the safe reading must be the one a caller gets by doing
+	// nothing, because a flag nobody sets cannot be the thing standing between a hostile page and an
+	// attack.
+	allowedHosts map[string]bool
+	// guarded is mux behind the cross-site gate, and it is what ListenAndServe serves. A separate
+	// field rather than reassigning mux, because every test in this package drives s.mux directly and
+	// must keep doing so: those tests are about handler behaviour, and the gate has its own.
+	guarded        http.Handler
+	sender         *sender.Sender
+	scanner        *scanner.ActiveScanner
+	passiveScanner *scanner.PassiveScanner
 	// toolRunner is the allowlist runner `run tool` statements dispatch through
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
@@ -1102,6 +1116,49 @@ func (s *Server) setupRoutes() {
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
+
+	// The cross-site gate, installed over the finished mux (burpsy-react-ui-s19k). LAST, so it wraps
+	// every route above and a route added after this line cannot be registered outside it — which is
+	// the failure mode a per-handler check would have, and the reason a new handler's author has to
+	// remember nothing.
+	//
+	// Here rather than in ListenAndServe because every test in this package drives s.mux.ServeHTTP
+	// directly: a gate in the listener would be exercised by nothing and verified by nothing, and a
+	// security control the suite cannot see is a comment rather than a control.
+	s.guarded = s.sameOriginOnly(s.mux)
+}
+
+// sameOriginOnly wraps h so a mutating request that did not come from this console is refused.
+//
+// The name says what it does and the body says why: the console has no authentication, it is a tool
+// that sends attacks, and it binds to loopback — which stops other hosts and not the operator's own
+// browser, which visits hostile targets all day. See api_sameorigin.go for the three checks, the
+// rebinding case each one covers, and the token that is deliberately not implemented here.
+func (s *Server) sameOriginOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireSameOrigin(w, r) {
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// WithAllowedHosts names the Host header values this console answers to for mutating requests.
+//
+// Required for a non-loopback bind: `-web 0.0.0.0:8081` puts the console on the network, and a
+// cross-site gate that only accepts loopback would refuse the operator's own browser along with
+// everything else. Naming the address is the deliberate step; not naming it keeps the default, which
+// is the safe one.
+func (s *Server) WithAllowedHosts(hosts ...string) *Server {
+	if s.allowedHosts == nil {
+		s.allowedHosts = make(map[string]bool, len(hosts))
+	}
+	for _, h := range hosts {
+		if h = strings.TrimSpace(h); h != "" {
+			s.allowedHosts[h] = true
+		}
+	}
+	return s
 }
 
 // ListenAndServe starts the web server.
@@ -1111,7 +1168,7 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	// insurance and the right default for any server that reads JSON into structs.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-		s.mux.ServeHTTP(w, r)
+		s.guarded.ServeHTTP(w, r)
 	})
 	server := &http.Server{
 		Addr:    addr,
