@@ -436,6 +436,22 @@ func (h *Host) Load(name string) (PluginView, error) {
 // rule and the rule is one sentence, not two spellings of it.
 const fmtChordRefused = "%q asks for %q, which this console cannot spell as a binding (mod or alt, plus shift, plus exactly one key)"
 
+// fmtChordCollision is the refusal for a hotkey whose chord is already taken — by a
+// shell binding or by another plugin. First wins; the second is refused.
+const fmtChordCollision = "%q asks for %q, which is already bound to %s"
+
+// shellChords is the set of chords the shell already uses. A plugin cannot take
+// these — they belong to the console's own actions.
+var shellChords = map[string]bool{
+	"mod+r": true, "mod+i": true, "mod+o": true, "mod+f": true,
+	"alt+t": true, "mod+enter": true, "mod+k": true,
+	"mod+alt+right": true, "mod+alt+left": true,
+	"mod+shift+l": true, "shift+slash": true,
+	// Editor codec keys (fixed, not rebindable)
+	"mod+u": true, "mod+shift+u": true, "mod+h": true, "mod+shift+h": true,
+	"mod+b": true, "mod+shift+b": true, "mod+s": true,
+}
+
 // validate keeps the registrations that mean something and counts the rest.
 //
 // Refusing the whole load over one bad row would be harsher than useful — a plugin
@@ -451,6 +467,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		refused++
 		p.console.append(StreamError, SourceHost, "registration refused: "+reason)
 	}
+	takenChords := map[string]string{} // chord -> plugin name (first wins)
 	for _, reg := range declared {
 		switch {
 		case len(kept) >= h.cfg.MaxRegistrations:
@@ -460,7 +477,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case seen[reg.ID]:
 			refuse(fmt.Sprintf("%q is declared twice; an invoke could not say which was meant", reg.ID))
 		case !validKinds[reg.Kind]:
-			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu and editor-tab only",
+			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action and hotkey",
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
@@ -469,6 +486,19 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case reg.Kind == KindHotKey && NormaliseChord(reg.Chord) == "":
 			refuse(fmt.Sprintf(fmtChordRefused, reg.ID, reg.Chord))
 		default:
+			if reg.Kind == KindHotKey {
+				chord := NormaliseChord(reg.Chord)
+				if shellChords[chord] {
+					refuse(fmt.Sprintf(fmtChordCollision, reg.ID, reg.Chord, "a shell binding"))
+					continue
+				}
+				if otherPlugin, taken := takenChords[chord]; taken {
+					refuse(fmt.Sprintf(fmtChordCollision, reg.ID, reg.Chord, fmt.Sprintf("plugin %q", otherPlugin)))
+					continue
+				}
+				takenChords[chord] = p.name
+				reg.Binding = chord
+			}
 			seen[reg.ID] = true
 			kept = append(kept, reg)
 		}
@@ -550,7 +580,7 @@ func (h *Host) unload(p *plugin, reason string) (PluginView, error) {
 
 // Invoke runs one registration.
 //
-// The three literal method names below are the dispatch decision *and* the thing
+// The five literal method names below are the dispatch decision *and* the thing
 // the protocol tests check: Test_the_documented_method_set_is_the_dispatched_method_set
 // reads them out of the source, and Test_each_registration_kind_invokes_its_documented_method
 // drives a real plugin and asserts which method arrived. A map from kind to method

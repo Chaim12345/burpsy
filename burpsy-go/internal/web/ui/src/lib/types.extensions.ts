@@ -26,6 +26,10 @@ export interface Registration {
    * The host refuses a hotkey registration whose chord it cannot install, so a hotkey row that
    * reaches the console always carries one. */
   chord?: string;
+  /** The same chord in this console's vocabulary ("mod+shift+p"), computed by the host's
+   * NormaliseChord at load time. Installed verbatim — there is no second normaliser on this side,
+   * so a chord the host accepted is a chord the keymap can bind (burpsy-react-ui-wsu4.2). */
+  binding?: string;
 }
 
 export interface ExitInfo {

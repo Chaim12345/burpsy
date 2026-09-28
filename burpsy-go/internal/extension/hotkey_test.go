@@ -21,7 +21,7 @@ func TestNormaliseChordSpellsBurpsFormatInTheConsolesVocabulary(t *testing.T) {
 		{"Ctrl+Shift+K", "mod+shift+k"},
 		{"Ctrl+K", "mod+k"},
 		{"Alt+T", "alt+t"},
-		{"Ctrl+Alt+R", "mod+alt+r"},
+		// Ctrl+Alt+R is refused — AltGr combinations belong to the editor
 		// The documented format's leniency: case, separators, glued modifiers, any order.
 		{"ctrl SHIFT k", "mod+shift+k"},
 		{"ctrl-shift-k", "mod+shift+k"},
@@ -56,6 +56,83 @@ func TestNormaliseChordRefusesABindingThatWouldNeverFire(t *testing.T) {
 	for _, in := range refused {
 		if got := NormaliseChord(in); got != "" {
 			t.Errorf("NormaliseChord(%q) = %q, want the empty refusal — this console cannot install it and a silent non-firing binding is worse than none", in, got)
+		}
+	}
+}
+
+// The wsu4.3 table test: editing keys and AltGr combinations are refused, not bound.
+func TestNormaliseChordRefusesEditingKeys(t *testing.T) {
+	refused := []string{
+		"Ctrl+C",     // clipboard — copy
+		"Ctrl+V",     // clipboard — paste
+		"Ctrl+X",     // clipboard — cut
+		"Ctrl+Z",     // undo
+		"Ctrl+Alt+Q", // AltGr+Q = '@' on German layouts
+		"Ctrl+Alt+R", // any mod+alt combination
+	}
+	for _, in := range refused {
+		if got := NormaliseChord(in); got != "" {
+			t.Errorf("NormaliseChord(%q) = %q, want the empty refusal — this chord belongs to the browser or the editor", in, got)
+		}
+	}
+}
+
+// The wsu4.3 collision test: a plugin chord that collides with a shell binding is
+// refused at load, and a second plugin declaring the same chord is also refused.
+func TestPluginChordCollisionRefused(t *testing.T) {
+	h := testHost(t, "collision-test")
+	if _, err := h.Load("probe"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	view := h.List().Extensions[0]
+	// The plugin declares: one valid hotkey, one that collides with mod+k (palette),
+	// and one that collides with mod+r (Send to Repeater).
+	for _, reg := range view.Registrations {
+		if reg.ID == "valid" && reg.Binding != "mod+shift+k" {
+			t.Errorf("valid hotkey binding = %q, want mod+shift+k", reg.Binding)
+		}
+	}
+	console := consoleText(t, h, "probe", StreamError)
+	for _, want := range []string{
+		`"palette-collision" asks for "Ctrl+K"`,
+		`"repeater-collision" asks for "Ctrl+R"`,
+	} {
+		if !strings.Contains(console, want) {
+			t.Errorf("the error console is missing %q; it said:\n%s", want, console)
+		}
+	}
+}
+
+// The wsu4.2 table test: every chord from the review findings, each either refused or
+// normalised to the key actually declared. This is the test that pins the two-normaliser
+// bug closed — the host's NormaliseChord is the single source of truth, and the UI installs
+// its output verbatim.
+func TestNormaliseChordWsu42Table(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string // "" means refused
+	}{
+		// Accepted — normalised to the declared key
+		{"Ctrl+K", "mod+k"},
+		{"Ctrl+Shift+K", "mod+shift+k"},
+		{"Alt+T", "alt+t"},
+		// Refused — second non-modifier token (last-key-wins bug)
+		{"Ctrl+Page Up", ""},
+		{"Ctrl+Back Slash", ""},
+		{"Ctrl+K+J", ""},
+		// Refused — key name not in the keymap's dispatchable set
+		{"Ctrl+Banana", ""},
+		{"Ctrl+Equals", ""},
+		// Refused — punctuation must be spelled by name
+		{"Ctrl+,", ""},
+		{"Ctrl+>", ""},
+		// Refused — function keys beyond F12
+		{"Ctrl+F13", ""},
+	}
+	for _, tc := range cases {
+		got := NormaliseChord(tc.in)
+		if got != tc.want {
+			t.Errorf("NormaliseChord(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

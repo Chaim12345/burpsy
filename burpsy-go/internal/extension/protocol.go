@@ -45,9 +45,9 @@ package extension
 
 import (
 	"encoding/json"
-	"time"
-
+	"slices"
 	"strings"
+	"time"
 )
 
 // ProtocolVersion is the version the host announces in `initialize` and expects
@@ -151,6 +151,11 @@ var validKinds = map[Kind]bool{
 // shipped bindings avoid them: the browser or the OS owns them. A refused chord is counted on
 // the wire like every other refused registration, rather than installed as a binding that
 // looks registered and never fires.
+//
+// A second non-modifier token is refused rather than overwriting the first: "Ctrl+K+J" is
+// not a chord this console can install, and silently binding it to "mod+j" would be a
+// binding the operator did not ask for. Key names are checked against the set the keymap
+// can dispatch — "Ctrl+Banana" is refused, not bound to a key that will never fire.
 func NormaliseChord(burp string) string {
 	rest := strings.ToLower(strings.TrimSpace(burp))
 	if rest == "" {
@@ -159,41 +164,44 @@ func NormaliseChord(burp string) string {
 	var mods []string
 	var key string
 	for rest != "" {
-		switch {
-		case strings.HasPrefix(rest, "ctrl"), strings.HasPrefix(rest, "cmd"), strings.HasPrefix(rest, "control"):
-			if strings.HasPrefix(rest, "control") {
-				rest = strings.TrimPrefix(rest, "control")
-			} else if strings.HasPrefix(rest, "ctrl") {
-				rest = strings.TrimPrefix(rest, "ctrl")
-			} else {
-				rest = strings.TrimPrefix(rest, "cmd")
+		// Modifiers: prefix-matched, longest first so "control" wins over "ctrl".
+		matched := false
+		for _, m := range []struct{ prefix, mod string }{
+			{"control", "mod"}, {"ctrl", "mod"}, {"cmd", "mod"},
+			{"shift", "shift"},
+			{"option", "alt"}, {"alt", "alt"},
+			{"meta", ""}, {"super", ""}, {"windows", ""},
+		} {
+			if strings.HasPrefix(rest, m.prefix) {
+				if m.mod == "" {
+					return "" // meta/super/windows: no web spelling
+				}
+				rest = strings.TrimPrefix(rest, m.prefix)
+				if !slices.Contains(mods, m.mod) {
+					mods = append(mods, m.mod)
+				}
+				matched = true
+				break
 			}
-			mods = appendUnique(mods, "mod")
-		case strings.HasPrefix(rest, "shift"):
-			rest = strings.TrimPrefix(rest, "shift")
-			mods = appendUnique(mods, "shift")
-		case strings.HasPrefix(rest, "alt"), strings.HasPrefix(rest, "option"):
-			if strings.HasPrefix(rest, "option") {
-				rest = strings.TrimPrefix(rest, "option")
-			} else {
-				rest = strings.TrimPrefix(rest, "alt")
-			}
-			mods = appendUnique(mods, "alt")
-		case strings.HasPrefix(rest, "meta"), strings.HasPrefix(rest, "super"), strings.HasPrefix(rest, "windows"):
+		}
+		if matched {
+			continue
+		}
+		// The key: everything up to the next separator, or the whole remainder.
+		sep := strings.IndexAny(rest, "+- ")
+		if sep == 0 {
+			// A leading separator the modifier scan did not consume: skip it, it names nothing.
+			rest = rest[1:]
+			continue
+		}
+		// A second non-modifier token is a refusal, not an overwrite.
+		if key != "" {
 			return ""
-		default:
-			// The key: everything up to the next separator, or the whole remainder.
-			sep := strings.IndexAny(rest, "+- ")
-			if sep == 0 {
-				// A leading separator the modifier scan did not consume: skip it, it names nothing.
-				rest = rest[1:]
-				continue
-			}
-			if sep < 0 {
-				key, rest = rest, ""
-			} else {
-				key, rest = rest[:sep], rest[sep:]
-			}
+		}
+		if sep < 0 {
+			key, rest = rest, ""
+		} else {
+			key, rest = rest[:sep], rest[sep:]
 		}
 	}
 	if key == "" {
@@ -212,37 +220,62 @@ func NormaliseChord(burp string) string {
 	if key == "f10" || key == "f11" || key == "f12" {
 		return ""
 	}
-	if !hasModOrAlt(mods) {
+	// The key must be one the keymap can dispatch.
+	if !dispatchableKeys[key] {
+		return ""
+	}
+	if !slices.Contains(mods, "mod") && !slices.Contains(mods, "alt") {
+		return ""
+	}
+	// Refuse editing keys: clipboard (c/v/x), undo (z), and any chord with both
+	// mod and alt (AltGr combinations like Ctrl+Alt+Q = '@' on German layouts).
+	// These belong to the browser and the editor, not to plugins.
+	if slices.Contains(mods, "mod") && slices.Contains(mods, "alt") {
+		return ""
+	}
+	switch key {
+	case "c", "v", "x", "z":
 		return ""
 	}
 	order := []string{"mod", "alt", "shift"}
 	var out []string
 	for _, m := range order {
-		for _, have := range mods {
-			if have == m {
-				out = append(out, m)
-			}
+		if slices.Contains(mods, m) {
+			out = append(out, m)
 		}
 	}
 	return strings.Join(append(out, key), "+")
 }
 
-func appendUnique(in []string, v string) []string {
-	for _, have := range in {
-		if have == v {
-			return in
-		}
-	}
-	return append(in, v)
-}
-
-func hasModOrAlt(mods []string) bool {
-	for _, m := range mods {
-		if m == "mod" || m == "alt" {
-			return true
-		}
-	}
-	return false
+// dispatchableKeys is the set of key names the keymap can actually dispatch. A chord
+// naming a key outside this set would be bound and never fire — the exact defect this
+// normaliser exists to prevent.
+var dispatchableKeys = map[string]bool{
+	// Letters
+	"a": true, "b": true, "c": true, "d": true, "e": true, "f": true, "g": true,
+	"h": true, "i": true, "j": true, "k": true, "l": true, "m": true, "n": true,
+	"o": true, "p": true, "q": true, "r": true, "s": true, "t": true, "u": true,
+	"v": true, "w": true, "x": true, "y": true, "z": true,
+	// Digits
+	"0": true, "1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
+	"7": true, "8": true, "9": true,
+	// Punctuation and symbols (spelled by name, not character)
+	"comma": true, "period": true, "slash": true, "backslash": true,
+	"semicolon": true, "quote": true, "bracketleft": true, "bracketright": true,
+	"minus": true, "equal": true, "backquote": true, "space": true,
+	"enter": true, "tab": true, "backspace": true, "delete": true,
+	"escape": true, "capslock": true,
+	// Arrow keys
+	"arrowup": true, "arrowdown": true, "arrowleft": true, "arrowright": true,
+	"up": true, "down": true, "left": true, "right": true,
+	// Navigation
+	"home": true, "end": true, "pageup": true, "pagedown": true,
+	// Numpad
+	"numpad0": true, "numpad1": true, "numpad2": true, "numpad3": true,
+	"numpad4": true, "numpad5": true, "numpad6": true, "numpad7": true,
+	"numpad8": true, "numpad9": true, "numpadenter": true,
+	"numpadadd": true, "numpadsubtract": true, "numpadmultiply": true,
+	"numpaddivide": true, "numpaddecimal": true,
 }
 
 // Registration is one thing a plugin declared at handshake.
@@ -260,6 +293,10 @@ type Registration struct {
 	// ignores the field on the other kinds rather than letting it imply a
 	// binding that was never installed.
 	Chord string `json:"chord,omitempty"`
+	// Binding is the normalised chord in the console's vocabulary, set by the
+	// host at load time. The UI installs this field verbatim — no second
+	// normaliser, no disagreement possible.
+	Binding string `json:"binding,omitempty"`
 }
 
 // Manifest is what a plugin answers `initialize` with.

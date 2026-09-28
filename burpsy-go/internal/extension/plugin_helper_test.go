@@ -90,6 +90,15 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "survives", "kind": "menu", "label": "An unrelated action"},
 			},
 		}
+	case "collision-test":
+		return map[string]any{
+			"name": "collider", "version": "0.1", "type": "python", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "valid", "kind": "hotkey", "label": "A valid hotkey", "chord": "Ctrl+Shift+K"},
+				{"id": "palette-collision", "kind": "hotkey", "label": "Collides with palette", "chord": "Ctrl+K"},
+				{"id": "repeater-collision", "kind": "hotkey", "label": "Collides with Repeater", "chord": "Ctrl+R"},
+			},
+		}
 	case "no-registrations":
 		return map[string]any{"name": "quiet", "version": "1.0", "type": "shell", "protocol": ProtocolVersion}
 	default:
