@@ -1,6 +1,7 @@
 package intruder
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/burpsy-go/burpsy/internal/apidoc"
 )
 
 // Hard ceiling on a resolved payload set, whatever maxCount a caller passes.
@@ -47,6 +50,10 @@ const (
 	PayloadErrItemTooLong
 	// PayloadErrBadDate: a date that is not YYYY-MM-DD.
 	PayloadErrBadDate
+	// PayloadErrBadGrammar: a grammar_fuzz source whose grammar does not compile (parse error,
+	// undefined rule, a cycle with no terminating alternative, a capture used before it is
+	// set) or whose budget bounds are outside their allowed range. The detail is in What.
+	PayloadErrBadGrammar
 )
 
 // PayloadError carries the kind plus the fields needed to render a specific refusal.
@@ -80,6 +87,8 @@ func (e *PayloadError) Error() string {
 		return fmt.Sprintf("one payload would be %d bytes, over the %d-byte limit; refused rather than shortened", e.Len, e.Limit)
 	case PayloadErrBadDate:
 		return fmt.Sprintf("not a YYYY-MM-DD date: %q", e.Date)
+	case PayloadErrBadGrammar:
+		return fmt.Sprintf("grammar error: %s", e.What)
 	default:
 		return "unknown payload error"
 	}
@@ -236,6 +245,49 @@ type PayloadSource struct {
 	// because it would replay the target out of order and record nothing the operator could
 	// pause or stop mid-chain.
 	RecursiveGrep *RecursiveGrepSource
+	// CharacterSubstitution (burpsy-react-ui-ij2t) is leet-speak style substitution: unlike
+	// CharSubstitution (an operator-named single-replacement map, one substitute per
+	// character), this generator carries MULTIPLE alternative substitutes per character
+	// (e.g. "e" -> ['3'], "a" -> ['4','@']) and emits every permutation across all
+	// substitutable positions, not just the 2^k "substitute or don't" subsets. "peter" with
+	// e->3 and t->7 produces all 8 combinations: peter, p3ter, pe7er, p37er, pet3r, p3t3r,
+	// pe73r, p373r.
+	CharacterSubstitution *CharacterSubstitution
+	// RuntimeFile (burpsy-react-ui-ij2t) reads payloads from a file path at resolve time,
+	// one per line, the same contract FileSource uses — kept as its own generator (rather
+	// than folded into FileSource) because the wire's "type" tag is what an operator's saved
+	// attack config names, and a saved config naming "runtime_file" must keep meaning that
+	// after this generator ships alongside FileSource's existing behaviour.
+	RuntimeFile *RuntimeFileSource
+	// OpenAPIPayloads (burpsy-react-ui-ghpy) generates type-appropriate payloads straight from an
+	// OpenAPI/Swagger definition's own declared parameters, building on apidoc.Parse — the
+	// reading half already exists; this is the payload-generation half.
+	OpenAPIPayloads *OpenAPIPayloads
+	// GrammarFuzz (burpsy-react-ui-manp) is barkus-style structured fuzzing: payloads are
+	// sentences of a grammar (built-in sql/json/xml, or operator-supplied text), and the
+	// decision tape recording the derivation's choices is the mutation surface — every
+	// mutation yields another valid sentence rather than a byte-flip that usually breaks
+	// parsing outright.
+	GrammarFuzz *GrammarFuzz
+}
+
+// OpenAPIPayloads is the configuration for {"type":"openapi_payloads"}: parses the parameters an
+// OpenAPI 3.x / Swagger 2.0 definition declares (via internal/apidoc) and produces one payload
+// family per parameter, shaped by that parameter's own declared type: a string parameter draws
+// from the bundled fuzzing corpus, an integer/number parameter gets boundary values, an
+// "email"-formatted parameter gets format violations, an enumerated parameter gets values outside
+// its enum, and an array parameter gets empty/oversized/nested shapes.
+type OpenAPIPayloads struct {
+	// Spec is the definition's own bytes (JSON or YAML), inline. Takes priority over Path when
+	// both are set, so a caller that already holds the document in memory need not round-trip it
+	// through the filesystem first.
+	Spec string `json:"spec,omitempty"`
+	// Path is a definition file to read from the server's filesystem, for a document too large
+	// to want inline on the wire — the same choice FileSource and RuntimeFileSource offer.
+	Path string `json:"path,omitempty"`
+	// ParamName restricts generation to the parameters with this exact name; empty means every
+	// parameter the definition declares, across every operation.
+	ParamName string `json:"param_name,omitempty"`
 }
 
 // CollaboratorSource is the configuration for {"type":"collaborator"}.
@@ -450,6 +502,32 @@ type CopyOtherSource struct {
 	Position int `json:"position"`
 }
 
+// CharacterSubstitution is leet-speak style substitution: each configured character maps to
+// one or more alternative runes, and every permutation across a word's substitutable positions
+// is emitted — not just "substitute or don't" (that is CharSubstitution). "peter" with e->['3']
+// and t->['7'] has 3 substitutable positions (two e's, one t), producing all 8 combinations:
+// peter, p3ter, pe7er, p37er, pet3r, p3t3r, pe73r, p373r.
+type CharacterSubstitution struct {
+	// Words is the base word list, one payload family per word.
+	Words []string `json:"words"`
+	// Subs maps a character (as it appears in a word) to its alternative substitutes. A
+	// character can have more than one alternative (e.g. "a" -> ["4", "@"]), unlike
+	// CharSubstitution's single replacement per character.
+	Subs map[string][]string `json:"subs"`
+	// MaxPerWord bounds combinations generated per word, so one word with many substitutable
+	// positions cannot alone exhaust the payload cap before later words are ever reached. 0
+	// means unbounded (subject to the overall Resolve cap).
+	MaxPerWord int `json:"max_per_word"`
+}
+
+// RuntimeFileSource is the filename for {"type":"runtime_file"}: payloads read from a file
+// path at resolve time, one per line, for a list too large to hold in memory as a JSON array
+// on the wire. It shares FileSource's read semantics (trim, skip blanks, one per line) rather
+// than duplicating a second reader with subtly different edge-case handling.
+type RuntimeFileSource struct {
+	Path string `json:"path"`
+}
+
 // UnmarshalJSON decodes the tagged shape, dispatching on "type".
 func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 	var probe struct {
@@ -568,6 +646,30 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.Collaborator = &c
+	case "character_substitution":
+		var cs CharacterSubstitution
+		if err := json.Unmarshal(b, &cs); err != nil {
+			return err
+		}
+		s.CharacterSubstitution = &cs
+	case "runtime_file":
+		var rf RuntimeFileSource
+		if err := json.Unmarshal(b, &rf); err != nil {
+			return err
+		}
+		s.RuntimeFile = &rf
+	case "openapi_payloads":
+		var o OpenAPIPayloads
+		if err := json.Unmarshal(b, &o); err != nil {
+			return err
+		}
+		s.OpenAPIPayloads = &o
+	case "grammar_fuzz":
+		var gf GrammarFuzz
+		if err := json.Unmarshal(b, &gf); err != nil {
+			return err
+		}
+		s.GrammarFuzz = &gf
 	default:
 		return fmt.Errorf("unknown payload source type %q", probe.Type)
 	}
@@ -812,6 +914,42 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		// operator's max_requests) is the real ceiling.
 		items = []string{s.RecursiveGrep.Initial}
 		total, exact = 0, false
+	case "character_substitution":
+		if s.CharacterSubstitution == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "character_substitution"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharacterSubstitution(s.CharacterSubstitution, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "runtime_file":
+		if s.RuntimeFile == nil || strings.TrimSpace(s.RuntimeFile.Path) == "" {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "runtime_file"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveRuntimeFile(s.RuntimeFile, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "openapi_payloads":
+		if s.OpenAPIPayloads == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "openapi_payloads"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveOpenAPIPayloads(s.OpenAPIPayloads, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "grammar_fuzz":
+		if s.GrammarFuzz == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "grammar_fuzz"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveGrammarFuzz(s.GrammarFuzz, cap)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unknown payload source type %q", s.Type)
 	}
@@ -1850,4 +1988,295 @@ func (r *splitMix64) next() uint64 {
 	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
 	z = (z ^ (z >> 27)) * 0x94D049BB133111EB
 	return z ^ (z >> 31)
+}
+
+// Intn returns a non-negative pseudo-random number in [0, n).
+// It implements gfRand so splitMix64 can be used directly by the grammar engine.
+func (r *splitMix64) Intn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return int(r.next() % uint64(n))
+}
+
+// charSubWordInfo is the per-word plan for resolveCharacterSubstitution, computed once so
+// generation never re-scans a word for every combination.
+type charSubWordInfo struct {
+	runes     []rune
+	positions []int      // rune indices that carry a configured substitution
+	radices   []int      // 1+len(alts) per substitutable position (digit 0 = keep original)
+	alts      [][]string // alternatives per substitutable position, aligned with positions
+	combos    uint64     // product of radices, saturating at MaxUint64
+}
+
+// resolveCharacterSubstitution enumerates every permutation across a word's substitutable
+// positions, where each position may carry more than one alternative substitute (unlike
+// CharSubstitution's single replacement per character). Digit 0 at a position means "keep the
+// original character", so the all-zero combination is always the base word itself.
+func resolveCharacterSubstitution(c *CharacterSubstitution, cap int) ([]string, uint64, bool, bool, error) {
+	if len(c.Words) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "words"}
+	}
+	if len(c.Subs) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "subs"}
+	}
+	perWord := uint64(c.MaxPerWord)
+	if c.MaxPerWord <= 0 {
+		perWord = math.MaxUint64
+	}
+
+	infos := make([]charSubWordInfo, len(c.Words))
+	var total uint64
+	saturated := false
+	for wi, word := range c.Words {
+		runes := []rune(word)
+		var positions []int
+		var radices []int
+		var alts [][]string
+		for ri, r := range runes {
+			if a, ok := c.Subs[string(r)]; ok && len(a) > 0 {
+				positions = append(positions, ri)
+				radices = append(radices, 1+len(a))
+				alts = append(alts, a)
+			}
+		}
+		combos := uint64(1)
+		for _, r := range radices {
+			if combos > math.MaxUint64/uint64(r) {
+				combos = math.MaxUint64
+				saturated = true
+				break
+			}
+			combos *= uint64(r)
+		}
+		infos[wi] = charSubWordInfo{runes: runes, positions: positions, radices: radices, alts: alts, combos: combos}
+		if total > math.MaxUint64-combos {
+			total = math.MaxUint64
+			saturated = true
+		} else {
+			total += combos
+		}
+	}
+	exact := !saturated
+
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for wi := range c.Words {
+		if len(out) >= take {
+			break
+		}
+		info := infos[wi]
+		k := len(info.positions)
+		limit := info.combos
+		if perWord < limit {
+			limit = perWord
+		}
+		idx := make([]int, k)
+		for produced := uint64(0); produced < limit && len(out) < take; produced++ {
+			var b strings.Builder
+			b.Grow(len(info.runes) + k)
+			pj := 0
+			for ri, r := range info.runes {
+				if pj < k && info.positions[pj] == ri {
+					if d := idx[pj]; d == 0 {
+						b.WriteRune(r)
+					} else {
+						b.WriteString(info.alts[pj][d-1])
+					}
+					pj++
+				} else {
+					b.WriteRune(r)
+				}
+			}
+			item := b.String()
+			if err := checkLen(len(item)); err != nil {
+				return nil, 0, false, false, err
+			}
+			out = append(out, item)
+			// Odometer, last position fastest, matching resolveCustomIterator's convention.
+			p := k
+			for {
+				if p == 0 {
+					break
+				}
+				p--
+				idx[p]++
+				if idx[p] < info.radices[p] {
+					break
+				}
+				idx[p] = 0
+			}
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, exact, trunc, nil
+}
+
+// resolveRuntimeFile streams the file line by line rather than reading it whole into memory
+// (FileSource's approach), for a wordlist too large to hold as a single in-memory buffer.
+// Lines beyond cap are counted towards Total but never retained, so resident memory is bounded
+// by cap regardless of file size.
+func resolveRuntimeFile(rf *RuntimeFileSource, cap int) ([]string, uint64, bool, bool, error) {
+	f, err := os.Open(rf.Path)
+	if err != nil {
+		return nil, 0, false, false, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxItemLen+1)
+	var total uint64
+	items := make([]string, 0, minI(cap, 1024))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if err := checkLen(len(line)); err != nil {
+			return nil, 0, false, false, err
+		}
+		total++
+		if len(items) < cap {
+			items = append(items, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, false, false, err
+	}
+	trunc := uint64(len(items)) < total
+	return items, total, true, trunc, nil
+}
+
+// maxInt64Str/maxInt64Plus1Str are literal rather than computed, because MaxInt64+1 cannot be
+// held in an int64 to begin with — the value only exists as text, which is exactly what a
+// boundary-value payload needs to be.
+const (
+	maxInt64Str      = "9223372036854775807"
+	maxInt64Plus1Str = "9223372036854775808"
+)
+
+func openAPIIntegerBoundaryPayloads() []string {
+	return []string{"0", "-1", maxInt64Str, maxInt64Plus1Str}
+}
+
+func openAPIEmailViolationPayloads() []string {
+	return []string{
+		"not-an-email",
+		"@example.com",
+		"user@",
+		"user@@example.com",
+		"user@.com",
+		"user name@example.com",
+	}
+}
+
+// openAPIArrayPayloads covers the three shapes the task calls out: empty, oversized (well
+// short of MaxItemLen, so it is refused for being interesting, not for tripping the unrelated
+// byte ceiling), and nested.
+func openAPIArrayPayloads() []string {
+	elements := make([]string, 2000)
+	for i := range elements {
+		elements[i] = "1"
+	}
+	return []string{
+		"[]",
+		"[" + strings.Join(elements, ",") + "]",
+		"[[[[[1]]]]]",
+	}
+}
+
+// openAPIOutOfEnumPayloads returns candidate values guaranteed absent from enum: fixed
+// candidates first, filtered against the declared set, and a value built from the set itself
+// (so it cannot collide) if every fixed candidate happened to be a declared member.
+func openAPIOutOfEnumPayloads(enum []string) []string {
+	inEnum := make(map[string]bool, len(enum))
+	for _, v := range enum {
+		inEnum[v] = true
+	}
+	candidates := []string{"__not_in_enum__", "0", "-1", "", "null"}
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if !inEnum[c] {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, strings.Join(enum, "")+"_out_of_enum")
+	}
+	return out
+}
+
+// openAPIPayloadsForParam picks the generator by specificity: an enum is the strongest signal
+// (any declared type still has one specific invalid space), then a declared string format,
+// then the declared type, then the fuzzing corpus as the type-agnostic fallback.
+func openAPIPayloadsForParam(p apidoc.Parameter) ([]string, error) {
+	switch {
+	case len(p.Enum) > 0:
+		return openAPIOutOfEnumPayloads(p.Enum), nil
+	case strings.EqualFold(p.Format, "email"):
+		return openAPIEmailViolationPayloads(), nil
+	case strings.EqualFold(p.Type, "integer") || strings.EqualFold(p.Type, "number"):
+		return openAPIIntegerBoundaryPayloads(), nil
+	case strings.EqualFold(p.Type, "array"):
+		return openAPIArrayPayloads(), nil
+	default:
+		return builtinWordlistLines("burp-fuzzing-full")
+	}
+}
+
+// resolveOpenAPIPayloads parses o's definition via apidoc.Parse and generates one payload
+// family per declared parameter (or just the one named by ParamName), each shaped by that
+// parameter's own type/format/enum. The set is fully enumerated before capping — unlike the
+// combinatorial generators above, its size is bounded by the definition's own parameter count,
+// not by an operator-tunable range, so there is no unbounded total to guard against.
+func resolveOpenAPIPayloads(o *OpenAPIPayloads, cap int) ([]string, uint64, bool, bool, error) {
+	var data []byte
+	switch {
+	case strings.TrimSpace(o.Spec) != "":
+		data = []byte(o.Spec)
+	case strings.TrimSpace(o.Path) != "":
+		raw, err := os.ReadFile(o.Path)
+		if err != nil {
+			return nil, 0, false, false, err
+		}
+		data = raw
+	default:
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "openapi spec or path"}
+	}
+
+	doc, err := apidoc.Parse(data)
+	if err != nil {
+		return nil, 0, false, false, fmt.Errorf("openapi_payloads: %w", err)
+	}
+
+	var all []string
+	for _, op := range doc.Operations {
+		for _, p := range op.Parameters {
+			if o.ParamName != "" && p.Name != o.ParamName {
+				continue
+			}
+			payloads, err := openAPIPayloadsForParam(p)
+			if err != nil {
+				return nil, 0, false, false, err
+			}
+			for _, item := range payloads {
+				if err := checkLen(len(item)); err != nil {
+					return nil, 0, false, false, err
+				}
+				all = append(all, item)
+			}
+		}
+	}
+	if len(all) == 0 {
+		if o.ParamName != "" {
+			return nil, 0, false, false, fmt.Errorf(
+				"openapi_payloads: the definition declared no parameter named %q, so there is nothing to generate payloads for", o.ParamName)
+		}
+		return nil, 0, false, false, fmt.Errorf(
+			"openapi_payloads: the definition declared no parameters, so there is nothing to generate payloads for")
+	}
+	total := uint64(len(all))
+	take := takeOf(total, cap)
+	out := all[:take]
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
 }
