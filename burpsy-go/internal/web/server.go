@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,7 +62,15 @@ type Server struct {
 	// guarded is mux behind the cross-site gate, and it is what ListenAndServe serves. A separate
 	// field rather than reassigning mux, because every test in this package drives s.mux directly and
 	// must keep doing so: those tests are about handler behaviour, and the gate has its own.
-	guarded        http.Handler
+	guarded http.Handler
+	// confirms holds the live one-time confirmations the unattended-caller gate spends
+	// (burpsy-react-ui-ejp5). On the Server because the gate is a per-process authorisation
+	// primitive: a token minted in one process says nothing about another, which is the right
+	// reading for a console an operator runs rather than a service with many users.
+	confirms *confirmStore
+	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
+	// /confirm suffix and so the patterns do not enter the route manifest's remit.
+	confirmMux     http.Handler
 	sender         *sender.Sender
 	scanner        *scanner.ActiveScanner
 	passiveScanner *scanner.PassiveScanner
@@ -76,12 +85,18 @@ type Server struct {
 	advisories         *advisory.Catalogue
 	sitemap            *sitemap.SiteMap
 	sessionCoordinator *session.Coordinator
-	matchReplace       *matchreplace.RuleSet
-	toolLog            *toollog.ToolLog
-	organizer          *organizer.Store
-	loginRuns          *sessionLoginRuns
-	intercept          *intercept.Engine
-	persist            *persist.Store
+	// prompts is the pending browser-recovery prompt registry behind the session rule action of
+	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
+	// seam, and the answer arrives here from the console's modal. Constructed in NewServer like
+	// the other registries; nil only in a Server built by direct struct literal in a test that
+	// never touches the prompt routes.
+	prompts      *sessionPrompts
+	matchReplace *matchreplace.RuleSet
+	toolLog      *toollog.ToolLog
+	organizer    *organizer.Store
+	loginRuns    *sessionLoginRuns
+	intercept    *intercept.Engine
+	persist      *persist.Store
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -216,6 +231,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		scope:              scope,
 		logger:             zap.NewNop(),
 		mux:                http.NewServeMux(),
+		confirms:           newConfirmStore(),
 		sender:             sender.NewSender(sender.DefaultSenderConfig()),
 		findings:           core.NewFindingStore(),
 		advisories:         loadAdvisories(),
@@ -226,6 +242,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		toolLog:            toollog.New(),
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
+		prompts:            newSessionPrompts(),
 		intercept:          intercept.NewEngine(),
 		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
 		tasks:              dash.NewRegistry(),
@@ -793,6 +810,10 @@ func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	// another. The adapter resolves the host per call — see extension_session_action.go — so a plugin
 	// loaded after this line is still found.
 	s.sessionCoordinator.SetSessionActionInvoker(sessionActionInvoker{s: s})
+	// The "Prompt the user for in-browser recovery" action is wired here for the same reason: a rule
+	// that names the prompt must be reachable from every call path, and the console is the only
+	// surface that can ask. See session_prompts.go.
+	s.sessionCoordinator.SetSessionPrompter(sessionPrompter{s: s})
 	return s
 }
 
@@ -983,6 +1004,11 @@ func (s *Server) setupRoutes() {
 	// nor writes a rule, it converts messages, and parking it under the rules subtree would make it
 	// inherit the credential risk class it does not deserve.
 	s.mux.HandleFunc("/api/session/macro-steps", s.handleSessionMacroSteps)
+	// The browser-recovery prompt registry (burpsy-react-ui-dq1g): the exact pattern reads the
+	// pending list, the subtree resolves one. A task blocked on the prompt waits on the seam until
+	// the operator answers here — see session_prompts.go.
+	s.mux.HandleFunc("/api/session/prompts", s.handleSessionPrompts)
+	s.mux.HandleFunc("/api/session/prompts/", s.handleSessionPromptResolve)
 
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
@@ -1125,7 +1151,44 @@ func (s *Server) setupRoutes() {
 	// Here rather than in ListenAndServe because every test in this package drives s.mux.ServeHTTP
 	// directly: a gate in the listener would be exercised by nothing and verified by nothing, and a
 	// security control the suite cannot see is a comment rather than a control.
-	s.guarded = s.sameOriginOnly(s.mux)
+	// The unattended-caller gate (burpsy-react-ui-ejp5), inside the cross-site gate. Order matters:
+	// sameOrigin first because a cross-site request should be refused for being cross-site whatever
+	// it was trying to do, and the confirmation gate is a different question about a different kind
+	// of caller.
+	// The confirmation gate, and the cross-site gate it sits inside. Order is the whole argument:
+	// sameOrigin is the OUTER one, so a cross-site request is refused for being cross-site and never
+	// reaches the authorisation check at all. In the other order a cross-site caller got a 428
+	// naming the route and the header to try — which tells an attacker probing the control exactly
+	// what to send next, and means a request from a hostile page got as far as asking for
+	// permission.
+	//
+	// s.registerConfirmationRoutes is called from here but lives in confirm_gate.go, because the
+	// mint patterns are DERIVED from the manifest and the route-manifest test refuses a
+	// non-literal HandleFunc argument in this file. The test is right to refuse it: a variable
+	// pattern is invisible to the manifest. The mint endpoints are not manifest routes — they are
+	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
+	// to keep them out of this file rather than to weaken the test.
+	s.confirmMux = s.registerConfirmationRoutes()
+	s.guarded = s.sameOriginOnly(s.confirmationGate(s.mux, s.confirmMux))
+}
+
+// gatedRoutePatterns is every manifest pattern whose risk class needs confirmation.
+//
+// Derived from the manifest rather than listed, because a list is a second statement of the policy
+// and this file already exists to make the gate one derivation. The `/` root is excluded because it
+// is an asset route and a subtree confirm endpoint under it would shadow every other pattern.
+func gatedRoutePatterns() []string {
+	var out []string
+	for pattern, r := range manifest {
+		if pattern == "/" || !needsConfirmation(r.risk) {
+			continue
+		}
+		// A subtree pattern (trailing slash) already matches, so its own path is reachable through
+		// it. An exact pattern is not, and the gate resolves it as written.
+		out = append(out, pattern)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // sameOriginOnly wraps h so a mutating request that did not come from this console is refused.

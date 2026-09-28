@@ -95,6 +95,15 @@ type auditConfigView struct {
 	// who would rather account a failed item's coverage as lost than retry against a target that is
 	// refusing -- so it is a pointer for the same reason MaxRequests is one.
 	FollowUpPasses *uint32 `json:"number_of_follow_up_passes"`
+	// PerHostThrottleMs is Burp's resource-pool throttle_interval_millis: the minimum
+	// interval between probes to the same host. Null means no per-host throttle.
+	PerHostThrottleMs *uint32 `json:"per_host_throttle_ms"`
+	// PerHostThrottleRandom enables Burp's throttle_random_enabled: jitter the per-host
+	// interval by up to 50% so a fixed cadence is not fingerprintable.
+	PerHostThrottleRandom bool `json:"per_host_throttle_random"`
+	// PerHostMaxInFlight is Burp's resource-pool concurrent_request_limit: the ceiling on
+	// probes in flight to ONE host at a time. Null means no per-host cap.
+	PerHostMaxInFlight *uint32 `json:"per_host_max_in_flight"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -151,6 +160,15 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if cfg.FollowUpPasses.Set {
 		n := cfg.FollowUpPasses.Value
 		v.FollowUpPasses = &n
+	}
+	if cfg.PerHostThrottleMs.Set {
+		n := cfg.PerHostThrottleMs.Value
+		v.PerHostThrottleMs = &n
+	}
+	v.PerHostThrottleRandom = cfg.PerHostThrottleRandom
+	if cfg.PerHostMaxInFlight.Set {
+		n := cfg.PerHostMaxInFlight.Value
+		v.PerHostMaxInFlight = &n
 	}
 	return v
 }
@@ -210,6 +228,13 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 	}
 	if v.FollowUpPasses != nil {
 		cfg.FollowUpPasses = scanner.SomeUint32(*v.FollowUpPasses)
+	}
+	if v.PerHostThrottleMs != nil {
+		cfg.PerHostThrottleMs = scanner.SomeUint32(*v.PerHostThrottleMs)
+	}
+	cfg.PerHostThrottleRandom = v.PerHostThrottleRandom
+	if v.PerHostMaxInFlight != nil {
+		cfg.PerHostMaxInFlight = scanner.SomeUint32(*v.PerHostMaxInFlight)
 	}
 	if v.SkipAllTestsForParameters != nil {
 		names := make([]string, 0, len(v.SkipAllTestsForParameters))
