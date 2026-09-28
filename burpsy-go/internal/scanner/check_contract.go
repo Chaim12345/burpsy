@@ -33,6 +33,90 @@ const (
 	PhaseJavaScript
 )
 
+// String names the phase for an outcome record and the audit queue's item row. Burp names its
+// seven audit phases (Zefx) and an operator comparing a thin burpsy run against a Burp one needs
+// to see which stage produced nothing; an unnameable enum cannot say.
+//
+// The names are burpsy's own stages, not Burp's seven: the two do not correspond one-to-one, and
+// claiming a mapping this tree cannot evidence would be worse than naming what is actually here.
+func (p CheckPhase) String() string {
+	switch p {
+	case PhasePassive:
+		return "passive"
+	case PhaseLightActive:
+		return "light-active"
+	case PhaseActive:
+		return "active"
+	case PhaseStored:
+		return "stored"
+	case PhaseCollaborator:
+		return "collaborator"
+	case PhaseJavaScript:
+		return "javascript"
+	default:
+		return "unknown"
+	}
+}
+
+// AllCheckPhases is every phase in declaration order, so a report can render a fixed table rather
+// than a map whose key set varies with what happened to run.
+var AllCheckPhases = [...]CheckPhase{
+	PhasePassive, PhaseLightActive, PhaseActive, PhaseStored, PhaseCollaborator, PhaseJavaScript,
+}
+
+// PhaseOutcome is what one phase did for one audit item.
+//
+// Burp tracks per-phase state per item (its Zekf nibble) precisely because "this phase produced
+// nothing" and "this phase never ran" are different facts, and an operator diagnosing a thin
+// result needs to tell them apart. burpsy recorded a phase on every descriptor and read it
+// nowhere, so both collapsed into the same silence (burpsy-react-ui-0qhf).
+type PhaseOutcome struct {
+	// Ran counts checks of this phase that completed without a transport failure.
+	Ran int `json:"ran"`
+	// Findings is what this phase contributed, so a phase that ran and found nothing is
+	// distinguishable from one that never ran.
+	Findings int `json:"findings"`
+	// Skipped counts checks of this phase the engine could not run (no implementation, or a
+	// dispatch scope with no addressable unit).
+	Skipped int `json:"skipped"`
+	// SendFailures counts checks of this phase abandoned because no probe could be sent or read.
+	SendFailures int `json:"send_failures"`
+	// NotRun counts checks of this phase never attempted because the budget ran out.
+	NotRun int `json:"not_run"`
+	// AlreadyCovered counts this phase's steps not admitted because an identical
+	// (dispatch unit, check) had already run this session.
+	AlreadyCovered int `json:"already_covered"`
+	// RateLimited counts this phase's steps the dispatch loop delayed on a 429 or 503 (fkl8).
+	RateLimited int `json:"rate_limited"`
+	// Refused counts this phase's checks the session declined before dispatch, by the reason
+	// recorded in the item's refusal list. Present so a phase whose checks were all refused is
+	// not indistinguishable from a phase that was never planned.
+	Refused int `json:"refused"`
+	// RequestBudgetSpent counts this phase's checks not admitted because the outbound-request
+	// budget was spent. Separate from NotRun so a request-budget cut is not reported per phase
+	// as a time-budget one.
+	RequestBudgetSpent int `json:"request_budget_spent"`
+	// UnitAbandoned counts this phase's checks not admitted because consecutive failures
+	// abandoned their dispatch unit.
+	UnitAbandoned int `json:"unit_abandoned"`
+	// ItemFailed counts this phase's checks not admitted because the item breaker failed the
+	// whole item.
+	ItemFailed int `json:"item_failed"`
+	// SessionPaused counts this phase's checks not admitted because the session breaker paused
+	// the run before this item.
+	SessionPaused int `json:"session_paused"`
+}
+
+// Observed reports whether this phase did anything at all — ran a check, or was refused one. A
+// phase with nothing observed is the case an operator must be able to see: it means the run never
+// reached that stage for this item.
+func (p PhaseOutcome) Observed() bool {
+	return p.Ran > 0 || p.Skipped > 0 || p.SendFailures > 0 || p.NotRun > 0 ||
+		p.AlreadyCovered > 0 || p.RateLimited > 0 || p.Refused > 0 ||
+		p.RequestBudgetSpent > 0 || p.UnitAbandoned > 0 || p.ItemFailed > 0 ||
+		p.SessionPaused > 0
+}
+
 // CheckInvasiveness is a check's rank in Burp's light/medium/intrusive active tiers. It is the
 // per-check ranking the `scanner/issues_reported/scan_type_*_active` keys select on.
 //
@@ -97,23 +181,19 @@ type CheckContext struct {
 	// InsertionKinds is *which classes of place*, this is *how many and how deep*. A check reads
 	// both through ProbeEnumerateOptions, which is the only spelling a probe site should use.
 	EnumerateOptions bcheck.EnumerateOptions
+	// PointEffectiveCheck names the check currently being enumerated, for the
+	// per-point effectiveness gate (y4om). Set by the dispatcher before the
+	// harness enumerates, so a probe site knows which check it is scoring.
+	PointEffectiveCheck string
+	// PointEffectiveness is the per-point effectiveness oracle (y4om): nil
+	// when the gate is off, non-nil when the run should drop places that have
+	// already been probed without a single answer.
+	PointEffectiveness *pointEffectiveness
 	// LightAudit is the run's light-audit tier handle (burpsy-react-ui-7bkj): nil in a
 	// context built outside a dispatched audit, which ProbeHarness-equivalent consumers read
 	// as "the tier is off" — a unit test or a direct check call must not skip points on the
 	// strength of a run it never joined. Set by the dispatcher to the run's own state.
 	LightAudit *RunLightAudit
-	// PointEffectiveness is the run's per-insertion-point effectiveness ledger
-	// (burpsy-react-ui-y4om, Burp's skip_ineffective_checks). nil in a context built outside a
-	// dispatched audit, which the checks read as "the gate is off" — a unit test or a direct
-	// check call must not skip points on the strength of a run it never joined. Set by the
-	// dispatcher, the same way LightAudit is.
-	PointEffectiveness *pointEffectiveness
-	// PointEffectiveCheck names the check this context is enumerating FOR, because the
-	// effectiveness prior is keyed per check (y4om): a place one check found nothing at is
-	// still worth probing with another. Set by runInjection before the harness enumerates,
-	// because ProbeEnumerateOptions reads it there — naming the check on a COPY of the run
-	// configuration instead would arrive after the enumeration that needed it.
-	PointEffectiveCheck string
 }
 
 // RunLightAudit is what a check context sees of the audit run's light-audit tier: the
@@ -175,10 +255,17 @@ func (cc *CheckContext) ProbeEnumerateOptions() bcheck.EnumerateOptions {
 		return bcheck.EnumerateOptions{}
 	}
 	opts := cc.EnumerateOptions
-	// The check asking is named here, not on a run-configuration copy: the harness enumerates
-	// through this method, and the effectiveness prior is keyed per check (y4om), so a name
-	// that arrived after this call would ask about a bucket nothing has ever written to.
-	if opts.CheckName == "" {
+	// The gate's prior is keyed by (check, kind, name, host), and the enumerator reads the check
+	// half off opts.CheckName. A check sets PointEffectiveCheck before it enumerates (runInjection
+	// does), so the name has to be copied in HERE — the copy is what makes the drop side and the
+	// record side agree on one key. Without it the enumerator consults the oracle under the empty
+	// name while checks_injection.go records under the real one, every lookup misses, and
+	// skip_ineffective_checks reports itself enabled while never dropping a single point.
+	//
+	// Overwritten rather than only-if-empty: a stale CheckName inherited from the run's config would
+	// score this check's points against another check's prior, which is the exact cross-check
+	// contamination the check half of the key exists to prevent.
+	if cc.PointEffectiveCheck != "" {
 		opts.CheckName = cc.PointEffectiveCheck
 	}
 	return opts
@@ -243,26 +330,14 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 	// state on, so every check the run dispatches sees one prior. Absent (a context built
 	// outside an audit) reads nil, which the RunLightAudit methods treat as off.
 	cc.LightAudit = lightAuditFrom(ctx)
+	// The per-point effectiveness ledger rides it too (y4om), by the same route and for the same
+	// reason. This assignment is load-bearing in both directions: without it the gate's RECORDING
+	// side never sees a ledger, so effectivenessFrom in checks_injection.go returns nil, no place is
+	// ever counted, and skip_ineffective_checks silently stops saving anything while still reading
+	// as enabled. Nil when the run set it to zero, which is how "the operator turned it off" reaches
+	// a check as an absent ledger rather than as a flag it has to honour.
 	cc.PointEffectiveness = pointEffectivenessFrom(ctx)
 	return cc
-}
-
-// lightAuditKeyCtx is the context key for the run's light-audit tier. Unexported struct key
-// so no other package can collide with it.
-type lightAuditKeyCtx struct{}
-
-// withLightAudit attaches the run's light-audit state to a dispatch context.
-func withLightAudit(ctx context.Context, la *RunLightAudit) context.Context {
-	return context.WithValue(ctx, lightAuditKeyCtx{}, la)
-}
-
-// lightAuditFrom reads it back; nil when absent.
-func lightAuditFrom(ctx context.Context) *RunLightAudit {
-	if ctx == nil {
-		return nil
-	}
-	la, _ := ctx.Value(lightAuditKeyCtx{}).(*RunLightAudit)
-	return la
 }
 
 // pointEffectivenessKeyCtx is the context key for the run's per-point effectiveness ledger
@@ -283,6 +358,24 @@ func pointEffectivenessFrom(ctx context.Context) *pointEffectiveness {
 	}
 	pe, _ := ctx.Value(pointEffectivenessKeyCtx{}).(*pointEffectiveness)
 	return pe
+}
+
+// lightAuditKeyCtx is the context key for the run's light-audit tier. Unexported struct key
+// so no other package can collide with it.
+type lightAuditKeyCtx struct{}
+
+// withLightAudit attaches the run's light-audit state to a dispatch context.
+func withLightAudit(ctx context.Context, la *RunLightAudit) context.Context {
+	return context.WithValue(ctx, lightAuditKeyCtx{}, la)
+}
+
+// lightAuditFrom reads it back; nil when absent.
+func lightAuditFrom(ctx context.Context) *RunLightAudit {
+	if ctx == nil {
+		return nil
+	}
+	la, _ := ctx.Value(lightAuditKeyCtx{}).(*RunLightAudit)
+	return la
 }
 
 // CheckRunner evaluates one admitted check unit. A refusal is represented by the

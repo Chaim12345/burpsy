@@ -662,6 +662,17 @@ type AuditConfig struct {
 	// a real choice (an operator who knows the target's limiter resets per-minute may
 	// prefer to let the request budget eat the 429s) and must not read as "unset".
 	AutoBackoffMs OptUint32
+	// PerHostThrottleMs is Burp's resource-pool throttle_interval_millis: the minimum
+	// interval between probes to the SAME host. Unset means no per-host throttle (the
+	// global request budget still applies). Set-and-zero is treated as unset.
+	PerHostThrottleMs OptUint32
+	// PerHostThrottleRandom enables Burp's throttle_random_enabled: jitter the
+	// per-host interval by up to 50% so a fixed cadence is not fingerprintable.
+	PerHostThrottleRandom bool
+	// PerHostMaxInFlight is Burp's resource-pool concurrent_request_limit: the ceiling
+	// on probes in flight to ONE host at a time, distinct from the global worker count.
+	// Unset means no per-host cap. Set-and-zero is treated as 1.
+	PerHostMaxInFlight OptUint32
 	// MaxItemsInProgress is Burp's scanner/audit_optimization/max_items_in_progress
 	// (burpsy-react-ui-3ymo): the ceiling on audit items admitted past the Auditing gate at
 	// once, enforced independently of ScanConfig.MaxConcurrency's worker-pool size. An item

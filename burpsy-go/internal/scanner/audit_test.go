@@ -861,6 +861,40 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				// "no cap stated" into "admit nothing", which is the one reading that is certainly
 				// wrong (burpsy-react-ui-iueb).
 				got, wantSet, wantUnset = optField(applied.MaxInsertionPointsPerRequest), uint64(k.Value), optField(base.MaxInsertionPointsPerRequest)
+			case "skip_ineffective_checks":
+				// A boolean-shaped gate (y4om), so the overlay is a scalar. Checked through the
+				// Set/Value pair rather than a resolved boolean because that is what the row writes,
+				// and because "unset means Burp's default (on)" cannot be observed on the field —
+				// a preset that does not set the key must leave the field UNSET rather than write a
+				// 1, or the operator's "inherit" would become an explicit decision on every preset.
+				got = optField(applied.SkipIneffectiveChecks)
+				if !k.Set {
+					wantSet, wantUnset = 0, 0
+				} else {
+					wantSet, wantUnset = uint64(k.Value), 0
+				}
+			case "max_items_in_progress":
+				// The admission cap (3ymo). Checked through the RUN's resolved value rather than
+				// the config field, because a preset value of 0 means the engine's own
+				// smallest-real-cap clamp rather than "unbounded" — resolvedMaxItemsInProgress
+				// turns it into 1, and asserting the raw field would demand 0 be preserved, which
+				// is precisely the deadlock the clamp exists to prevent.
+				//
+				// Unset means the shipped default, so a preset that does not set the key holds
+				// DefaultMaxItemsInProgress rather than zero.
+				if !k.Set {
+					// Unset is a no-op overlay, so the applied config holds what the BASE held —
+					// which is the zero value unless the base also set it. Asserting the shipped
+					// default here would be wrong: Apply does not resolve defaults, and the run's
+					// newAuditRun does that later.
+					got, wantSet, wantUnset = optField(applied.MaxItemsInProgress), 0, 0
+					break
+				}
+				want := uint64(k.Value)
+				if k.Value == 0 {
+					want = 1 // set-and-zero is the smallest real cap, not "unbounded"
+				}
+				got, wantSet, wantUnset = uint64(applied.resolvedMaxItemsInProgress()), want, 0
 			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
 				// Field-less by design: this engine has no per-issue selection, the row reports
 				// Applies false, and Apply reports the key unapplied. Nothing on the applied config

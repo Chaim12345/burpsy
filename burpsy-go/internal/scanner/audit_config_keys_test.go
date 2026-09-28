@@ -135,6 +135,12 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// 38/4/16 since burpsy-react-ui-y4om: skip_ineffective_checks moved from reported to applied,
 	// which is the one change this table exists to make visible. A key that stops reporting as
 	// unapplied without the count moving is the silent-coverage-change defect the pin prevents.
+	//
+	// The count follows the TABLE, not an intention. An earlier revision of this constant claimed
+	// 40/4/18 on the strength of scan_speed and scan_accuracy having moved to applied; both rows
+	// still read applies:false with a "not applied:" reason, and neither has a read or apply
+	// function, so the table is honouring 38. A pin that outruns the code it pins is worse than no
+	// pin: it makes the test fail on a correct table and gets "fixed" by weakening the table.
 	applied, partial, reported := 0, 0, 0
 	for _, k := range builtInConfigKeys {
 		switch {

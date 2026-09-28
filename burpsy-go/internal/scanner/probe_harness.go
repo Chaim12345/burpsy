@@ -56,6 +56,13 @@ type ProbeHarness struct {
 	baseline ProbeResponse
 	points   []bcheck.InsertionPoint
 	declined []bcheck.Declined
+	// accuracy is the run-level ScanAccuracy bound (ev7y): the maximum number of
+	// payloads any single check may send. Zero means unset — no bound. A check
+	// whose payload list is longer is truncated to accuracy entries, so a
+	// minimise_false_positives run (accuracy=10) probes fewer candidates per
+	// place than a minimise_false_negatives run (accuracy=4), which is the whole
+	// point of the trade-off.
+	accuracy int
 }
 
 // NewProbeHarness captures the baseline and enumerates insertion points.
@@ -80,6 +87,9 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	}
 
 	h := &ProbeHarness{scanner: s, exchange: exchange, reqBytes: raw}
+	// The run-level accuracy bound is not wired onto CheckContext yet (ev7y is
+	// mid-refactor); zero is the field's own "unset — no bound" value.
+	_ = cc
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)
@@ -87,6 +97,9 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 		return nil, fmt.Errorf("probe harness: no baseline response: %w", err)
 	}
 	h.baseline = baseline
+	// The baseline is a path of the target too — the response to the unmodified
+	// request — so it is recorded like any other probe's response.
+	h.recordCoverage(nil, "", baseline)
 	return h, nil
 }
 
@@ -142,11 +155,58 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 
 // Send places payload at point and dispatches the resulting request.
 func (h *ProbeHarness) Send(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	return h.guidedSend(&point, payload, ctx)
+}
+
+// guidedSend applies the payload, sends, and folds the response into the coverage
+// ledger — the one place a probe's response is recorded, so no probe path (direct Send,
+// probe, or the baseline) can skip it.
+func (h *ProbeHarness) guidedSend(point *bcheck.InsertionPoint, payload string, ctx context.Context) (ProbeResponse, error) {
 	mutated, err := point.Apply(h.reqBytes, payload, false)
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
 	}
-	return h.send(ctx, mutated)
+	resp, err := h.send(ctx, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(point, payload, resp)
+	return resp, nil
+}
+
+// recordCoverage folds one probe's response into the scanner's coverage ledger and
+// payload guide (burpsy-react-ui-6c90): the response cell (status × body-length
+// bucket) is recorded per exchange, and when the cell is new the payload's novelty
+// score at this place rises — the signal the guide orders future payload lists by.
+//
+// A nil point is the baseline: its response is a path of the target too and is
+// recorded, but there is no place to score a payload against. A scanner without
+// the ledgers (a zero ActiveScanner) is a no-op, not an error — the harness is
+// usable offline without the guidance machinery.
+func (h *ProbeHarness) recordCoverage(point *bcheck.InsertionPoint, payload string, resp ProbeResponse) {
+	if h.scanner == nil || h.scanner.pathCov == nil {
+		return
+	}
+	novel := h.scanner.pathCov.Record(fmt.Sprintf("%d", h.exchange.ID), resp.Status, len(resp.Body))
+	if point != nil {
+		h.scanner.guide.RecordOutcome(pointPlace(h.exchange.Host, *point), payload, novel)
+	}
+}
+
+// orderPayloads applies the coverage guide to a place's payload list: the payloads
+// that have opened new response cells at this place go first (burpsy-react-ui-6c90).
+// A place with no history gets the list back exactly as written — see
+// payloadGuide.Order for why an untouched list is never reshuffled.
+func (h *ProbeHarness) orderPayloads(point bcheck.InsertionPoint, payloads []string) []string {
+	// h.exchange is guarded alongside the guide, not after it. The guide is the thing whose absence
+	// is a supported state (no coverage tracking configured), but h.exchange is dereferenced on the
+	// line below to build the place key, so a harness built without one nil-panics the moment a guide
+	// happens to be present. A harness with no exchange has no place to score a payload against, so
+	// the list goes back unshuffled for the same reason the guide's absence does.
+	if h.scanner == nil || h.scanner.guide == nil || h.exchange == nil {
+		return payloads
+	}
+	return h.scanner.guide.Order(pointPlace(h.exchange.Host, point), payloads)
 }
 
 // probe runs one payload and hands the baseline/injected pair to classify. A send failure
@@ -155,7 +215,7 @@ func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, p
 	classify func(baseline, injected ProbeResponse) (InjectionEvidence, string)) InjectionProbe {
 
 	out := InjectionProbe{Payload: payload}
-	injected, err := h.Send(ctx, point, payload)
+	injected, err := h.guidedSend(&point, payload, ctx)
 	if err != nil {
 		out.Evidence = InjectionEvidenceInconclusive
 		out.Detail = fmt.Sprintf("%s %q: probe not sent: %v", point.Kind, point.Name, err)
@@ -168,10 +228,16 @@ func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, p
 }
 
 // ProbeErrorSignatures sends each payload and looks for signatures the baseline did not have.
+//
+// The list is coverage-guided (burpsy-react-ui-6c90): payloads that have opened new
+// response cells at this place on earlier exchanges are sent first — gofuzz's
+// "mutate what discovered new blocks", restated for a place that has not answered
+// yet. A place with no history gets the list exactly as written.
 func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
 
 	out := make([]InjectionProbe, 0, len(payloads))
+	payloads = h.orderPayloads(point, payloads)
 	for _, payload := range payloads {
 		out = append(out, h.probe(ctx, point, payload,
 			func(baseline, injected ProbeResponse) (InjectionEvidence, string) {

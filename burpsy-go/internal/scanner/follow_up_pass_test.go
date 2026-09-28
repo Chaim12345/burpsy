@@ -1,7 +1,13 @@
 package scanner
 
 import (
+	"context"
 	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
 )
 
 // burpsy-react-ui-5efx: Burp re-passes a FAILED audit item, bounded by
@@ -155,4 +161,83 @@ func TestTheFollowUpPassKeyNowApplies(t *testing.T) {
 		return
 	}
 	t.Fatal("no row for number_of_follow_up_passes")
+}
+
+// burpsy-react-ui-krf5: the follow-up pass must actually RE-DISPATCH. The old
+// `goto dispatch` label sat AFTER the dispatch loop, so the jump skipped the loop
+// entirely and went straight to the tail — which counted every step as failed a
+// second time (ItemFailed += len(steps)) and reported FollowUpPasses = 0. The retry
+// the feature exists for never ran.
+//
+// This drives an item through a failed pass with retries on: a dead target, a plan
+// spanning TWO dispatch scopes (PerHost final checks + PerUrl injection checks), and
+// the breaker wound tight. Pass 0 fails the first unit's check and abandons it; the
+// retry must re-dispatch, skip the already-failed check, and try the next unit's check.
+func TestAFollowUpPassReDispatchesAndDoesNotDoubleCount(t *testing.T) {
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, "127.0.0.1", deadTarget(t), "/search", "<html>seed</html>")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{
+			MaxConcurrency: 1, Timeout: 10 * time.Second,
+			// Two dispatch scopes: PerHost (final checks) before PerUrl (injection).
+			// The PerHost check fails first, tripping the item breaker with the
+			// PerUrl unit still untried — the state a retry exists for.
+			CheckExtendedActive: true,
+			CheckSqli:           true, CheckXss: true, CheckPathTraversal: true,
+		})
+
+	cfg := DefaultAuditConfig()
+	cfg.FollowUpPasses = SomeUint32(1)
+	// One failure abandons the unit; one abandoned unit fails the item — the tightest
+	// breaker, so pass 0 stops after the first unit and the retry has something to do.
+	cfg.ConsecutiveCheckFailuresToAbandonUnit = 1
+	cfg.ConsecutiveUnitFailuresToFailItem = 1
+	outcome, _ := scan.AuditWithin(context.Background(), id, cfg)
+
+	// The retry RAN — the whole point of the fix. The old code reported 0 here.
+	if outcome.FollowUpPasses != 1 {
+		t.Errorf("FollowUpPasses = %d, want 1: a failed item with untried steps must be re-dispatched", outcome.FollowUpPasses)
+	}
+	// The partition identity: every enabled check is dispositioned exactly once.
+	// The old code double-counted — the tail added len(steps) to ItemFailed after the
+	// per-check counters had already accounted for them.
+	if got, want := outcome.Considered(), scan.ActiveCheckCount(); got != want {
+		t.Errorf("Considered() = %d, want %d (the enabled check set): a failed item still "+
+			"accounts for its whole check set exactly once, with no double-count", got, want)
+	}
+	if outcome.State != ItemStateFailed {
+		t.Errorf("state = %s, want failed", outcome.State.Label())
+	}
+}
+
+// The narrowing's second defect (krf5): the old narrowing branch advanced pos a
+// second time after the step-consumption point, so every already-failed check
+// silently ate its successor's disposition. A re-pass must skip the failed check
+// AND still dispatch the one after it.
+func TestTheNarrowingDoesNotEatTheFollowingStep(t *testing.T) {
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, "127.0.0.1", deadTarget(t), "/search", "<html>seed</html>")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{
+			MaxConcurrency: 1, Timeout: 10 * time.Second,
+			CheckExtendedActive: true,
+			CheckSqli:           true, CheckXss: true, CheckPathTraversal: true,
+		})
+
+	cfg := DefaultAuditConfig()
+	cfg.FollowUpPasses = SomeUint32(1)
+	cfg.ConsecutiveCheckFailuresToAbandonUnit = 1
+	cfg.ConsecutiveUnitFailuresToFailItem = 1
+	outcome, _ := scan.AuditWithin(context.Background(), id, cfg)
+
+	// The retry re-dispatched and the previously-skipped check ran in it. The old
+	// double pos++ would have left checks with no disposition at all.
+	if outcome.FollowUpPasses != 1 {
+		t.Errorf("FollowUpPasses = %d, want 1", outcome.FollowUpPasses)
+	}
+	if got, want := outcome.Considered(), scan.ActiveCheckCount(); got != want {
+		t.Errorf("Considered() = %d, want %d: every check dispositioned exactly once", got, want)
+	}
 }

@@ -76,6 +76,30 @@ func descriptorWithTier(name string, scope DispatchScope, enabled func(*ScanConf
 	return d
 }
 
+// corpusDescriptor builds a CheckDescriptor for a BCheck corpus entry. The phase is
+// derived from the check's properties: NeedsCollaborator → PhaseCollaborator, otherwise
+// PhaseActive. This replaces the old hard-coded PhaseActive for every corpus BCheck.
+func corpusDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner, needsCollaborator bool) CheckDescriptor {
+	issue, ok := ByName(name)
+	if !ok {
+		panic(fmt.Sprintf("native scanner issue %q is absent from catalog", name))
+	}
+	phase := PhaseActive
+	if needsCollaborator {
+		phase = PhaseCollaborator
+	}
+	return CheckDescriptor{
+		TypeIndex:      issue.TypeIndex,
+		Name:           issue.Name,
+		Implementation: ImplementationNative,
+		Phase:          phase,
+		Scope:          scope,
+		Enabled:        enabled,
+		Run:            run,
+		Invasiveness:   TierLight,
+	}
+}
+
 // intrusiveDescriptor is nativeDescriptor for a check that changes state someone else will have to
 // undo: a canary planted in the target, an outbound connection to a collaborator, an entity expansion
 // that consumes server memory. These are the checks an operator turns off when the target is not
@@ -128,6 +152,7 @@ func nativeActiveCheckSet() []activeCheck {
 			scope:        d.Scope,
 			enabled:      d.Enabled,
 			invasiveness: d.Invasiveness,
+			phase:        d.Phase,
 			passive:      d.Passive,
 			run:          run,
 		})
