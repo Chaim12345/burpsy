@@ -73,6 +73,10 @@ type discoveredLink struct {
 	// item carries it onto the Fetch edge, so the crawl-paths view can say which edges a
 	// browser-less crawl would not have found at all.
 	foundAtRendered bool
+	// speculative marks a candidate the speculative-hidden-link phase mined from a comment
+	// or script body (burpsy-react-ui-t5m0) rather than a navigational element. It changes
+	// nothing about which gates the link passes — only that the crawl-wide cap counts it.
+	speculative bool
 }
 
 // formField is one name/value pair a submitted form would carry.
@@ -122,7 +126,16 @@ type pageStructure struct {
 // html.Parse only fails on a read error, which a bytes.Reader cannot produce, so there is no
 // malformed-document path here: a broken document yields whatever the parsing algorithm's error
 // recovery produces, which is what a browser would have seen.
-func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
+// parsePage walks one response body for navigational links and forms. speculative
+// additionally collects the non-visible text a browser never renders — HTML comments and
+// script bodies — and mines it for URL-shaped candidates: the speculative-hidden-link
+// phase (burpsy-react-ui-t5m0), Burp's "Follow hidden links in comments and JavaScript".
+//
+// The candidates are returned as ordinary discoveredLinks and admitted through the same
+// gates as a navigational link (scope, destructive, query, depth), never as privileged
+// seeds — a comment that says /logout is still a logout. What distinguishes them is only
+// their provenance (the tag) and the crawl-wide cap that bounds how many are admitted.
+func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) pageStructure {
 	out := pageStructure{}
 	if len(body) > limits.MaxParseBytes {
 		body = body[:limits.MaxParseBytes]
@@ -151,6 +164,10 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 	var linkTargets []string
 	textLen := 0
 	admitted := 0
+	// specText collects the non-visible text the speculative phase mines (burpsy-react-ui-t5m0):
+	// HTML comments and script bodies. Only collected when the phase is on — a crawl that
+	// declined it has no business reading the bytes.
+	var specText strings.Builder
 	// admit reports whether one more link or form may be taken, counting the refusals.
 	admit := func() bool {
 		if admitted >= limits.MaxLinksPerPage {
@@ -163,6 +180,14 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 
 	var walk func(n *html.Node, depth int)
 	walk = func(n *html.Node, depth int) {
+		if n.Type == html.CommentNode {
+			// An HTML comment is invisible to a browser and is exactly where a hidden path
+			// leaks: `<!-- /adminpanel -->`. Mined only when the speculative phase is on.
+			if speculative {
+				specText.WriteString(n.Data)
+				specText.WriteByte(' ')
+			}
+		}
 		if n.Type == html.TextNode {
 			// Visible text length only, and only as a coarse bucket later. Text *content* is the most
 			// ephemeral thing on a page, and its length is the least ephemeral thing about it.
@@ -243,6 +268,15 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: "embed"})
 					}
 				}
+			case "script":
+				// A script body is the other place a hidden path lives — a single-page app's
+				// router table is a list of URL strings inside a <script> block. The script's
+				// own text is not rendered, so it is invisible to the wire read and to the
+				// location fingerprint alike. Mined only when the speculative phase is on.
+				if speculative {
+					specText.WriteString(nodeText(n))
+					specText.WriteByte(' ')
+				}
 			case "form":
 				f := readForm(n)
 				// A form's signature: method, its action resolved but untemplated, and its field
@@ -266,6 +300,14 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 	walk(doc, 0)
 
 	out.fingerprint = locationFingerprint(skeleton.String(), linkTargets, textLen)
+	// The speculative phase (burpsy-react-ui-t5m0): mine the non-visible text for
+	// URL-shaped candidates and admit them as ordinary links — same gates, same
+	// frontier, distinguished only by the tag and bounded by the crawl-wide cap.
+	if speculative {
+		for _, raw := range speculativeURLFields(specText.String()) {
+			out.links = append(out.links, discoveredLink{raw: raw, tag: "speculative", speculative: true})
+		}
+	}
 	return out
 }
 
@@ -379,6 +421,61 @@ func attr(n *html.Node, name string) (string, bool) {
 
 // linkText is what the destructive check reads: the element's descendant text, plus its title and
 // aria-label. See the package docs for why the accessible names are included.
+// nodeText is an element's descendant text, whitespace-normalised. Used for the
+// speculative phase's script bodies — the element's own text is what a browser would
+// have executed, and what a hidden-path scan reads.
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(m *html.Node) {
+		if m.Type == html.TextNode {
+			b.WriteString(m.Data)
+		}
+		for c := m.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// speculativeURLFields splits non-visible text into URL-shaped candidates: absolute
+// http(s) URLs and root-relative paths. The two shapes are what a comment or a script
+// body actually carries when it leaks a location (`<!-- /adminpanel -->`,
+// `var base = "https://internal.example"`); anything else in a script — a JS string,
+// a number, an identifier — is not a location, and reading it as one would flood the
+// frontier with the application's own vocabulary.
+//
+// Tokens are cut on whitespace and the characters that frame a URL in prose or code,
+// then trailing punctuation is trimmed (a sentence's period is not part of the path).
+// Absolute URLs are matched by scheme; a path is only read when it starts with "/" and
+// is not the scheme-relative "//" — those resolve against the page like any other
+// relative target, which is the same gate a navigational link passes.
+func speculativeURLFields(text string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, tok := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == '"' || r == '\'' || r == '<' || r == '>' ||
+			r == '(' || r == ')' || r == ',' || r == '`'
+	}) {
+		raw := strings.TrimRight(tok, ".,;:!?]}")
+		if raw == "" {
+			continue
+		}
+		isAbs := strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
+		isPath := strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//")
+		if !isAbs && !isPath {
+			continue
+		}
+		if !seen[raw] {
+			seen[raw] = true
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 func linkText(n *html.Node) string {
 	var b strings.Builder
 	collectText(n, &b)

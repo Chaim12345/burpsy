@@ -102,15 +102,15 @@ func TestLocationFingerprintIgnoresEphemeralContent(t *testing.T) {
 		<a href="/next">Next</a>
 		</body></html>`)
 
-	a := parsePage(first, base, DefaultLimits())
-	b := parsePage(second, base, DefaultLimits())
+	a := parsePage(first, base, DefaultLimits(), false)
+	b := parsePage(second, base, DefaultLimits(), false)
 	if a.fingerprint != b.fingerprint {
 		t.Fatalf("the same page rendered twice must be one location:\n %s\n %s", a.fingerprint, b.fingerprint)
 	}
 
 	// A genuinely different structure must not collapse into it.
 	third := []byte(`<html><body><h1>Welcome back, Alice</h1><table><tr><td>x</td></tr></table></body></html>`)
-	if c := parsePage(third, base, DefaultLimits()); c.fingerprint == a.fingerprint {
+	if c := parsePage(third, base, DefaultLimits(), false); c.fingerprint == a.fingerprint {
 		t.Error("a different page structure must fingerprint differently")
 	}
 	// A different set of links is a different location, even with identical markup around it.
@@ -123,7 +123,7 @@ func TestLocationFingerprintIgnoresEphemeralContent(t *testing.T) {
 		</form>
 		<a href="/somewhere-else">Next</a>
 		</body></html>`)
-	if d := parsePage(fourth, base, DefaultLimits()); d.fingerprint == a.fingerprint {
+	if d := parsePage(fourth, base, DefaultLimits(), false); d.fingerprint == a.fingerprint {
 		t.Error("a page linking somewhere else is a different location")
 	}
 }
@@ -138,7 +138,7 @@ func TestLocationFingerprintKeepsDetailPagesApart(t *testing.T) {
 		return parsePage([]byte(`<html><body>
 			<h1>User `+id+`</h1>
 			<a href="/users/`+id+`/edit">Edit</a>
-			</body></html>`), mustURL(t, "http://h/users/"+id), DefaultLimits())
+			</body></html>`), mustURL(t, "http://h/users/"+id), DefaultLimits(), false)
 	}
 	one, two := page("1"), page("2")
 	if one.fingerprint == two.fingerprint {
@@ -156,8 +156,8 @@ func TestLocationFingerprintKeepsDetailPagesApart(t *testing.T) {
 // lost invisibly — and the per-template visit quota is what stops the split from running away.
 func TestLocationFingerprintSplitsOnAnEphemeralLinkTarget(t *testing.T) {
 	base := mustURL(t, "http://h/page")
-	a := parsePage([]byte(`<html><body><a href="/next?_=111">Next</a></body></html>`), base, DefaultLimits())
-	b := parsePage([]byte(`<html><body><a href="/next?_=222">Next</a></body></html>`), base, DefaultLimits())
+	a := parsePage([]byte(`<html><body><a href="/next?_=111">Next</a></body></html>`), base, DefaultLimits(), false)
+	b := parsePage([]byte(`<html><body><a href="/next?_=222">Next</a></body></html>`), base, DefaultLimits(), false)
 	if a.fingerprint == b.fingerprint {
 		t.Fatal("this is documented as a false split; if it now merges, the raw-link-target rule was weakened")
 	}
@@ -247,7 +247,7 @@ func TestParsePageHonoursTheBaseElement(t *testing.T) {
 		[]byte(`<html><head><base href="http://other.example/app/"></head><body><a href="x">x</a></body></html>`),
 		mustURL(t, "http://h/page"),
 		DefaultLimits(),
-	)
+		false)
 	if len(page.links) != 1 {
 		t.Fatalf("expected one link, got %d", len(page.links))
 	}
@@ -261,7 +261,7 @@ func TestParsePageHonoursTheBaseElement(t *testing.T) {
 		[]byte(`<html><head></head><body><a href="x">x</a></body></html>`),
 		mustURL(t, "http://h/page"),
 		DefaultLimits(),
-	)
+		false)
 	if without.fingerprint == page.fingerprint {
 		t.Error("a base element that retargets every link must change the location's skeleton")
 	}
@@ -277,7 +277,7 @@ func TestParsePageBoundsAreCountedNotSilent(t *testing.T) {
 	}
 	body = append(body, []byte("</body></html>")...)
 
-	page := parsePage(body, mustURL(t, "http://h/"), Limits{MaxLinksPerPage: 5}.normalise())
+	page := parsePage(body, mustURL(t, "http://h/"), Limits{MaxLinksPerPage: 5}.normalise(), false)
 	if len(page.links) != 5 {
 		t.Fatalf("expected the bound of 5 links to be honoured, got %d", len(page.links))
 	}
@@ -285,7 +285,7 @@ func TestParsePageBoundsAreCountedNotSilent(t *testing.T) {
 		t.Fatalf("expected 15 dropped links to be counted, got %d", page.dropped)
 	}
 
-	truncated := parsePage(body, mustURL(t, "http://h/"), Limits{MaxParseBytes: 20}.normalise())
+	truncated := parsePage(body, mustURL(t, "http://h/"), Limits{MaxParseBytes: 20}.normalise(), false)
 	if !truncated.truncated {
 		t.Fatal("a body longer than the parse bound must report that it was truncated")
 	}
@@ -308,7 +308,7 @@ func TestFormFieldDefaultsMatchWhatABrowserWouldSend(t *testing.T) {
 		<textarea name="note"></textarea>
 		<input type="file" name="upload">
 		<input type="submit" name="do" value="Send">
-		</form></body></html>`), mustURL(t, "http://h/"), DefaultLimits())
+		</form></body></html>`), mustURL(t, "http://h/"), DefaultLimits(), false)
 
 	if len(page.forms) != 1 {
 		t.Fatalf("expected one form, got %d", len(page.forms))

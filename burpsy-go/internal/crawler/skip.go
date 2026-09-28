@@ -192,11 +192,17 @@ const (
 	// not JSON" and "this is JSON I could not read" have different remedies, and folding them
 	// together is the defect mz1n is about (burpsy-react-ui-mz1n).
 	SkipJSONUnparsed
+	// SkipSpeculativeLimit means a speculative-phase candidate (a URL mined from a comment or
+	// script body, burpsy-react-ui-t5m0) was refused because the crawl-wide speculative cap
+	// was spent. It is a phase bound, not a property of the target: the remedy is raising
+	// maximum_speculative_links, which is why it is its own reason rather than a frontier-full
+	// variant — the two have different causes and different fixes.
+	SkipSpeculativeLimit
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [32]Skip{
+var SkipAll = [33]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -229,6 +235,7 @@ var SkipAll = [32]Skip{
 	SkipRenderUnavailable,
 	SkipSitemapUnparsed,
 	SkipJSONUnparsed,
+	SkipSpeculativeLimit,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -300,6 +307,8 @@ func (s Skip) slot() int {
 		return 30
 	case SkipJSONUnparsed:
 		return 31
+	case SkipSpeculativeLimit:
+		return 32
 	}
 	panic("unknown Skip")
 }
@@ -371,6 +380,8 @@ func (s Skip) String() string {
 		return "sitemap-unparsed"
 	case SkipJSONUnparsed:
 		return "json-unparsed"
+	case SkipSpeculativeLimit:
+		return "speculative-limit"
 	}
 	return "unknown"
 }
@@ -442,6 +453,8 @@ func (s Skip) Explanation() string {
 		return "the response looked like a sitemap — by its content type or the element names in its body — and could not be parsed as one, so the URLs it publishes were not followed"
 	case SkipRenderUnavailable:
 		return "the response was HTML but the browser render failed, so links that exist only after the page's script runs were not discovered"
+	case SkipSpeculativeLimit:
+		return "the speculative-link cap is spent: the URL was mined from a comment or script body and the crawl-wide bound on hidden links is reached"
 	}
 	return "unknown skip"
 }
@@ -515,7 +528,8 @@ func (s Skip) Category() SkipCategory {
 		return CategoryPolicy
 	case SkipAlreadyQueued, SkipDuplicateLocation:
 		return CategoryDuplicate
-	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
+	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
+		SkipSpeculativeLimit:
 		return CategoryLimit
 	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,

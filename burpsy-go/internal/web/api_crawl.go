@@ -261,6 +261,15 @@ type crawlStartReq struct {
 	// SubmitForms defaults off, and that is a requirement rather than a default: a crawl that submits
 	// forms writes to the application.
 	SubmitForms bool `json:"submit_forms"`
+	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
+	// mining HTML comments and script bodies for hidden links. Off by default here — the
+	// operator's explicit request is the switch, and a named Burp configuration can set it
+	// (crawler/customization/request_speculative lands through the config overlay below).
+	RequestSpeculative bool `json:"request_speculative"`
+	// MaxSpeculativeLinks caps how many mined candidates the crawl admits, when the
+	// phase is on. A POINTER so an explicit 0 (admit none) is distinguishable from unset
+	// (take the default of 1000, Burp's own shipped default).
+	MaxSpeculativeLinks *int `json:"max_speculative_links,omitempty"`
 	// The three bounds that predate the rest, kept as plain ints, and the eight that joined them as
 	// POINTERS. The difference is load-bearing and it is the iueb shape the scanner keys already
 	// refused (burpsy-react-ui-qzzy).
@@ -609,6 +618,13 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	}
 
 	limits := crawler.DefaultLimits()
+	// The error-handling family starts UNSET rather than at the engine's defaults, so a request that
+	// names no threshold and no configuration inherits DefaultErrorHandling at the point the crawler
+	// reads it. Seeding it here with the defaults would make "the file set all three to 0" and "the
+	// file said nothing" the same value, which is the distinction the whole family rests on (o0c5).
+	var eh crawler.ErrorHandling
+	var configSpeculative bool
+	var configSpeculativeLinks int
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.
@@ -617,7 +633,24 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		return 0, nil, 0, nil, cerr
 	}
 	if req.Config != "" {
-		limits = s.crawlLimitsFromConfig(crawlCfgName)
+		whole := s.crawlConfigFromConfig(crawlCfgName)
+		limits = whole.Limits
+		eh = whole.ErrorHandling
+		configSpeculative = whole.RequestSpeculative
+		configSpeculativeLinks = whole.Limits.MaxSpeculativeLinks
+	}
+	// The speculative phase and its cap overlay UNDER the explicit per-request fields,
+	// the same order as the limits: a field the operator typed on this request wins over
+	// the file they also named. The cap lands on the limits; the switch itself is carried
+	// to crawlConfig, which owns the Config literal.
+	if req.RequestSpeculative {
+		configSpeculative = true
+	}
+	if req.MaxSpeculativeLinks != nil {
+		configSpeculativeLinks = *req.MaxSpeculativeLinks
+	}
+	if configSpeculativeLinks > 0 {
+		limits.MaxSpeculativeLinks = configSpeculativeLinks
 	}
 	if req.MaxRequests > 0 {
 		limits.MaxRequests = req.MaxRequests
@@ -670,7 +703,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
-	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch))
+	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh))
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
@@ -1197,7 +1230,7 @@ func availablePools(reg *pool.Registry) string {
 // that the session had been lost, and reported whatever the public pages yielded. A field missing
 // from a struct literal nobody inspects is invisible, and that is the same shape as the Params
 // field's own note about the wire dropping what the store kept.
-func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch)) crawler.Config {
+func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling) crawler.Config {
 	// The fetch hook for the crawl→audit bridge, built before the task is registered so a
 	// configuration mistake is a 400 the operator can fix, not a task that appears in the dashboard
 	// only to fail immediately. Declared here rather than at the call site so this method is the
@@ -1214,16 +1247,18 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 			Logger:   s.logger,
 			Source:   core.SourceCrawl,
 		},
-		Query:             req.Query,
-		RetentionQuery:    req.RetentionQuery,
-		SubmitForms:       req.SubmitForms,
-		Limits:            limits,
-		RequestsPerSecond: req.RequestsPerSecond,
-		Pool:              poolLimit,
-		UserAgent:         req.UserAgent,
-		Headers:           req.Headers,
-		OnFetch:           onFetch,
-		Render:            nil,
+		Query:              req.Query,
+		RetentionQuery:     req.RetentionQuery,
+		SubmitForms:        req.SubmitForms,
+		RequestSpeculative: speculative,
+		Limits:             limits,
+		ErrorHandling:      eh,
+		RequestsPerSecond:  req.RequestsPerSecond,
+		Pool:               poolLimit,
+		UserAgent:          req.UserAgent,
+		Headers:            req.Headers,
+		OnFetch:            onFetch,
+		Render:             nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
 		Logger:            s.logger,
@@ -1270,20 +1305,32 @@ func (s *Server) resolveCrawlConfig(name string) (string, []string, error) {
 // sets, over the defaults rather than over the caller's own — the caller merges the two in the
 // order that lets an explicit request field win.
 func (s *Server) crawlLimitsFromConfig(name string) crawler.Limits {
-	limits := crawler.DefaultLimits()
+	return s.crawlConfigFromConfig(name).Limits
+}
+
+// crawlConfigFromConfig is the whole crawler half of a named configuration: its limits AND its
+// error-handling family.
+//
+// Split from crawlLimitsFromConfig when the error_handling keys landed (burpsy-react-ui-o0c5), which
+// are a different shape from Limits — pointers, because a 0 threshold means "never pause" — and a
+// limits-only accessor would have made them unreachable from exactly the path that reaches every
+// other crawler key.
+func (s *Server) crawlConfigFromConfig(name string) crawler.CrawlConfig {
 	doc, found := s.savedScanConfigDocument(name)
 	if !found {
-		return limits
+		return crawler.CrawlConfig{Limits: crawler.DefaultLimits()}
 	}
 	cfg, err := crawler.ParseBurpCrawlConfig(doc)
 	if err != nil {
 		// Unreachable: resolveCrawlConfig already parsed this document and refused it on error, so a
 		// failure here means the store changed underneath two calls in one request. The defaults are
 		// the honest fallback; the name was already refused to the operator if it was mistyped.
-		return limits
+		return crawler.CrawlConfig{Limits: crawler.DefaultLimits()}
 	}
+	limits := crawler.DefaultLimits()
 	overlayCrawlLimits(&limits, cfg.Limits)
-	return limits
+	cfg.Limits = limits
+	return cfg
 }
 
 // overlayCrawlLimits copies every field the configuration actually named. A field left at its zero
@@ -1301,6 +1348,9 @@ func overlayCrawlLimits(dst *crawler.Limits, src crawler.Limits) {
 	}
 	if src.MaxLocations != 0 {
 		dst.MaxLocations = src.MaxLocations
+	}
+	if src.MaxSpeculativeLinks != 0 {
+		dst.MaxSpeculativeLinks = src.MaxSpeculativeLinks
 	}
 }
 

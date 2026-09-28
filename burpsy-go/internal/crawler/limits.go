@@ -64,6 +64,13 @@ type Limits struct {
 	// carry a hundred thousand links, and admitting them all would fill the frontier from one
 	// document.
 	MaxLinksPerPage int
+	// MaxSpeculativeLinks caps how many speculative-phase candidates (burpsy-react-ui-t5m0 —
+	// URLs mined from HTML comments and script bodies) are admitted across the whole crawl.
+	// The cap is crawl-wide rather than per-page because a single script bundle can carry a
+	// hundred router paths: the per-page bound counts links a page LINKS to, this one counts
+	// links a page merely MENTIONS, which is a different and much larger set. Zero takes the
+	// default (DefaultMaxSpeculativeLinks, Burp's own shipped default).
+	MaxSpeculativeLinks int
 	// MaxParseBytes caps how much of a response body is parsed for links. The body is stored and
 	// scanned in full regardless — this bounds only the HTML walk.
 	MaxParseBytes int
@@ -117,15 +124,21 @@ type Limits struct {
 // against a slow target. Both are deliberately small: a crawl that stops early and says so is
 // recoverable in one command, and a crawl that ran for an hour unattended against a live
 // application is not.
+// DefaultMaxSpeculativeLinks is the speculative-hidden-link cap (burpsy-react-ui-t5m0) when
+// the operator sets none: 1000, which is Burp's own shipped default
+// (Preferences/CrawlDefaults.json, crawler.customization.maximum_speculative_links).
+const DefaultMaxSpeculativeLinks = 1000
+
 func DefaultLimits() Limits {
 	return Limits{
-		MaxRequests:     500,
-		MaxDepth:        6,
-		MaxDuration:     5 * time.Minute,
-		MaxLocations:    300,
-		MaxFrontier:     5_000,
-		MaxLinksPerPage: 500,
-		MaxParseBytes:   2 * 1024 * 1024,
+		MaxRequests:         500,
+		MaxDepth:            6,
+		MaxDuration:         5 * time.Minute,
+		MaxLocations:        300,
+		MaxFrontier:         5_000,
+		MaxLinksPerPage:     500,
+		MaxSpeculativeLinks: DefaultMaxSpeculativeLinks,
+		MaxParseBytes:       2 * 1024 * 1024,
 		// Twenty samples of one shape is enough to see whether the shape behaves consistently, which
 		// is what a crawl of `/orders/{id}` is actually for; the ninety-thousandth order adds nothing
 		// a scanner will act on. katana defaults its depth to 3 and colly defaults MaxDepth to 0,
@@ -171,6 +184,9 @@ func (l Limits) normalise() Limits {
 	if l.MaxLinksPerPage <= 0 {
 		l.MaxLinksPerPage = d.MaxLinksPerPage
 	}
+	if l.MaxSpeculativeLinks <= 0 {
+		l.MaxSpeculativeLinks = d.MaxSpeculativeLinks
+	}
 	if l.MaxParseBytes <= 0 {
 		l.MaxParseBytes = d.MaxParseBytes
 	}
@@ -206,6 +222,12 @@ const (
 	StopDepth
 	// StopFrontierCapacity means links were dropped because the frontier was full.
 	StopFrontierCapacity
+	// StopSpeculativeLinks means at least one speculative-phase candidate (a URL mined from a
+	// comment or script body, burpsy-react-ui-t5m0) was refused because the crawl-wide
+	// speculative cap was spent. Unlike the other stops this one names a phase the operator
+	// can raise the budget for — the cap is a choice about how much hidden-link following a
+	// crawl may do, not a property of the application.
+	StopSpeculativeLinks
 	// StopLinksPerPage means at least one page carried more links than the per-page bound admits,
 	// so the excess was never considered.
 	StopLinksPerPage
@@ -251,15 +273,41 @@ const (
 	// application no longer honours, and the rest of the crawl is unauthenticated whether it knows
 	// it or not.
 	StopReloginBudget
+	// StopPausedTimeouts means the crawl stopped because PAUSED BY POLICY: this many CONSECUTIVE
+	// requests timed out. Distinct from StopDuration and StopRequestBudget because the crawl did not
+	// run out of anything — it was told to stop by the operator's own error_handling configuration,
+	// which is a different fact and a different response. An operator who set 5 to spare a slow
+	// target needs the report to say the crawl honoured that, not that it finished.
+	StopPausedTimeouts
+	// StopPausedTimeoutPercentage means the same, on the PERCENTAGE axis: this share of the crawl's
+	// requests timed out. Separate from the count because the two answer different questions — a
+	// count is about a streak, a percentage about a host that is broadly slow — and an operator
+	// reading "paused" cannot choose between them.
+	StopPausedTimeoutPercentage
+	// StopPausedAuthFailures means the crawl stopped because this many consecutive requests were
+	// REJECTED for authentication. The most actionable of the three: every page from here on would
+	// have been a 401 page, so continuing would have filled the report with coverage of a login form.
+	StopPausedAuthFailures
+	// StopFollowUpBudget means a follow-up pass wanted to retry and the request budget was spent.
+	// A distinct stop because the failure is not "the target is broken" — it is "this crawl was not
+	// allowed to try again", which is a coverage hole of a different kind and one an operator can fix
+	// by raising a bound rather than by waiting.
+	StopFollowUpBudget
+	// StopFollowUpCancelled means a follow-up pass was abandoned because the caller's context ended.
+	// Recorded rather than folded into StopCancelled because the two cancel different amounts of
+	// work: StopCancelled is a crawl that stopped mid-frontier, this is one that finished its main
+	// pass and then ran out of time on the retries.
+	StopFollowUpCancelled
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var CrawlStopAll = [12]CrawlStop{
+var CrawlStopAll = [13]CrawlStop{
 	StopRequestBudget,
 	StopDuration,
 	StopLocationBudget,
 	StopDepth,
 	StopFrontierCapacity,
+	StopSpeculativeLinks,
 	StopLinksPerPage,
 	StopParseBytes,
 	StopCancelled,
@@ -281,6 +329,8 @@ func (s CrawlStop) String() string {
 		return "depth"
 	case StopFrontierCapacity:
 		return "frontier-capacity"
+	case StopSpeculativeLinks:
+		return "speculative-links"
 	case StopLinksPerPage:
 		return "links-per-page"
 	case StopParseBytes:
@@ -312,6 +362,8 @@ func (s CrawlStop) Explanation() string {
 		return "links were found at the depth limit and not followed; anything only reachable past that depth was not seen"
 	case StopFrontierCapacity:
 		return "the frontier reached its capacity bound and further links were dropped"
+	case StopSpeculativeLinks:
+		return "the speculative-link cap is spent, so a hidden link mined from a comment or script was not followed"
 	case StopLinksPerPage:
 		return "a page carried more links than the per-page bound admits; the excess was not considered"
 	case StopParseBytes:
@@ -354,6 +406,11 @@ type LimitReport struct {
 	FrontierRemaining int `json:"frontier_remaining"`
 	// FrontierDropped counts URLs refused admission because the frontier was at capacity.
 	FrontierDropped int `json:"frontier_dropped"`
+	// SpeculativeDropped counts speculative-phase candidates (burpsy-react-ui-t5m0) refused
+	// admission because the crawl-wide speculative cap was spent. Reported beside
+	// FrontierDropped for the same reason: a drop is a coverage hole, and an operator
+	// reading a smaller fetch count needs to know which bound caused it.
+	SpeculativeDropped int `json:"speculative_dropped"`
 	// DepthDeferred counts links discovered at the depth limit and never queued.
 	DepthDeferred int `json:"depth_deferred"`
 	// LinksDropped counts links never even considered, because their page carried more than the
@@ -401,7 +458,7 @@ func (r LimitReport) Hit(stop CrawlStop) bool {
 // — those were fetched, so they are not unfetched; Report.NotCaptured counts them.
 func (r LimitReport) Unfetched() int {
 	return r.FrontierRemaining + r.FrontierDropped + r.DepthDeferred + r.LinksDropped +
-		r.TemplateQuotaDropped + r.FingerprintDropped
+		r.TemplateQuotaDropped + r.FingerprintDropped + r.SpeculativeDropped
 }
 
 // record adds a stop, at most once each. Order of first occurrence is preserved, so the list reads

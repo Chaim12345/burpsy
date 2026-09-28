@@ -40,7 +40,11 @@ func TestAShippedCrawlConfigAppliesItsThreeLimits(t *testing.T) {
 		t.Errorf("UnrepresentableKeys = %v, want none: all three keys this engine honours applied", cfg.UnrepresentableKeys)
 	}
 	if len(cfg.AppliedKeys) != 3 {
-		t.Errorf("AppliedKeys = %v, want all three named so a report can say 3 of 3", cfg.AppliedKeys)
+		t.Errorf("AppliedKeys = %v, want all three named so a report can say 3 of 46", cfg.AppliedKeys)
+	}
+	if cfg.ShippedKeyCount != 46 {
+		t.Errorf("ShippedKeyCount = %d, want 46: the fixed denominator across every key Burp ships, "+
+			"not a count derived from this one file", cfg.ShippedKeyCount)
 	}
 }
 
@@ -119,16 +123,16 @@ func TestAnUnknownCrawlSectionIsReportedAsASection(t *testing.T) {
 }
 
 // A section listed with no keys behind it is still reported, not treated as absent: Burp's shipped
-// files carry sections like `optimization` that burpsy has no field for, and silence about them is
+// files carry sections like `login_functions` that burpsy has no field for, and silence about them is
 // the difference between "your configuration said nothing" and "your configuration said something we
 // could not use".
 func TestAKnownSectionWithNoKeysBehindItIsStillReported(t *testing.T) {
-	doc := []byte(`{"crawler":{"optimization": {"cache_enabled": true}}}`)
+	doc := []byte(`{"crawler":{"login_functions": {"trigger_login_failures": true}}}`)
 	cfg, err := ParseBurpCrawlConfig(doc)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(cfg.UnrepresentableKeys) != 1 || cfg.UnrepresentableKeys[0] != "optimization/cache_enabled" {
+	if len(cfg.UnrepresentableKeys) != 1 || cfg.UnrepresentableKeys[0] != "login_functions/trigger_login_failures" {
 		t.Errorf("UnrepresentableKeys = %v, want the one key inside a section burpsy lists but has no "+
 			"field for; the section being known does not make the key applicable", cfg.UnrepresentableKeys)
 	}
