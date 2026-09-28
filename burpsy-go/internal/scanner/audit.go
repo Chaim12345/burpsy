@@ -644,7 +644,13 @@ type AuditConfig struct {
 	// looked. Not an operator-facing field: nil means no oracle and therefore no skips, which
 	// is what a context built outside a dispatched audit gets — the light tier's nil-safe
 	// reading, for the same reason.
-	PointEffective func(check string, p bcheck.InsertionPoint) bool
+	//
+	// Tagged `json:"-"` (burpsy-react-ui-5b0t): encoding/json refuses func-typed fields
+	// even when nil, so a struct carrying one cannot be marshalled at all — which 500'd
+	// every scan-config save and clone through the API. This is runtime wiring, never
+	// configuration; a document that tried to carry it would be carrying a closure the
+	// operator did not write.
+	PointEffective func(check string, p bcheck.InsertionPoint) bool `json:"-"`
 	// CheckName is the row name the effectiveness prior is keyed by, set by the check that is
 	// enumerating (runInjection does it). Not operator-facing: a check's own name is not a
 	// setting, and an empty value is its own bucket rather than a shared one.
