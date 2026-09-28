@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bufio"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/http"
@@ -259,6 +261,87 @@ func TestADigestChallengeIsLearnedSoTheNextRequestAuthenticates(t *testing.T) {
 
 // The header insert must not disturb the body. Getting the head boundary wrong would splice a header
 // into a payload, which is the failure mode of doing this with a text replace instead of a parse.
+// The NTLMv2 analogue of the Digest test above: the NEGOTIATE goes out on the first request,
+// the 401's CHALLENGE_MESSAGE is learned into the credential store, and the second request on
+// a SEPARATE connection carries the AUTHENTICATE leg. That is the stronger claim the store
+// keyed state makes: the learned challenge survives in netauth rather than in a socket, which
+// is the only way it can reach the next request on a different connection (burpsy-react-ui-noz5).
+func TestAnNTLMv2ChallengeIsLearnedSoTheNextRequestAuthenticates(t *testing.T) {
+	var mu sync.Mutex
+	var n int
+	originSrv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		seen := n
+		mu.Unlock()
+		if seen == 1 {
+			targetInfo := []byte{
+				0x02, 0x00, 0x08, 0x00,
+				0x43, 0x00, 0x4f, 0x00, 0x52, 0x00, 0x50, 0x00, // "CORP", UTF-16LE
+				0x06, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00,
+				0x00, 0x00,
+			}
+			msg := make([]byte, 48+len(targetInfo))
+			copy(msg[0:8], "NTLMSSP\x00")
+			binary.LittleEndian.PutUint32(msg[8:12], 2)
+			copy(msg[24:32], "\x01\x02\x03\x04\x05\x06\x07\x08")
+			binary.LittleEndian.PutUint16(msg[40:42], uint16(len(targetInfo)))
+			binary.LittleEndian.PutUint32(msg[44:48], 48)
+			copy(msg[48:], targetInfo)
+			w.Header().Set("WWW-Authenticate", "NTLM "+base64.StdEncoding.EncodeToString(msg))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// The second request carries the AUTHENTICATE (type 3).
+		hdr := r.Header.Get("Authorization")
+		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(hdr, "NTLM "))
+		if err != nil || len(blob) < 88 || binary.LittleEndian.Uint32(blob[8:12]) != 3 {
+			t.Errorf("the second request carried %q; want an NTLMSSP AUTHENTICATE (type 3) message", hdr)
+		}
+		w.WriteHeader(http.StatusOK)
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go originSrv.Serve(ln)
+	t.Cleanup(func() { originSrv.Close(); ln.Close() })
+
+	host, _, _ := net.SplitHostPort(ln.Addr().String())
+	creds := credentialsWith(t, host, netauth.SchemeNTLMv2, "operator", "s3cret", "")
+	store := core.NewTrafficStore()
+	srv := NewServer(NewProxyConfig(store).
+		WithScope(core.NewScopeAllowEverything()).
+		WithPlatformAuth(creds).
+		WithLogger(zap.NewNop()).
+		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())))
+	proxyAddr := startProxyListener(t, srv)
+
+	for i := 0; i < 2; i++ {
+		conn, err := net.Dial("tcp", proxyAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		fmt.Fprintf(conn, "GET /dir/index.html HTTP/1.1\r\nHost: %s\r\n\r\n", ln.Addr())
+		br := bufio.NewReader(conn)
+		for {
+			line, err := br.ReadString('\n')
+			if err != nil || line == "\r\n" {
+				break
+			}
+		}
+		conn.Close()
+	}
+
+	mu.Lock()
+	requests := n
+	mu.Unlock()
+	if requests != 2 {
+		t.Fatalf("the origin saw %d request(s), want exactly 2 - negotiate then authenticate", requests)
+	}
+}
+
 func TestTheCredentialInsertLeavesTheBodyAndEveryOtherHeaderUntouched(t *testing.T) {
 	creds := credentialsWith(t, "example.test", netauth.SchemeBasic, "operator", "s3cret", "")
 	raw := "POST /submit?a=1 HTTP/1.1\r\n" +

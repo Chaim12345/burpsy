@@ -1,6 +1,7 @@
 package netauth
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
@@ -430,6 +431,27 @@ func (c *Credentials) Authorization(host, method, uri string) (string, bool) {
 	switch rule.Scheme {
 	case SchemeBasic:
 		return basicHeader(rule), true
+	case SchemeNTLMv2:
+		// NTLMv2 sends NEGOTIATE preemptively, like Basic: the type-1 message carries no
+		// credential, only the flags this build asks for, so there is nothing to wait for
+		// before sending it. The 401's CHALLENGE_MESSAGE is what is learned from.
+		state, ok := c.ntlm[host]
+		if !ok {
+			negotiate := ntlmNegotiateMessage()
+			c.ntlm[host] = &ntlmSession{negotiate: negotiate}
+			return "NTLM " + base64.StdEncoding.EncodeToString(negotiate), true
+		}
+		// A challenge already learned: answer it. The request carrying this header is the
+		// bounded retry, so the authenticate leg goes out with the answer computed against
+		// the challenge as it was received.
+		header, err := ntlmAnswer(rule, state.negotiate, state.challenge)
+		if err != nil {
+			// A challenge that cannot be answered is reported as "no header", not as a
+			// wrong one, matching the Digest branch: the request goes out unauthenticated
+			// and the 401 is the caller's honest answer.
+			return "", false
+		}
+		return header, true
 	case SchemeDigest:
 		state, ok := c.challenges[host]
 		if !ok {
@@ -477,6 +499,37 @@ func (c *Credentials) Learn(host, wwwAuthenticate string) (bool, error) {
 	if !found {
 		return false, nil
 	}
+	if rule.Scheme == SchemeNTLMv2 {
+		// The NTLM leg learns raw bytes, not a Digest header. The blob is decoded and
+		// validated here, against the store's lock, so a hostile payload is refused
+		// before it is ever hashed — and the error travels to the caller that reports why
+		// a credential did not apply.
+		msg, err := ntlmChallengeBlob(wwwAuthenticate)
+		if err != nil {
+			return false, err
+		}
+		if _, err := parseChallenge(msg); err != nil {
+			return false, err
+		}
+		state, ok := c.ntlm[host]
+		if !ok {
+			// No NEGOTIATE has gone out yet, so there is no exchange to answer: the
+			// challenge is kept and the next Authorization call sends the type-1 message,
+			// after which the following one carries the authenticate leg. This is the
+			// same "works for a host that challenged on a PREVIOUS request" shape the
+			// Digest branch documents — a first-request 401 is learned, not answered.
+			c.ntlm[host] = &ntlmSession{negotiate: ntlmNegotiateMessage(), challenge: msg}
+			return true, nil
+		}
+		if state.challenge != nil && bytes.Equal(state.challenge, msg) {
+			// The same challenge message came back: the credential was rejected rather
+			// than the nonce having expired, so re-learning it would loop. Reported as
+			// unusable for the same reason the Digest branch reports it.
+			return false, nil
+		}
+		state.challenge = msg
+		return true, nil
+	}
 	if rule.Scheme != SchemeDigest {
 		return false, nil
 	}
@@ -504,6 +557,14 @@ func (c *Credentials) forgetMatching(pattern string) {
 	for host := range c.challenges {
 		if matchHost(pattern, host) {
 			delete(c.challenges, host)
+		}
+	}
+	// The NTLMv2 cache answers the same question and so dies the same death: a stale
+	// challenge replayed under a changed rule fails, and the failure would look like the
+	// new password being wrong.
+	for host := range c.ntlm {
+		if matchHost(pattern, host) {
+			delete(c.ntlm, host)
 		}
 	}
 }

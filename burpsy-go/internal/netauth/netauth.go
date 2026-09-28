@@ -97,18 +97,30 @@ const (
 	SchemeBasic Scheme = "basic"
 	// SchemeDigest answers an RFC 7616 challenge; see digest.go.
 	SchemeDigest Scheme = "digest"
+	// SchemeNTLMv2 answers an NTLMSSP CHALLENGE_MESSAGE with the MS-NLMP response
+	// algorithm (burpsy-react-ui-noz5). The codec is ntlm.go (buildNegotiate /
+	// parseChallenge / buildAuthenticate, full MIC); the three legs are driven by
+	// Credentials: NEGOTIATE goes out preemptively like Basic, the CHALLENGE_MESSAGE is
+	// learned by Learn like the Digest nonce, and the AUTHENTICATE leg rides the same
+	// bounded one-retry flow the Digest branch uses.
+	//
+	// Handshake state lives in the credential store keyed by host, not in a socket: the
+	// AUTHENTICATE message is computed against the CHALLENGE the server sent, so the
+	// learned bytes have to survive whatever connection carries the next request — the
+	// same property the Digest cache's doc states and for the same reason.
+	SchemeNTLMv2 Scheme = "ntlmv2"
 )
 
 // SupportedSchemes is what a selector may offer, in display order. The UI reads this
 // through the API rather than hard-coding a list, so a scheme cannot appear in the
 // panel without existing here.
-func SupportedSchemes() []Scheme { return []Scheme{SchemeBasic, SchemeDigest} }
+func SupportedSchemes() []Scheme { return []Scheme{SchemeBasic, SchemeDigest, SchemeNTLMv2} }
 
 // UnsupportedSchemes names the schemes Burp has and this does not, so the panel can
 // say so out loud instead of leaving an operator to infer it from an absence. Being
 // told "NTLM is not supported" is a usable answer; finding no NTLM option and not
 // knowing whether you are looking in the wrong place is not.
-func UnsupportedSchemes() []string { return []string{"NTLMv1", "NTLMv2", "Negotiate"} }
+func UnsupportedSchemes() []string { return []string{"NTLMv1", "Negotiate"} }
 
 // ParseScheme resolves a wire string, refusing anything it does not implement.
 //
@@ -124,14 +136,16 @@ func ParseScheme(raw string) (Scheme, error) {
 		return SchemeBasic, nil
 	case "digest":
 		return SchemeDigest, nil
+	case "ntlmv2":
+		return SchemeNTLMv2, nil
 	case "":
-		return "", errors.New("a platform-authentication rule needs a scheme: basic or digest")
-	case "ntlm", "ntlmv1", "ntlmv2", "negotiate", "kerberos":
-		return "", fmt.Errorf("%s is not supported by this build; only basic and digest are implemented "+
-			"(NTLM needs per-connection affinity the sender does not offer, and Negotiate needs a Kerberos "+
+		return "", errors.New("a platform-authentication rule needs a scheme: basic, digest or ntlmv2")
+	case "ntlm", "ntlmv1", "negotiate", "kerberos":
+		return "", fmt.Errorf("%s is not supported by this build; only basic, digest and ntlmv2 are implemented "+
+			"(NTLMv1 is DES-only, and Negotiate needs a Kerberos "+
 			"credential rather than a password)", strings.TrimSpace(raw))
 	default:
-		return "", fmt.Errorf("unknown authentication scheme %q: this build implements basic and digest", strings.TrimSpace(raw))
+		return "", fmt.Errorf("unknown authentication scheme %q: this build implements basic, digest and ntlmv2", strings.TrimSpace(raw))
 	}
 }
 
@@ -173,7 +187,7 @@ func NewCredential(host string, scheme Scheme, username, password, realm string)
 	if strings.TrimSpace(username) == "" {
 		return Credential{}, errors.New("a platform-authentication rule needs a username")
 	}
-	if scheme != SchemeBasic && scheme != SchemeDigest {
+	if scheme != SchemeBasic && scheme != SchemeDigest && scheme != SchemeNTLMv2 {
 		return Credential{}, fmt.Errorf("unsupported scheme %q", string(scheme))
 	}
 	return Credential{
@@ -236,11 +250,17 @@ type Credentials struct {
 	// spending another 401. Keyed by host, not by pattern: a challenge is a fact about
 	// one server, while a pattern is a statement about many.
 	challenges map[string]*digestState
+	// ntlm caches one host's NTLMv2 handshake state, the same shape and the same keying
+	// as the Digest cache: the NEGOTIATE message this build sent and the CHALLENGE_MESSAGE
+	// the server answered, kept as raw bytes because the MIC covers exactly those two legs.
+	// State lives here rather than in a socket, so a learned challenge reaches the next
+	// request whatever connection carries it.
+	ntlm map[string]*ntlmSession
 }
 
 // NewCredentials returns an empty rule list.
 func NewCredentials() *Credentials {
-	return &Credentials{challenges: map[string]*digestState{}}
+	return &Credentials{challenges: map[string]*digestState{}, ntlm: map[string]*ntlmSession{}}
 }
 
 // Add appends a rule, or replaces the one with the same (host, scheme) key.

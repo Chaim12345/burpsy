@@ -39,6 +39,7 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -299,6 +300,17 @@ func avPairs(buf []byte) map[uint16][]byte {
 	return out
 }
 
+// utf16Text decodes a UTF-16LE byte pair back into the text the server named. An odd
+// number of bytes is truncated to whole units rather than guessed at: a truncated name
+// hashes wrong, and a wrong hash is reported as a 401 rather than silently accepted.
+func utf16Text(b []byte) string {
+	units := make([]uint16, 0, len(b)/2)
+	for i := 0; i+1 < len(b); i += 2 {
+		units = append(units, binary.LittleEndian.Uint16(b[i:i+2]))
+	}
+	return string(utf16.Decode(units))
+}
+
 // appendAVPair writes one AV_PAIR.
 func appendAVPair(dst []byte, id uint16, value []byte) []byte {
 	var header [4]byte
@@ -509,4 +521,111 @@ func micOver(exportedSessionKey, negotiateMsg, challengeMsg, authenticateWithZer
 	mac.Write(challengeMsg)
 	mac.Write(authenticateWithZeroedMIC)
 	return mac.Sum(nil)
+}
+
+// ntlmSession is one host's NTLMv2 handshake state: the NEGOTIATE message this build sent
+// and the CHALLENGE_MESSAGE the server answered it with, both as raw bytes, because the
+// MIC covers exactly those two legs (MS-NLMP 3.2.5.1.1). It lives in the credential store
+// keyed by host — the same shape as the Digest nonce cache — rather than in a socket, so a
+// learned challenge reaches the next request whatever connection carries it.
+//
+// Everything here is unexported and every accessor hands back only derived wire bytes, so
+// encoding/json cannot reach the state and no accessor can leak the derived NT one-way
+// function: it is recomputed from the rule's password on each use, matching the package
+// doc's secret rule.
+type ntlmSession struct {
+	negotiate []byte
+	challenge []byte
+}
+
+// ntlmNegotiateMessage returns the type-1 NEGOTIATE message. One per session, generated
+// when the challenge is learned and kept, so the MIC's negotiate leg is the message as sent
+// rather than a second assembly of it.
+func ntlmNegotiateMessage() []byte { return buildNegotiate() }
+
+// ntlmChallengeBlob decodes the base64 payload of a `WWW-Authenticate: NTLM <blob>` header,
+// refusing a header whose payload is not base64 or does not carry an NTLMSSP message. The
+// bytes arrive from a hostile server, so they are validated before they are ever hashed.
+func ntlmChallengeBlob(header string) ([]byte, error) {
+	const prefix = "NTLM "
+	rest := strings.TrimSpace(header)
+	if len(rest) > len(prefix) && strings.EqualFold(rest[:len(prefix)], prefix) {
+		rest = strings.TrimSpace(rest[len(prefix):])
+	}
+	raw, err := base64.StdEncoding.DecodeString(rest)
+	if err != nil {
+		return nil, fmt.Errorf("NTLM challenge payload is not valid base64: %w", err)
+	}
+	return raw, nil
+}
+
+// ntlmAnswer computes the type-3 AUTHENTICATE message for one learned challenge. It is the
+// MS-NLMP 3.3.2 response algorithm driven end to end: NTOWFv2 from the rule's password,
+// the v2 hash over the server's challenge and AV_PAIR list, a fresh client challenge and
+// timestamp, and a MIC over the negotiate and challenge legs under the session base key.
+//
+// The negotiate message passed in is the one this build actually sent, kept by the session,
+// so the MIC covers the exchange as it went out.
+func ntlmAnswer(rule Credential, negotiate, challengeMsg []byte) (string, error) {
+	challenge, err := parseChallenge(challengeMsg)
+	if err != nil {
+		return "", err
+	}
+
+	clientChallenge, err := newClientChallenge()
+	if err != nil {
+		return "", err
+	}
+
+	// The domain is the AV pair the server named, decoded back from its UTF-16LE wire
+	// form: ntowfv2 hashes upper(user) + domain as the *text* the server meant, and a
+	// pair's bytes re-encoded as UTF-16 would hash the double-encoded name the server
+	// never sent. A challenge with no domain pair hashes the empty one — the same input
+	// a domain-less account would produce.
+	domain := ""
+	if pairs := avPairs(challenge.TargetInfo); pairs != nil {
+		if nb, ok := pairs[avIDNbDomain]; ok {
+			domain = utf16Text(nb)
+		}
+	}
+
+	key := ntowfv2(rule.Username, domain, rule.password)
+
+	// A MIC is asked for by setting MsvAvFlags' MIC bit in the challenge's own target
+	// info (MS-NLMP 3.2.5.1.1). The v2 response is computed ONCE, over the target info
+	// exactly as the server sent it: NTProofStr hashes serverChallenge + temp, and temp
+	// embeds that list — a server recomputing the proof hashes the bytes it sent, so
+	// hashing a patched copy would produce a proof no server accepts. The MIC-bit patch
+	// matters for whether the MIC is computed and claimed, never for the response hash.
+	flags := ntlmClientFlags
+	withMIC := micBitSet(challenge)
+
+	ntResponse, sessionKey := ntlmv2Response(key, challenge.ServerChallenge, clientChallenge,
+		ntlmTimestamp(time.Now()), challenge.TargetInfo)
+
+	msg := buildAuthenticate(authenticateInput{
+		domain:       domain,
+		user:         rule.Username,
+		workstation:  "",
+		lmResponse:   lmv2Response(key, challenge.ServerChallenge, clientChallenge),
+		ntResponse:   ntResponse,
+		flags:        flags,
+		withMIC:      withMIC,
+		micKey:       sessionKey,
+		negotiateMsg: negotiate,
+		challengeMsg: challengeMsg,
+	})
+	return "NTLM " + base64.StdEncoding.EncodeToString(msg), nil
+}
+
+// micBitSet reports whether the challenge's MsvAvFlags AV pair claims a MIC, which is how a
+// server asks for one (MS-NLMP 3.2.5.1.1). A challenge with no flags pair never asked, so
+// it reads false rather than being guessed at.
+func micBitSet(challenge ntlmChallengeMessage) bool {
+	pairs := avPairs(challenge.TargetInfo)
+	flags, ok := pairs[avIDFlags]
+	if !ok {
+		return false
+	}
+	return binary.LittleEndian.Uint32(flags)&0x00000004 != 0
 }

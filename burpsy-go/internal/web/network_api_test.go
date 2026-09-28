@@ -184,8 +184,10 @@ func Test_deleting_an_absent_rule_answers_404(t *testing.T) {
 func Test_the_network_api_refuses_unusable_rules(t *testing.T) {
 	server := networkServer()
 	cases := map[string]string{
-		"no scheme":          `{"host":"example.com","username":"a","password":"b"}`,
-		"unsupported scheme": `{"host":"example.com","scheme":"ntlmv2","username":"a","password":"b"}`,
+		"no scheme": `{"host":"example.com","username":"a","password":"b"}`,
+		// ntlmv2 is implemented (ntlm.go); NTLMv1 is the unsupported Burp scheme this
+		// build refuses, so it names the refusal class instead.
+		"unsupported scheme": `{"host":"example.com","scheme":"ntlmv1","username":"a","password":"b"}`,
 		"unknown scheme":     `{"host":"example.com","scheme":"bearer","username":"a","password":"b"}`,
 		"no host":            `{"host":"  ","scheme":"basic","username":"a","password":"b"}`,
 		"no username":        `{"host":"example.com","scheme":"basic","username":"","password":"b"}`,

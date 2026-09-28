@@ -103,9 +103,9 @@ export function PlatformAuthSection(): JSX.Element {
         <div className="notice">
           <span>
             {data.unsupported.join(", ")} {data.unsupported.length === 1 ? "is" : "are"} not implemented by this build
-            and cannot be selected. NTLM needs the per-connection affinity the sender does not offer, and Negotiate
-            needs a Kerberos credential rather than a password. Basic is sent preemptively; Digest answers one
-            challenge first.
+            and cannot be selected. NTLMv1 is DES-only — a weaker credential that also does not work — and Negotiate
+            needs a Kerberos credential rather than a password. Basic is sent preemptively; Digest and NTLMv2 answer
+            one challenge first, with NTLMv2 exchanging NTLMSSP negotiate, challenge and authenticate messages.
           </span>
         </div>
       ) : null}
@@ -116,7 +116,7 @@ export function PlatformAuthSection(): JSX.Element {
             <Input id={id} value={host} placeholder="api.example.com" onChange={(event) => setHost(event.target.value)} />
           )}
         </Field>
-        <Field label="Scheme" hint="Basic is preemptive; Digest waits for a challenge.">
+        <Field label="Scheme" hint="Basic is preemptive; Digest and NTLMv2 wait for a challenge.">
           {(id) => (
             <Select
               id={id}
@@ -126,7 +126,7 @@ export function PlatformAuthSection(): JSX.Element {
             >
               {schemes.map((option) => (
                 <option key={option} value={option}>
-                  {option === "basic" ? "Basic" : option === "digest" ? "Digest" : option}
+                  {option === "basic" ? "Basic" : option === "digest" ? "Digest" : option === "ntlmv2" ? "NTLMv2" : option}
                 </option>
               ))}
             </Select>

@@ -125,7 +125,9 @@ func Test_secrets_are_readable_by_the_persistence_hole_and_round_trip(t *testing
 // The unsupported schemes must be refused by name, not silently coerced. Coercion to
 // Basic would put the operator's password in a header the target never asked for.
 func Test_unsupported_schemes_are_refused_and_named(t *testing.T) {
-	for _, raw := range []string{"ntlm", "NTLMv1", "ntlmv2", "Negotiate", "kerberos"} {
+	// NTLMv2 is implemented (ntlm.go, full MS-NLMP codec) and must parse; the rest of
+	// Burp's list is refused with the reason each would actually require.
+	for _, raw := range []string{"ntlm", "NTLMv1", "Negotiate", "kerberos"} {
 		scheme, err := ParseScheme(raw)
 		if err == nil {
 			t.Errorf("ParseScheme(%q) returned %q instead of refusing; a selector option that does "+
@@ -135,6 +137,9 @@ func Test_unsupported_schemes_are_refused_and_named(t *testing.T) {
 		if !strings.Contains(err.Error(), "not supported by this build") {
 			t.Errorf("ParseScheme(%q) error does not say it is unsupported, so it reads like a typo: %v", raw, err)
 		}
+	}
+	if _, err := ParseScheme("ntlmv2"); err != nil {
+		t.Errorf("ParseScheme(%q) refused the scheme the codec implements: %v", "ntlmv2", err)
 	}
 	if _, err := ParseScheme("bogus"); err == nil {
 		t.Error("an unknown scheme must be an error, never a fallback to basic")
