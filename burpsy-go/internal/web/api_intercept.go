@@ -363,8 +363,12 @@ func specToRules(specs []interceptRuleSpec) ([]intercept.Rule, error) {
 			// A member name on a field that is not a list (host, path, body, …) is a rule
 			// that cannot mean anything: the engine would silently ignore the member and
 			// match the field's whole value, which is a match the operator never asked
-			// for. Refused here, at the wire, so the console's rule editor can say why.
-			return nil, fmt.Errorf("rule field %q does not name a list, so it cannot carry a member name (use the member only on request/response header or cookie rules)", sp.Field)
+			// for. Refused here, at the wire, so the console's rule editor can say why —
+			// and the refusal names the MEMBER that caused it (burpsy-react-ui-lhrr), not
+			// only the field: "which of my rules' members is the problem" is the answer
+			// an operator needs, and a field-only message sends them looking at every
+			// rule they wrote.
+			return nil, fmt.Errorf("rule member %q on field %q does not name a list, so it cannot carry a member name (use the member only on request/response header or cookie rules)", sp.Member, sp.Field)
 		}
 		if sp.Member == "" && field.IsMember() {
 			return nil, fmt.Errorf("rule field %q names a list and needs a member: the header or cookie name to match against", sp.Field)
