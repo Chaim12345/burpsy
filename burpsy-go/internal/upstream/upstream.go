@@ -704,6 +704,63 @@ func (p *Policy) Remove(pattern string) bool {
 	return false
 }
 
+// Move repositions one rule by `to` places: positive is later in the list, negative is earlier, and
+// a |to| beyond either end clamps rather than failing.
+//
+// Ordering is not cosmetic here. `For` is first-match, so with two overlapping patterns — `*` and
+// `*.internal.example` — the one earlier in the list wins outright, and an operator who cannot
+// reorder cannot say which. That is the whole capability gap burpsy-react-ui-ldtj records: the
+// precedence exists, it just cannot be expressed.
+//
+// A RELATIVE move rather than an absolute index, because the two actions a UI offers are "move up"
+// and "move down" (Burp's own panel has Up and Down on the rule list, Zryl.java:155,164) and a
+// relative offset is what both of them mean. An absolute index would also need a caller to hold the
+// current list, which is the thing that goes stale between reading it and clicking.
+//
+// Clamping rather than an error: an operator pressing "up" on the top row has asked for something
+// already true, and answering with an error would make a double-click look like a failure. The
+// alternative — silently doing nothing and reporting success — is indistinguishable from a move that
+// went the wrong way, so the return value says whether the list changed.
+//
+// Returns the rule's new index, and whether it moved. A pattern that is not in the policy returns
+// (-1, false): the caller turns that into a 404 the same way Remove's false becomes one.
+func (p *Policy) Move(pattern string, to int) (int, bool) {
+	if p == nil {
+		return -1, false
+	}
+	pattern = strings.TrimSpace(pattern)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	from := -1
+	for i := range p.rules {
+		if p.rules[i].Pattern == pattern {
+			from = i
+			break
+		}
+	}
+	if from < 0 {
+		return -1, false
+	}
+	to += from
+	if to < 0 {
+		to = 0
+	}
+	if to > len(p.rules)-1 {
+		to = len(p.rules) - 1
+	}
+	if to == from {
+		return from, false
+	}
+	rule := p.rules[from]
+	// Splice rather than swap. Swapping would exchange two rules and silently change which hosts the
+	// OTHER one covers at the positions between; a move has to close the gap, or a three-rule list
+	// would lose one on every press.
+	p.rules = append(p.rules[:from], p.rules[from+1:]...)
+	rest := append([]Rule(nil), p.rules[to:]...)
+	p.rules = append(append(p.rules[:to], rule), rest...)
+	return to, true
+}
+
 // SetDefault installs the proxy for destinations no rule matches. An empty string or "direct" clears
 // it back to dialling origins ourselves.
 func (p *Policy) SetDefault(proxyURL string) error {
