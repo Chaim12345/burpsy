@@ -149,29 +149,29 @@ export interface SessionRuleFull {
 	 * Burp's parameter scope (burpsy-react-ui-9hip): the rule applies only where every named
 	 * parameter exists. Omitted = unrestricted, like the host scope.
 	 */
-	scope_params?: string[];
-	/**
-	 * Burp's tools scope (so3): the rule applies only to requests made by one of these tools,
-	 * named as the Logger's capture filter names them. Omitted = every tool. An empty array is
-	 * refused by the server rather than read as "every tool" — an operator who unchecked every
-	 * box meant the opposite of that, and the form shows the meaning either way.
-	 */
-	scope_tools?: string[];
+ scope_params?: string[];
+ /**
+  * Burp's tools scope (so3): the rule applies only to requests made by one of these tools,
+  * named as the Logger's capture filter names them. Omitted = every tool. An empty array is
+  * refused by the server rather than read as "every tool" — an operator who unchecked every
+  * box meant the opposite of that, and the form shows the meaning either way.
+  */
+ scope_tools?: string[];
  steps: SessionMacroStep[];
  validity: SessionValidity;
  max_attempts?: number;
-	/**
-	 * The rule's ordered action list (burpsy-react-ui-ayi) — Burp's rule shape, and what the executor
-	 * actually runs.
-	 *
-	 * Served as the *effective* list, never as a bare stored one: a rule written before actions
-	 * existed (or whose row predates the column) behaves as the synthesis "check validity, and if not
-	 * valid run the macro", and the server sends that list rather than an empty table. So this is
-	 * never empty, and an empty array in an editor means the client invented one — sending it back is
-	 * refused, because a rule with no actions does nothing and the server would otherwise silently
-	 * restore the login flow.
-	 */
-	actions: SessionAction[];
+ /**
+  * The rule's ordered action list (burpsy-react-ui-ayi) — Burp's rule shape, and what the executor
+  * actually runs.
+  *
+  * Served as the *effective* list, never as a bare stored one: a rule written before actions
+  * existed (or whose row predates the column) behaves as the synthesis "check validity, and if not
+  * valid run the macro", and the server sends that list rather than an empty table. So this is
+  * never empty, and an empty array in an editor means the client invented one — sending it back is
+  * refused, because a rule with no actions does nothing and the server would otherwise silently
+  * restore the login flow.
+  */
+ actions: SessionAction[];
 }
 
 /**
@@ -179,45 +179,45 @@ export interface SessionRuleFull {
  * lists of the same shape, and its executor is the only kind that reads them.
  */
 export interface SessionAction {
-	/** One of `action_kinds[].kind` from the same response. */
-	kind: string;
-	/**
-	 * Burp's own words for the action, served by the server rather than spelled here. A copy in this
-	 * file would be a second vocabulary, and the failure it produces is silent: an editor that offers
-	 * a kind the API refuses, or spells one it does not accept.
-	 */
-	label: string;
-	/** Burp's per-action checkbox. A disabled action is skipped and the list continues. */
-	enabled: boolean;
-	/** Burp's "no further actions should be applied to the request". */
-	stop?: boolean;
-	/** A RunMacro action's own steps. Absent means the rule's own `steps`, not a copy of them. */
-	macro?: SessionMacroStep[];
-	then?: SessionAction[];
-	else?: SessionAction[];
-	/** SetCookie's cookie name / SetParam's parameter name / SetHeader's header name. */
-	name?: string;
-	/** A value that may carry {{name}} placeholders a macro action extracted earlier in the list. */
-	value?: string;
-	/** SetParam's target: absent (wherever it already is, else the query), "query" or "body". */
-	in?: string;
-	match?: string;
-	replacement?: string;
-	regex?: boolean;
-	/** InvokeExtension's target: a plugin registration id, which the server resolves to a plugin. */
-	extension?: string;
-	/**
-	 * Burp's `validate_every_num_requests` (us12): a CheckValidity action that checks the session
-	 * only on every Nth request the rule handles. Absent/0 is check every time, which is the
-	 * pre-field behaviour and what every rule written before it means.
-	 */
-	validate_every?: number;
+ /** One of `action_kinds[].kind` from the same response. */
+ kind: string;
+ /**
+  * Burp's own words for the action, served by the server rather than spelled here. A copy in this
+  * file would be a second vocabulary, and the failure it produces is silent: an editor that offers
+  * a kind the API refuses, or spells one it does not accept.
+  */
+ label: string;
+ /** Burp's per-action checkbox. A disabled action is skipped and the list continues. */
+ enabled: boolean;
+ /** Burp's "no further actions should be applied to the request". */
+ stop?: boolean;
+ /** A RunMacro action's own steps. Absent means the rule's own `steps`, not a copy of them. */
+ macro?: SessionMacroStep[];
+ then?: SessionAction[];
+ else?: SessionAction[];
+ /** SetCookie's cookie name / SetParam's parameter name / SetHeader's header name. */
+ name?: string;
+ /** A value that may carry {{name}} placeholders a macro action extracted earlier in the list. */
+ value?: string;
+ /** SetParam's target: absent (wherever it already is, else the query), "query" or "body". */
+ in?: string;
+ match?: string;
+ replacement?: string;
+ regex?: boolean;
+ /** InvokeExtension's target: a plugin registration id, which the server resolves to a plugin. */
+ extension?: string;
+ /**
+  * Burp's `validate_every_num_requests` (us12): a CheckValidity action that checks the session
+  * only on every Nth request the rule handles. Absent/0 is check every time, which is the
+  * pre-field behaviour and what every rule written before it means.
+  */
+ validate_every?: number;
 }
 
 /** One entry of the action palette, served so the editor cannot drift from what the server accepts. */
 export interface SessionActionKind {
-	kind: string;
-	label: string;
+ kind: string;
+ label: string;
 }
 
 /**
@@ -225,24 +225,24 @@ export interface SessionActionKind {
  * can show it with the reason rather than leaving the operator to conclude it was overlooked.
  */
 export interface SessionDeclinedAction {
-	name: string;
-	reason: string;
+ name: string;
+ reason: string;
 }
 
 export interface SessionRulesResponse {
-	wired: boolean;
-	rules: SessionRuleFull[];
-	hint?: string;
-	/**
-	 * Every tool name a rule's tools scope may name (so3), served by the API so this checklist
-	 * cannot drift from what the server enforces. Always present: the server sends it even when
-	 * the rules list is empty.
-	 */
-	tools: string[];
-	/** The action palette, from the same source. Always present, same reason. */
-	action_kinds: SessionActionKind[];
-	/** The Burp actions this build does not implement. Always present, same reason. */
-	declined_actions: SessionDeclinedAction[];
+ wired: boolean;
+ rules: SessionRuleFull[];
+ hint?: string;
+ /**
+  * Every tool name a rule's tools scope may name (so3), served by the API so this checklist
+  * cannot drift from what the server enforces. Always present: the server sends it even when
+  * the rules list is empty.
+  */
+ tools: string[];
+ /** The action palette, from the same source. Always present, same reason. */
+ action_kinds: SessionActionKind[];
+ /** The Burp actions this build does not implement. Always present, same reason. */
+ declined_actions: SessionDeclinedAction[];
 }
 
 export interface SessionCookiePair {
@@ -540,8 +540,15 @@ export interface NetworkCarrierView {
  configured: boolean;
  /** The hop's redacted address, read from the live carrier rather than the settings document. */
  socks: string;
- /** Destination host patterns that skip the hop, in the same language a rule uses. */
- bypass: string[];
+ /**
+  * Destination host patterns that skip the hop, in the same language a rule uses.
+  *
+  * `null` when the hop has no bypass list: the server marshals a nil Go slice as null, and this is
+  * read from the live carrier rather than from a synthesised settings document. Declared `| null`
+  * because the panel crashed on exactly that (burpsy-react-ui-2qbi) — the type claimed an array, so
+  * the `.join` on it was written unguarded and killed the whole Settings page behind the boundary.
+  */
+ bypass: string[] | null;
  /**
   * Ask the SOCKS server to resolve destination names, which is what makes an internal-only hostname
   * reachable through it. A SOCKS feature: the server refuses it for an HTTP hop rather than
@@ -555,8 +562,11 @@ export interface NetworkCarrierView {
   * limitation is a property of the dial path, not of the settings document: a panel that showed the
   * layer as configured without saying what it skips would be the same overclaim in a different place
   * (burpsy-react-ui-mr83 part 3).
+  *
+  * `null` for the same reason as `bypass`: a nil Go slice marshals as null, and this one is mapped
+  * in the panel, so an unguarded `.map` on it would throw the same way.
   */
- limits: string[];
+ limits: string[] | null;
 }
 
 /** POST body. `default` omitted leaves the default alone; "" or "direct" clears it. */

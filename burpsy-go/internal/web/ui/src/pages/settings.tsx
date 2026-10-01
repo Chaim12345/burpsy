@@ -1513,8 +1513,12 @@ function AppearanceSection(): JSX.Element {
 function MessageEditorSection(): JSX.Element {
  const defaultVariant = useApp((state) => state.defaultMessageVariant);
  const setDefaultVariant = useApp((state) => state.setDefaultMessageVariant);
- const request = useApp((state) => state.hideRequestHeaders);
- const response = useApp((state) => state.hideResponseHeaders);
+ // A store persisted before these keys existed has them as undefined, and `request.join("\n")`
+ // below then threw out of this section and took the whole Settings page down. The fallback is the
+ // shipped default list — what the store seeds for a fresh install — so an operator upgrading from
+ // before the message-editor lists sees what a new install sees (burpsy-react-ui-2qbi).
+ const request = useApp((state) => state.hideRequestHeaders) ?? DEFAULT_HIDE_REQUEST_HEADERS;
+ const response = useApp((state) => state.hideResponseHeaders) ?? DEFAULT_HIDE_RESPONSE_HEADERS;
  const byDefault = useApp((state) => state.hideHeadersByDefault);
  const setHideHeaders = useApp((state) => state.setHideHeaders);
  const setHideHeadersByDefault = useApp((state) => state.setHideHeadersByDefault);
@@ -2112,7 +2116,16 @@ function UpstreamProxySection(): JSX.Element {
  const [carrierDraft, setCarrierDraft] = useState({ socks: "", bypass: [] as string[], remote_resolve: false });
  useEffect(() => {
   if (!data) return;
-  setCarrierDraft({ socks: data.carrier.socks, bypass: data.carrier.bypass, remote_resolve: data.carrier.remote_resolve });
+  setCarrierDraft({
+   socks: data.carrier.socks,
+   // Null, not [], when the hop has no bypass list: the server marshals a nil Go slice as null
+   // (NetworkCarrierView declares string[] | null for exactly this reason). Adopted unguarded, this
+   // put null in the draft and the next `.join` on it killed the whole Settings page behind the
+   // error boundary (burpsy-react-ui-2qbi). The draft holds string[] because the editor round-trips
+   // through text, so the null is normalised here, at the boundary.
+   bypass: data.carrier.bypass ?? [],
+   remote_resolve: data.carrier.remote_resolve,
+  });
  }, [data]);
 
  return (
@@ -2336,7 +2349,11 @@ function UpstreamProxySection(): JSX.Element {
        { carrier: carrierDraft },
        {
         onSuccess: (answer) => {
-         setCarrierDraft({ socks: answer.carrier.socks, bypass: answer.carrier.bypass, remote_resolve: answer.carrier.remote_resolve });
+         setCarrierDraft({
+          socks: answer.carrier.socks,
+          bypass: answer.carrier.bypass ?? [],
+          remote_resolve: answer.carrier.remote_resolve,
+         });
          toast.success(answer.carrier.configured ? "SOCKS carrier applied" : "SOCKS carrier cleared");
         },
         onError: (failure: unknown) => fail(failure, "The SOCKS carrier could not be applied"),
@@ -2355,7 +2372,7 @@ function UpstreamProxySection(): JSX.Element {
       }.`
      : "No carrier is installed: every connection dials directly, and any upstream proxy above is reached directly too."}
    </p>
-   {data?.carrier.limits.map((limit) => (
+   {(data?.carrier.limits ?? []).map((limit) => (
     <p key={limit} className="field-hint">
      <strong>Not carried:</strong> {limit}.
     </p>
