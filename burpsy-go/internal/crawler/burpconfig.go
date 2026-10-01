@@ -112,6 +112,14 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	// by default there (request_speculative: true, maximum_speculative_links: 1000).
 	{burpKey: "crawler/customization/request_speculative", configField: "RequestSpeculative"},
 	{burpKey: "crawler/customization/maximum_speculative_links", field: "MaxSpeculativeLinks"},
+	// The API-definition parsing family (burpsy-react-ui-bwwg): four switches that
+	// control whether the crawl reads OpenAPI/Swagger documents, SOAP WSDLs, sends
+	// GraphQL introspection queries, and probes for hidden GraphQL endpoints. All
+	// four are bool switches in Burp's crawler/customization section.
+	{burpKey: "crawler/customization/parse_api_definitions", configField: "ParseAPIDefinitions"},
+	{burpKey: "crawler/customization/parse_soap_wsdls", configField: "ParseSOAPWSDLs"},
+	{burpKey: "crawler/customization/perform_graphql_introspection", configField: "PerformGraphQLIntrospection"},
+	{burpKey: "crawler/customization/guess_hidden_graphql_endpoints", configField: "GuessHiddenGraphQLEndpoints"},
 }
 
 // registerBurpCrawlKey adds a row to the crawl-key table from outside this file.
@@ -142,6 +150,26 @@ type CrawlConfig struct {
 	// hidden links. A bool rather than a Limits field because it is a switch, not a
 	// bound — the same reason SubmitForms has no Limits row.
 	RequestSpeculative bool
+	// ParseAPIDefinitions is the crawler/customization/parse_api_definitions flag
+	// (burpsy-react-ui-bwwg): whether the crawl reads OpenAPI/Swagger documents it
+	// fetches for their declared endpoints. A bool rather than a Limits field because
+	// it is a switch, not a bound.
+	ParseAPIDefinitions bool
+	// ParseSOAPWSDLs is the crawler/customization/parse_soap_wsdls flag
+	// (burpsy-react-ui-bwwg): whether the crawl reads SOAP WSDL documents it fetches
+	// for their declared operations. A bool rather than a Limits field because it is
+	// a switch, not a bound.
+	ParseSOAPWSDLs bool
+	// PerformGraphQLIntrospection is the crawler/customization/perform_graphql_introspection
+	// flag (burpsy-react-ui-bwwg): whether the crawl sends an introspection query to
+	// GraphQL endpoints it discovers. A bool rather than a Limits field because it is
+	// a switch, not a bound.
+	PerformGraphQLIntrospection bool
+	// GuessHiddenGraphQLEndpoints is the crawler/customization/guess_hidden_graphql_endpoints
+	// flag (burpsy-react-ui-bwwg): whether the crawl probes common GraphQL paths
+	// (/graphql, /api/graphql, etc.) for hidden endpoints. A bool rather than a Limits
+	// field because it is a switch, not a bound.
+	GuessHiddenGraphQLEndpoints bool
 	// ErrorHandling is the `crawler/error_handling/*` family as the file set it, every field a POINTER
 	// so a 0 the operator wrote is distinguishable from a key the file never mentioned
 	// (burpsy-react-ui-o0c5). See errorhandling.go for why that distinction is the whole feature.
@@ -231,6 +259,14 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 		switch row.configField {
 		case "RequestSpeculative":
 			c.RequestSpeculative = b
+		case "ParseAPIDefinitions":
+			c.ParseAPIDefinitions = b
+		case "ParseSOAPWSDLs":
+			c.ParseSOAPWSDLs = b
+		case "PerformGraphQLIntrospection":
+			c.PerformGraphQLIntrospection = b
+		case "GuessHiddenGraphQLEndpoints":
+			c.GuessHiddenGraphQLEndpoints = b
 		}
 		return nil
 	}

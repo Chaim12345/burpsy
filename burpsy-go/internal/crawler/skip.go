@@ -198,11 +198,23 @@ const (
 	// maximum_speculative_links, which is why it is its own reason rather than a frontier-full
 	// variant — the two have different causes and different fixes.
 	SkipSpeculativeLimit
+	// SkipAPIUnparsed means a response that announced itself as an API DEFINITION — an OpenAPI or
+	// Swagger document, a SOAP WSDL — could not be read, so the endpoints it declares were never
+	// admitted. Its own reason, and not SkipJSONUnparsed, for the same reason that one is distinct
+	// from SkipNotHTML: the three answers have three different remedies.
+	//
+	// "this was not an API document" is the absence of a thing and is not a skip at all.
+	// "this was JSON I could not read" is a truncated or mislabelled fetch.
+	// "this was an API definition I could not read" is a document the operator almost certainly wants
+	// to know about — it is the one case where the target PUBLISHED its API surface and the crawl
+	// still cannot see it. Reporting it as zero endpoints would tell the operator their target has
+	// no API, which is the exact failure burpsy-react-ui-bwwg exists to stop.
+	SkipAPIUnparsed
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [33]Skip{
+var SkipAll = [34]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -236,6 +248,7 @@ var SkipAll = [33]Skip{
 	SkipSitemapUnparsed,
 	SkipJSONUnparsed,
 	SkipSpeculativeLimit,
+	SkipAPIUnparsed,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -309,6 +322,8 @@ func (s Skip) slot() int {
 		return 31
 	case SkipSpeculativeLimit:
 		return 32
+	case SkipAPIUnparsed:
+		return 33
 	}
 	panic("unknown Skip")
 }
@@ -382,6 +397,8 @@ func (s Skip) String() string {
 		return "json-unparsed"
 	case SkipSpeculativeLimit:
 		return "speculative-limit"
+	case SkipAPIUnparsed:
+		return "api-unparsed"
 	}
 	return "unknown"
 }
@@ -455,6 +472,8 @@ func (s Skip) Explanation() string {
 		return "the response was HTML but the browser render failed, so links that exist only after the page's script runs were not discovered"
 	case SkipSpeculativeLimit:
 		return "the speculative-link cap is spent: the URL was mined from a comment or script body and the crawl-wide bound on hidden links is reached"
+	case SkipAPIUnparsed:
+		return "the response is an API definition (OpenAPI, Swagger or WSDL) that could not be read, so the endpoints it declares were not crawled: check that the document was fetched whole"
 	}
 	return "unknown skip"
 }
@@ -531,7 +550,8 @@ func (s Skip) Category() SkipCategory {
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
 		SkipSpeculativeLimit:
 		return CategoryLimit
-	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
+	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed,
+		SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
 		SkipRenderUnavailable:
 		return CategoryResponse

@@ -268,6 +268,20 @@ type Config struct {
 	// never heard of the setting should get the behaviour they have always got. The wire field
 	// is the opt-in; the Burp-config key lands through the customization table.
 	RequestSpeculative bool
+	// The API-discovery switches (burpsy-react-ui-bwwg). Each corresponds to one Burp
+	// `crawler/customization/*` key and to one thing this crawler can now do with a definition it
+	// meets during a crawl.
+	//
+	// Defaulted ON, which is the opposite of RequestSpeculative above and for a different reason.
+	// There the phase sends requests nobody asked for, so it is opt-in. These READ a document the
+	// target already published and turn its own declared routes into crawl candidates — they cannot
+	// reach anything the crawl would not have reached through a link, and leaving them off by
+	// default would make the capability present but unreachable without a Burp config file, which is
+	// the "a feature nobody can find" shape Burp ships its defaults to avoid.
+	ParseAPIDefinitions         bool
+	ParseSOAPWSDLs              bool
+	PerformGraphQLIntrospection bool
+	GuessHiddenGraphQLEndpoints bool
 	// Limits bounds the crawl. See Limits and DefaultLimits.
 	Limits Limits
 	// ErrorHandling is what the crawl does about requests that FAIL, rather than only counting
@@ -588,6 +602,12 @@ type Report struct {
 	// different facts about a target, and one number cannot carry both.
 	JSONDocumentsRead  int `json:"json_documents_read"`
 	JSONLocationsFound int `json:"json_locations_found"`
+	// APIDocumentsRead counts API definitions (OpenAPI, Swagger, WSDL) the crawl read, and
+	// APIEndpointsFound the operations they declared (burpsy-react-ui-bwwg). Reported as a pair for
+	// the same reason the JSON pair is: a definition read is not a definition understood, and a
+	// report carrying only the first would read as success.
+	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
+	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
 	// SitemapIndexesFollowed counts <sitemapindex> documents whose entries were themselves sitemaps.
 	// A large site publishes a handful of sitemaps pointing at the rest, so this is the difference
 	// between "read one file" and "read the list the operator published".
@@ -1615,6 +1635,18 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// The JSON reader is deliberately narrow: it takes URLs, slash-rooted paths, and relative
 	// references only under a key that names a link. A bare word is not a path — guessing that
 	// an arbitrary string is one is how a crawler invents URLs nobody observed.
+	// An API DEFINITION — OpenAPI, Swagger, WSDL (burpsy-react-ui-bwwg). Checked BEFORE the
+	// generic JSON gate below, and the order is load-bearing: a definition is also valid JSON, so
+	// the narrow reader would look at it first, find the URL-shaped strings inside a `servers` block
+	// or an example, and admit those — while missing every route the document actually declares. A
+	// document read by the wrong reader is worse than one not read, because it produces locations.
+	if c.cfg.ParseAPIDefinitions || c.cfg.ParseSOAPWSDLs {
+		if c.consumeAPIDocument(item, contentType, body, &fetch, rep, lim) {
+			rep.Fetches = append(rep.Fetches, fetch)
+			return
+		}
+	}
+
 	if LooksLikeJSON(contentType, body) {
 		c.consumeJSON(item, contentType, body, &fetch, rep, lim)
 		rep.Fetches = append(rep.Fetches, fetch)
@@ -1933,6 +1965,80 @@ func (c *Crawler) consumeJSON(item frontierItem, contentType string, body []byte
 		rep.JSONLocationsFound++
 		c.admit(discoveredLink{raw: loc.Raw, tag: "json:" + loc.Key}, item.url, item.depth+1, rep, lim)
 	}
+}
+
+// consumeAPIDocument reads an API definition and admits the endpoints it declares, reporting whether
+// it consumed this response.
+//
+// The bool is "this was a definition and I handled it", so the caller returns rather than falling
+// through to the JSON or HTML gates. A body that is NOT a definition returns false and is left
+// entirely alone — which is the overwhelming majority of what a crawl fetches, and it must reach the
+// gates below untouched.
+//
+// Every endpoint enters as a DISCOVERED LINK, through the same admit() gates a page's href goes
+// through, for the reason consumeJSON argues and it is worth repeating because it is the whole safety
+// argument: a URL a target published is exactly as untrusted as one it linked from a page. A JSON
+// body naming /admin/purge-all must not become a privileged request because the API documented it, and
+// the destructiveness gate runs before scope so a documented logout reports as the logout it is.
+//
+// The path is the document's own template, and it is resolved against the URL the document was
+// FETCHED FROM rather than a base declared inside it. A definition that says `servers: [{url:
+// https://elsewhere.test}]` is a claim about another host; following it would take the crawl off the
+// target the operator scoped, and admit() is where scope is decided.
+func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) bool {
+	if LooksLikeWSDL(contentType, body) && !c.cfg.ParseSOAPWSDLs {
+		// The document IS a WSDL and the operator's configuration turned the WSDL reader off.
+		// Falling through is the honest reading: the body is XML, so the JSON gate will not claim it
+		// and it records SkipNotHTML like any other document this crawl cannot read. Recording a
+		// skip reason here would imply the reader tried and failed, when it was switched off.
+		return false
+	}
+	if !LooksLikeWSDL(contentType, body) && !c.cfg.ParseAPIDefinitions {
+		return false
+	}
+
+	format, eps, failure := ParseAPIDocument(contentType, body)
+	if format == APIDocNone {
+		return false
+	}
+	rep.APIDocumentsRead++
+	if failure != "" {
+		// The acceptance criterion, and the reason this is a distinct skip: the target PUBLISHED an
+		// API definition and the crawl still cannot see it. Reporting zero endpoints here would tell
+		// the operator their target has no API, which is the failure this whole change exists to
+		// remove.
+		c.skips.record(SkipRecord{
+			Reason: SkipAPIUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: string(format) + ": " + failure,
+		})
+		return true
+	}
+
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	for _, ep := range eps {
+		rep.APIEndpointsFound++
+		c.admit(discoveredLink{raw: apiEndpointPath(ep), text: ep.OperationID, tag: "api:" + string(format)},
+			item.url, item.depth+1, rep, lim)
+	}
+	return true
+}
+
+// apiEndpointPath is the path one declared operation is requested at.
+//
+// A templated path keeps its braces here: admit() resolves the reference, and the fetch that follows
+// fills the parameters. Substituting a placeholder value at this point would be inventing data the
+// document never declared, and the crawl's fingerprinting would then treat every such URL as one
+// location — which is true, and less useful than the template that says which segment is a parameter.
+//
+// A WSDL operation carries no path at all (it lives in the port's <soap:address>), so it yields the
+// document's own URL rather than an empty one, which would resolve to the current page and re-fetch
+// what has already been fetched.
+func apiEndpointPath(ep APIDocEndpoint) string {
+	if strings.TrimSpace(ep.Path) != "" {
+		return ep.Path
+	}
+	return ""
 }
 
 // robotsLiteralPrefix reduces a robots.txt path pattern to the longest leading literal, so a pattern
