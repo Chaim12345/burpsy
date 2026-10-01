@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"strings"
 )
 
 const (
@@ -160,6 +161,15 @@ type AdvancedTest struct {
 	// assumptions the statistic rests on. Never a substitute for Reason — a
 	// notice is about a test that ran, a reason about one that could not.
 	Notices []string `json:"notices,omitempty"`
+	// Disabled is true when the operator switched this test off rather than when
+	// it could not run (burpsy-react-ui-3iao). Those are different facts and a
+	// verdict that leans on neither must still be able to say which happened:
+	// "untestable" is a limit of the sample, "disabled" is a decision by the
+	// reader, and only the second one is anybody's fault to look into.
+	Disabled bool `json:"disabled,omitempty"`
+	// DisableReason is set alongside Disabled so the record is self-explaining —
+	// a consumer must not have to know this package's policy to render it.
+	DisableReason string `json:"disable_reason,omitempty"`
 }
 
 // AdvancedReport is the extended battery's outcome.
@@ -179,13 +189,34 @@ type AdvancedReport struct {
 // decoded for the bit-level view. It takes the decoded stream rather than
 // re-deriving it so the spectral test sees exactly the bits the FIPS battery
 // was given — two views of one sample must not disagree about what the sample is.
-func advancedFor(tokens []string, enc Encoding, bitStream []byte) AdvancedReport {
-	tests := []AdvancedTest{
+func advancedFor(tokens []string, enc Encoding, bitStream []byte, disabled map[string]bool) AdvancedReport {
+	// Each test is built and then FILTERED, rather than each disabled test being skipped before it
+	// runs. The distinction matters: a skipped test costs nothing, while this keeps the report's
+	// shape identical whether a test was turned off or found inapplicable, and the record says which
+	// — a disabled test and an untestable one are different facts and an operator reading a verdict
+	// needs to tell them apart.
+	all := []AdvancedTest{
 		transitionTest(tokens),
 		spectralTest(bitStream),
 		correlationTest(tokens, enc),
 		compressionTest(tokens, enc),
 	}
+	tests := make([]AdvancedTest, 0, len(all))
+	turnedOff := make([]string, 0, len(disabled))
+	for _, test := range all {
+		if disabled[test.ID] {
+			test.Disabled = true
+			test.DisableReason = "switched off by the operator in the analysis settings"
+			turnedOff = append(turnedOff, test.ID)
+			continue
+		}
+		tests = append(tests, test)
+	}
+	// `total` is the FULL battery, not len(tests): the summary quotes "N of M ran", and M has to
+	// stay the battery's size or a report from a build with one test switched off reads as though a
+	// smaller battery had run. The disabled tests are named at the end so the operator can see which
+	// ones their verdict did not consider.
+	total := len(all)
 	examined, flagged, untested := 0, 0, 0
 	for _, test := range tests {
 		if test.Tested {
@@ -196,21 +227,27 @@ func advancedFor(tokens []string, enc Encoding, bitStream []byte) AdvancedReport
 		flagged += test.Flagged
 	}
 	var summary string
+	// Named at the end whenever any are off, because "3 of 4 extended tests ran" is a sentence an
+	// operator could read as the battery being smaller rather than as a choice they made.
+	offNote := ""
+	if len(turnedOff) > 0 {
+		offNote = fmt.Sprintf(" Switched off in the analysis settings: %s.", strings.Join(turnedOff, ", "))
+	}
 	switch {
 	case examined == 0:
 		summary = fmt.Sprintf(
-			"None of the %d extended tests could run on this sample; each names what it needs in its reason. The grade above is the FIPS battery's and is unaffected by them.",
-			len(tests),
+			"None of the %d extended tests could run on this sample; each names what it needs in its reason. The grade above is the FIPS battery's and is unaffected by them.%s",
+			total, offNote,
 		)
 	case flagged == 0:
 		summary = fmt.Sprintf(
-			"%d of %d extended tests ran and none flagged a deviation at the 0.05 family-wise level; %d could not be tested on this sample. The grade above is the FIPS battery's and is unaffected.",
-			examined, len(tests), untested,
+			"%d of %d extended tests ran and none flagged a deviation at the 0.05 family-wise level; %d could not be tested on this sample. The grade above is the FIPS battery's and is unaffected.%s",
+			examined, total, untested, offNote,
 		)
 	default:
 		summary = fmt.Sprintf(
-			"%d of %d extended tests ran and %d data point(s) across them are significant at the 0.05 family-wise level; %d test(s) could not be tested on this sample. The grade above is the FIPS battery's and is unaffected.",
-			examined, len(tests), flagged, untested,
+			"%d of %d extended tests ran and %d data point(s) across them are significant at the 0.05 family-wise level; %d test(s) could not be tested on this sample. The grade above is the FIPS battery's and is unaffected.%s",
+			examined, total, flagged, untested, offNote,
 		)
 	}
 	return AdvancedReport{Tests: tests, Summary: summary, AffectsGrade: false}

@@ -308,6 +308,21 @@ type Options struct {
 	// the default.
 	SignificancePercent   float64
 	SignificanceDefaulted bool
+	// DisabledTests names the extended tests the operator switched off, by their AdvancedTest.ID
+	// ("transition", "spectral", "correlation", "compression") — Burp's Analysis settings tab lets a
+	// test be turned off individually and the analysis redone (burpsy-react-ui-3iao).
+	//
+	// A DISABLE list rather than an enable list on purpose. An enable list reads as though the
+	// operator had to restate the battery every time they wanted one test off, and a client that
+	// adds a fifth test would silently stop running it until every existing caller learned the new
+	// name. With a disable list, a test this build does not know about cannot be disabled by
+	// accident, and adding one is a no-op for every existing caller.
+	//
+	// An UNKNOWN id is ignored rather than an error for the same reason the significance level is
+	// refused at the HTTP boundary but not here: this is a filter, and a filter that refuses its
+	// input turns a stale bookmark in a saved configuration into a failed analysis. The panel
+	// validates what it offers; the filter does not.
+	DisabledTests []string
 	// Pad is where short tokens are padded — Burp's "Pad short tokens at start /
 	// end". Empty or PadNone means no padding, burpsy's own default.
 	Pad PadMode
@@ -356,6 +371,23 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 // An out-of-range level is a caller error and is refused at the HTTP boundary
 // (ValidSignificancePercent); this function does not clamp, because a silently
 // clamped level answers a question the operator did not ask.
+// disabledTestSet turns a disable list into a lookup set.
+//
+// Empty input gives an EMPTY set rather than nil so the call site can index it unconditionally, and
+// a nil map would read fine too — this is about the caller not having to know which is which.
+func disabledTestSet(disabled []string) map[string]bool {
+	if len(disabled) == 0 {
+		return map[string]bool{}
+	}
+	set := make(map[string]bool, len(disabled))
+	for _, id := range disabled {
+		if id = strings.TrimSpace(id); id != "" {
+			set[id] = true
+		}
+	}
+	return set
+}
+
 func AnalyseWith(tokens []string, encoding *Encoding, significancePercent float64) SequencerReport {
 	report, _ := analyse(tokens, Options{Encoding: encoding, SignificancePercent: significancePercent})
 	return report
@@ -551,7 +583,7 @@ func analyse(tokens []string, opts Options) (SequencerReport, error) {
 		ExtraStats:       extraFor(tokens),
 		Bits:             bits,
 		Fips:             fips,
-		Advanced:         advancedFor(tokens, enc, bitStream),
+		Advanced:         advancedFor(tokens, enc, bitStream, disabledTestSet(opts.DisabledTests)),
 		EffectiveEntropy: effective,
 		Grade:            grade,
 		Verdict:          verdict,
