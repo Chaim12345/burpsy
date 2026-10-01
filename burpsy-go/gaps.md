@@ -1192,6 +1192,89 @@ evaluator, `ToolRunner` interface), `internal/scanner/{toolrunner,passive,
 bcheck_runner,scanner}.go` (runner, load bucket, dispatch gate), `internal/web`
 (`WithToolRunner`), `cmd/burpsy` (`-tools` flag).
 
+## Go extension: MCP server transport (stdio) — `burpsy-react-ui-q31t`
+
+Landed 2026-10-01. Beyond parity: the Rust oracle has no MCP server, and neither
+does Burp itself (Burp AT's approval layer is architecturally separate from the
+model, which is the shape this reuses). ZAP and Caido shipped MCP surfaces in
+2026; burpsy already had the expensive half — a per-route risk class and a
+server-side confirmation gate — and no transport to reach it.
+
+**What ships.** A separate binary, `cmd/burpsy-mcp` (`burpsy-mcp -web
+http://127.0.0.1:8081`), speaking newline-delimited JSON-RPC 2.0 on stdio. It is
+a binary rather than a `burpsy mcp` subcommand because every `cmd/burpsy`
+subcommand is built through `newCLIContext`, which opens the traffic store, loads
+the bcheck corpus and builds the scanners before the command runs — a second
+engine wired against the same database, built only to make HTTP calls to the
+first. The console's own API is unchanged: no route is added to the manifest.
+
+**tools/list** is derived from the manifest, one tool per route, through
+`internal/web/mcp_export.go` (a wrapper file that adds names and changes no
+existing line). Each tool carries the route's risk class in its description and
+its annotations, plus MCP's four standard hints (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`) taken from
+`agent_tools.go`'s derivation — shared with the console's own agent-tool
+registry rather than re-judged, because a descriptor that called an attack route
+idempotent is exactly the drift the taxonomy exists to prevent. Names normalise
+the pattern (`/api/crawl/start` → `api_crawl_start`); the manifest legitimately
+holds both `/api/pools` and `/api/pools/`, so the subtree half of a collision is
+named `_subtree` and a third collision is numbered.
+
+**tools/call does not decide anything.** It forwards the call over HTTP to the
+running console and returns what the server answers. The transport therefore has
+no copy of the gate to drift from it: a gated mutating call with no confirmation
+comes back as the server's own HTTP 428, surfaced as an `isError` tool result
+with the gate's body verbatim; the confirmation travels as the
+`X-Burpsy-Confirm` header, relayed from the caller and never minted by the
+transport. Recovery is an explicit separate tool, `burpsy_confirm`, which POSTs
+the console's own mint endpoint — separate precisely so the escalation is one
+visible, approvable call in the host's transcript rather than a field the model
+fills in. The gate's own comment states the limit honestly and the tool
+description repeats it: an agent that can supply the confirm itself has learned
+nothing from being asked, so the enforcement point is the host and the operator.
+
+The one thing the transport refuses locally is a call whose path resolves to a
+different route than the tool names — `/api/audit/` must not be able to reach
+`/api/audit/selected` through the tool that names the subtree. It decides this
+with `MCPRouteForPath`, which is the gate's own `routeRiskFor` longest-prefix
+resolver, so the binding and the gate cannot disagree about which route a path
+names.
+
+**Verification.** `go build ./...`, `go vet`, `gofmt`, and 19 tests in
+`internal/mcp` pass. The tests mount a real `web.NewServer`'s gated chain on an
+`httptest` server, so the real `confirmStore` mints and spends the tokens — the
+acceptance criterion forbids a second gate, and a fake store would pass whether
+or not the production path exists. Four mutations were killed to prove the tests
+bite: dropping the token relay, dropping the tool/route binding, reporting the
+428 as success, and removing name-collision disambiguation each fail a named
+test. A live stdio session against a running console was driven end to end:
+`initialize` → `tools/list` (123 tools) → a `riskRead` call returning the real
+catalogue (183 advisories) → a `riskAttack` call refused with 428 → `burpsy_confirm`
+minting a token → the same call returning 200 → the same token replayed and
+refused with 428 again.
+
+**Known limits, stated rather than papered over.**
+
+- Stdio only. No SSE/HTTP transport, which the bead allowed as optional.
+- The gate's refusal text prints the manifest pattern, so for a subtree route the
+  console's own message reads `POST /api/audit//confirm` — one slash too many.
+  The transport prints the path it will actually POST to and says why the two
+  differ; the message itself lives in `internal/web/confirm_gate.go`, which this
+  change does not own and does not edit.
+- A streaming route (`text/event-stream`) is refused with a reason rather than
+  left to hang until the client timeout, and a response over 1 MiB is truncated
+  with the cut reported in the result.
+- `internal/web/mcp_export.go` also carries the export surface a second,
+  concurrent implementation of this bead had written (its `MCPRouteInfo`,
+  `MCPRoutes`, `MCPRouteRisk`, `MCPNeedsConfirm`, `MCPConfirmEndpoint`,
+  `MCPGuarded` are preserved as written). This transport added only what it
+  needed to those: `Tier`/`Hints` on the struct, `MCPRouteForPath`,
+  `MCPMethodMutates`, `MCPConfirmTTLSeconds`.
+
+**Files:** `internal/mcp/{mcp,tools}.go` (protocol, descriptors, call path),
+`internal/mcp/mcp_test.go`, `internal/web/mcp_export.go`,
+`cmd/burpsy-mcp/main.go`.
+
 ## Honest-counting guarantees
 
 - Parse success ≠ run success: files whose `given` family is not producible are

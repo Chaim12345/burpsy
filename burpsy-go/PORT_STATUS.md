@@ -97,6 +97,33 @@ Latest: `docs/HANDOFF-2026-08-18.md`.
   per-connection endpoint Burp lacks. `X-WebSocket-Extensions` stripping on by
   default (`WithStripWsExtensions`).
 
+### 2026-10-01 — MCP server transport (burpsy-react-ui-q31t)
+
+`cmd/burpsy-mcp` serves a running console over MCP on stdio, so any MCP client can drive burpsy's
+routes while burpsy keeps its own scope and approval enforcement. `tools/list` is derived from
+`internal/web/route_manifest.go` through `internal/web/mcp_export.go` — one tool per route, each
+carrying its risk class and MCP's four standard hints, taken from `agent_tools.go`'s derivation
+rather than re-judged. `tools/call` forwards over HTTP and returns the server's answer: the
+transport has no gate of its own to drift from the real one. A gated mutating call without a
+confirmation comes back as the server's HTTP 428 with its body verbatim; `burpsy_confirm` is a
+separate, explicitly-named tool that mints a one-time token from the console's own endpoint, so the
+escalation is one visible call in the host's transcript rather than a silent field.
+
+Verified: `go build ./...`, `go vet`, `gofmt` and 19 tests in `internal/mcp`, all green. The tests
+mount a real `web.NewServer` gated chain on `httptest`, so the real `confirmStore` mints and spends
+the tokens (a fake would pass whether or not the production path exists). Four mutations — dropping
+the token relay, dropping the tool/route binding, reporting the 428 as success, and removing
+name-collision disambiguation — each fail a named test. A live stdio session was also driven against
+a running console: initialize → tools/list (123 tools) → a read call returning the real catalogue
+(183 advisories) → an attack call refused 428 → mint → the same call 200 → the same token replayed
+and refused again.
+
+Honest limits: stdio only (no SSE/HTTP); a response over 1 MiB is truncated with the cut reported;
+a `text/event-stream` route is refused rather than left to hang; and the gate's own refusal message
+renders a subtree pattern with a doubled slash (`POST /api/audit//confirm`), so the transport prints
+the path it will actually POST to and says why the two differ rather than editing a file it does not
+own. Details and the concurrency note on `mcp_export.go` are in `gaps.md`.
+
 ## Phase Status — where to read it now
 
 The original per-phase parity tables that used to fill the rest of this file
