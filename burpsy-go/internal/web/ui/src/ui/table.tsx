@@ -490,6 +490,19 @@ export function VirtualTable<T>({
                   // "HTML", "—" are presentation); the data is what a wordlist wants.
                   const rawHeader = header.column.columnDef.header;
                   const columnLabel = typeof rawHeader === "string" ? rawHeader : header.column.id;
+                  // A column declared with no header text — the row-select checkbox, a grip-only
+                  // column, an actions column — still needs an accessible name, and axe is right to
+                  // say so (#history, burpsy-react-ui-wj9k): an empty <th> tells a screen-reader user
+                  // that this column exists and nothing about what it holds, which is exactly the
+                  // column whose purpose the cells underneath it do not reveal.
+                  //
+                  // The column id is the name because it is the one identifier here already unique,
+                  // already declared, and already what a caller passes back as the "path" argument —
+                  // so the accessible name and the name in the transcript are the same string. Carried
+                  // as clipped text rather than only aria-label on the cell, because text content also
+                  // names the column to a table-navigation cursor, and .sr-only costs no layout.
+                  const headerText = typeof rawHeader === "string" ? rawHeader.trim() : "";
+                  const cellName = headerText === "" ? header.column.id : undefined;
                   const copyColumn = () => {
                     if (!rows.length) {
                       toast.error("No rows to copy");
@@ -527,7 +540,9 @@ export function VirtualTable<T>({
                         setColumnOrder((current) => moveColumnBefore(current, draggingColumn, header.column.id));
                         setDraggingColumn(null);
                       }}
+                      aria-label={cellName}
                     >
+                      {cellName ? <span className="sr-only">{cellName}</span> : null}
                       <span
                         className="col-drag-handle"
                         aria-hidden="true"
@@ -835,9 +850,28 @@ export function SimpleTable({
         <table>
           <thead>
             <tr>
-              {headers.map((header) => (
-                <th key={header}>{header}</th>
-              ))}
+              {headers.map((header, index) => {
+                // A header declared "" is this tree's convention for the per-row action column, and
+                // ~15 call sites do it (#proxysettings, #auditqueue, #extenderapis and others all
+                // carried an unnamed <th> before this, burpsy-react-ui-wj9k). The cell is still a
+                // column, and an unnamed column tells a screen-reader user that something is there
+                // and nothing about what it is.
+                //
+                // Named by POSITION, because SimpleTable takes a bare string[] with no id to borrow
+                // and "Actions" would be a claim this component cannot make: one caller's trailing
+                // column is a note field, another's is a menu, and the component sees only a string.
+                //
+                // Keyed by index in the empty case, which also fixes a live React bug — settings.tsx
+                // passes ["Name","Source","Keys set","",""] and two headers of "" were both keyed "",
+                // so the browser logged "Encountered two children with the same key".
+                const empty = header.trim() === "";
+                const name = `Column ${index + 1}`;
+                return (
+                  <th key={empty ? `empty-${index}` : header} scope="col" aria-label={empty ? name : undefined}>
+                    {empty ? <span className="sr-only">{name}</span> : header}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>{children}</tbody>
