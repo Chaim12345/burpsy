@@ -639,6 +639,17 @@ type Report struct {
 	Skips SkipReport `json:"skips"`
 	// Limits says which bounds were hit and how many URLs went unfetched (CRAWL-07).
 	Limits LimitReport `json:"limits"`
+	// LocationFolds counts responses recognised as a known location by the TOLERANCE BAND rather
+	// than by exact fingerprint equality (burpsy-react-ui-9x67, location_band.go). Reported beside
+	// DuplicateLocations, and not folded into it, because it is the only number that says how much
+	// of the crawl's location count rests on a tolerance: a report claiming 300 locations where 120
+	// were folded by a band of 2 is making a coverage claim a reader cannot audit from
+	// `locations` alone, and this is where they learn it.
+	//
+	// Always a subset of DuplicateLocations, and it counts an actual loss of a second traversal
+	// rather than a guess at one: a folded page's links were NOT queued again, so this is the
+	// number of pages the band kept out of the frontier.
+	LocationFolds int `json:"location_folds,omitempty"`
 	// RenderedAudit is the browser's second look over the crawl's locations (burpsy-react-ui-xuim):
 	// which distinct locations were rendered in a headless browser, and at how many of them the
 	// page's own script produced content the wire response never contained. Nil when the pass did
@@ -699,12 +710,19 @@ func (r Report) Summary() string {
 	if r.FormSubmission {
 		forms = "on"
 	}
+	// The location clause says how much of the count rests on a tolerance rather than on exact
+	// identity, because that is the number a reader cannot otherwise audit: `locations` alone reads
+	// as 300 distinct pages whether or not 120 of them were recognised by a band. Only stated when
+	// non-zero — a crawl that folded nothing has nothing to disclaim.
+	locs := fmt.Sprintf("%d locations (%d duplicate)", r.Locations, r.DuplicateLocations)
+	if r.LocationFolds > 0 {
+		locs += fmt.Sprintf(", %d of the duplicates by the location tolerance band", r.LocationFolds)
+	}
 	s := fmt.Sprintf(
-		"crawled %d URLs in %s: %d locations (%d duplicate), %d links and %d forms found, %d forms submitted (submission %s), %d refused by scope, %d failed to send; %s",
+		"crawled %d URLs in %s: %s, %d links and %d forms found, %d forms submitted (submission %s), %d refused by scope, %d failed to send; %s",
 		r.Fetched,
 		r.Elapsed.Round(time.Millisecond),
-		r.Locations,
-		r.DuplicateLocations,
+		locs,
 		r.LinksFound,
 		r.FormsFound,
 		r.FormsSubmitted,
@@ -878,8 +896,18 @@ type Crawler struct {
 	// that grows for the whole crawl and never shrinks, and it is bounded by Limits.MaxFingerprints —
 	// stated rather than left at the MaxFrontier + MaxRequests it worked out to before, since a
 	// derivative bound moves whenever either of those does and nothing reported it.
-	queued    map[string]bool
-	locations map[string]string
+	queued map[string]bool
+	// locations maps one exact location fingerprint to where it was first seen, plus the link
+	// targets the tolerance band compares against. The extra fields are the band's price and
+	// nothing else: only recordStructuredLocation writes an entry with targets, and only it reads
+	// them.
+	locations map[string]locationEntry
+	// locationShapes indexes locations by their shape digest — skeleton, form signatures and text
+	// bucket, everything but the link targets — so the tolerance band compares a candidate only
+	// against locations that share its shape. Bounded by the same MaxFingerprints the location map
+	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
+	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
+	locationShapes map[string][]string
 	// templates counts fetches admitted per URL template, for the quota. Bounded by
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
@@ -1107,7 +1135,8 @@ func New(cfg Config) (*Crawler, error) {
 		// computed from the same parse the requests are.
 		credentialOrigins: make(map[string]bool),
 		queued:            make(map[string]bool),
-		locations:         make(map[string]string),
+		locations:         make(map[string]locationEntry),
+		locationShapes:    make(map[string][]string),
 		templates:         make(map[string]int),
 		templateOK:        make(map[string]bool),
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
@@ -1778,9 +1807,9 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		})
 	}
 	fetch.Fingerprint = page.fingerprint
-	if !c.recordLocation(page.fingerprint, item.url.String(), &fetch, rep) {
-		// Already seen at another URL: the links here are the links there, so descending again would
-		// spend budget re-walking a subtree already covered.
+	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
+		// Already seen at another URL, exactly or within the tolerance band: the links here are the
+		// links there, so descending again would spend budget re-walking a subtree already covered.
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
@@ -1871,26 +1900,6 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		}
 	}
 	rep.Fetches = append(rep.Fetches, fetch)
-}
-
-// recordLocation folds one fingerprint into the location map. It reports false when the fingerprint
-// had already been seen, in which case the fetch is annotated with where it was first seen and the
-// duplicate is counted.
-func (c *Crawler) recordLocation(fingerprint, at string, fetch *Fetch, rep *Report) bool {
-	if fingerprint == "" {
-		return true
-	}
-	if first, seen := c.locations[fingerprint]; seen {
-		rep.DuplicateLocations++
-		fetch.DuplicateOf = first
-		c.skips.record(SkipRecord{
-			Reason: SkipDuplicateLocation, URL: at,
-			Detail: "the same contents were already seen at " + first,
-		})
-		return false
-	}
-	c.locations[fingerprint] = at
-	return true
 }
 
 // admitSeed puts one validated seed on the frontier. Seeds skip the destructive check (see

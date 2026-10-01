@@ -153,6 +153,15 @@ type pageStructure struct {
 	forms []discoveredForm
 	// fingerprint identifies the location by its structure — see fingerprint.go.
 	fingerprint string
+	// shape is the same four components EXCEPT the link targets, hashed. Two pages that agree on
+	// it differ only in where they point, which is the one axis the tolerance band may tolerate —
+	// see location_band.go. Empty when the body could not be parsed, which is why an empty shape
+	// can never be folded into anything.
+	shape string
+	// linkTargets are the outgoing navigation targets, sorted and RAW — the same slice the
+	// fingerprint is built over, kept so the band can compare it against a known location's
+	// without walking the document a second time.
+	linkTargets []string
 	// dropped counts links and forms discarded at the per-page bound. Counted, never silently
 	// absent.
 	dropped int
@@ -342,7 +351,13 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 	}
 	walk(doc, 0)
 
-	out.fingerprint = locationFingerprint(skeleton.String(), linkTargets, textLen)
+	// Sorted ONCE and handed to both the fingerprint and the tolerance band, so neither re-sorts
+	// the crawl's hottest list and the band compares the same order the fingerprint hashed.
+	sort.Strings(linkTargets)
+	out.linkTargets = linkTargets
+	skel := skeleton.String()
+	out.fingerprint = locationFingerprint(skel, linkTargets, textLen)
+	out.shape = shapeDigest(skel, textLen)
 	// The speculative phase (burpsy-react-ui-t5m0): mine the non-visible text for
 	// URL-shaped candidates and admit them as ordinary links — same gates, same
 	// frontier, distinguished only by the tag and bounded by the crawl-wide cap.
@@ -419,18 +434,21 @@ func resolvedTarget(base *url.URL, raw string) string {
 
 // locationFingerprint combines the four components into one hash.
 //
+// sortedLinkTargets must already be sorted, and the tolerance band needs that same sorted slice to
+// compare against a known location (see location_band.go), so parsePage sorts once and both read
+// it. Sorting again here would be a second pass over the crawl's hottest list for no gain, and two
+// readers disagreeing about the order is the kind of thing that reads as a duplicate-location bug
+// later.
+//
 // The text-length bucket is log2, so a page whose body grew by a paragraph is the same location and a
 // page with ten times the content is not. Coarse on purpose: exact length would make every render
 // with a different user name a new location.
-func locationFingerprint(skeleton string, linkTargets []string, textLen int) string {
-	sorted := make([]string, len(linkTargets))
-	copy(sorted, linkTargets)
-	sort.Strings(sorted)
+func locationFingerprint(skeleton string, sortedLinkTargets []string, textLen int) string {
 	var b strings.Builder
 	b.WriteString(skeleton)
 	b.WriteString("\n>>")
-	b.WriteString(strings.Join(sorted, "\n"))
-	b.WriteString("\n##")
+	b.WriteString(strings.Join(sortedLinkTargets, "\n"))
+	b.WriteString(shapeSeparator)
 	b.WriteString(strconv.Itoa(bits.Len(uint(textLen))))
 	return hashSkeleton(b.String())
 }
