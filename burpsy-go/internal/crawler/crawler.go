@@ -608,6 +608,11 @@ type Report struct {
 	// report carrying only the first would read as success.
 	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
 	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
+	// GraphQLEndpointsFound counts the operations a GraphQL introspection answer declared. Beside
+	// APIEndpointsFound rather than folded into it, because a GraphQL operation is a FIELD on one
+	// endpoint's type rather than a path of its own, and counting them together would hide which
+	// surface they came from.
+	GraphQLEndpointsFound int `json:"graphql_endpoints_found,omitempty"`
 	// SitemapIndexesFollowed counts <sitemapindex> documents whose entries were themselves sitemaps.
 	// A large site publishes a handful of sitemaps pointing at the rest, so this is the difference
 	// between "read one file" and "read the list the operator published".
@@ -814,7 +819,26 @@ type Crawler struct {
 	// senders caches one AuthorisedSender per origin. Cached because AuthorisedSender counts its own
 	// sends and refusals per target, and building a fresh one per request would throw those counters
 	// away — they are the crawler's cross-check that its own Refused count matches the chokepoint's.
-	senders map[string]*sender.AuthorisedSender
+	// graphqlAnswer receives the body of a response that was captured for an introspection query, and
+	// returns the operations to admit from it.
+	//
+	// A HOOK rather than a second send, and that is the whole point: perform() already has the bytes
+	// in hand after capture, so a reader that wanted them has to be given them here or it has to ask
+	// the target again. Asking again would double the traffic for one fact, and would make the second
+	// request the one whose answer differed from the first — a schema that changed mid-crawl would
+	// then be reported as whatever the second request saw. nil means nobody asked, which is every
+	// crawl that is not looking for GraphQL.
+	graphqlAnswer func(u *url.URL, body []byte) []APIDocEndpoint
+	// guessedGraphQL records the guessed paths already probed, so a host is probed once per path
+	// rather than once per page that happens to sit on it.
+	guessedGraphQL map[string]bool
+	// introspected records the URLs already introspected, so an endpoint reached from five
+	// pages is asked once rather than five times.
+	introspected map[string]bool
+	// guessHiddenGraphQL is the armed state of the guess, as opposed to guessedGraphQL which is
+	// the set of paths already probed. Two names because one is a switch and one is a ledger.
+	guessHiddenGraphQL bool
+	senders            map[string]*sender.AuthorisedSender
 
 	// credentialOrigins are the origins Config.Headers may be sent to: the seeds' own origins, and
 	// nothing else. Keyed by originKey, so scheme, host and port all have to match.
@@ -1096,6 +1120,23 @@ func New(cfg Config) (*Crawler, error) {
 	for _, s := range seeds {
 		c.credentialOrigins[originKey(s)] = true
 	}
+
+	// The two GraphQL bookkeeping sets, always present. Unconditional rather than armed with the
+	// reader: a nil map here panics on assignment the first time a crawl reaches a GraphQL envelope,
+	// and a panic is a worse answer than an empty crawl.
+	if c.guessedGraphQL == nil {
+		c.guessedGraphQL = map[string]bool{}
+	}
+	if c.introspected == nil {
+		c.introspected = map[string]bool{}
+	}
+
+	// The GraphQL reader, armed only if the operator's configuration asks for it. Here rather than at
+	// each use, so there is exactly ONE place that decides whether this crawl will send a POST of its
+	// own initiative — and so the answer is visible in one glance rather than spread across the reader.
+	if cfg.PerformGraphQLIntrospection || cfg.GuessHiddenGraphQLEndpoints {
+		c.armGraphQL()
+	}
 	return c, nil
 }
 
@@ -1251,6 +1292,13 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		item := c.frontier[0]
 		c.frontier = c.frontier[1:]
 		c.visit(ctx, item, &rep, &lim)
+		// One GraphQL probe pass per origin, after the origin's first page has been fetched. After,
+		// not before, because a probe is a request and the crawl's own coverage claim is better
+		// served by reaching a page the operator seeded first; and keyed on the origin rather than
+		// the URL so a site with two hundred pages is probed four times, not eight hundred.
+		if c.guessHiddenGraphQL {
+			c.guessGraphQL(ctx, item.url, &rep, &lim)
+		}
 	}
 
 	// The follow-up pass, run after the main loop and before the report is assembled, so the counts
@@ -1533,6 +1581,23 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 	contentType := string(msg.Header("Content-Type"))
 	body := msg.Body()
+
+	// A GraphQL introspection answer, read here because this is where the DECODED body exists. It was
+	// first installed just after the capture, against res.Raw — which is the whole raw HTTP response,
+	// status line and headers included, so every probe against it was reading the head and never the
+	// body. That is worth recording: a hook placed one step too early looks correct, compiles, and
+	// silently never fires, and the only symptom is a feature that reports nothing.
+	if c.graphqlAnswer != nil {
+		if ops := c.graphqlAnswer(item.url, body); len(ops) > 0 {
+			c.admitGraphQLOperations(item.url, ops, rep, lim)
+		} else if looksLikeGraphQLEndpoint(body) && !c.introspected[item.url.String()] {
+			// The body carries a GraphQL envelope, so this URL is a GraphQL endpoint and the only way
+			// to learn its operations is to ask. Recorded once per URL, because a crawl that fetches
+			// the same endpoint from five pages must not introspect it five times.
+			c.introspected[item.url.String()] = true
+			c.introspect(ctx, item.url, rep, lim)
+		}
+	}
 
 	// Session expiry (Phase 6, Gap A). Checked here — after CRAWL-02 has captured and scanned the
 	// bytes, before the robots/redirect/content branches — so a login *redirect* (a template that was
@@ -2039,6 +2104,123 @@ func apiEndpointPath(ep APIDocEndpoint) string {
 		return ep.Path
 	}
 	return ""
+}
+
+// ---- GraphQL discovery (burpsy-react-ui-bwwg, criterion 4) ----------------------------------
+
+// commonGraphQLPaths are the paths Burp's "Test common GraphQL endpoints" button probes
+// (Zrf0.java:3629).
+//
+// They are a GUESS, not an observation, which is exactly what guess_hidden_graphql_endpoints says —
+// and why Burp ships that switch OFF in its own defaults and this implementation honours that. Each
+// is resolved against a host the crawl is ALREADY sending to, so a guess can never introduce an origin
+// the operator did not scope.
+var commonGraphQLPaths = []string{"/graphql", "/api/graphql", "/gql", "/query"}
+
+// armGraphQL installs the introspection reader when the operator's configuration asks for it.
+//
+// Armed in New rather than checked at each use, so there is exactly one place that decides whether the
+// crawl will send a POST of its own. Every reader here refuses by default — a crawl that sends traffic
+// nobody asked for is the failure mode this package is built to avoid — and these two switches are the
+// only ones that make it send on its own initiative.
+func (c *Crawler) armGraphQL() {
+	if c.cfg.PerformGraphQLIntrospection {
+		c.graphqlAnswer = func(u *url.URL, body []byte) []APIDocEndpoint {
+			if !LooksLikeGraphQLAnswer(body) {
+				// Not a GraphQL answer. Not a failure and not a skip: this is the ordinary answer for
+				// every POST the crawl makes against an endpoint that is not GraphQL, and recording a
+				// refusal here would fill the ledger with noise that buries the real one.
+				return nil
+			}
+			ops, failure := ParseGraphQLOperations(body)
+			if failure != "" {
+				// The endpoint IS GraphQL and the answer could not be read. Distinct from the case
+				// above in the only way that matters to an operator: this one is worth a look.
+				c.skips.record(SkipRecord{
+					Reason: SkipGraphQLUnparsed, URL: u.String(), Method: "POST", Detail: failure,
+				})
+				return nil
+			}
+			return ops
+		}
+	}
+	if c.cfg.GuessHiddenGraphQLEndpoints {
+		c.guessHiddenGraphQL = true
+	}
+}
+
+// introspect sends one introspection query to a URL the crawl has established is a GraphQL endpoint.
+//
+// Straight to perform, for the reason guessGraphQL gives: this is a request, so it is scope-authorised,
+// rate limited, captured and counted by the same path every other crawl request takes. A separate send
+// would be traffic the crawl's own report does not mention.
+func (c *Crawler) introspect(ctx context.Context, u *url.URL, rep *Report, lim *LimitReport) {
+	// rep.Fetched, NOT lim.Requests: lim.Requests is assigned once from rep.Fetched AFTER the loop
+	// finishes, so for the whole crawl it reads zero and a bound checked against it is no bound at
+	// all. Reading the live counter is the difference between a stated request limit and one that
+	// only appears to hold.
+	if rep.Fetched >= c.limits.MaxRequests {
+		c.skips.record(SkipRecord{
+			Reason: SkipGraphQLIntrospection, URL: u.String(), Method: "POST",
+			Detail: "the crawl-wide request bound is spent, so the endpoint was not introspected",
+		})
+		return
+	}
+	item := frontierItem{url: u, method: "POST", foundAt: u.String(),
+		body: graphqlIntrospectionBody(), contentType: "application/json"}
+	c.perform(ctx, item, c.buildRequest(item), rep, lim)
+}
+
+// guessGraphQL probes the common GraphQL paths on one origin, once each.
+//
+// Behind its own switch, which Burp ships off. Same-origin only: the paths hang off the URL the crawl
+// is already on, so a guess cannot reach a host the operator did not scope. Each probe goes through
+// perform() like every other request, so it is scope-authorised, rate limited, captured and counted —
+// and an introspection query that scope refuses is recorded as SkipSendRefused rather than sent.
+func (c *Crawler) guessGraphQL(ctx context.Context, u *url.URL, rep *Report, lim *LimitReport) {
+	if !c.guessHiddenGraphQL {
+		return
+	}
+	base := *u
+	base.Path, base.RawQuery, base.Fragment = "/", "", ""
+	for _, path := range commonGraphQLPaths {
+		probe := base
+		probe.Path = path
+		if c.guessedGraphQL[probe.String()] {
+			continue
+		}
+		// The bound is checked BEFORE the request goes out, not after: an operator reading the request
+		// count must never see a number that omits what was actually sent. rep.Fetched, not
+		// lim.Requests — see introspect for why the latter reads zero throughout the crawl.
+		if rep.Fetched >= c.limits.MaxRequests {
+			c.skips.record(SkipRecord{
+				Reason: SkipGraphQLIntrospection, URL: probe.String(), Method: "POST",
+				Detail: "the crawl-wide request bound is spent, so the GraphQL probe was not sent",
+			})
+			return
+		}
+		c.guessedGraphQL[probe.String()] = true
+		item := frontierItem{url: &probe, method: "POST", foundAt: u.String(),
+			body: graphqlIntrospectionBody(), contentType: "application/json"}
+		// Straight to perform, NOT through visit/enqueue: a guessed path must not be depth-counted or
+		// admitted as a location before the answer says there is anything there. perform is where the
+		// send, the scope gate and the capture happen, which is all a probe needs.
+		c.perform(ctx, item, c.buildRequest(item), rep, lim)
+	}
+}
+
+// admitGraphQLOperations puts the operations an introspection answer named on the frontier.
+//
+// Every operation goes to the ENDPOINT the answer came from, not to a path from the schema: a GraphQL
+// operation is a field on the endpoint's own type, so they all share one URL and differ only in the
+// query they send. Admitting the endpoint is what makes the crawl fetch it, and the operation name
+// travels as the item's text so a report says which field was found.
+func (c *Crawler) admitGraphQLOperations(u *url.URL, ops []APIDocEndpoint, rep *Report, lim *LimitReport) {
+	rep.GraphQLEndpointsFound += len(ops)
+	for _, op := range ops {
+		c.admit(discoveredLink{raw: u.RequestURI(), text: op.OperationID, tag: "graphql:" + op.OperationID},
+			u, 0, rep, lim)
+	}
 }
 
 // robotsLiteralPrefix reduces a robots.txt path pattern to the longest leading literal, so a pattern

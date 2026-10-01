@@ -210,11 +210,22 @@ const (
 	// still cannot see it. Reporting it as zero endpoints would tell the operator their target has
 	// no API, which is the exact failure burpsy-react-ui-bwwg exists to stop.
 	SkipAPIUnparsed
+	// SkipGraphQLUnparsed means a response that WAS a GraphQL introspection answer could not be read,
+	// so the operations it named were not crawled. Distinct from the absence of a GraphQL endpoint,
+	// which is not a skip at all: almost every URL a crawl touches is not GraphQL, and a refusal per
+	// non-GraphQL URL would bury the one that mattered. This reason fires only where the endpoint
+	// answered with a schema the crawl could not parse (burpsy-react-ui-bwwg).
+	SkipGraphQLUnparsed
+	// SkipGraphQLIntrospection means a GraphQL probe was NOT sent: the crawl-wide request bound was
+	// already spent. Its own reason because the request never went out, and a report that said
+	// "0 GraphQL endpoints found" without it would read as "this target has none" when the crawl
+	// simply ran out of budget first.
+	SkipGraphQLIntrospection
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [34]Skip{
+var SkipAll = [36]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -249,6 +260,8 @@ var SkipAll = [34]Skip{
 	SkipJSONUnparsed,
 	SkipSpeculativeLimit,
 	SkipAPIUnparsed,
+	SkipGraphQLUnparsed,
+	SkipGraphQLIntrospection,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -324,6 +337,10 @@ func (s Skip) slot() int {
 		return 32
 	case SkipAPIUnparsed:
 		return 33
+	case SkipGraphQLUnparsed:
+		return 34
+	case SkipGraphQLIntrospection:
+		return 35
 	}
 	panic("unknown Skip")
 }
@@ -399,6 +416,10 @@ func (s Skip) String() string {
 		return "speculative-limit"
 	case SkipAPIUnparsed:
 		return "api-unparsed"
+	case SkipGraphQLUnparsed:
+		return "graphql-unparsed"
+	case SkipGraphQLIntrospection:
+		return "graphql-not-probed"
 	}
 	return "unknown"
 }
@@ -474,6 +495,10 @@ func (s Skip) Explanation() string {
 		return "the speculative-link cap is spent: the URL was mined from a comment or script body and the crawl-wide bound on hidden links is reached"
 	case SkipAPIUnparsed:
 		return "the response is an API definition (OpenAPI, Swagger or WSDL) that could not be read, so the endpoints it declares were not crawled: check that the document was fetched whole"
+	case SkipGraphQLUnparsed:
+		return "the endpoint answered a GraphQL introspection query with a schema that could not be read, so its operations were not crawled"
+	case SkipGraphQLIntrospection:
+		return "the crawl-wide request bound was already spent, so the GraphQL endpoint was not probed"
 	}
 	return "unknown skip"
 }
@@ -548,10 +573,10 @@ func (s Skip) Category() SkipCategory {
 	case SkipAlreadyQueued, SkipDuplicateLocation:
 		return CategoryDuplicate
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
-		SkipSpeculativeLimit:
+		SkipSpeculativeLimit, SkipGraphQLIntrospection:
 		return CategoryLimit
 	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed,
-		SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
+		SkipGraphQLUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
 		SkipRenderUnavailable:
 		return CategoryResponse
