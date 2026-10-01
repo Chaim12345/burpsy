@@ -107,6 +107,23 @@ type Limits struct {
 	// the stop's Detail names *which* table filled, and LimitReport.Fingerprints and .Templates report
 	// both sizes on every crawl whether or not the bound was reached.
 	MaxFingerprints int
+	// MaxSubmissionsPerForm caps how many times ONE form is submitted, whatever page carried it
+	// (burpsy-react-ui-u0k3). Burp's crawler.crawl_optimization.max_submissions_per_form, whose
+	// shipped default is 6 (Zgjj.java:143, resolved through Zfj.Zc -> Zshz).
+	//
+	// ZERO means unbounded, and that is deliberately NOT a default that normalise() fills in. The
+	// phase is off by default anyway (Config.SubmitForms), so a crawl that never submits is
+	// unaffected; and an operator who turned submission ON has opted into submitting forms, not into
+	// submitting each one a fixed number of times. Burp applies 6 unconditionally because it applies
+	// it to a phase Burp also has on by default.
+	//
+	// A search box or a pagination form is the case this exists for: a document carrying one such
+	// form on every page turns an unbounded crawl into one that submits it thousands of times and
+	// learns nothing after the first few.
+	//
+	// LEFT OUT of normalise on purpose — see above. A bound that silently became 6 for every caller
+	// would be a behaviour change disguised as a default.
+	MaxSubmissionsPerForm int
 	// MaxRelogins caps how many times this crawl may attempt to restore an expired session
 	// (Gap A). Every attempt costs the target a login macro and every failure costs repeated
 	// login-page fetches, so both are bounded by one number. Unlike some bounds this is not a

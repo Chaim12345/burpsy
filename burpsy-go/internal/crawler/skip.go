@@ -237,11 +237,22 @@ const (
 	// which kind of refusal it was, which is the diagnostic the bead asks for and the only thing it
 	// proposes to change.
 	SkipOutOfScopeResource
+	// SkipFormSubmissionCap means a form was NOT submitted because this form has already been
+	// submitted the number of times the operator allowed (burpsy-react-ui-u0k3).
+	//
+	// Its own reason rather than SkipTemplateQuota, the closest neighbour: that one counts a URL
+	// TEMPLATE (a path with its ids replaced), so a search box posting to the same path with different
+	// values is ONE template there and many submissions here. Merged, a pagination form hitting the
+	// form cap would report as having hit the template quota, naming a limit that never fired.
+	//
+	// Recorded rather than silently dropped: a form refused by a cap is a hole in the crawl's coverage,
+	// and an operator reading "N forms submitted" needs to know why it was not more.
+	SkipFormSubmissionCap
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [37]Skip{
+var SkipAll = [38]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -279,6 +290,7 @@ var SkipAll = [37]Skip{
 	SkipGraphQLUnparsed,
 	SkipGraphQLIntrospection,
 	SkipOutOfScopeResource,
+	SkipFormSubmissionCap,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -360,6 +372,8 @@ func (s Skip) slot() int {
 		return 35
 	case SkipOutOfScopeResource:
 		return 36
+	case SkipFormSubmissionCap:
+		return 37
 	}
 	panic("unknown Skip")
 }
@@ -441,6 +455,8 @@ func (s Skip) String() string {
 		return "graphql-not-probed"
 	case SkipOutOfScopeResource:
 		return "out-of-scope-resource"
+	case SkipFormSubmissionCap:
+		return "form-submission-cap"
 	}
 	return "unknown"
 }
@@ -476,6 +492,9 @@ func (s Skip) Explanation() string {
 		return "a form was found and not submitted, because form submission is off"
 	case SkipFormNotSubmittable:
 		return "the form's enctype or method is one the crawler does not build"
+	case SkipFormSubmissionCap:
+		return "this form was already submitted the maximum number of times the crawl allows, so it was " +
+			"not submitted again: raise max_submissions_per_form to explore it further"
 	case SkipAlreadyQueued:
 		return "an identical request has already been queued or fetched"
 	case SkipTemplateQuota:
@@ -591,7 +610,7 @@ func (s Skip) Category() SkipCategory {
 		return CategorySafety
 	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource:
 		return CategoryScope
-	case SkipFormSubmissionDisabled, SkipFormNotSubmittable:
+	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap:
 		return CategoryPolicy
 	case SkipAlreadyQueued, SkipDuplicateLocation:
 		return CategoryDuplicate

@@ -104,6 +104,49 @@ type discoveredForm struct {
 	hasFileInput bool
 }
 
+// signature is the form's identity for the per-form submission cap (burpsy-react-ui-u0k3).
+//
+// Method, the action resolved but untemplated, and the field NAMES sorted. discover.go:282-285 puts
+// the same three parts in the location skeleton, and for the same reason: a search box submitted with
+// a different query is still the SAME form, and a cap that counted those separately would bound nothing
+// on exactly the page that needs a bound.
+//
+// The field's input TYPE is not in the signature. The location skeleton reads it from the DOM
+// attribute; formField carries only name and value, because the values are what a submission sends and
+// this package does not keep the rest. A form whose only difference is text-vs-number input would
+// therefore share a cap — which is the conservative direction, since one cap is tighter than two.
+//
+// Values are excluded. A CSRF token or a session id is a value, and counting on it would make every
+// submission look like a different form.
+func (f discoveredForm) signature(base *url.URL) string {
+	var b strings.Builder
+	b.WriteString(f.method)
+	b.WriteByte(' ')
+	if f.action == "" {
+		// An empty action submits to the document's own URL (admitForm says the same), so two forms
+		// with empty actions on different pages are different forms.
+		if base != nil {
+			b.WriteString(base.String())
+		}
+	} else if u, err := resolveAgainst(base, f.action); err == nil {
+		b.WriteString(u.String())
+	} else {
+		// Unresolvable: admitForm will refuse it as malformed, and a signature that cannot be
+		// computed must not collide with every other unresolvable form's.
+		b.WriteString(f.action)
+	}
+	names := make([]string, 0, len(f.fields))
+	for _, fld := range f.fields {
+		names = append(names, fld.name)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		b.WriteByte('!')
+		b.WriteString(n)
+	}
+	return b.String()
+}
+
 // pageStructure is everything one response contributed.
 type pageStructure struct {
 	links []discoveredLink

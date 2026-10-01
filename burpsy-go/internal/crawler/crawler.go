@@ -841,6 +841,11 @@ type Crawler struct {
 	// introspected records the URLs already introspected, so an endpoint reached from five
 	// pages is asked once rather than five times.
 	introspected map[string]bool
+	// formSubmissions counts submissions per FORM SIGNATURE, for the per-form cap
+	// (burpsy-react-ui-u0k3). Bounded in use by the cap itself: an entry is created only when a form is
+	// actually submitted, and that form is never submitted again once the cap is reached, so the map
+	// grows with the number of DISTINCT forms submitted rather than with the number of submissions.
+	formSubmissions map[string]int
 	// guessHiddenGraphQL is the armed state of the guess, as opposed to guessedGraphQL which is
 	// the set of paths already probed. Two names because one is a switch and one is a ledger.
 	guessHiddenGraphQL bool
@@ -1135,6 +1140,9 @@ func New(cfg Config) (*Crawler, error) {
 	}
 	if c.introspected == nil {
 		c.introspected = map[string]bool{}
+	}
+	if c.formSubmissions == nil {
+		c.formSubmissions = map[string]int{}
 	}
 
 	// The GraphQL reader, armed only if the operator's configuration asks for it. Here rather than at
@@ -2321,6 +2329,27 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		return
 	}
 
+	// The per-form cap (burpsy-react-ui-u0k3), checked here — after the enabled check, because a
+	// crawl with submission off has submitted nothing and its count is meaningless, and before the
+	// per-form shape checks, because a form that could not be submitted anyway should report THAT
+	// rather than a cap it never reached.
+	//
+	// Counted against the form's SIGNATURE rather than its URL: a search box on every page of a site is
+	// ONE form submitted N times, and a per-URL count would bound nothing on exactly the page that
+	// needs the bound.
+	if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+		sig := f.signature(base)
+		if c.formSubmissions[sig] >= cap {
+			c.skips.record(SkipRecord{
+				Reason: SkipFormSubmissionCap, URL: target, Method: f.method, Text: f.label,
+				FoundAt: base.String(),
+				Detail: fmt.Sprintf("this form has already been submitted %d times, the configured cap "+
+					"(max_submissions_per_form); raise it to explore further", c.formSubmissions[sig]),
+			})
+			return
+		}
+	}
+
 	if f.method != "GET" && f.method != "POST" {
 		c.skips.record(SkipRecord{
 			Reason: SkipFormNotSubmittable, URL: target, Method: f.method, Text: f.label,
@@ -2402,6 +2431,12 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 	}
 	if c.enqueue(item, base.String(), lim) {
 		rep.FormsSubmitted++
+		// Counted here, on the SUCCESS path, so the cap counts submissions MADE rather than forms
+		// CONSIDERED. Counting earlier would let a refused form consume budget and fire the cap on a
+		// form that was never sent — which is the more confusing failure of the two.
+		if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+			c.formSubmissions[f.signature(base)]++
+		}
 	}
 }
 

@@ -96,6 +96,15 @@ type burpCrawlConfigKey struct {
 	// that is a switch rather than a bound (burpsy-react-ui-t5m0's request_speculative).
 	// Absent means a Limits field, as above — the two kinds never share a row.
 	configField string
+	// configCountField names a crawler.Config INT field this key lands on, for the one key that is a
+	// bound on a PHASE rather than on the crawl as a whole (burpsy-react-ui-u0k3's
+	// form_submission_optimization_threshold, which bounds how many destinations the crawler explores
+	// THROUGH forms rather than how many requests it makes).
+	//
+	// A third kind, and its own name rather than an overload of configField: an operator reading
+	// applyCrawlKey has to be able to see that this row is neither a switch nor a crawl-wide bound,
+	// because folding it into either would put it on the wrong half of the Config.
+	configCountField string
 }
 
 // burpCrawlConfigKeys is the whole of Burp's shipped crawl-key vocabulary, as read today.
@@ -120,6 +129,12 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	{burpKey: "crawler/customization/parse_soap_wsdls", configField: "ParseSOAPWSDLs"},
 	{burpKey: "crawler/customization/perform_graphql_introspection", configField: "PerformGraphQLIntrospection"},
 	{burpKey: "crawler/customization/guess_hidden_graphql_endpoints", configField: "GuessHiddenGraphQLEndpoints"},
+	// The two form-submission bounds (burpsy-react-ui-u0k3). Both live in crawler/crawl_optimization/
+	// in Burp (Zgjj.java:143-144), which this table already recognises as a section with no keys behind
+	// it — so before this, a migrated configuration naming either was reported UNREPRESENTABLE for the
+	// wrong reason: not "burpsy has no field" but "the loader never recognised the section it is in".
+	{burpKey: "crawler/crawl_optimization/max_submissions_per_form", field: "MaxSubmissionsPerForm"},
+	{burpKey: "crawler/crawl_optimization/form_submission_optimization_threshold", configCountField: "FormSubmissionOptimizationThreshold"},
 }
 
 // registerBurpCrawlKey adds a row to the crawl-key table from outside this file.
@@ -145,6 +160,16 @@ func registerBurpCrawlKey(k burpCrawlConfigKey) {
 type CrawlConfig struct {
 	// Limits are the overlaid values. A field left at its zero value was not named by the file.
 	Limits Limits
+	// FormSubmissionOptimizationThreshold is the
+	// crawler/crawl_optimization/form_submission_optimization_threshold bound (burpsy-react-ui-u0k3):
+	// how many distinct destinations the crawler explores THROUGH forms before it decides a form is
+	// exhausted. A Config field rather than a Limit because it bounds a phase, not the crawl — the
+	// request count is unchanged by it, which is exactly why folding it into Limits would make a
+	// report claim the crawl ran out of budget when it ran out of form targets.
+	//
+	// 0 means off, and is left as written by normalise: an operator who never wrote the key gets the
+	// zero value, and "off" is the honest reading of a phase they did not configure.
+	FormSubmissionOptimizationThreshold int
 	// RequestSpeculative is the crawler/customization/request_speculative flag
 	// (burpsy-react-ui-t5m0): whether the crawl mines comments and script bodies for
 	// hidden links. A bool rather than a Limits field because it is a switch, not a
@@ -270,6 +295,25 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 		}
 		return nil
 	}
+	if row.configCountField != "" {
+		// A bound on a PHASE rather than on the crawl: a number, refused rather than coerced, on the
+		// same rule the limits section follows. Zero is ACCEPTED and means off, which is why the
+		// negative check is what stands here rather than a minimum — an operator writing 0 is saying
+		// "do not cap this", and a loader that refused it would be refusing the only value that turns
+		// the bound off.
+		n, err := burpCrawlConfigNumber(raw)
+		if err != nil {
+			return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+		}
+		if n < 0 {
+			return fmt.Errorf("burp crawl configuration: %s: a negative bound would be no bound at all", row.burpKey)
+		}
+		switch row.configCountField {
+		case "FormSubmissionOptimizationThreshold":
+			c.FormSubmissionOptimizationThreshold = int(n)
+		}
+		return nil
+	}
 	if row.errorField != "" {
 		return c.applyErrorKey(row, raw)
 	}
@@ -304,6 +348,8 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 		c.Limits.MaxSpeculativeLinks = int(n)
 	case "MaxDepth":
 		c.Limits.MaxDepth = int(n)
+	case "MaxSubmissionsPerForm":
+		c.Limits.MaxSubmissionsPerForm = int(n)
 	}
 	return nil
 }
