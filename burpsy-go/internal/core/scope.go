@@ -409,6 +409,11 @@ type Scope struct {
 	mu       sync.RWMutex
 	rules    []*ScopeRule
 	allowAll bool
+	// watchers holds the scope-change subscribers (burpsy-react-ui-e05t). Its own lock, never the
+	// scope's: a handler runs AFTER the write lock is released (scope_change.go says why), so there
+	// is no re-entrancy to protect here — and a separate lock means registering a handler cannot
+	// block a Contains() on a request path.
+	watchers scopeWatchers
 	// dropOutOfScope is Burp's "Out-of-scope request handling: Drop all out-of-scope requests"
 	// (settings/project/scope.html). When set, every scope refusal becomes an egress refusal:
 	// Contains keeps its retention meaning, and AuthoriseRequest — the gate the proxy relay paths
@@ -452,8 +457,14 @@ func (s *Scope) Add(rule *ScopeRule) {
 	}
 	rule.compileArms()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	before, allowAll := s.changeSnapshot()
 	s.rules = append(s.rules, rule)
+	s.mu.Unlock()
+	// Fired AFTER the unlock (burpsy-react-ui-e05t): every mutator here uses defer-unlock, so a
+	// notification from inside the critical section would deadlock the moment a handler called
+	// Contains() to see what had changed.
+	s.notify(ScopeChange{Before: before, After: before + 1, AllowAllBefore: allowAll,
+		AllowAllAfter: allowAll, Operation: "add"})
 }
 
 // AddInclude adds an include rule.
@@ -512,14 +523,18 @@ func (s *Scope) AddExclude(pattern string) {
 // It reports whether a rule was removed.
 func (s *Scope) Remove(kind ScopeRuleKind, pattern string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for i, rule := range s.rules {
 		if rule.Kind == kind && rule.Pattern == pattern {
+			before, allowAll := s.changeSnapshot()
 			s.rules = append(s.rules[:i], s.rules[i+1:]...)
+			s.mu.Unlock()
+			s.notify(ScopeChange{Before: before, After: before - 1, AllowAllBefore: allowAll,
+				AllowAllAfter: allowAll, Operation: "remove"})
 			return true
 		}
 	}
+	s.mu.Unlock()
 	return false
 }
 
@@ -535,7 +550,6 @@ func (s *Scope) Remove(kind ScopeRuleKind, pattern string) bool {
 // must not take a path-scoped sibling with it.
 func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for i, rule := range s.rules {
 		if rule.Kind != kind || rule.Pattern != pattern {
@@ -544,9 +558,14 @@ func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *str
 		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
 			continue
 		}
+		before, allowAll := s.changeSnapshot()
 		s.rules = append(s.rules[:i], s.rules[i+1:]...)
+		s.mu.Unlock()
+		s.notify(ScopeChange{Before: before, After: before - 1, AllowAllBefore: allowAll,
+			AllowAllAfter: allowAll, Operation: "remove"})
 		return true
 	}
+	s.mu.Unlock()
 	return false
 }
 
@@ -560,7 +579,6 @@ func (s *Scope) RemoveScoped(kind ScopeRuleKind, pattern string, pathPrefix *str
 // same rule twice, which is exactly what a switch must do.
 func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *string, port *uint16, enabled bool) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for _, rule := range s.rules {
 		if rule.Kind != kind || rule.Pattern != pattern {
@@ -569,9 +587,28 @@ func (s *Scope) SetRuleEnabled(kind ScopeRuleKind, pattern string, pathPrefix *s
 		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) {
 			continue
 		}
+		before, allowAll := s.changeSnapshot()
+		if rule.Enabled == enabled {
+			// Setting a rule to the value it already holds changes no answer, so it is not a change
+			// and must not wake a subscriber — a handler woken by this re-reads its whole cache for a
+			// decision nobody made. Refused-or-accepted is deliberately NOT the question here: the
+			// caller gets true (the rule was found and is in the requested state, which it now
+			// demonstrably is), and only the notification is suppressed.
+			s.mu.Unlock()
+			return true
+		}
 		rule.Enabled = enabled
+		s.mu.Unlock()
+		// The counts are IDENTICAL either side of a toggle, so ScopeChange.Changed() is false for
+		// this one on its own — which is correct for a subscriber deciding "is my cached view still
+		// valid" and useless for one that just wants to know something happened. Hence the operation
+		// name on the record, and hence this notification firing unconditionally rather than through
+		// the Changed() filter.
+		s.notifyUnconditional(ScopeChange{Before: before, After: before, AllowAllBefore: allowAll,
+			AllowAllAfter: allowAll, Operation: "enable"})
 		return true
 	}
+	s.mu.Unlock()
 	return false
 }
 
@@ -593,7 +630,6 @@ func (s *Scope) ReplaceScoped(kind ScopeRuleKind, pattern string, pathPrefix *st
 	}
 	replacement.compileArms()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	for i, rule := range s.rules {
 		if rule.Kind != kind || rule.Pattern != pattern {
@@ -602,9 +638,16 @@ func (s *Scope) ReplaceScoped(kind ScopeRuleKind, pattern string, pathPrefix *st
 		if !eqStrPtr(rule.PathPrefix, pathPrefix) || !eqPortPtr(rule.Port, port) || !eqStrPtr(rule.Protocol, protocol) {
 			continue
 		}
+		before, allowAll := s.changeSnapshot()
 		s.rules[i] = replacement
+		s.mu.Unlock()
+		// An edit is not a count change either — one rule in, one rule out — so it takes the
+		// unconditional path for the same reason the toggle does.
+		s.notifyUnconditional(ScopeChange{Before: before, After: before, AllowAllBefore: allowAll,
+			AllowAllAfter: allowAll, Operation: "replace"})
 		return true
 	}
+	s.mu.Unlock()
 	return false
 }
 
@@ -625,8 +668,14 @@ func eqPortPtr(a, b *uint16) bool {
 // Clear removes all scope rules.
 func (s *Scope) Clear() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	before, allowAll := s.changeSnapshot()
 	s.rules = s.rules[:0]
+	s.mu.Unlock()
+	// Fired even when the scope was already empty, for the same reason the toggle is: "clear all"
+	// is an operator decision that a subscriber may want to react to (a crawler frontier that drops
+	// everything it had queued), and a no-op clear is a statement the operator made.
+	s.notifyUnconditional(ScopeChange{Before: before, After: 0, AllowAllBefore: allowAll,
+		AllowAllAfter: allowAll, Operation: "clear"})
 }
 
 // Validate returns the first rule whose arms cannot be interpreted, naming which rule and why, or
