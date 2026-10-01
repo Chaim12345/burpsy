@@ -221,11 +221,27 @@ const (
 	// "0 GraphQL endpoints found" without it would read as "this target has none" when the crawl
 	// simply ran out of budget first.
 	SkipGraphQLIntrospection
+	// SkipOutOfScopeResource means a URL was refused because it names a HOST OUTSIDE the engagement
+	// scope AND it was found as a SUBRESOURCE — an image, script, stylesheet, font or frame that the
+	// page loads to work at all, rather than a link a person would follow (burpsy-react-ui-hgor).
+	//
+	// Its own reason because "why is my crawl empty" has two very different answers that both look
+	// like a scope refusal in one number. A navigational link to an out-of-scope host is scope doing
+	// its job; a page whose entire content came from a CDN is the case burpsy is STRICTER than Burp
+	// about, because Burp's crawler fetches such resources by default
+	// (crawler.customization.allow_out_of_scope_resources = true, Preferences/CrawlDefaults.json)
+	// while burpsy refuses them. Merged into SkipOutOfScope, the operator cannot tell which happened,
+	// and the second is the one that explains an empty crawl on a modern site.
+	//
+	// Deliberately NOT a relaxation: burpsy's refusal stands. This reason exists so the refusal says
+	// which kind of refusal it was, which is the diagnostic the bead asks for and the only thing it
+	// proposes to change.
+	SkipOutOfScopeResource
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [36]Skip{
+var SkipAll = [37]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -262,6 +278,7 @@ var SkipAll = [36]Skip{
 	SkipAPIUnparsed,
 	SkipGraphQLUnparsed,
 	SkipGraphQLIntrospection,
+	SkipOutOfScopeResource,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -341,6 +358,8 @@ func (s Skip) slot() int {
 		return 34
 	case SkipGraphQLIntrospection:
 		return 35
+	case SkipOutOfScopeResource:
+		return 36
 	}
 	panic("unknown Skip")
 }
@@ -420,6 +439,8 @@ func (s Skip) String() string {
 		return "graphql-unparsed"
 	case SkipGraphQLIntrospection:
 		return "graphql-not-probed"
+	case SkipOutOfScopeResource:
+		return "out-of-scope-resource"
 	}
 	return "unknown"
 }
@@ -499,6 +520,8 @@ func (s Skip) Explanation() string {
 		return "the endpoint answered a GraphQL introspection query with a schema that could not be read, so its operations were not crawled"
 	case SkipGraphQLIntrospection:
 		return "the crawl-wide request bound was already spent, so the GraphQL endpoint was not probed"
+	case SkipOutOfScopeResource:
+		return "the page loads this from a host outside the engagement scope. Burp's crawler fetches such resources by default (allow_out_of_scope_resources); burpsy refuses them, so a page whose content lives on a CDN or a third-party API contributes no locations"
 	}
 	return "unknown skip"
 }
@@ -566,7 +589,7 @@ func (s Skip) Category() SkipCategory {
 		return CategoryDestructive
 	case SkipUnsupportedScheme, SkipMalformedURL, SkipCredentialsInURL:
 		return CategorySafety
-	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded:
+	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource:
 		return CategoryScope
 	case SkipFormSubmissionDisabled, SkipFormNotSubmittable:
 		return CategoryPolicy

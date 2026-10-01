@@ -1453,3 +1453,120 @@ The two remaining misses are unchanged and are separate capability gaps:
   `& = + ; # %`, bytes `<= 0x20`, and bytes `>= 0x7f`. `<`, `>` and `"` are printable ASCII and
   pass through raw, so a cookie point does carry markup and the kind is enumerated. The miss has
   a different cause and needs its own diagnosis before anything is claimed about it.
+
+### Decline 4b — Crawler default-bound divergence
+
+**Burp:** `Preferences/CrawlDefaults.json` publishes `maximum_link_depth: 4`,
+`maximum_crawl_time: 150`, `maximum_unique_locations: 1500`. It ships no template-visit
+key at all (verified 2026-10-01: enumerating every leaf key in that file, none matches
+`template`), so burpsy's 20 is a bound burpsy invented — a deliberate one, argued at
+limits.go:143-147 — with nothing on Burp's side to diverge from.
+**burpsy:** `internal/crawler/limits.go` defaults to depth 6, 5 minutes, 300 locations,
+and 20 template visits. These are burpsy's chosen conservatism for a pentest tool,
+not an oversight. `GET /api/crawl` now publishes both sets under
+`default_limits` (burpsy's) and `burp_defaults` (Burp's) so a console can show the delta.
+
+### Decline 5 — HTTP/2 pseudo-header awareness
+
+**Burp:** `Zee2.java:12-63` classifies `:scheme` / `:method` / `:path` /
+`:authority` as a distinct header class (literals `map_root.tsv:10712-10715`),
+used by `Ze0j.findInvalidHeaderNames` (`Ze0j.java:170-171`) to keep them out of
+the ordinary-header insertion-point path.
+
+**Why declined:** the sender is HTTP/1.1 `writeHTTP1` (`sender.go:597`) and
+nothing in burpsy reads pseudo-headers, so there is no insertion-point class for
+the rule to protect. Re-open if an HTTP/2 sender lands.
+
+### Decline 6 — Name+value relocation matching
+
+**Burp:** `InsertionPointBuilder.java:1035-1045` moves the matching URL parameter
+to the corresponding body kind by matching **name and value**.
+
+**Why declined:** burpsy already ships 2 of Burp's 6 relocation directions
+(`insertion.go:381`); the remaining matching adds a comparison cost to a kind
+that rarely fires. Re-open if a real target shows a relocation the blanket clause
+move gets wrong.
+
+
+## G-reflected-xss-header-reach — the reflected-XSS row could not probe headers
+
+**Verified 2026-09-17 against HEAD, measured with `cmd/xsschallenge`.**
+
+The three core injection rows (SQL injection, reflected XSS, file path traversal) named their
+own insertion-point literal:
+
+    var coreInjectionKinds = []string{"query", "body", "cookie"}   // checks_core_injection.go:52
+
+Two consequences, both real:
+
+1. **No `header`.** A value reflected out of an HTTP header was structurally unreachable by the
+   reflected-XSS row, because no probe was ever sent into a header. `cmd/xsschallenge`'s
+   `/x/header` case (User-Agent reflected into the body) is exactly this shape.
+2. **The operator's configuration was ignored.** `scanner/insertion_point_types/*` reaches every
+   other probe site through `cc.ProbeInsertionKinds()`, but these three passed the literal
+   instead — so turning cookie insertion off changed what the audit queue displayed and not one
+   byte of what these rows sent.
+
+**Fix:** all three call sites now pass `cc.ProbeInsertionKinds()`, so the configured kinds govern
+and `header` is in the default set (`DefaultProbeInsertionKinds` at probe_harness.go:40).
+
+**Evidence — `cmd/xsschallenge`, before → after:**
+
+| | before | after |
+|---|---|---|
+| `header-user-agent` | **MISS** | **hit** (Cross-site scripting (reflected)) |
+| detection | 20/23 | **21/23 (91%)** |
+| false positives | 0/9 | 0/9 |
+
+The two remaining misses are unchanged and are separate capability gaps:
+
+- `stored` — the batch-audit cycle cannot close (checks_stored.go's own header documents this);
+  the deferred phase did not reach the `/x/stored/view` render in this run.
+- `cookie-pref` — NOT YET DIAGNOSED. An earlier draft of this note claimed the cookie
+  insertion point used a percent-encoding codec that escaped `<`/`>`; that is FALSE and was
+  retracted before landing. `percentEscape` (bcheck/insertion.go:1871-1884) escapes only
+  `& = + ; # %`, bytes `<= 0x20`, and bytes `>= 0x7f`. `<`, `>` and `"` are printable ASCII and
+  pass through raw, so a cookie point does carry markup and the kind is enumerated. The miss has
+  a different cause and needs its own diagnosis before anything is claimed about it.
+
+## Crawler: out-of-scope resources — burpsy is stricter than Burp BY DEFAULT (2026-10-01, burpsy-react-ui-hgor)
+
+**Declared divergence, and it is burpsy's side.** No default was changed and the chokepoint is
+untouched; this records a difference an operator comparing against Burp cannot otherwise see.
+
+Burp distinguishes *navigational* scope (what gets crawled and audited) from *resource* scope (what a
+page may load to work at all), and **the second defaults to permissive**:
+
+- `crawler.customization.allow_out_of_scope_resources` — Zxcp.java:123; constructor parameter in
+  Zula.java:43,65; panel label "Fetch required resources and data from out-of-scope hosts"
+  (Zrfn.java:159).
+- Default **true** — `Preferences/CrawlDefaults.json`, `allow_out_of_scope_resources: true`
+  (tree 2026.7.1, build 51467).
+- Burp's own documentation states the consequence: *"This setting controls whether Burp Scanner
+  issues requests to out-of-scope hosts where necessary. Websites often require the browser to load
+  externally hosted subresources or fetch data from an API to function correctly. … Out-of-scope
+  requests are not audited."* (`crawl-settings.html:273`, with the paired read-timeout
+  `timeout_for_in_progress_resource_requests`, default 10, `CrawlDefaults.json`).
+
+burpsy refuses. `enqueue`'s scope gate refuses an out-of-scope URL before the frontier sees it and
+`sender.AuthorisedSender` refuses again on the wire — CRAWL-02, a deliberate design decision this
+bead does not propose weakening. On a site whose fonts, app shell or API live on a CDN or a
+third-party host, a burpsy crawl therefore reports far fewer locations than a Burp crawl of the same
+seed, with no indication that the difference is a policy choice rather than a bug or a broken target.
+
+**What landed, and what did not.** `SkipOutOfScopeResource` now distinguishes the case the crawler can
+actually observe — a framed or embedded document (`iframe`, `frame`, `object`, `embed`) refused for
+naming an out-of-scope host, as against a navigational link refused by the same rule. The count reaches
+`Report.Limits.OutOfScopeResources` and is stated in the crawl's `Caveat` **even for a complete
+crawl**, because a crawl that refused every CDN asset ran to completion within a narrower world than
+the operator expects — and the pre-existing caveat only speaks when a bound was hit, which is exactly
+the silence this bead is about.
+
+**The larger half, still open.** For the subresources that dominate this scenario — `img`, `script`,
+`link`, `source`, `video`, `audio` — burpsy produces **no ledger entry at all**, because it never
+discovers them (`internal/crawler/discover.go:24`). It does not refuse them; it never looks at them.
+Against Burp, which fetches them, a page served largely from a CDN reads as "found, no links". No skip
+reason can express that, because nothing was refused. Two options, neither taken here and both real
+work: record the discovered-but-not-queued subresource hosts as an explicit coverage statement on the
+report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
+honest one and is the smaller.

@@ -387,6 +387,16 @@ func (s CrawlStop) Explanation() string {
 type LimitReport struct {
 	// Limits is the effective bound set after defaults were filled in.
 	Limits Limits `json:"limits"`
+	// OutOfScopeResources is how many SUBRESOURCE requests were refused because they name a host
+	// outside the engagement scope (burpsy-react-ui-hgor). Reported on the limits because it is a
+	// claim about coverage, not a ledger detail: a page whose content came from a CDN contributes
+	// nothing, and the crawl is otherwise indistinguishable from one of an empty site.
+	//
+	// Separate from the navigational out-of-scope count because the two mean opposite things to an
+	// operator. A navigational refusal is scope working. A resource refusal is burpsy being STRICTER
+	// than Burp, whose crawler fetches out-of-scope resources by default
+	// (crawler.customization.allow_out_of_scope_resources = true, Preferences/CrawlDefaults.json).
+	OutOfScopeResources int `json:"out_of_scope_resources"`
 	// Requests, Locations, DeepestDepth and Elapsed are what was actually consumed.
 	Requests     int           `json:"requests"`
 	Locations    int           `json:"locations"`
@@ -475,8 +485,21 @@ func (r *LimitReport) record(stop CrawlStop) {
 // depth limit early and then run out of request budget, and an operator raising only one of them
 // gets the same truncated result again.
 func (r LimitReport) Caveat() string {
+	// The out-of-scope-resource count is stated EVEN FOR A COMPLETE CRAWL, which is the whole reason
+	// it is here rather than in the truncated branch below. A crawl that refused every CDN-hosted
+	// asset is not truncated — it ran to completion, within a narrower world than the operator
+	// thinks — and the existing caveat is therefore silent about the one thing that explains an
+	// unexpectedly small crawl. Silence here is the defect hgor is about.
+	resourceNote := ""
+	if r.OutOfScopeResources > 0 {
+		resourceNote = fmt.Sprintf(
+			"; %d subresource(s) were refused for naming a host outside the engagement scope — burpsy "+
+				"refuses these and Burp's crawler fetches them by default (allow_out_of_scope_resources), "+
+				"so a page served largely from a CDN or a third-party API contributes no locations here",
+			r.OutOfScopeResources)
+	}
 	if !r.Truncated() {
-		return ""
+		return strings.TrimPrefix(resourceNote, "; ")
 	}
 	reasons := make([]string, 0, len(r.Stops))
 	for _, s := range r.Stops {
@@ -491,6 +514,6 @@ func (r LimitReport) Caveat() string {
 		r.LinksDropped,
 		r.TemplateQuotaDropped,
 		r.FingerprintDropped,
-		strings.Join(reasons, "; "),
+		strings.Join(reasons, "; ")+resourceNote,
 	)
 }

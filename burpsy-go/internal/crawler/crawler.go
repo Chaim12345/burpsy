@@ -749,6 +749,12 @@ type frontierItem struct {
 	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
 	// crawl would not have found at all.
 	renderedOrigin bool
+	// tag is the element the item was discovered from — "a", "img", "script", "form", "sitemap",
+	// "api:openapi", and so on. Carried onto the item because the scope gate has to distinguish a
+	// SUBRESOURCE refusal from a navigational one (burpsy-react-ui-hgor), and the tag is the only
+	// thing that says which it was. Empty for a seed, which is what a seed is: something the operator
+	// named rather than something a page carried.
+	tag string
 	// speculative marks an item the speculative-hidden-link phase mined from a comment or
 	// script body (burpsy-react-ui-t5m0). It passes every gate a navigational link passes;
 	// the flag exists so the crawl-wide cap can count it and the report can say how many
@@ -2291,7 +2297,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 		})
 		return
 	}
-	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, renderedOrigin: l.foundAtRendered, speculative: l.speculative}, base.String(), lim)
+	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, tag: l.tag, renderedOrigin: l.foundAtRendered, speculative: l.speculative}, base.String(), lim)
 }
 
 // admitForm turns one discovered form into a request, or records why it did not.
@@ -2413,8 +2419,26 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		}); ok {
 			detail = s.Explain(host, port, item.url.Path, tls)
 		}
+		// Two refusals that look identical in one number, told apart by WHAT the link was (its
+		// tag): a subresource the page loads to work at all, versus a navigational link a person
+		// would follow. The second is scope doing its job; the first is where burpsy is stricter
+		// than Burp, whose crawler fetches out-of-scope resources by default
+		// (allow_out_of_scope_resources = true in Preferences/CrawlDefaults.json). An operator
+		// looking at "why is my crawl empty" needs those answered separately, because on a modern
+		// site — fonts, a CDN-hosted app shell, a third-party API — the second is the whole
+		// explanation and the first says nothing (burpsy-react-ui-hgor).
+		//
+		// The refusal itself is unchanged. This records WHICH refusal happened, which is all the
+		// bead asks for: nothing here relaxes the chokepoint.
+		reason := SkipOutOfScope
+		if isResourceTag(item.tag) {
+			reason = SkipOutOfScopeResource
+			// Counted on the LIMITS rather than only in the ledger, because the caveat a complete
+			// crawl prints is built from the limits and would otherwise never mention it.
+			lim.OutOfScopeResources++
+		}
 		c.skips.record(SkipRecord{
-			Reason: SkipOutOfScope, URL: item.url.String(), Method: item.method,
+			Reason: reason, URL: item.url.String(), Method: item.method,
 			Text: item.text, FoundAt: foundAt, Detail: detail,
 		})
 		return false
@@ -2800,4 +2824,35 @@ func isHTML(contentType string) bool {
 		return true
 	}
 	return false
+}
+
+// isResourceTag reports whether a discovered link was a SUBRESOURCE — something the page EMBEDS to
+// work at all — rather than a navigational link a person would follow.
+//
+// The set is only the elements discover.go actually queues. `img`, `script`, `link`, `source`,
+// `video` and `audio` are NOT in it because the crawler never discovers them at all (discover.go:24),
+// so no out-of-scope refusal can ever carry one of those tags — naming them here would be a classifier
+// with no reachable input, and a table that claims to distinguish things this crawler never sees.
+//
+// That absence is itself half of this bead's answer, and the larger half: for a stylesheet, a script
+// or a font on a CDN, burpsy produces NO ledger entry whatsoever. It does not refuse the asset — it
+// never looks at it. An operator comparing against Burp, whose crawler fetches exactly those
+// (allow_out_of_scope_resources = true), sees a page render as "found, no links" where Burp saw its
+// full content. No skip reason can express that, because nothing was refused; see the bead.
+//
+// So the set here is what remains: frames and embedded documents. A browser loads them for the page;
+// a person does not click them; and they are the one case where burpsy's scope refusal IS the reason
+// the content is missing.
+func isResourceTag(tag string) bool {
+	// The synthetic prefixes are never resources: "json:", "api:" and "graphql:" name locations read
+	// out of a document, and "speculative" is a URL mined from non-rendered text.
+	if tag == "" || strings.Contains(tag, ":") {
+		return false
+	}
+	switch tag {
+	case "iframe", "frame", "object", "embed":
+		return true
+	default:
+		return false
+	}
 }
