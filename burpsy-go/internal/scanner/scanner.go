@@ -91,6 +91,12 @@ type ActiveScanner struct {
 	sessions *session.Coordinator
 	// provenance counts findings by source for the four "<x> generated issue" rows.
 	provenance *ProvenanceLedger
+	// pathCov and guide are the coverage-guided-mutation ledgers (burpsy-react-ui-6c90):
+	// every probe's response cell per exchange, and the per-place payload novelty the
+	// guide prioritises by. See coverage_guided.go for why the response space is the
+	// coverage signal when the target is remote.
+	pathCov *PathCoverage
+	guide   *payloadGuide
 	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
 	// Each carries its own dataset and coverage counters, so they are built once per scanner and
 	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
@@ -301,6 +307,8 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckHostDiscovery:   true,
 		},
 		findings: make([]*Finding, 0),
+		pathCov:  newPathCoverage(),
+		guide:    newPayloadGuide(),
 	}
 }
 

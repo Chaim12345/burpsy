@@ -90,6 +90,15 @@ type Parameter struct {
 	// Type is the schema type as the document stated it, or "" when it stated none. Carried so a
 	// reader can see why a placeholder looks the way it does.
 	Type string `json:"type,omitempty"`
+	// Format is the schema's declared string format ("email", "date-time", "uuid", ...), or ""
+	// when the document stated none. Carried so a payload generator can target a format-specific
+	// violation (burpsy-react-ui-ghpy) without re-parsing the document itself.
+	Format string `json:"format,omitempty"`
+	// Enum is the schema's declared enum values, verbatim as the document wrote them, or nil when
+	// it declared none. Populated regardless of which ValueSource this parameter's own Value came
+	// from, because a payload generator sweeping "everything outside the enum" needs the whole
+	// set, not just the first value valueFor picked for the request itself.
+	Enum []string `json:"enum,omitempty"`
 	// Required is the document's own statement, which is why an optional parameter is still sent:
 	// the definition is the only thing that knows which parameters a given API tolerates missing.
 	Required bool `json:"required,omitempty"`
@@ -542,39 +551,42 @@ func valueFor(param map[string]any, r *resolver, format Format) Parameter {
 	if schema != nil {
 		schema = r.resolveMap(schema)
 	}
+	typ := typeOf(param, schema)
+	fmtStr := formatOf(param, schema)
+	enumVals := enumOf(param, schema)
 
 	// OpenAPI 3: `example` on the parameter, then `examples.<first>.value`, then the schema.
 	if v, ok := param["example"]; ok {
-		return Parameter{Value: scalarString(v), Source: ValueExample, Type: typeOf(param, schema)}
+		return Parameter{Value: scalarString(v), Source: ValueExample, Type: typ, Format: fmtStr, Enum: enumVals}
 	}
 	if examples, ok := param["examples"].(map[string]any); ok {
 		for _, name := range sortedKeys(examples) {
 			entry, _ := r.resolveMap(examples[name].(map[string]any))["value"].(any)
 			if entry != nil {
-				return Parameter{Value: scalarString(entry), Source: ValueExample, Type: typeOf(param, schema)}
+				return Parameter{Value: scalarString(entry), Source: ValueExample, Type: typ, Format: fmtStr, Enum: enumVals}
 			}
 		}
 	}
 	if schema != nil {
 		if v, ok := schema["example"]; ok {
-			return Parameter{Value: scalarString(v), Source: ValueExample, Type: typeOf(param, schema)}
+			return Parameter{Value: scalarString(v), Source: ValueExample, Type: typ, Format: fmtStr, Enum: enumVals}
 		}
 		if v, ok := schema["default"]; ok {
-			return Parameter{Value: scalarString(v), Source: ValueDefault, Type: typeOf(param, schema)}
+			return Parameter{Value: scalarString(v), Source: ValueDefault, Type: typ, Format: fmtStr, Enum: enumVals}
 		}
 		if enum, ok := schema["enum"].([]any); ok && len(enum) > 0 {
-			return Parameter{Value: scalarString(enum[0]), Source: ValueEnum, Type: typeOf(param, schema)}
+			return Parameter{Value: scalarString(enum[0]), Source: ValueEnum, Type: typ, Format: fmtStr, Enum: enumVals}
 		}
 	}
 	// Swagger 2 states these on the parameter itself.
 	if v, ok := param["default"]; ok {
-		return Parameter{Value: scalarString(v), Source: ValueDefault, Type: typeOf(param, schema)}
+		return Parameter{Value: scalarString(v), Source: ValueDefault, Type: typ, Format: fmtStr, Enum: enumVals}
 	}
 	if enum, ok := param["enum"].([]any); ok && len(enum) > 0 {
-		return Parameter{Value: scalarString(enum[0]), Source: ValueEnum, Type: typeOf(param, schema)}
+		return Parameter{Value: scalarString(enum[0]), Source: ValueEnum, Type: typ, Format: fmtStr, Enum: enumVals}
 	}
 	name := stringField(param, "name")
-	return Parameter{Value: placeholder(name, typeOf(param, schema), schema, r), Source: ValuePlaceholder, Type: typeOf(param, schema)}
+	return Parameter{Value: placeholder(name, typ, schema, r), Source: ValuePlaceholder, Type: typ, Format: fmtStr, Enum: enumVals}
 }
 
 // placeholder invents a value that reads as invented. See the package comment: a path parameter named
@@ -607,6 +619,42 @@ func typeOf(param, schema map[string]any) string {
 		}
 	}
 	return stringField(param, "type")
+}
+
+// formatOf reads a parameter's declared string format the same way typeOf reads its type:
+// OpenAPI 3 nests it under `schema`, Swagger 2 states it inline.
+func formatOf(param, schema map[string]any) string {
+	if schema != nil {
+		if f := stringField(schema, "format"); f != "" {
+			return f
+		}
+	}
+	return stringField(param, "format")
+}
+
+// enumOf reads a parameter's declared enum values, wherever the document put them, rendered as
+// strings so a caller never has to type-switch the underlying JSON/YAML scalar. Independent of
+// valueFor's own value selection: an enum still counts here even when an example or default won
+// the value that actually goes on the wire, because a caller sweeping "everything outside the
+// enum" needs the whole declared set, not just the one value valueFor picked.
+func enumOf(param, schema map[string]any) []string {
+	if schema != nil {
+		if enum, ok := schema["enum"].([]any); ok && len(enum) > 0 {
+			return enumStrings(enum)
+		}
+	}
+	if enum, ok := param["enum"].([]any); ok && len(enum) > 0 {
+		return enumStrings(enum)
+	}
+	return nil
+}
+
+func enumStrings(enum []any) []string {
+	out := make([]string, 0, len(enum))
+	for _, v := range enum {
+		out = append(out, scalarString(v))
+	}
+	return out
 }
 
 // bodyFromContent picks a media type out of an OpenAPI 3 `content` map and synthesises a body for it.
