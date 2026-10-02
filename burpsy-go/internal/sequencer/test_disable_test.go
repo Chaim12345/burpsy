@@ -55,23 +55,29 @@ func TestDisablingOneTestRemovesItWhileTheGradeAndFipsStayIdentical(t *testing.T
 
 	full := AnalyseWith(tokens, nil, 1)
 	withoutCompression := AnalyseWith(tokens, nil, 1)
-	withoutCompression.Advanced = advancedFor(tokens, Encoding(0), nil, map[string]bool{"compression": true})
+	withoutCompression.Advanced = advancedFor(tokens, Encoding(0), nil, []string{"compression"})
 
-	// The disabled test is gone from the list.
+	// The compression test is MARKED, not gone. This originally asserted the row left the list;
+	// burpsy-react-ui-nm81 supersedes it, because a row that vanishes is indistinguishable from a
+	// build that never had the test and the operator cannot tell what they switched off.
 	for _, test := range withoutCompression.Advanced.Tests {
-		if test.ID == "compression" {
-			t.Fatalf("the compression test is still in advanced.tests after being switched off: %+v", test)
+		if test.ID != "compression" {
+			continue
+		}
+		if !test.Disabled {
+			t.Errorf("the compression row is present but not marked disabled: %+v", test)
+		}
+		if test.DisableReason == "" {
+			t.Error("the compression row is marked disabled without saying why")
 		}
 	}
-	if len(withoutCompression.Advanced.Tests) != len(full.Advanced.Tests)-1 {
-		t.Errorf("advanced.tests has %d entries with compression off, want %d",
-			len(withoutCompression.Advanced.Tests), len(full.Advanced.Tests)-1)
+	if len(withoutCompression.Advanced.Tests) != len(full.Advanced.Tests) {
+		t.Errorf("advanced.tests has %d entries with compression off and %d with it on, want the same: a "+
+			"switch changes whether a test RAN, not whether the battery HAS it",
+			len(withoutCompression.Advanced.Tests), len(full.Advanced.Tests))
 	}
 
-	// And the other three are the SAME records, byte for byte.
-	if len(withoutCompression.Advanced.Tests) == len(full.Advanced.Tests) {
-		t.Fatal("the battery did not shrink; the comparison below would be vacuous")
-	}
+	// And no test was introduced or lost by the switch.
 	fullIDs := map[string]bool{}
 	for _, test := range full.Advanced.Tests {
 		fullIDs[test.ID] = true
@@ -111,16 +117,17 @@ func TestOptionsDisabledTestsIsHonouredEndToEnd(t *testing.T) {
 	ids := map[string]bool{}
 	for _, test := range report.Advanced.Tests {
 		ids[test.ID] = true
-		if test.Disabled {
-			t.Errorf("test %q is present AND marked disabled; a disabled test must leave the list, "+
-				"because a report that carries both is reporting two different runs", test.ID)
+	}
+	// Every row is still present, and the two named are marked. See the note above on why the row
+	// is kept rather than dropped.
+	if !ids["compression"] || !ids["spectral"] || !ids["transition"] || !ids["correlation"] {
+		t.Errorf("advanced.tests is missing a row: %v, want all four present with two marked", ids)
+	}
+	for _, test := range report.Advanced.Tests {
+		want := test.ID == "compression" || test.ID == "spectral"
+		if test.Disabled != want {
+			t.Errorf("the %s row reports disabled=%v, want %v", test.ID, test.Disabled, want)
 		}
-	}
-	if ids["compression"] || ids["spectral"] {
-		t.Errorf("advanced.tests still carries %v after both were switched off", ids)
-	}
-	if !ids["transition"] || !ids["correlation"] {
-		t.Errorf("switching off two tests removed the others too: %v", ids)
 	}
 }
 
@@ -137,14 +144,30 @@ func TestADisabledTestIsReportedDifferentlyFromAnUntestableOne(t *testing.T) {
 		}
 	}
 
-	// Now disable one on the same short sample: it must leave the list rather than appear as an
-	// untested record, so "the operator turned it off" and "the sample could not answer" stay
-	// distinguishable by the presence of the test itself.
+	// Now disable one on the same short sample. The row is KEPT and marked, while every other row
+	// is kept and UNmarked-because-untestable — so the two remain distinguishable by the flag rather
+	// than by presence, which is what burpsy-react-ui-nm81's criterion 2 asks for.
 	off := analyseWithOptions(t, short, []string{"compression"})
+	disabled, untestable := 0, 0
 	for _, test := range off.Advanced.Tests {
 		if test.ID == "compression" {
-			t.Errorf("a disabled test is present in the report: %+v", test)
+			if !test.Disabled {
+				t.Errorf("the compression row is present but not marked disabled: %+v", test)
+			}
+			disabled++
+			continue
 		}
+		if test.Disabled {
+			t.Errorf("the %s row is marked disabled though only compression was named", test.ID)
+		}
+		untestable++
+	}
+	if disabled != 1 {
+		t.Errorf("%d rows are marked disabled, want 1", disabled)
+	}
+	if untestable == 0 {
+		t.Error("no row came back untestable; the short sample should have declined several, which is " +
+			"what makes the two states comparable")
 	}
 	if !bytes.Contains([]byte(off.Advanced.Summary), []byte("Switched off")) {
 		t.Errorf("the summary does not name the tests that were switched off: %q", off.Advanced.Summary)
@@ -197,14 +220,19 @@ func TestAnUnknownTestIdIsIgnoredRatherThanFailingTheAnalysis(t *testing.T) {
 	tokens := batteryFixture()
 	report := analyseWithOptions(t, tokens, []string{"compression", "not-a-real-test", "  ", ""})
 
-	if len(report.Advanced.Tests) != 3 {
-		t.Errorf("advanced.tests has %d entries, want 3: only the one real id should have been honoured",
+	if len(report.Advanced.Tests) != 4 {
+		t.Errorf("advanced.tests has %d entries, want 4 — an unknown id must not remove a row",
 			len(report.Advanced.Tests))
 	}
+	marked := 0
 	for _, test := range report.Advanced.Tests {
-		if test.ID == "compression" {
-			t.Error("the real id was not honoured because an unknown one accompanied it")
+		if test.Disabled {
+			marked++
 		}
+	}
+	if marked != 1 {
+		t.Errorf("%d rows are marked disabled, want 1: the real id must be honoured and the unknown "+
+			"ones ignored", marked)
 	}
 }
 
@@ -214,8 +242,15 @@ func TestSwitchingEveryTestOffStillReportsWhatWasNotRun(t *testing.T) {
 	tokens := batteryFixture()
 	report := analyseWithOptions(t, tokens, []string{"transition", "spectral", "correlation", "compression"})
 
-	if len(report.Advanced.Tests) != 0 {
-		t.Errorf("advanced.tests has %d entries with every test off, want 0", len(report.Advanced.Tests))
+	// Kept and marked, not dropped — the same correction as above.
+	if len(report.Advanced.Tests) != 4 {
+		t.Errorf("advanced.tests has %d entries with every test off, want 4 marked rows",
+			len(report.Advanced.Tests))
+	}
+	for _, test := range report.Advanced.Tests {
+		if !test.Disabled {
+			t.Errorf("the %s row is not marked disabled", test.ID)
+		}
 	}
 	if report.Advanced.Summary == "" {
 		t.Error("the summary is empty with every test switched off; the reader needs to be told their " +

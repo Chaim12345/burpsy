@@ -371,22 +371,6 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 // An out-of-range level is a caller error and is refused at the HTTP boundary
 // (ValidSignificancePercent); this function does not clamp, because a silently
 // clamped level answers a question the operator did not ask.
-// disabledTestSet turns a disable list into a lookup set.
-//
-// Empty input gives an EMPTY set rather than nil so the call site can index it unconditionally, and
-// a nil map would read fine too — this is about the caller not having to know which is which.
-func disabledTestSet(disabled []string) map[string]bool {
-	if len(disabled) == 0 {
-		return map[string]bool{}
-	}
-	set := make(map[string]bool, len(disabled))
-	for _, id := range disabled {
-		if id = strings.TrimSpace(id); id != "" {
-			set[id] = true
-		}
-	}
-	return set
-}
 
 func AnalyseWith(tokens []string, encoding *Encoding, significancePercent float64) SequencerReport {
 	report, _ := analyse(tokens, Options{Encoding: encoding, SignificancePercent: significancePercent})
@@ -515,7 +499,7 @@ func analyse(tokens []string, opts Options) (SequencerReport, error) {
 	characters := AnalyseChars(tokens)
 	bitStream := BitsOf(tokens, enc)
 	bits := BitStatsOf(bitStream)
-	fips := AnalyseFipsBits(bitStream)
+	fips := AnalyseFipsBits(bitStream, opts.DisabledTests)
 
 	warnings := make([]string, 0, 6)
 	if len(tokens) == 0 {
@@ -583,7 +567,7 @@ func analyse(tokens []string, opts Options) (SequencerReport, error) {
 		ExtraStats:       extraFor(tokens),
 		Bits:             bits,
 		Fips:             fips,
-		Advanced:         advancedFor(tokens, enc, bitStream, disabledTestSet(opts.DisabledTests)),
+		Advanced:         advancedFor(tokens, enc, bitStream, opts.DisabledTests),
 		EffectiveEntropy: effective,
 		Grade:            grade,
 		Verdict:          verdict,

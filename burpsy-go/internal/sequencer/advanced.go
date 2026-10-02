@@ -178,6 +178,8 @@ type AdvancedReport struct {
 	// Summary is one sentence over the four, so an operator reading the JSON
 	// alone can tell "nothing found" from "nothing ran".
 	Summary string `json:"summary"`
+	// SwitchedOff names the tests this run was told not to run (burpsy-react-ui-nm81).
+	SwitchedOff []string `json:"switched_off,omitempty"`
 	// AffectsGrade is always false, and serialised so it is stated rather than
 	// assumed: the grade and verdict sentence in this report are the FIPS
 	// battery's, byte-for-byte the Rust reference's, and nothing in this file
@@ -189,7 +191,7 @@ type AdvancedReport struct {
 // decoded for the bit-level view. It takes the decoded stream rather than
 // re-deriving it so the spectral test sees exactly the bits the FIPS battery
 // was given — two views of one sample must not disagree about what the sample is.
-func advancedFor(tokens []string, enc Encoding, bitStream []byte, disabled map[string]bool) AdvancedReport {
+func advancedFor(tokens []string, enc Encoding, bitStream []byte, disabled []string) AdvancedReport {
 	// Each test is built and then FILTERED, rather than each disabled test being skipped before it
 	// runs. The distinction matters: a skipped test costs nothing, while this keeps the report's
 	// shape identical whether a test was turned off or found inapplicable, and the record says which
@@ -202,13 +204,20 @@ func advancedFor(tokens []string, enc Encoding, bitStream []byte, disabled map[s
 		compressionTest(tokens, enc),
 	}
 	tests := make([]AdvancedTest, 0, len(all))
-	turnedOff := make([]string, 0, len(disabled))
+	off := DisabledSet(disabled)
+	turnedOff := make([]string, 0, len(off))
 	for _, test := range all {
-		if disabled[test.ID] {
+		if off[test.ID] {
+			// MARKED and kept, for the same reason the FIPS battery does it: a dropped row is
+			// indistinguishable from a build that never had the test. The two batteries must behave
+			// identically here or an operator comparing them learns nothing from the comparison.
 			test.Disabled = true
-			test.DisableReason = "switched off by the operator in the analysis settings"
+			test.DisableReason = "switched off in the analysis settings"
+			test.Tested = false
+			test.Flagged = 0
+			test.Threshold = 0
+			test.Tolerance = 0
 			turnedOff = append(turnedOff, test.ID)
-			continue
 		}
 		tests = append(tests, test)
 	}
@@ -250,7 +259,8 @@ func advancedFor(tokens []string, enc Encoding, bitStream []byte, disabled map[s
 			examined, total, flagged, untested, offNote,
 		)
 	}
-	return AdvancedReport{Tests: tests, Summary: summary, AffectsGrade: false}
+	return AdvancedReport{Tests: tests, Summary: summary, AffectsGrade: false,
+		SwitchedOff: turnedOff}
 }
 
 // transitionReject says why one character position could not be tested. Named
