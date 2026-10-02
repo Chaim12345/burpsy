@@ -667,7 +667,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  return (
   <Modal open={open} onOpenChange={onOpenChange} title="New scan" wide description="Select the type of scan to run. It registers as a task below, with progress and a cancel button.">
    <div className="stack">
-    <h4>Scan type</h4>
+    <h3 className="subheading">Scan type</h3>
     <div className="scan-type-grid">
      {SCAN_TYPES.map((scan) => (
       <button

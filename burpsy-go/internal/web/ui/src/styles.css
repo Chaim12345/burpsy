@@ -607,6 +607,17 @@ main {
   font-size: var(--fs-lg);
 }
 
+/* A sub-heading inside a card or dialog. It is an h3 because it sits under a section's h2, and the
+   heading ORDER is the structure a screen-reader user navigates by — axe's heading-order rule
+   flagged the h4 tags this replaced (burpsy-react-ui-pyj3).
+ *
+   The size is pinned to 1em on purpose. The user agent's h3 is 1.17em, which in this design is
+   LARGER than the 16px .section-heading h2 above it, so an unstyled h3 would have made every
+   sub-heading out-size its own section title. 1em is the size the h4 tags rendered. */
+.subheading {
+  font-size: 1em;
+}
+
 .section-heading p,
 .detail-panel > p {
   color: var(--muted);

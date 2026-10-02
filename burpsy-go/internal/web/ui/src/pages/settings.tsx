@@ -630,7 +630,7 @@ function ScannerSettingsSection(): JSX.Element {
      </div>
      {configs.data.default ? (
       <div className="stack" style={{ marginTop: "var(--gap)" }}>
-       <h4>Server default</h4>
+       <h3 className="subheading">Server default</h3>
        <DetailList rows={[
         { label: "Time budget", value: formatDuration(configs.data.default.time_budget_ms) },
         { label: "Max requests", value: configs.data.default.max_requests ?? "uncapped" },
@@ -647,7 +647,7 @@ function ScannerSettingsSection(): JSX.Element {
          read-only and say so; only saved rows offer Rename and Delete, so no button is ever shown
          that could only answer 409. */}
      <div className="stack" style={{ marginTop: "var(--gap)" }}>
-      <h4>Configuration library</h4>
+      <h3 className="subheading">Configuration library</h3>
       <div className="toolbar">
        <Input
         aria-label="New configuration name"
@@ -858,7 +858,7 @@ function NetworkSection(): JSX.Element {
 
    {draft && data ? (
     <>
-     <h4>Hostname resolution</h4>
+     <h3 className="subheading">Hostname resolution</h3>
      <div className="notice">
       <span>
        An override sends requests for a host to an address of your choosing. The TLS SNI and the{" "}
@@ -941,7 +941,7 @@ function NetworkSection(): JSX.Element {
       </SimpleTable>
      )}
 
-     <h4>DNS lookup</h4>
+     <h3 className="subheading">DNS lookup</h3>
      <Toolbar>
       <Field label="Lookup policy" hint="Where a hostname's address comes from">
        {(id) => (
@@ -1009,7 +1009,7 @@ function NetworkSection(): JSX.Element {
       of its own, which is the thing being configured.
      </p>
 
-     <h4>Timeouts</h4>
+     <h3 className="subheading">Timeouts</h3>
      <div className="notice">
       <span>
        Three bounds because they fail differently. A connect timeout means the host is not there, a
@@ -1057,7 +1057,7 @@ function NetworkSection(): JSX.Element {
       </Field>
      </Toolbar>
 
-     <h4>Redirections</h4>
+     <h3 className="subheading">Redirections</h3>
      <div className="notice">
       <span>
        Off by default, and that is a design position rather than a gap. A 30x <em>is</em> the
@@ -1121,7 +1121,7 @@ function NetworkSection(): JSX.Element {
        : "Off. A login or SSO flow that sets a cookie on its 302 will arrive at the destination unauthenticated, which reads as a broken application rather than a missing cookie."}
      </p>
 
-     <h4>100-continue</h4>
+     <h3 className="subheading">100-continue</h3>
      <div className="stack">
       <Switch
        checked={draft.continue.understand_100_continue}
@@ -1155,7 +1155,7 @@ function NetworkSection(): JSX.Element {
       are sent verbatim, so edit the bytes to change them.
      </p>
 
-     <h4>Open-ended responses</h4>
+     <h3 className="subheading">Open-ended responses</h3>
      <div className="notice">
       <span>
        Hosts whose responses do not end — an event stream, a long poll. Declaring one bounds its read
@@ -2291,7 +2291,7 @@ function UpstreamProxySection(): JSX.Element {
     rules and not this would let an operator conclude their HTTP proxy is reachable from anywhere
     (burpsy-react-ui-mr83 part 3).
    */}
-   <h4>Global SOCKS carrier</h4>
+   <h3 className="subheading">Global SOCKS carrier</h3>
    <div className="notice">
     <span>
      A TCP layer under every connection this tool opens, including the connections to an upstream proxy
