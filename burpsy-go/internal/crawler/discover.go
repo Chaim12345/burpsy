@@ -520,7 +520,15 @@ func speculativeURLFields(text string) []string {
 			r == '"' || r == '\'' || r == '<' || r == '>' ||
 			r == '(' || r == ')' || r == ',' || r == '`'
 	}) {
-		raw := strings.TrimRight(tok, ".,;:!?]}")
+		// Trailing punctuation is trimmed — a sentence's period is not part of the path — but `}`
+		// must NOT be: it closes the `{id}` segment every SPA router uses, and trimming it turned
+		// `/orders/{id}` into `/orders/{id`, which is a URL that does not exist. A `}` is only stripped
+		// when the token has no unclosed `{` before it, so prose ending in a brace keeps its
+		// punctuation and a route keeps its segment.
+		raw := strings.TrimRight(tok, ".,;:!?]")
+		if strings.HasSuffix(raw, "}") && strings.Count(raw, "{") > strings.Count(raw, "}") {
+			raw = strings.TrimRight(raw, ".,;:!?") + "}"
+		}
 		if raw == "" {
 			continue
 		}

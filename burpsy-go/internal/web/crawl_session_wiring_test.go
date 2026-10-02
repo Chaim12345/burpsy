@@ -29,7 +29,7 @@ func TestAProductionCrawlIsWiredToTheSessionCoordinator(t *testing.T) {
 	// this test called the helper directly and passed against the unwired shape — the helper was
 	// right and nothing called it, which was the entire defect. A field missing from a literal
 	// nobody inspects is invisible, so the assertion has to be on the literal.
-	cfg := s.crawlConfig(crawlStartReq{}, nil, crawler.Limits{}, nil, nil, false, crawler.ErrorHandling{})
+	cfg := s.crawlConfig(crawlStartReq{}, nil, crawler.Limits{}, nil, nil)
 	if cfg.SessionCoordinator == nil {
 		t.Fatal("the crawl configuration a production crawl builds carries no SessionCoordinator; " +
 			"the re-login seam is unreachable from every operator-launched crawl (burpsy-react-ui-nc9s)")

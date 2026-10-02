@@ -375,11 +375,7 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/blindxss",
 		"/api/network/auth", "/api/network/client-certs",
 		"/api/proxy/ca/import",
-		"/api/session/cookies", "/api/session/login",
-		// Resolving a recovery prompt makes burpsy replay the stored login on the operator's behalf,
-		// which is the same authority as the other routes in this class — hence credential, not local.
-		"/api/session/prompts/",
-		"/api/session/rules", "/api/session/rules/",
+		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
 		"/api/settings/triage",
 	}
 	equal := func(name string, got, want []string) {
