@@ -57,6 +57,10 @@ type ActiveScanner struct {
 	// that need a tool are counted at load (LoadReport.Tools) and excluded
 	// from the dispatch set, never run against nothing.
 	toolRunner bcheck.ToolRunner
+	// disabledChecks is the per-row enable/disable the corpus leaf renders (burpsy-react-ui-kdqj):
+	// keyed by name, read by corpusChecksEnabled at the same two sites s.corpus is read. Nil until
+	// the first disable — a process where nothing was ever disabled holds no map.
+	disabledChecks map[string]bool
 	// browsers hands out the shared headless browser for DOM checks. Nil means no DOM
 	// capability: CheckContext.Browser then returns an error, so a DOM check reports that
 	// it could not look rather than reporting an empty observation set.

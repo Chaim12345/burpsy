@@ -67,6 +67,7 @@ export const keys = {
  scannerConfigs: ["scanner", "configs"] as const,
  scannerConfig: ["scanner", "config"] as const,
  scannerCoverage: ["scanner", "coverage"] as const,
+ scannerChecks: ["scanner", "checks"] as const,
  scannerLive: ["scanner", "live"] as const,
  auditItems: ["scanner", "audit-items"] as const,
  collaborator: ["collaborator"] as const,

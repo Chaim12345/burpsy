@@ -947,6 +947,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
+	// The Custom scan checks leaf (burpsy-react-ui-kdqj): the corpus as rows, and the per-row switch
+	// the audit engine reads.
+	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
+	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two

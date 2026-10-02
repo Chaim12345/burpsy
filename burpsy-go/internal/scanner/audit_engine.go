@@ -110,7 +110,7 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 		}
 	}
 	if cfg.CheckCorpus {
-		out = append(out, s.corpusActiveChecks(corpus)...)
+		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
 	}
 	// The per-issue selection, applied LAST and to BOTH sources. Burp's dispatch is a two-stage
 	// filter (Zwy6.java:36-75, with the per-check predicate at :170-184), so the type filter sits
@@ -350,7 +350,7 @@ func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInva
 		// carry no rank. They join every tier: a preset that narrows the built-in checks has not
 		// said anything about an operator's own corpus, and dropping it would silently change what
 		// the corpus switch means.
-		out = append(out, s.corpusActiveChecks(corpus)...)
+		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
 	}
 	return out
 }

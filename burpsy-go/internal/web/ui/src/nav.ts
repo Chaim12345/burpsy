@@ -34,6 +34,7 @@ import { MatchReplacePage } from "./pages/matchreplace";
 import { OrganizerPage } from "./pages/organizer";
 import { ProxySettingsPage } from "./pages/proxysettings";
 import { RepeaterPage } from "./pages/repeater";
+import { ScannerChecksPage } from "./pages/scannerchecks";
 import { ScannerLaunchPage } from "./pages/scannerlaunch";
 import { ScannerPage } from "./pages/scanner";
 import { SequencerPage } from "./pages/sequencer";
@@ -270,6 +271,12 @@ export const TOOLS: NavTool[] = [
         label: "APIs",
         description: "The JSON-RPC contract a plugin is written against",
         page: ExtenderApisPage,
+      },
+      {
+        id: "scannerchecks",
+        label: "Custom scan checks",
+        description: "The loaded BCheck corpus: what compiled, what ran, and a per-row switch",
+        page: ScannerChecksPage,
       },
     ],
   },

@@ -12,6 +12,7 @@ import type { InterceptTarget } from "./intercept-target";
 import type { IssueTriagePatch } from "./issue-triage";
 import type {
  AuditResult,
+ CorpusChecks,
  InterceptListState,
  InterceptStateDetail,
  IssuesDetail,
@@ -246,6 +247,27 @@ export function useScanConfigLibrary() {
 }
 
 export const useScannerCoverage = () => useResource<ScannerCoverage>(keys.scannerCoverage, "/api/scanner/coverage");
+
+/** GET /api/scanner/checks — the loaded corpus, both buckets, from the corpus loader. Not polled:
+ * the corpus changes when the process starts or an operator flips a row, and the mutation below
+ * invalidates it. */
+export const useCorpusChecks = () => useResource<CorpusChecks>(keys.scannerChecks, "/api/scanner/checks");
+
+/**
+ * PUT /api/scanner/checks/enable — the per-row switch.
+ *
+ * The server answers with the state read back from the set the audit engine filters by, and the
+ * corpus query is invalidated so the row re-renders from that state rather than from the click: a
+ * response that echoed the request would make a refused write look applied.
+ */
+export function useSetCorpusCheckEnabled() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (body: { name: string; enabled: boolean }) =>
+      api<{ name: string; enabled: boolean; disabled: boolean }>("/api/scanner/checks/enable", json("PUT", body)),
+    onSuccess: () => invalidate([keys.scannerChecks, keys.scannerCoverage]),
+  });
+}
 
 /** Polls like Intercept: the sweep's swept/behind counters move as traffic is captured, and an
  * operator watching progress should see it advance between event-stream bursts. */

@@ -307,6 +307,36 @@ export interface ScannerCoverage {
  partition?: CoveragePartitionView[];
 }
 
+/* --- scanner: the loaded corpus (burpsy-react-ui-kdqj) -------------------- */
+
+/**
+ * GET /api/scanner/checks — the loaded BCheck corpus as rows.
+ *
+ * `active` and `passive` distinguish the two buckets (an active check is dispatched by the audit
+ * engine, a passive one runs on every captured response); a row can be only one. `run_count` is the
+ * passive coverage counter, which exists only for passive checks — an active check reports 0 there
+ * because the engine keeps a per-session ledger, not a counter, and a fabricated number would be
+ * worse than an honest zero.
+ */
+export interface CorpusCheckView {
+  name: string;
+  active?: boolean;
+  passive?: boolean;
+  loaded?: boolean;
+  run_count?: number;
+  disabled?: boolean;
+  severity?: string;
+  author?: string;
+  description?: string;
+}
+
+export interface CorpusChecks {
+  enabled: boolean;
+  passive_count?: number;
+  active_count?: number;
+  checks?: CorpusCheckView[];
+}
+
 /* --- scanner: live active audit ------------------------------------------ */
 
 /**

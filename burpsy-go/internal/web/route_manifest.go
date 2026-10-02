@@ -641,6 +641,14 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "what the check set covers, and what it declines to look at",
 	},
+	"/api/scanner/checks": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the loaded BCheck corpus as rows: name, active/passive, compile status, run count and the per-row switch's own state (burpsy-react-ui-kdqj); counting from the corpus loader rather than a second list",
+	},
+	"/api/scanner/checks/enable": {
+		methods: []string{"PUT"}, risk: riskLocal,
+		summary: "enable or disable one corpus check by name; the audit engine reads the same disabled set at both dispatch sites, so a switched-off row is a check the next audit does not run",
+	},
 	"/api/scanner/live": {
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "the live sweep over newly-completed proxied traffic; POST opts in",
