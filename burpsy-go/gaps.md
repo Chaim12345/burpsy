@@ -1460,11 +1460,28 @@ The two remaining misses are unchanged and are separate capability gaps:
 `maximum_crawl_time: 150`, `maximum_unique_locations: 1500`. It ships no template-visit
 key at all (verified 2026-10-01: enumerating every leaf key in that file, none matches
 `template`), so burpsy's 20 is a bound burpsy invented — a deliberate one, argued at
-limits.go:143-147 — with nothing on Burp's side to diverge from.
+limits.go:159-163 — with nothing on Burp's side to diverge from.
 **burpsy:** `internal/crawler/limits.go` defaults to depth 6, 5 minutes, 300 locations,
 and 20 template visits. These are burpsy's chosen conservatism for a pentest tool,
 not an oversight. `GET /api/crawl` now publishes both sets under
 `default_limits` (burpsy's) and `burp_defaults` (Burp's) so a console can show the delta.
+
+**One divergence the note above missed, and it is the largest of the four:** `maximum_request_count`
+is **0** in `Preferences/CrawlDefaults.json`, which means Burp's crawler is UNBOUNDED on requests.
+burpsy's is 500 (`limits.go:151`). A Burp crawl of a large application therefore keeps going while
+burpsy's stops and says so — which is the difference an operator migrating a crawl will hit first, and
+the one least likely to be recognised as a policy choice because a crawl that stops is not obviously a
+crawl that was told to. It belongs beside the other three comparisons rather than with the invented
+bounds below.
+
+**Every other entry in `burp_defaults` is a burpsy-invented bound, and zero misreads as one.**
+`maximum_frontier_size`, `maximum_links_per_page`, `maximum_parse_bytes`, `maximum_capture_bytes`,
+`maximum_fingerprints`, `maximum_relogins` and `maximum_submissions_per_form` have no Burp
+counterpart at all — the same enumeration that cleared the template key clears these. A console
+rendering that table shows "Burp's frontier bound: 0", and 0 in that column is indistinguishable
+from "Burp enforces no limit" when the truth is "Burp has no such setting". Separating the two needs
+a change to `internal/web/api_crawl.go`, which is another session's working set; recorded here so the
+distinction travels with the entry rather than being rediscovered.
 
 ### Decline 5 — HTTP/2 pseudo-header awareness
 

@@ -16,6 +16,35 @@ reader can always answer "what happened to the URLs that were not fetched" — `
 Failed + NotCaptured` is every request attempted, and `Skips` accounts for every URL discovered and
 not attempted.
 
+## Burp divergence (2026-10-01)
+
+burpsy's crawl defaults differ from Burp's shipped defaults, and where they do it is deliberate.
+The four diverging defaults, with Burp's evidence:
+
+- **MaxDepth**: Burp 4 (`maximum_link_depth`, CrawlDefaults.json:4), burpsy 6 (`limits.go:152`).
+- **MaxDuration**: Burp 150 minutes, burpsy 5 minutes (`limits.go:153`).
+- **MaxLocations**: Burp 1500, burpsy 300 (`limits.go:154`).
+- **MaxRequests**: Burp 0 (unbounded), burpsy 500 (`limits.go:151`).
+- **MaxTemplateVisits**: burpsy 20 (`limits.go:164`) has **no Burp counterpart** — see below.
+
+These are burpsy's chosen conservatism for a pentest tool, not an oversight. `GET /api/crawl`
+publishes both sets so a console can show the delta.
+
+**`MaxTemplateVisits` is not a divergence, and an earlier version of this note said it was.** Burp
+ships no template-visit key at all: enumerating every leaf key in
+`Preferences/CrawlDefaults.json` (tree 2026.7.1, build 51467) returns nothing matching `template` or
+`visit`. The bound is burpsy's own — a deliberate one, argued at `limits.go:159-163` as twenty samples
+of one shape — with nothing on Burp's side to diverge from. Publishing it beside four real
+comparisons would tell an operator migrating a crawl that Burp allows 1000 visits per template, which
+is a setting Burp neither has nor enforces. The `burp_defaults` table in `internal/web/api_crawl.go`
+carried the same number and had the same defect.
+
+The same reasoning applies to every entry in that table that Burp does not ship: `max_frontier_size`,
+`max_links_per_page`, `max_parse_bytes`, `max_capture_bytes`, `max_fingerprints`, `max_relogins` and
+`max_submissions_per_form` are all burpsy-invented bounds. Zero reads as an enforced value in that
+table; the truth is "Burp has no such bound". Marking them apart is a change for whoever owns
+`api_crawl.go` — recorded on burpsy-react-ui-1or6.
+
 ## Key Files
 
 | File | Description |
