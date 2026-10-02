@@ -608,6 +608,14 @@ type Report struct {
 	// report carrying only the first would read as success.
 	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
 	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
+	// SitemapSeeded counts requests this crawl did not make because the site map already held that
+	// exact request (burpsy-react-ui-z8qf). Zero for a crawl seeded from nothing, which is the
+	// common case and the one that must not read as a failure.
+	//
+	// Deliberately separate from the request and location counts: a seeded request is one this crawl
+	// declined to make, and folding it into either of those would either inflate what the crawl did
+	// or hide what it saved.
+	SitemapSeeded int `json:"sitemap_seeded"`
 	// GraphQLEndpointsFound counts the operations a GraphQL introspection answer declared. Beside
 	// APIEndpointsFound rather than folded into it, because a GraphQL operation is a FIELD on one
 	// endpoint's type rather than a path of its own, and counting them together would hide which
@@ -912,6 +920,11 @@ type Crawler struct {
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
 	templates map[string]int
+	// sitemapSeeded counts the requests pre-marked from the site map (burpsy-react-ui-z8qf).
+	// Reported rather than assumed: a seeding feature whose saving nobody can see is one nobody
+	// can tell is working. See sitemap_seed.go for what is seeded and — the more important half —
+	// what deliberately is not.
+	sitemapSeeded int
 	// templateOK remembers the URL templates this crawl has seen return 200, so the session
 	// expiry detector can tell a template that flipped from one that simply never worked. Set at
 	// most per template, like the quota table; an entry is removed when a template stops matching.
@@ -1279,6 +1292,10 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// were actually built from and not the pool the caller meant to pass.
 		Pool:            c.poolName,
 		PoolConcurrency: c.poolConcurrency,
+		// The count is on the Crawler rather than only the Report, because SeedFromSiteMap is called
+		// by a caller that may run before Run (burpsy-react-ui-z8qf) and a report that only learned
+		// of it at Run time would report a seed it did not cause.
+		SitemapSeeded: c.sitemapSeeded,
 	}
 	lim := LimitReport{Limits: c.limits}
 
