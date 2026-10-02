@@ -19,7 +19,7 @@ import (
 // actions in one rule, the second of which did not exist in any form. An operator could fetch the
 // token and had nowhere to put it.
 //
-// # Burp's nine actions, and this port's tenth kind
+// # The nine actions, and the one that is declined
 //
 // Burp lists nine. Ten kinds here, because Burp presents "Set a specific cookie or parameter value"
 // as one action with a type selector and this port splits it: a cookie is written into the Cookie
@@ -27,14 +27,15 @@ import (
 // different failure mode, and keeping them apart means each kind's validation is total instead of a
 // switch inside a switch.
 //
-// "Prompt the user for in-browser session recovery" is burpsy's counterpart of Burp's ninth,
-// implemented rather than declined: Burp opens a browser window on the failing response so the
-// operator can log in by hand and then tells the rule to carry on. burpsy has no window it can
-// open — the console is a page the operator opens themselves — so the prompt is a modal on that
-// page and the task blocks until the operator answers. The one thing kept from the earlier
-// decline is the honesty: this is a real question with a real answer, never a silent wait. If
-// there is nobody at the console to ask, the action says so and stops the walk rather than
-// sending a request the operator put the action there to gate.
+// "Prompt the user for in-browser session recovery" is **declined**, and recorded as declined rather
+// than omitted so the count is honest: Burp's action opens a browser window on the failing response
+// so an operator can log in by hand and then tells the rule to carry on. burpsy has no browser it
+// can open for the operator — the console is a page the operator opens themselves, and the
+// headless engine it does own (internal/domexec) is for confirming findings, not for asking a human
+// a question. The nearest thing it has is the intercept hold queue, and that is a different
+// feature with a different contract (it holds *requests*, and it says nothing about a session).
+// Declining it is a statement about what an operator can rely on: nothing in this port will
+// silently wait for a person who was never asked.
 //
 // "Invoke an extension" is implemented against this tree's own extension host (internal/extension),
 // which is a local JSON-RPC plugin rather than Burp's Java API — so the *authoring* model is
@@ -73,16 +74,6 @@ const (
 	// ActionInvokeExtension hands the request and the last response to a loaded plugin and takes
 	// back the request it wants sent. The last action with a host to talk to.
 	ActionInvokeExtension
-	// ActionPromptForBrowserRecovery suspends the task until the operator has recovered the session
-	// in their own browser — Burp's "prompt the user for in-browser session recovery" (Zgr9.java,
-	// build 51467), which opens a window on the failing response so an operator can log in by hand.
-	// burpsy has no window it can open: the console is a page the operator opens themselves, so the
-	// prompt is a modal on that page and the task blocks until the operator answers. On success the
-	// task resumes — the retried request carries the jar as the operator's browser left it, which is
-	// the same mechanism Burp's own prompt relies on. On decline, or with no console attached to
-	// ask, the walk stops without sending: the action exists to gate the send on a human being's
-	// answer, and a request that goes out anyway makes the action a lie.
-	ActionPromptForBrowserRecovery
 	// ActionKindCount must stay last. It exists so tests can walk the enum and so
 	// actionKindNames can be an array the compiler sizes: a kind added without a wire name is then
 	// a build failure rather than a rule that reads back as something else. Same shape as
@@ -93,31 +84,29 @@ const (
 // The wire names, in the enum's own order. `action_kind` on the wire is one of these, and the two
 // directions share the list so they cannot drift.
 var actionKindNames = [ActionKindCount]string{
-	ActionRunMacro:                 "run_macro",
-	ActionRunPostRequestMacro:      "run_post_request_macro",
-	ActionCheckValidity:            "check_validity",
-	ActionAddCookiesFromJar:        "add_cookies_from_jar",
-	ActionSetCookie:                "set_cookie",
-	ActionSetParam:                 "set_param",
-	ActionSetHeader:                "set_header",
-	ActionReplace:                  "replace",
-	ActionInvokeExtension:          "invoke_extension",
-	ActionPromptForBrowserRecovery: "prompt_for_browser_recovery",
+	ActionRunMacro:            "run_macro",
+	ActionRunPostRequestMacro: "run_post_request_macro",
+	ActionCheckValidity:       "check_validity",
+	ActionAddCookiesFromJar:   "add_cookies_from_jar",
+	ActionSetCookie:           "set_cookie",
+	ActionSetParam:            "set_param",
+	ActionSetHeader:           "set_header",
+	ActionReplace:             "replace",
+	ActionInvokeExtension:     "invoke_extension",
 }
 
 // actionKindLabels are Burp's own words for each action, so the editor reads like the documentation
 // the operator is following rather than like this port's enum.
 var actionKindLabels = [ActionKindCount]string{
-	ActionRunMacro:                 "Run a macro",
-	ActionRunPostRequestMacro:      "Run a post-request macro",
-	ActionCheckValidity:            "Check whether the current session is valid, and perform sub-actions conditionally",
-	ActionAddCookiesFromJar:        "Add cookies from the session handling cookie jar",
-	ActionSetCookie:                "Set a specific cookie value",
-	ActionSetParam:                 "Set a specific parameter value",
-	ActionSetHeader:                "Set a specific header value",
-	ActionReplace:                  "Replace matching part of the request",
-	ActionInvokeExtension:          "Invoke an extension",
-	ActionPromptForBrowserRecovery: "Prompt the user for in-browser session recovery",
+	ActionRunMacro:            "Run a macro",
+	ActionRunPostRequestMacro: "Run a post-request macro",
+	ActionCheckValidity:       "Check whether the current session is valid, and perform sub-actions conditionally",
+	ActionAddCookiesFromJar:   "Add cookies from the session handling cookie jar",
+	ActionSetCookie:           "Set a specific cookie value",
+	ActionSetParam:            "Set a specific parameter value",
+	ActionSetHeader:           "Set a specific header value",
+	ActionReplace:             "Replace matching part of the request",
+	ActionInvokeExtension:     "Invoke an extension",
 }
 
 // ActionKindName is the wire name for a kind. An out-of-range kind says so rather than naming the
@@ -282,9 +271,8 @@ func ValidateAction(a *Action, path string) error {
 			return fmt.Errorf("%s (%s): validate every must be 0 (check every request) or a positive "+
 				"number of requests, got %d", path, ActionKindLabel(a.Kind), a.ValidateEvery)
 		}
-	case ActionRunMacro, ActionRunPostRequestMacro, ActionAddCookiesFromJar, ActionPromptForBrowserRecovery:
-		// Nothing beyond the kind and its switches. The prompt asks the operator, not the rule, for
-		// what comes next — there is no field to state.
+	case ActionRunMacro, ActionRunPostRequestMacro, ActionAddCookiesFromJar:
+		// Nothing beyond the kind and its switches.
 	}
 	if a.Kind != ActionCheckValidity && (len(a.Then) > 0 || len(a.Else) > 0) {
 		return fmt.Errorf("%s (%s): only a validity check has conditional sub-actions",

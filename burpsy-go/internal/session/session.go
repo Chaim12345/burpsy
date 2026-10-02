@@ -1530,14 +1530,6 @@ type Coordinator struct {
 	// quietly — see actionWalk.invokeExtension.
 	extensionInvoker SessionActionInvoker
 
-	// sessionPrompter is the console's "ask the operator" surface, when one is attached, for the
-	// prompt-for-browser-recovery rule action. Same seam reasoning as extensionInvoker: the console
-	// sits above this package in the dependency direction, so this package declares the one method
-	// it needs and the console adapts its prompt UI to it. Nil is a valid state — a headless
-	// process has nobody to ask — and the action reports that rather than waiting on a person who
-	// was never asked. See actionWalk.promptForBrowserRecovery.
-	sessionPrompter SessionPrompter
-
 	// validityCounters counts the requests each rule has handled, for Burp's
 	// `validate_every_num_requests` (us12): a check with an interval of N evaluates the session only
 	// on every Nth request. Per rule, because the field counts the requests the RULE handles, so two
