@@ -1,0 +1,94 @@
+# burpsy bundled wordlist: Common file extensions (short list)
+# Source: Burp Suite's own shipped Intruder payload resource (PayloadStrings), reproduced
+#   verbatim from the files PortSwigger bundles with Burp Suite itself.
+# Licence basis: these ARE PortSwigger's shipped payloads, carried over as-is; unlike
+#   burpsy's other starter lists, this content is not third-party OWASP/SecLists material —
+#   it is Burp's own bundled data, redistributed here as plain wordlist files.
+# Placeholders such as {base}, {domain}, {file} are Burp's template syntax and are
+#   preserved as-is; the attack engine substitutes them at send time.
+a
+asp
+aspx
+backup
+bak
+c
+cfg
+cfm
+cfml
+class
+com
+conf
+cpp
+dat
+data
+db
+dbc
+dbf
+debug
+dev
+dhtml
+dll
+doc
+docx
+dot
+exe
+gif
+gz
+htm
+html
+htr
+htw
+htx
+ida
+idc
+idq
+inc
+ini
+jar
+java
+jhtml
+jpg
+js
+jsp
+log
+lst
+net
+o
+old
+pdf
+php
+php3
+php4
+php5
+phtm
+phtml
+pl
+printer
+prn
+py
+rb
+reg
+rtf
+save
+sgml
+sh
+shtm
+shtml
+source
+src
+stm
+sys
+tar
+tar.gz
+temp
+test
+text
+tgz
+tmp
+tst
+txt
+xls
+xlsx
+xml
+zip
+~

