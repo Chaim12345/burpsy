@@ -19,7 +19,8 @@ not attempted.
 ## Burp divergence (2026-10-01)
 
 burpsy's crawl defaults differ from Burp's shipped defaults, and where they do it is deliberate.
-The four diverging defaults, with Burp's evidence:
+The four defaults where Burp ships a value and burpsy's differs, then one bound that has no Burp
+counterpart at all:
 
 - **MaxDepth**: Burp 4 (`maximum_link_depth`, CrawlDefaults.json:4), burpsy 6 (`limits.go:152`).
 - **MaxDuration**: Burp 150 minutes, burpsy 5 minutes (`limits.go:153`).
