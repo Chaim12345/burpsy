@@ -608,6 +608,12 @@ type Report struct {
 	// report carrying only the first would read as success.
 	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
 	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
+	// Phases counts locations admitted, by the phase that produced them
+	// (burpsy-react-ui-hbjo). Every phase is present with a zero rather than only the ones that
+	// fired, so a reader can tell "this crawl never reached the rendered pass" from "this crawl has no
+	// rendered pass", and the numbers sum to the discovered total because an unrecognised tag is
+	// counted under PhaseNone rather than dropped.
+	Phases map[CrawlPhase]int `json:"phases,omitempty"`
 	// SitemapSeeded counts requests this crawl did not make because the site map already held that
 	// exact request (burpsy-react-ui-z8qf). Zero for a crawl seeded from nothing, which is the
 	// common case and the one that must not read as a failure.
@@ -2276,6 +2282,22 @@ func robotsLiteralPrefix(pattern string) string {
 	return pattern
 }
 
+// countPhase adds one to a phase's tally on the report.
+//
+// The map is created with every phase at zero rather than lazily on first use, so the report always
+// carries the full legend. A reader showing "0 rendered" has been told the crawl never got there; a
+// reader with no "rendered" key at all can only guess.
+func (c *Crawler) countPhase(rep *Report, phase CrawlPhase) {
+	if rep.Phases == nil {
+		rep.Phases = make(map[CrawlPhase]int, len(CrawlPhaseAll)+1)
+		for _, p := range CrawlPhaseAll {
+			rep.Phases[p] = 0
+		}
+		rep.Phases[PhaseNone] = 0
+	}
+	rep.Phases[phase]++
+}
+
 // admit runs one discovered link through the frontier's gates, in this order:
 //
 //  1. resolution — a href that cannot be resolved to a host is nothing to fetch;
@@ -2292,6 +2314,11 @@ func robotsLiteralPrefix(pattern string) string {
 // refusal, the exact signal that matched. There is no path out of this function that declines a link
 // without recording why.
 func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report, lim *LimitReport) {
+	// Counted FIRST, before any gate can refuse. A link the crawl then declines is still something it
+	// discovered and attributed: counting only what was fetched would make the tallies describe egress
+	// rather than discovery, and an operator asking "did this crawl ever reach the sitemap" would be
+	// answered by a number that says no when the answer is yes.
+	c.countPhase(rep, PhaseOfTag(l.tag))
 	u, err := resolveAgainst(base, l.raw)
 	if err != nil {
 		c.skips.record(SkipRecord{
