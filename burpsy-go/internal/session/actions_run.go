@@ -81,6 +81,18 @@ type actionWalk struct {
 	changed bool
 	// stopped is set by an action carrying "no further actions".
 	stopped bool
+	// promptDeclined is set when a browser-recovery prompt ended without the session being
+	// recovered — by a decline, a timeout, or there being nobody to ask. The walk stops in every
+	// one of those cases, and the flag is how the caller tells "the gate held and nothing was
+	// sent" from "nothing needed doing", which a stopped walk with no other change would
+	// otherwise read as. See promptForBrowserRecovery and RecoveryPromptDeclined.
+	promptDeclined bool
+	// promptSucceeded is set when the operator confirmed the session was recovered. The request
+	// bytes did not change, but the session did — the jar the resend carries is the one the
+	// operator's browser just established — so the walk reports the resend the same way a
+	// changed request or a successful macro does. Without it a prompt-only rule would report
+	// AlreadyValid and drop the request the operator was asked to recover the session for.
+	promptSucceeded bool
 	// cookieOverrides are the cookies set_cookie actions named, in the order they were set, carried
 	// to the send so the jar cannot overwrite them. See applyJarWith.
 	cookieOverrides []CookieOverride
@@ -126,6 +138,16 @@ type actionResult struct {
 	// MacroRan is whether any macro action ran, and MacroOutcome is the last one's result.
 	MacroRan     bool
 	MacroOutcome LoginOutcome
+	// PromptDeclined is whether a browser-recovery prompt ended without the session being
+	// recovered. The caller reads it as RecoveryPromptDeclined, which is the difference
+	// between "the operator was asked and the answer was no" and "the session was already
+	// fine" — a stopped walk with no macro and no changes is otherwise indistinguishable from
+	// the second.
+	PromptDeclined bool
+	// PromptSucceeded is whether the operator confirmed the session was recovered. The caller
+	// reads it as a reason to re-send the request: the bytes are unchanged but the session is
+	// not, and the resend is the entire point of having asked.
+	PromptSucceeded bool
 }
 
 // runActions walks a rule's actions over one request and reports what came of it.
@@ -153,6 +175,8 @@ func (c *Coordinator) runActions(rule *SessionRule, request MacroStep, response 
 		Validity:        w.validity,
 		MacroRan:        w.macroRan,
 		MacroOutcome:    w.macroOutcome,
+		PromptDeclined:  w.promptDeclined,
+		PromptSucceeded: w.promptSucceeded,
 	}
 }
 
@@ -200,6 +224,8 @@ func (w *actionWalk) perform(a *Action) {
 		w.replace(a)
 	case ActionInvokeExtension:
 		w.invokeExtension(a)
+	case ActionPromptForBrowserRecovery:
+		w.promptForBrowserRecovery(a)
 	default:
 		// Unreachable through ValidateRule, which refuses an unknown kind. Recorded rather than
 		// ignored because this is the branch a kind added to the enum but not to this switch would
@@ -507,6 +533,54 @@ func (w *actionWalk) invokeExtension(a *Action) {
 		!sameMacroStep(before, w.request))
 }
 
+// promptForBrowserRecovery is Burp's "prompt the user for in-browser session recovery", and the one
+// action whose executor is a question rather than a rewrite.
+//
+// # What burpsy's counterpart is, and is not
+//
+// Burp opens a browser window on the failing response so the operator can log in by hand, then
+// tells the rule to carry on. burpsy has no window it can open — the console is a page the
+// operator opens themselves — so the prompt is a modal on that page, and the task blocks on the
+// SessionPrompter seam until the operator answers. The session the operator establishes in their
+// browser reaches the retried request the same way Burp's does: through the proxy, into the jar,
+// and out on the Cookie header. Nothing in this action reads the operator's browser directly; it
+// only asks, waits, and carries on.
+//
+// # Why every non-success stops the walk
+//
+// The action's whole job is to gate the send on a human being's answer. A request that goes out
+// after a decline — or after the prompt could not be asked at all — makes the action a lie, which
+// is the decorative-control failure this whole unit exists to prevent. So the walk stops on
+// every path that is not an explicit "the session is recovered", and the outcome says so
+// (RecoveryPromptDeclined) rather than reading as AlreadyValid — "the session was already fine"
+// is the opposite of what happened: the operator was asked whether it is, and the answer was no.
+func (w *actionWalk) promptForBrowserRecovery(a *Action) {
+	if w.c.sessionPrompter == nil {
+		w.record(a.Kind, "no console is attached, so the operator was never asked; the request "+
+			"was not sent — a rule that gates its sends on a prompt cannot be honoured by a "+
+			"process with nobody at the console", false)
+		w.stopped = true
+		w.promptDeclined = true
+		return
+	}
+	recovered, err := w.c.sessionPrompter.PromptForBrowserRecovery(w.rule.Name, w.request.URL)
+	switch {
+	case err != nil:
+		w.record(a.Kind, "the browser-recovery prompt could not be completed: "+err.Error(), false)
+		w.stopped = true
+		w.promptDeclined = true
+	case !recovered:
+		w.record(a.Kind, "the operator was asked to recover the session in the browser and "+
+			"declined; the request was not sent", false)
+		w.stopped = true
+		w.promptDeclined = true
+	default:
+		w.record(a.Kind, "the operator recovered the session in the browser; the task resumed "+
+			"and the request goes out with the jar as the browser left it", false)
+		w.promptSucceeded = true
+	}
+}
+
 // ---- the extension seam -------------------------------------------------------------------------
 
 // SessionActionRequest is what an extension session action is handed: the request as the rule has
@@ -547,6 +621,44 @@ func (c *Coordinator) ExtensionAttached() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.extensionInvoker != nil
+}
+
+// ---- the console-prompt seam ------------------------------------------------------------------------
+
+// SessionPrompter is the console's "ask the operator" surface as this package sees it: one method,
+// named after the rule action it serves. Implemented by internal/web, which owns the console the
+// operator is looking at — the same seam reasoning as SessionActionInvoker, and for the same
+// reason: the prompt UI sits above this package in the dependency direction, so this package
+// declares the one method it needs and the console adapts its modal to it.
+type SessionPrompter interface {
+	// PromptForBrowserRecovery suspends the calling task until the operator has recovered the
+	// session in their own browser. The bool reports whether the session was recovered — the
+	// task resumes — or not; a non-nil error means the prompt could not be completed at all (a
+	// timeout, or a console that could not be reached), which the action reports verbatim rather
+	// than reading as a decline the operator never made.
+	//
+	// Implementations must not return (false, nil) on a timeout: a timeout is not a decline, and
+	// the two are different things for an operator to read in the trace.
+	PromptForBrowserRecovery(ruleName string, requestURL string) (recovered bool, err error)
+}
+
+// SetSessionPrompter attaches the console's prompt surface. Separate from the coordinator's
+// constructor for the reason SetSessionActionInvoker is: the console is wired once, by whoever
+// owns it, and a rule may name the prompt long before one exists. Nil is a valid state and is
+// reported by the action rather than by silence.
+func (c *Coordinator) SetSessionPrompter(p SessionPrompter) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionPrompter = p
+}
+
+// PrompterAttached reports whether a console prompt surface is wired, so a surface can say why a
+// prompt-for-browser-recovery action would do nothing rather than offering a control that
+// silently does nothing — the same contract ExtensionAttached exists for.
+func (c *Coordinator) PrompterAttached() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.sessionPrompter != nil
 }
 
 // ---- small helpers ------------------------------------------------------------------------------
