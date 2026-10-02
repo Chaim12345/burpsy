@@ -637,6 +637,22 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskLocal,
 		summary: "the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding",
 	},
+	"/api/scanner/checks": {
+		// The corpus inventory: which custom checks are loaded, and whether each is enabled. riskRead
+		// — it answers what this process already holds and sends nothing.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the loaded BCheck corpus as rows: each custom check's name, enablement and run count, " +
+			"so what the corpus covers is inspectable rather than only counted (burpsy-react-ui-kdqj)",
+	},
+	"/api/scanner/checks/enable": {
+		// riskLocal, not riskRead: this changes what the NEXT audit dispatches. Not riskAttack —
+		// nothing leaves the process — and not riskCredential — no secret is involved. The honest
+		// class for "writes this tool's own configuration" is local-write, the same as the other
+		// per-check switches under /api/scanner/.
+		methods: []string{"PUT"}, risk: riskLocal,
+		summary: "enable or disable one corpus check by name; a name the corpus does not contain is " +
+			"refused before anything is recorded",
+	},
 	"/api/scanner/coverage": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "what the check set covers, and what it declines to look at",
