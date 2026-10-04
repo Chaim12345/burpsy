@@ -1,59 +1,30 @@
-#!/usr/bin/env python3
-# mcp-agent-mail chain-runner (pre-commit)
-import os
-import sys
-import stat
-import subprocess
-from pathlib import Path
+#!/usr/bin/env sh
+# pre-commit, in the shape every sibling hook already uses (burpsy-react-ui-5r80).
+#
+# Why this file is sh and not the python chain-runner it used to be: bd's integration appends a
+# POSIX-shell block between its BEGIN/END markers to whatever file carries them, and it appends
+# AFTER the existing body. Appending shell to a python file is a SyntaxError at parse time, which
+# is the defect this change fixes — not just the parse, but the fact that a block placed after a
+# sys.exit() could never have run anyway. The three sibling hooks (post-checkout, post-merge,
+# prepare-commit-msg) are sh and are correct; the two that were python were the two that broke.
+#
+# The chain-runner is preserved, not deleted: it moved to pre-commit.runner.py, and this file
+# invokes it first so its child-dispatch behaviour is unchanged. Its exit code is honoured, so a
+# failing child hook still fails the commit — which is what a chain is for.
+#
+# The Windows shims (pre-commit.cmd/.ps1) invoked this file with `python`; they now invoke the
+# runner directly, so Windows keeps the chain-runner and loses the bd block rather than losing
+# everything to a SyntaxError, which is what it had before.
 
-HOOK_DIR = Path(__file__).parent
-RUN_DIR = HOOK_DIR / 'hooks.d' / 'pre-commit'
-ORIG = HOOK_DIR / 'pre-commit.orig'
-
-def _is_exec(p: Path) -> bool:
-    try:
-        st = p.stat()
-        return bool(st.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
-    except Exception:
-        return False
-
-def _list_execs() -> list[Path]:
-    if not RUN_DIR.exists() or not RUN_DIR.is_dir():
-        return []
-    items = sorted([p for p in RUN_DIR.iterdir() if p.is_file()], key=lambda p: p.name)
-    # On POSIX, honor exec bit; on Windows, include all files (we'll dispatch .py via python).
-    if os.name == 'posix':
-        try:
-            items = [p for p in items if _is_exec(p)]
-        except Exception:
-            pass
-    return items
-
-def _run_child(path: Path, * , stdin_bytes=None):
-    # On Windows, prefer 'python' for .py plugins to avoid PATHEXT reliance.
-    try:
-        if os.name != 'posix' and path.suffix.lower() == '.py':
-            return subprocess.run([sys.executable, str(path)], input=stdin_bytes, check=False).returncode
-        return subprocess.run([str(path)], input=stdin_bytes, check=False).returncode
-    except OSError as exc:
-        print(f'mcp-agent-mail chain-runner: could not execute {path.name}: {exc}', file=sys.stderr)
-        return 126
-
-def _remember_failure(path: Path, rc: int, first_failure: int) -> int:
-    if rc == 0:
-        return first_failure
-    print(f'mcp-agent-mail chain-runner: {path.name} exited with status {rc}', file=sys.stderr)
-    return first_failure or rc
-
-first_failure = 0
-for exe in _list_execs():
-    rc = _run_child(exe)
-    first_failure = _remember_failure(exe, rc, first_failure)
-
-if ORIG.exists():
-    rc = _run_child(ORIG)
-    first_failure = _remember_failure(ORIG, rc, first_failure)
-sys.exit(first_failure)
+# Run the mcp-agent-mail chain-runner if it is present, honouring its exit code.
+runner="$(dirname "$0")/pre-commit.runner.py"
+if [ -f "$runner" ]; then
+  python3 "$runner" "$@"
+  _runner_rc=$?
+  if [ "$_runner_rc" -ne 0 ]; then
+    exit "$_runner_rc"
+  fi
+fi
 
 # --- BEGIN BEADS INTEGRATION v1.2.2 ---
 # This section is managed by beads. Do not remove these markers.

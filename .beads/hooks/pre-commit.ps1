@@ -1,4 +1,4 @@
 $ErrorActionPreference = 'Stop'
-$hook = Join-Path $PSScriptRoot 'pre-commit'
-python $hook @args
+$runner = Join-Path $PSScriptRoot 'pre-commit.runner.py'
+python $runner @args
 exit $LASTEXITCODE
