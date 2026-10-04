@@ -167,6 +167,14 @@ type pageStructure struct {
 	dropped int
 	// truncated records that the body was longer than the parse bound, so its tail was not walked.
 	truncated bool
+	// sourceMap is the //# sourceMappingURL a SCRIPT named, relative to that script, or empty.
+	//
+	// Kept as a reference rather than fetched during the parse, because parsePage is pure: it reads a
+	// body and returns locations, and a parse that sent a request would make every caller of it
+	// responsible for the egress. The fetch happens once per script in the crawl loop, through the
+	// ordinary perform() path, so the map is scope-authorised, rate-limited and captured like any
+	// other request — which is what keeps criterion 3 of jwy5 honest.
+	sourceMap string
 }
 
 // parsePage walks one HTML body for links, forms and the location skeleton.
@@ -328,6 +336,37 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 				if speculative {
 					specText.WriteString(nodeText(n))
 					specText.WriteByte(' ')
+					// A script's own source map — the one artifact in a minified bundle that
+					// recovers the original paths and source.
+					//
+					// The BASE differs by script kind and getting it wrong is a 404 either way:
+					// an INLINE script has no src of its own, so its reference resolves against
+					// the PAGE; an EXTERNAL one resolves against ITS OWN url, so a bundle served
+					// from /static/js/main.js naming "main.js.map" is /static/js/main.js.map and
+					// not /main.js.map.
+					//
+					// An absolute reference is taken AS WRITTEN. It names a host the crawl may not
+					// cover, and rewriting it against the page would invent a same-host URL that does
+					// not exist. Whether that host may be fetched is the scope gate's decision, made
+					// later, on the real URL.
+					if out.sourceMap == "" {
+						// scriptBody, not n.Data: n is the ELEMENT node and its text lives in a
+						// child, so an element with several children needs them all joined rather than
+						// reading one. A script body split across several text nodes — which is what an
+						// HTML parser produces for a minified bundle with an inline map — still yields
+						// its marker.
+						if ref := sourceMapReference(scriptBody(n)); ref != "" {
+							base := effective
+							if src, ok := attr(n, "src"); ok && src != "" {
+								if scriptURL, rerr := resolveAgainst(effective, src); rerr == nil {
+									base = scriptURL
+								}
+							}
+							if resolved, merr := resolveAgainst(base, ref); merr == nil {
+								out.sourceMap = resolved.String()
+							}
+						}
+					}
 				}
 			case "form":
 				f := readForm(n)
@@ -788,4 +827,56 @@ func fillValue(typ, existing string) string {
 		return ""
 	}
 	return fillerText
+}
+
+// sourceMapReference extracts a //# sourceMappingURL from a script body.
+//
+// The LAST such comment wins, not the first. A build that concatenates several bundles into one file
+// emits one per input, and the last is the one describing the combined output — the file the operator
+// actually has. Taking the first would fetch a map for a component that is not there.
+//
+// An INLINE map (data:application/json;base64,...) is deliberately not returned: it is already in the
+// body the caller holds, so there is nothing to fetch, and handing a multi-kilobyte data URL back as a
+// "URL" would put it through the resolver and the scope gate for no reason.
+func sourceMapReference(script string) string {
+	// Both spellings, because both ship: "//# sourceMappingURL=x.map" is the common one and
+	// "/*# sourceMappingURL=x.map */" appears in builds that wrap the bundle. Looking only for the
+	// first missed every such build, which is what the table test caught.
+	i := strings.LastIndex(script, "//# sourceMappingURL=")
+	tail := "//# sourceMappingURL="
+	if j := strings.LastIndex(script, "/*# sourceMappingURL="); j > i {
+		i, tail = j, "/*# sourceMappingURL="
+	}
+	if i < 0 {
+		return ""
+	}
+	ref := strings.TrimSpace(script[i+len(tail):])
+	// The comment runs to the end of its LINE, not of the file — a bundle with code after the marker
+	// would otherwise hand back everything that follows it as one "path".
+	if nl := strings.IndexAny(ref, "\r\n"); nl >= 0 {
+		ref = strings.TrimSpace(ref[:nl])
+	}
+	// The block-comment form exists in the wild and is the same fact written differently.
+	ref = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(ref, "/*"), "*/"))
+	if ref == "" || strings.HasPrefix(ref, "data:") {
+		return ""
+	}
+	return ref
+}
+
+// scriptBody returns the concatenated TEXT of a script element.
+//
+// Its own walk rather than nodeText, which deliberately EXCLUDES script contents
+// (discover.go:554-556 — a minified bundle inside a <noscript> fallback must not become a link's
+// label). That exclusion is right for a link label and wrong here: the sourceMappingURL marker lives
+// in exactly the text nodeText refuses to read.
+func scriptBody(n *html.Node) string {
+	var b strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.TextNode {
+			b.WriteString(c.Data)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }

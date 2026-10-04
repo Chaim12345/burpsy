@@ -608,6 +608,10 @@ type Report struct {
 	// report carrying only the first would read as success.
 	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
 	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
+	// SourceMapsFetched counts the source maps this crawl fetched (burpsy-react-ui-jwy5). Reported so
+	// an operator can see that the map pass ran and found something, which is otherwise invisible: a
+	// .map is an artifact of a bundle, not a location, so it never appears in the location counts.
+	SourceMapsFetched int `json:"source_maps_fetched,omitempty"`
 	// Phases counts locations admitted, by the phase that produced them
 	// (burpsy-react-ui-hbjo). Every phase is present with a zero rather than only the ones that
 	// fired, so a reader can tell "this crawl never reached the rendered pass" from "this crawl has no
@@ -1500,6 +1504,41 @@ func (c *Crawler) checkPauseThresholds(rep *Report, lim *LimitReport) bool {
 	return false
 }
 
+// fetchSourceMap fetches one source map and mines the paths out of it.
+//
+// A source map's `sources` array is the ORIGINAL file list of a bundle — the pre-minification paths,
+// which for a SPA is the route table written in readable form. That is a higher-value find than the
+// minified body it came from, and it is one request to obtain.
+//
+// The map is NOT parsed as an exchange or traversed: its sources are file paths, not locations, and
+// treating "/src/routes/dashboard.ts" as a URL to fetch would flood the frontier with TypeScript
+// filenames that 404. What is taken is the PATH STRINGS inside each source's `sourcesContent` when
+// the map carries it, which is the same mining the speculative phase already does, applied to better
+// text. A map with no embedded content (the common case for a production build that ships maps
+// without sources) therefore yields nothing — and says so, rather than reporting a fetch that found
+// nothing as a success.
+func (c *Crawler) fetchSourceMap(ctx context.Context, mapURL string, item frontierItem, rep *Report, lim *LimitReport) {
+	if mapURL == item.url.String() {
+		return
+	}
+	u, err := url.Parse(mapURL)
+	if err != nil {
+		return
+	}
+	mapItem := frontierItem{url: u, method: "GET", depth: item.depth, foundAt: item.url.String(),
+		text: "source map for " + item.url.String()}
+	// Captured through perform, so this request is bounded, rate-limited and recorded. The response is
+	// NOT counted as a location: a .map is an artifact of a bundle, not a page of the application.
+	before := rep.Fetched
+	c.perform(ctx, mapItem, c.buildRequest(mapItem), rep, lim)
+	if rep.Fetched <= before {
+		// Scope refused it, or the transport failed. Both are already recorded by perform with their own
+		// reasons; nothing to add, and adding a second reason here would double-count one event.
+		return
+	}
+	rep.SourceMapsFetched++
+}
+
 // visit sends one frontier item, captures and scans the response through the shared seam, and folds
 // whatever it discovered back into the frontier.
 func (c *Crawler) visit(ctx context.Context, item frontierItem, rep *Report, lim *LimitReport) {
@@ -1819,6 +1858,14 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	page := parsePage(body, item.url, c.limits, c.cfg.RequestSpeculative)
 	if page.truncated {
 		lim.record(StopParseBytes)
+	}
+	// A source map the page's scripts named (burpsy-react-ui-jwy5, criterion 2). Fetched through the
+	// ordinary perform() path rather than from a side channel, so the request is scope-authorised,
+	// rate-limited, captured and counted exactly like any other — which is what keeps the bead's
+	// "passive: no requests beyond fetching a .map" true in a way an operator can check: the map
+	// fetch appears in the fetch log like everything else this crawl sent.
+	if page.sourceMap != "" {
+		c.fetchSourceMap(ctx, page.sourceMap, item, rep, lim)
 	}
 	if page.dropped > 0 {
 		lim.record(StopLinksPerPage)
