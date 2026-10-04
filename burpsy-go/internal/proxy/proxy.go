@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -668,6 +669,28 @@ type ProxyConfig struct {
 	// (dial the name, forward the bytes), which is what an embedder with no console gets. See
 	// WithNetworkSettings and NetworkSettings().
 	network *NetworkSettings
+	// sessionCoordinator is the session-handling seam (burpsy-react-ui-9llt): the same
+	// *session.Coordinator the sender and the crawler consult, so a rule the operator writes
+	// governs the leg that carries their browser traffic too. Nil — the default — keeps today's
+	// exact behaviour: no jar cookie is attached to a proxied request and no re-login is
+	// attempted, and the relay is byte-for-byte what it always was. See session_gate.go.
+	sessionCoordinator ProxySessionCoordinator
+	// sessionRunner supplies the re-login macro's step runner. Held as a function rather than a
+	// *session.MacroStepRunner because the runner is per-run state the wirer owns: the sender
+	// builds one per send, and a proxy that cached one would reuse a closed connection's
+	// transport across re-logins.
+	sessionRunner proxyLoginRunner
+	// sessionGate is the per-listener expiry state the coordinator's rules run against — the
+	// templates this listener has seen answer 200 and the ones whose last response signalled an
+	// expired session. Built by NewServer when a coordinator is attached, so a relay goroutine
+	// never races a nil gate.
+	sessionGate *sessionGate
+	// LoginPagePattern is the optional body pattern that ALSO flags expiry: an application that
+	// answers an expired cookie with the login form at HTTP 200 is invisible to the status-flip
+	// signal, and this pattern is how the operator names that page. Nil — the default — detects
+	// by status alone. The pattern is deliberately on the config rather than a rule: it names
+	// the application's shape, not the engagement's rules.
+	LoginPagePattern *regexp.Regexp
 }
 
 // NetworkSettings is the live holder for the resolution and 100-continue settings this leg follows.
@@ -961,6 +984,24 @@ func (c *ProxyConfig) WithNetworkSettings(n *NetworkSettings) *ProxyConfig {
 	return c
 }
 
+// WithSessionCoordinator attaches the session-handling coordinator the relay consults
+// (burpsy-react-ui-9llt), along with the runner a re-login macro's steps dispatch through.
+//
+// The coordinator is the same one the sender and the crawler hold — not a copy — so a rule
+// the operator edits while the proxy is running governs this leg without a restart, the
+// same single-handle rule as Scope. The runner is a function because it is per-run state:
+// the wirer hands the macro engine a fresh runner per re-login (the sender builds one per
+// send), and a proxy that cached one would pin a transport across sessions.
+//
+// Attaching the coordinator is what arms the gate: NewServer builds the per-listener
+// session state at construction, so the first flagged template re-logs in through the
+// coordinator's single-flight rather than per request.
+func (c *ProxyConfig) WithSessionCoordinator(coord ProxySessionCoordinator, runner proxyLoginRunner) *ProxyConfig {
+	c.sessionCoordinator = coord
+	c.sessionRunner = runner
+	return c
+}
+
 func (c *ProxyConfig) WithLogger(logger *zap.Logger) *ProxyConfig {
 	c.logger = logger
 	return c
@@ -996,6 +1037,15 @@ func NewServer(config *ProxyConfig) *Server {
 	// be the first to find one nil and have to decide what to do about that.
 	_ = config.Streaming()
 	_ = config.TLS()
+	// The session gate is per-listener state (the templates this listener has seen flip), so it
+	// is built here rather than in WithSessionCoordinator: a config built and then attached to a
+	// server must not carry a gate another server already flagged templates on, and a relay
+	// goroutine must never read a nil one. Only when a coordinator is attached — without one
+	// there is nothing the gate could run a rule against, and withSessionRules' nil checks keep
+	// the relay byte-for-byte what it was.
+	if config.sessionCoordinator != nil && config.sessionGate == nil {
+		config.sessionGate = newSessionGate(config.sessionRunner)
+	}
 	return &Server{
 		config:    config,
 		listeners: map[string]*boundListener{},
@@ -2046,6 +2096,19 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// requestLineOf. Every transformation that could have changed the line has now run.
 	method, path = refreshedRequestLine(requestData, method, path)
 
+	// The session seam (burpsy-react-ui-9llt): attach the jar's Cookie header, and when this
+	// template was flagged by the previous response, re-login and carry the fresh cookie on
+	// this request. Runs here — after every byte-level transform and after the operator's hold,
+	// before the scope check — so what the origin receives, what history records and what the
+	// operator edited are one set of bytes, the invariant every transform above states. Nil
+	// coordinator is the unwired default and the call is a no-op, so the relay is unchanged
+	// wherever the embedder attached no coordinator.
+	requestData = s.withSessionRules(requestData, host, method, path, port, scheme)
+	// withSessionRules may have rewritten the header block (a Cookie insert or a rebuild after
+	// re-login), so the method and path are re-read from the final bytes for the same reason
+	// refreshedRequestLine exists: what is recorded and what is sent must agree with each other.
+	method, path = refreshedRequestLine(requestData, method, path)
+
 	// Check scope. The scheme is the destination's, not the client's: a request retargeted from http to
 	// https must be matched by the https arm of a scope rule, or the scheme arm would be answering a
 	// question about a host the request is not going to.
@@ -2400,6 +2463,12 @@ func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
 	if s.config.cookieJar != nil && len(x.Response) > 0 {
 		s.config.cookieJar.AbsorbResponseCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Response)
 	}
+	// The session gate reads the same response (burpsy-react-ui-9llt): the coordinator's
+	// jar and validity rules, then the flip/pattern signals that flag the template the
+	// next request re-logs in under. Same position as absorption — before Record's
+	// refusals, because a session fact the origin stated is not contingent on the row
+	// being indexable.
+	s.noteProxiedResponse(x)
 	ex, err := s.capture().Record(x)
 	if err != nil {
 		s.config.logger.Error("failed to capture exchange",
