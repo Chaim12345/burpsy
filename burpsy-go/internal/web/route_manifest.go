@@ -518,6 +518,18 @@ var manifest = map[string]route{
 		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
 	},
 
+	"/api/project": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "which project this instance is: the persisted project name (\"Unnamed\" when never set), " +
+			"the -db file it lives in, and whether anything is durable at all — the readout the Project menu shows",
+	},
+	"/api/project/name": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "read or rename the project; the name is stored with the database, so it travels with the " +
+			"project file and survives a restart. A blank name is refused rather than stored, because a stored " +
+			"placeholder would be indistinguishable from a real name",
+	},
+
 	"/api/proxy/ca": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "which CA is signing intercepted TLS right now: subject and expiry, never the key",

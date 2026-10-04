@@ -52,6 +52,26 @@ func (s *Store) Path() string {
 	return s.path
 }
 
+// ProjectName is the human name of this project file (burpsy-react-ui-je3y).
+//
+// One settings row, not its own table: the name is a single string that travels with the
+// database file, which is exactly what a "project" is here — burpsy has no separate project
+// container, the -db file IS the project, and the name is the one field of it a human wants
+// to see in a title bar. An absent row is the empty string, which the caller renders as
+// "Unnamed" rather than storing a placeholder — a stored "Unnamed" would be indistinguishable
+// from a real name the operator chose to type.
+func (s *Store) ProjectName() (string, error) {
+	return s.getSetting("project.name")
+}
+
+// SetProjectName stores the project name. The name is not blank here only because the API
+// refuses blank before it reaches this method; the store itself is the wrong place to enforce
+// an operator-facing rule, and a future caller (a rename from a script) may want different
+// validation than the console's dialog.
+func (s *Store) SetProjectName(name string) error {
+	return s.setSetting("project.name", name)
+}
+
 // Open opens (creating if necessary) the database at path and ensures the
 // schema exists. Pass a logger for mirror-write diagnostics.
 func Open(path string, logger *zap.Logger) (*Store, error) {

@@ -497,3 +497,49 @@ func TestRestore_SessionRuleActionListRoundTrips(t *testing.T) {
 			rs[0].Actions[3].Enabled, rs[0].Actions[3].Stop)
 	}
 }
+
+// The project name must survive a close and reopen, because the name is a property of the
+// database file, not of the process: an operator who renames a project and restarts burpsy
+// has to see the name they typed, or the name was never really attached to the project.
+func TestProjectNameRoundTripsThroughAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project.db")
+	p, err := Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if name, err := p.ProjectName(); err != nil || name != "" {
+		t.Fatalf("a fresh project reads name=%q err=%v, want \"\" — an absent row is not a name", name, err)
+	}
+	if err := p.SetProjectName("Springfield bank, phase 2"); err != nil {
+		t.Fatalf("SetProjectName: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	name, err := reopened.ProjectName()
+	if err != nil {
+		t.Fatalf("ProjectName after reopen: %v", err)
+	}
+	if name != "Springfield bank, phase 2" {
+		t.Fatalf("the project name did not survive the reopen: got %q\n"+
+			"The name is a property of the project file; losing it across a restart would make the "+
+			"Project menu's readout a per-session label rather than a project identity.", name)
+	}
+
+	// A blank name is refused by the API layer, not here — but the store must still round-trip
+	// whatever it is given without inventing a placeholder, so the caller's rules stay the
+	// only rules.
+	if err := reopened.SetProjectName(""); err != nil {
+		t.Fatalf("SetProjectName(\"\"): %v — the store must store what it is given", err)
+	}
+	name, _ = reopened.ProjectName()
+	if name != "" {
+		t.Fatalf("an explicitly cleared name read back as %q, want \"\"", name)
+	}
+}

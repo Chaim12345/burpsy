@@ -65,6 +65,20 @@ export interface Stats {
  dom_checks?: boolean;
 }
 
+/** GET /api/project — which project this instance is (burpsy-react-ui-je3y). The -db file IS the
+ *  project: the name travels with the database, and a process started with no -db has none of it. */
+export interface ProjectInfo {
+ name: string;
+ /** True when the name is the "Unnamed" placeholder rather than one the operator set. */
+ unnamed: boolean;
+ /** The -db path this project lives in. Empty when this instance persists nothing. */
+ database?: string;
+ /** Set only in the no-persistence case, so it cannot render as an empty path. */
+ database_note?: string;
+ persisted: boolean;
+ backupable: boolean;
+}
+
 export interface ScopeRule {
  host?: string;
  port?: number;

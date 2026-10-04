@@ -937,6 +937,12 @@ func (s *Server) setupRoutes() {
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
 	s.mux.HandleFunc("/api/protocols", s.handleProtocols)
+	// The Project menu's two reads (burpsy-react-ui-je3y): which project this instance is —
+	// name, -db path, whether anything is durable at all — and the name's write. Burp has a
+	// whole Project container; burpsy's project IS the database file, so the readout names the
+	// file and the menu's other items hang off what it reports.
+	s.mux.HandleFunc("/api/project", s.handleProject)
+	s.mux.HandleFunc("/api/project/name", s.handleProjectName)
 	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)

@@ -16,6 +16,7 @@ import {
  ListChecks,
  Moon,
  Network,
+ PencilLine,
  Plus,
  Radar,
  Repeat2,
@@ -36,7 +37,7 @@ import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
 import { api, copyToClipboard, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
-import { queryClient, useConnection, useEventStream, useIntercept, useScope, useStats } from "./lib/data";
+import { queryClient, useConnection, useEventStream, useIntercept, useProject, useRenameProject, useScope, useStats } from "./lib/data";
 import { useScannerLive } from "./lib/data.attack";
 import { useCrawls } from "./lib/data.observe";
 import { attentionFor, attentionSignals } from "./lib/attention";
@@ -204,6 +205,37 @@ function App(): JSX.Element {
  // hook; the shell now does too, and says why instead of failing.
  const caCert = useCaCert();
  const caAvailable = caCert.data?.available ?? false;
+ // The Project menu's readout (je3y): which project this instance is. It is a plain read, not a
+ // poll — the name and the -db path change only when this process restarts or the operator
+ // renames from the menu itself, and the rename invalidates the query by key.
+ const project = useProject();
+ const renameProject = useRenameProject();
+ // Save copy is the backup route, and the backup route is riskDestructive (it prunes old
+ // snapshots past the retention count), so it answers 428 until a one-time confirm is minted.
+ // The mint here is explicit, from a menu click, with the dialog the browser shows — the same
+ // shape every other gated console action takes — never an automatic retry that would turn the
+ // gate into a speed bump.
+ const saveProjectCopy = useCallback(() => {
+  if (!project.data?.backupable) {
+   toast.info("A copy needs a project database, and this instance persists nothing.");
+   return;
+  }
+  void api<{ token: string }>("/api/backup/confirm", { method: "POST" })
+   .then((minted) =>
+    api<{ path: string; bytes: number; pruned: number; kept: number; warning?: string }>("/api/backup", {
+     method: "POST",
+     headers: { "X-Burpsy-Confirm": minted.token },
+    }),
+   )
+   .then((r) =>
+    toast.success(
+     r.warning
+      ? `Project copy written to ${r.path} (${formatBytes(r.bytes)}) — ${r.warning}`
+      : `Project copy written to ${r.path} (${formatBytes(r.bytes)}; kept ${r.kept})`,
+    ),
+   )
+   .catch((error) => toast.error(`Save copy failed: ${String(error)}`));
+ }, [project.data?.backupable]);
  const live = useConnection((state) => state.live);
  const lastEventAt = useConnection((state) => state.lastEventAt);
  const eventCount = useConnection((state) => state.eventCount);
@@ -797,6 +829,34 @@ function App(): JSX.Element {
     keywords: "html findings issues export",
     run: () => window.open("/api/report/html", "_blank"),
    },
+   {
+    id: "cmd:project-rename",
+    label: project.data?.persisted ? "Rename this project…" : "Rename project — no project file (start with -db)",
+    group: "Help",
+    keywords: "project name rename file db database",
+    icon: PencilLine,
+    run: () => {
+     if (!project.data?.persisted) {
+      toast.info("A project name lives in the database file, and this instance has none — start burpsy with -db.");
+      return;
+     }
+     const current = project.data?.name ?? "";
+     const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
+     if (name === null || name.trim() === "") return;
+     renameProject.mutate(name.trim(), {
+      onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
+      onError: (error) => toast.error(`Rename refused: ${String(error)}`),
+     });
+    },
+   },
+   {
+    id: "cmd:project-save-copy",
+    label: project.data?.backupable ? "Save a copy of this project" : "Save a project copy — no project file (start with -db)",
+    group: "Help",
+    keywords: "project copy backup snapshot db database",
+    icon: Save,
+    run: saveProjectCopy,
+   },
   ];
 
   // One entry per Settings section, built from the same list the page and its section rail
@@ -805,7 +865,7 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen]);
+ }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, saveProjectCopy]);
 
  const hasSubTabs = tool.leaves.length > 1;
 
@@ -867,6 +927,90 @@ function App(): JSX.Element {
        icon: ShieldCheck,
        disabled: !caAvailable,
        onSelect: () => window.open("/ca.crt", "_blank"),
+      },
+     ],
+    },
+   ],
+  },
+  {
+   label: "Project",
+   groups: [
+    {
+     id: "identity",
+     title: "This instance",
+     actions: [
+      {
+       // The readout, not a command: the whole point of the menu is that an operator can
+       // see which project a running instance is. Disabled because clicking it should do
+       // nothing, with the hint carrying what it names — the AC's "Project file" readout.
+       id: "file",
+       label: project.data?.persisted ? `Project file: ${project.data.database}` : "No project file",
+       icon: Database,
+       disabled: true,
+       hint:
+        project.data?.persisted
+         ? `This instance's project is the database at ${project.data.database}.`
+         : (project.data?.database_note ??
+          "This instance was started without -db, so nothing it captures is persisted."),
+       onSelect: () => undefined,
+      },
+      {
+       id: "rename",
+       label: "Rename project…",
+       icon: PencilLine,
+       disabled: !project.data?.persisted,
+       hint: project.data?.persisted
+        ? "Name the project; the name is stored in the database, so it survives a restart."
+        : "A project name lives in the database file, and this instance has none.",
+       onSelect: () => {
+        const current = project.data?.name ?? "";
+        const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
+        if (name === null) return;
+        if (name.trim() === "") {
+         toast.error("A project name must not be blank.");
+         return;
+        }
+        renameProject.mutate(name.trim(), {
+         onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
+         onError: (error) => toast.error(`Rename refused: ${String(error)}`),
+        });
+       },
+      },
+     ],
+    },
+    {
+     id: "copies",
+     title: "Project file operations",
+     actions: [
+      {
+       id: "save-copy",
+       label: "Save copy",
+       icon: Save,
+       disabled: !project.data?.backupable,
+       hint: project.data?.backupable
+        ? "Write a complete snapshot of this project to a new database file (VACUUM INTO)."
+        : "A copy needs a project database, and this instance persists nothing.",
+       onSelect: saveProjectCopy,
+      },
+      {
+       // Burp gates this on the Pro licence and it reads "[Pro version only]". burpsy's
+       // build has no licence machinery at all, so the decline is stated the way the
+       // settings page declines absent sections: named, with the reason, never a silent
+       // omission.
+       id: "open",
+       label: "Open project file",
+       icon: FolderOpen,
+       disabled: true,
+       hint: "Declined: opening another project means restarting burpsy with that -db file — the running process cannot swap its database underneath itself.",
+       onSelect: () => undefined,
+      },
+      {
+       id: "import",
+       label: "Import project file",
+       icon: FileUp,
+       disabled: true,
+       hint: "Declined: burpsy has no separate project container to merge into — the -db file IS the project, so an import would have to replace the database this process is running on. Use Save copy to carry one out, and start a second instance to work on it.",
+       onSelect: () => undefined,
       },
      ],
     },

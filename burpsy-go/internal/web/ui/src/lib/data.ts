@@ -13,6 +13,7 @@ import type {
  OrganizerCollection,
  OrganizerEdit,
  OrganizerItem,
+ ProjectInfo,
  WorkflowStatus,
  Scope,
  ScannerConfig,
@@ -42,6 +43,7 @@ export const queryClient = new QueryClient({
 export const keys = {
  stats: ["stats"] as const,
  scope: ["scope"] as const,
+ project: ["project"] as const,
  dashboard: ["dashboard"] as const,
  history: (q: string, limit: number, search?: HistorySearch) =>
   ["history", q, limit, ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : [])] as const,
@@ -240,6 +242,22 @@ export function useResource<T>(key: readonly unknown[], url: string, enabled = t
 
 export const useStats = () => useResource<Stats>(keys.stats, "/api/stats");
 export const useScannerConfig = () => useResource<ScannerConfig>(keys.scannerConfig, "/api/scanner/config");
+
+/** GET /api/project — the Project menu's readout: which project this instance is. */
+export const useProject = () => useResource<ProjectInfo>(keys.project, "/api/project");
+
+/** PUT /api/project/name — rename the project. The name is stored with the database file, so a
+ *  restart keeps it; the confirmed response is what the cache gets. */
+export function useRenameProject() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (name: string) => api<ProjectInfo>("/api/project/name", json("PUT", { name })),
+  onSuccess: (confirmed) => {
+   queryClient.setQueryData(keys.project, confirmed);
+   invalidate([keys.project]);
+  },
+ });
+}
 
 /** PUT /api/scanner/config — apply a partial patch of audit-family switches and knobs. The server
  *  answers with the whole confirmed state and persists it for the next start, so the confirmed
