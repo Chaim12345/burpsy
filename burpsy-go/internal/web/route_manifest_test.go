@@ -420,7 +420,10 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	//
 	// /api/proxy/ca/export joins because handing out the signing key is irreversible
 	// (burpsy-react-ui-j92x): once a copy exists elsewhere nothing here can take it back.
-	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
+	//
+	// /api/browser/clear joins because it deletes the operator browser's profile — cookies, logins and
+	// history — which nothing brings back (burpsy-react-ui-bufa).
+	equal("destructive", destructive, []string{"/api/backup", "/api/browser/clear", "/api/dashboard/events", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

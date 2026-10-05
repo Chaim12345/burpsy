@@ -107,6 +107,11 @@ func (o Options) resolvedTimeout() time.Duration {
 	return 30 * time.Second
 }
 
+// ResolveChromePath is resolveChromePath for the operator's browser launcher (internal/browser,
+// burpsy-react-ui-bufa), so the two find Chromium by the same candidate list. Exported as a lookup
+// only: the launcher must not share anything else here — domexec stays headless and extension-free.
+func ResolveChromePath(explicit string) (string, error) { return resolveChromePath(explicit) }
+
 // resolveChromePath finds the Chrome/Chromium binary to launch.
 //
 // An explicit path that does not resolve to an executable is reported by

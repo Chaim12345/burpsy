@@ -10,6 +10,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/extension"
@@ -103,6 +104,10 @@ type Server struct {
 	// means "never set" and reads as sequencer.DefaultSettings. Guarded by seqMu.
 	seqMu       sync.Mutex
 	seqSettings sequencer.Settings
+	// browser is the operator's pre-wired Chromium launcher (burpsy-react-ui-bufa), created on first
+	// use; see api_browser.go.
+	browserOnce sync.Once
+	browser     *browser.Launcher
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -521,6 +526,9 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		// on every in-console project switch, which re-runs WithPersist. A project that never saved any
 		// reads as Burp's defaults rather than keeping the outgoing project's switches.
 		s.restoreSequencerSettings(p)
+		// The browser's settings and its default profile directory follow the project too — two
+		// engagements' browsers must not share cookies (burpsy-react-ui-bufa).
+		s.restoreBrowserSettings()
 	}
 	return s
 }
@@ -898,6 +906,11 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
 	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
+	// Burp's "Open browser" (burpsy-react-ui-bufa): a Chromium pre-wired to a live listener and pinned
+	// to burpsy's CA, its settings, and Burp's "Clear all browser data". See api_browser.go.
+	s.mux.HandleFunc("/api/browser/launch", s.handleBrowserLaunch)
+	s.mux.HandleFunc("/api/browser/settings", s.handleBrowserSettings)
+	s.mux.HandleFunc("/api/browser/clear", s.handleBrowserClear)
 	// Export the CA certificate, private key or a PKCS#12 pair (burpsy-react-ui-j92x) so another tool
 	// can intercept with the same CA. Behind the confirmation gate: see api_ca_export.go.
 	s.mux.HandleFunc("/api/proxy/ca/export", s.handleCAExport)

@@ -564,6 +564,25 @@ var manifest = map[string]route{
 		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
 			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
 	},
+	"/api/browser/launch": {
+		// riskEgress: the browser it opens loads the URL through the proxy — traffic to a target.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "open the operator's browser: Chromium on its own profile, routed through the first usable " +
+			"proxy listener and trusting burpsy's CA by SPKI pin for that profile only; refuses by name with no " +
+			"listener, no Chromium, root with the sandbox on, or no display. With url, opens it (in the running " +
+			"browser when there is one)",
+	},
+	"/api/browser/settings": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the browser's settings under Burp's keys (browser_data_directory, allow_saving_browser_settings, " +
+			"allow_running_without_sandbox, disable_gpu), saved with the project, plus the profile and listener a " +
+			"launch would use",
+	},
+	"/api/browser/clear": {
+		// riskDestructive: deletes the profile's cookies, logins and history; nothing brings them back.
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "Burp's 'Clear all browser data': delete the stored browser profile; refused while the browser runs",
+	},
 	"/api/proxy/ca/export": {
 		// riskDestructive, alongside regenerate: handing out the signing key is irreversible — once a
 		// copy exists elsewhere nothing here can take it back, and whoever holds it can mint a leaf

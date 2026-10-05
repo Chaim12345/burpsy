@@ -2442,6 +2442,21 @@ func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
 	return s.setSetting("network.settings", string(encoded))
 }
 
+// SaveBrowserSettings persists the operator browser's settings (burpsy-react-ui-bufa) with the
+// project. Stored as the browser package's own JSON, under Burp's key names.
+func (s *Store) SaveBrowserSettings(raw []byte) error {
+	return s.setSetting("browser.settings", string(raw))
+}
+
+// LoadBrowserSettings returns the stored JSON, or nil when none was saved.
+func (s *Store) LoadBrowserSettings() ([]byte, error) {
+	v, err := s.getSetting("browser.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
 // SaveSequencerSettings persists Burp's sequencer.* analysis settings (burpsy-react-ui-nm81) with the
 // project, so the tests an engagement's verdicts rest on travel with its database.
 func (s *Store) SaveSequencerSettings(set sequencer.Settings) error {
