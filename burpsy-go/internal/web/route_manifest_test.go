@@ -327,7 +327,9 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	sort.Strings(execute)
 
 	wantAttack := []string{
-		"/api/apiscan", "/api/audit/", "/api/audit/selected", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
+		// /api/authz/test re-sends a captured request to its target under several credentials; it is
+		// traffic to the target and belongs here (burpsy-react-ui-cr37). Sorted position: after audit/*.
+		"/api/apiscan", "/api/audit/", "/api/audit/selected", "/api/authz/test", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
 		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
 		// against a live target through runAudit. That it is spelled as an action on an existing queue
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission

@@ -724,6 +724,14 @@ var manifest = map[string]route{
 		summary: "enable or disable one corpus check by name; a name the corpus does not contain is " +
 			"refused before anything is recorded",
 	},
+	"/api/authz/identities": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the access-control test identities (burpsy-react-ui-cr37): named cookie/header role bundles saved with the project, one marked the high-privilege baseline the others are compared against",
+	},
+	"/api/authz/test": {
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "re-send one captured request under each saved identity and classify access control per identity: Enforced, Bypassed (the identity got the baseline's privileged content) or Ambiguous — Autorize's three-state BOLA/IDOR verdict",
+	},
 	"/api/dominvader": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent",

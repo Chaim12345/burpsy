@@ -2531,6 +2531,21 @@ func (s *Store) LoadSecretDetection() (bool, error) {
 	return v == "on", err
 }
 
+// SaveAuthzIdentities persists the access-control test identities (burpsy-react-ui-cr37) with the
+// project, as the raw identities JSON.
+func (s *Store) SaveAuthzIdentities(raw []byte) error {
+	return s.setSetting("authz.identities", string(raw))
+}
+
+// LoadAuthzIdentities returns the stored identities JSON, or nil when none was saved.
+func (s *Store) LoadAuthzIdentities() ([]byte, error) {
+	v, err := s.getSetting("authz.identities")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
 // SaveFindingConsolidation persists the operator's issue-consolidation policy
 // (burpsy-react-ui-oorl) with the project, as the policy JSON.
 func (s *Store) SaveFindingConsolidation(raw []byte) error {

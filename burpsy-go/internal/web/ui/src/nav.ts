@@ -23,6 +23,7 @@ import { ComparerPage } from "./pages/comparer";
 import { CollaboratorPage } from "./pages/collaborator";
 import { ContentDiscoveryPage } from "./pages/contentdiscovery";
 import { DomInvaderPage } from "./pages/dominvader";
+import { AuthzPage } from "./pages/authz";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -134,6 +135,12 @@ export const TOOLS: NavTool[] = [
         label: "DOM auditor",
         description: "Watch a canary through a page's sources and sinks while you browse",
         page: DomInvaderPage,
+      },
+      {
+        id: "authz",
+        label: "Access control",
+        description: "Re-send a request as each identity and see whether access control held (BOLA/IDOR)",
+        page: AuthzPage,
       },
     ],
   },

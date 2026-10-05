@@ -113,6 +113,8 @@ type Server struct {
 	// switch and the reported source/sink hits. The browser bakes its config from this on launch and
 	// the report endpoint feeds it.
 	domInvader *dominvader.Store
+	// authz holds the project's access-control test identities (burpsy-react-ui-cr37).
+	authz authzState
 	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
 	// launch rewrites it so the temp area does not accumulate one per launch.
 	domExtDir string
@@ -562,6 +564,8 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreHistoryExtractors(p)
 		// So is the issue consolidation policy (burpsy-react-ui-oorl).
 		s.restoreFindingConsolidation(p)
+		// And the access-control test identities (burpsy-react-ui-cr37).
+		s.restoreAuthzIdentities(p)
 		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
 		s.restoreSecretDetection(p)
 	}
@@ -968,6 +972,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/dominvader", s.handleDomInvader)
 	s.mux.HandleFunc("/api/dominvader/hit", s.handleDomInvaderHit)
 	s.mux.HandleFunc("/api/dominvader/hits", s.handleDomInvaderHits)
+	s.mux.HandleFunc("/api/authz/identities", s.handleAuthzIdentities)
+	s.mux.HandleFunc("/api/authz/test", s.handleAuthzTest)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.
