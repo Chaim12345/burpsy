@@ -191,6 +191,11 @@ type TlsEngine struct {
 	caCert   *x509.Certificate
 	caPriv   *rsa.PrivateKey
 	certPool sync.Map // cache of generated certificates
+	// selfSigned caches the self-signed leaves a listener in CertModeSelfSigned serves
+	// (burpsy-react-ui-4trc). SEPARATE from certPool on purpose: the two modes produce
+	// different certificates for the same hostname, and one cache would hand a listener
+	// whichever mode happened to ask first.
+	selfSigned sync.Map
 }
 
 // GetCertificate returns or generates a certificate for the given host.
@@ -1317,7 +1322,7 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 
 	// Intercept: present a CA-signed leaf cert to the client, terminate TLS,
 	// and re-encrypt to the origin so traffic can be recorded and scanned.
-	s.interceptTLS(clientConn, host, port16, certName)
+	s.interceptTLS(clientConn, host, port16, certName, spec)
 }
 
 // interceptTLS decrypts a CONNECT tunnel: it answers with 200 Connection
@@ -1327,7 +1332,7 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 // certName is the name the client asked for in its CONNECT, which is the only name a leaf
 // certificate it will accept can carry. It is the same as host unless the listener redirects
 // — see handleConnect for why the two are allowed to differ, and why nothing else does.
-func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, certName string) {
+func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, certName string, spec ListenerSpec) {
 	// Signal the client that the tunnel is established.
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		return
@@ -1376,16 +1381,23 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 
 	// Sign a leaf certificate for the host the client asked for — not the destination, when
 	// a redirect has moved them apart. See the signature comment.
-	leaf, err := s.config.tls.engine.GetCertificate(certName)
+	// The listener's own certificate selection (burpsy-react-ui-4trc), which defaults to exactly
+	// what this line did before: a CA-signed leaf for the name the client asked for.
+	leaf, err := s.certificateFor(spec, s.listenerCert(spec.ID), certName)
 	if err != nil {
 		s.config.logger.Error("certificate signing failed", zap.String("host", certName), zap.Error(err))
 		return
 	}
 
 	// TLS server side: offer the client exactly what the origin chose.
+	// The listener's protocol bounds ride the same spec. Zero on either side is crypto/tls's own
+	// default, so a listener that names neither handshakes exactly as it did.
+	minVersion, maxVersion := tlsVersionsFor(spec)
 	tlsClient := tls.Server(replay, &tls.Config{
 		Certificates: []tls.Certificate{*leaf},
 		NextProtos:   ClientALPNProtos(negotiated),
+		MinVersion:   minVersion,
+		MaxVersion:   maxVersion,
 	})
 	if err := tlsClient.Handshake(); err != nil {
 		return

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -71,6 +72,31 @@ type ListenerSpec struct {
 	// A plain bool would have made the per-listener control a no-op: invisible_proxy is
 	// seeded ON, so a listener ticked off would still have accepted origin-form requests.
 	Invisible *bool
+	// CertMode is Burp's per-listener "Server TLS certificate" choice (burpsy-react-ui-4trc).
+	// The zero value is CertModeCAPerHost, which is what every listener did before this field
+	// existed: sign a leaf per requested hostname from the process CA.
+	CertMode CertMode
+	// CertHostname is the one name every leaf carries under CertModeCAFixed. Ignored in the other
+	// modes. Empty under CertModeCAFixed is refused at validation rather than silently falling back
+	// to per-host signing — a listener that was asked for a fixed name and quietly served the
+	// client's own would be a control that reads as applied and does something else.
+	CertHostname string
+	// CertFile and CertPassword locate a PKCS#12 bundle for CertModePKCS12. The password is held
+	// because the bundle is re-read when the listener is rebound; it is never logged and never
+	// reported by the API — see ListenerStatus, which carries the spec but is built by
+	// redactedSpec.
+	CertFile     string
+	CertPassword string
+	// TLSMinVersion and TLSMaxVersion bound the protocol versions this listener offers a client,
+	// as crypto/tls constants. Zero on either side means "the Go default", so a listener that names
+	// neither behaves exactly as it did.
+	//
+	// A RANGE rather than a single version, because that is what the negotiation actually is:
+	// crypto/tls picks the highest version both sides support inside [Min, Max]. A single "use
+	// TLS 1.2" setting would either pin the connection to one version — breaking every client that
+	// cannot speak it — or silently mean a floor, and an operator cannot tell which from the name.
+	TLSMinVersion uint16
+	TLSMaxVersion uint16
 }
 
 // redirectFor answers where a request that named host:port should actually be sent. Both
@@ -110,9 +136,14 @@ type ListenerStatus struct {
 // boundListener is a spec with the socket serving it. The mutex guards both, so a live
 // update is a single atomic swap as far as the accept loop and the relay are concerned.
 type boundListener struct {
-	mu     sync.Mutex
-	spec   ListenerSpec
-	ln     net.Listener
+	mu   sync.Mutex
+	spec ListenerSpec
+	ln   net.Listener
+	// cert is the PKCS#12 bundle this listener serves, loaded once when the spec was validated
+	// (burpsy-react-ui-4trc). Nil in every other mode, where the certificate is minted per
+	// connection. Held here rather than re-read per handshake so a connection can never be the
+	// thing that discovers the configuration is broken.
+	cert   *tls.Certificate
 	closed bool
 }
 
@@ -190,6 +221,14 @@ func (s *Server) AddListener(spec ListenerSpec) (ListenerStatus, error) {
 		return ListenerStatus{}, ErrNotListening
 	}
 
+	// The certificate selection is validated BEFORE the socket is opened (burpsy-react-ui-4trc): a
+	// bundle that cannot be loaded must fail the edit, and failing after binding would leave a
+	// listener accepting connections it cannot serve the configured certificate for.
+	cert, err := validateCert(spec)
+	if err != nil {
+		return ListenerStatus{}, err
+	}
+
 	ln, err := net.Listen("tcp", spec.Bind)
 	if err != nil {
 		return ListenerStatus{}, fmt.Errorf("failed to bind proxy listener on %s: %w", spec.Bind, err)
@@ -198,7 +237,7 @@ func (s *Server) AddListener(spec ListenerSpec) (ListenerStatus, error) {
 	s.listenerMu.Lock()
 	s.listenerSeq++
 	spec.ID = "listener-" + strconv.Itoa(s.listenerSeq)
-	bl := &boundListener{spec: spec, ln: ln}
+	bl := &boundListener{spec: spec, ln: ln, cert: cert}
 	s.listeners[spec.ID] = bl
 	s.listenerOrder = append(s.listenerOrder, spec.ID)
 	s.listenerMu.Unlock()
@@ -228,6 +267,14 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 	}
 
 	spec.ID = id
+	// Validated before any part of the edit lands, for the reason AddListener states: a listener
+	// whose new bundle cannot be loaded keeps serving exactly what it served before, rather than
+	// falling back to the process CA and looking like it worked.
+	loadedCert, err := validateCert(spec)
+	if err != nil {
+		return ListenerStatus{}, err
+	}
+
 	bl.mu.Lock()
 	currentBind := bl.spec.Bind
 	currentAddr := ""
@@ -248,6 +295,7 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 	if spec.Bind == currentBind || spec.Bind == currentAddr {
 		bl.mu.Lock()
 		bl.spec = spec
+		bl.cert = loadedCert
 		addr := currentAddr
 		bl.mu.Unlock()
 		s.config.logger.Info("proxy listener updated", zap.String("id", id), zap.String("addr", addr))
@@ -262,6 +310,10 @@ func (s *Server) UpdateListener(id string, spec ListenerSpec) (ListenerStatus, e
 	old := bl.ln
 	bl.ln = ln
 	bl.spec = spec
+	// The rebinding path swaps the bundle with the spec for the same reason the in-place path
+	// does: an edit that changed BOTH the bind address and the certificate would otherwise move
+	// the socket and keep serving the old bundle.
+	bl.cert = loadedCert
 	bl.mu.Unlock()
 	if old != nil {
 		old.Close()
@@ -397,4 +449,25 @@ func NormalizeRedirectHost(raw string) (string, error) {
 		return "[" + host + "]", nil
 	}
 	return host, nil
+}
+
+// listenerCert returns the PKCS#12 bundle loaded for one listener, or nil when it has none —
+// which is every mode except CertModePKCS12, and every connection arriving on the boot listener.
+//
+// Looked up by id at handshake time rather than threaded through handleConnectionOn and
+// handleConnect, because those two carry a spec by VALUE: a listener edited between accept and
+// handshake would otherwise hand the connection a bundle that no longer matches its own spec.
+func (s *Server) listenerCert(id string) *tls.Certificate {
+	if id == "" {
+		return nil
+	}
+	s.listenerMu.Lock()
+	bl := s.listeners[id]
+	s.listenerMu.Unlock()
+	if bl == nil {
+		return nil
+	}
+	bl.mu.Lock()
+	defer bl.mu.Unlock()
+	return bl.cert
 }
