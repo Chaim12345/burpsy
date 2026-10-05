@@ -202,7 +202,13 @@ func (s *PassiveScanner) scanBChecks(exchange *core.Exchange) []*Finding {
 		return nil
 	}
 	ctx := bcheck.NewContext()
-	ctx.Response = resp.Raw()
+	// The response as the application sent it — dechunked and decompressed (jgnf) — so a check
+	// matching a body reads text, not gzip.
+	readable, undecoded := readableResponse(resp.Raw())
+	ctx.Response = readable
+	if undecoded && s.coverage != nil {
+		s.coverage.RecordUndecoded()
+	}
 	ctx.Host = exchange.Host
 	ctx.Port = exchange.Port
 	ctx.Path = exchange.Path

@@ -386,6 +386,13 @@ function CoverageCard(): JSX.Element {
               ))}
             </div>
           ) : null}
+          {(data.undecoded_bodies ?? 0) > 0 ? (
+            <div className="notice notice-warn">
+              {data.undecoded_bodies!.toLocaleString()} response(s) were scanned with a body this build cannot decode (brotli or
+              zstd) — the body checks read encoded bytes there, so a clean result on them is not evidence the body is clean.
+              Proxy settings › Strip Accept-Encoding from requests asks origins for uncompressed responses.
+            </div>
+          ) : null}
           <SimpleTable headers={["Check", "Ran", "Findings", "Errored", "State"]}>
             {(data.checks ?? []).map((check) => (
               <tr key={check.name}>

@@ -309,6 +309,9 @@ export interface ScannerCoverage {
  checks?: CoverageCheckView[];
  skips?: number;
  partition?: CoveragePartitionView[];
+ /** Responses scanned with a body this build could not decode (br, zstd) — their clean results are
+  *  not evidence the body is clean (jgnf). */
+ undecoded_bodies?: number;
 }
 
 /* --- scanner: the loaded corpus (burpsy-react-ui-kdqj) -------------------- */

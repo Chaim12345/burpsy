@@ -664,7 +664,7 @@ func collectTokens(msg *core.StoredMessage, isRequest bool, out []rawToken) []ra
 		out = scanTextForTokens(msg.Text(h.Value), at, out)
 	}
 	if !isRequest {
-		out = scanTextForTokens(string(msg.Body()), tokenLocation{kind: locResponseBody}, out)
+		out = scanTextForTokens(string(readableBody(msg)), tokenLocation{kind: locResponseBody}, out)
 	}
 	return out
 }

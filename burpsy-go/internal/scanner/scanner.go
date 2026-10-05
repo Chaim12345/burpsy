@@ -706,6 +706,9 @@ func (s *ActiveScanner) getResponseBody(exchange *core.Exchange) string {
 	if bodySpan.IsEmpty() {
 		return ""
 	}
+	// Raw, unlike PassiveScanner.getResponseBody: active checks compare this base body against
+	// probe responses the sender returns as they arrived — usually still compressed — so decoding
+	// only this side would compare text with gzip (see burpsy-react-ui-jgnf's follow-up).
 	return string(msg.Slice(bodySpan))
 }
 
@@ -981,11 +984,11 @@ func (s *PassiveScanner) getResponseBody(exchange *core.Exchange) string {
 	if err != nil {
 		return ""
 	}
-	bodySpan := msg.Shape.Body
-	if bodySpan.IsEmpty() {
+	if msg.Shape.Body.IsEmpty() {
 		return ""
 	}
-	return string(msg.Slice(bodySpan))
+	// Dechunked and decompressed (jgnf): a check matching the body must read text, not gzip.
+	return string(readableBody(msg))
 }
 
 // getResponseHeaders retrieves the response headers from the store.
@@ -997,8 +1000,10 @@ func (s *PassiveScanner) getResponseHeaders(exchange *core.Exchange) string {
 	if err != nil {
 		return ""
 	}
-	// Return full raw message for header parsing
-	return string(msg.Raw())
+	// The full message for header parsing, with its body readable (jgnf): the info-disclosure
+	// check matches over this whole string, body included.
+	raw, _ := readableResponse(msg.Raw())
+	return string(raw)
 }
 
 // GetFindings returns all passive findings.

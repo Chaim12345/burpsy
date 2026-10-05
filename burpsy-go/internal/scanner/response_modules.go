@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
-	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ResponseFinding is one observation a ResponseModule makes about a single response. It is a
@@ -401,27 +400,4 @@ func moduleFindings(store *core.TrafficStore, ex *core.Exchange, modules []Respo
 		})
 	}
 	return out
-}
-
-// readableBody returns a stored response's body as the application sent it: chunk framing removed
-// and a gzip/deflate Content-Encoding decoded. Decoding is opt-in on the proxy path
-// (unpack_compressed_responses), so a stored body is usually still compressed — and a CDN-served JS
-// bundle is exactly where a leaked key lives, so a module reading raw bytes would miss the headline
-// case. Where the bytes cannot be decoded (br, zstd, a broken stream) the stored body is returned
-// as it is: a module then reads what it can rather than nothing.
-func readableBody(msg *core.StoredMessage) []byte {
-	body := msg.Body()
-	if te := msg.Header("Transfer-Encoding"); strings.EqualFold(strings.TrimSpace(string(te)), "chunked") {
-		if plain, ok := httputil.Dechunk(body); ok {
-			body = plain
-		}
-	}
-	enc := strings.TrimSpace(string(msg.Header("Content-Encoding")))
-	if enc == "" || strings.EqualFold(enc, "identity") || !httputil.Unpackable(enc) {
-		return body
-	}
-	if plain, err := httputil.DecodeBody(enc, body); err == nil {
-		return plain
-	}
-	return body
 }

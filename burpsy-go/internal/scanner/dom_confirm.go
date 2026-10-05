@@ -209,7 +209,7 @@ func (s *ActiveScanner) confirmDOMFindingsFor(ex *core.Exchange) []*Finding {
 	if err != nil || msg == nil {
 		return nil
 	}
-	a := AnalyzeDOMDocument(msg.Body(), string(msg.Header("Content-Type")), DOMBudget{})
+	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), DOMBudget{})
 	a.ExchangeID = ex.ID
 	a.Method = ex.Method
 	a.URL = domURL(ex)
