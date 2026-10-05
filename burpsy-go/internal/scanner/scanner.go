@@ -554,6 +554,7 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 		}
 		if err == nil && resp != nil {
 			meter.succeeded()
+			decodeTypedResponse(resp)
 			return string(resp.Body)
 		}
 		meter.failure()
@@ -633,6 +634,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 		if s.sessions != nil {
 			s.sessions.AbsorbResponseCookies(session.SourceScanner, exchange.Host, exchange.Port, exchange.TLS, resp.Raw)
 		}
+		decodeTypedResponse(resp)
 		return resp
 	}
 	meter.failure()
@@ -673,6 +675,7 @@ func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.
 	}
 	if err == nil && resp != nil {
 		meter.succeeded()
+		decodeTypedResponse(resp)
 		return resp
 	}
 	meter.failure()
@@ -702,14 +705,14 @@ func (s *ActiveScanner) getResponseBody(exchange *core.Exchange) string {
 		return ""
 	}
 	// Get body span
-	bodySpan := msg.Shape.Body
-	if bodySpan.IsEmpty() {
+	if msg.Shape.Body.IsEmpty() {
 		return ""
 	}
-	// Raw, unlike PassiveScanner.getResponseBody: active checks compare this base body against
-	// probe responses the sender returns as they arrived — usually still compressed — so decoding
-	// only this side would compare text with gzip (see burpsy-react-ui-jgnf's follow-up).
-	return string(msg.Slice(bodySpan))
+	// Readable (s68u). The probes this base is compared with come back decoded on every path: the
+	// typed sends through net/http's transparent gzip, the raw ones through readableResponse at
+	// their egress (ProbeHarness.send, sendProbe, the GraphQL transport). Read raw, a gzip base
+	// against a plaintext probe made every differential compare compressed bytes with text.
+	return string(readableBody(msg))
 }
 
 // min returns the minimum of two integers.

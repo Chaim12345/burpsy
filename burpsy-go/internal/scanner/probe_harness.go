@@ -139,13 +139,17 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 	}
 	meter.succeeded()
 
-	out := ProbeResponse{Raw: res.Raw, Duration: res.Duration}
+	// Readable, like the base response it is compared with (burpsy-react-ui-s68u): the harness
+	// replays the captured browser request, Accept-Encoding and all, so the wire answer is usually
+	// gzip and often chunked — and a reflection check searching compressed bytes finds nothing.
+	readable, _ := readableResponse(res.Raw)
+	out := ProbeResponse{Raw: readable, Duration: res.Duration}
 	if res.Status != nil {
 		out.Status = *res.Status
 	}
-	out.Body = responseBody(string(res.Raw))
+	out.Body = responseBody(string(readable))
 	if out.Status == 0 {
-		out.Status = responseStatus(string(res.Raw))
+		out.Status = responseStatus(string(readable))
 	}
 	// Auto-backoff (fkl8): the same 429/503 observation sendTestRequestFull holds. The
 	// injection families send through THIS path, not that one, so the rule lives in both —

@@ -294,7 +294,9 @@ func responseRaw(s *ActiveScanner, exchange *core.Exchange) string {
 	if err != nil {
 		return ""
 	}
-	return string(msg.Raw())
+	// Readable (s68u): probes come back decoded, so the base they are compared with must be too.
+	raw, _ := readableResponse(msg.Raw())
+	return string(raw)
 }
 
 // requestRaw returns the raw bytes of the exchange's request message, or "".

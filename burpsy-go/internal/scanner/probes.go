@@ -27,7 +27,12 @@ type probeGate interface {
 func sendProbe(ctx context.Context, gate probeGate, raw []byte, budget time.Duration) ([]byte, error) {
 	send := func(c context.Context) ([]byte, error) {
 		resp, err := gate.Send(c, raw)
-		return resp.Raw, err
+		if err != nil || resp.Raw == nil {
+			return resp.Raw, err
+		}
+		// Readable, like the base response the check compares it with (s68u).
+		readable, _ := readableResponse(resp.Raw)
+		return readable, nil
 	}
 	if budget <= 0 {
 		return send(ctx)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/httputil"
+	"github.com/burpsy-go/burpsy/internal/sender"
 )
 
 // readableResponse returns a stored response as the application sent it, which is what every check
@@ -109,4 +110,28 @@ func rebuildHead(head []byte, drop map[string]bool, length int, body []byte) []b
 	out.WriteString("Content-Length: " + strconv.Itoa(length) + "\r\n\r\n")
 	out.Write(body)
 	return out.Bytes()
+}
+
+// decodeTypedResponse decodes a typed-path probe response's body in place when it still carries a
+// gzip/deflate Content-Encoding. net/http decodes transparently when it chose the Accept-Encoding
+// itself, which covers a probe built without headers; a caller that passed Accept-Encoding
+// explicitly gets the encoded body back, and this makes that case read like the rest (s68u).
+func decodeTypedResponse(resp *sender.Response) {
+	if resp == nil {
+		return
+	}
+	for name, enc := range resp.Headers {
+		if !strings.EqualFold(name, "Content-Encoding") {
+			continue
+		}
+		enc = strings.TrimSpace(enc)
+		if enc == "" || strings.EqualFold(enc, "identity") || !httputil.Unpackable(enc) {
+			return
+		}
+		if plain, err := httputil.DecodeBody(enc, resp.Body); err == nil {
+			resp.Body = plain
+			delete(resp.Headers, name)
+		}
+		return
+	}
 }

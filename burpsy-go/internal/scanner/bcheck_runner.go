@@ -152,7 +152,8 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 		return nil, errCheckUnsupported
 	}
 	bctx := bcheck.NewContext()
-	bctx.Response = resp.Raw()
+	// Readable, like the probe responses sendProbe hands the check (s68u).
+	bctx.Response, _ = readableResponse(resp.Raw())
 	bctx.Host = ex.Host
 	bctx.Port = ex.Port
 	bctx.TLS = ex.TLS
