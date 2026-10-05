@@ -746,6 +746,10 @@ const (
 	SourceIntruder Source = "intruder"
 	// SourceScanner is an active audit probe.
 	SourceScanner Source = "scanner"
+	// SourceImport is traffic brought in from a file — a HAR export, say — rather than captured live.
+	// It is kept distinct from SourceProxy for the same reason Repeater is: history must not claim the
+	// operator's own client sent a request that in fact arrived from a colleague's session or a CI run.
+	SourceImport Source = "import"
 )
 
 // Attributed reports whether a producer named this exchange's origin.

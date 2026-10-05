@@ -869,6 +869,8 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 func (s *Server) setupRoutes() {
 	// Capture + stats
 	s.mux.HandleFunc("/api/history", s.handleHistory)
+	// Import HAR (eyi1): bring traffic captured elsewhere into history without re-proxying it live.
+	s.mux.HandleFunc("/api/history/import/har", s.handleHistoryImportHar)
 	s.mux.HandleFunc("/api/message/", s.handleMessage)
 	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
 	// store because the history rows the console holds carry no bytes to search. See api_search.go.
