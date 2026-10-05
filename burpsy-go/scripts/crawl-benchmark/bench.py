@@ -10,7 +10,8 @@ reached to (path, sorted query-parameter NAMES) on the target's own origin, and 
 
 Each crawler gets its strongest settings, because the question is coverage, not defaults:
   katana: -jc -jsl -kf all -aff -hl -nos -xhr  (headless hybrid, JS + jsluice, known files, forms)
-  burpsy: -dom chrome (its rendered pass, the counterpart of -hl), submit_forms + request_speculative,
+  burpsy: -dom chrome (its rendered pass, the counterpart of -hl), submit_forms + request_speculative +
+          request_well_known (the counterpart of -kf),
           through its own API exactly as the console drives it (scope include, then a confirmed crawl).
 """
 import argparse, json, os, re, shutil, socket, subprocess, sys, tempfile, time, urllib.request
@@ -91,7 +92,8 @@ def run_burpsy(target, depth, duration, outdir, binary):
         api(base, "POST", "/api/scope", {"action": "include", "pattern": host}, confirm=True)
         start = api(base, "POST", "/api/crawl", {"seeds": [target], "max_depth": depth,
                     "max_duration_secs": duration, "max_requests": 5000, "submit_forms": True,
-                    "request_speculative": True}, confirm=True)
+                    "request_speculative": True,
+                    "request_well_known": True}, confirm=True)
         tid = start["task_id"]
         deadline = time.time() + duration + 180
         run = None

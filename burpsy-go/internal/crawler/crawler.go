@@ -347,6 +347,10 @@ type Config struct {
 	// while Fingerprint, DuplicateOf and RetentionExcluded are decided on branches below this point
 	// and are zero here. The matching entry in Report.Fetches carries the completed record.
 	OnFetch func(Fetch)
+	// RequestWellKnown requests the standard .well-known documents once per seed authority
+	// (burpsy-react-ui-bc2x). Opt-in, like Katana's -kf: it adds seven requests per authority to every
+	// crawl, which changes what a crawl sends — a decision for the operator, not a silent default.
+	RequestWellKnown bool
 	// Render, when set, is how the crawler sees the DOM a browser builds: it returns the
 	// rendered document for a URL, and the crawler extracts links from it that the wire
 	// markup never carried (burpsy-react-ui-nx7b).
@@ -975,6 +979,8 @@ type Crawler struct {
 	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
 	// in New so a malformed pattern is a construction error, never a per-URL surprise.
 	loginPage *regexp.Regexp
+	// wellKnownSeeded records the authorities whose .well-known documents were admitted (bc2x).
+	wellKnownSeeded map[string]bool
 	// robotsSeeded records the authorities whose robots.txt has already been read, so it is read once
 	// per authority and never in a loop.
 	robotsSeeded map[string]bool
@@ -1354,6 +1360,12 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// would rather nobody looked at. See the package docs.
 		for _, u := range c.seedURLs {
 			c.admitRobots(u, &lim)
+		}
+		// The standard .well-known documents, once per seed authority (burpsy-react-ui-bc2x).
+		if c.cfg.RequestWellKnown {
+			for _, u := range c.seedURLs {
+				c.admitWellKnown(u, &rep, &lim)
+			}
 		}
 	}
 
@@ -2178,6 +2190,38 @@ func (c *Crawler) admitSeed(u *url.URL, lim *LimitReport) {
 // the operator's own instruction, in this case one their API definition stated.
 func (c *Crawler) admitSeedRequest(item frontierItem, lim *LimitReport) {
 	c.enqueue(item, "", lim)
+}
+
+// wellKnownPaths are the RFC 8615 documents an application publishes about itself — a security
+// contact, its OpenID / OAuth metadata (which names its endpoints), a password-change URL, the app-link
+// association files, a CSAF advisory index. Measured as a class a known-files crawler reached and
+// burpsy never requested (the dvi7 benchmark).
+var wellKnownPaths = []string{
+	"/.well-known/security.txt",
+	"/.well-known/openid-configuration",
+	"/.well-known/oauth-authorization-server",
+	"/.well-known/change-password",
+	"/.well-known/apple-app-site-association",
+	"/.well-known/assetlinks.json",
+	"/.well-known/csaf/provider-metadata.json",
+}
+
+// admitWellKnown admits the .well-known documents for a seed's authority, once per authority, as
+// discovered links through admit() — scope, the destructive gate, dedup and the phase tally apply
+// exactly as to any link, so an authority the scope excludes is not asked for them either.
+func (c *Crawler) admitWellKnown(seed *url.URL, rep *Report, lim *LimitReport) {
+	key := strings.ToLower(seed.Scheme) + "://" + strings.ToLower(seed.Hostname()) + ":" + strconv.Itoa(int(portOf(seed)))
+	if c.wellKnownSeeded[key] {
+		return
+	}
+	if c.wellKnownSeeded == nil {
+		c.wellKnownSeeded = map[string]bool{}
+	}
+	c.wellKnownSeeded[key] = true
+	root := &url.URL{Scheme: seed.Scheme, Host: seed.Host, Path: "/"}
+	for _, p := range wellKnownPaths {
+		c.admit(discoveredLink{raw: p, tag: "well-known"}, root, 1, rep, lim)
+	}
 }
 
 // admitRobots queues the one /robots.txt request for a seed's authority, at most once per authority.

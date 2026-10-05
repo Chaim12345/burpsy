@@ -7,16 +7,16 @@ import "testing"
 // a request spent on a URL nobody serves. The routes are real ones from the same run and must survive.
 func TestCodeShapedCandidatesAreRefusedAndRealRoutesKept(t *testing.T) {
 	junk := []string{
-		`/[\-\[\]\/\{\}\`,          // a regex character class
-		`/\*/g`,                    // a regex literal with a flag
-		`/^`,                       // a regex anchor
-		`/:/g`,                     // a regex literal with a flag
-		`/g;var`,                   // a statement boundary
+		`/[\-\[\]\/\{\}\`, // a regex character class
+		`/\*/g`,           // a regex literal with a flag
+		`/^`,              // a regex anchor
+		`/:/g`,            // a regex literal with a flag
+		`/g;var`,          // a statement boundary
 		`/this._cachedWidth;e._isLeftThumb&&this._cachedWidth ?this._setTrackActiveStyles`,
-		`/assets/i18n/{{reddit}}`,  // an unrendered template
-		`/a b`,                     // whitespace
-		"/x`y",                     // a backtick
-		`/fn(a)`,                   // a call
+		`/assets/i18n/{{reddit}}`, // an unrendered template
+		`/a b`,                    // whitespace
+		"/x`y",                    // a backtick
+		`/fn(a)`,                  // a call
 	}
 	for _, raw := range junk {
 		if loc, ok := normaliseJSLocation(raw); ok {

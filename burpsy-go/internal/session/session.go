@@ -1484,8 +1484,8 @@ func NewSessionRule(name string, hosts []string, steps []MacroStep) *SessionRule
 // --- Coordinator ---
 
 type Coordinator struct {
-	mu     sync.RWMutex
-	rules  map[RuleID]*SessionRule
+	mu    sync.RWMutex
+	rules map[RuleID]*SessionRule
 	// scriptStores is each rule's pre-request script store (burpsy-react-ui-ydmj): the small string
 	// map a RunScript action reads and writes through `store`, kept across requests so a token
 	// captured from one response is there for the next request. Per rule, so two rules' scripts
@@ -1493,10 +1493,10 @@ type Coordinator struct {
 	// not hold the rule table's lock.
 	scriptMu     sync.Mutex
 	scriptStores map[RuleID]map[string]string
-	order  []RuleID
-	nextID int64
-	jarMgr *CookieJarManager
-	logger *zap.Logger
+	order        []RuleID
+	nextID       int64
+	jarMgr       *CookieJarManager
+	logger       *zap.Logger
 
 	// tracer is the opt-in session-handling tracer (burpsy-react-ui-n29). Off by default —
 	// see tracer.go for why an always-on tracer is the wrong default — and while off its

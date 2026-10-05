@@ -49,6 +49,8 @@ const (
 	// PhaseJavaScript is a location read out of a JavaScript response — an external bundle or its
 	// source map — by the jsluice AST pass and burpsy's own path miner together (burpsy-react-ui-jwy5).
 	PhaseJavaScript CrawlPhase = "13-javascript"
+	// PhaseWellKnown is a standard .well-known document requested per seed authority (bc2x).
+	PhaseWellKnown CrawlPhase = "14-well-known"
 )
 
 // CrawlPhaseAll is every phase, in order. A caller renders a legend from this rather than
@@ -56,7 +58,7 @@ const (
 var CrawlPhaseAll = []CrawlPhase{
 	PhaseSeeds, PhaseRobots, PhaseRobotsSitemap, PhaseSitemap, PhaseRedirect,
 	PhaseRendered, PhaseFrontierWalk, PhaseSpeculative, PhaseJSONDocument,
-	PhaseAPIDocument, PhaseGraphQL, PhaseEmbeddedObject, PhaseJavaScript,
+	PhaseAPIDocument, PhaseGraphQL, PhaseEmbeddedObject, PhaseJavaScript, PhaseWellKnown,
 }
 
 // PhaseOfTag maps a discovery tag to the phase that produced it.
@@ -86,6 +88,8 @@ func PhaseOfTag(tag string) CrawlPhase {
 		return PhaseSitemap
 	case "speculative":
 		return PhaseSpeculative
+	case "well-known":
+		return PhaseWellKnown
 	case "script":
 		// An external script a page referenced, fetched to be read for locations (jwy5).
 		return PhaseJavaScript

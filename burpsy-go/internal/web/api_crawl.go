@@ -235,6 +235,10 @@ type crawlStartReq struct {
 	// link to pages nothing has visited, and seeding it would hide them. The crawl's own seeds are never
 	// pre-marked, scope is honoured on the way in, and the count rides the report (sitemap_seeded).
 	SeedFromSiteMap bool `json:"seed_from_site_map,omitempty"`
+	// RequestWellKnown requests the standard .well-known documents once per seed authority
+	// (burpsy-react-ui-bc2x) — security.txt, OpenID/OAuth metadata, app-link associations, a CSAF
+	// index. Opt-in: it adds seven requests per authority.
+	RequestWellKnown bool `json:"request_well_known,omitempty"`
 	// Config is a scan configuration by name, applied to the CRAWL half of it (burpsy-react-ui-3ok6).
 	//
 	// A Burp configuration carries a `scanner` object and a `crawler` object, and importing one is a
@@ -1315,6 +1319,7 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		RequestSpeculative: speculative,
 		Limits:             limits,
 		ErrorHandling:      eh,
+		RequestWellKnown:   req.RequestWellKnown,
 		RequestsPerSecond:  req.RequestsPerSecond,
 		Pool:               poolLimit,
 		UserAgent:          req.UserAgent,
