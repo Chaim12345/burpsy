@@ -119,7 +119,7 @@ func TestAMultipartBodyYieldsAPointPerPartContentNameAndFilename(t *testing.T) {
 	// saying which field, which is not a finding.
 	r := postBody("multipart/form-data; boundary=B", twoPartForm)
 	ps, declined := Enumerate(r, []string{"body"})
-	want := []string{"body:user", "body:user name", "body:avatar", "body:avatar name", "body:avatar filename"}
+	want := []string{"body:user", "multipart_attr:user name", "body:avatar", "multipart_attr:avatar name", "multipart_attr:avatar filename"}
 	if !reflect.DeepEqual(names(ps), want) {
 		t.Errorf("points = %v, want %v (each part contributes its content and each Content-Disposition attribute it declares)", names(ps), want)
 	}
@@ -142,7 +142,7 @@ func TestAMultipartPartWithNoNameAttributeIsLabelledByItsPartIndex(t *testing.T)
 		"--B--\r\n"
 	r := postBody("multipart/form-data; boundary=B", body)
 	ps, _ := Enumerate(r, []string{"body"})
-	want := []string{"body:user", "body:user name", "body:part[1]"}
+	want := []string{"body:user", "multipart_attr:user name", "body:part[1]"}
 	if !reflect.DeepEqual(names(ps), want) {
 		t.Errorf("points = %v, want %v (the nameless part is labelled by its own 0-based index, and declares no attribute to inject into)", names(ps), want)
 	}
@@ -1369,7 +1369,7 @@ func TestAnXMLBodyYieldsAPointPerTextNodeAndAttributeValueNamedByElementPath(t *
 	// Repeated siblings need distinguishing for the same reason.
 	r := postBody("application/xml", `<order id="7"><item>bolt</item><item>nut</item></order>`)
 	ps, declined := Enumerate(r, []string{"body"})
-	want := []string{"body:order@id", "body:order/item", "body:order/item[1]"}
+	want := []string{"xml:order@id", "xml:order/item", "xml:order/item[1]"}
 	if !reflect.DeepEqual(names(ps), want) {
 		t.Errorf("points = %v, want %v (an attribute is named `path@attr`, and the second `item` is indexed so two findings cannot collapse into one name)", names(ps), want)
 	}
@@ -1387,7 +1387,7 @@ func TestAnXMLBodyIsRecognisedByItsOwnShapeNotOnlyByContentType(t *testing.T) {
 	// the header would leave those bodies untested.
 	r := postBody("text/plain", `<order><item>bolt</item></order>`)
 	ps, declined := Enumerate(r, []string{"body"})
-	if !reflect.DeepEqual(names(ps), []string{"body:order/item"}) {
+	if !reflect.DeepEqual(names(ps), []string{"xml:order/item"}) {
 		t.Errorf("points = %v, want [body:order/item]", names(ps))
 	}
 	if len(declined) != 0 {

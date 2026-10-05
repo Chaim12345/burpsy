@@ -256,6 +256,61 @@ const (
 	AuditItemPointSkippedIneffective
 )
 
+// LabelFor is Label with the insertion-point KIND named (burpsy-react-ui-75jm).
+//
+// "Skipped" with no kind is unactionable: an operator cannot tell a skip they chose from a point
+// the enumerator refused, and cannot tell WHICH of a request's places was passed over. Burp's own
+// status vocabulary names the kind a status refers to (Zq5.java:48-85, a 16-row status/kind table),
+// and this is that, for the one status whose bare label says nothing — AuditItemPointSkippedDeclined.
+//
+// Only that status is elaborated, deliberately. The others already name their own cause ("Skipped as
+// nested insertion points not enabled" says what to change), and appending a kind to every one of
+// them would make a queue column longer without making it say more.
+func (s AuditItemPointStatus) LabelFor(kind string) string {
+	if s != AuditItemPointSkippedDeclined || kind == "" {
+		return s.Label()
+	}
+	label, _ := insertionKindLabel(kind)
+	return s.Label() + " (" + label + ")"
+}
+
+// insertionKindLabel renders a bcheck.IpKind as the operator reads it. Unknown kinds pass through
+// verbatim rather than becoming "unknown": a kind this table has not learned yet is still more
+// information than nothing, and silently relabelling it would hide a kind that was added without
+// being listed here.
+// The second return says whether the kind was RECOGNISED, which a caller cannot infer from the
+// string: two kinds legitimately label as themselves ("cookie", "header"), so comparing the label
+// to the identifier would report them as unlisted.
+func insertionKindLabel(kind string) (string, bool) {
+	switch bcheck.IpKind(kind) {
+	case bcheck.IpQuery:
+		return "URL parameter", true
+	case bcheck.IpBody:
+		return "body parameter", true
+	case bcheck.IpCookie:
+		return "cookie", true
+	case bcheck.IpHeader:
+		return "header", true
+	case bcheck.IpParamNameURL:
+		return "URL parameter name", true
+	case bcheck.IpParamNameBody:
+		return "body parameter name", true
+	case bcheck.IpEntireBody:
+		return "entire body", true
+	case bcheck.IpURLPathFilename:
+		return "URL path filename", true
+	case bcheck.IpURLPathFolder:
+		return "URL path folder", true
+	case bcheck.IpSyntheticHeader:
+		return "added header", true
+	case bcheck.IpXML:
+		return "XML parameter", true
+	case bcheck.IpMultipartAttr:
+		return "multipart attribute", true
+	}
+	return kind, false
+}
+
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
 func (s AuditItemPointStatus) Label() string {
 	switch s {
@@ -319,6 +374,22 @@ type AuditItemPoint struct {
 	// Detail is why the status is not "Audited", "" when it is. For a declined place this is the
 	// enumerator's own reason, which is the only place the specific refusal is recorded.
 	Detail string `json:"detail,omitempty"`
+}
+
+// MarshalJSON writes the row with its status label NAMING THE KIND (burpsy-react-ui-75jm).
+//
+// The status marshals itself as a label everywhere else, which is right for a status read on its
+// own. A point row is the one place the kind is also in hand, and "Skipped" on a row is the
+// unactionable string this bead was filed about: it cannot tell the operator which of a request's
+// places was passed over. Composing them here rather than changing AuditItemPointStatus.MarshalJSON
+// keeps the bare status honest for callers that hold no kind.
+func (p AuditItemPoint) MarshalJSON() ([]byte, error) {
+	// An alias so the embedded marshal does not recurse into this method.
+	type row AuditItemPoint
+	return json.Marshal(struct {
+		row
+		Status string `json:"status"`
+	}{row: row(p), Status: p.Status.LabelFor(p.Kind)})
 }
 
 // AuditItemBreakers is the budget and breaker configuration this item was audited under.

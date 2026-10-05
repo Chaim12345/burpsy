@@ -105,6 +105,17 @@ const (
 	IpRelocateBodyToCookie IpKind = "relocate_body_to_cookie"
 	// IpRelocateCookieToBody moves one cookie into the form body.
 	IpRelocateCookieToBody IpKind = "relocate_cookie_to_body"
+	// IpXML is a value inside an XML body — an element's text or an attribute's value
+	// (burpsy-react-ui-75jm). Burp carries these as their own parameter location (PARAM_XML,
+	// PARAM_XML_ATTR) rather than as body parameters, and the distinction is what lets an operator
+	// tell "this endpoint's XML was tested" from "its form fields were".
+	IpXML IpKind = "xml"
+	// IpMultipartAttr is a multipart part's `name` or `filename` ATTRIBUTE, which Burp models as
+	// PARAM_MULTIPART_ATTR. A part's CONTENT stays IpBody: the content is what the application
+	// reads as the parameter's value, and it is a body byte range like any other. The attributes
+	// are a different thing — MIME header parameters, with their own escaping — and reporting them
+	// as body parameters made a multipart API's fields invisible to insertion-point selection.
+	IpMultipartAttr IpKind = "multipart_attr"
 )
 
 // InsertionPoint is one place a payload can go, plus the value already there.
@@ -960,7 +971,7 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 	if strings.Contains(ctype, "xml") || looksLikeXML(trimmed) {
 		for _, xp := range xmlPoints(body) {
 			*out = append(*out, InsertionPoint{
-				Kind:      IpBody,
+				Kind:      IpXML,
 				Name:      xp.name,
 				BaseValue: body[xp.start:xp.end],
 				loc:       loc{kind: locBody, start: xp.start, end: xp.end},
@@ -1045,7 +1056,7 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		})
 		if part.hasName {
 			*out = append(*out, InsertionPoint{
-				Kind:      IpBody,
+				Kind:      IpMultipartAttr,
 				Name:      label + " name",
 				BaseValue: body[part.nameSpan[0]:part.nameSpan[1]],
 				loc:       loc{kind: locBody, start: part.nameSpan[0], end: part.nameSpan[1]},
@@ -1055,7 +1066,7 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		}
 		if part.hasFile {
 			*out = append(*out, InsertionPoint{
-				Kind:      IpBody,
+				Kind:      IpMultipartAttr,
 				Name:      label + " filename",
 				BaseValue: body[part.fileSpan[0]:part.fileSpan[1]],
 				loc:       loc{kind: locBody, start: part.fileSpan[0], end: part.fileSpan[1]},
