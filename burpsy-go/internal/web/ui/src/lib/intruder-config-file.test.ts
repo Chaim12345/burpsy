@@ -52,9 +52,9 @@ function fullConfig(): IntruderConfig {
     ],
     payloadNulls: ["10", "25"],
     rules: [
-      { rule: "add_prefix", text: "pre-", pattern: "", replace: "", all: false, layer: "url", algorithm: "sha256" },
-      { rule: "replace", text: "", pattern: "a+", replace: "b", all: true, layer: "url", algorithm: "sha256" },
-      { rule: "hash", text: "", pattern: "", replace: "", all: false, layer: "url", algorithm: "md5" },
+      { rule: "add_prefix", text: "pre-", pattern: "", replace: "", all: false, layer: "url", algorithm: "sha256", form: "nfkc" },
+      { rule: "replace", text: "", pattern: "a+", replace: "b", all: true, layer: "url", algorithm: "sha256", form: "nfkc" },
+      { rule: "hash", text: "", pattern: "", replace: "", all: false, layer: "url", algorithm: "md5", form: "nfkc" },
     ],
     grepMatch: "Welcome back",
     grepMatchMode: "regex",

@@ -132,6 +132,7 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
       all: bool,
       layer: str,
       algorithm: str,
+      form: str,
     }),
   ),
   grepMatch: str,

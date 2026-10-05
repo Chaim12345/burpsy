@@ -19,9 +19,10 @@ export type PayloadRuleName =
   | "encode"
   | "decode"
   | "hash"
-  | "skip_if_matches";
+  | "skip_if_matches"
+  | "normalize";
 
-export const PAYLOAD_RULES: { value: PayloadRuleName; label: string; uses: ("text" | "pattern" | "replace" | "all" | "layer" | "algorithm")[] }[] = [
+export const PAYLOAD_RULES: { value: PayloadRuleName; label: string; uses: ("text" | "pattern" | "replace" | "all" | "layer" | "algorithm" | "form")[] }[] = [
   { value: "add_prefix", label: "Add prefix", uses: ["text"] },
   { value: "add_suffix", label: "Add suffix", uses: ["text"] },
   { value: "replace", label: "Match and replace", uses: ["pattern", "replace", "all"] },
@@ -31,7 +32,11 @@ export const PAYLOAD_RULES: { value: PayloadRuleName; label: string; uses: ("tex
   { value: "decode", label: "Decode", uses: ["layer"] },
   { value: "hash", label: "Hash", uses: ["algorithm"] },
   { value: "skip_if_matches", label: "Skip if it matches", uses: ["pattern"] },
+  { value: "normalize", label: "Unicode normalization", uses: ["form"] },
 ];
+
+/** The normalization forms a "normalize" rule can emit (burpsy-react-ui-d617). */
+export const NORMALIZATION_FORMS = ["nfc", "nfd", "nfkc", "nfkd", "fullwidth", "homoglyph"] as const;
 
 export const PAYLOAD_LAYERS = ["url", "html", "base64", "base64url", "hex", "gzip", "deflate"] as const;
 export const HASH_ALGORITHMS = ["md5", "sha256"] as const;
@@ -44,10 +49,11 @@ export interface PayloadRuleSpec {
   all: boolean;
   layer: string;
   algorithm: string;
+  form: string;
 }
 
 export function emptyRule(rule: PayloadRuleName): PayloadRuleSpec {
-  return { rule, text: "", pattern: "", replace: "", all: false, layer: "url", algorithm: "sha256" };
+  return { rule, text: "", pattern: "", replace: "", all: false, layer: "url", algorithm: "sha256", form: "nfkc" };
 }
 
 export interface PointView {

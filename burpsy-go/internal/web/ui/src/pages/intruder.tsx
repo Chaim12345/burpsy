@@ -35,6 +35,7 @@ import {
 import {
   ATTACK_MODES,
   HASH_ALGORITHMS,
+  NORMALIZATION_FORMS,
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
   customIteratorSize,
@@ -212,6 +213,19 @@ function RuleRow({
           {PAYLOAD_LAYERS.map((layer) => (
             <option key={layer} value={layer}>
               {layer}
+            </option>
+          ))}
+        </Select>
+      ) : null}
+      {uses.includes("form") ? (
+        <Select
+          aria-label={`Rule ${index + 1} normalization form`}
+          value={rule.form}
+          onChange={(event) => onChange({ ...rule, form: event.target.value })}
+        >
+          {NORMALIZATION_FORMS.map((form) => (
+            <option key={form} value={form}>
+              {form}
             </option>
           ))}
         </Select>

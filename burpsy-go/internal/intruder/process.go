@@ -65,6 +65,9 @@ type RuleSpec struct {
 	Layer string `json:"layer"`
 	// Algorithm is the digest for hash: md5 or sha256.
 	Algorithm string `json:"algorithm"`
+	// Form is the normalization form for normalize: nfc, nfd, nfkc, nfkd, fullwidth or homoglyph
+	// (burpsy-react-ui-d617).
+	Form string `json:"form"`
 }
 
 // RuleErrorKind distinguishes the ways a rule can refuse to build.
@@ -150,6 +153,7 @@ type step struct {
 	hasHash   bool
 	layerName string
 	pattern   string
+	normForm  NormForm
 }
 
 type stepKind int
@@ -164,6 +168,7 @@ const (
 	stepDecode
 	stepHash
 	stepSkipIfMatches
+	stepNormalize
 )
 
 // Chain is an ordered chain of processing rules, ready to run.
@@ -214,6 +219,12 @@ func NewChain(specs []RuleSpec) (*Chain, error) {
 				return nil, err
 			}
 			steps = append(steps, step{kind: stepSkipIfMatches, re: re, pattern: s.Pattern})
+		case "normalize":
+			f, ok := parseNormForm(s.Form)
+			if !ok {
+				return nil, normFormError(s.Form)
+			}
+			steps = append(steps, step{kind: stepNormalize, normForm: f})
 		default:
 			// The Rust tagged enum refuses this at deserialisation; the Go struct cannot,
 			// so the refusal lives here, at construction, where an operator typo is one
@@ -292,6 +303,8 @@ func (c *Chain) Apply(payload []byte) Processed {
 			cur = v
 		case stepHash:
 			cur = []byte(st.hash.hex(cur))
+		case stepNormalize:
+			cur = normalizeVariant(st.normForm, cur)
 		case stepSkipIfMatches:
 			if st.re.Match(cur) {
 				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d: skipped, matches %s", i, st.pattern)}
