@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard deep dive — widget interactions, API flows, navigation</title>
+<style>
+:root { --bg:#0d1117; --fg:#c9d1d9; --border:#30363d; --accent:#58a6ff; --gap:#f0883e; --ok:#3fb950; }
+body { font-family: ui-monospace, monospace; background: var(--bg); color: var(--fg); margin: 0; padding: 20px; font-size: 11px; }
+h1 { font-size: 16px; }
+h2 { font-size: 13px; margin-top: 20px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+h3 { font-size: 11px; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+th { background: #161b22; color: #8b949e; text-align: left; padding: 3px 6px; border: 1px solid var(--border); font-size: 10px; }
+td { padding: 3px 6px; border: 1px solid var(--border); vertical-align: top; }
+.flow { background: #161b22; border: 1px solid var(--border); border-radius: 4px; padding: 8px; margin: 8px 0; }
+.widget { display: inline-block; background: #21262d; border: 1px solid #30363d; border-radius: 3px; padding: 2px 6px; margin: 1px; }
+.api { color: var(--accent); }
+.gap { color: var(--gap); }
+.ok { color: var(--ok); }
+code { background: rgba(110,118,129,0.2); padding: 1px 3px; border-radius: 2px; font-size: 10px; }
+</style>
+</head>
+<body>
+
+<h1>Dashboard — deep dive</h1>
+
+<h2>1. Widget inventory (19 widgets)</h2>
+<table>
+<tr><th>#</th><th>Widget</th><th>Type</th><th>Data source</th><th>API field</th></tr>
+<tr><td>1</td><td>Metric: Exchanges</td><td>stat card</td><td>useDashboard</td><td>data.exchanges</td></tr>
+<tr><td>2</td><td> Metric: Capture store</td><td>stat card</td><td>useDashboard</td><td>data.stored_bytes</td></tr>
+<tr><td>3</td><td>Metric: Running tasks</td><td>stat card</td><td>useDashboard</td><td>data.tasks_running, data.tasks.length</td></tr>
+<tr><td>4</td><td>Metric: Coverage gaps</td><td>stat card</td><td>useDashboard + useMemo</td><td>data.summaries.filter(!breakdown.complete)</td></tr>
+<tr><td>5-9</td><td>Finding severity tiles (5)</td><td>stat cards</td><td>useIssues</td><td>data.counts.critical/high/medium/low/info</td></tr>
+<tr><td>10</td><td>Unrecognised severity</td><td>stat card</td><td>useIssues</td><td>data.counts.unrecognised</td></tr>
+<tr><td>11</td><td>Coverage panel</td><td>card</td><td>useDashboard</td><td>data.summaries.map(CoverageCard)</td></tr>
+<tr><td>12</td><td>Requests sent by burpsy</td><td>card</td><td>useDashboard</td><td>data.activity.slice(0,10)</td></tr>
+<tr><td>13</td><td>Tool events</td><td>card</td><td>useDashboard</td><td>data.events.slice(0,12)</td></tr>
+<tr><td>14</td><td>Tasks panel</td><td>card</td><td>useDashboard + useScannerLive</td><td>data.tasks + live.findings</td></tr>
+<tr><td>15</td><td>New scan</td><td>button</td><td>useState</td><td>Opens NewScanModal</td></tr>
+<tr><td>16</td><td>New live task</td><td>button</td><td>useState</td><td>Opens NewLiveTaskModal</td></tr>
+<tr><td>17</td><td>Traffic sources</td><td>card</td><td>useDashboard + useMemo</td><td>Object.entries(data.sources).sort()</td></tr>
+<tr><td>18</td><td>Open HTTP history</td><td>button</td><td>useApp.setRoute</td><td>Navigates to "history"</td></tr>
+<tr><td>19</td><td>Notices (2)</td></td><td>alerts</td><td>useDashboard</td><td>data.exchanges, incomplete</td></tr>
+</table>
+
+<h2>2. Data flow diagram</h2>
+<div class="flow">
+<strong>API calls feeding the Dashboard:</strong><br><br>
+<span class="api">GET /api/dashboard</span> → useDashboard() → data.exchanges, data.messages, data.stored_bytes, data.tasks_running, data.tasks, data.summaries, data.sources, data.activity, data.events<br>
+<span class="api">GET /api/issues</span> → useIssues() → issues.data.counts.critical/high/medium/low/info/unrecognised<br>
+<span class="api">GET /api/scanner/live</span> → useScannerLive() → live.data.findings, live.data.enabled<br>
+<span class="api">SSE /api/events</span> → useEventStream() → real-time invalidation<br>
+</div>
+
+<h2>3. Widget interaction map</h2>
+<div class="flow">
+<strong>Internal interactions (same page):</strong><br><br>
+<span class="widget">RefreshButton</span> → refetch() → invalidates all dashboard queries → all widgets update<br>
+<span class="widget">New scan</span> → setScanOpen(true) → opens NewScanModal<br>
+<span class="widget">New live task</span> → setLiveOpen(true) → opens NewLiveTaskModal<br>
+<span class="widget">Open HTTP history</span> → setRoute("history") → navigates to Proxy→HTTP history<br><br>
+<strong>External interactions (other pages):</strong><br><br>
+<span class="widget">Open HTTP history</span> → useApp.setRoute("history") → /history page<br>
+<span class="widget">CoverageCard</span> → read-only display (no click)<br>
+<span class="widget">ActivityTable</span> → read-only display (no click)<br>
+<span class="widget">TaskTable</span> → cancel button (if task running)<br>
+</div>
+
+<h2>4. Navigation flows</h2>
+<table>
+<tr><th>From widget</th><th>Action</th><th>Target page</th><th>API triggered</th></tr>
+<tr><td>Open HTTP history</td><td>click</td><td>Proxy → HTTP history</td><td>useHistory(q, limit)</td></tr>
+<tr><td>New scan</td><td>click</td><td>NewScanModal (modal)</td><td>Seeds crawl</td></tr>
+<tr><td>New live task</td><td>click</td><td>NewLiveTaskModal (modal)</td><td>Starts live audit</td></tr>
+<tr><td>RefreshButton</td><td>click</td><td>Same page (refetch)</td><td>All queries invalidated</td></tr>
+<tr><td>CoverageCard</td><td>(none)</td><td>—</td><td>—</td></tr>
+<tr><td>ActivityTable</td><td>(none)</td><td>—</td><td>—</td></tr>
+<tr><td>TaskTable cancel</td><td>click</td><td>Same page (task cancelled)</td><td>POST /api/tasks/{id}/cancel</td></tr>
+</table>
+
+<h2>5. Store interactions</h2>
+<table>
+<tr><th>Store field</th><th>Type</th><th>Used by Dashboard</th></tr>
+<tr><td>route</td><td>string</td><td>Read indirectly via setRoute("history")</td></tr>
+<tr><td>theme</td><td>light/dark</td><td>Applies to all widgets</td></tr>
+<tr><td>density</td><td>comfortable/compact</td><td>Applies to all widgets</td></tr>
+<tr><td>paletteOpen</td><td>bool</td><td>Closed on setRoute()</td></tr>
+<tr><td>setRoute</td><td>function</td><td>Called by "Open HTTP history"</td></tr>
+</table>
+
+<h2>6. API endpoints (registered in server.go)</h2>
+<table>
+<tr><th>Endpoint</th><th>Method</th><th>Handler</th><th>UI usage</th></tr>
+<tr><td>/api/dashboard</td><td>GET</td><td>handleDashboard</td><td>useDashboard() — 14 widgets</td></tr>
+<tr><td>/api/issues</td><td>GET</td><td>handleIssues</td><td>useIssues() — 5 severity tiles</td></tr>
+<tr><td>/api/scanner/live</td><td>GET</td><td>handleScannerLive</td><td>useScannerLive() — Tasks panel</td></tr>
+<tr><td>/api/events</td><td>SSE</td><td>handleEvents</td><td>useEventStream() — real-time updates</td></tr>
+<tr><td>/api/tasks/{id}/cancel</td><td>POST</td><td>handleTaskCancel</td><td>TaskTable cancel button</td></tr>
+</table>
+
+<h2>7. Gaps vs Burp</h2>
+<table>
+<tr><th>Feature</th><th>Burp (Java class)</th><th>burpsy (React)</th><th>Gap</th></tr>
+<tr><td>Task progress bar</td><td><code>DashboardTaskProgress.java</code> — progress bar with Z_, ZA, Zz, Zv, Zk, Zh methods</td><td>Static "0 tasks" text</td><td><span class="gap">Missing animated progress bar</span></td></tr>
+<tr><td>Event log popup</td><td><code>DashboardActivityLogTable.java</code> — popupMenuWillBecomeVisible/invisible</td><td>Static list (no context menu)</td><td><span class="gap">Missing context menu</span></td></tr>
+<tr><td>Activity log popup</td><td><code>DashboardActivityLogTable.java</code> — popupMenuWillBecomeVisible/invisible</td><td>Static list (no context menu)</td><td><span class="gap">Missing context menu</span></td></tr>
+<tr><td>Scan configuration</td><td>scanConfigurationEditor* strings</td><td>Not on Dashboard</td><td><span class="gap">Missing scan config widget</span></td></tr>
+<tr><td>Pause/resume</td><td>"Task execution is paused" string</td><td>Not present</td><td><span class="gap">Missing pause/resume controls</span></td></tr>
+<tr><td>No proxy listeners</td><td>Warning bar "No proxy listeners are currently running"</td><td>Not present</td><td><span class="gap">Missing listener status</span></td></tr>
+<tr><td>Telemetry</td><td><code>DashboardTelemetry.java</code> — OpenTelemetry span</td><td>Not present</td><td><span class="gap">Missing telemetry</span></td></tr>
+<tr><td>Tab label</td><td><code>DashboardTabLabel.java</code></td><td>Not present</td><td><span class="gap">Missing tab label</span></td></tr>
+<tr><td>Task query</td><td><code>DashboardContainsTaskQuery.java</code></td><td>Not present</td><td><span class="gap">Missing task query</span></td></tr>
+<tr><td>Paused warning</td><td><code>DashboardPausedWarning.java</code></td><td>Not present</td><td><span class="gap">Missing paused warning</span></td></tr>
+<tr><td>Panel builder</td><td><code>DashboardPanelBuilder.java</code></td><td>Not present</td><td><span class="gap">Missing panel builder</span></td></tr>
+<tr><td>Crawl errors</td><td>"Crawl Errors"</td><td>Not present</td><td><span class="gap">Missing crawl errors</span></td></tr>
+<tr><td>Live audit widget</td><td>"Live audit (Pro version only)"</td><td>Simple stat card</td><td><span class="gap">Missing live audit controls</span></td></tr>
+<tr><td><strong>Honest coverage</strong></td><td>Hidden</td><td>Shown</td><td><span class="ok">burpsy wins</span></td></tr>
+<tr><td><strong>Gated work count</strong></td><td>Not shown</td><td>Shown</td><td><span class="ok">burpsy wins</span></td></tr>
+<tr><td><strong>Unrecognised severity</strong></td><td>Not shown</td><td>Shown</td><td><span class="ok">burpsy wins</span></td></tr>
+</table>
+
+<h2>8. Event stream invalidation map</h2>
+<table>
+<tr><th>SSE event kind</th><th>Invalidated queries</th><th>Affected widgets</th></tr>
+<tr><td>history</td><td>[history, stats, sitemap, dashboard]</td><td>Metrics, Coverage, Activity, Traffic sources</td></tr>
+<tr><td>capture</td><td>[history, stats, sitemap, dashboard]</td><td>Metrics, Coverage, Activity, Traffic sources</td></tr>
+<tr><td>issues</td><td>[issues, dashboard, scanner]</td><td>Severity tiles, Coverage</td></tr>
+<tr><td>scanner</td><td>[issues, dashboard, scanner]</td><td>Severity tiles, Coverage</td></tr>
+<tr><td>toollog</td><td>[toollog, dashboard]</td><td>Activity table</td></tr>
+<tr><td>dashboard</td><td>[dashboard]</td><td>All dashboard widgets</td></tr>
+<tr><td>task</td><td>[dashboard]</td><td>Tasks panel</td></tr>
+<tr><td>tasks</td><td>[dashboard]</td><td>Tasks panel</td></tr>
+<tr><td>ws</td><td>[ws, stats, dashboard]</td><td>Metrics, Traffic sources</td></tr>
+<tr><td>intercept</td><td>[intercept]</td><td>(not on dashboard)</td></tr>
+<tr><td>scope</td><td>[scope]</td><td>(not on dashboard)</td></tr>
+<tr><td>session</td><td>[session]</td><td>(not on dashboard)</td></tr>
+<tr><td>sitemap</td><td>[sitemap, dashboard]</td><td>Metrics, Coverage</td></tr>
+<tr><td>organizer</td><td>[organizer]</td><td>(not on dashboard)</td></tr>
+<tr><td>rules</td><td>[rules]</td><td>(not on dashboard)</td></tr>
+</table>
+
+</body>
+</html>
