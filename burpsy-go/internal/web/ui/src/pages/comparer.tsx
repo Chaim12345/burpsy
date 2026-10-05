@@ -357,12 +357,15 @@ export function ComparerPage(): JSX.Element {
   // store; consume them so a second hand-off of the same text still lands.
   // The hand-off still lands as a pending slot; the page consumes it into the LIST (yy2), so
   // the third send-to a side adds a row instead of destroying what was there. The label names
-  // the provenance because the item tables' visible column is "which exchange is this".
+  // the provenance because the item tables' visible column is "which exchange is this". The new
+  // item is also LOADED into the side, not just marked selected: the comparison reads the editor,
+  // and a selected row over an empty editor compared nothing (burpsy-react-ui-hz60).
   useEffect(() => {
     if (!slots.a) return;
     const item = newComparerItem(labelOf(slots.a), slots.a);
     addComparerItem("a", item);
     setSelectedA(item.id);
+    setA(slots.a);
     setComparerSlot("a", "");
   }, [slots.a, setComparerSlot, addComparerItem]);
 
@@ -371,6 +374,7 @@ export function ComparerPage(): JSX.Element {
     const item = newComparerItem(labelOf(slots.b), slots.b);
     addComparerItem("b", item);
     setSelectedB(item.id);
+    setB(slots.b);
     setComparerSlot("b", "");
   }, [slots.b, setComparerSlot, addComparerItem]);
 
