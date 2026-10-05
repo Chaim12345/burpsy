@@ -3311,6 +3311,28 @@ tbody td {
   align-items: center;
 }
 
+/* A row in the history Extractor-columns manager (burpsy-react-ui-28n8): name, source, header
+   name, method, pattern, capture group, then the reorder/remove actions. One grid so the controls
+   line up down the list; it collapses to a single column on a narrow viewport (below). */
+.extractor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1fr) auto minmax(0, 1.5fr) 5rem auto;
+  gap:var(--s2);
+  align-items: center;
+}
+
+.extractor-row-actions {
+  display: flex;
+  gap:var(--s1);
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .extractor-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* One macro step in the session editor. */
 .step-card {
   border: 1px solid var(--line);

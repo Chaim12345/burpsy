@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, Upload, X } from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
@@ -20,6 +20,9 @@ import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, 
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
+import { ExtractorManager } from "../ui/extractor-manager";
+import { useHistoryExtractors, useHistoryExtractValues, useSaveHistoryExtractors, type ExtractValues } from "../lib/data.extractors";
+import { extractorColumnId, extractorSignature } from "../lib/extractors";
 
 const STATUS_BUCKETS = [
  { value: "all", label: "All statuses" },
@@ -362,6 +365,40 @@ function CommentIndicator(): JSX.Element {
 }
 
 /**
+ * One cell of a derived extractor column (burpsy-react-ui-28n8). The five states are deliberately
+ * distinct — the house rule that empty, failed and loading must not read alike:
+ *
+ *  - a captured value: shown, with the full text as a title since the column is narrow;
+ *  - "" the extractor really captured: an empty-string marker, NOT a blank cell, so "matched empty"
+ *    is visibly different from "did not match";
+ *  - null (the response had no such field): an em dash;
+ *  - no value in the answer: a dash, with the reason the row has none — either it has no stored
+ *    response, or the run is still loading, or the run failed (the notice above the table carries the
+ *    failure; a per-cell error notice across every row would be noise);
+ */
+function ExtractorCell({
+ value,
+ hasResponse,
+ loading,
+ failed,
+}: {
+ value: string | null | undefined;
+ hasResponse: boolean;
+ loading: boolean;
+ failed: boolean;
+}): JSX.Element {
+ if (value === undefined) {
+  if (!hasResponse) return <span className="cell-dim" title="No response was captured for this row">—</span>;
+  if (loading) return <span className="cell-dim" title="Running the extractors…">…</span>;
+  if (failed) return <span className="cell-dim" title="The extractor run failed — see the notice above the table">—</span>;
+  return <span className="cell-dim" title="No value for this row">—</span>;
+ }
+ if (value === null) return <span className="cell-dim" title="No match in the response">—</span>;
+ if (value === "") return <span className="cell-dim" title="Captured an empty string">&quot;&quot;</span>;
+ return <span title={value}>{value}</span>;
+}
+
+/**
  * The filter box's syntax help.
  *
  * This modal used to hold its own nine-line cheat sheet and a paragraph naming the
@@ -462,6 +499,13 @@ export function HistoryPage(): JSX.Element {
   body: "",
  });
  const [columnFiltersOpen, setColumnFiltersOpen] = useState(false);
+ // Per-extractor-column substring filters (burpsy-react-ui-28n8), keyed by extractor name. Unlike
+ // the DSL column filters above — which compose into the server query because host/path/body are
+ // grammar fields — an extractor's captured value exists only in the fetched /extract answer, not in
+ // the query grammar, so these filter CLIENT-SIDE over those values. That is the one case this page's
+ // "every filter is one visible DSL statement" rule bends, and it is labelled as such in the panel so
+ // it does not read as a DSL clause that quietly does nothing.
+ const [extractorFilters, setExtractorFilters] = useState<Record<string, string>>({});
  // burpsy-react-ui-3daa: Logger's capability, same fifteen lines (see the note on
  // useStoredColumnVisibility): the operator's hidden-column set persists per table.
  const [columnVisibility, setColumnVisibility] = useStoredColumnVisibility("history-columns");
@@ -677,7 +721,11 @@ export function HistoryPage(): JSX.Element {
  // bar read unfiltered while the values wait underneath.
  const appliedFilterNames = filterOn ? activeFilterNames : [];
 
- const rows = useMemo(() => {
+ // The rows after every filter EXCEPT the client-side extractor-column filters. This is the set the
+ // extractor values are requested for (below), kept separate from the displayed `rows` so that the
+ // id list fed to /extract never depends on the values it fetches — an extractor filter narrowing
+ // the view must not change which ids are extracted, or it would chase its own tail.
+ const baseRows = useMemo(() => {
   const all = data ?? [];
   return all.filter((row) => {
    // burpsy-react-ui-ovow: suspended means the whole capture, values preserved.
@@ -727,6 +775,76 @@ export function HistoryPage(): JSX.Element {
  // only while the filter is on, because that is the only time it changes what the operator is looking
  // at — and it is the reason the filter KEEPS those rows rather than dropping them.
  const neverCounted = useMemo(() => (data ?? []).filter((row) => (row.request_params ?? 0) < 0).length, [data]);
+
+ // Custom extractor columns (burpsy-react-ui-28n8). The saved definitions are the column set; their
+ // values are run per visible page over /api/history/extract, because an extractor needs the response
+ // bytes a history index row never carries.
+ const [extractorsOpen, setExtractorsOpen] = useState(false);
+ const extractorsQuery = useHistoryExtractors();
+ // Only the GET's confirmed answer is treated as "the saved set". While it is loading or has failed,
+ // this stays [] for RENDERING, but the manager is gated on `extractorsReady` below so it never opens
+ // on that empty value and PUTs it back as a wholesale replacement — which would wipe the project's
+ // saved columns on a slow or failed load.
+ const extractorsReady = extractorsQuery.isSuccess;
+ const savedExtractors = useMemo(() => extractorsQuery.data?.extractors ?? [], [extractorsQuery.data]);
+ const extractorSig = useMemo(() => extractorSignature(savedExtractors), [savedExtractors]);
+ const saveExtractors = useSaveHistoryExtractors();
+
+ // The ids to request values for: the loaded rows that HAVE a response, taken from `baseRows` — the
+ // view BEFORE the extractor filters — so an extractor filter narrowing the table never changes which
+ // ids are extracted. Rows with no response yield nothing, so they are not asked for; and because
+ // response-presence is part of the list, a row that was pending and later answered re-enters it and
+ // gets run rather than staying empty. Debounced so a filter edit or a burst of new rows does not fire
+ // a request per keystroke.
+ const extractIdsKey = useMemo(() => baseRows.filter((row) => row.response !== null).map((row) => row.id).join(","), [baseRows]);
+ const debouncedExtractIdsKey = useDebounced(extractIdsKey, 300);
+ const extractIds = useMemo(
+  () => (debouncedExtractIdsKey === "" ? [] : debouncedExtractIdsKey.split(",").map(Number)),
+  [debouncedExtractIdsKey],
+ );
+ const extractValues = useHistoryExtractValues(extractIds, extractorSig, savedExtractors.length > 0);
+ const extractValuesMap: ExtractValues | undefined = extractValues.data;
+ // Loading is "we do not yet have values for the current definitions": a true first fetch, or a
+ // placeholder still showing the PREVIOUS id-set's values. isPlaceholderData is counted because during
+ // it a row absent from the previous map has an undefined value that is loading, not "no value".
+ const extractLoading =
+  savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+ const extractFailed = extractValues.isError;
+
+ // Active client-side extractor filters, by name. An empty/whitespace box is not a filter.
+ const activeExtractorFilters = useMemo(
+  () => savedExtractors
+   .map((extractor) => ({ name: extractor.name, query: (extractorFilters[extractor.name] ?? "").trim().toLowerCase() }))
+   .filter((entry) => entry.query !== ""),
+  [savedExtractors, extractorFilters],
+ );
+
+ // The displayed rows: baseRows narrowed by the client-side extractor filters. A row passes a filter
+ // when its captured value contains the text; a value that has not loaded yet (undefined) is KEPT so
+ // the table does not empty while the extract is in flight, and a null (the extractor did not match)
+ // is dropped because it cannot contain the text. Suspended (Filter off) applies nothing, matching
+ // every other filter on this page.
+ const rows = useMemo(() => {
+  if (!filterOn || activeExtractorFilters.length === 0) return baseRows;
+  return baseRows.filter((row) =>
+   activeExtractorFilters.every(({ name, query }) => {
+    const value = extractValuesMap?.[String(row.id)]?.[name];
+    if (value === undefined) return true; // not loaded / no response — do not hide while unknown
+    if (value === null) return false; // the extractor did not match, so it cannot contain the text
+    return value.toLowerCase().includes(query);
+   }),
+  );
+ }, [baseRows, filterOn, activeExtractorFilters, extractValuesMap]);
+
+ // The extractor filters join the page's one honest list of what is narrowing the view, so the empty
+ // state and the status bar name them like any other filter rather than reporting "no traffic".
+ const allAppliedFilterNames = useMemo(
+  () => (filterOn ? [...appliedFilterNames, ...activeExtractorFilters.map(({ name, query }) => `${name} contains "${query}"`)] : []),
+  [filterOn, appliedFilterNames, activeExtractorFilters],
+ );
+ // The "Column filters" button counts both the DSL column filters and the client-side extractor ones,
+ // since both live in that panel.
+ const totalColumnFiltersActive = columnFiltersActive + activeExtractorFilters.length;
 
  // CSV export — client-side from the loaded rows; no server endpoint needed
  // because the page already holds the index rows in memory. The CSV shape is
@@ -1149,11 +1267,41 @@ export function HistoryPage(): JSX.Element {
     size: 84,
     cell: (info) => <span className="cell-dim">{relativeTime(info.getValue<number>())}</span>,
    },
+   // One derived column per saved extractor (burpsy-react-ui-28n8). They toggle in the same
+   // column-visibility menu and sort like the others; the sort reads the accessorFn (null/absent
+   // collapsed to undefined so `sortUndefined: "last"` keeps the empties at the bottom in either
+   // direction), while the CELL reads the raw value so it can tell "" apart from null apart from
+   // absent. `id` is namespaced by extractorColumnId so a name like "status" cannot shadow a
+   // built-in column.
+   ...savedExtractors.map(
+    (extractor): Column<Exchange> => ({
+     id: extractorColumnId(extractor.name),
+     header: extractor.name,
+     size: 150,
+     sortUndefined: "last",
+     accessorFn: (row: Exchange) => {
+      const value = extractValuesMap?.[String(row.id)]?.[extractor.name];
+      return value == null ? undefined : value;
+     },
+     cell: (info) => {
+      const row = info.row.original;
+      return (
+       <ExtractorCell
+        value={extractValuesMap?.[String(row.id)]?.[extractor.name]}
+        hasResponse={row.response !== null}
+        loading={extractLoading}
+        failed={extractFailed}
+       />
+      );
+     },
+    }),
+   ),
   ],
   // checkedRows is read inside the tick cell, so the memo tracks it (the Checkbox is fully
   // controlled; without this a re-tick would not re-render the header count on the button). The
-  // setter is stable, but it is named here too because the cell is the only writer.
-  [checkedRows, setCheckedExchanges],
+  // setter is stable, but it is named here too because the cell is the only writer. The extractor
+  // state is here because the derived columns close over the saved set and the fetched values.
+  [checkedRows, setCheckedExchanges, savedExtractors, extractValuesMap, extractLoading, extractFailed],
  );
 
  const detail = selected ? (
@@ -1372,7 +1520,7 @@ export function HistoryPage(): JSX.Element {
      {/* FilterToggle takes a single string child, so the count is composed rather than
               interpolated as a second child. */}
      <FilterToggle pressed={columnFiltersOpen} onPressedChange={setColumnFiltersOpen}>
-      {columnFiltersActive > 0 ? `Column filters (${columnFiltersActive})` : "Column filters"}
+      {totalColumnFiltersActive > 0 ? `Column filters (${totalColumnFiltersActive})` : "Column filters"}
      </FilterToggle>
      <Button
       variant={filtersActive > 0 ? "outline" : "quiet"}
@@ -1381,6 +1529,21 @@ export function HistoryPage(): JSX.Element {
       onClick={() => setFilterOpen(true)}
      >
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
+     </Button>
+     {/* Burp/Caido's custom extractor columns (burpsy-react-ui-28n8): define a named regex-group,
+         JSON-path or whole-value extractor and read its capture as a column across history rows. */}
+     <Button
+      variant={savedExtractors.length > 0 ? "outline" : "quiet"}
+      size="small"
+      onClick={() => setExtractorsOpen(true)}
+      // Disabled until the saved set has actually loaded: opening on the not-yet-loaded [] and saving
+      // would PUT an empty replacement over the project's real columns. A failed load says so in the
+      // error strip below rather than silently offering an empty editor.
+      disabled={!extractorsReady}
+      title={extractorsReady ? "Add columns that extract a field from every response" : extractorsQuery.isError ? "Could not load the saved extractors" : "Loading the saved extractors…"}
+     >
+      <ScanText size={14} />
+      Extractors{savedExtractors.length > 0 ? ` (${savedExtractors.length})` : ""}
      </Button>
      <BucketMenu
       label="Status"
@@ -1457,28 +1620,65 @@ export function HistoryPage(): JSX.Element {
         )}
        </Field>
       ))}
-      {columnFiltersActive > 0 ? (
+      {/* Extractor columns filter client-side over the fetched values (28n8), not through the query
+                box — their captured value is not a grammar field — so they are grouped under their own
+                label and cleared on their own. A row whose value has not loaded yet is kept. */}
+      {savedExtractors.map((extractor) => (
+       <Field key={extractor.name} label={`${extractor.name} (extractor)`} className="field-inline">
+        {(id) => (
+         <Input
+          id={id}
+          value={extractorFilters[extractor.name] ?? ""}
+          placeholder="contains…"
+          onChange={(event) => setExtractorFilters((current) => ({ ...current, [extractor.name]: event.target.value }))}
+         />
+        )}
+       </Field>
+      ))}
+      {totalColumnFiltersActive > 0 ? (
        <Button
         variant="outline"
         size="small"
         onClick={() => {
          for (const spec of COLUMN_FILTERS) setColumnFilter(spec.field, "");
+         setExtractorFilters({});
         }}
        >
         <X size={13} />
         Clear column filters
        </Button>
       ) : null}
-      {/* Said once, here, rather than left to be discovered: these write clauses into the
-                filter box above, and the columns the query grammar cannot express get no input. */}
+      {/* Said once, here, rather than left to be discovered: the host/path/body boxes write clauses
+                into the filter box above, and the columns the query grammar cannot express get no DSL
+                input. Extractor boxes are the exception and say so. */}
       <span className="cell-dim">
-       These append clauses to the filter box, so it always shows what is filtered. Status,
-       type and method have their own controls above; extension, params, length, time and
-       comment cannot be expressed in the query grammar and so have no filter here.
+       Host, path and response-body boxes append clauses to the filter box, so it always shows what
+       is filtered. Status, type and method have their own controls above; extension, params,
+       length, time and comment cannot be expressed in the query grammar and so have no filter here.
+       {savedExtractors.length > 0 ? " Extractor-column boxes filter client-side over the captured values." : ""}
       </span>
      </Toolbar>
     ) : null}
     {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+    {/* The saved-definitions GET failed: the manager is disabled (saving an empty set would wipe the
+        real one), and this says why rather than presenting an empty, saveable editor. */}
+    {extractorsQuery.isError ? (
+     <ErrorNotice
+      title="Could not load the extractor columns"
+      error={extractorsQuery.error}
+      onRetry={() => void extractorsQuery.refetch()}
+     />
+    ) : null}
+    {/* The extractor run is a second request, so it fails on its own: naming it here (rather than
+        leaving every derived cell as a bare dash) is what tells the operator the columns are empty
+        because the run failed, not because nothing matched. */}
+    {extractFailed ? (
+     <ErrorNotice
+      title="Could not run the extractor columns"
+      error={extractValues.error}
+      onRetry={() => void extractValues.refetch()}
+     />
+    ) : null}
    </div>
 
    <SplitPane
@@ -1545,10 +1745,10 @@ export function HistoryPage(): JSX.Element {
        // and was answered with "No traffic captured yet. Point a client at the proxy", which is
        // a claim about the proxy, was false whenever a filter was responsible, and sent the
        // operator to check their client setup over a dropdown they had set themselves.
-       appliedFilterNames.length > 0 ? (
+       allAppliedFilterNames.length > 0 ? (
         <Empty
          title="No exchange matches these filters"
-         detail={`Nothing in the ${formatCount(data?.length ?? 0)} loaded rows matches ${appliedFilterNames.join(" + ")}. Relax or clear a filter to see more of the capture.`}
+         detail={`Nothing in the ${formatCount(data?.length ?? 0)} loaded rows matches ${allAppliedFilterNames.join(" + ")}. Relax or clear a filter to see more of the capture.`}
         />
        ) : (
         <Empty
@@ -1598,9 +1798,9 @@ export function HistoryPage(): JSX.Element {
 
             --fg, not --warn: this is a neutral statement of cause, and the yellow token is a
             14px-on-paper contrast risk in a status bar the axe suite currently passes clean. */}
-    {rows.length === 0 && (data?.length ?? 0) > 0 && appliedFilterNames.length > 0 ? (
+    {rows.length === 0 && (data?.length ?? 0) > 0 && allAppliedFilterNames.length > 0 ? (
      <div style={{ color: "var(--fg)" }} title="Which filters are responsible for the empty table">
-      no match for {appliedFilterNames.join(" + ")}
+      no match for {allAppliedFilterNames.join(" + ")}
      </div>
     ) : null}
     <div title="Sum of response bytes for the visible rows">
@@ -1617,6 +1817,13 @@ export function HistoryPage(): JSX.Element {
    </div>
 
    <QueryHelp open={helpOpen} onOpenChange={setHelpOpen} />
+   <ExtractorManager
+    open={extractorsOpen}
+    onOpenChange={setExtractorsOpen}
+    extractors={savedExtractors}
+    saving={saveExtractors.isPending}
+    onSave={(next) => saveExtractors.mutateAsync(next).then((res) => res.extractors)}
+   />
    <Modal
     open={filterOpen}
     onOpenChange={setFilterOpen}

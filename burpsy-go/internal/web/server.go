@@ -111,6 +111,11 @@ type Server struct {
 	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
 	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
 	scanBaseline *scanner.ScanConfig
+	// Custom history/Intruder extractor columns (burpsy-react-ui-28n8), project-level; see
+	// api_history_extractors.go.
+	histExtractMu   sync.Mutex
+	histExtractDefs []sessionExtractDto
+	histExtractRun  []*session.Extraction
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -535,6 +540,8 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		// Project-level scan state — the scan overrides and the live sweep's seen ledger — follows the
 		// project too (burpsy-react-ui-z4ml).
 		s.restoreProjectScanState(p)
+		// Custom extractor columns are project-level too (burpsy-react-ui-28n8).
+		s.restoreHistoryExtractors(p)
 	}
 	return s
 }
@@ -895,6 +902,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/history", s.handleHistory)
 	// Import HAR (eyi1): bring traffic captured elsewhere into history without re-proxying it live.
 	s.mux.HandleFunc("/api/history/import/har", s.handleHistoryImportHar)
+	// Custom extractor columns (burpsy-react-ui-28n8): the saved definitions, and their values for a
+	// page of rows.
+	s.mux.HandleFunc("/api/history/extractors", s.handleHistoryExtractors)
+	s.mux.HandleFunc("/api/history/extract", s.handleHistoryExtract)
 	s.mux.HandleFunc("/api/message/", s.handleMessage)
 	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
 	// store because the history rows the console holds carry no bytes to search. See api_search.go.

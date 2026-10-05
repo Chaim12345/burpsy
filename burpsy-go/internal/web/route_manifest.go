@@ -330,6 +330,16 @@ var manifest = map[string]route{
 		summary: "proxy history, filtered by the typed query DSL; DELETE removes rows from the " +
 			"operator's view (ids body) or clears the capture (no body)",
 	},
+	"/api/history/extractors": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the custom extractor columns (burpsy-react-ui-28n8): named regex-group or json-path " +
+			"extractors saved with the project and rendered as derived columns in history and Intruder results",
+	},
+	"/api/history/extract": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "run the saved extractors against the responses of the named exchange ids and return each " +
+			"captured value, so the console can fill the derived columns for the rows it is showing",
+	},
 	"/api/history/import/har": {
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable " +
