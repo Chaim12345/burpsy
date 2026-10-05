@@ -55,12 +55,27 @@ const ConfirmTTL = 60 * time.Second
 // that replayed would be indistinguishable from a caller the operator meant to allow.
 type confirmStore struct {
 	mu     sync.Mutex
-	tokens map[string]time.Time
+	tokens map[string]confirmEntry
+}
+
+// confirmEntry is a minted token's expiry and the route it confirms.
+type confirmEntry struct {
+	expires time.Time
+	// route is the pattern the token was minted for, normalised by confirmRouteKey so a subtree pair
+	// (/api/x and /api/x/, which share one /confirm endpoint) is one route.
+	route string
 }
 
 func newConfirmStore() *confirmStore {
-	return &confirmStore{tokens: make(map[string]time.Time)}
+	return &confirmStore{tokens: make(map[string]confirmEntry)}
 }
+
+// confirmRouteKey is the route identity a token is bound to. A manifest subtree pattern and its exact
+// sibling ("/api/session/rules" and "/api/session/rules/") are minted through ONE confirm path, and
+// the mint cannot know which of the two the caller is about to spend on — so binding to the pair is
+// the only binding that is both strict across routes and never refuses the caller's own route
+// (burpsy-react-ui-r9b5).
+func confirmRouteKey(pattern string) string { return strings.TrimSuffix(pattern, "/") }
 
 // issue mints a token bound to one route pattern, and returns it.
 func (c *confirmStore) issue(pattern string) (string, error) {
@@ -74,12 +89,12 @@ func (c *confirmStore) issue(pattern string) (string, error) {
 	// accumulate them. A store that only cleaned on spend would grow without bound for a
 	// caller that never spends what it asks for.
 	now := time.Now()
-	for k, exp := range c.tokens {
-		if now.After(exp) {
+	for k, e := range c.tokens {
+		if now.After(e.expires) {
 			delete(c.tokens, k)
 		}
 	}
-	c.tokens[raw] = now.Add(ConfirmTTL)
+	c.tokens[raw] = confirmEntry{expires: now.Add(ConfirmTTL), route: confirmRouteKey(pattern)}
 	return raw, nil
 }
 
@@ -89,12 +104,17 @@ func (c *confirmStore) issue(pattern string) (string, error) {
 func (c *confirmStore) spend(token, pattern string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	exp, ok := c.tokens[token]
+	e, ok := c.tokens[token]
 	if !ok {
 		return false
 	}
+	// Burned whatever the outcome, including a spend on the wrong route: a token tried against another
+	// route is a token in the wrong hands, and leaving it live would let a caller probe route after
+	// route with one confirmation. Before burpsy-react-ui-r9b5 the route was recorded at mint and
+	// never compared, so a confirmation for a cheap gated call (a crawl) confirmed any other gated call
+	// (a project switch, a CA private-key export) within the TTL.
 	delete(c.tokens, token)
-	return time.Now().Before(exp)
+	return time.Now().Before(e.expires) && e.route == confirmRouteKey(pattern)
 }
 
 // pending reports whether a token exists and has not expired, without consuming it. Used by the
@@ -102,8 +122,8 @@ func (c *confirmStore) spend(token, pattern string) bool {
 func (c *confirmStore) pending(token string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	exp, ok := c.tokens[token]
-	return ok && time.Now().Before(exp)
+	e, ok := c.tokens[token]
+	return ok && time.Now().Before(e.expires)
 }
 
 // gate wraps h so a confirmation-worthy route cannot execute without a confirmed token.
@@ -333,8 +353,8 @@ func (s *Server) confirmCount() int {
 	defer s.confirms.mu.Unlock()
 	now := time.Now()
 	n := 0
-	for _, exp := range s.confirms.tokens {
-		if now.Before(exp) {
+	for _, e := range s.confirms.tokens {
+		if now.Before(e.expires) {
 			n++
 		}
 	}

@@ -185,7 +185,9 @@ func TestAnExpiredConfirmationIsRefused(t *testing.T) {
 	token := confirm(t, s, "/api/crawl")
 	// Age it past the TTL rather than sleeping: the test asserts the BOUND, not the wait.
 	s.confirms.mu.Lock()
-	s.confirms.tokens[token] = time.Now().Add(-time.Second)
+	e := s.confirms.tokens[token]
+	e.expires = time.Now().Add(-time.Second)
+	s.confirms.tokens[token] = e
 	s.confirms.mu.Unlock()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/crawl", strings.NewReader(`{"seeds":["http://x/"]}`))
@@ -218,7 +220,9 @@ func TestExpiredConfirmationsAreSweptRatherThanAccumulating(t *testing.T) {
 		t.Fatalf("issue: %v", err)
 	}
 	c.mu.Lock()
-	c.tokens[old] = time.Now().Add(-time.Hour)
+	e := c.tokens[old]
+	e.expires = time.Now().Add(-time.Hour)
+	c.tokens[old] = e
 	c.mu.Unlock()
 	fresh, err := c.issue("/api/crawl")
 	if err != nil {
@@ -274,4 +278,51 @@ func TestAPrefixAloneDoesNotMakeARouteGated(t *testing.T) {
 	if !pathHasPrefix("/api/audit", "/api/audit") {
 		t.Error("pathHasPrefix failed on an exact path")
 	}
+}
+
+// burpsy-react-ui-r9b5: a confirmation is bound to the route it was minted for. A token minted for a
+// cheap gated call (here, a crawl) must not confirm a different gated call (a CA private-key export)
+// — before the fix the minted route was recorded and never compared, so any confirmation confirmed
+// everything within its TTL.
+func TestAConfirmationMintedForOneRouteIsRefusedOnAnother(t *testing.T) {
+	s, _ := newTestServerWithCA(t)
+	token := confirm(t, s, "/api/crawl")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/proxy/ca/export", strings.NewReader(`{"kind":"key"}`))
+	req.Host = "127.0.0.1:8081"
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Header.Set(ConfirmHeader, token)
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("a crawl confirmation exported the CA private key (%d)", rec.Code)
+	}
+}
+
+// The binding is to the subtree PAIR: /api/session/rules and /api/session/rules/ share one confirm
+// endpoint, so a token from it spends on either — strict across routes, never refusing the route the
+// caller minted for (the second half of r9b5: binding to one member at random would have failed about
+// half of rule creates and edits).
+func TestAConfirmationSpendsOnEitherMemberOfItsSubtreePair(t *testing.T) {
+	s := newTestServer()
+	for _, path := range []string{"/api/session/rules", "/api/session/rules/"} {
+		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules/"), path) {
+			t.Errorf("a token minted at the pair's confirm endpoint was refused on %s", path)
+		}
+		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules"), path) {
+			t.Errorf("a token minted for the exact pattern was refused on %s", path)
+		}
+	}
+	if s.confirms.spend(mustIssue(t, s, "/api/session/rules"), "/api/scope") {
+		t.Error("a session-rules token spent on /api/scope")
+	}
+}
+
+func mustIssue(t *testing.T, s *Server, pattern string) string {
+	t.Helper()
+	tok, err := s.confirms.issue(pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
 }
