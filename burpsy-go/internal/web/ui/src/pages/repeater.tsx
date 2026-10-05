@@ -80,6 +80,14 @@ function schemeOf(target: string): "http" | "https" {
  * (see the store's partialize), because losing a hand-crafted request to an
  * accidental refresh is the failure mode operators complain about most.
  */
+// A tab's effective send overrides (burpsy-react-ui-aa0p): its own options when it is overriding the
+// global default, and nothing when it inherits — so a group send never silently applies a tab's
+// stale per-tab options. Inheriting is the default; only an explicit inheritsGlobal === false
+// overrides.
+function sendOptionsFor(tab: RepeaterTab): RepeaterSendOptions | undefined {
+  return tab.inheritsGlobal === false ? tab.options : undefined;
+}
+
 export function RepeaterPage(): JSX.Element {
   const tabs = useApp((state) => state.repeaterTabs);
   const activeId = useApp((state) => state.activeRepeaterTab);
@@ -256,7 +264,7 @@ export function RepeaterPage(): JSX.Element {
         from_exchange: tab.fromExchange,
         // Absent options means "standing behaviour" — the backend validates and applies whatever
         // arrives, so an empty object is never sent when the operator set nothing.
-        ...(tab.options ? { options: tab.options } : {}),
+        ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
       },
       {
         onSuccess: (result) => {
@@ -386,7 +394,7 @@ export function RepeaterPage(): JSX.Element {
           request: tab.request,
           protocol: schemeOf(tab.target),
           ...(tab.fromExchange != null ? { from_exchange: tab.fromExchange } : {}),
-          ...(tab.options ? { options: tab.options } : {}),
+          ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
         })),
       },
       {
@@ -452,7 +460,7 @@ export function RepeaterPage(): JSX.Element {
             target: tab.target,
             request: tab.request,
             protocol: schemeOf(tab.target),
-            ...(tab.options ? { options: tab.options } : {}),
+            ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
           }),
         );
         // Same pairing rule as a normal send: the entry this hand-off adds carries the draft it
@@ -763,6 +771,8 @@ export function RepeaterPage(): JSX.Element {
   /** How many overrides the active tab carries — shown on the Config trigger so a panel that is
    *  closed cannot silently narrow what Send will do. */
   const overrideCount = Object.keys(active.options ?? {}).length;
+  // Whether the active tab overrides the global send defaults (burpsy-react-ui-aa0p).
+  const overriding = active.inheritsGlobal === false;
 
   /**
    * Merge a patch into the active tab's options, then drop every field whose value means
@@ -777,6 +787,14 @@ export function RepeaterPage(): JSX.Element {
       if (value === undefined || value === "" || value === false) delete merged[key];
     }
     setRepeaterTabOptions(active.id, merged);
+    // Touching any option makes the tab an override of the global default (Burp's blue marker).
+    if (active.inheritsGlobal !== false) updateRepeaterTab(active.id, { inheritsGlobal: false });
+  };
+
+  // Burp's "Restore global default": the send falls back to the global settings. The tab's own
+  // options are kept, just no longer applied, so overriding again restores them.
+  const restoreGlobalDefault = () => {
+    if (active) updateRepeaterTab(active.id, { inheritsGlobal: true });
   };
 
   /**
@@ -954,6 +972,9 @@ export function RepeaterPage(): JSX.Element {
         ) : (
           <span>
             {tab.kind === "ws" ? <Repeat2 size={10} style={{ display: "inline", marginRight: 4, verticalAlign: "-1px" }} /> : null}
+            {tab.inheritsGlobal === false ? (
+              <span title="This tab overrides the global send settings" style={{ color: "var(--accent)", marginRight: 3 }}>●</span>
+            ) : null}
             {tab.name}
           </span>
         )}
@@ -1361,7 +1382,7 @@ export function RepeaterPage(): JSX.Element {
             onDismiss={() => setGroupOutcome(null)}
           />
         ) : null}
-        {configOpen ? <SendOptionsPanel options={active.options} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} /> : null}
+        {configOpen ? <SendOptionsPanel options={active.options} overriding={overriding} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} onRestoreGlobal={restoreGlobalDefault} /> : null}
         {httpResult?.redirects ? (
           <RedirectChain chain={httpResult.redirects} chainSide={chainSide} onViewHop={setChainSide} />
         ) : null}
@@ -1598,12 +1619,16 @@ function WsReplyPane({
  */
 function SendOptionsPanel({
   options,
+  overriding,
   onChange,
   onReset,
+  onRestoreGlobal,
 }: {
   options?: RepeaterSendOptions;
+  overriding: boolean;
   onChange: (patch: Partial<RepeaterSendOptions>) => void;
   onReset: () => void;
+  onRestoreGlobal: () => void;
 }): JSX.Element {
   return (
     <Card style={{ marginTop: 10, padding: 12, display: "grid", gap: 10 }}>
@@ -1636,8 +1661,11 @@ function SendOptionsPanel({
             </Select>
           )}
         </Field>
-        <Button variant="outline" onClick={onReset}>
+        <Button variant="outline" onClick={onRestoreGlobal} disabled={!overriding} title="Send this tab with the global defaults instead of its own overrides">
           <RotateCcw size={14} />
+          Restore global default
+        </Button>
+        <Button variant="quiet" onClick={onReset} title="Clear this tab's stored overrides">
           Reset overrides
         </Button>
       </div>
@@ -1656,7 +1684,9 @@ function SendOptionsPanel({
         />
       </div>
       <p className="field-hint">
-        Overrides ride on this one send; anything left unset uses the standing Network settings.
+        {overriding
+          ? "This tab overrides the global send settings. Restore global default sends it with the standing Network settings instead."
+          : "This tab uses the global send defaults. Changing any option above overrides them for this tab."}
       </p>
     </Card>
   );

@@ -139,9 +139,18 @@ export interface RepeaterTab {
  /** Which RepeaterGroup this tab belongs to. Undefined = ungrouped; groups are cosmetic buckets,
   *  never a permission or a send target, so a dangling id after a group delete is harmless. */
  groupId?: string;
- /** Per-send overrides (Burp's config-override menu). Absent fields mean "the standing behaviour" —
+  /** Per-send overrides (Burp's config-override menu). Absent fields mean "the standing behaviour" —
   *  see internal/web/repeater_options.go for what each key does and what is deliberately absent. */
  options?: RepeaterSendOptions;
+ /**
+  * Whether this tab uses the global send defaults rather than its own `options`
+  * (burpsy-react-ui-aa0p). Burp lets a tab override the global settings wholesale, marks it while
+  * it does, and offers "Restore global default". Absent or true = inheriting (the send ignores
+  * `options`); false = overriding (the send applies `options`). Kept separate from `options` being
+  * empty so a tab tuned last week and then restored to the default keeps its tuning for when the
+  * operator overrides again, exactly as Burp's toggle does.
+  */
+ inheritsGlobal?: boolean;
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:
