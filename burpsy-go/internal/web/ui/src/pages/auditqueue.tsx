@@ -120,6 +120,16 @@ export function AuditQueuePage(): JSX.Element {
           <td>
            <Badge tone={stateTone(item.state)}>{item.status_label || item.state}</Badge>
            {item.burp_status ? <span className="cell-dim"> {item.burp_status}</span> : null}
+           {item.url_disposition ? (
+            <div style={{ marginTop: 2 }}>
+             <Badge
+              tone={item.url_disposition === "NETWORK_ERROR" ? "bad" : "good"}
+              title={item.url_disposition === "NETWORK_ERROR" ? "This URL's probes failed below HTTP — it never answered" : "This URL was reached and audited"}
+             >
+              {item.url_disposition}
+             </Badge>
+            </div>
+           ) : null}
           </td>
           <td title="Steps that reached a disposition, out of the steps this item planned">
            {itemProgress(item)}

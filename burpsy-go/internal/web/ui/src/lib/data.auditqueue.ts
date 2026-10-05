@@ -19,6 +19,9 @@ export interface AuditItemRow {
   state: string;
   status_label: string;
   burp_status: string;
+  /** The URL-level verdict (burpsy-react-ui-87fq): AUDITABLE, NETWORK_ERROR, or absent. Distinct from
+   *  the per-check dispositions in `outcome`. */
+  url_disposition?: string;
   note?: string;
   attempts: number;
   insertion_points?: { kind: string; name: string; status: number; detail?: string }[];

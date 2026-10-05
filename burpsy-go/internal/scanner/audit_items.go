@@ -455,6 +455,13 @@ type AuditItem struct {
 	Path   string `json:"path"`
 
 	State ItemState `json:"state"`
+	// URLDisposition is the URL-level verdict Burp's queue carries (burpsy-react-ui-87fq), distinct
+	// from the nine CHECK-level dispositions on Outcome: AUDITABLE when the request reached the target
+	// and at least one check ran, NETWORK_ERROR when its probes failed below HTTP and none ran, "" for
+	// an item refused before dispatch (the State and Note already say why) or not yet resolved. It is
+	// the field that lets a row say "never reachable" apart from "audited and clean". LOW_VALUE is
+	// deliberately absent — its prerequisite is crawler action metadata burpsy does not carry yet.
+	URLDisposition string `json:"url_disposition,omitempty"`
 	// StatusLabel is State's operator-facing label, and BurpStatus the burp.Zq5 constant it
 	// corresponds to ("" when Burp has none). Both on the row rather than derived by the reader,
 	// because the Cancelled flag overrides them: a bounded item whose context ended is Burp's
@@ -678,6 +685,7 @@ func (l *AuditItemLedger) Resolve(id core.ExchangeID, ex *core.Exchange, o Audit
 	}
 	identifyLocked(row, ex)
 	row.Outcome = o
+	row.URLDisposition = urlDispositionFor(o)
 	// Written on every resolve, not only when Begin ran: an item the session refused was still
 	// refused *by* a threshold, and that threshold is the one thing the row has to be able to name.
 	row.Breakers = newAuditItemBreakers(cfg)
@@ -1008,6 +1016,20 @@ func auditItemNote(o AuditOutcome, cfg AuditConfig) string {
 		}
 		return fmt.Sprintf("the run's wall-clock budget of %s was spent before %d step(s) of this item's plan were started",
 			cfg.TimeBudget, o.NotRun)
+	}
+	return ""
+}
+
+// urlDispositionFor derives the URL-level verdict from a terminal outcome (burpsy-react-ui-87fq).
+// A check that ran reached the target, so the URL is AUDITABLE whatever else was skipped; a URL
+// whose probes only ever failed below HTTP is NETWORK_ERROR; anything else — refused by a budget,
+// paused, cancelled, or nothing attempted — has no URL verdict, because the State already names why.
+func urlDispositionFor(o AuditOutcome) string {
+	if o.Ran > 0 {
+		return "AUDITABLE"
+	}
+	if o.SendFailures > 0 {
+		return "NETWORK_ERROR"
 	}
 	return ""
 }
