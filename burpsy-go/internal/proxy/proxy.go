@@ -72,6 +72,17 @@ type TlsPolicy struct {
 	passthrough      []string
 	passthroughPorts []uint16
 	engine           *TlsEngine
+	// applyOutOfScope passes an out-of-scope host through without interception (burpsy-react-ui-n1fi),
+	// Burp's "Apply to out-of-scope items": an engagement that only wants its targets decrypted does
+	// not have to enumerate every CDN and telemetry host its clients also reach.
+	applyOutOfScope bool
+	// autoAddOnFailure adds a host to the passthrough list when the CLIENT rejects burpsy's leaf —
+	// a pinned client — so the next connection to it tunnels opaque instead of failing again. Burp
+	// turns the handshake failure itself into the passthrough entry.
+	autoAddOnFailure bool
+	// autoAdded counts the hosts auto-add has written, so the behaviour is visible on the panel rather
+	// than a list that silently grows.
+	autoAdded int
 }
 
 // NewTlsPolicy creates a new TLS policy.
@@ -130,6 +141,79 @@ func (p *TlsPolicy) RemovePassthrough(pattern string) bool {
 		}
 	}
 	return false
+}
+
+// ApplyOutOfScope reports whether an out-of-scope host is passed through. The scope check itself is
+// the caller's — the policy holds no scope — so this only exposes the switch; see handleConnect.
+func (p *TlsPolicy) ApplyOutOfScope() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.applyOutOfScope
+}
+
+// SetApplyOutOfScope sets the switch.
+func (p *TlsPolicy) SetApplyOutOfScope(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.applyOutOfScope = on
+}
+
+// SetAutoAddOnFailure sets whether a client's rejection of burpsy's leaf auto-adds the host.
+func (p *TlsPolicy) SetAutoAddOnFailure(on bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.autoAddOnFailure = on
+}
+
+// AutoAddOnFailure reports whether auto-add is on.
+func (p *TlsPolicy) AutoAddOnFailure() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoAddOnFailure
+}
+
+// AutoAddedCount reports how many hosts auto-add has written.
+func (p *TlsPolicy) AutoAddedCount() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.autoAdded
+}
+
+// NoteFailedNegotiation records that a client rejected burpsy's leaf for host, and — when auto-add is
+// on — adds the host to the passthrough list so the next connection to it tunnels opaque. It reports
+// whether it added the host (false when auto-add is off or the host was already present), so the
+// caller can log the one-time transition rather than every failed handshake.
+//
+// The host is added as an EXACT pattern, not a wildcard: the failure was observed for this host, and
+// widening it to *.example.com would stop decrypting siblings the client never pinned. An operator who
+// wants the wildcard adds it themselves.
+func (p *TlsPolicy) NoteFailedNegotiation(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.autoAddOnFailure {
+		return false
+	}
+	for _, existing := range p.passthrough {
+		if existing == host {
+			return false
+		}
+	}
+	p.passthrough = append(p.passthrough, host)
+	p.autoAdded++
+	return true
 }
 
 // WithCommonDefaults returns a TLS policy with common pinned hosts.
@@ -1332,7 +1416,13 @@ func (s *Server) handleConnect(clientConn net.Conn, reader *bufio.Reader, target
 	// Passthrough is decided on the name the CLIENT asked for, not the redirect target: the
 	// passthrough patterns are the operator's list of hosts not to decrypt, and they name
 	// the hosts their clients ask for.
-	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.engine == nil {
+	// Passthrough when the host is on the list, when there is no engine to intercept with, or —
+	// Burp's "Apply to out-of-scope items" (burpsy-react-ui-n1fi) — when the switch is on and this
+	// host is out of scope. The scope check lives here because the policy holds no scope; it is the
+	// host the client asked for, judged at the host level, the same name the passthrough list matches.
+	outOfScopePassthrough := s.config.tls.ApplyOutOfScope() && s.config.scope != nil &&
+		!s.config.scope.MayContainHost(certName, uint16(port), true)
+	if s.config.tls.ShouldPassthrough(certName, uint16(port)) || s.config.tls.engine == nil || outOfScopePassthrough {
 		s.tunnelConnection(clientConn, net.JoinHostPort(host, strconv.Itoa(int(port16))))
 		return
 	}
@@ -1417,6 +1507,14 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		MaxVersion:   maxVersion,
 	})
 	if err := tlsClient.Handshake(); err != nil {
+		// The client rejected burpsy's leaf — the signature of a pinned client. Burp turns that
+		// failure into the passthrough entry (burpsy-react-ui-n1fi): with auto-add on, the host joins
+		// the list so the next connection to it tunnels opaque instead of failing again. Logged once,
+		// on the transition, not on every failed handshake.
+		if s.config.tls.NoteFailedNegotiation(certName) {
+			s.config.logger.Info("TLS passthrough auto-added a host after the client rejected burpsy's certificate",
+				zap.String("host", certName))
+		}
 		return
 	}
 	defer tlsClient.Close()

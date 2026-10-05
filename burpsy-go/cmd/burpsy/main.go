@@ -760,6 +760,10 @@ func main() {
 				}
 			}
 		}
+		// The two coupling switches survive restarts too (burpsy-react-ui-n1fi).
+		applyOOS, autoAdd := persistStore.LoadTlsPassthroughMode()
+		tlsPolicy.SetApplyOutOfScope(applyOOS)
+		tlsPolicy.SetAutoAddOnFailure(autoAdd)
 		// Runtime edits to the proxy's response-modification switches survive restarts.
 		// Without this, every switch the operator turned on in Proxy → Options came back
 		// off after a restart while the panel still rendered a working panel — the

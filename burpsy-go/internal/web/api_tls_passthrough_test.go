@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -109,5 +110,42 @@ func TestPassthroughEndpointWithoutAPolicyReportsUnavailableNotAFakeEmptyList(t 
 	rec := getJSON(t, s, "/api/proxy/passthrough")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d; a server with no TLS policy must admit it rather than serve an empty list that cannot be edited", rec.Code)
+	}
+}
+
+// burpsy-react-ui-n1fi: the two coupling switches round-trip through PUT and are reported on GET.
+func TestPassthroughCouplingSwitchesRoundTrip(t *testing.T) {
+	s := newPassthroughTestServer(t)
+
+	var view passthroughView
+	if err := json.Unmarshal(getJSON(t, s, "/api/proxy/passthrough").Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.ApplyOutOfScope || view.AutoAddOnFailure {
+		t.Errorf("defaults are not both off: %+v", view)
+	}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/proxy/passthrough",
+		strings.NewReader(`{"apply_out_of_scope":true,"auto_add_on_failure":true}`))
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if !view.ApplyOutOfScope || !view.AutoAddOnFailure {
+		t.Errorf("the switches did not take: %+v", view)
+	}
+	if !s.tlsPolicy.ApplyOutOfScope() || !s.tlsPolicy.AutoAddOnFailure() {
+		t.Error("the PUT did not reach the live policy")
+	}
+
+	// A partial PUT changes only the field it names.
+	s.mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPut, "/api/proxy/passthrough",
+		strings.NewReader(`{"auto_add_on_failure":false}`)))
+	if !s.tlsPolicy.ApplyOutOfScope() || s.tlsPolicy.AutoAddOnFailure() {
+		t.Error("a partial PUT changed a field it did not name")
 	}
 }

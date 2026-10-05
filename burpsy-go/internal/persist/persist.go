@@ -2336,6 +2336,34 @@ func (s *Store) SaveTlsPassthrough(patterns []string) {
 	}
 }
 
+// SaveTlsPassthroughMode persists the two coupling switches (burpsy-react-ui-n1fi): apply to
+// out-of-scope items, and auto-add a host when a client rejects burpsy's certificate.
+func (s *Store) SaveTlsPassthroughMode(applyOutOfScope, autoAddOnFailure bool) {
+	encoded, err := json.Marshal(map[string]bool{
+		"apply_out_of_scope": applyOutOfScope, "auto_add_on_failure": autoAddOnFailure,
+	})
+	if err != nil {
+		s.log("tls passthrough mode encode", err)
+		return
+	}
+	if err := s.setSetting("tls.passthrough.mode", string(encoded)); err != nil {
+		s.log("tls passthrough mode save", err)
+	}
+}
+
+// LoadTlsPassthroughMode restores the two switches; absence is both off.
+func (s *Store) LoadTlsPassthroughMode() (applyOutOfScope, autoAddOnFailure bool) {
+	v, err := s.getSetting("tls.passthrough.mode")
+	if err != nil || v == "" {
+		return false, false
+	}
+	var m map[string]bool
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return false, false
+	}
+	return m["apply_out_of_scope"], m["auto_add_on_failure"]
+}
+
 // LoadTlsPassthrough restores the pattern list. A database that never saved one
 // yields an empty list and no error: absence of state is the empty state, not a
 // failure worth waking the operator up for.
@@ -2451,6 +2479,21 @@ func (s *Store) SaveBrowserSettings(raw []byte) error {
 // LoadBrowserSettings returns the stored JSON, or nil when none was saved.
 func (s *Store) LoadBrowserSettings() ([]byte, error) {
 	v, err := s.getSetting("browser.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveHistoryExtractors persists the custom history/Intruder extractor columns (burpsy-react-ui-28n8)
+// with the project, as the raw definitions JSON.
+func (s *Store) SaveHistoryExtractors(raw []byte) error {
+	return s.setSetting("history.extractors", string(raw))
+}
+
+// LoadHistoryExtractors returns the stored definitions JSON, or nil when none was saved.
+func (s *Store) LoadHistoryExtractors() ([]byte, error) {
+	v, err := s.getSetting("history.extractors")
 	if err != nil || v == "" {
 		return nil, err
 	}

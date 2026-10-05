@@ -618,8 +618,8 @@ var manifest = map[string]route{
 		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",
 	},
 	"/api/proxy/passthrough": {
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
-		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy",
+		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskLocal,
+		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy; PUT the two coupling switches (apply to out-of-scope items, auto-add on a client certificate rejection)",
 	},
 	"/api/repeater/browser-reissue": {
 		// riskEgress, the same class as the WS resend: it mints URLs that re-send one stored
