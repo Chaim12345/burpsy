@@ -1068,9 +1068,13 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	// now point at payloads from a previous life.
 	ts.wsMessages = nil
 	ts.wsPayloads = nil
-	if len(messages) > 0 {
-		ts.nextID = uint64(len(messages))
-	}
+	// Unconditional: ids are positions, so the counter is the length of what was restored — INCLUDING
+	// zero. A guard that skipped the reset for an empty restore left the counter at the previous
+	// contents' length, which an in-console switch to a new project file then exposed: the next capture
+	// got id 3 while landing in slot 0, so every message stored after the switch was unreadable and every
+	// exchange pointing at one showed no bytes (burpsy-react-ui-nagj). Nothing else assigns nextID, so
+	// there is no other source of truth an empty restore could be protecting.
+	ts.nextID = uint64(len(messages))
 	var total int64
 	for _, m := range messages {
 		total += int64(m.Len())

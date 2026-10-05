@@ -120,4 +120,8 @@ type projectView struct {
 	// Backupable reports whether "Save copy" can work: it is the same condition the backup
 	// route checks, surfaced here so the menu can label the item before the operator clicks it.
 	Backupable bool `json:"backupable"`
+	// RestoreError is set only on the answer to an in-console switch whose one-time restore failed
+	// partway (burpsy-react-ui-nagj): the stores now point at the new file, but its history may be
+	// incomplete. Without it a partial switch answered exactly like a clean one.
+	RestoreError string `json:"restore_error,omitempty"`
 }

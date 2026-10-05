@@ -413,7 +413,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// /api/dashboard/events joins because its DELETE clears the event log — scope.changed and
 	// crawl.refused are the record of what the engagement was allowed to touch and what the tool
 	// refused, so discarding them is discarding evidence, the same act as clearing the tool log.
-	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
+	//
+	// /api/project/open joins because a switch REPLACES every in-memory store with another file's
+	// contents (burpsy-react-ui-dlw2): the console then shows the other project's history, and an
+	// unattended caller switching it would hide the operator's engagement behind someone else's.
+	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/project/open", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

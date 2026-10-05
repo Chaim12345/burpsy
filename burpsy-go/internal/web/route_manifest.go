@@ -534,6 +534,17 @@ var manifest = map[string]route{
 			"project file and survives a restart. A blank name is refused rather than stored, because a stored " +
 			"placeholder would be indistinguishable from a real name",
 	},
+	"/api/project/open": {
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "switch the running process to another project file (relative paths resolve next to the " +
+			"current one; a missing file is created): quiesces tasks, re-runs the one-time restore against " +
+			"the new file and re-points every write-through sink, so every in-memory store is replaced",
+	},
+	"/api/projects": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the project (.db) files in the active project's own directory, with stored names and the " +
+			"active one marked; never searches upward",
+	},
 
 	"/api/proxy/ca": {
 		methods: []string{"GET"}, risk: riskRead,

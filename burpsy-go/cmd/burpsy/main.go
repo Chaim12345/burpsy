@@ -276,17 +276,18 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to open database %s: %v", *dbFile, err)
 		}
-		defer persistStore.Close()
+		// Closed by webServer.CloseProject (deferred below, once the server exists), not here: an
+		// in-console project switch (burpsy-react-ui-dlw2) closes this store and opens another, so a
+		// deferred Close of this pointer would close the wrong file twice and the live one never.
 		// Tool log and coordinator are owned by the web server below, so restore
 		// them after it exists; history/scope/findings restore here.
 		if err := persistStore.Restore(store, findingStore, scope, nil, nil, nil, nil); err != nil {
 			log.Fatalf("Failed to restore from database: %v", err)
 		}
-		store.SetPersistenceSinks(persistStore.SaveMessage, persistStore.SaveExchange)
-		findingStore.SetPersistenceSink(persistStore.SaveFinding)
-		// Triage deletes must reach the mirror too: without this a finding deleted in the UI is
-		// restored on the next start, reading its surviving row back out of SQLite.
-		findingStore.SetDeleteSink(persistStore.DeleteFinding)
+		// Message, exchange and finding sinks — including the triage delete sink, without which a
+		// finding deleted in the UI is restored on the next start. Installed through the web
+		// package so every durable write takes the project-switch lock from the first capture on.
+		web.InstallCaptureSinks(store, findingStore, persistStore)
 	}
 
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
@@ -745,6 +746,9 @@ func main() {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
 		webServer.WithPersist(persistStore)
+		// Close whichever project file is open at exit — after an in-console switch that is no
+		// longer persistStore (burpsy-react-ui-dlw2).
+		defer webServer.CloseProject()
 		// The live sweep's cross-run seen ledger (apfh) survives restarts: re-seen request
 		// content stays REQUEST_TO_AUDIT_DEDUPLICATED instead of re-auditing everything the
 		// last process already covered. Loaded here onto the state the sweep consults, before

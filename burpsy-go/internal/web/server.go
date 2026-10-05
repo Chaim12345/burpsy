@@ -945,6 +945,11 @@ func (s *Server) setupRoutes() {
 	// file and the menu's other items hang off what it reports.
 	s.mux.HandleFunc("/api/project", s.handleProject)
 	s.mux.HandleFunc("/api/project/name", s.handleProjectName)
+	// In-console open/switch (burpsy-react-ui-dlw2): the front half je3y had to decline. The switch
+	// re-runs the one-time restore against the new file and re-points every sink — see
+	// api_project_open.go for why it is not a pointer swap.
+	s.mux.HandleFunc("/api/project/open", s.handleProjectOpen)
+	s.mux.HandleFunc("/api/projects", s.handleProjectList)
 	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
