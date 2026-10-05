@@ -79,6 +79,45 @@ X-Version: v42`, `{"data":{"user":{"id":"u-7"}}}`)
 	}
 }
 
+// burpsy-react-ui-28n8.1: an Intruder row holds the MESSAGE id of its stored response, not an exchange
+// id, and both count from zero — so message ids are their own field, resolved against the message
+// store. Sending the response's message id must yield that response's value, keyed by message id.
+func TestHistoryExtractByMessageIDReadsThatMessage(t *testing.T) {
+	s := newTestServer()
+	putJSON(t, s, "/api/history/extractors", map[string]any{"extractors": []map[string]any{
+		{"name": "user", "how": map[string]any{"json_path": "data.user.id"}},
+	}})
+	seedResponse(t, s, "HTTP/1.1 200 OK", `{"data":{"user":{"id":"decoy"}}}`)
+	exID := seedResponse(t, s, "HTTP/1.1 200 OK", `{"data":{"user":{"id":"u-9"}}}`)
+	ex, err := s.store.GetExchange(core.ExchangeID(exID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respID := uint64(*ex.Response)
+	if respID == exID {
+		t.Fatalf("test needs the message id (%d) to differ from the exchange id", respID)
+	}
+
+	rec := postJSON(t, s, "/api/history/extract", map[string]any{"messages": []uint64{respID}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("extract = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Values   map[string]map[string]*string `json:"values"`
+		Messages map[string]map[string]*string `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	row := resp.Messages[strconv.FormatUint(respID, 10)]
+	if row == nil || row["user"] == nil || *row["user"] != "u-9" {
+		t.Errorf("message-id row = %v, want user=u-9: %s", row, rec.Body.String())
+	}
+	if len(resp.Values) != 0 {
+		t.Errorf("a messages-only request answered exchange rows: %v", resp.Values)
+	}
+}
+
 func jsonContains(t *testing.T, raw []byte, name string) bool {
 	t.Helper()
 	var v struct {

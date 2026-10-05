@@ -19,6 +19,8 @@ import {
   useWordlists,
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
+import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
+import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
@@ -81,6 +83,7 @@ import {
   Tooltip,
 } from "../ui/primitives";
 import { SortableTable, type Column } from "../ui/table";
+import { ExtractorCell } from "../ui/extractor-manager";
 import type { MenuGroup } from "../ui/menu";
 
 /**
@@ -540,6 +543,49 @@ function AttackResult({
   const [comments, setComments] = useState<Map<number, string>>(new Map());
   useEffect(() => setComments(new Map()), [view]);
 
+  /**
+   * The custom extractor columns (burpsy-react-ui-28n8.1), the same saved set History renders. A row
+   * here is not an exchange: it names its stored response by MESSAGE id, so values are requested by
+   * message id. Every bucket keeps its exemplar response; an attempt keeps one only when it opened its
+   * bucket, so most attempt cells say the response was not kept rather than reading as "no match".
+   * Defined in History, where the manager lives — here the columns are read-only.
+   */
+  const extractorsQuery = useHistoryExtractors();
+  const savedExtractors = useMemo(() => extractorsQuery.data?.extractors ?? [], [extractorsQuery.data]);
+  const extractorSig = useMemo(() => extractorSignature(savedExtractors), [savedExtractors]);
+  const extractMessageIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const bucket of report.buckets) if (bucket.example_response_id !== null) ids.add(bucket.example_response_id);
+    for (const attempt of report.attempts) if (attempt.response_id !== null) ids.add(attempt.response_id);
+    return [...ids].sort((a, b) => a - b);
+  }, [report.buckets, report.attempts]);
+  const extractValues = useMessageExtractValues(extractMessageIds, extractorSig, savedExtractors.length > 0);
+  const extractLoading = savedExtractors.length > 0 && extractMessageIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+  function extractorColumns<Row>(responseOf: (row: Row) => number | null, noResponseTitle: string): Column<Row>[] {
+    return savedExtractors.map((extractor) => ({
+      id: extractorColumnId(extractor.name),
+      header: extractor.name,
+      sortUndefined: "last" as const,
+      accessorFn: (row: Row) => {
+        const id = responseOf(row);
+        const value = id === null ? undefined : extractValues.data?.[String(id)]?.[extractor.name];
+        return value == null ? undefined : value;
+      },
+      cell: ({ row }: { row: { original: Row } }) => {
+        const id = responseOf(row.original);
+        return (
+          <ExtractorCell
+            value={id === null ? undefined : extractValues.data?.[String(id)]?.[extractor.name]}
+            hasResponse={id !== null}
+            loading={extractLoading}
+            failed={extractValues.isError}
+            noResponseTitle={noResponseTitle}
+          />
+        );
+      },
+    }));
+  }
+
   const bucketColumns: Column<ResultBucket>[] = [
     {
       accessorFn: (bucket) => bucket.status ?? undefined,
@@ -591,6 +637,7 @@ function AttackResult({
         </>
       ),
     },
+    ...extractorColumns<ResultBucket>((bucket) => bucket.example_response_id, "The engine stored no response for this bucket"),
     {
       id: "first_payload",
       header: "First payload",
@@ -775,6 +822,10 @@ function AttackResult({
           <span className="cell-dim">—</span>
         ),
     },
+    ...extractorColumns<Attempt>(
+      (attempt) => attempt.response_id,
+      "Response not kept: only the attempt that opened its bucket stores one — read the bucket's row, or use Grep - Extract for every attempt",
+    ),
     {
       id: "response",
       header: "Response",

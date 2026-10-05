@@ -207,3 +207,40 @@ export function ExtractorManager({
   </Modal>
  );
 }
+
+/**
+ * One cell of a derived extractor column (burpsy-react-ui-28n8). The five states are deliberately
+ * distinct — the house rule that empty, failed and loading must not read alike:
+ *
+ *  - a captured value: shown, with the full text as a title since the column is narrow;
+ *  - "" the extractor really captured: an empty-string marker, NOT a blank cell, so "matched empty"
+ *    is visibly different from "did not match";
+ *  - null (the response had no such field): an em dash;
+ *  - no value in the answer: a dash, with the reason the row has none — either it has no stored
+ *    response, or the run is still loading, or the run failed (the notice above the table carries the
+ *    failure; a per-cell error notice across every row would be noise);
+ */
+export function ExtractorCell({
+ value,
+ hasResponse,
+ loading,
+ failed,
+ noResponseTitle = "No response was captured for this row",
+}: {
+ value: string | null | undefined;
+ hasResponse: boolean;
+ loading: boolean;
+ failed: boolean;
+ /** Why a row with no stored response has no value — the reason differs between tables. */
+ noResponseTitle?: string;
+}): JSX.Element {
+ if (value === undefined) {
+  if (!hasResponse) return <span className="cell-dim" title={noResponseTitle}>—</span>;
+  if (loading) return <span className="cell-dim" title="Running the extractors…">…</span>;
+  if (failed) return <span className="cell-dim" title="The extractor run failed — see the notice above the table">—</span>;
+  return <span className="cell-dim" title="No value for this row">—</span>;
+ }
+ if (value === null) return <span className="cell-dim" title="No match in the response">—</span>;
+ if (value === "") return <span className="cell-dim" title="Captured an empty string">&quot;&quot;</span>;
+ return <span title={value}>{value}</span>;
+}

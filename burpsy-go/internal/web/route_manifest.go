@@ -337,8 +337,9 @@ var manifest = map[string]route{
 	},
 	"/api/history/extract": {
 		methods: []string{"POST"}, risk: riskLocal,
-		summary: "run the saved extractors against the responses of the named exchange ids and return each " +
-			"captured value, so the console can fill the derived columns for the rows it is showing",
+		summary: "run the saved extractors against the responses of the named exchange ids (history) or " +
+			"response message ids (Intruder) and return each captured value, so the console can fill the " +
+			"derived columns for the rows it is showing",
 	},
 	"/api/history/import/har": {
 		methods: []string{"POST"}, risk: riskLocal,

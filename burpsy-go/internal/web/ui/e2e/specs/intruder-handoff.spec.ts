@@ -21,13 +21,17 @@ const route = (id: string) => ROUTES.find((entry) => entry.id === id)!;
 
 /** POST JSON to burpsy's own web API and return the parsed reply. */
 function postJson<T>(webPort: number, path: string, body: unknown): Promise<T> {
+  return sendJson<T>(webPort, "POST", path, body);
+}
+
+function sendJson<T>(webPort: number, method: string, path: string, body: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const request = httpRequest(
       {
         host: "127.0.0.1",
         port: webPort,
-        method: "POST",
+        method,
         path,
         headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
       },
@@ -39,7 +43,7 @@ function postJson<T>(webPort: number, path: string, body: unknown): Promise<T> {
         });
         response.once("end", () => {
           if ((response.statusCode ?? 0) >= 400) {
-            reject(new Error(`POST ${path} -> ${response.statusCode}: ${text}`));
+            reject(new Error(`${method} ${path} -> ${response.statusCode}: ${text}`));
             return;
           }
           resolve(JSON.parse(text) as T);
@@ -155,5 +159,39 @@ test.describe("intruder results handoff", () => {
     await expect(page.locator(".cm-content").nth(1)).toContainText("ORIGIN-OK", { timeout: 10_000 });
 
     expect(consoleErrors).toEqual([]);
+  });
+  // The custom extractor columns History defines render in Intruder's results too
+  // (burpsy-react-ui-28n8.1). The trap this guards: a result row names its response by MESSAGE id,
+  // and an exchange id with the same number is an unrelated row — so a wrong lookup shows a value,
+  // just someone else's. The origin echoes the URL, so the captured value must be the payload this
+  // row actually sent.
+  test("an extractor column reads each result's own response", async ({ page, consoleErrors }) => {
+    const { webPort } = readHarness();
+    await sendJson(webPort, "PUT", "/api/history/extractors", {
+      extractors: [{ name: "echoed q", how: { regex: { pattern: "q=([a-z0-9]+)", group: 1 } } }],
+    });
+    try {
+      await pinTheme(page, "dark");
+      await runAnAttack(page);
+
+      const attempts = page.getByRole("group", { name: "Attempts" });
+      await expect(attempts.getByRole("columnheader", { name: "echoed q" })).toBeVisible();
+      // Ordinal 0 sent FIRST_PAYLOAD and opened its bucket, so it kept its response.
+      await expect(attempts.locator("tbody tr").first()).toContainText(FIRST_PAYLOAD, { timeout: 10_000 });
+      // The value cell, not the payload cell: the payload column also reads "admin", so the
+      // assertion that matters is that a cell carrying the captured value exists under this header.
+      const firstRowCells = attempts.locator("tbody tr").first().getByRole("cell");
+      const headers = await attempts.getByRole("columnheader").allTextContents();
+      const column = headers.findIndex((text) => text.includes("echoed q"));
+      expect(column).toBeGreaterThanOrEqual(0);
+      await expect(firstRowCells.nth(column)).toHaveText(FIRST_PAYLOAD);
+
+      const buckets = page.getByRole("group", { name: "Result buckets" });
+      await expect(buckets.getByRole("columnheader", { name: "echoed q" })).toBeVisible();
+
+      expect(consoleErrors).toEqual([]);
+    } finally {
+      await sendJson(webPort, "PUT", "/api/history/extractors", { extractors: [] });
+    }
   });
 });

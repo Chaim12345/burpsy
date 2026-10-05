@@ -23,6 +23,9 @@ export const extractorKeys = {
   *  a definition refetches; the id set is part of it so a different page of rows is a different
   *  entry rather than a stale reuse. */
  values: (signature: string, ids: string) => ["historyExtract", signature, ids] as const,
+ /** Intruder rows, named by response message id — a different id space, so a different entry. The
+  *  signature stays at index 1 so the placeholder rule below reads both shapes alike. */
+ messageValues: (signature: string, ids: string) => ["historyExtract", signature, "messages", ids] as const,
  /** The prefix the PUT invalidates so every value entry refetches against the new definitions. */
  valuesPrefix: ["historyExtract"] as const,
 };
@@ -79,16 +82,42 @@ export function useHistoryExtractValues(
  signature: string,
  enabled: boolean,
 ): UseQueryResult<ExtractValues> {
+ return useExtractValues("ids", ids, signature, enabled);
+}
+
+/**
+ * The same values for Intruder rows (burpsy-react-ui-28n8.1), named by the MESSAGE id of each row's
+ * stored response. An attempt or bucket is not an exchange, and both ids count from zero, so sending a
+ * response_id as an exchange id would resolve an unrelated exchange and show its value as the
+ * attempt's. The server keeps the two in separate fields; the answer is keyed by message id.
+ */
+export function useMessageExtractValues(
+ messageIds: readonly number[],
+ signature: string,
+ enabled: boolean,
+): UseQueryResult<ExtractValues> {
+ return useExtractValues("messages", messageIds, signature, enabled);
+}
+
+function useExtractValues(
+ field: "ids" | "messages",
+ ids: readonly number[],
+ signature: string,
+ enabled: boolean,
+): UseQueryResult<ExtractValues> {
  const idKey = ids.join(",");
  return useQuery({
-  queryKey: extractorKeys.values(signature, idKey),
+  queryKey: field === "ids" ? extractorKeys.values(signature, idKey) : extractorKeys.messageValues(signature, idKey),
   enabled: enabled && ids.length > 0,
   queryFn: async ({ signal }) => {
    const out: ExtractValues = {};
    for (let i = 0; i < ids.length; i += MAX_EXTRACT_ROWS) {
     const chunk = ids.slice(i, i + MAX_EXTRACT_ROWS);
-    const res = await api<{ values: ExtractValues }>("/api/history/extract", { ...json("POST", { ids: chunk }), signal });
-    Object.assign(out, res.values);
+    const res = await api<{ values: ExtractValues; messages: ExtractValues }>("/api/history/extract", {
+     ...json("POST", { [field]: chunk }),
+     signal,
+    });
+    Object.assign(out, field === "ids" ? res.values : res.messages);
    }
    return out;
   },

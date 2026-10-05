@@ -167,54 +167,76 @@ func (s *Server) handleHistoryExtractors(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// handleHistoryExtract serves POST /api/history/extract {ids:[...]} — the saved extractors' values for
-// the named rows. riskLocal: it reads stored responses and sends nothing.
+// handleHistoryExtract serves POST /api/history/extract — the saved extractors' values for the named
+// rows. riskLocal: it reads stored responses and sends nothing.
 //
-// The answer is id -> { extractor name -> value or null }. A null is an honest "this response did not
-// yield that value" (no match, no such header, a walk that found nothing), distinct from "" which is a
-// value the extractor really captured. A row with no stored response is absent from the answer.
+// Rows are named one of two ways, because the two tables that render these columns hold different
+// ids. History rows are exchanges: {"ids":[exchange ids]} answers {"values":{id:{...}}}. An Intruder
+// attempt or bucket is not an exchange — it carries the MESSAGE id of its stored response — so
+// {"messages":[response message ids]} answers {"messages":{id:{...}}}. The two are separate fields
+// rather than one id list with a flag because both are counters from zero: a message id read as an
+// exchange id resolves an unrelated exchange and would show its value as the attempt's.
+//
+// Each row maps extractor name -> value or null. A null is an honest "this response did not yield that
+// value" (no match, no such header, a walk that found nothing), distinct from "" which is a value the
+// extractor really captured. A row with no stored response is absent from the answer.
 func (s *Server) handleHistoryExtract(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		IDs []core.ExchangeID `json:"ids"`
+		IDs      []core.ExchangeID `json:"ids"`
+		Messages []core.MsgId      `json:"messages"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		http.Error(w, `the body must be {"ids":[...]}`, http.StatusBadRequest)
+		http.Error(w, `the body must be {"ids":[...]} or {"messages":[...]}`, http.StatusBadRequest)
 		return
 	}
-	if len(body.IDs) > maxHistoryExtractRows {
+	if len(body.IDs)+len(body.Messages) > maxHistoryExtractRows {
 		http.Error(w, "too many rows in one request; ask for the page you are showing", http.StatusBadRequest)
 		return
 	}
 	_, runs := s.historyExtractors()
-	out := make(map[string]map[string]*string, len(body.IDs))
+	values := make(map[string]map[string]*string, len(body.IDs))
 	for _, id := range body.IDs {
 		ex, err := s.store.GetExchange(id)
 		if err != nil || ex.Response == nil {
 			continue
 		}
-		msg, err := s.store.Get(*ex.Response)
-		if err != nil {
-			continue
+		if row, ok := s.extractFromMessage(*ex.Response, runs); ok {
+			values[strconv.FormatUint(uint64(id), 10)] = row
 		}
-		head, bodyBytes := splitHeadBody(msg.Raw())
-		hdrs := headerMapOf(head)
-		row := make(map[string]*string, len(runs))
-		for _, extractor := range runs {
-			res := extractor.RunResult(hdrs, bodyBytes)
-			if res.Outcome == session.ExtractResolved {
-				v := res.Value
-				row[extractor.Name] = &v
-			} else {
-				row[extractor.Name] = nil
-			}
-		}
-		out[strconv.FormatUint(uint64(id), 10)] = row
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"values": out})
+	messages := make(map[string]map[string]*string, len(body.Messages))
+	for _, id := range body.Messages {
+		if row, ok := s.extractFromMessage(id, runs); ok {
+			messages[strconv.FormatUint(uint64(id), 10)] = row
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"values": values, "messages": messages})
+}
+
+// extractFromMessage runs every extractor over one stored response. ok is false when the message is
+// not in the store.
+func (s *Server) extractFromMessage(id core.MsgId, runs []*session.Extraction) (map[string]*string, bool) {
+	msg, err := s.store.Get(id)
+	if err != nil {
+		return nil, false
+	}
+	head, body := splitHeadBody(msg.Raw())
+	hdrs := headerMapOf(head)
+	row := make(map[string]*string, len(runs))
+	for _, extractor := range runs {
+		res := extractor.RunResult(hdrs, body)
+		if res.Outcome == session.ExtractResolved {
+			v := res.Value
+			row[extractor.Name] = &v
+		} else {
+			row[extractor.Name] = nil
+		}
+	}
+	return row, true
 }
 
 // headerMapOf parses a response head's headers into the name->value map RunResult takes. A repeated

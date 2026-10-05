@@ -20,7 +20,7 @@ import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, 
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { ReferencePanelView } from "../ui/reference";
 import { VirtualTable, type Column, type VisibilityState } from "../ui/table";
-import { ExtractorManager } from "../ui/extractor-manager";
+import { ExtractorCell, ExtractorManager } from "../ui/extractor-manager";
 import { useHistoryExtractors, useHistoryExtractValues, useSaveHistoryExtractors, type ExtractValues } from "../lib/data.extractors";
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 
@@ -362,40 +362,6 @@ function CommentIndicator(): JSX.Element {
    <span className="sr-only">Has a note</span>
   </span>
  );
-}
-
-/**
- * One cell of a derived extractor column (burpsy-react-ui-28n8). The five states are deliberately
- * distinct — the house rule that empty, failed and loading must not read alike:
- *
- *  - a captured value: shown, with the full text as a title since the column is narrow;
- *  - "" the extractor really captured: an empty-string marker, NOT a blank cell, so "matched empty"
- *    is visibly different from "did not match";
- *  - null (the response had no such field): an em dash;
- *  - no value in the answer: a dash, with the reason the row has none — either it has no stored
- *    response, or the run is still loading, or the run failed (the notice above the table carries the
- *    failure; a per-cell error notice across every row would be noise);
- */
-function ExtractorCell({
- value,
- hasResponse,
- loading,
- failed,
-}: {
- value: string | null | undefined;
- hasResponse: boolean;
- loading: boolean;
- failed: boolean;
-}): JSX.Element {
- if (value === undefined) {
-  if (!hasResponse) return <span className="cell-dim" title="No response was captured for this row">—</span>;
-  if (loading) return <span className="cell-dim" title="Running the extractors…">…</span>;
-  if (failed) return <span className="cell-dim" title="The extractor run failed — see the notice above the table">—</span>;
-  return <span className="cell-dim" title="No value for this row">—</span>;
- }
- if (value === null) return <span className="cell-dim" title="No match in the response">—</span>;
- if (value === "") return <span className="cell-dim" title="Captured an empty string">&quot;&quot;</span>;
- return <span title={value}>{value}</span>;
 }
 
 /**
