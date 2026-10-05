@@ -564,6 +564,15 @@ var manifest = map[string]route{
 		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
 			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
 	},
+	"/api/proxy/ca/export": {
+		// riskDestructive, alongside regenerate: handing out the signing key is irreversible — once a
+		// copy exists elsewhere nothing here can take it back, and whoever holds it can mint a leaf
+		// every client trusting this CA accepts. The certificate kind shares the gate so one route has
+		// one rule a caller cannot talk past by naming the cheap kind first.
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "export the signing CA as kind cert (PEM), key (PKCS#8 PEM) or pkcs12 (password-protected " +
+			"keystore carrying both), so another tool can intercept with the same CA; never logged, never cached",
+	},
 	"/api/proxy/ca/regenerate": {
 		// riskDestructive, not riskLocal or riskCredential. riskLocal would put "throw away the trust
 		// anchor this proxy signs every intercepted site with" in the same class as a table-density

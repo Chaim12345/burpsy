@@ -510,6 +510,23 @@ func (e *TlsEngine) CertPEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.caCert.Raw})
 }
 
+// ExportCA returns the signing CA's certificate and private key as ONE snapshot taken under the
+// lock (burpsy-react-ui-j92x).
+//
+// One call rather than CertPEM plus a key getter, because the two must be halves of the same pair:
+// an ImportCA or RegenerateCA landing between two separate reads would hand an exporter the new
+// certificate with the old key — an export that every downstream tool accepts and then fails to
+// verify a single leaf with. ok is false when there is no CA. The caller owns keeping the key out of
+// logs; nothing here formats it.
+func (e *TlsEngine) ExportCA() (cert *x509.Certificate, key *rsa.PrivateKey, ok bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.caCert == nil || e.caPriv == nil {
+		return nil, nil, false
+	}
+	return e.caCert, e.caPriv, true
+}
+
 // CADescription reports who the current CA is and how long it lasts, for a UI that
 // has to show which CA is in force after an import. Returns the subject common
 // name, the NotAfter, and whether there is a CA at all.

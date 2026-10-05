@@ -888,6 +888,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
 	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
+	// Export the CA certificate, private key or a PKCS#12 pair (burpsy-react-ui-j92x) so another tool
+	// can intercept with the same CA. Behind the confirmation gate: see api_ca_export.go.
+	s.mux.HandleFunc("/api/proxy/ca/export", s.handleCAExport)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
 	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
