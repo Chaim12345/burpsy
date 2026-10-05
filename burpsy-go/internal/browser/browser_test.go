@@ -45,6 +45,17 @@ func TestArgsCarryTheLaunchContract(t *testing.T) {
 	}
 }
 
+// A bypass host (burpsy's own web host, for the DOM auditor's hit reports) is added to the bypass
+// list AFTER <-loopback>, so loopback targets are still proxied while that one host is reached
+// directly (burpsy-react-ui-wl94).
+func TestArgsBypassTheNamedHostButStillProxyLoopback(t *testing.T) {
+	args := Args(DefaultSettings(), "/p", Spec{ProxyAddr: "127.0.0.1:8080", BypassProxyFor: []string{"127.0.0.1:8099"}})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--proxy-bypass-list=<-loopback>;127.0.0.1:8099") {
+		t.Errorf("bypass list is wrong:\n%s", joined)
+	}
+}
+
 // Every refusal names its cause rather than leaving a button that does nothing.
 func TestLaunchRefusesByName(t *testing.T) {
 	l := New(t.TempDir())

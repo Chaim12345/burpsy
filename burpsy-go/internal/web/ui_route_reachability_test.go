@@ -51,6 +51,8 @@ import (
 // Adding an entry here is a decision that a capability is not operator-facing. If the honest reason
 // is "no UI yet", that is a gap, not an exemption — file it and leave the test red.
 var uiRouteExempt = map[string]string{
+	"/api/dominvader/hit": "the DOM-auditor browser extension's service worker POSTs here, not the " +
+		"console (burpsy-react-ui-wl94); the console reads the collected hits via /api/dominvader.",
 	"/": "the console itself; the browser requests it by navigating, not by fetch. The asset paths " +
 		"(app.js, style.css, favicon.ico) are served by this same catch-all and are not separate " +
 		"registrations, so they need no entries of their own",

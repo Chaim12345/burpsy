@@ -22,6 +22,7 @@ import { AuditQueuePage } from "./pages/auditqueue";
 import { ComparerPage } from "./pages/comparer";
 import { CollaboratorPage } from "./pages/collaborator";
 import { ContentDiscoveryPage } from "./pages/contentdiscovery";
+import { DomInvaderPage } from "./pages/dominvader";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -127,6 +128,12 @@ export const TOOLS: NavTool[] = [
         label: "Content discovery",
         description: "Sweep a path space with ffuf, and what the scope check dropped",
         page: ContentDiscoveryPage,
+      },
+      {
+        id: "dominvader",
+        label: "DOM auditor",
+        description: "Watch a canary through a page's sources and sinks while you browse",
+        page: DomInvaderPage,
       },
     ],
   },

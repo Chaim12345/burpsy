@@ -118,6 +118,18 @@ func (s *Server) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
 			spec.CA = ca
 		}
 	}
+	// The DOM auditor extension (burpsy-react-ui-wl94): materialised fresh each launch so the current
+	// canary and switch are baked in, and the web host bypassed so its hit reports are a direct
+	// loopback POST rather than traffic through the proxy they describe. A materialisation failure is
+	// logged and the browser still opens — the auditor is an addition, not a precondition for browsing.
+	if dir, bypass, err := s.materialiseDomAuditor(); err != nil {
+		s.logger.Warn("DOM auditor extension not loaded; the browser opens without it", zap.Error(err))
+	} else if dir != "" {
+		spec.Extensions = append(spec.Extensions, dir)
+		if bypass != "" {
+			spec.BypassProxyFor = append(spec.BypassProxyFor, bypass)
+		}
+	}
 	res, err := s.browserLauncher().Launch(spec)
 	if err != nil {
 		// 503: every refusal is about this machine (no listener, no binary, root, no display), not

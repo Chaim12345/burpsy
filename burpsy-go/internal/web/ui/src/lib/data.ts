@@ -116,6 +116,9 @@ const INVALIDATION: Record<string, string[][]> = {
  sitemap: [["sitemap"], ["dashboard"]],
  organizer: [["organizer"]],
  rules: [["rules"]],
+ // A DOM-auditor hit the operator's browser just reported (burpsy-react-ui-wl94), so the auditor
+ // view refetches without a poll.
+ dominvader: [["dominvader"]],
 };
 
 const FALLBACK: string[][] = [["dashboard"], ["stats"]];

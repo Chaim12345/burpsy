@@ -13,6 +13,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -108,6 +109,16 @@ type Server struct {
 	// use; see api_browser.go.
 	browserOnce sync.Once
 	browser     *browser.Launcher
+	// domInvader is the operator-side DOM auditor's state (burpsy-react-ui-wl94): the canary, the
+	// switch and the reported source/sink hits. The browser bakes its config from this on launch and
+	// the report endpoint feeds it.
+	domInvader *dominvader.Store
+	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
+	// launch rewrites it so the temp area does not accumulate one per launch.
+	domExtDir string
+	// webAddr is the address ListenAndServe bound, so the DOM auditor can tell its extension where to
+	// report. Empty in tests, which never serve.
+	webAddr string
 	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
 	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
 	scanBaseline *scanner.ScanConfig
@@ -276,6 +287,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		discoveries:        newDiscoveryRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
+		domInvader:         dominvader.NewStore(),
 	}
 	// One wiring call gives every task in the process — including a crawl registered from outside this
 	// package — a started and a finished event, without either side knowing about the other.
@@ -322,6 +334,7 @@ func (s *Server) followLive() {
 	s.findings.SetDedupPolicy(scanner.DedupPolicy())
 	s.reapplyConsolidation()
 	s.toolLog.OnChange(func() { s.live.notify(changeToolLog) })
+	s.domInvader.OnChange(func() { s.live.notify(changeDomInvader) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
 }
@@ -952,6 +965,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
 	s.mux.HandleFunc("/api/issues/consolidation", s.handleIssueConsolidation)
 	s.mux.HandleFunc("/api/scanner/secrets", s.handleScannerSecrets)
+	s.mux.HandleFunc("/api/dominvader", s.handleDomInvader)
+	s.mux.HandleFunc("/api/dominvader/hit", s.handleDomInvaderHit)
+	s.mux.HandleFunc("/api/dominvader/hits", s.handleDomInvaderHits)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.
@@ -1299,6 +1315,9 @@ func (s *Server) WithAllowedHosts(hosts ...string) *Server {
 
 // ListenAndServe starts the web server.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	// Remember the bound address so the DOM auditor can tell its extension where to report
+	// (burpsy-react-ui-wl94). A wildcard or empty host is normalised to loopback by domInvaderReportURL.
+	s.webAddr = addr
 	// Cap every request body so a single oversized POST cannot exhaust memory.
 	// The API is operator-facing and loopback-bound, but a body limit is cheap
 	// insurance and the right default for any server that reads JSON into structs.

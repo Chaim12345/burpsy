@@ -69,6 +69,12 @@ type Spec struct {
 	// Extensions are unpacked extension directories for --load-extension. A list so a DOM-Invader-style
 	// extension can join later without changing the launch path.
 	Extensions []string
+	// BypassProxyFor are host:port patterns the browser reaches directly rather than through the
+	// proxy. burpsy's own web host goes here when the DOM auditor is loaded (burpsy-react-ui-wl94), so
+	// the extension's hit reports are a direct loopback POST rather than traffic through — and
+	// recorded by — the very proxy they describe. Everything else, loopback targets included, still
+	// goes through the proxy (see the <-loopback> note in Args).
+	BypassProxyFor []string
 	// extraArgs are appended verbatim — tests use them to run the same launch headless.
 	extraArgs []string
 }
@@ -170,6 +176,15 @@ func SPKIPin(cert *x509.Certificate) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// bypassList renders Chromium's --proxy-bypass-list: the <-loopback> token first (undo the implicit
+// loopback bypass, so a target on localhost is still proxied), then any explicit host:port burpsy
+// wants reached directly. Order matters — <-loopback> subtracts, the explicit entries add back only
+// the one or two hosts named.
+func bypassList(extra []string) string {
+	parts := append([]string{"<-loopback>"}, extra...)
+	return strings.Join(parts, ";")
+}
+
 // Args builds Chromium's command line. Pure, so the launch contract is testable without a browser.
 func Args(set Settings, profileDir string, spec Spec) []string {
 	args := []string{
@@ -177,7 +192,7 @@ func Args(set Settings, profileDir string, spec Spec) []string {
 		"--proxy-server=http://" + spec.ProxyAddr,
 		// Chromium bypasses the proxy for loopback by default; a target on localhost is still a target,
 		// and its traffic belongs in history like any other.
-		"--proxy-bypass-list=<-loopback>",
+		"--proxy-bypass-list=" + bypassList(spec.BypassProxyFor),
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--class=burpsy-browser",

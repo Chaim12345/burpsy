@@ -724,6 +724,18 @@ var manifest = map[string]route{
 		summary: "enable or disable one corpus check by name; a name the corpus does not contain is " +
 			"refused before anything is recorded",
 	},
+	"/api/dominvader": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent",
+	},
+	"/api/dominvader/hit": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "the endpoint burpsy's own DOM-auditor extension reports one source/sink flow to; records a hit the operator's browser produced",
+	},
+	"/api/dominvader/hits": {
+		methods: []string{"DELETE"}, risk: riskLocal,
+		summary: "clear the DOM auditor's reported hits",
+	},
 	"/api/scanner/secrets": {
 		// riskLocal: the secret scan reads responses burpsy already captured and sends nothing; the
 		// switch changes which findings future captures file, which is this tool's own state.
