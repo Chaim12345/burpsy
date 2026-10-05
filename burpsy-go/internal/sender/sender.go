@@ -1142,6 +1142,7 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
+		eventStreamPromoter(ctx, conn, settings),
 	)
 	if err != nil {
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a

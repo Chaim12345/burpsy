@@ -137,6 +137,7 @@ func (s *Sender) sendSynchronizedOn(ctx context.Context, conn net.Conn, raw []by
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
+		eventStreamPromoter(ctx, conn, settings),
 	)
 	if rerr != nil {
 		return nil, SendOutcome{}, fmt.Errorf("read failed: %w", explainCancellation(ctx, rerr))

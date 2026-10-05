@@ -3,9 +3,13 @@ package sender
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/httputil"
 )
@@ -43,14 +47,19 @@ const maxStreamingBodyBytes = 8 * 1024 * 1024
 // rather than a failure, so what arrived is returned instead of an error. Before this an event stream
 // was indistinguishable from a hung target — the deadline fired inside the body read and the whole
 // response, head included, came back as nothing but an error string.
-func readResponse(br *bufio.Reader, understand100, streaming bool) ([]byte, error) {
+//
+// promote, when non-nil, is asked about each head and may turn an ordinary read into a streaming one
+// for THAT response — "treat text/event-stream responses as streaming" (burpsy-react-ui-v52t): an
+// event stream on a host nobody declared would otherwise run the ordinary read to its deadline and
+// come back as nothing but an error, losing the head and every event that did arrive.
+func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(head []byte) bool) ([]byte, error) {
 	for interim := 0; ; interim++ {
 		head, err := httputil.ReadResponseHead(br)
 		if err != nil {
 			return nil, err
 		}
 
-		if streaming {
+		if streaming || (promote != nil && promote(head)) {
 			// Best effort by design: for a declared streaming host the only way this read ends is the
 			// deadline or the cap, so the error is the expected outcome and the bytes are the result.
 			// The head is returned even when no body byte arrived, which is the case the old path lost.
@@ -131,4 +140,47 @@ func statusCode(head []byte) (int, bool) {
 		return 0, false
 	}
 	return code, true
+}
+
+// eventStreamPromoter returns readResponse's promote hook for one exchange, or nil when the
+// "treat text/event-stream responses as streaming" switch is off (burpsy-react-ui-v52t) — the sender's
+// half of the switch the proxy leg already honours, so one setting means the same thing in Repeater
+// as in the browser.
+//
+// It promotes only a text/event-stream response that is chunked or unframed: one with a
+// Content-Length says where it ends, and the ordinary read finishes it. A promoted response's read is
+// re-bounded by the streaming window rather than the ordinary read timeout — unless the caller's
+// context carries its own deadline, which describes the whole operation and still wins.
+func eventStreamPromoter(ctx context.Context, conn net.Conn, settings NetworkSettings) func([]byte) bool {
+	if !settings.Streaming.UseTextEventStreamHeader {
+		return nil
+	}
+	return func(head []byte) bool {
+		if !headDeclaresEventStream(head) {
+			return false
+		}
+		if !httputil.ResponseIsFrameless(head) && !httputil.ResponseIsChunked(head) {
+			return false
+		}
+		if _, has := ctx.Deadline(); !has {
+			if window := time.Duration(settings.Streaming.TimeoutMS) * time.Millisecond; window > 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(window))
+			}
+		}
+		return true
+	}
+}
+
+// headDeclaresEventStream reports whether a response head's Content-Type is text/event-stream,
+// ignoring parameters and case.
+func headDeclaresEventStream(head []byte) bool {
+	for _, line := range strings.Split(string(head), "\r\n") {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Content-Type") {
+			continue
+		}
+		mt, _, _ := strings.Cut(value, ";")
+		return strings.EqualFold(strings.TrimSpace(mt), "text/event-stream")
+	}
+	return false
 }

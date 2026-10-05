@@ -69,6 +69,14 @@ export interface NetworkSettings {
   streaming: {
     hosts: string[] | null;
     timeout_ms: number;
+    /**
+     * Burp's streaming_responses switches (burpsy-react-ui-609d / -v52t). `store` is optional on the wire:
+     * absent means ON (a document saved before the switch existed), so a panel must read a missing key as
+     * on — never as the operator having turned storage off.
+     */
+    store?: boolean | null;
+    strip_chunked_encoding_metadata?: boolean;
+    use_text_event_stream_header?: boolean;
   };
   /**
    * How the certificate the TARGET presents is treated. `verify` defaults to true and was false on

@@ -1338,6 +1338,39 @@ function NetworkSection(): JSX.Element {
        ? "No host is declared open-ended. Every response is read under the timeouts above."
        : `${streamingHosts.length} pattern${streamingHosts.length === 1 ? "" : "s"} declared open-ended.`}
      </p>
+     {/* Burp's three streaming_responses switches (burpsy-react-ui-609d / -v52t). They apply to the
+         proxy leg and, for text/event-stream, to every request the console sends. */}
+     <div className="stack">
+      <Switch
+       checked={draft.streaming.use_text_event_stream_header === true}
+       label="Treat text/event-stream responses as streaming"
+       onCheckedChange={(on) => patchSection("streaming", { use_text_event_stream_header: on })}
+      />
+      <p className="field-hint">
+       Recognise an event stream by its content type rather than by host, so it is forwarded as it
+       arrives and returned when the open-ended timeout ends — on hosts nobody declared above.
+      </p>
+      <Switch
+       checked={draft.streaming.store !== false}
+       label="Store streaming responses (may result in large captures)"
+       onCheckedChange={(on) => patchSection("streaming", { store: on })}
+      />
+      <p className="field-hint">
+       {draft.streaming.store === false
+        ? "Off: a streamed body still reaches the browser live; history keeps the response head and a note instead of the bytes."
+        : "On: a streamed body is recorded in history like any other response."}
+      </p>
+      <Switch
+       checked={draft.streaming.strip_chunked_encoding_metadata === true}
+       label="Strip chunked encoding metadata from streamed responses"
+       onCheckedChange={(on) => patchSection("streaming", { strip_chunked_encoding_metadata: on })}
+      />
+      <p className="field-hint">
+       {draft.streaming.strip_chunked_encoding_metadata === true
+        ? "On: a chunked stream is forwarded without its Transfer-Encoding header, its body sent until the connection closes."
+        : "Off: a chunked stream is forwarded as chunks, keeping its Transfer-Encoding header true."}
+      </p>
+     </div>
 
    {/* Upstream TLS: every intercepted connection was opened with verification off and nothing could
        turn it on (burpsy-react-ui-f365). On by default; the two escape hatches are named rather than
