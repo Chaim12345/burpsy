@@ -102,7 +102,7 @@ func Test_every_committed_git_hook_parses_under_its_own_shebang(t *testing.T) {
 		checked++
 	}
 	if checked == 0 {
-		t.Error("no hooks were checked: the directory held no executable hook files, so this gate "+
+		t.Error("no hooks were checked: the directory held no executable hook files, so this gate " +
 			"proved nothing — which is a finding about the directory, not a pass")
 	}
 }
