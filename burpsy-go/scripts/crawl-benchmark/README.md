@@ -42,3 +42,19 @@ Each class is filed as its own bead rather than fixed here.
 Same target and settings: burpsy-only page/other 109 -> 81, api unchanged at 40. All 28 dropped
 candidates were code (regex literals, statements, expressions, template fragments); none was a route,
 and nothing new appeared — 28 fewer wasted requests per crawl of this app.
+
+## After hzzl (run-time requests recorded by the rendered pass)
+
+The first two runs measured burpsy **without its DOM engine** while Katana ran headless — the
+comparison measured a flag, not the crawler. bench.py now starts burpsy with `-dom chrome`.
+
+With it, burpsy's rendered pass records the XHR/fetch requests each page issues and admits the
+same-origin GETs: 17 admitted on this target (phase 06-rendered: 17; one page POST counted, not
+sent), api class 40 -> 46. Every genuine API call that only Katana reached in the first run is now
+reached by burpsy (/api/Challenges?name, /rest/admin/application-configuration and -version,
+/rest/languages, /rest/products/search?q); the remaining first-run Katana-only api entries were
+escaped-quote fragments.
+
+That run's Katana half is not usable: with -hl Katana overran its 180 s budget by more than two
+minutes and wrote no output, so the table for it is omitted. The harness now stops an overrunning
+crawler, keeps whatever it wrote, and says so in results.md.

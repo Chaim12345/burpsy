@@ -10,8 +10,8 @@ reached to (path, sorted query-parameter NAMES) on the target's own origin, and 
 
 Each crawler gets its strongest settings, because the question is coverage, not defaults:
   katana: -jc -jsl -kf all -aff -hl -nos -xhr  (headless hybrid, JS + jsluice, known files, forms)
-  burpsy: submit_forms + request_speculative, through its own API exactly as the console drives it
-          (scope include, then a confirmed crawl).
+  burpsy: -dom chrome (its rendered pass, the counterpart of -hl), submit_forms + request_speculative,
+          through its own API exactly as the console drives it (scope include, then a confirmed crawl).
 """
 import argparse, json, os, re, shutil, socket, subprocess, sys, tempfile, time, urllib.request
 from urllib.parse import urlsplit, parse_qsl
@@ -51,8 +51,16 @@ def run_katana(target, depth, duration, outdir):
     out = os.path.join(outdir, "katana.jsonl")
     cmd = ["katana", "-u", target, "-d", str(depth), "-ct", f"{duration}s", "-jc", "-jsl", "-kf", "all",
            "-aff", "-hl", "-nos", "-xhr", "-fs", "fqdn", "-j", "-or", "-ob", "-silent", "-o", out]
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 120)
+    overran = False
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=duration + 120)
+    except subprocess.TimeoutExpired:
+        # Katana can overrun its own -ct budget (observed: >2 min past it with -hl). subprocess.run has
+        # already killed it; what it wrote so far is the result, and the overrun is reported.
+        overran = True
     urls = set()
+    if not os.path.exists(out):
+        return urls, overran
     for line in open(out, encoding="utf-8", errors="replace"):
         try:
             rec = json.loads(line)
@@ -62,13 +70,16 @@ def run_katana(target, depth, duration, outdir):
         if req.get("endpoint"): urls.add(req["endpoint"])
         for x in (rec.get("response") or {}).get("xhr_requests") or []:
             if x.get("endpoint"): urls.add(x["endpoint"])
-    return urls
+    return urls, overran
 
 def run_burpsy(target, depth, duration, outdir, binary):
     web, proxy = free_port(), free_port()
     work = tempfile.mkdtemp(prefix="bench-burpsy-")
+    # -dom chrome: burpsy's rendered-DOM pass, the counterpart of Katana's headless hybrid mode — run
+    # both crawlers with a browser or neither, or the comparison measures the flag, not the crawler.
     proc = subprocess.Popen([binary, "-db", os.path.join(work, "p.db"), "-web", f"127.0.0.1:{web}",
-                             "-proxy", f"127.0.0.1:{proxy}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             "-proxy", f"127.0.0.1:{proxy}", "-dom", "chrome"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     base = f"http://127.0.0.1:{web}"
     try:
         for _ in range(50):
@@ -103,12 +114,12 @@ def main():
     outdir = os.path.join(a.out, a.name); os.makedirs(outdir, exist_ok=True)
     u = urlsplit(a.target); origin = f"{u.scheme}://{u.netloc}"
 
-    k_urls = run_katana(a.target, a.depth, a.duration, outdir)
+    k_urls, k_overran = run_katana(a.target, a.depth, a.duration, outdir)
     b_urls = run_burpsy(a.target, a.depth, a.duration, outdir, a.burpsy)
     K = {k for k in (key(x, origin) for x in k_urls) if k}
     B = {k for k in (key(x, origin) for x in b_urls) if k}
 
-    lines = [f"# Crawl coverage: {a.name}", "", f"Target `{a.target}`, depth {a.depth}, budget {a.duration}s.", "",
+    lines = [f"# Crawl coverage: {a.name}", "", f"Target `{a.target}`, depth {a.depth}, budget {a.duration}s." + (" Katana overran its budget and was stopped; its partial output is used." if k_overran else ""), "",
              "| class | both | Katana only | burpsy only |", "|---|---:|---:|---:|"]
     classes = sorted({klass(p) for p, _ in K | B})
     for c in classes + ["**total**"]:

@@ -594,10 +594,15 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 			NetworkIdle: domexec.DefaultNetworkIdle,
 			MaxWait:     domexec.DefaultMaxRenderWait,
 		})
+		reqs := make([]crawler.RenderedRequest, 0, len(outcome.Requests))
+		for _, r := range outcome.Requests {
+			reqs = append(reqs, crawler.RenderedRequest{URL: r.URL, Method: r.Method})
+		}
 		return html, crawler.RenderOutcome{
-			Settled: outcome.Settled,
-			Capped:  outcome.Capped,
-			Waited:  outcome.Waited,
+			Settled:  outcome.Settled,
+			Capped:   outcome.Capped,
+			Waited:   outcome.Waited,
+			Requests: reqs,
 		}, err
 	}
 }

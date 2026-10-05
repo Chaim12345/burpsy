@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -762,15 +763,32 @@ type RenderOutcome struct {
 	Capped bool
 	// Waited is how long the render actually took.
 	Waited time.Duration
+	// Requests are the XHR and fetch requests the page itself issued while it rendered
+	// (burpsy-react-ui-hzzl): the run-time API calls a single-page app makes, which appear in no
+	// served byte and no rendered link. Capped at MaxRenderedRequests; RequestsDropped counts the rest.
+	Requests        []RenderedRequest
+	RequestsDropped int
 }
+
+// RenderedRequest is one request a page issued at run time.
+type RenderedRequest struct {
+	URL    string
+	Method string
+	// Type is the CDP resource type, "XHR" or "Fetch".
+	Type string
+}
+
+// MaxRenderedRequests bounds how many run-time requests one render records, so a page that polls or
+// streams cannot grow a crawl's frontier without bound.
+const MaxRenderedRequests = 200
 
 // RenderedDOMWithOptions reads the rendered DOM of one page, waiting for it to settle first, and
 // says whether it did.
 func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
 	opts = opts.withDefaults()
 	started := time.Now()
-	html, err := b.renderedDOM(ctx, targetURL, opts, started)
-	outcome := RenderOutcome{Waited: time.Since(started)}
+	html, reqs, dropped, err := b.renderedDOM(ctx, targetURL, opts, started)
+	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped}
 	if err != nil {
 		return "", outcome, err
 	}
@@ -787,15 +805,38 @@ func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, er
 	return html, err
 }
 
-func (b *Browser) renderedDOM(ctx context.Context, targetURL string, opts RenderOptions, started time.Time) (string, error) {
+func (b *Browser) renderedDOM(ctx context.Context, targetURL string, opts RenderOptions, started time.Time) (string, []RenderedRequest, int, error) {
 	tabCtx, cancel, err := b.newTab(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
 	defer cancel()
 
+	// The page's own run-time requests, recorded as the browser announces them. XHR and Fetch only:
+	// documents, scripts and images are already reachable from the served or rendered markup, and the
+	// requests a page MAKES are the ones nothing else can see.
+	var mu sync.Mutex
+	var reqs []RenderedRequest
+	dropped := 0
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		e, ok := ev.(*network.EventRequestWillBeSent)
+		if !ok || e.Request == nil || (e.Type != network.ResourceTypeXHR && e.Type != network.ResourceTypeFetch) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(reqs) >= MaxRenderedRequests {
+			dropped++
+			return
+		}
+		reqs = append(reqs, RenderedRequest{URL: e.Request.URL, Method: e.Request.Method, Type: string(e.Type)})
+	})
+
 	var html string
 	err = chromedp.Run(tabCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.Enable().Do(ctx)
+		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, err := page.AddScriptToEvaluateOnNewDocument(instrumentationJS).Do(ctx)
 			return err
@@ -809,10 +850,13 @@ func (b *Browser) renderedDOM(ctx context.Context, targetURL string, opts Render
 		}),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &html),
 	)
+	mu.Lock()
+	out, gone := append([]RenderedRequest(nil), reqs...), dropped
+	mu.Unlock()
 	if err != nil {
-		return "", fmt.Errorf("domexec: render %q: %w", targetURL, err)
+		return "", out, gone, fmt.Errorf("domexec: render %q: %w", targetURL, err)
 	}
-	return html, nil
+	return html, out, gone, nil
 }
 
 // waitForSettle blocks until the page is quiet in either the DOM or the network, or MaxWait elapses.

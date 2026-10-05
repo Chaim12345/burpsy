@@ -456,6 +456,14 @@ type RenderOutcome struct {
 	Capped bool
 	// Waited is how long the render actually took.
 	Waited time.Duration
+	// Requests are the XHR/fetch requests the page issued while it rendered (burpsy-react-ui-hzzl).
+	Requests []RenderedRequest
+}
+
+// RenderedRequest is one request a rendered page issued at run time.
+type RenderedRequest struct {
+	URL    string
+	Method string
 }
 
 // SeedRequest is one concrete request a seeds-only run sends: what one operation of an API
@@ -617,6 +625,12 @@ type Report struct {
 	JavaScriptLocationsFound int `json:"javascript_locations_found,omitempty"`
 	JavaScriptParseFailures  int `json:"javascript_parse_failures,omitempty"`
 	JavaScriptTruncated      int `json:"javascript_truncated,omitempty"`
+	// RenderedRequestsAdmitted counts same-origin GET requests a rendered page issued at run time and
+	// that were admitted as locations; the other two count what was observed and deliberately not sent
+	// — a page's own non-GET requests, and requests to another origin (burpsy-react-ui-hzzl).
+	RenderedRequestsAdmitted    int `json:"rendered_requests_admitted,omitempty"`
+	RenderedRequestsNotGET      int `json:"rendered_requests_not_get,omitempty"`
+	RenderedRequestsOtherOrigin int `json:"rendered_requests_other_origin,omitempty"`
 	// APIDocumentsRead counts API definitions (OpenAPI, Swagger, WSDL) the crawl read, and
 	// APIEndpointsFound the operations they declared (burpsy-react-ui-bwwg). Reported as a pair for
 	// the same reason the JSON pair is: a definition read is not a definition understood, and a
@@ -2119,9 +2133,36 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 				rep.LinksFound++
 				c.admit(l, item.url, item.depth+1, rep, lim)
 			}
+			if renderOutcome != nil {
+				c.admitRenderedRequests(renderOutcome.Requests, item, rep, lim)
+			}
 		}
 	}
 	rep.Fetches = append(rep.Fetches, fetch)
+}
+
+// admitRenderedRequests admits the requests a rendered page issued at run time (burpsy-react-ui-hzzl)
+// — the API calls a single-page app makes, which no served byte and no rendered link names. Measured
+// as the largest class of locations a headless crawler reached and burpsy did not (dvi7).
+//
+// Only SAME-ORIGIN GETs become discovered links, through admit()'s gates like any other link. A
+// cross-origin request is a third party the page talks to (analytics, a CDN) — admitting it would fill
+// the skip ledger with out-of-scope refusals; a non-GET is the page ACTING (a POST it made), and
+// replaying it from a crawler would be acting rather than discovering. Both are counted, never sent.
+func (c *Crawler) admitRenderedRequests(reqs []RenderedRequest, item frontierItem, rep *Report, lim *LimitReport) {
+	for _, r := range reqs {
+		u, err := url.Parse(r.URL)
+		if err != nil || !strings.EqualFold(u.Scheme, item.url.Scheme) || !strings.EqualFold(u.Host, item.url.Host) {
+			rep.RenderedRequestsOtherOrigin++
+			continue
+		}
+		if m := strings.ToUpper(r.Method); m != "" && m != "GET" {
+			rep.RenderedRequestsNotGET++
+			continue
+		}
+		rep.RenderedRequestsAdmitted++
+		c.admit(discoveredLink{raw: u.String(), tag: "rendered:xhr", foundAtRendered: true}, item.url, item.depth+1, rep, lim)
+	}
 }
 
 // admitSeed puts one validated seed on the frontier. Seeds skip the destructive check (see

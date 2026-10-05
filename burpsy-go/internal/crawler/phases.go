@@ -101,6 +101,9 @@ func PhaseOfTag(tag string) CrawlPhase {
 			return PhaseGraphQL
 		case hasTagPrefix(tag, "js:"):
 			return PhaseJavaScript
+		case hasTagPrefix(tag, "rendered:"):
+			// A request a rendered page issued at run time (hzzl) is the rendered pass's discovery.
+			return PhaseRendered
 		}
 		return PhaseNone
 	}
