@@ -344,6 +344,30 @@ type StreamingSettings struct {
 	// TimeoutMS is how long to keep reading a streaming response before returning what has arrived.
 	// Burp calls this the open-ended response timeout.
 	TimeoutMS int `json:"timeout_ms"`
+
+	// The three response-handling switches, Burp's streaming_responses.* keys. They govern what the
+	// proxy does with a response once it is recognised as streaming, and the proxy leg reads them off
+	// this document (api_network pushes them into proxy.StreamingPolicy).
+
+	// Store is "Store streaming responses (may result in large temp files)". A pointer, not a bare
+	// bool, because LoadNetworkSettings unmarshals onto an empty struct: a bare bool would decode a
+	// previously-saved document that predates this field as `false` and silently stop recording
+	// streamed bodies. Nil means the shipped default, which StoreStreamed reads as on.
+	Store *bool `json:"store,omitempty"`
+	// StripChunkedMetadata is "Strip chunked encoding metadata from streamed responses". Defaults off,
+	// which reproduces forwarding a streamed response exactly as it arrived.
+	StripChunkedMetadata bool `json:"strip_chunked_encoding_metadata"`
+	// UseTextEventStreamHeader is "Treat text/event-stream responses as streaming". Defaults off: a
+	// framed text/event-stream response takes the buffered path like any other framed response until
+	// the operator turns this on.
+	UseTextEventStreamHeader bool `json:"use_text_event_stream_header"`
+}
+
+// StoreStreamed reads the Store switch, defaulting a nil (never-set, or loaded from a document that
+// predates the field) to on — the behaviour that shipped before the switch existed, where every
+// streamed response was recorded.
+func (s StreamingSettings) StoreStreamed() bool {
+	return s.Store == nil || *s.Store
 }
 
 // Bounds on what the API will accept. Stated as constants so a refusal message can name the limit

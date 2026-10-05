@@ -568,6 +568,14 @@ func main() {
 				if err := streamingPolicy.Set(applied.Streaming.Hosts, time.Duration(applied.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 					logger.Warn("Proxy streaming policy refused the restored window", zap.Error(err))
 				}
+				// The three response-handling switches, restored on the same pass: a restart must honour
+				// "store", "strip chunked metadata" and "treat text/event-stream as streaming" for browser
+				// traffic too, or they would apply in Repeater and silently not through the proxy.
+				streamingPolicy.SetResponseHandling(
+					applied.Streaming.StoreStreamed(),
+					applied.Streaming.StripChunkedMetadata,
+					applied.Streaming.UseTextEventStreamHeader,
+				)
 				// The resolution overrides and 100-continue handling, restored onto the listener for
 				// the same reason: a restart must honour what the operator saved, or their
 				// split-horizon override works in Repeater and not in the browser they browse

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -125,15 +126,35 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	}
 	w.WriteHeader(resp.StatusCode)
 
-	var respBody []byte
+	policy := s.config.Streaming()
+	// A response whose length is unknown streams on its framing alone; the text/event-stream switch
+	// adds the one shape framing does not catch — a framed event stream, which Go's h2 client reports
+	// with a non-negative ContentLength and which would otherwise be read to completion before the
+	// browser saw a byte. Strip is not expressible here: net/http owns the h2 framing to the client, so
+	// there is no Transfer-Encoding header for the operator to strip.
 	streamed := resp.ContentLength < 0
+	if policy.TreatEventStreamAsStreaming() && isEventStreamHTTP(resp.Header) {
+		streamed = true
+	}
+	var respBody []byte
 	if streamed {
-		window := s.config.Streaming().Window()
+		window := policy.Window()
 		respBody = s.streamH2Body(resp.Body, w, window)
-		s.config.Streaming().NoteUnframed()
+		if resp.ContentLength < 0 {
+			// Only a response nothing framed is "unframed". A framed event stream the switch admitted is
+			// framed, so counting it would muddy the diagnostic NoteUnframed exists to answer.
+			policy.NoteUnframed()
+		}
 	} else {
 		respBody, _ = io.ReadAll(resp.Body)
 		_, _ = w.Write(respBody)
+	}
+	// Store off: the client already has the streamed body; history records the head without it, the h2
+	// counterpart of the HTTP/1 legs recording the head and a note. There is no note field on this
+	// hand-built row, so the omitted body is the whole of the record's "not stored".
+	recordedBody := respBody
+	if streamed && !policy.Store() {
+		recordedBody = nil
 	}
 
 	// The response modification rules do not run here, and the count says so rather
@@ -173,7 +194,7 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 			Response: burpsyhttp2.RenderResponse(
 				resp.StatusCode,
 				filterHopHeaders(resp.Header),
-				respBody,
+				recordedBody,
 			),
 			Started:  startTime,
 			Duration: time.Since(startTime),
@@ -185,6 +206,20 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 	} else {
 		s.config.options.NoteOutOfScopeDrop()
 	}
+}
+
+// isEventStreamHTTP reports whether an http.Header declares a text/event-stream body, the h2
+// counterpart of headIsEventStream: it ignores parameters such as `; charset=utf-8` and compares
+// case-insensitively, because `text/event-stream; charset=utf-8` is the same media type.
+func isEventStreamHTTP(hdr http.Header) bool {
+	ct := hdr.Get("Content-Type")
+	if ct == "" {
+		return false
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(ct), "text/event-stream")
 }
 
 func filterHopHeaders(hdr http.Header) []burpsyhttp2.Header {

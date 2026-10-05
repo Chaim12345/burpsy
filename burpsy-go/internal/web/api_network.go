@@ -189,6 +189,23 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 		"timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchInt(raw, &n.Streaming.TimeoutMS)
 		},
+		"store": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			// A pointer field, so a document that never set it reads as the shipped on rather than a
+			// bare false — see StreamingSettings.Store. The patch always carries an explicit value, so
+			// here the pointer is always set.
+			var b bool
+			if err := json.Unmarshal(raw, &b); err != nil {
+				return fmt.Errorf("wants true or false")
+			}
+			n.Streaming.Store = &b
+			return nil
+		},
+		"strip_chunked_encoding_metadata": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Streaming.StripChunkedMetadata)
+		},
+		"use_text_event_stream_header": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Streaming.UseTextEventStreamHeader)
+		},
 	},
 }
 
@@ -340,6 +357,15 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
 			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))
 		}
+		// The three response-handling switches reach the proxy leg for the same reason the host list
+		// does: one console edit, both legs. StoreStreamed reads a nil (never-set, or loaded from a
+		// document that predates the switch) as on, so an operator who never opened the panel keeps the
+		// recording behaviour that shipped.
+		s.proxyServer.Streaming().SetResponseHandling(
+			next.Streaming.StoreStreamed(),
+			next.Streaming.StripChunkedMetadata,
+			next.Streaming.UseTextEventStreamHeader,
+		)
 		// The resolution and 100-continue half, pushed for exactly the same reason: without it a
 		// hostname override would apply to Repeater and silently not to the browser traffic the
 		// operator is driving through the proxy, and an interim 100 would be handed to the client

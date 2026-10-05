@@ -68,6 +68,16 @@ type StreamingPolicy struct {
 	// operator did not name. It exists so a support conversation about "my event stream shows up
 	// empty" can be answered from the counter rather than guessed at.
 	unmatched int
+
+	// The three response-handling switches, Burp's streaming_responses.* keys (Zrgt.java:88,100,111).
+	// They govern what the operator does with a response once it is recognised as streaming, where the
+	// host list and the window govern which responses that is and for how long. Defaults reproduce the
+	// behaviour that shipped before the switches existed, so a policy nobody has touched behaves as it
+	// did: streamed bodies are stored, chunk metadata is left exactly as it arrived, and a framed
+	// text/event-stream response takes the buffered path like any other framed response.
+	store                  bool
+	stripChunked           bool
+	treatEventStreamStream bool
 }
 
 // NewStreamingPolicy returns a policy with no hosts declared, which is the correct default: a proxy
@@ -75,7 +85,10 @@ type StreamingPolicy struct {
 // Replace rules that run before the write. The window is the default one so a policy that has had
 // its host list set is immediately usable.
 func NewStreamingPolicy() *StreamingPolicy {
-	return &StreamingPolicy{window: DefaultStreamingWindow}
+	// store defaults on: before the switch existed the proxy recorded every streamed response, so an
+	// embedder that never touches the policy keeps that. The other two default off for the same
+	// reason — off is what the code did before they existed.
+	return &StreamingPolicy{window: DefaultStreamingWindow, store: true}
 }
 
 // WithStreaming attaches the streaming policy, so a host the operator declares in Settings → Network
@@ -132,6 +145,66 @@ func (p *StreamingPolicy) Set(hosts []string, window time.Duration) error {
 	p.window = window
 	p.mu.Unlock()
 	return nil
+}
+
+// SetResponseHandling replaces the three response-handling switches.
+//
+// It is separate from Set because the two answer different questions and change on different edits in
+// the console: Set is the host list and the window — which responses stream and for how long —
+// while these three are what the operator does with a streamed response once it is recognised. Keeping
+// them apart also means the existing Set callers and their tests do not grow a signature for a
+// decision they do not make.
+func (p *StreamingPolicy) SetResponseHandling(store, stripChunkedMetadata, treatEventStreamAsStreaming bool) {
+	p.mu.Lock()
+	p.store = store
+	p.stripChunked = stripChunkedMetadata
+	p.treatEventStreamStream = treatEventStreamAsStreaming
+	p.mu.Unlock()
+}
+
+// Store reports whether a streamed response's body is recorded to history.
+//
+// When off, the streamed bytes still reach the client live — the switch never changes what the
+// browser receives — but history keeps the head and a note instead of the body, which is Burp's
+// "Store streaming responses (may result in large temp files)" turned off: the operator watched the
+// stream and chose not to pay the temp-file cost of keeping it.
+func (p *StreamingPolicy) Store() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.store
+}
+
+// StripChunkedMetadata reports whether chunk framing is removed from a streamed chunked response.
+//
+// When on, a chunked streamed response is forwarded with its Transfer-Encoding header dropped and its
+// decoded payload sent close-delimited, which is what a client that cannot be told the body is chunked
+// while it is in fact being dechunked actually needs. When off, the response is forwarded exactly as
+// it arrived, which is the behaviour that shipped.
+func (p *StreamingPolicy) StripChunkedMetadata() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.stripChunked
+}
+
+// TreatEventStreamAsStreaming reports whether a framed text/event-stream response is streamed.
+//
+// A frameless or chunked event stream already streams on its framing alone; this switch is for the
+// one shape that does not — an SSE response that carries a Content-Length and would otherwise be
+// buffered until it ended. With it on, a response whose Content-Type is text/event-stream streams
+// however it is framed, which is Burp's "Treat text/event-stream responses as streaming".
+func (p *StreamingPolicy) TreatEventStreamAsStreaming() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.treatEventStreamStream
 }
 
 // Hosts returns the declared host list, copied.

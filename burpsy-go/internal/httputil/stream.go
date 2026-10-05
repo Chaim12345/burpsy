@@ -130,16 +130,33 @@ func StreamResponse(br *bufio.Reader, head []byte, onChunk func([]byte)) (Stream
 		if readN > int64(remaining) {
 			readN = int64(remaining)
 		}
-		buf := make([]byte, readN)
-		if _, err := io.ReadFull(br, buf); err != nil {
-			// A length-delimited body that ends short is a protocol fault, not a stream that stopped:
-			// the peer declared a length and did not deliver it. Reporting the error rather than
-			// returning the prefix keeps "this response was malformed" distinct from "this response
-			// is still arriving".
-			return StreamResult{Body: out.Bytes()}, fmt.Errorf("reading body: %w", err)
+		// Read and forward the length-delimited body in pieces rather than one ReadFull, so a framed
+		// event stream — a `text/event-stream` response the proxy admitted here because the operator
+		// turned on "treat text/event-stream responses as streaming" — reaches the client as each piece
+		// arrives instead of all at once when the body finishes. Without this an SSE feed that happens to
+		// carry a Content-Length would stream in name only: the client would see nothing until the body
+		// completed, which is the buffered behaviour the switch exists to escape.
+		buf := make([]byte, 32*1024)
+		var read int64
+		for read < readN {
+			want := int64(len(buf))
+			if rem := readN - read; want > rem {
+				want = rem
+			}
+			m, err := br.Read(buf[:want])
+			if m > 0 {
+				out.Write(buf[:m])
+				emit(buf[:m])
+				read += int64(m)
+			}
+			if err != nil {
+				// A length-delimited body that ends short is a protocol fault, not a stream that stopped:
+				// the peer declared a length and did not deliver it. Reporting the error rather than
+				// returning the prefix keeps "this response was malformed" distinct from "this response
+				// is still arriving".
+				return StreamResult{Body: out.Bytes()}, fmt.Errorf("reading body: %w", err)
+			}
 		}
-		out.Write(buf)
-		emit(buf)
 		return StreamResult{Body: out.Bytes(), Completed: true, Truncated: readN < n}, nil
 	}
 

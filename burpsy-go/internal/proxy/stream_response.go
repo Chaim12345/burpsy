@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/httputil"
@@ -49,12 +50,16 @@ import (
 // status that can carry a body. Such a response is open-ended by definition, and this branch is what
 // saves the operator who has not declared the host in Settings → Network.
 //
-// A framed response is never streamed, however the host is declared. Content-Length and a terminal
-// chunk both say when the response ends, and honouring that is what lets Match & Replace and the
-// hold see the whole message before any of it reaches the client. An operator who declares a
-// well-behaved host open-ended gets the buffered path, which is the correct answer and not a silent
-// override: a declared-open-ended host answering with a Content-Length is a host that ended its
-// response.
+// A framed response is never streamed on its framing alone. Content-Length and a terminal chunk both
+// say when the response ends, and honouring that is what lets Match & Replace and the hold see the
+// whole message before any of it reaches the client. An operator who declares a well-behaved host
+// open-ended gets the buffered path, which is the correct answer and not a silent override: a
+// declared-open-ended host answering with a Content-Length is a host that ended its response.
+//
+// The one exception is the "treat text/event-stream responses as streaming" switch: when it is on, a
+// framed response whose Content-Type is text/event-stream is streamed anyway, because an SSE feed that
+// carries a Content-Length is still a feed the operator wants to watch arrive. That is the only way a
+// framed response reaches this path.
 //
 // The host list is consulted for the window and the diagnostic, not for the decision — the decision
 // is a property of the response's framing, which is knowable, where the host list is an operator's
@@ -72,7 +77,102 @@ func (s *Server) streamsResponse(host string, head []byte) bool {
 	// the read: a response that reaches its own terminal framing was ordinary all along, and one that
 	// did not was a stream. That is why the buffered path re-reads rather than guessing here.
 	_ = host
-	return httputil.ResponseIsFrameless(head) || httputil.ResponseIsChunked(head)
+	if httputil.ResponseIsFrameless(head) || httputil.ResponseIsChunked(head) {
+		return true
+	}
+	// The text/event-stream switch admits the one streaming shape framing alone does not: an SSE
+	// response that carries a Content-Length and would otherwise be buffered until it ended. The two
+	// branches above already stream every frameless or chunked response, so this only ever adds the
+	// framed event stream, and only when the operator turned the switch on — a host that answered a
+	// request with an ordinary framed body is untouched.
+	if s.config.Streaming().TreatEventStreamAsStreaming() && headIsEventStream(head) {
+		return true
+	}
+	return false
+}
+
+// headIsEventStream reports whether a response head declares a text/event-stream body.
+//
+// The comparison ignores parameters (a `; charset=utf-8` suffix) and case, because `Content-Type:
+// text/event-stream; charset=utf-8` is the same media type as `text/event-stream` and an operator
+// who turned the switch on means both.
+func headIsEventStream(head []byte) bool {
+	ct := headerValue(head, "Content-Type")
+	if ct == "" {
+		return false
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(ct), "text/event-stream")
+}
+
+var (
+	streamCRLF          = []byte("\r\n")
+	streamTerminalChunk = []byte("0\r\n\r\n")
+)
+
+// streamFraming decides how a streamed response is written to the client, reconciling the three
+// shapes a streamed response takes once framing and the strip switch are accounted for.
+//
+// The problem it solves: StreamResponse hands back the DECODED payload — it consumes the chunk size
+// lines and trailers. So a chunked response forwarded with its Transfer-Encoding header intact but its
+// body dechunked is unreadable: a client told the body is chunked tries to parse "data: ..." as a
+// chunk size and fails with "unexpected EOF". The proxy did exactly that for every chunked response
+// before this, the latent half of burpsy-react-ui-wet3. The two honest answers are to re-frame the
+// payload as chunks (keep the header true) or to drop the header and send the body close-delimited —
+// which is precisely Burp's "strip chunked encoding metadata" switch off and on.
+type streamFraming struct {
+	head     []byte // the head to forward to the client
+	rechunk  bool   // re-frame each decoded chunk as a chunk and emit a terminal chunk on completion
+	closeEnd bool   // the forwarded response is close-delimited, so the connection must end with it
+}
+
+// framingFor builds the framing decision from the policy and the upstream head.
+func framingFor(policy *StreamingPolicy, head []byte) streamFraming {
+	if !httputil.ResponseIsChunked(head) {
+		// Frameless already: no Content-Length and no Transfer-Encoding, so the body is close-delimited
+		// and there is nothing to re-frame or strip.
+		return streamFraming{head: head, closeEnd: true}
+	}
+	if policy.StripChunkedMetadata() {
+		// Strip on: drop Transfer-Encoding and send the decoded payload close-delimited.
+		stripped, _ := removeHeader(head, "Transfer-Encoding")
+		return streamFraming{head: stripped, closeEnd: true}
+	}
+	// Strip off (the default): keep the chunked head and re-frame the decoded payload as chunks, so the
+	// header stays true to the body and a strict client can read it.
+	return streamFraming{head: head, rechunk: true}
+}
+
+// writeChunk writes one decoded payload to the client, re-framed as a chunk when the framing calls for
+// it. StreamResponse never hands an empty payload to its callback, so a re-framed chunk is never a
+// spurious terminal chunk.
+func (f streamFraming) writeChunk(clientConn net.Conn, chunk []byte) {
+	if !f.rechunk {
+		_, _ = clientConn.Write(chunk)
+		return
+	}
+	_, _ = clientConn.Write(strconv.AppendInt(nil, int64(len(chunk)), 16))
+	_, _ = clientConn.Write(streamCRLF)
+	_, _ = clientConn.Write(chunk)
+	_, _ = clientConn.Write(streamCRLF)
+}
+
+// writeTerminal closes a re-framed chunked response with its terminal chunk, but only when the
+// upstream response actually ended: a truncated stream has no terminal chunk and the connection
+// closing is what tells the client it stopped.
+func (f streamFraming) writeTerminal(clientConn net.Conn, result httputil.StreamResult) {
+	if f.rechunk && result.Completed {
+		_, _ = clientConn.Write(streamTerminalChunk)
+	}
+}
+
+// keepAlive reports whether the connection may carry a next request after this response. Only a
+// self-framed response that ended qualifies — a re-chunked response with its terminal chunk. A
+// close-delimited response (stripped or frameless) and a truncated one both end with the connection.
+func (f streamFraming) keepAlive(result httputil.StreamResult) bool {
+	return f.rechunk && result.Completed
 }
 
 // streamTLSResponse forwards one open-ended response over an intercepted TLS tunnel live, then runs
@@ -110,15 +210,21 @@ func (s *Server) streamTLSResponse(
 	requestEdited bool,
 	downgrade string,
 ) bool {
-	window := s.config.Streaming().Window()
+	policy := s.config.Streaming()
+	window := policy.Window()
 	if deadlineConn, ok := upstream.(interface{ SetReadDeadline(time.Time) error }); ok {
 		_ = deadlineConn.SetReadDeadline(time.Now().Add(window))
 		defer func() { _ = deadlineConn.SetReadDeadline(time.Time{}) }()
 	}
 
+	// How the streamed response is framed to the client: a re-chunked chunked response, a stripped
+	// close-delimited one, or an already-frameless one. StreamResponse is still handed the original
+	// head so it decodes the chunk framing — the framing decision only changes what the client is told.
+	framing := framingFor(policy, head)
+
 	// The head first: a browser cannot begin rendering an event stream without the status and
 	// headers, and streaming is the point at which the client starts consuming early.
-	if _, err := clientConn.Write(head); err != nil {
+	if _, err := clientConn.Write(framing.head); err != nil {
 		return false
 	}
 
@@ -126,8 +232,7 @@ func (s *Server) streamTLSResponse(
 	// client's socket buffer until the response ends, which is the buffered path wearing a streaming
 	// hat.
 	result, err := httputil.StreamResponse(upstreamBR, head, func(chunk []byte) {
-		if _, werr := clientConn.Write(chunk); werr == nil {
-		}
+		framing.writeChunk(clientConn, chunk)
 	})
 	if err != nil {
 		// A malformed frame is a protocol fault. The head has already gone to the client, so the
@@ -136,18 +241,31 @@ func (s *Server) streamTLSResponse(
 			zap.String("host", host), zap.Error(err))
 		return false
 	}
+	framing.writeTerminal(clientConn, result)
 
 	// The client has its bytes. Now the ordinary machinery runs on what arrived — the rules, the
 	// record, the note — with handleTLSResponse's write suppressed, because the write is the one step
 	// this path has already done differently.
 	completed := time.Now()
+	note := streamingNote(result, window)
 	responseData := make([]byte, 0, len(head)+len(result.Body))
 	responseData = append(responseData, head...)
-	responseData = append(responseData, result.Body...)
+	if policy.Store() {
+		responseData = append(responseData, result.Body...)
+	} else {
+		// Store off: the client already has the body; history keeps the head and a note rather than
+		// the streamed bytes. That is Burp's "Store streaming responses (may result in large temp
+		// files)" turned off — the operator watched the stream and chose not to pay to keep it.
+		note = joinNotes(streamNotStoredNote(result), note)
+	}
 
-	return s.handleTLSResponse(clientConn, method, host, port, tls, path, requestData, reqStages,
+	kept := s.handleTLSResponse(clientConn, method, host, port, tls, path, requestData, reqStages,
 		inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited,
-		downgrade, true, streamingNote(result, window))
+		downgrade, true, note)
+	// Keep the tunnel alive only for a self-framed response that ended. A stripped or frameless body
+	// is close-delimited and a truncated one never finished, so either must close rather than carry a
+	// next request on a framing that no longer says where this response ended.
+	return kept && framing.keepAlive(result)
 }
 
 // streamingResponseNote says what kind of response this was, in the row's own terms.
@@ -175,6 +293,44 @@ func streamingNote(result httputil.StreamResult, window time.Duration) *string {
 		return nil
 	}
 	return &text
+}
+
+// streamNotStoredNote is the history note for a streamed response whose body the operator chose not
+// to store. It names the byte count so the row still says how much was forwarded, which is the one
+// fact the missing body would otherwise have carried.
+func streamNotStoredNote(result httputil.StreamResult) string {
+	return "streaming response body not stored: " + formatByteCount(len(result.Body)) +
+		" forwarded to the client (store off)"
+}
+
+// joinNotes combines a leading note with an optional trailing one into the *string the TLS record
+// path takes, keeping both facts and returning nil when there is nothing to say.
+func joinNotes(lead string, rest *string) *string {
+	text := mergeNoteText(lead, derefNote(rest))
+	if text == "" {
+		return nil
+	}
+	return &text
+}
+
+// mergeNoteText joins two note fragments with "; ", dropping either when it is empty so a missing
+// fragment does not leave a dangling separator.
+func mergeNoteText(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	default:
+		return a + "; " + b
+	}
+}
+
+func derefNote(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // formatByteCount renders a streamed body size for a history note, at the precision an operator
@@ -268,7 +424,14 @@ func (s *Server) streamPlainResponse(
 		return
 	}
 
-	if _, err := clientConn.Write(head); err != nil {
+	// The framing decision, the same as the TLS leg: a chunked response is re-framed as chunks (strip
+	// off) or stripped to a close-delimited body (strip on), and a frameless one is already
+	// close-delimited. The plain path serves one request per connection (handleHTTP's caller defers
+	// Close), so a close-delimited response needs no extra signalling — the connection ends when this
+	// returns — but a chunked response still has to be re-framed or a strict client cannot read it.
+	policy := s.config.Streaming()
+	framing := framingFor(policy, head)
+	if _, err := clientConn.Write(framing.head); err != nil {
 		return
 	}
 
@@ -276,28 +439,32 @@ func (s *Server) streamPlainResponse(
 	// hands the bytes to the kernel and the peer reads them — so the write IS the flush, and that is
 	// what makes this streaming rather than the buffered path wearing a streaming hat.
 	result, err := httputil.StreamResponse(br, head, func(chunk []byte) {
-		_, _ = clientConn.Write(chunk)
+		framing.writeChunk(clientConn, chunk)
 	})
 	if err != nil {
 		s.config.logger.Warn("streaming response stopped on a malformed frame",
 			zap.String("host", host), zap.Error(err))
 		return
 	}
+	framing.writeTerminal(clientConn, result)
 
 	completed := time.Now()
 	responseData := make([]byte, 0, len(head)+len(result.Body))
 	responseData = append(responseData, head...)
-	responseData = append(responseData, result.Body...)
-
 	// The stream note is merged into whatever the request hold already left, for the same reason
 	// handleTLSResponse seeds it: both are facts about this exchange and neither replaces the other.
-	note := streamingNote(result, window)
-	if note != nil {
+	noteText := streamingResponseNote(result, window)
+	if policy.Store() {
+		responseData = append(responseData, result.Body...)
+	} else {
+		// Store off: history keeps the head and a note; the client already has the body.
+		noteText = mergeNoteText(streamNotStoredNote(result), noteText)
+	}
+	if noteText != "" {
 		if heldNote == "" {
-			heldNote = *note
+			heldNote = noteText
 		} else {
-			joined := *note + "; " + heldNote
-			heldNote = joined
+			heldNote = noteText + "; " + heldNote
 		}
 	}
 	s.completeResponse(clientConn, method, host, port, tls, path, requestData, reqStages,
