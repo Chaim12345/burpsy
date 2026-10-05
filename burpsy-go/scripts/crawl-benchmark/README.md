@@ -36,3 +36,9 @@ Raw counts overstate both sides; read the lists. What they showed:
   budget; the normaliser should refuse code-shaped candidates.
 
 Each class is filed as its own bead rather than fixed here.
+
+## After 8lpc (code-shaped candidates refused)
+
+Same target and settings: burpsy-only page/other 109 -> 81, api unchanged at 40. All 28 dropped
+candidates were code (regex literals, statements, expressions, template fragments); none was a route,
+and nothing new appeared — 28 fewer wasted requests per crawl of this app.

@@ -121,6 +121,9 @@ func normaliseJSLocation(raw string) (string, bool) {
 	if q := strings.IndexByte(s, '?'); q >= 0 && strings.ContainsAny(s[len(s)-1:], "=&?") {
 		s = s[:q]
 	}
+	if looksLikeCode(s) {
+		return "", false
+	}
 	switch {
 	case strings.HasPrefix(s, "http://"), strings.HasPrefix(s, "https://"):
 	case strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "//"):
@@ -148,4 +151,33 @@ func LooksLikeJavaScript(contentType, path string) bool {
 		return ct == "" || strings.HasPrefix(ct, "text/plain") || strings.HasPrefix(ct, "application/octet-stream")
 	}
 	return false
+}
+
+// looksLikeCode reports a candidate that is JavaScript rather than a location (burpsy-react-ui-8lpc).
+//
+// Measured by the dvi7 benchmark: a large share of what the extractors produced on a real SPA bundle
+// was code read as a path — regex literals (/\*/g, /:/g, /^), statements (/g;var), expressions with
+// && and spaces, unrendered {{templates}}. Each admitted one is a request spent on a URL nobody serves.
+// The test is on characters a URL path does not carry unescaped and code always does, applied after
+// placeholders are cut, so a real route built from a template (/orders/${id} -> /orders/) survives.
+func looksLikeCode(s string) bool {
+	if strings.ContainsAny(s, " \t\n;\\^`{}[]()<>|") || strings.Contains(s, "&&") {
+		return true
+	}
+	// A trailing regex-flag segment after a segment that is not a word: "/:/g", "/\\*/gi". A real
+	// route can end in a short word ("/blog/g"), so the segment before it decides.
+	segs := strings.Split(strings.TrimPrefix(s, "/"), "/")
+	if n := len(segs); n >= 2 {
+		last, prev := segs[n-1], segs[n-2]
+		if last != "" && len(last) <= 4 && strings.Trim(last, "gimsuy") == "" && prev != "" &&
+			strings.TrimFunc(prev, isPathWordRune) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isPathWordRune(r rune) bool {
+	return r == '-' || r == '_' || r == '.' || r == '~' ||
+		(r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
