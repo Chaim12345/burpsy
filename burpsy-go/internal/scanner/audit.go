@@ -522,6 +522,11 @@ const DefaultAutoBackoffMs uint32 = 2000
 const DefaultMaxItemsInProgress uint32 = 10
 
 type AuditConfig struct {
+	// ManualSpans are operator-marked [start,end) byte ranges over the audited request
+	// (burpsy-react-ui-806w). When set — only a single-exchange "audit this marked request" ever sets
+	// them — the enumerator audits exactly those spans and skips its heuristics, Burp's precedence for
+	// a manual insertion point. Empty is every other audit: the enumerator guesses as before.
+	ManualSpans [][2]int
 	// TimeBudget is the wall-clock ceiling for the whole run.
 	TimeBudget time.Duration
 	// MaxRequests is the ceiling on outbound probe requests for the whole run. Unset leaves it
@@ -835,6 +840,9 @@ func (cfg AuditConfig) enumerateOptions() bcheck.EnumerateOptions {
 	// harness, audit-item ledger and check context — because enumerateOptions is the one
 	// place all three read.
 	opts.SkipAllTestsForParameters = cfg.SkipAllTestsForParameters
+	// Operator-marked spans short-circuit the heuristics (burpsy-react-ui-806w). Rides this one path
+	// so the probe harness, the item ledger and the check context all see the same manual points.
+	opts.ManualSpans = cfg.ManualSpans
 	// The per-point effectiveness gate (burpsy-react-ui-y4om) rides the same path. It is a
 	// FUNCTION rather than a value because the oracle needs the run's own state: a point
 	// counts as effective when the run has seen it answer something, which is a per-run

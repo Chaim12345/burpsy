@@ -78,6 +78,11 @@ const (
 	IpBody   IpKind = "body"
 	IpCookie IpKind = "cookie"
 	IpHeader IpKind = "header"
+	// IpManual is an operator-marked byte span over the raw request (burpsy-react-ui-806w): Burp's
+	// MANUAL_INSERTION_POINT. When a request carries manual spans the enumerator audits exactly those
+	// and skips its heuristics, so an operator can confirm an injection point the enumerator does not
+	// model (a custom body format, a header the parser skips).
+	IpManual IpKind = "manual"
 	// URL query parameter name, not its value (Montoya PARAM_NAME_URL).
 	IpParamNameURL IpKind = "param_name_url"
 	// Form body parameter name (Montoya PARAM_NAME_BODY).
@@ -175,6 +180,9 @@ const (
 	// locRelocateCookieToBody removes one cookie clause and appends it to the
 	// form body as name=<payload>.
 	locRelocateCookieToBody
+	// locManualRaw is a byte range over the WHOLE raw request (not a RequestEdit component): an
+	// operator-marked span. Apply splices into the raw bytes directly (burpsy-react-ui-806w).
+	locManualRaw
 )
 
 // loc is a byte range within one component of the base request: the query
@@ -396,6 +404,12 @@ type EnumerateOptions struct {
 	// of a base64-wrapped JSON body has not tested that body, and a report that did
 	// not say so would be the false negative Declined exists to prevent.
 	NoNested bool
+	// ManualSpans are operator-marked [start,end) byte ranges over the raw request
+	// (burpsy-react-ui-806w). When non-empty, EnumerateWith returns exactly one manual point per span
+	// and nothing else — Burp short-circuits heuristic enumeration the moment a manual point exists,
+	// because the operator marking a position is a statement that the enumerator's guesses are not
+	// what they want tested here. An out-of-range or inverted span is dropped and recorded as Declined.
+	ManualSpans [][2]int
 	// SkipAllTestsForParameters names parameters an operator exempted from testing
 	// entirely — Burp's scanner.ignored_insertion_points.skip_all_tests_for_parameters.
 	// A point whose Name matches (case-insensitively; a parameter is an identifier and
@@ -444,6 +458,30 @@ func Enumerate(req []byte, kinds []string) ([]InsertionPoint, []Declined) {
 	return EnumerateWith(req, kinds, EnumerateOptions{Max: DefaultMaxInsertionPoints})
 }
 
+// manualPoints builds one insertion point per operator-marked span over the raw request, dropping a
+// span that is out of range or inverted and recording it as Declined. Spans are returned in the order
+// given, so a check's one-finding-per-point output is stable across runs (burpsy-react-ui-806w).
+func manualPoints(req []byte, spans [][2]int) ([]InsertionPoint, []Declined) {
+	var out []InsertionPoint
+	var declined []Declined
+	for i, sp := range spans {
+		start, end := sp[0], sp[1]
+		if start < 0 || end > len(req) || end < start {
+			declined = append(declined, Declined{What: fmt.Sprintf("manual span %d", i+1),
+				Reason: fmt.Sprintf("[%d,%d) is out of range for a %d-byte request", start, end, len(req))})
+			continue
+		}
+		out = append(out, InsertionPoint{
+			Kind:      IpManual,
+			Name:      fmt.Sprintf("manual %d", i+1),
+			BaseValue: string(req[start:end]),
+			loc:       loc{kind: locManualRaw, start: start, end: end},
+			coding:    codingRaw,
+		})
+	}
+	return out, declined
+}
+
 // EnumerateWithLimit is EnumerateWith with an explicit cap and nested expansion
 // left on. Retained as the spelling Intruder's uncapped body enumeration uses —
 // Intruder wants every nested position and no ceiling, which is a property of
@@ -474,6 +512,9 @@ func EnumerateWithLimit(req []byte, kinds []string, max int) ([]InsertionPoint, 
 // capped enumeration can never be mistaken for a request that simply had fewer
 // places to inject.
 func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]InsertionPoint, []Declined) {
+	if len(opts.ManualSpans) > 0 {
+		return manualPoints(req, opts.ManualSpans)
+	}
 	max := opts.Max
 	if max == 0 {
 		max = DefaultMaxInsertionPoints
@@ -1621,6 +1662,23 @@ func clauseRemovalSep(s string, start, end int, sep byte) (int, int) {
 // Everything else in the request is untouched, which is what makes a resulting
 // finding attributable to the point's name.
 func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]byte, error) {
+	// A manual point splices into the RAW request bytes at its marked span, bypassing the component
+	// parser entirely — the operator marked a byte range, not a parsed parameter (burpsy-react-ui-806w).
+	if p.loc.kind == locManualRaw {
+		start, end := p.loc.start, p.loc.end
+		if start < 0 || end > len(req) || end < start {
+			return nil, fmt.Errorf("manual insertion point [%d,%d) is out of range for a %d-byte request", start, end, len(req))
+		}
+		newVal := payload
+		if appending {
+			newVal = p.BaseValue + payload
+		}
+		out := make([]byte, 0, len(req)-(end-start)+len(newVal))
+		out = append(out, req[:start]...)
+		out = append(out, newVal...)
+		out = append(out, req[end:]...)
+		return out, nil
+	}
 	e, err := core.ParseRequestEdit(req)
 	if err != nil {
 		return nil, err

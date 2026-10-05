@@ -39,6 +39,11 @@ type scannerAuditReq struct {
 	// an audit works on at once, because Burp's dialog says "max concurrent requests" and one item can
 	// send many. An unknown name is refused rather than defaulted — see Server.poolLimiter.
 	Pool string `json:"pool,omitempty"`
+	// InsertionSpans are operator-marked [start,end) byte ranges over the audited request's raw bytes
+	// (burpsy-react-ui-806w). When present, the audit tests exactly those and skips the enumerator's
+	// heuristics — Burp's "actively scan this marked request". Meaningful only for a single-exchange
+	// audit, which is the only path that reads it.
+	InsertionSpans [][2]int `json:"insertion_spans,omitempty"`
 }
 
 // auditContext binds a named pool's limiter to this audit's context, so every probe the checks send
@@ -121,6 +126,8 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
 	}
+	// Operator-marked spans apply to this one request only (burpsy-react-ui-806w).
+	cfg.ManualSpans = req.InsertionSpans
 	ctx, perr := s.auditContext(r.Context(), req.Pool)
 	if perr != nil {
 		http.Error(w, perr.Error(), http.StatusNotFound)
