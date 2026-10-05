@@ -45,6 +45,7 @@ package crawler
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/bits"
 	"net/url"
 	"sort"
@@ -877,6 +878,40 @@ func scriptBody(n *html.Node) string {
 			b.WriteString(c.Data)
 			b.WriteByte('\n')
 		}
+	}
+	return b.String()
+}
+
+// sourceMapSourcesContent returns one source map's sourcesContent entries joined as one text, or
+// "" when the map carries none.
+//
+// A source map is JSON, and this reader is deliberately minimal: it asks for the `sourcesContent`
+// array only, and each entry contributes its text. Nothing else in the map is read — `sources` is a
+// file list, never a set of URLs (see mineSourceMapBody for why admitting those would flood the
+// frontier), `names` is a symbol table, `mappings` is VLQ soup no string miner should try to
+// interpret.
+//
+// encoding/json rather than a hand parser, because the one thing this reader must not do is invent
+// content a malformed map does not carry. Unmarshal into a struct with the one field that matters: a
+// truncated or non-JSON body yields the zero value, which is the honest empty — the map was fetched,
+// the report counts it, and there was nothing in it to find.
+func sourceMapSourcesContent(body []byte) string {
+	var m struct {
+		SourcesContent []string `json:"sourcesContent"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	if len(m.SourcesContent) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, src := range m.SourcesContent {
+		if src == "" {
+			continue
+		}
+		b.WriteString(src)
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

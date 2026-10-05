@@ -1537,6 +1537,72 @@ func (c *Crawler) fetchSourceMap(ctx context.Context, mapURL string, item fronti
 		return
 	}
 	rep.SourceMapsFetched++
+	c.mineSourceMapBody(mapItem, item, rep, lim)
+}
+
+// mineSourceMapBody reads a fetched map's sourcesContent back out of the store and admits the
+// URL-shaped paths inside it, through the same speculative gates every other hidden link passes.
+//
+// # Why sourcesContent and never `sources`
+//
+// The map's `sources` array is a file list — "/src/routes/dashboard.ts" is a TypeScript path inside
+// the build tree, not a URL the application serves. Admitting those would flood the frontier with
+// filenames that 404. sourcesContent is the ORIGINAL SOURCE TEXT itself, which for a SPA is where
+// the route table lives in readable form — `router.get("/admin", …)` written by a human. The
+// speculativeURLFields gates (root-relative or absolute only, punctuation-aware) are applied to it
+// unchanged: the same discipline that keeps a comment's prose out of the frontier also keeps a
+// TypeScript import path out, which is the exact reason to reuse them rather than write looser
+// rules "just for maps".
+//
+// # Why read the body back rather than hold the bytes
+//
+// The map was captured through the shared seam; its bytes live in the store indexed by exchange id.
+// Reading them back through GetExchange→Get→Body means the text mined is byte-for-byte the bytes the
+// passive check set already examined, and no copy of a potentially multi-megabyte map is held by the
+// frontier or the report. This is the architecture's own rule: raw bytes are written once and never
+// copied (AGENTS.md, "The one invariant").
+//
+// # The cap and the honest empty
+//
+// A map whose sourcesContent is absent (the common case for a production build that ships maps
+// without sources) yields nothing, and that is the true answer — the fetch is counted and the
+// report says so, rather than padded into a success. The MaxSpeculativeLinks cap still bounds the
+// mining through the same accounting every other speculative overflow takes.
+func (c *Crawler) mineSourceMapBody(mapItem frontierItem, item frontierItem, rep *Report, lim *LimitReport) {
+	// The map's own fetch row, found BY URL rather than by position. The obvious `rep.Fetches[len-1]`
+	// is wrong: perform appends the map's row, but the crawl is concurrent and by the time this runs
+	// the rows for the root page and the robots probe may already sit after it — the map's row was
+	// not last on the first probe, and the row that WAS last was the root page's, whose ExchangeID is
+	// 0. A store assigns ids from 0, so "ExchangeID == 0" is a real id and cannot be the sentinel
+	// either; matching the URL is the only lookup that cannot confuse a row for the wrong one.
+	var fetch Fetch
+	found := false
+	for _, f := range rep.Fetches {
+		if f.URL == mapItem.url.String() {
+			fetch, found = f, true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	ex, err := c.cfg.Capture.Store.GetExchange(fetch.ExchangeID)
+	if err != nil || ex.Response == nil {
+		return
+	}
+	msg, gerr := c.cfg.Capture.Store.Get(*ex.Response)
+	if gerr != nil {
+		return
+	}
+	content := sourceMapSourcesContent(msg.Body())
+	// No emptiness guard, deliberately: speculativeURLFields("") returns no candidates, so an absent
+	// sourcesContent produces no admission and no request — the honest empty — without a branch that
+	// a reader has to verify against the extractor to know it is not load-bearing.
+	// The map was fetched for item; the paths inside it are found relative to the page that named
+	// the map, at the page's own depth so the map pass cannot dig deeper than the page that carried it.
+	for _, raw := range speculativeURLFields(content) {
+		c.admit(discoveredLink{raw: raw, tag: "source map", speculative: true}, item.url, item.depth, rep, lim)
+	}
 }
 
 // visit sends one frontier item, captures and scans the response through the shared seam, and folds
