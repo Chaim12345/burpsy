@@ -220,3 +220,27 @@ func TestSeedingTwiceIsIdempotent(t *testing.T) {
 		t.Errorf("crawler.sitemapSeeded = %d after two identical passes, want 1", c.sitemapSeeded)
 	}
 }
+
+// THE START-URL TEST. The operator's own seed is almost always in the site map — it is the page they
+// browsed before deciding to crawl it — and seeds are admitted through the same enqueue that consults
+// the queued table. Seeding the seed itself would therefore drop the crawl's starting point, and a
+// seeded crawl would fetch nothing at all. The seed is the operator's instruction for THIS crawl; the
+// site map may only spare the requests the crawl would otherwise have discovered on its own.
+func TestSeedingNeverMarksTheCrawlsOwnSeedAsAlreadyQueued(t *testing.T) {
+	sm := seededMap(t,
+		[4]string{"a.test", "80", "/", "GET"},
+		[4]string{"a.test", "80", "/other", "GET"},
+	)
+	c, scope := newSeededCrawler(t, "a.test") // seeded at http://a.test/
+
+	if got := c.SeedFromSiteMap(sm, []string{"a.test:80"}, allowInScope(scope)); got != 1 {
+		t.Errorf("seeded %d, want 1: /other only — the crawl's own seed is not the site map's to spare", got)
+	}
+	seed := mustURL(t, "http://a.test/")
+	if c.queued[requestFingerprint("GET", seed, nil)] {
+		t.Fatal("the crawl's own seed was marked already-queued; Run would drop it and the crawl would fetch nothing")
+	}
+	if !c.enqueue(frontierItem{url: seed, method: "GET", depth: 0}, "", &LimitReport{Limits: c.limits}) {
+		t.Error("the seed was refused by enqueue after seeding")
+	}
+}

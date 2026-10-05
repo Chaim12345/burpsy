@@ -225,6 +225,16 @@ type crawlStartReq struct {
 	// With nothing held and no Seeds, the request is refused: a crawl with no origins is
 	// not a smaller crawl, it is none.
 	IncludeLiveSeen bool `json:"include_live_seen,omitempty"`
+	// SeedFromSiteMap pre-marks every request the site map already holds for the seeds' origins as
+	// already made (burpsy-react-ui-z8qf), so a second crawl of a site does not repeat the first
+	// crawl's discovery cost. Burp pre-seeds its crawl dedup the same way (Zrbx.java:91-93).
+	//
+	// Opt-in, and the reason is coverage: a request the site map holds is NOT fetched, so its links are
+	// not extracted. That is free when the map came from an earlier crawl — that crawl followed those
+	// links and they are in the map too — but a page the operator only BROWSED through the proxy may
+	// link to pages nothing has visited, and seeding it would hide them. The crawl's own seeds are never
+	// pre-marked, scope is honoured on the way in, and the count rides the report (sitemap_seeded).
+	SeedFromSiteMap bool `json:"seed_from_site_map,omitempty"`
 	// Config is a scan configuration by name, applied to the CRAWL half of it (burpsy-react-ui-3ok6).
 	//
 	// A Burp configuration carries a `scanner` object and a `crawler` object, and importing one is a
@@ -313,6 +323,15 @@ type crawlStartReq struct {
 	// MaxRelogins caps session-recovery attempts. Each costs a full login round trip, so a target
 	// whose session keeps expiring spends the crawl on logins rather than on pages.
 	MaxRelogins *int `json:"max_relogins,omitempty"`
+	// Burp's crawler.error_handling family (burpsy-react-ui-o0c5), under Burp's own key names. Every
+	// one is a POINTER because 0 is a real answer: Burp's shipped "Never stop crawl due to application
+	// errors" sets all three pause thresholds to 0, and an int read as "0 means unset" would turn that
+	// into a crawl that pauses where the operator explicitly said never. Absent means the named
+	// configuration's value, or Burp's default when there is none; present overrides both.
+	PauseOnTimeoutCount   *int `json:"pause_task_requests_timed_out_count,omitempty"`
+	PauseOnTimeoutPercent *int `json:"pause_task_requests_timed_out_percentage,omitempty"`
+	PauseOnAuthFailures   *int `json:"consecutive_authentication_failures_before_pausing_task,omitempty"`
+	FollowUpPasses        *int `json:"number_of_follow_up_passes,omitempty"`
 	// Pool names a saved resource pool to run under. Empty leaves the crawl on this package's own
 	// documented defaults, which is what every caller predating pools sends.
 	//
@@ -639,6 +658,23 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		configSpeculative = whole.RequestSpeculative
 		configSpeculativeLinks = whole.Limits.MaxSpeculativeLinks
 	}
+	// The error-handling keys overlay the named configuration the same way the limits do: a field the
+	// operator typed on this request wins over the file they also named (o0c5).
+	if req.PauseOnTimeoutCount != nil {
+		eh.PauseOnTimeoutCount = req.PauseOnTimeoutCount
+	}
+	if req.PauseOnTimeoutPercent != nil {
+		eh.PauseOnTimeoutPercent = req.PauseOnTimeoutPercent
+	}
+	if req.PauseOnAuthFailures != nil {
+		eh.PauseOnAuthFailures = req.PauseOnAuthFailures
+	}
+	if req.FollowUpPasses != nil {
+		eh.FollowUpPasses = req.FollowUpPasses
+	}
+	if err := eh.Validate(); err != nil {
+		return 0, nil, 0, nil, err
+	}
 	// The speculative phase and its cap overlay UNDER the explicit per-request fields,
 	// the same order as the limits: a field the operator typed on this request wins over
 	// the file they also named. The cap lands on the limits; the switch itself is carried
@@ -695,11 +731,17 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// and starts nothing yet: a configuration mistake below must still be a 400 with no task row, so
 	// the feed only becomes visible once the crawl goroutine starts it.
 	var feed *crawlAuditFeed
-	var onFetch func(crawler.Fetch)
+	var auditOffer func(crawler.Fetch)
 	if kind == crawlKindAudit {
 		feed = newCrawlAuditFeed(s, "crawl of "+seedAuditHost(seeds))
-		onFetch = feed.offer
+		auditOffer = feed.offer
 	}
+	// The task row advances as the crawl fetches, not once after Run returns (burpsy-react-ui-hbjo):
+	// before this an operator watching a crawl saw 0% and then 100%, and a long crawl was
+	// indistinguishable from a hung one. The hook is bound to the task once it exists (see
+	// progress.bind below); it fires only during Run, which starts after the bind.
+	progress := &crawlProgress{}
+	onFetch := progress.hook(auditOffer)
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
@@ -710,6 +752,16 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
 	// nil-receiver safe, so a process with no task registry attaches a gate that never holds.
 	c.WithSuiteGate(s.tasks.GateCheck)
+	// Site-map reuse (burpsy-react-ui-z8qf), before Run so the dedup table is seeded before the first
+	// request. Origins are the seeds' own, so a map holding a hundred hosts seeds only the ones this
+	// crawl was pointed at; the scope predicate keeps an out-of-scope host from being marked handled.
+	if req.SeedFromSiteMap && s.sitemap != nil {
+		var scopeAllows func(string, uint16, bool) bool
+		if s.scope != nil {
+			scopeAllows = s.scope.MayContainHost
+		}
+		c.SeedFromSiteMap(s.sitemap, seeds, scopeAllows)
+	}
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
 	s.crawls.start(task.ID(), seeds, kind, limits)
@@ -723,6 +775,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// mistyped bound must be a 400, not a task that appears only to fail). Handing the crawler the id
 	// afterwards is what makes "show me the traffic this scan produced" answerable at all.
 	c.WithTaskID(task.ID())
+	// Bound before the goroutine that calls Run starts, so every fetch the hook sees already has a row
+	// to advance — the go statement orders this write before any read in the crawl.
+	progress.bind(task)
 
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -745,7 +800,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		s.auditCrawlLocations(ctx, task.ID(), &rep)
 		s.crawls.finish(task.ID(), &rep, nil)
 		task.SetNote(fmt.Sprintf("%d fetched, %d refused, %d failed", rep.Fetched, rep.Refused, rep.Failed))
-		task.Advance(uint64(rep.Fetched))
+		// The fetches the hook already counted are not counted twice; only the remainder (requests the
+		// report counts that never reached the capture path) is credited now.
+		progress.settle(uint64(rep.Fetched))
 		if feed != nil {
 			// Before Finish and before this goroutine's deferred cancel, because the audit phase's
 			// own task id is handed to the findings it produces and the crawl task stays open while

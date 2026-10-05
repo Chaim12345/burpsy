@@ -318,7 +318,7 @@ const (
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var CrawlStopAll = [13]CrawlStop{
+var CrawlStopAll = [18]CrawlStop{
 	StopRequestBudget,
 	StopDuration,
 	StopLocationBudget,
@@ -332,6 +332,11 @@ var CrawlStopAll = [13]CrawlStop{
 	StopCaptureBytes,
 	StopFingerprintBudget,
 	StopReloginBudget,
+	StopPausedTimeouts,
+	StopPausedTimeoutPercentage,
+	StopPausedAuthFailures,
+	StopFollowUpBudget,
+	StopFollowUpCancelled,
 }
 
 func (s CrawlStop) String() string {
@@ -362,8 +367,35 @@ func (s CrawlStop) String() string {
 		return "fingerprint-budget"
 	case StopReloginBudget:
 		return "relogin-budget"
+	case StopPausedTimeouts:
+		return "paused-timeouts"
+	case StopPausedTimeoutPercentage:
+		return "paused-timeout-percentage"
+	case StopPausedAuthFailures:
+		return "paused-auth-failures"
+	case StopFollowUpBudget:
+		return "follow-up-budget"
+	case StopFollowUpCancelled:
+		return "follow-up-cancelled"
 	}
 	return "unknown"
+}
+
+// MarshalText puts a stop on the wire by its NAME (burpsy-react-ui-j5j7). As a bare integer the stop
+// list meant nothing to a reader that did not share this package's iota order, and a stop added later
+// shifted every number after it; "paused-timeouts" means the same thing in every build.
+func (s CrawlStop) MarshalText() ([]byte, error) { return []byte(s.String()), nil }
+
+// UnmarshalText reads a stop back by name, refusing a name this build does not have rather than
+// mapping it to some other stop.
+func (s *CrawlStop) UnmarshalText(b []byte) error {
+	for _, stop := range CrawlStopAll {
+		if stop.String() == string(b) {
+			*s = stop
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown crawl stop %q", string(b))
 }
 
 // Explanation is one line an operator can act on.
@@ -395,6 +427,16 @@ func (s CrawlStop) Explanation() string {
 		return "a request-identity table reached its bound, so URLs the crawl had never seen were refused rather than remembered; the application is larger than this crawl can keep track of"
 	case StopReloginBudget:
 		return "the re-login budget was spent while URLs were still queued; anything beyond the last re-login was crawled unauthenticated"
+	case StopPausedTimeouts:
+		return "paused by policy: consecutive requests timed out past the error-handling threshold, so the crawl stopped rather than keep sending to a target that had stopped answering"
+	case StopPausedTimeoutPercentage:
+		return "paused by policy: the share of requests that timed out passed the error-handling threshold, so the crawl stopped against a broadly unresponsive target"
+	case StopPausedAuthFailures:
+		return "paused by policy: consecutive re-logins failed past the error-handling threshold; everything after would have been crawled as a logged-out user"
+	case StopFollowUpBudget:
+		return "requests that failed were not retried because the request budget was spent; they remain failed in this report"
+	case StopFollowUpCancelled:
+		return "the crawl was cancelled during its follow-up pass, so some failed requests were not retried"
 	}
 	return "unknown stop"
 }

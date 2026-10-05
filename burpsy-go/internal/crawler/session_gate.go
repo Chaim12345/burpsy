@@ -209,6 +209,14 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 // exactly one skip, so a login page is never silently dropped.
 func (c *Crawler) handleExpired(ctx context.Context, item frontierItem, verdict loggedOut, rep *Report, lim *LimitReport) {
 	rebuilt, result, detail := c.recoverSession(ctx, item, lim)
+	// The consecutive authentication-failure streak the pause policy reads (o0c5): a failed re-login
+	// extends it, a restored session ends it. A spent budget is not counted — the crawl did not try.
+	switch result {
+	case recovered:
+		c.noteAuth(true)
+	case reloginFailed:
+		c.noteAuth(false)
+	}
 	switch result {
 	case recovered:
 		c.perform(ctx, item, rebuilt, rep, lim)

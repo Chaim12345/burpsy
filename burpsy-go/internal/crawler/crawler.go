@@ -162,8 +162,11 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -584,6 +587,10 @@ type Report struct {
 	// exceeded the capture bound. Its own member of the partition rather than folded into Failed:
 	// nothing failed, a bound was applied, and the two call for different responses from an operator.
 	NotCaptured int `json:"not_captured"`
+	// FollowUpRecovered counts requests that failed at the transport in the main pass and were fetched
+	// by a follow-up pass (o0c5). They are in Fetched, not Failed — the partition above still holds,
+	// each request counted once by how it ENDED — and this says how much coverage the retry bought.
+	FollowUpRecovered int `json:"follow_up_recovered,omitempty"`
 
 	// RobotsPathsFound counts paths taken from a robots.txt and offered to the frontier. Reported
 	// separately from LinksFound because they are a different kind of discovery: nothing linked to
@@ -1328,6 +1335,8 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		}
 	}
 
+	// pausedByPolicy is set when the error-handling thresholds end the crawl (o0c5).
+	pausedByPolicy := false
 	for {
 		// Frontier-empty is tested before every bound, so a crawl that fetched exactly its request
 		// budget and had nothing left to do reports as complete rather than as truncated. A bound is
@@ -1369,6 +1378,13 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		if c.guessHiddenGraphQL {
 			c.guessGraphQL(ctx, item.url, &rep, &lim)
 		}
+		// The operator's error-handling policy (o0c5), checked after every visit: a target that keeps
+		// timing out, or keeps rejecting the session, ends the crawl with a NAMED stop rather than the
+		// crawl grinding through the rest of its budget against it.
+		if c.checkPauseThresholds(&rep, &lim) {
+			pausedByPolicy = true
+			break
+		}
 	}
 
 	// The follow-up pass, run after the main loop and before the report is assembled, so the counts
@@ -1378,7 +1394,12 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	// and the crawl does not know which requests those are until it has tried them all. Retrying
 	// inside the loop would also spend the request budget twice per request, which is the one thing a
 	// bound on cost must not do.
-	c.runFollowUpPasses(ctx, &rep, &lim)
+	//
+	// Not after a policy pause: the policy just said this target is timing out or rejecting the
+	// session, and retrying its failures is exactly the traffic the operator configured it to stop.
+	if !pausedByPolicy {
+		c.runFollowUpPasses(ctx, &rep, &lim)
+	}
 
 	lim.FrontierRemaining = len(c.frontier)
 	lim.Templates = len(c.templates)
@@ -1419,7 +1440,10 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 	if passes <= 0 || len(c.followUp) == 0 {
 		return
 	}
-	sending := lim.Requests
+	// The budget is rep.Fetched against MaxRequests — the SAME measure the main loop stops on. It was
+	// lim.Requests, which is assigned once after the loop and reads zero for the whole crawl, so a
+	// follow-up pass could spend a second full request budget on top of the first: the one way a
+	// retry feature makes a tool cost more than the operator agreed to.
 	for pass := 0; pass < passes; pass++ {
 		if len(c.followUp) == 0 {
 			break
@@ -1430,50 +1454,87 @@ func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *Limit
 			lim.record(StopFollowUpCancelled)
 			return
 		}
-		// The request budget, checked BEFORE the pass rather than per request, so the report's
-		// Requests figure and the stop that ended it cannot disagree about what the crawl was allowed.
-		if budget := c.limits.MaxRequests - (sending - lim.Requests); budget <= 0 {
-			lim.record(StopFollowUpBudget)
-			return
-		}
+		// A fresh slice, not c.followUp[:0]: a request that fails again is appended to c.followUp
+		// while this pass is still iterating, and appending into the same backing array would
+		// overwrite the requests this pass has not reached yet.
 		remaining := c.followUp
-		c.followUp = c.followUp[:0]
-		for _, item := range remaining {
+		c.followUp = nil
+		for i, item := range remaining {
 			if ctx.Err() != nil {
+				c.followUp = append(c.followUp, remaining[i:]...)
 				lim.record(StopFollowUpCancelled)
 				return
 			}
-			if lim.Requests-sending >= c.limits.MaxRequests {
-				// The request is put BACK rather than dropped: it failed and this crawl was not
-				// allowed to try again, so it belongs in the report as an untried request rather
-				// than vanish.
-				c.followUp = append(c.followUp, item)
+			if rep.Fetched >= c.limits.MaxRequests {
+				// Put BACK rather than dropped: it failed and this crawl was not allowed to try again,
+				// so it belongs in the report as an untried request rather than vanish.
+				c.followUp = append(c.followUp, remaining[i:]...)
 				lim.record(StopFollowUpBudget)
-				continue
+				return
 			}
+			// Failed counts requests that ENDED failed, not attempts: the earlier failure is withdrawn
+			// before the retry, and perform counts it again only if the retry fails too. Without this a
+			// recovered request would stay in Failed and Fetched at once.
+			rep.Failed--
+			fetchedBefore := rep.Fetched
 			c.perform(ctx, item, c.buildRequest(item), rep, lim)
+			if rep.Fetched > fetchedBefore {
+				rep.FollowUpRecovered++
+			}
+			// The policy holds during a follow-up pass too: retrying a host that has started timing out
+			// again is the traffic the operator configured the crawl to stop.
+			if c.checkPauseThresholds(rep, lim) {
+				c.followUp = append(c.followUp, remaining[i+1:]...)
+				return
+			}
 		}
 	}
 }
 
-// noteFailure records a transport failure for the follow-up pass, and trips the failure counters
-// the pause thresholds read.
+// noteTransportFailure records a send that never came back, for the follow-up pass, and advances the
+// timeout counters the pause thresholds read (o0c5).
 //
-// The two are the same function because they happen at the same moment: a failure is both something
-// to retry and something that counts toward "this target keeps refusing". Splitting them would let a
+// The two are one function because they happen at the same moment: a failure is both something to
+// retry and something that counts toward "this target keeps timing out". Splitting them would let a
 // caller wire one without the other, and the half that retries is the half an operator notices.
-func (c *Crawler) noteFailure(rep *Report, item frontierItem, timedOut, authFailed bool) {
+//
+// Only a TIMEOUT extends the consecutive streak; a refused connection or reset breaks it, because
+// Burp's threshold is about a target that has stopped answering, not one that answers "no".
+func (c *Crawler) noteTransportFailure(item frontierItem, timedOut bool) {
 	c.followUp = append(c.followUp, item)
 	if timedOut {
+		c.timeouts++
 		c.consecutiveTimeouts++
-	} else {
-		c.consecutiveTimeouts = 0
+		return
 	}
-	if authFailed {
-		c.consecutiveAuthFailures++
-	} else {
+	c.consecutiveTimeouts = 0
+}
+
+// noteSent records a send that came back with a response, whatever its status: the target answered,
+// so the consecutive-timeout streak is over.
+func (c *Crawler) noteSent() { c.consecutiveTimeouts = 0 }
+
+// noteAuth records the outcome of restoring an expired session: a failed re-login extends the
+// consecutive authentication-failure streak, a successful one ends it.
+func (c *Crawler) noteAuth(ok bool) {
+	if ok {
 		c.consecutiveAuthFailures = 0
+		return
 	}
+	c.consecutiveAuthFailures++
+}
+
+// isTimeout reports whether a send failed because it ran out of time — a dial, read or overall
+// deadline — as opposed to being refused or reset.
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // checkPauseThresholds trips the crawl's pause policy, returning true when the crawl must stop.
@@ -1492,8 +1553,11 @@ func (c *Crawler) checkPauseThresholds(rep *Report, lim *LimitReport) bool {
 		lim.record(StopPausedTimeouts)
 		return true
 	}
-	if want := c.eh.timeoutPercent(); want > 0 && lim.Requests > 0 &&
-		100*c.timeouts/lim.Requests >= want {
+	// The denominator is the sends this crawl has made — fetched plus failed — NOT lim.Requests,
+	// which is assigned once after the loop and reads zero for the whole crawl (see introspect): a
+	// percentage over it could never fire.
+	if want, sent := c.eh.timeoutPercent(), rep.Fetched+rep.Failed; want > 0 && sent > 0 &&
+		100*c.timeouts/sent >= want {
 		lim.record(StopPausedTimeoutPercentage)
 		return true
 	}
@@ -1653,8 +1717,13 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 			Reason: SkipSendFailed, URL: item.url.String(), Method: item.method,
 			Text: item.text, FoundAt: item.foundAt, Detail: err.Error(),
 		})
+		// Kept for the follow-up pass and counted toward the timeout thresholds (o0c5): before this,
+		// a failed request was recorded and forgotten, and a flaky target left a coverage hole with no
+		// second attempt.
+		c.noteTransportFailure(item, isTimeout(err))
 		return
 	}
+	c.noteSent()
 	c.observe(item.url, res.Status)
 
 	// Capped before capture, not after. The bytes are already in memory — SendRaw read them, bounded

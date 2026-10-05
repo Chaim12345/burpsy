@@ -63,6 +63,36 @@ type ErrorHandling struct {
 	FollowUpPasses *int
 }
 
+// Validate refuses a policy no crawl can honour, naming the field: a negative threshold (it would
+// pause before the first request), an authentication cap above Burp's own 10 (Zrfv.java:109), or a
+// percentage above 100. Zero is valid on every field — it is how "never pause" and "never retry" are
+// said — and an unset (nil) field is valid, meaning the default. The same rules the Burp-config
+// import applies, so a value typed on a request and the same value in a file are judged alike.
+func (e ErrorHandling) Validate() error {
+	check := func(name string, v *int, max int) error {
+		if v == nil {
+			return nil
+		}
+		if *v < 0 {
+			return fmt.Errorf("%s is %d; a threshold cannot be negative — 0 is how a crawl says never", name, *v)
+		}
+		if max > 0 && *v > max {
+			return fmt.Errorf("%s is %d, above the maximum of %d", name, *v, max)
+		}
+		return nil
+	}
+	if err := check("pause_task_requests_timed_out_count", e.PauseOnTimeoutCount, 0); err != nil {
+		return err
+	}
+	if err := check("pause_task_requests_timed_out_percentage", e.PauseOnTimeoutPercent, 100); err != nil {
+		return err
+	}
+	if err := check("consecutive_authentication_failures_before_pausing_task", e.PauseOnAuthFailures, 10); err != nil {
+		return err
+	}
+	return check("number_of_follow_up_passes", e.FollowUpPasses, 0)
+}
+
 // DefaultErrorHandling is what a crawl naming no error-handling key gets.
 //
 // Every threshold a real value rather than zero, because zero means DISARMED and a default of zero

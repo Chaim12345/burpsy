@@ -76,6 +76,19 @@ func (c *Crawler) SeedFromSiteMap(sm *sitemap.SiteMap, origins []string, scopeAl
 		wanted[normaliseOrigin(o)] = true
 	}
 
+	// The crawl's own starting requests are exempt. They are admitted through the same enqueue that
+	// consults the queued table, and the operator's seed is almost always in the site map — it is the
+	// page they browsed before deciding to crawl it. Seeding it would drop the crawl's starting point
+	// and a seeded crawl would fetch nothing at all. The seed is the operator's instruction for THIS
+	// crawl; the site map may only spare requests the crawl would otherwise have found on its own.
+	own := make(map[string]bool, len(c.seedURLs)+len(c.seedRequests))
+	for _, u := range c.seedURLs {
+		own[requestFingerprint("GET", u, nil)] = true
+	}
+	for _, item := range c.seedRequests {
+		own[requestFingerprint(item.method, item.url, item.body)] = true
+	}
+
 	seeded := 0
 	for _, hn := range sm.Hosts() {
 		if !wanted[originKeyOf(hn.Host, hn.Port, hn.TLS)] {
@@ -94,7 +107,11 @@ func (c *Crawler) SeedFromSiteMap(sm *sitemap.SiteMap, origins []string, scopeAl
 					Host:   hostPort(hn.Host, hn.Port),
 					Path:   pn.Path,
 				}
-				c.queued[requestFingerprint(method, u, nil)] = true
+				key := requestFingerprint(method, u, nil)
+				if own[key] {
+					continue
+				}
+				c.queued[key] = true
 				seeded++
 			}
 		}
