@@ -5,6 +5,8 @@
   "scripts": {
     "gen:tokens": "node scripts/gen-tokens.mjs",
     "check:tokens": "node scripts/check-closed-tokens.mjs",
+    "gen:gated-routes": "bun scripts/gen-gated-routes.ts",
+    "check:gated-routes": "bun scripts/gen-gated-routes.ts --check",
     "test:scripts": "node scripts/lib/transit.test.mjs && node scripts/fetch-penpot-file.test.mjs",
     "test:lib": "bun test src/lib",
     "fetch:penpot": "node scripts/fetch-penpot-file.mjs",
@@ -12,7 +14,7 @@
     "build:js": "bun build src/app.tsx --outdir dist --minify",
     "build:css": "bun build src/styles.css --outfile style.css --minify",
     "build": "bun run gen:tokens && bun run build:js && bun run build:css",
-    "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run test:scripts && bun run test:lib"
+    "check": "tsc --noEmit && node scripts/gen-tokens.mjs --check && bun run check:tokens && bun run check:gated-routes && bun run test:scripts && bun run test:lib"
   },
   "dependencies": {
     "@codemirror/language": "^6",

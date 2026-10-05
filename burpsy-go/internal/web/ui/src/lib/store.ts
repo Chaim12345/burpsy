@@ -20,6 +20,17 @@ export type EditorFont = "12px" | "13px" | "14px" | "16px" | "18px";
 export type UiScale = "100%" | "110%" | "125%" | "150%";
 
 /**
+ * The CSS value of --ui-scale for a stored scale: a unitless factor ("1.1" for "110%"), because the
+ * property multiplies px lengths and px × % is invalid CSS (burpsy-react-ui-9nlz). Anything
+ * unparseable is 1, so a corrupted preference renders at the default size rather than in a fallback
+ * font.
+ */
+export function uiScaleFactor(scale: string): string {
+ const percent = Number.parseFloat(scale);
+ return Number.isFinite(percent) && percent > 0 ? String(percent / 100) : "1";
+}
+
+/**
  * Per-operator triage state for Collaborator interactions (burpsy-react-ui-8o6): which
  * interaction ids have been opened (read), and the comment/highlight pairs written on
  * them. Held in this browser alongside the rest of the workspace state — like the

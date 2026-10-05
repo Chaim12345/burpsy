@@ -134,6 +134,17 @@ export interface CrawlReport {
  refused: number;
  failed: number;
  not_captured: number;
+ /** Requests not made because the site map already held them (burpsy-react-ui-z8qf) — only when the
+  *  run was launched with seed_from_site_map. */
+ sitemap_seeded?: number;
+ /** Requests a follow-up pass retried successfully (burpsy-react-ui-o0c5). Omitted when 0. */
+ follow_up_recovered?: number;
+ /**
+  * What bounded the crawl (internal/crawler/limits.go's LimitReport). `stops` names every bound
+  * that was hit, in the order first hit; a crawl with any stop did not cover the application
+  * (burpsy-react-ui-j5j7). Read through lib/crawl-stops.ts.
+  */
+ limits?: CrawlLimitReport;
  links_found: number;
  forms_found: number;
  forms_submitted: number;
@@ -166,6 +177,16 @@ export interface CrawlLimits {
  max_fingerprints?: number;
  max_relogins?: number;
  [bound: string]: number | undefined;
+}
+
+/** A finished crawl's limit report. Only the fields the console reads are declared. */
+export interface CrawlLimitReport {
+ /** Stable stop names ("request-budget", "paused-timeouts", …); absent when nothing was hit. */
+ stops?: string[];
+ requests?: number;
+ locations?: number;
+ deepest_depth?: number;
+ frontier_remaining?: number;
 }
 
 export interface CrawlRun {

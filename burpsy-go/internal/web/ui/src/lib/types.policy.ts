@@ -206,6 +206,8 @@ export interface SessionAction {
  regex?: boolean;
  /** InvokeExtension's target: a plugin registration id, which the server resolves to a plugin. */
  extension?: string;
+ /** A run_script action's JavaScript (burpsy-react-ui-ydmj). Compiled when the rule is saved. */
+ script?: string;
  /**
   * Burp's `validate_every_num_requests` (us12): a CheckValidity action that checks the session
   * only on every Nth request the rule handles. Absent/0 is check every time, which is the

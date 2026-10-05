@@ -36,8 +36,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { api, copyToClipboard, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
-import { queryClient, useConnection, useEventStream, useIntercept, useProject, useRenameProject, useScope, useStats } from "./lib/data";
+import { api, copyToClipboard, gatedFetch, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
+import { queryClient, useConnection, useEventStream, useIntercept, useProject, useProjectEpoch, useRenameProject, useScope, useStats } from "./lib/data";
 import { useScannerLive } from "./lib/data.attack";
 import { useCrawls } from "./lib/data.observe";
 import { attentionFor, attentionSignals } from "./lib/attention";
@@ -49,7 +49,7 @@ import {
 } from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
 import { settingsPaletteActions } from "./lib/settings-sections";
-import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, useApp } from "./lib/store";
+import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
 import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
@@ -59,6 +59,7 @@ import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
 import { ErrorBoundary } from "./ui/layout";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
+import { ProjectSwitcher } from "./ui/project-switcher";
 import { SearchDialog } from "./ui/search-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
@@ -106,7 +107,7 @@ function useThemeEffect(): void {
  // The two text scales (burpsy-react-ui-7bd) ride the same attribute pattern as the
  // theme: one place on <html>, everything downstream reads the custom property.
  useEffect(() => {
-  document.documentElement.style.setProperty("--ui-scale", uiScale);
+  document.documentElement.style.setProperty("--ui-scale", uiScaleFactor(uiScale));
  }, [uiScale]);
  useEffect(() => {
   document.documentElement.style.setProperty("--editor-font-size", editorFont);
@@ -178,6 +179,11 @@ function App(): JSX.Element {
  // so no single tool owns it. Local rather than in the store because nothing outside the shell
  // opens it — the command palette and the menu item are both built here.
  const [searchOpen, setSearchOpen] = useState(false);
+ // The project switcher (dlw2). Shell state because both the Project menu and the palette open it.
+ const [projectsOpen, setProjectsOpen] = useState(false);
+ // Bumped by every completed project switch; keying the routed page on it remounts the page, so no
+ // component-local selection from the project that was left survives into the one that was opened.
+ const projectEpoch = useProjectEpoch((state) => state.epoch);
  // Which top-level tabs the operator has hidden (burpsy-react-ui-lje3). Burp's View menu is where
  // this lives; the tab keeps working when hidden — hotkeys, the palette and links into its routes
  // all still reach it — so hiding is a statement about chrome, never about capability.
@@ -220,13 +226,8 @@ function App(): JSX.Element {
    toast.info("A copy needs a project database, and this instance persists nothing.");
    return;
   }
-  void api<{ token: string }>("/api/backup/confirm", { method: "POST" })
-   .then((minted) =>
-    api<{ path: string; bytes: number; pruned: number; kept: number; warning?: string }>("/api/backup", {
-     method: "POST",
-     headers: { "X-Burpsy-Confirm": minted.token },
-    }),
-   )
+  // api() mints the gate's confirmation for /api/backup on this click (p1uz).
+  void api<{ path: string; bytes: number; pruned: number; kept: number; warning?: string }>("/api/backup", { method: "POST" })
    .then((r) =>
     toast.success(
      r.warning
@@ -437,7 +438,8 @@ function App(): JSX.Element {
  const importConfiguration = useCallback(async (file: File) => {
   const text = await file.text();
   try {
-   const res = await fetch("/api/config/import", {
+   // gatedFetch: /api/config/import is riskDestructive, and this is the operator's file pick (p1uz).
+   const res = await gatedFetch("/api/config/import", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: text,
@@ -850,6 +852,14 @@ function App(): JSX.Element {
     },
    },
    {
+    id: "cmd:project-open",
+    label: "Open or create a project…",
+    group: "Help",
+    keywords: "project open switch new create file db database",
+    icon: FolderOpen,
+    run: () => setProjectsOpen(true),
+   },
+   {
     id: "cmd:project-save-copy",
     label: project.data?.backupable ? "Save a copy of this project" : "Save a project copy — no project file (start with -db)",
     group: "Help",
@@ -865,13 +875,14 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, saveProjectCopy]);
+ }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
 
  /**
-  * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files,
-  * which burpsy does not have, so those items stay out.
+  * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files;
+  * burpsy's project file is the -db database, so the menu names it, renames it, copies it and
+  * (dlw2) opens or creates another one — and declines the import Burp offers, with the reason.
   *
   * Intruder is here now (burpsy-react-ui-yinb). It was dropped on the grounds that its state lives
   * only on the Intruder page — true, and the wrong conclusion: the attack configuration moved into
@@ -993,23 +1004,22 @@ function App(): JSX.Element {
        onSelect: saveProjectCopy,
       },
       {
-       // Burp gates this on the Pro licence and it reads "[Pro version only]". burpsy's
-       // build has no licence machinery at all, so the decline is stated the way the
-       // settings page declines absent sections: named, with the reason, never a silent
-       // omission.
+       // Burp's open/new project (dlw2). The running process re-points its database and
+       // re-runs the startup restore (api_project_open.go), so this is a real switch, not a
+       // restart instruction. The dialog lists the .db files beside this one, takes a new
+       // file name for a new project, and asks before anything is replaced.
        id: "open",
-       label: "Open project file",
+       label: "Open or create project…",
        icon: FolderOpen,
-       disabled: true,
-       hint: "Declined: opening another project means restarting burpsy with that -db file — the running process cannot swap its database underneath itself.",
-       onSelect: () => undefined,
+       hint: "Switch this instance to another project file, or create a new one. Everything on screen is replaced by that project's.",
+       onSelect: () => setProjectsOpen(true),
       },
       {
        id: "import",
        label: "Import project file",
        icon: FileUp,
        disabled: true,
-       hint: "Declined: burpsy has no separate project container to merge into — the -db file IS the project, so an import would have to replace the database this process is running on. Use Save copy to carry one out, and start a second instance to work on it.",
+       hint: "Declined: burpsy has no separate project container to merge into — the -db file IS the project, so an import would have to merge another database into the one this process is running on. Use Open or create project… to switch to that file instead.",
        onSelect: () => undefined,
       },
      ],
@@ -1307,8 +1317,8 @@ function App(): JSX.Element {
     ) : null}
 
     <main id="main-content" tabIndex={-1}>
-     <ErrorBoundary resetKey={route}>
-      <ActivePage />
+     <ErrorBoundary resetKey={`${route}:${projectEpoch}`}>
+      <ActivePage key={projectEpoch} />
      </ErrorBoundary>
     </main>
 
@@ -1356,6 +1366,7 @@ function App(): JSX.Element {
 
    <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
    {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
           chosen file. Cleared after every change so picking the same file twice still fires. */}

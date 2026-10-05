@@ -54,16 +54,13 @@ export function SessionPromptLayer(): JSX.Element | null {
   // /confirm endpoint with no prompt id in it. A per-prompt mint path would be a second naming
   // scheme for one authorisation decision, and a token minted "for prompt 3" says something
   // the gate cannot enforce — the token authorises the route, and the gate binds it there.
-  void api<{ token: string }>("/api/session/prompts/confirm", { method: "POST" })
-   .then((minted) =>
-    api<SessionPromptResolveResponse>(
-     `/api/session/prompts/${prompt.id}/resolve`,
-     {
-      ...json("POST", { recovered } satisfies SessionPromptResolveRequest),
-      headers: { "X-Burpsy-Confirm": minted.token },
-     },
-    ),
-   )
+  //
+  // api() does that mint (burpsy-react-ui-p1uz): it resolves this URL to the gated pattern and mints
+  // at that pattern's /confirm, exactly as described above.
+  void api<SessionPromptResolveResponse>(
+   `/api/session/prompts/${prompt.id}/resolve`,
+   json("POST", { recovered } satisfies SessionPromptResolveRequest),
+  )
    .then(() => {
     // The server notifies on resolve; the invalidation is the local half of the same signal.
     void invalidate([["session"]]);

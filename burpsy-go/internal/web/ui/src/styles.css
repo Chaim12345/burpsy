@@ -31,8 +31,12 @@
    Appearance's scale control resizes the chrome without touching the message editor,
    which reads its own --editor-font-size. calc() over the clamp keeps the fluid
    behaviour at each end. */
+/* --ui-scale is a UNITLESS factor (1, 1.1, 1.25, 1.5), never a percentage: calc(13px * 100%) is
+   not a valid product, so a percentage made every --fs-* token invalid at computed-value time and
+   every `font` shorthand that read one fell back to the browser default (Times New Roman) —
+   burpsy-react-ui-9nlz. app.tsx converts the stored "110%" to 1.1 through uiScaleFactor(). */
 :root {
-  --ui-scale: 100%;
+  --ui-scale: 1;
   --editor-font-size: 12px; /* the runtime font picker overrides this on mount (7bd); defined here so the editor panes have a value before JS runs */
   /* Remapped fluid type tokens (burpsy-react-ui-7bd): the generated --fs-* values
      scaled by --ui-scale, so Appearance's text-size control resizes the chrome
@@ -4984,4 +4988,99 @@ tbody td {
   background: var(--accent-soft, rgb(0 0 0 / 10%));
   color: var(--accent, var(--fg));
   font-weight: var(--weight-bold, 600);
+}
+
+/* Project switcher (burpsy-react-ui-dlw2). One row per .db file beside the open project: icon,
+   name over path, named/file-name badge, and the Open action or the "open now" mark. Paths are
+   monospace and break anywhere, because they are long and the operator reads them to tell two
+   engagements apart. */
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+}
+
+.project-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+
+.project-row:last-child {
+  border-bottom: 0;
+}
+
+.project-row-name {
+  display: grid;
+  min-width: 0;
+}
+
+.project-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  word-break: break-all;
+}
+
+.project-confirm {
+  color: var(--text);
+}
+
+/* Sequencer analysis settings (burpsy-react-ui-nm81): one switch per test, in columns so the nine
+   rows read as one panel rather than a long list. */
+.analysis-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--s1) var(--s3);
+}
+
+/* The pre-request script's reference (burpsy-react-ui-ydmj): names in monospace, what they are beside. */
+.script-reference {
+  display: grid;
+  gap: var(--s1);
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+}
+
+.script-reference > div {
+  display: grid;
+  grid-template-columns: minmax(0, 16em) minmax(0, 1fr);
+  gap: var(--s2);
+}
+
+.script-reference dt {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.script-reference dd {
+  margin: 0;
+}
+
+/* A crawl's stops (burpsy-react-ui-j5j7): one line per bound the crawl hit, across the whole run row,
+   so a partial crawl's counts are never read without the reason they are partial. */
+.crawl-stops {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+}
+
+.crawl-stop {
+  border-left: var(--border-status) solid var(--line-strong);
+  padding-left: var(--s2);
+  color: var(--text-soft);
+}
+
+.crawl-stop-policy {
+  border-left-color: var(--warn);
+  color: var(--text);
 }

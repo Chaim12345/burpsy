@@ -24,6 +24,7 @@ import {
  Waypoints, Activity } from "lucide-react";
 import { openDetailWindow } from "../pages/detailwindow";
 import { toast } from "sonner";
+import { openUrlInBrowser } from "./data.browser";
 import { useHotkeys } from "react-hotkeys-hook";
 import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
@@ -378,6 +379,9 @@ const addToSiteMap = async (exchange: Exchange) => {
  const addToScope = async (exchange: Exchange) => {
   try {
    await api<unknown>("/api/scope", json("POST", { action: "include", pattern: exchange.host }));
+   // The status bar's rule count and the Scope page read this key; without the refresh they kept
+   // saying "0 rules" after the add succeeded.
+   void queryClient.invalidateQueries({ queryKey: ["scope"] });
    toast.success(`${exchange.host} added to scope`);
   } catch (error) {
    toast.error(`Could not scope ${exchange.host}: ${error instanceof Error ? error.message : String(error)}`);
@@ -461,13 +465,11 @@ const addToSiteMap = async (exchange: Exchange) => {
  };
 
  /**
-  * Open the target in a browser tab. Capture only happens if the operator's browser routes
-  * through burpsy's proxy, so the toast says that instead of implying burpsy fetched anything.
+  * Open the target in the burpsy browser (bufa): Chromium routed through burpsy's proxy, so what
+  * the operator does there is captured. A refused launch is shown verbatim and offers the
+  * operator's own browser instead, saying that it is not proxied.
   */
- const requestInBrowser = (exchange: Exchange) => {
-  window.open(exchangeUrl(exchange), "_blank", "noopener");
-  toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
- };
+ const requestInBrowser = (exchange: Exchange) => void openUrlInBrowser(exchangeUrl(exchange));
 
 /**
  * Burp's "Show response in browser" (burpsy-react-ui-js5y): the operator's own browser opens

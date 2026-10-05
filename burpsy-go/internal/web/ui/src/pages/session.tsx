@@ -21,6 +21,7 @@ import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/l
 import { DetailList } from "../ui/json";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
+import { actionPath, refusedActionPath, SCRIPT_LIMITS, SCRIPT_REFERENCE } from "../lib/session-script";
 
 /* --- editor shapes --------------------------------------------------------
  * The wire carries `from` and `how` as unions and the scope as a document.
@@ -103,6 +104,8 @@ interface ActionDraft {
  regex: boolean;
  /** An InvokeExtension action's registration id. */
  extension: string;
+ /** A RunScript action's JavaScript (burpsy-react-ui-ydmj). */
+ script: string;
  /**
   * A CheckValidity action's interval (us12): check the session only on every Nth request the rule
   * handles. Empty means every request, the pre-field behaviour. A string because the editor collects
@@ -203,6 +206,7 @@ function actionIn(action: SessionAction): ActionDraft {
   replacement: action.replacement ?? "",
   regex: action.regex === true,
   extension: action.extension ?? "",
+  script: action.script ?? "",
   validateEvery: action.validate_every ? String(action.validate_every) : "",
  };
 }
@@ -248,6 +252,10 @@ function actionOut(draft: ActionDraft): SessionAction {
   case "invoke_extension":
    out.extension = draft.extension.trim();
    break;
+  case "run_script":
+   // Sent as typed: whitespace and line breaks are part of the program.
+   out.script = draft.script;
+   break;
   default:
    break;
  }
@@ -270,6 +278,7 @@ function emptyAction(kind: string): ActionDraft {
   replacement: "",
   regex: false,
   extension: "",
+  script: "",
   validateEvery: "",
  };
 }
@@ -694,12 +703,19 @@ function ActionCard({
  palette,
  ruleStepCount,
  disabled,
+ path,
+ refusal,
  onChange,
  onMove,
  onRemove,
 }: {
  action: ActionDraft;
  index: number;
+ /** This card's position in the server's numbering ("action 2 → then 1"), so a save refusal that
+  *  names an action is shown on that action rather than only in a toast. */
+ path: string;
+ /** The last save refusal that named an action, or null. Shown when its path is this card's. */
+ refusal: { path: string; message: string } | null;
  total: number;
  depth: number;
  palette: { kind: string; label: string }[];
@@ -730,6 +746,8 @@ function ActionCard({
      key={childIndex}
      action={child}
      index={childIndex}
+     path={actionPath(path, childIndex, which)}
+     refusal={refusal}
      total={action[which].length}
      depth={depth + 1}
      palette={palette}
@@ -909,6 +927,39 @@ function ActionCard({
     </>
    ) : null}
 
+   {action.kind === "run_script" ? (
+    <>
+     <Field
+      label="Pre-request script"
+      hint="JavaScript run before the request is sent, over the request as the actions before this one left it. Compiled when the rule is saved."
+     >
+      {(id) => (
+       <Textarea
+        id={id}
+        rows={10}
+        value={action.script}
+        disabled={disabled}
+        placeholder={'request.headers["X-Signature"] = burpsy.hmacSha256Hex(store.get("key") ?? "", request.body);'}
+        onChange={(event) => patch({ script: event.target.value })}
+       />
+      )}
+     </Field>
+     <dl className="script-reference">
+      {SCRIPT_REFERENCE.map((entry) => (
+       <div key={entry.name}>
+        <dt>{entry.name}</dt>
+        <dd>{entry.detail}</dd>
+       </div>
+      ))}
+     </dl>
+     <small className="field-hint">{SCRIPT_LIMITS}</small>
+    </>
+   ) : null}
+
+   {refusal && refusal.path === path ? (
+    <ErrorNotice title="This action was refused when the rule was saved" error={refusal.message} />
+   ) : null}
+
    {action.kind === "invoke_extension" ? (
     <>
      <Field
@@ -1001,6 +1052,8 @@ export function SessionPage(): JSX.Element {
    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Cookie jar write failed"),
   });
  const saveRule = useSaveSessionRule();
+ // The last save refusal that named an action (ydmj), shown on that action's card.
+ const [actionRefusal, setActionRefusal] = useState<{ path: string; message: string } | null>(null);
  const deleteRule = useDeleteSessionRule();
  const moveRuleMut = useMoveSessionRule();
  const login = useSessionLogin();
@@ -1125,6 +1178,7 @@ export function SessionPage(): JSX.Element {
    return;
   }
   const payload = ruleOut(editing);
+  setActionRefusal(null);
   saveRule.mutate(payload, {
    onSuccess: (result) => {
     // The server assigns the id on create; re-read it so the next save is a PUT.
@@ -1134,7 +1188,14 @@ export function SessionPage(): JSX.Element {
     setBaseline(JSON.stringify(draft));
     toast.success(`Saved “${payload.name}”`);
    },
-   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Save failed"),
+   onError: (failure: unknown) => {
+    const message = failure instanceof Error ? failure.message : "Save failed";
+    // A refusal that names an action ("action 2 (Run a pre-request script): … does not compile: …")
+    // is also shown ON that action, so the operator does not have to count cards to find it.
+    const refused = refusedActionPath(message);
+    setActionRefusal(refused ? { path: refused, message } : null);
+    toast.error(message);
+   },
   });
  };
 
@@ -1934,6 +1995,8 @@ export function SessionPage(): JSX.Element {
           key={index}
           action={action}
           index={index}
+          path={actionPath("", index)}
+          refusal={actionRefusal}
           total={editing.actions.length}
           depth={0}
           palette={actionKinds ?? []}

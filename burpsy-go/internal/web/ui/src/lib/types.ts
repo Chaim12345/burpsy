@@ -77,6 +77,35 @@ export interface ProjectInfo {
  database_note?: string;
  persisted: boolean;
  backupable: boolean;
+ /**
+  * Set only on the answer to an in-console switch whose one-time restore failed partway: the switch
+  * happened (this IS the project now open) but its history, findings or rules may be incomplete.
+  */
+ restore_error?: string;
+}
+
+/** One project file GET /api/projects found. Mirrors api_project_open.go's projectListEntry. */
+export interface ProjectListEntry {
+ /** Absolute path of the .db file — what POST /api/project/open is sent. */
+ path: string;
+ /** The stored project name when the file carries one, else the file's base name. */
+ name: string;
+ /** True when `name` is a stored name rather than the file name. */
+ named: boolean;
+ /** True for the file this process has open. */
+ active: boolean;
+}
+
+/** GET /api/projects. Mirrors api_project_open.go's projectListResp. */
+export interface ProjectList {
+ /** null when the directory holds no .db file (a Go nil slice) — read through projectEntries(). */
+ projects: ProjectListEntry[] | null;
+ /** The database file this process has open; "" when it persists nothing. */
+ active: string;
+ /** The directory the list came from — always the active project's own. */
+ project_dir?: string;
+ /** Why the list is empty when it is empty for a reason (no -db, unreadable directory). */
+ note?: string;
 }
 
 export interface ScopeRule {

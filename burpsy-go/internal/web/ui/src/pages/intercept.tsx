@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useInterceptNewlineCorrection, useSetInterceptNewlineCorrection, type InterceptNewlineCorrection } from "../lib/data.tools";import { useHotkeys } from "react-hotkeys-hook";
 import { ArrowDown, ArrowUp, Columns3, Combine, ArrowRightLeft, FileCode2, FileOutput, Globe, Link2, MessageSquare, Pencil, Plus, Repeat2, Send, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { describeLaunch, openUrlInBrowser, useLaunchBrowser } from "../lib/data.browser";
 import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
 import { exchangeUrl, rawToCurl } from "../lib/actions";
 import { useChord } from "../lib/keymap";
@@ -591,6 +592,8 @@ const NO_NEWLINE_CORRECTION: InterceptNewlineCorrection = {
 
 export function InterceptPage(): JSX.Element {
  const { data, error, isFetching, refetch } = useInterceptDetailed();
+ // Burp's "Open browser" (bufa), in the toolbar where Burp puts it.
+ const launch = useLaunchBrowser();
  // Enable and drop come from the shared controls; forward has its own hook because the shared one
  // hard-codes fix_content_length and this page offers it as a toggle.
  const controls = useInterceptControls();
@@ -1026,10 +1029,8 @@ export function InterceptPage(): JSX.Element {
       id: "browser",
       label: "Open URL in browser",
       icon: Globe,
-      onSelect: () => {
-       window.open(url, "_blank", "noopener");
-       toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
-      },
+      // The burpsy browser, proxied (bufa); a refusal is shown and offers this browser instead.
+      onSelect: () => void openUrlInBrowser(url),
      },
     ],
    },
@@ -1453,6 +1454,23 @@ export function InterceptPage(): JSX.Element {
         onCheckedChange={toggle}
         label="Intercept is on"
        />
+       <Button
+        variant="outline"
+        size="small"
+        disabled={launch.isPending}
+        title="Burp's Open browser: Chromium on its own profile, routed through burpsy's proxy and trusting burpsy's CA"
+        onClick={() =>
+         launch.mutate(undefined, {
+          onSuccess: (result) => toast.success(describeLaunch(result)),
+          // 503 is a named refusal written for the operator (no listener, no Chromium, root with the
+          // sandbox on, no display) — shown verbatim.
+          onError: (failure) => toast.error(`The browser did not open: ${failure.message}`, { duration: 15_000 }),
+         })
+        }
+       >
+        <Globe size={14} aria-hidden="true" />
+        {launch.isPending ? "Opening…" : "Open browser"}
+       </Button>
        {/* The protocol consequence belongs beside the switch, not only on the affected rows in
         history. This switch is where the operator decides to intercept, and turning it on moves
         every HTTP/2 client to HTTP/1.1 upstream because the hold queue holds whole HTTP/1-shaped

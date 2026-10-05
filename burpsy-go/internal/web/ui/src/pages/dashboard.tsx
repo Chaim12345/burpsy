@@ -8,7 +8,8 @@ import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, 
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
-import { useAPIScanCheck, useAuditSelected, useCrawlRun, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
+import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
+import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
@@ -174,6 +175,12 @@ function TaskTile({
  const setLive = useSetScannerLive();
  const again = useScanTaskAgain();
  const remove = useDeleteTask();
+ // A crawl task's retained run (j5j7). The shell already keeps this list warm, so a tile costs no
+ // request: a finished crawl that hit a bound reads "incomplete" / "paused by policy", never "done".
+ const crawls = useCrawls();
+ const crawlRun = crawls.data?.crawls.find((run) => run.task_id === task.id);
+ const tileStops = crawlStops(crawlRun);
+ const tileState = crawlRun && task.state.toLowerCase() === "done" ? crawlOutcome(crawlRun) : null;
  // The task row's options menu (burpsy-react-ui-r6q): Burp's taskListEntryOptionsMenu, minus the
  // pieces that are their own tracked issues (pause/resume is 8gw; settings live on the detail
  // pane). Scan again re-runs a crawl at its target; Delete removes a finished row — the server
@@ -237,7 +244,13 @@ function TaskTile({
     ) : null}
    </div>
    <div className="task-tile-state">
-    <Badge tone={taskTone(task.state)}>{task.state}</Badge>
+    {tileState ? (
+     <Badge tone={tileState.tone} title={tileStops.map(crawlStopLabel).join("\n") || undefined}>
+      {tileState.label}
+     </Badge>
+    ) : (
+     <Badge tone={taskTone(task.state)}>{task.state}</Badge>
+    )}
     <span className="cell-dim">{task.progress}</span>
    </div>
    {task.kind === "live audit" ? (
@@ -1245,6 +1258,22 @@ function TaskDetail({
        </div>
       </Card>
 
+      {crawlStops(run.data).length ? (
+       <Card>
+        <SectionHeading
+         title={crawlStops(run.data).some(isPolicyPause) ? "Paused by policy — the crawl stopped itself" : "Incomplete — the crawl hit a bound"}
+         detail="This crawl did not cover the application. Everything counted here is what it reached before it stopped."
+        />
+        <ul className="crawl-stops">
+         {crawlStops(run.data).map((stop) => (
+          <li key={stop} className={isPolicyPause(stop) ? "crawl-stop crawl-stop-policy" : "crawl-stop"}>
+           {crawlStopLabel(stop)}
+          </li>
+         ))}
+        </ul>
+       </Card>
+      ) : null}
+
       {run.data?.definition ? (
        <Card>
         <SectionHeading
@@ -1330,6 +1359,8 @@ function TaskDetail({
               );
              }}
             />
+           ) : run.data && task.state.toLowerCase() === "done" ? (
+            <Badge tone={crawlOutcome(run.data).tone}>{crawlOutcome(run.data).label}</Badge>
            ) : (
             <Badge tone={taskTone(task.state)}>{task.state}</Badge>
            ),

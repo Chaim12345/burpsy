@@ -99,6 +99,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "chromium headless dom embedded browser",
   },
   {
+    id: "browser",
+    title: "Browser",
+    summary: "The browser Open browser launches: its data folder, sandbox and GPU, and clearing its data.",
+    keywords: "open browser chromium profile data folder sandbox gpu clear cookies proxy",
+  },
+  {
     id: "upstream-proxy",
     title: "Upstream proxy and SOCKS",
     summary: "Where this tool's traffic goes on its way out. Ordered rules, first match wins.",

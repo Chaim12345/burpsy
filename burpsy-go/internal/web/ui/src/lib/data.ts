@@ -2,6 +2,7 @@ import { QueryClient, useMutation, useQuery, useQueryClient, type UseQueryResult
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { api, json, query } from "./api";
+import { useApp, type RepeaterTab } from "./store";
 import type {
  Dashboard,
  Exchange,
@@ -14,6 +15,7 @@ import type {
  OrganizerEdit,
  OrganizerItem,
  ProjectInfo,
+ ProjectList,
  WorkflowStatus,
  Scope,
  ScannerConfig,
@@ -44,6 +46,7 @@ export const keys = {
  stats: ["stats"] as const,
  scope: ["scope"] as const,
  project: ["project"] as const,
+ projects: ["projects"] as const,
  dashboard: ["dashboard"] as const,
  history: (q: string, limit: number, search?: HistorySearch) =>
   ["history", q, limit, ...(search && search.term !== "" ? [search.term, search.caseSensitive ?? false, search.regex ?? false, search.negate ?? false] : [])] as const,
@@ -246,6 +249,76 @@ export const useScannerConfig = () => useResource<ScannerConfig>(keys.scannerCon
 /** GET /api/project — the Project menu's readout: which project this instance is. */
 export const useProject = () => useResource<ProjectInfo>(keys.project, "/api/project");
 
+/** GET /api/projects — the .db files beside the active project, the active one marked. Fetched
+ *  only while the switcher is open (`enabled`): the server peeks into every file for its stored
+ *  name, which is not a read the shell should repeat on every render. */
+export const useProjects = (enabled: boolean) => useResource<ProjectList>(keys.projects, "/api/projects", enabled);
+
+/**
+ * Bumped once per completed project switch. The shell keys the routed page on it, so every page's
+ * own component state — a selected row, an expanded node, a draft filter — is discarded with the
+ * project it belonged to. Exchange and finding ids restart per database, so a selection that
+ * survived the switch would silently point at a different request in the new project.
+ */
+export const useProjectEpoch = create<{ epoch: number; bump: () => void }>((set) => ({
+ epoch: 0,
+ bump: () => set((state) => ({ epoch: state.epoch + 1 })),
+}));
+
+/**
+ * POST /api/project/open — switch this process to another project file (burpsy-react-ui-dlw2).
+ *
+ * riskDestructive, so it goes through the confirmation gate: the caller has already asked the
+ * operator, and only then is a token minted at /api/project/open/confirm and spent on the call. A
+ * path that does not exist yet creates the project.
+ *
+ * On success EVERY store on the server has been replaced, so nothing cached may survive: the
+ * confirmed project view goes into the readout, every query is reset (not invalidated — an
+ * invalidated query keeps showing the old project's rows until its refetch lands, and an inactive
+ * one would show them on the next navigation), and the caller's `onSwitched` clears the
+ * browser-side pointers into the old project and remounts the page.
+ */
+export function useOpenProject() {
+ return useMutation<ProjectInfo, Error, string>({
+  mutationFn: (path: string) => api<ProjectInfo>("/api/project/open", json("POST", { path })),
+  onSuccess: (confirmed) => {
+   void queryClient.resetQueries();
+   queryClient.setQueryData(keys.project, confirmed);
+   forgetOutgoingProjectPointers();
+   useProjectEpoch.getState().bump();
+  },
+ });
+}
+
+/**
+ * Clear the session state that names rows of the project being left: the focused exchange and
+ * issue, the checked rows, the history filter (one that hid every row of the new project would
+ * make it read as empty) and the Comparer lists (copies of the old project's messages).
+ *
+ * The drafts that are kept — Repeater tabs' request text and the Intruder payloads, settings and
+ * last report — are persisted per browser rather than per project, and discarding them would be
+ * losing work nobody asked to lose. But the ids INSIDE them are references into the project being
+ * left, and ids restart per database: so a Repeater tab's `fromExchange` (sent as the resend's
+ * parent) is dropped, and Intruder's base message id and the insertion points measured on that
+ * message are cleared — kept, the next attack would silently run against whatever request has
+ * that id in the new project. The switcher's confirmation says all of this.
+ */
+export function forgetOutgoingProjectPointers(): void {
+ const app = useApp.getState();
+ app.focusExchange(null);
+ app.focusIssue(null);
+ app.setCheckedExchanges([]);
+ app.setHistoryQuery("");
+ app.clearComparerItems("a");
+ app.clearComparerItems("b");
+ app.setIntruder((current) => ({ ...current, msgId: "", points: [], selected: [], manualSpans: [] }));
+ const dropLineage = (tabs: RepeaterTab[]) => tabs.map(({ fromExchange: _left, ...tab }) => tab);
+ useApp.setState((state) => ({
+  repeaterTabs: dropLineage(state.repeaterTabs),
+  closedRepeaterTabs: dropLineage(state.closedRepeaterTabs),
+ }));
+}
+
 /** PUT /api/project/name — rename the project. The name is stored with the database file, so a
  *  restart keeps it; the confirmed response is what the cache gets. */
 export function useRenameProject() {
@@ -363,6 +436,8 @@ export function useSaveMatchReplace() {
 export function useSaveSessionRule() {
  const invalidate = useInvalidate();
  return useMutation({
+  // riskCredential: api() mints at the /api/session/rules pair's one /confirm on this Save click
+  // (burpsy-react-ui-p1uz), for the create and the edit alike.
   mutationFn: (rule: SessionRule) =>
    rule.id === undefined
     ? api<{ rule: SessionRule }>("/api/session/rules", json("POST", rule))
@@ -471,6 +546,21 @@ export function useDeleteHistory() {
    api<{ removed: number; requested: number }>("/api/history", json("DELETE", ids === null ? undefined : { ids })),
   // Same prefixes the server-push map gives history (INVALIDATION.history), inlined: that
   // Record's value type is string[][] and invalidate() needs tuple literals.
+  onSuccess: () => invalidate([["history"], ["stats"], ["sitemap"], ["dashboard"]]),
+ });
+}
+
+/** POST /api/history/import/har — Burp's "Import HAR" (burpsy-react-ui-eyi1). The raw HAR file bytes
+ *  are the request body — the handler reads the body and json-parses it, so there is no JSON envelope —
+ *  and the File is handed straight to fetch rather than through json(), so a capture of up to
+ *  maxHARImportBytes (64 MB in api_har_import.go) is never copied into a JS string. The imported entries
+ *  become ordinary history rows (Source "import"), so the same prefixes the delete hook refreshes are
+ *  invalidated and the new rows appear without a manual reload. */
+export function useImportHar() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (file: File) =>
+   api<{ imported: number; skipped: number; errors?: string[] }>("/api/history/import/har", { method: "POST", body: file }),
   onSuccess: () => invalidate([["history"], ["stats"], ["sitemap"], ["dashboard"]]),
  });
 }

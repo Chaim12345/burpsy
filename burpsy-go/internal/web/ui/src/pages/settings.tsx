@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
+import { Download, KeyRound, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
+import type { CaExportKind } from "../lib/ca-export";
+import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
 import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
@@ -31,7 +33,7 @@ import {
  useRemoveNetworkProxyRule,
  useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useBackupNow, useCaCert, useCaStatus, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useBackupNow, useCaCert, useCaStatus, useExportCa, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { cn } from "../lib/cn";
 import {
@@ -53,7 +55,7 @@ import type { FrameProgramResponse } from "../lib/types.policy";
 import type { TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
 
@@ -575,6 +577,141 @@ export function TlsPassthroughSection(): JSX.Element {
 // Burp keeps its browser block in User options → Misc, beside Hotkeys; this section sits in the
 // same relative slot. Read-only on purpose: the engine is named by -dom at startup, and switching
 // it live would race the audit engine's unlocked config reads and strand a cached browser.
+/**
+ * Burp's browser settings (burpsy-react-ui-bufa) — the browser "Open browser" launches, which is not
+ * the DOM-check engine above: this one is the operator's, on its own profile, routed through a Proxy
+ * listener. Every switch is saved with the project and applies to the next launch.
+ */
+function BrowserSection(): JSX.Element {
+ const settings = useBrowserSettings();
+ const save = useSaveBrowserSettings();
+ const clear = useClearBrowserData();
+ const [confirmClear, setConfirmClear] = useState(false);
+ // The folder is typed, so it is a draft until the operator applies it — a PUT per keystroke would
+ // save half-typed paths, and the server refuses a relative one with a 400 that should be read once.
+ const [folder, setFolder] = useState<string | null>(null);
+ const s = settings.data;
+ const folderDraft = folder ?? s?.browser_data_directory ?? "";
+
+ const put = (edit: BrowserSettingsEdit, what: string, after?: () => void) =>
+  save.mutate(edit, {
+   onSuccess: () => after?.(),
+   onError: (failure) => toast.error(`${what} was not saved: ${failure.message}`),
+  });
+
+ return (
+  <Card>
+   <SectionHeading
+    title="Browser"
+    detail="The browser Open browser launches: Chromium on its own profile, routed through a burpsy Proxy listener and trusting burpsy's CA. Saved with the project; changes apply to the next launch."
+    actions={<RefreshButton onClick={() => void settings.refetch()} loading={settings.isFetching} />}
+   />
+   {settings.isPending ? (
+    <LoadingPanel label="Reading the browser settings" />
+   ) : settings.isError ? (
+    <ErrorNotice title="Could not read the browser settings" error={settings.error} onRetry={() => void settings.refetch()} />
+   ) : s ? (
+    <div className="stack">
+     <div className="metric-grid wide">
+      <Metric
+       label="Proxy a launch will use"
+       value={s.proxy || "none usable"}
+       tone={s.proxy ? "good" : "warn"}
+       detail={s.proxy ? undefined : "Open browser is refused until a Proxy listener is running"}
+      />
+      <Metric label="Browser" value={s.running ? "Running" : "Not running"} tone={s.running ? "info" : "neutral"} />
+     </div>
+     <Field
+      label="Browser data folder"
+      hint={`Empty uses the per-project default. A launch uses ${s.profile_dir}. Must be an absolute path.`}
+     >
+      {(id) => (
+       <div className="inline-add">
+        <Input
+         id={id}
+         value={folderDraft}
+         placeholder="per-project default"
+         spellCheck={false}
+         onChange={(event) => setFolder(event.target.value)}
+        />
+        <Button
+         variant="outline"
+         size="small"
+         disabled={save.isPending || folder === null || folder === s.browser_data_directory}
+         onClick={() => put({ browser_data_directory: folderDraft.trim() }, "The data folder", () => setFolder(null))}
+        >
+         Apply
+        </Button>
+       </div>
+      )}
+     </Field>
+     <Checkbox
+      checked={s.allow_saving_browser_settings}
+      disabled={save.isPending}
+      onCheckedChange={(on) => put({ allow_saving_browser_settings: on }, "Store browser data")}
+      label="Store browser data between launches (cookies, logins, history)"
+     />
+     <Checkbox
+      checked={s.allow_running_without_sandbox}
+      disabled={save.isPending}
+      onCheckedChange={(on) => put({ allow_running_without_sandbox: on }, "Allow running without the sandbox")}
+      label="Allow running without the sandbox"
+     />
+     <div className="notice notice-warn">
+      Chromium refuses to start sandboxed when burpsy runs as root, so this is required there — and it
+      removes the browser&apos;s main defence against a malicious page. Test only targets you are authorised
+      to test, and prefer running burpsy as an ordinary user.
+     </div>
+     <Checkbox
+      checked={s.disable_gpu}
+      disabled={save.isPending}
+      onCheckedChange={(on) => put({ disable_gpu: on }, "Disable GPU")}
+      label="Disable GPU (for remote displays and VMs where hardware acceleration fails)"
+     />
+     <Toolbar>
+      <Button variant="danger" size="small" disabled={s.running || clear.isPending} onClick={() => setConfirmClear(true)}>
+       <Trash2 size={13} aria-hidden="true" />
+       Clear all browser data
+      </Button>
+      {s.running ? <span className="field-hint">Close the burpsy browser first — its data is in use.</span> : null}
+     </Toolbar>
+     <Modal
+      open={confirmClear}
+      onOpenChange={setConfirmClear}
+      title="Clear all browser data?"
+      description={`Deletes the burpsy browser's profile at ${s.profile_dir} — its cookies, saved logins and history. Nothing brings them back.`}
+     >
+      <div className="page-actions">
+       <Button variant="outline" autoFocus onClick={() => setConfirmClear(false)}>
+        Cancel
+       </Button>
+       <Button
+        variant="danger"
+        disabled={clear.isPending}
+        onClick={() =>
+         clear.mutate(undefined, {
+          onSuccess: (result) => {
+           setConfirmClear(false);
+           toast.success(`Cleared ${result.cleared}`);
+          },
+          onError: (failure) => {
+           setConfirmClear(false);
+           toast.error(`Browser data was not cleared: ${failure.message}`);
+          },
+         })
+        }
+       >
+        <Trash2 size={13} aria-hidden="true" />
+        {clear.isPending ? "Clearing…" : "Clear all browser data"}
+       </Button>
+      </div>
+     </Modal>
+    </div>
+   ) : null}
+  </Card>
+ );
+}
+
 function DomEngineSection(): JSX.Element {
  const stats = useStats();
  const checks = stats.data?.dom_checks === true;
@@ -1948,6 +2085,160 @@ function CaImportSection(): JSX.Element {
  );
 }
 
+/**
+ * Burp's CA dialog exports (burpsy-react-ui-j92x): the certificate, the private key, or both as a
+ * password-protected PKCS#12 keystore — the way to point another tool (ZAP, a scanner, a mobile
+ * proxy) at the CA burpsy is already intercepting with.
+ *
+ * Every export goes through the confirmation gate (lib/ca-export.ts). The certificate is public, so
+ * its button is the confirmation; the key and the keystore each open a dialog that says what the key
+ * lets its holder do before anything is minted. The password lives in this component only while the
+ * dialog is open and is dropped on close, success or failure; the mutation that carried it is reset
+ * when the call settles and is not kept by the cache (useExportCa's gcTime 0); the exported bytes are
+ * never in state.
+ */
+function CaExportPanel({ available }: { available: boolean }): JSX.Element {
+ const exportCa = useExportCa();
+ const [asking, setAsking] = useState<"key" | "pkcs12" | null>(null);
+ const [password, setPassword] = useState("");
+ const [again, setAgain] = useState("");
+ const [refusal, setRefusal] = useState("");
+
+ const dismiss = () => {
+  setAsking(null);
+  setPassword("");
+  setAgain("");
+ };
+
+ const run = (kind: CaExportKind) => {
+  setRefusal("");
+  exportCa.mutate(kind === "pkcs12" ? { kind, password } : { kind }, {
+   onSuccess: ({ filename, bytes }) => {
+    toast.success(`Exported ${filename} (${formatBytes(bytes)})`);
+    dismiss();
+   },
+   onError: (failure) => {
+    setRefusal(failure.message);
+    if (kind !== "pkcs12") setAsking(null);
+   },
+   // Drop the mutation's copy of the variables (the PKCS#12 password) once the call is over.
+   onSettled: () => exportCa.reset(),
+  });
+ };
+
+ const mismatch = asking === "pkcs12" && again !== "" && password !== again;
+ const pkcs12Ready = password !== "" && password === again;
+
+ return (
+  <div className="stack">
+   <strong>Export</strong>
+   <Toolbar>
+    <Button size="small" variant="outline" disabled={!available || exportCa.isPending} onClick={() => run("cert")}>
+     <Download size={14} aria-hidden="true" />
+     Export certificate (PEM)
+    </Button>
+    <Button
+     size="small"
+     variant="outline"
+     disabled={!available || exportCa.isPending}
+     onClick={() => {
+      setRefusal("");
+      setAsking("key");
+     }}
+    >
+     <KeyRound size={14} aria-hidden="true" />
+     Export private key…
+    </Button>
+    <Button
+     size="small"
+     variant="outline"
+     disabled={!available || exportCa.isPending}
+     onClick={() => {
+      setRefusal("");
+      setAsking("pkcs12");
+     }}
+    >
+     <KeyRound size={14} aria-hidden="true" />
+     Export PKCS#12…
+    </Button>
+   </Toolbar>
+   {refusal && asking === null ? <ErrorNotice title="The CA was not exported" error={refusal} /> : null}
+   <p className="field-hint">
+    {available
+     ? "For another tool that has to agree with burpsy about what is intercepted. The certificate is public; the private key and the PKCS#12 keystore are not — each asks first. burpsy logs that an export happened (its kind and the CA's subject), never what was exported."
+     : "Nothing to export: TLS interception is off, so there is no signing CA. Start burpsy with -intercept-tls."}
+   </p>
+
+   <Modal
+    open={asking !== null}
+    onOpenChange={(next) => {
+     if (!next) dismiss();
+    }}
+    title={asking === "pkcs12" ? "Export the CA as PKCS#12?" : "Export the CA private key?"}
+    description="Whoever holds this key can mint a certificate, for any site, that every browser and device trusting burpsy's CA will accept without a warning — and so read and change their TLS traffic. A copy cannot be taken back: if one is lost, regenerate the CA and re-trust the new one everywhere."
+   >
+    <form
+     className="stack"
+     onSubmit={(event) => {
+      event.preventDefault();
+      if (asking === "key") run("key");
+      else if (asking === "pkcs12" && pkcs12Ready) run("pkcs12");
+     }}
+    >
+     {asking === "pkcs12" ? (
+      <>
+       <Field label="Keystore password" hint="Required: a keystore without one opens for anyone who has the file.">
+        {(id) => (
+         <Input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+         />
+        )}
+       </Field>
+       <Field label="Repeat the password">
+        {(id) => (
+         <Input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          aria-invalid={mismatch || undefined}
+          value={again}
+          onChange={(event) => setAgain(event.target.value)}
+         />
+        )}
+       </Field>
+       {mismatch ? (
+        <p className="field-hint" role="alert">
+         The two passwords differ.
+        </p>
+       ) : null}
+      </>
+     ) : (
+      <p className="field-hint">The key is downloaded as burpsy-ca.key — a PKCS#8 PEM file with no password on it.</p>
+     )}
+     {refusal ? <ErrorNotice title="The CA was not exported" error={refusal} /> : null}
+     <div className="page-actions">
+      <Button variant="outline" autoFocus disabled={exportCa.isPending} onClick={dismiss}>
+       Cancel
+      </Button>
+      <Button
+       type="submit"
+       variant="danger"
+       disabled={exportCa.isPending || (asking === "pkcs12" && !pkcs12Ready)}
+      >
+       <KeyRound size={14} aria-hidden="true" />
+       {exportCa.isPending ? "Exporting…" : asking === "pkcs12" ? "Export PKCS#12" : "Export private key"}
+      </Button>
+     </div>
+    </form>
+   </Modal>
+  </div>
+ );
+}
+
 function CertificateSection(): JSX.Element {
  const { data, error, isFetching, refetch } = useCaCert();
 
@@ -1983,6 +2274,7 @@ function CertificateSection(): JSX.Element {
      "4. Point the client's HTTP and HTTPS proxy at burpsy, then reload a page and check HTTP history.",
     ].join("\n")}
    </div>
+   <CaExportPanel available={data?.available ?? false} />
    <p className="field-hint">
     Trust this CA in the browser you test with, never in one you use for anything else: while it is trusted,
     burpsy can read that browser&apos;s TLS traffic.
@@ -2424,6 +2716,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  scanner: ScannerSettingsSection,
  "llm-triage": LlmTriageSection,
  "browser-engine": DomEngineSection,
+ browser: BrowserSection,
  "upstream-proxy": UpstreamProxySection,
  "platform-auth": PlatformAuthSection,
  "client-certificates": ClientCertificatesSection,

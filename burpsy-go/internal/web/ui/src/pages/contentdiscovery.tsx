@@ -1,6 +1,7 @@
 import { AlertTriangle, Copy, ExternalLink, FolderTree, Globe, Link2, Play, Repeat2, Terminal } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { openUrlInBrowser } from "../lib/data.browser";
 import { copyToClipboard, formatBytes, formatCount, templateRequest } from "../lib/api";
 import { takeSeed } from "../lib/page-seed";
 import { useApp } from "../lib/store";
@@ -315,10 +316,8 @@ function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
           id: "browser",
           label: "Open URL in browser",
           icon: Globe,
-          onSelect: () => {
-            window.open(row.url, "_blank", "noopener");
-            toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
-          },
+          // The burpsy browser, proxied (bufa); a refusal is shown and offers this browser instead.
+          onSelect: () => void openUrlInBrowser(row.url),
         },
       ],
     },

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, X } from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, Search, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
-import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useMessage, useStats } from "../lib/data";
+import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useImportHar, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
 import { useScopeView } from "../lib/data.policy";
 import { QUERY_PANEL } from "../lib/reference";
@@ -515,6 +515,40 @@ export function HistoryPage(): JSX.Element {
  const scope = useScopeView();
  const annotate = useAnnotateExchange();
  const removeRows = useDeleteHistory();
+ // Burp's File > Import (HAR): bring a capture taken elsewhere — a browser's DevTools export, a CI
+ // run — into history for replay, without re-proxying it live. The raw file is POSTed as the request
+ // body; the server renders each entry into an ordinary history row (Source "import").
+ const importHar = useImportHar();
+ const harInputRef = useRef<HTMLInputElement>(null);
+
+ // Read the chosen HAR and import it. Refused above 64 MB client-side (maxHARImportBytes in
+ // api_har_import.go) so an oversized file gets an honest message rather than the browser's opaque
+ // "Failed to fetch" when the server's MaxBytesReader cuts the stream mid-upload.
+ const importHarFile = (file: File) => {
+  if (file.size > 64 * 1024 * 1024) {
+   toast.error(`"${file.name}" is larger than the 64 MB import limit`);
+   return;
+  }
+  importHar.mutate(file, {
+   // `errors[]` is NOT the skip list: the server records a note when a response fails to render but
+   // still imports that entry as a request-only row, so errors.length can exceed skipped and the
+   // list is capped at 50. It is surfaced as neutral "Notes", never as a total, and never as the
+   // reason for the skipped count.
+   onSuccess: ({ imported, skipped, errors }) => {
+    const description = errors && errors.length > 0 ? `Notes: ${errors.slice(0, 3).join("; ")}` : undefined;
+    const summary = `Imported ${imported}${skipped > 0 ? `, skipped ${skipped}` : ""}`;
+    // Zero imported is not a success — say so. Any skips make it a warning rather than a clean win.
+    if (imported === 0) toast.error(skipped > 0 ? `${summary} — nothing was imported` : "Nothing in the file could be imported", { description });
+    else if (skipped > 0) toast.warning(summary, { description });
+    else toast.success(summary, { description });
+    // The hook already invalidates the history prefix; this refetches the view immediately so the
+    // imported rows appear without waiting for the next focus/poll.
+    void refetch();
+   },
+   onError: (cause: unknown) =>
+    toast.error(`Could not import the HAR: ${cause instanceof Error ? cause.message : "the server refused it"}`),
+  });
+ };
  // Burp's "Delete items"/"Clear (tool)" (r6li) go through one confirm modal, the way Logger's
  // clear does: rows is null for "the selected rows", or "all" for Clear. undefined means the
  // modal is closed; the value decides what the confirm button says and sends.
@@ -1257,6 +1291,32 @@ export function HistoryPage(): JSX.Element {
         <Download size={14} />
         Export CSV
        </Button>
+       {/* Burp's File > Import (HAR). Not disabled on an empty capture — importing into one is the
+           main use. The input is visually hidden but reachable; the button is its label and opens it. */}
+       <Button
+        variant="outline"
+        size="small"
+        onClick={() => harInputRef.current?.click()}
+        disabled={importHar.isPending}
+       >
+        <Upload size={14} />
+        {importHar.isPending ? "Importing…" : "Import HAR"}
+       </Button>
+       <input
+        ref={harInputRef}
+        type="file"
+        accept=".har,application/json"
+        className="sr-only"
+        aria-hidden="true"
+        tabIndex={-1}
+        onChange={(event) => {
+         const file = event.target.files?.[0];
+         // Cleared so re-picking the same file fires change again — re-importing an edited capture
+         // saved over the same path is an ordinary thing to want.
+         event.target.value = "";
+         if (file) importHarFile(file);
+        }}
+       />
        {/* Burp's third scan kind, launched from the selection the way Burp launches it: right-click
            or toolbar, on the items you ticked, as one task. It sits next to Delete items because that
            is the other action on the tick column, and both are disabled with the same reason. */}

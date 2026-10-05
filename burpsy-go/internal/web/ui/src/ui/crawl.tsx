@@ -4,6 +4,7 @@ import { crawlBound } from "../lib/crawl-bounds";
 import { useState } from "react";
 import { useCrawls, useStartCrawl } from "../lib/data.observe";
 import type { CrawlRun } from "../lib/types.observe";
+import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { Badge, Button, Field, Input, Modal, Switch } from "./primitives";
 
 /**
@@ -39,6 +40,15 @@ export function CrawlLauncher(): JSX.Element {
   const [maxCaptureBytes, setMaxCaptureBytes] = useState("");
   const [maxFingerprints, setMaxFingerprints] = useState("");
   const [maxRelogins, setMaxRelogins] = useState("");
+  // Burp's "Reuse the site map" (z8qf). Off by default: a seeded crawl does not re-fetch what the site
+  // map holds, so a page only ever browsed through the proxy contributes its links only if its stored
+  // response is parsed — the trade the hint states.
+  const [seedFromSiteMap, setSeedFromSiteMap] = useState(false);
+  // Burp's crawler.error_handling (o0c5), blank = the engine default, 0 = never/off/no retries.
+  const [pauseTimeoutCount, setPauseTimeoutCount] = useState("");
+  const [pauseTimeoutPercent, setPauseTimeoutPercent] = useState("");
+  const [pauseAuthFailures, setPauseAuthFailures] = useState("");
+  const [followUpPasses, setFollowUpPasses] = useState("");
   const start = useStartCrawl();
   const { data, running } = useCrawls();
   // The engine's own defaults, from the server. The first version of this row carried a hard-coded
@@ -65,6 +75,11 @@ export function CrawlLauncher(): JSX.Element {
         ...crawlBound("max_capture_bytes", maxCaptureBytes),
         ...crawlBound("max_fingerprints", maxFingerprints),
         ...crawlBound("max_relogins", maxRelogins),
+        ...(seedFromSiteMap ? { seed_from_site_map: true } : {}),
+        ...crawlBound("pause_task_requests_timed_out_count", pauseTimeoutCount),
+        ...crawlBound("pause_task_requests_timed_out_percentage", pauseTimeoutPercent),
+        ...crawlBound("consecutive_authentication_failures_before_pausing_task", pauseAuthFailures),
+        ...crawlBound("number_of_follow_up_passes", followUpPasses),
       },
       { onSuccess: () => setOpen(false) },
     );
@@ -136,6 +151,26 @@ export function CrawlLauncher(): JSX.Element {
             </Field>
           </div>
 
+          <div className="eyebrow">Error handling</div>
+          <div className="form-grid">
+            <Field label="Pause after timeouts in a row" hint="Consecutive timed-out requests before the crawl pauses itself. Blank takes the default (15); 0 never pauses.">
+              {(id) => <Input id={id} type="number" min={0} value={pauseTimeoutCount} onChange={(event) => setPauseTimeoutCount(event.target.value)} placeholder="default (15)" />}
+            </Field>
+            <Field label="Pause at timeout percentage" hint="Share of the crawl's requests that may time out before it pauses, 0–100. Blank or 0 is off.">
+              {(id) => <Input id={id} type="number" min={0} max={100} value={pauseTimeoutPercent} onChange={(event) => setPauseTimeoutPercent(event.target.value)} placeholder="default (off)" />}
+            </Field>
+            <Field label="Pause after auth failures in a row" hint="Consecutive authentication failures before the crawl pauses, at most 10. Blank takes the default (2); 0 never pauses.">
+              {(id) => <Input id={id} type="number" min={0} max={10} value={pauseAuthFailures} onChange={(event) => setPauseAuthFailures(event.target.value)} placeholder="default (2)" />}
+            </Field>
+            <Field label="Follow-up passes" hint="Passes that retry requests which failed. Blank takes the default (1); 0 retries nothing. Retries spend the same request budget.">
+              {(id) => <Input id={id} type="number" min={0} value={followUpPasses} onChange={(event) => setFollowUpPasses(event.target.value)} placeholder="default (1)" />}
+            </Field>
+          </div>
+
+          <Field label="Reuse the site map" hint="Skips requests the site map already holds for the seeds' origins. Best for a re-crawl: pages only browsed through the proxy may link to pages a seeded crawl will not discover.">
+            <Switch checked={seedFromSiteMap} onCheckedChange={setSeedFromSiteMap} label="Skip requests already in the site map" />
+          </Field>
+
           <Field label="Submit forms" hint="Off by default on purpose: a crawl that submits forms writes to the application under test.">
             <Switch checked={submitForms} onCheckedChange={setSubmitForms} label="Submit discovered forms" />
           </Field>
@@ -197,10 +232,13 @@ function describeBounds(limits: NonNullable<CrawlRun["limits"]>, defaults: NonNu
 function CrawlRunRow({ run, defaults }: { run: CrawlRun; defaults: NonNullable<CrawlRun["limits"]> }): JSX.Element {
   const rep = run.report;
   const skips = (rep?.skips?.counts ?? []).filter((c) => c.count > 0);
-  const tone = run.state === "failed" ? "bad" : run.state === "running" ? "info" : "good";
+  // "done" only for a crawl that exhausted its frontier (j5j7): a run that hit any bound says so in
+  // the badge, and names each stop below — the counts beside it are then counts of a partial crawl.
+  const outcome = crawlOutcome(run);
+  const stops = crawlStops(run);
   return (
     <div className="ex-row">
-      <Badge tone={tone}>{run.state}</Badge>
+      <Badge tone={outcome.tone}>{outcome.label}</Badge>
       <span className="cell-dim" title={run.seeds.join(", ")}>
         {run.seeds.join(", ")}
       </span>
@@ -209,8 +247,27 @@ function CrawlRunRow({ run, defaults }: { run: CrawlRun; defaults: NonNullable<C
           {rep.fetched} fetched · {rep.refused} refused · {rep.failed} failed
         </span>
       ) : null}
+      {rep && (rep.sitemap_seeded ?? 0) > 0 ? (
+        <span className="cell-dim">
+          {rep.sitemap_seeded} {rep.sitemap_seeded === 1 ? "request" : "requests"} reused from the site map
+        </span>
+      ) : null}
+      {rep && (rep.follow_up_recovered ?? 0) > 0 ? (
+        <span className="cell-dim">
+          {rep.follow_up_recovered} recovered by a follow-up pass
+        </span>
+      ) : null}
       {run.limits ? <span className="cell-dim">{describeBounds(run.limits, defaults)}</span> : null}
       {run.error ? <span className="cell-dim">{run.error}</span> : null}
+      {stops.length ? (
+        <ul className="crawl-stops">
+          {stops.map((stop) => (
+            <li key={stop} className={isPolicyPause(stop) ? "crawl-stop crawl-stop-policy" : "crawl-stop"}>
+              {crawlStopLabel(stop)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {skips.length ? (
         <span className="cell-dim" title={skips.map((s) => `${s.name}: ${s.count}`).join("\n")}>
           {skips.length} skip {skips.length === 1 ? "category" : "categories"}

@@ -251,8 +251,21 @@ export function useStartCrawl() {
     max_relogins?: number;
    requests_per_second?: number;
    submit_forms?: boolean;
+   /** Burp's "Reuse the site map" (burpsy-react-ui-z8qf): requests the site map already holds for the
+    *  seeds' origins are not fetched again. Opt-in; omitted means off. */
+   seed_from_site_map?: boolean;
+   /**
+    * Burp's crawler.error_handling, under Burp's names (burpsy-react-ui-o0c5). Same blank-versus-0
+    * rule as the bounds above: blank is omitted (the engine default), a typed 0 is sent as 0 and
+    * means "never" / "off" / "no retries".
+    */
+   pause_task_requests_timed_out_count?: number;
+   pause_task_requests_timed_out_percentage?: number;
+   consecutive_authentication_failures_before_pausing_task?: number;
+   number_of_follow_up_passes?: number;
    query?: string;
    retention_query?: string;
+  // riskAttack: api() mints the gate's confirmation on the operator's Start click (p1uz).
   }) => api<{ task_id: number; seeds: string[]; state: string; kind: string }>("/api/crawl", json("POST", body)),
   onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap]),
  });

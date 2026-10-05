@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CircleStop, Copy, Download, Pause, Play, Radio } from "lucide-react";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { CircleStop, Copy, Download, Pause, Play, Radio, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "../lib/store";
 import { cookieOptions, formFieldOptions, headerOptions, type TokenOption } from "../lib/sequencer-token-options";
@@ -18,12 +19,16 @@ import {
  useSequencerAnalyse,
  useSequencerAnalyseTokens,
  useSequencerCapture,
+ useSaveSequencerSettings,
+ useSequencerSettings,
  useStartSequencerCapture,
  useStopSequencerCapture,
 } from "../lib/data.workbench";
 import type {
  CharacterAnalysis,
  SequencerCapture,
+ SequencerSettings,
+ SequencerSettingsEdit,
  TokenLocation,
  TokenLocationKind,
 } from "../lib/types.workbench";
@@ -42,6 +47,7 @@ import {
  Input,
  Metric,
  Select,
+ Spinner,
  Tabs,
  TabsContent,
  TabsList,
@@ -49,6 +55,7 @@ import {
  Toolbar,
 } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
+import { analysisSettingRows } from "../lib/sequencer-settings";
 
 /** The analyse report as this page reads it, with the effective-entropy curve
  *  (burpsy-react-ui-boq). The field is intersected on in data.workbench.ts rather
@@ -119,7 +126,19 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
     </div>
    ) : (
     <SimpleTable headers={["Test", "Result", "Observed", "Requirement", "Blocks"]}>
-     {fips.tests.map((test) => (
+     {fips.tests.map((test) =>
+      test.disabled ? (
+       // Switched off by the operator (nm81): kept, by name, and never read as a failure.
+       <tr key={test.id}>
+        <td title={test.spec}>{test.name}</td>
+        <td>
+         <Badge tone="neutral">not run — switched off</Badge>
+        </td>
+        <td className="cell-dim" colSpan={3}>
+         {test.disable_reason ?? "switched off in the analysis settings"}
+        </td>
+       </tr>
+      ) : (
       <tr key={test.id}>
        <td title={test.spec}>{test.name}</td>
        <td>
@@ -131,7 +150,8 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
         {test.blocks_passed} / {test.blocks_passed + test.blocks_failed}
        </td>
       </tr>
-     ))}
+      ),
+     )}
     </SimpleTable>
    )}
    <DetailList
@@ -166,7 +186,17 @@ function Advanced({ report }: { report: SequencerAnalysis }): JSX.Element | null
    <SectionHeading title="Extended tests" detail={advanced.summary} />
    <SimpleTable headers={["Test", "Result", "Observed", "Requirement", "Flagged"]}>
     {advanced.tests.map((test) =>
-     test.tested ? (
+     test.disabled ? (
+      <tr key={test.id}>
+       <td title={test.basis}>{test.name}</td>
+       <td>
+        <Badge tone="neutral">not run — switched off</Badge>
+       </td>
+       <td className="cell-dim" colSpan={3}>
+        {test.disable_reason ?? "switched off in the analysis settings"}
+       </td>
+      </tr>
+     ) : test.tested ? (
       <tr key={test.id}>
        <td title={test.basis}>{test.name}</td>
        <td>
@@ -630,6 +660,65 @@ function CaptureProgress({ capture }: { capture: SequencerCapture }): JSX.Elemen
  );
 }
 
+/**
+ * Burp's Sequencer "Analysis Settings" (burpsy-react-ui-nm81, -3iao): one switch per test, bound to
+ * /api/sequencer/settings and saved with the project. A switch changes the NEXT analysis — the
+ * report on screen was run under the settings of its time — which is what Redo analysis is for.
+ *
+ * Character count is shown on and inert: it is the characterisation every other result is read
+ * against, and the server refuses switching it off, so a live checkbox would be a control that lies.
+ */
+function AnalysisSettings({
+ settings,
+ saving,
+ onToggle,
+ redo,
+}: {
+ settings: UseQueryResult<SequencerSettings>;
+ saving: boolean;
+ onToggle: (key: string, on: boolean) => void;
+ redo: JSX.Element;
+}): JSX.Element {
+ const rows = analysisSettingRows(settings.data);
+ return (
+  <Card>
+   <SectionHeading
+    title="Analysis settings"
+    detail="Which tests an analysis runs. Saved with the project; a change applies to the next analysis — Redo re-runs the last sample under it."
+    actions={redo}
+   />
+   {settings.isPending ? (
+    <Spinner label="Reading the analysis settings" />
+   ) : settings.isError ? (
+    <ErrorNotice
+     title="Could not read the analysis settings"
+     error={settings.error}
+     onRetry={() => void settings.refetch()}
+    />
+   ) : (
+    <div className="analysis-settings" role="group" aria-label="Tests an analysis runs">
+     {rows.map((row) => (
+      <Checkbox
+       key={row.burpKey}
+       checked={row.on}
+       disabled={row.locked || saving}
+       onCheckedChange={(next) => onToggle(row.burpKey, next)}
+       label={
+        <>
+         {row.name} <span className="cell-dim">{row.burpKey}</span>
+         {row.locked ? (
+          <span className="field-hint"> — always runs: the base characterisation the other tests are read against</span>
+         ) : null}
+        </>
+       }
+      />
+     ))}
+    </div>
+   )}
+  </Card>
+ );
+}
+
 export function SequencerPage(): JSX.Element {
  const [source, setSource] = useState("paste");
  const [encoding, setEncoding] = useState("");
@@ -643,8 +732,19 @@ export function SequencerPage(): JSX.Element {
  // back in the report — a quoted finding has to carry which sample produced it.
  const [padMode, setPadMode] = useState("");
  const [padByte, setPadByte] = useState("0");
- const [base64Decode, setBase64Decode] = useState(false);
+ // Base64-decode is no longer page state: it is the saved setting
+ // sequencer.token_handling.base_64_decode_before_analyzing (burpsy-react-ui-nm81), read and
+ // written through /api/sequencer/settings, so it survives a reload and travels with the project.
+ // Undefined until the settings load — the field is then omitted and the server applies the saved
+ // value itself, rather than this page guessing "off".
+ const settings = useSequencerSettings();
+ const saveSettings = useSaveSequencerSettings();
+ const base64Decode = settings.data?.token_handling.base_64_decode_before_analyzing;
  const tokenHandling = { padMode, padByte, base64Decode };
+ const editSettings = (edit: SequencerSettingsEdit, what: string) =>
+  saveSettings.mutate(edit, {
+   onError: (cause) => toast.error(`${what} was not saved: ${cause.message}`),
+  });
  const [tokens, setTokens] = useState("");
  // Burp's Manual load offers Paste AND Load (burpsy-react-ui-ts3v): the hidden input is the
  // file affordance, the same pattern app.tsx uses for configuration import. Read as text —
@@ -775,6 +875,27 @@ export function SequencerPage(): JSX.Element {
    },
   );
 
+ // Burp's "Redo analysis" (burpsy-react-ui-3iao): the sample the last analysis on screen ran over,
+ // analysed again under the CURRENT settings and token handling. The sample is the mutation's own
+ // record of what it sent — not the editor or the live capture now, which may have changed since —
+ // and disabled_tests is never sent, so the saved analysis settings decide which tests run.
+ const lastSample =
+  source === "paste"
+   ? (analysePaste.variables ? { kind: "paste" as const, text: analysePaste.variables.text } : null)
+   : (analyseTokens.variables ? { kind: "tokens" as const, tokens: analyseTokens.variables.tokens } : null);
+ const redoAnalysis = () => {
+  if (!lastSample) return;
+  const done = {
+   onSuccess: (result: SequencerAnalysis) => toast.success(`Re-analysed ${result.tokens.toLocaleString()} token(s)`),
+   onError: (cause: Error) => toast.error(`Redo analysis failed: ${cause.message}`),
+  };
+  if (lastSample.kind === "paste") {
+   analysePaste.mutate({ text: lastSample.text, encoding, significancePercent, tokens: tokenHandling }, done);
+  } else {
+   analyseTokens.mutate({ tokens: lastSample.tokens, encoding, significancePercent, handling: tokenHandling }, done);
+  }
+ };
+
  // Burp's Auto-analyze (burpsy-react-ui-qpl): the battery re-runs periodically while a live
  // capture is running, so the verdict converges as the sample grows instead of only after
  // the operator stops and clicks. Period 30s, and only when the sample has actually grown
@@ -898,8 +1019,11 @@ export function SequencerPage(): JSX.Element {
        />
       ) : null}
       <Checkbox
-       checked={base64Decode}
-       onCheckedChange={setBase64Decode}
+       checked={base64Decode ?? false}
+       disabled={base64Decode === undefined || saveSettings.isPending}
+       onCheckedChange={(next) =>
+        editSettings({ token_handling: { base_64_decode_before_analyzing: next } }, "Base64-decode before analyzing")
+       }
        label="Base64-decode before analyzing"
       />
       <Button
@@ -1178,6 +1302,28 @@ export function SequencerPage(): JSX.Element {
      ) : null}
     </TabsContent>
    </Tabs>
+
+   <AnalysisSettings
+    settings={settings}
+    saving={saveSettings.isPending}
+    onToggle={(key, on) => editSettings({ token_analysis: { [key]: on } }, `The ${key} switch`)}
+    redo={
+     <Button
+      variant="outline"
+      size="small"
+      onClick={redoAnalysis}
+      disabled={pending || lastSample === null}
+      title={
+       lastSample === null
+        ? "Analyse a sample first; Redo re-runs that sample under the current settings."
+        : "Re-run the last analysed sample under the current settings."
+      }
+     >
+      <RotateCcw size={14} aria-hidden="true" />
+      Redo analysis
+     </Button>
+    }
+   />
 
    {error ? <ErrorNotice error={error} onRetry={source === "paste" ? runPaste : runCaptured} /> : null}
 

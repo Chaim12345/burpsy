@@ -181,6 +181,11 @@ export interface BitStats {
 
 export interface FipsTest {
  id: string;
+ /** True when the operator switched the test off (burpsy-react-ui-nm81): the row is kept, its
+  *  numbers are cleared, and it is NOT a failure. */
+ disabled?: boolean;
+ /** Why, whenever `disabled` is set. */
+ disable_reason?: string;
  name: string;
  spec: string;
  requirement: string;
@@ -216,8 +221,11 @@ export interface AdvancedTest {
  /** The pass condition, with the constants it was read against. */
  requirement: string;
  tested: boolean;
- /** Why the test could not run. Present exactly when `tested` is false. */
+ /** Why the test could not run. Present when `tested` is false and the test was not switched off. */
  reason?: string;
+ /** True when the operator switched the test off (burpsy-react-ui-nm81). `tested` is false too. */
+ disabled?: boolean;
+ disable_reason?: string;
  passed: boolean;
  /** The statistic that decided the verdict: the most significant point examined. */
  observed: string;
@@ -241,6 +249,25 @@ export interface AdvancedReport {
  tests: AdvancedTest[];
  summary: string;
  affects_grade: boolean;
+ /** The test ids this run was told not to run. */
+ switched_off?: string[];
+}
+
+/**
+ * GET/PUT /api/sequencer/settings — Burp's Sequencer analysis settings (burpsy-react-ui-nm81,
+ * -3iao), keyed by Burp's own names and saved with the project. `count` is always true.
+ */
+export interface SequencerSettings {
+ token_analysis: Record<string, boolean>;
+ token_handling: { base_64_decode_before_analyzing: boolean };
+ /** Every token_analysis key the server accepts, so a key this console does not know still renders. */
+ keys: string[];
+}
+
+/** A partial PUT: only the keys present change. */
+export interface SequencerSettingsEdit {
+ token_analysis?: Record<string, boolean>;
+ token_handling?: { base_64_decode_before_analyzing?: boolean };
 }
 
 /** The full report from POST /api/sequencer/analyse. */

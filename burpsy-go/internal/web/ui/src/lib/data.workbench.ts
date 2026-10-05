@@ -9,6 +9,8 @@ import type {
  HashResponse,
  SequencerAnalysis,
  SequencerCapture,
+ SequencerSettings,
+ SequencerSettingsEdit,
  StopCaptureResult,
  TokenLocation,
  ToolLogView,
@@ -29,6 +31,7 @@ export const workbenchKeys = {
   *  would let the Dashboard's 20-row window and this page's full read collide. */
  toolLog: (filter: string, search: string, limit: number) => ["toollog", "logger", filter, search, limit] as const,
  sequencerCapture: (id: string) => ["sequencer", "capture", id] as const,
+ sequencerSettings: ["sequencer", "settings"] as const,
 };
 
 /* --- supported values, read off the Go handlers --------------------------- */
@@ -128,8 +131,9 @@ export interface TokenHandling {
  padMode: string;
  /** The single character to pad with. Burp's own default is "0". */
  padByte: string;
- /** Burp's "Base64-decode before analyzing". */
- base64Decode: boolean;
+ /** Burp's "Base64-decode before analyzing". Undefined while the saved setting has not loaded: the
+  *  field is then omitted and the server applies the project's saved value. */
+ base64Decode?: boolean;
 }
 
 function analyseBody(
@@ -148,7 +152,10 @@ function analyseBody(
   ...(tokens && tokens.padMode && tokens.padMode !== "none"
    ? { pad_mode: tokens.padMode, ...(tokens.padByte ? { pad_byte: tokens.padByte } : {}) }
    : {}),
-  ...(tokens && tokens.base64Decode ? { base64_decode: true } : {}),
+  // Sent explicitly whenever the page knows the saved setting (the checkbox is bound to it): an
+  // omitted field means "the saved setting decides", and a PUT still in flight when Analyse is
+  // clicked would otherwise run under the previous value.
+  ...(tokens && tokens.base64Decode !== undefined ? { base64_decode: tokens.base64Decode } : {}),
  };
 }
 
@@ -173,6 +180,26 @@ export function useSequencerAnalyseTokens() {
  >({
   mutationFn: ({ tokens, encoding, significancePercent, handling }) =>
    api<SequencerAnalysisWithEntropy>("/api/sequencer/analyse", json("POST", analyseBody({ tokens }, encoding, significancePercent, handling))),
+ });
+}
+
+/**
+ * GET /api/sequencer/settings — which tests an analysis runs, and the base64 token handling.
+ * Saved with the project; an analysis that does not name its own tests (this page never does)
+ * runs what these leave on.
+ */
+export const useSequencerSettings = (): UseQueryResult<SequencerSettings> =>
+ useQuery({
+  queryKey: workbenchKeys.sequencerSettings,
+  queryFn: ({ signal }) => api<SequencerSettings>("/api/sequencer/settings", { signal }),
+ });
+
+/** PUT /api/sequencer/settings with a partial edit. The confirmed full view goes into the cache. */
+export function useSaveSequencerSettings() {
+ const client = useQueryClient();
+ return useMutation<SequencerSettings, Error, SequencerSettingsEdit>({
+  mutationFn: (edit) => api<SequencerSettings>("/api/sequencer/settings", json("PUT", edit)),
+  onSuccess: (confirmed) => client.setQueryData(workbenchKeys.sequencerSettings, confirmed),
  });
 }
 

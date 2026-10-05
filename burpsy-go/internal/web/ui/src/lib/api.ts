@@ -1,3 +1,5 @@
+import { ROUTE_GATED } from "./gated-routes";
+
 export class ApiError extends Error {
  constructor(
   message: string,
@@ -25,10 +27,100 @@ function readFailure(text: string, fallback: string): string {
  return trimmed;
 }
 
+/** The header the confirmation gate (internal/web/confirm_gate.go) reads a spent token from. */
+export const CONFIRM_HEADER = "X-Burpsy-Confirm";
+
+/**
+ * The manifest pattern a path resolves to, by the gate's own rule (routeRiskFor in
+ * confirm_gate.go): the LONGEST pattern the path has as a segment-bounded prefix, "/" matching
+ * everything. Longest over every pattern, gated or not, because an ungated pattern can be the
+ * longest match under a gated one.
+ */
+export function manifestPatternFor(path: string, table: Readonly<Record<string, boolean>> = ROUTE_GATED): string | undefined {
+ let best: string | undefined;
+ for (const pattern of Object.keys(table)) {
+  if (pattern !== "/" && !hasSegmentPrefix(path, pattern)) continue;
+  if (best === undefined || pattern.length > best.length) best = pattern;
+ }
+ return best;
+}
+
+function hasSegmentPrefix(path: string, pattern: string): boolean {
+ if (!path.startsWith(pattern)) return false;
+ return path.length === pattern.length || pattern.endsWith("/") || path[pattern.length] === "/";
+}
+
+/** The gated pattern a mutating call to `url` must carry a confirmation for, or undefined. */
+export function gatedPatternFor(url: string, table: Readonly<Record<string, boolean>> = ROUTE_GATED): string | undefined {
+ const path = new URL(url, "http://console.invalid").pathname;
+ // A mint request is not a gated call: the gate answers `<gated pattern>/confirm` from its mint
+ // mux before resolving risk, so minting for it would be minting for the mint.
+ if (path.endsWith("/confirm")) {
+  const stripped = path.slice(0, -"/confirm".length);
+  if (table[stripped] || table[`${stripped}/`]) return undefined;
+ }
+ const pattern = manifestPatternFor(path, table);
+ return pattern !== undefined && table[pattern] ? pattern : undefined;
+}
+
+/** Where the gate mints for a pattern: one /confirm per pattern, shared by an `/x` + `/x/` pair. */
+export function confirmUrlFor(pattern: string): string {
+ return `${pattern.replace(/\/+$/, "")}/confirm`;
+}
+
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
+
+/**
+ * Mint a one-time confirmation for the gated route `url` resolves to.
+ *
+ * The token is bound to that route (burpsy-react-ui-r9b5: a token minted for one route is refused —
+ * and burned — on any other; the two members of an `/x` + `/x/` pair are one route), lives 60
+ * seconds and is spent by one call. A raw fetch rather than `api()`, because `/x/confirm` itself
+ * resolves under a gated `/x/` subtree and `api()` would try to mint for the mint.
+ */
+export async function mintConfirmation(url: string): Promise<string> {
+ const pattern = gatedPatternFor(url) ?? new URL(url, "http://console.invalid").pathname;
+ const response = await fetch(confirmUrlFor(pattern), { method: "POST" });
+ const text = await response.text();
+ if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
+ let token = "";
+ try {
+  token = (JSON.parse(text) as { token?: string }).token ?? "";
+ } catch {
+  token = "";
+ }
+ if (!token) throw new ApiError("the confirmation endpoint returned no token", response.status, text);
+ return token;
+}
+
+/**
+ * `fetch` for the console: a mutating call (anything but GET/HEAD/OPTIONS/TRACE — the gate's own
+ * methodMutates rule) to a route the server gates (scope, attack, credential, destructive) first
+ * mints a confirmation for exactly that route and sends it (burpsy-react-ui-p1uz).
+ *
+ * Why in the client and not at each call site: the gate landed (cc972e0) after most of the console
+ * was written, and a dozen operator actions — Regenerate CA, Back up now, every scope edit, rule
+ * saves and deletes — silently became 428s. One rule here, driven by a table generated from the Go
+ * manifest (gated-routes.ts, drift-tested), means a newly gated route cannot regress the same way.
+ *
+ * What this does NOT change: every console mutation is an operator's click (or an operator-armed
+ * task), so minting on its behalf records that act. The gate exists for callers with no human
+ * present — agents, scripts, other pages — and they still get 428. A caller that already holds a
+ * token (an explicit mint) is left alone.
+ */
+export async function gatedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+ const method = (init.method ?? "GET").toUpperCase();
+ const headers = new Headers(init.headers);
+ if (!SAFE_METHODS.has(method) && !headers.has(CONFIRM_HEADER) && gatedPatternFor(url) !== undefined) {
+  headers.set(CONFIRM_HEADER, await mintConfirmation(url));
+ }
+ return fetch(url, { ...init, headers });
+}
+
 export async function api<T>(url: string, init?: RequestInit): Promise<T> {
  const headers = new Headers(init?.headers);
  if (init?.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
- const response = await fetch(url, { ...init, headers });
+ const response = await gatedFetch(url, { ...init, headers });
  const text = await response.text();
  if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
  if (!text) return null as T;
@@ -166,6 +258,21 @@ export function downloadText(filename: string, text: string, type = "text/plain"
  anchor.download = filename;
  anchor.click();
  URL.revokeObjectURL(url);
+}
+
+/**
+ * Hand a fetched file to the browser as a download. The object URL is revoked on the next tick
+ * rather than synchronously, so the navigation the click started has the URL to read from; after
+ * that the only copy is the one the operator saved.
+ */
+export function downloadBlob(filename: string, blob: Blob): void {
+ const url = URL.createObjectURL(blob);
+ const anchor = document.createElement("a");
+ anchor.href = url;
+ anchor.download = filename;
+ anchor.rel = "noopener";
+ anchor.click();
+ window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 /**

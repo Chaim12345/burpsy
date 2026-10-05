@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { api, json } from "./api";
+import { api, downloadBlob, json } from "./api";
+import { fetchCaExport, type CaExportKind } from "./ca-export";
 import { keys, useResource } from "./data";
 import type {
  EventHubStats,
@@ -202,6 +203,27 @@ export function useRegenerateCaCert() {
   onSuccess: () => {
    void client.invalidateQueries({ queryKey: policyKeys.caStatus });
    void client.invalidateQueries({ queryKey: policyKeys.caCert });
+  },
+ });
+}
+
+/**
+ * Export the signing CA — Burp's CA dialog exports (burpsy-react-ui-j92x): the certificate, the
+ * private key, or a password-protected PKCS#12 keystore. Confirm-gated (see lib/ca-export.ts).
+ *
+ * The download happens INSIDE the mutation and only the file name and size are returned, so the
+ * exported bytes never become the mutation's `data` — React Query would otherwise keep the key in
+ * its cache for as long as the component lives. `gcTime: 0` drops the finished mutation (and the
+ * PKCS#12 password in its `variables`) from the MutationCache as soon as nothing observes it, rather
+ * than after the default five minutes.
+ */
+export function useExportCa() {
+ return useMutation<{ filename: string; bytes: number }, Error, { kind: CaExportKind; password?: string }>({
+  gcTime: 0,
+  mutationFn: async ({ kind, password }) => {
+   const { filename, blob } = await fetchCaExport(kind, password);
+   downloadBlob(filename, blob);
+   return { filename, bytes: blob.size };
   },
  });
 }
