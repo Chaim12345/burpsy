@@ -8,6 +8,7 @@ import type {
  FrameProgramResponse,
  MatchReplaceTestRequest,
  MatchReplaceTestResponse,
+ PassthroughSwitches,
  PassthroughView,
  ProtocolReport,
  ScopeUpdate,
@@ -441,6 +442,16 @@ export function useRemovePassthrough() {
  return useMutation({
   mutationFn: (pattern: string) =>
    api<PassthroughView>(`/api/proxy/passthrough?pattern=${encodeURIComponent(pattern)}`, json("DELETE")),
+  onSuccess: () => invalidate([policyKeys.passthrough]),
+ });
+}
+
+/** PUT /api/proxy/passthrough — the two scope-coupling switches (n1fi). An omitted switch is left as
+ *  it is; the reply is the confirmed view. */
+export function useSetPassthroughSwitches() {
+ const invalidate = useInvalidate();
+ return useMutation({
+  mutationFn: (switches: PassthroughSwitches) => api<PassthroughView>("/api/proxy/passthrough", json("PUT", switches)),
   onSuccess: () => invalidate([policyKeys.passthrough]),
  });
 }

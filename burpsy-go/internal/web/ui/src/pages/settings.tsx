@@ -33,7 +33,7 @@ import {
  useRemoveNetworkProxyRule,
  useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useBackupNow, useCaCert, useCaStatus, useExportCa, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough } from "../lib/data.policy";
+import { useBackupNow, useCaCert, useCaStatus, useExportCa, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough, useSetPassthroughSwitches } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { cn } from "../lib/cn";
 import {
@@ -490,6 +490,7 @@ export function TlsPassthroughSection(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = usePassthrough();
  const add = useAddPassthrough();
  const remove = useRemovePassthrough();
+ const switches = useSetPassthroughSwitches();
  const [pattern, setPattern] = useState("");
 
  const fail = (failure: unknown) =>
@@ -512,6 +513,39 @@ export function TlsPassthroughSection(): JSX.Element {
      pattern: <code>*.bank.test</code> and <code>bank.test</code> are separate rules.
     </span>
    </div>
+
+   {data ? (
+    <Toolbar>
+     <Field
+      label="Apply to out-of-scope items"
+      hint="relay every host the target scope cannot contain, so it is never decrypted"
+      htmlFor="passthrough-out-of-scope"
+     >
+      <Switch
+       id="passthrough-out-of-scope"
+       label="Apply TLS passthrough to out-of-scope items"
+       checked={data.apply_out_of_scope}
+       onCheckedChange={(on) => switches.mutate({ apply_out_of_scope: on }, { onError: fail })}
+      />
+     </Field>
+     <Field
+      label="Add a host when a client refuses the certificate"
+      hint={
+       data.auto_added > 0
+        ? `a pinned client's next connection is relayed instead of failing again — added this run: ${formatCount(data.auto_added)}`
+        : "a pinned client's next connection is relayed instead of failing again"
+      }
+      htmlFor="passthrough-auto-add"
+     >
+      <Switch
+       id="passthrough-auto-add"
+       label="Add a host to TLS passthrough when a client refuses burpsy's certificate"
+       checked={data.auto_add_on_failure}
+       onCheckedChange={(on) => switches.mutate({ auto_add_on_failure: on }, { onError: fail })}
+      />
+     </Field>
+    </Toolbar>
+   ) : null}
 
    <Toolbar>
     <Field label="Host pattern" hint="e.g. internal.bank.test or *.cdn.example">

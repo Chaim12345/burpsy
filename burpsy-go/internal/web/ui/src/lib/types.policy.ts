@@ -480,6 +480,18 @@ export interface EventHubStats {
 /** GET/POST/DELETE /api/proxy/passthrough — the live TLS passthrough host-pattern list. */
 export interface PassthroughView {
  patterns: string[];
+ /** Relay every host the scope cannot contain untouched, as Burp's "Apply TLS pass through to
+  *  out-of-scope items". */
+ apply_out_of_scope: boolean;
+ /** Add a host to the list once a client refuses burpsy's certificate for it. */
+ auto_add_on_failure: boolean;
+ /** How many patterns auto-add has put in the list this run. */
+ auto_added: number;
+}
+
+export interface PassthroughSwitches {
+ apply_out_of_scope?: boolean;
+ auto_add_on_failure?: boolean;
 }
 
 /* --- upstream proxy servers and SOCKS (Unit 9) ---------------------------- */
