@@ -86,6 +86,16 @@ type Capture struct {
 	Findings *core.FindingStore
 	// Logger carries the DOM pass's truncation caveat. Nil is tolerated and silences it.
 	Logger *zap.Logger
+	// ResponseModules are the pluggable post-request analyzers run over each captured response
+	// after the check set and the DOM pass (burpsy-react-ui-8j0d's seam; see response_modules.go).
+	// Nil or empty runs none — the zero value is every previous behaviour, so a surface that wires
+	// no modules is unaffected.
+	//
+	// Why a separate slice rather than folding the modules into PassiveScanner: a module sends
+	// nothing and has no catalog issue to resolve by name, so it is not a CheckDescriptor and making
+	// it one would force a check-shaped question (what issue is this?) that a module cannot answer.
+	// The two run side by side over the same captured bytes.
+	ResponseModules []ResponseModule
 	// Source is the default attribution for every exchange recorded through this handle, for a surface
 	// that only ever produces one kind. A CapturedExchange naming its own Source overrides it.
 	//
@@ -483,6 +493,14 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 			zap.String("caveat", caveat))
 	}
 	findings = append(findings, dom.Findings()...)
+
+	// The response modules, over the same captured bytes as the two passes above and at this same
+	// call site, so a module's findings are indexed and stored by exactly the path every other
+	// finding takes — same Occurrence, same exchange, same store. A module returns its own smaller
+	// ResponseFinding shape (no catalog issue to resolve by name, no insertion point), so each is
+	// translated into the check shape below rather than appended directly: a finding that bypassed
+	// coreNewFindingFor would carry no exchange and be unreachable from history.
+	findings = append(findings, moduleFindings(c.Store, ex, c.ResponseModules)...)
 
 	for _, f := range findings {
 		EnrichFinding(f)
