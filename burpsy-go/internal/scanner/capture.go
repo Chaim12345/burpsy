@@ -63,6 +63,10 @@ func coreNewFindingFor(f *Finding, ex *core.Exchange) core.NewFinding {
 		Description: f.Description,
 		Remediation: f.Solution,
 		Param:       f.Param,
+		// Evidence was missing from this mapping entirely, so every check that populated it lost it
+		// on the way into the store (burpsy-react-ui-cx31). A redacted excerpt that never arrives is
+		// indistinguishable from a check that found nothing to quote.
+		Evidence: f.Evidence,
 		// The dedup target, taken from the exchange in hand rather than resolved later. This is
 		// the path that produces the most duplicates by far — a passive check re-fires on every
 		// response — so it is the one that most needs the store to be able to merge.

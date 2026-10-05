@@ -274,6 +274,17 @@ type NewFinding struct {
 	//
 	// Empty means the target is the key, which is every row's behaviour before this field existed.
 	MergeKey string
+	// Evidence is the excerpt that justifies the finding — the matched text the producer saw,
+	// redacted by that producer to whatever it must be (burpsy-react-ui-cx31).
+	//
+	// It answers "WHICH value", where Name and Description answer "what kind of thing". A finding
+	// that says "AWS secret access key exposed" without the excerpt tells an operator that a
+	// credential leaked and nothing about which one, so recovering that means re-fetching the
+	// traffic by hand — which is the whole job the tool is doing for them.
+	//
+	// Optional: most findings legitimately have none, and empty is not a refusal. It is a finding
+	// with nothing to quote.
+	Evidence string `json:"evidence,omitempty"`
 }
 
 // Finding represents a security finding.
@@ -284,6 +295,9 @@ type Finding struct {
 	Confidence  Confidence
 	Description string
 	Remediation string
+	// Evidence is this finding's excerpt, carried from NewFinding.Evidence (burpsy-react-ui-cx31).
+	// See that field for why it is not optional in practice even though it is optional in shape.
+	Evidence    string `json:"evidence,omitempty"`
 	Occurrences []Occurrence
 	Inserted    *Inserted
 	// TaskID is the run that produced this finding, or 0 when nothing tracked it. See NewFinding.
@@ -523,6 +537,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Confidence:  finding.Confidence,
 		Description: finding.Description,
 		Remediation: finding.Remediation,
+		Evidence:    finding.Evidence,
 		Occurrences: append([]Occurrence(nil), finding.Occurrences...),
 		Inserted:    finding.Inserted,
 		TaskID:      finding.TaskID,
@@ -577,6 +592,14 @@ func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
 	}
 	if existing.Inserted == nil && incoming.Inserted != nil {
 		existing.Inserted = incoming.Inserted
+	}
+	// Evidence is the FIRST observation's, like Description, so a finding's quoted excerpt does not
+	// depend on scan order — the rule Add's doc states for every text field. The one exception is an
+	// empty first: a check that produced no excerpt on the first sighting and one on the second
+	// leaves the merged finding with none at all, which would drop the only record of WHICH value
+	// leaked on the very finding an operator most needs it for. Backfill in that direction only.
+	if existing.Evidence == "" && incoming.Evidence != "" {
+		existing.Evidence = incoming.Evidence
 	}
 }
 

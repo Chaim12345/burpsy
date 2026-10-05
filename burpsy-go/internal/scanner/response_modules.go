@@ -392,24 +392,15 @@ func moduleFindings(store *core.TrafficStore, ex *core.Exchange, modules []Respo
 	}
 	out := make([]*Finding, 0, len(raw))
 	for _, f := range raw {
-		// Evidence is FOLDED INTO Description rather than carried as its own field, and that works
-		// around a gap in core rather than expressing a preference: neither core.NewFinding nor
-		// core.Finding has an evidence field at all, so a finding's evidence — the redacted excerpt
-		// redactSecret produces, and the one thing that tells an operator WHICH credential leaked —
-		// is dropped by coreNewFindingFor for EVERY check in this package, not only for modules.
-		// Concatenating it here at least delivers it to the operator through the field that survives.
-		//
-		// When core grows an evidence field this becomes a plain assignment. Until then the
-		// duplication is visible in a stored finding rather than silently absent from it.
-		description := f.Detail
-		if f.Evidence != "" {
-			description = f.Detail + " Evidence: " + f.Evidence
-		}
+		// Evidence rides its own field, which core grew for exactly this (burpsy-react-ui-cx31). It
+		// used to be concatenated into Description as a workaround for core having nowhere to put
+		// it, which meant every stored module finding carried the excerpt twice — once in its own
+		// place and once glued to the prose. That duplication was visible in the data and is gone.
 		out = append(out, &Finding{
 			Name:        f.Name,
 			Severity:    f.Severity,
 			Confidence:  f.Confidence,
-			Description: description,
+			Description: f.Detail,
 			Evidence:    f.Evidence,
 			ExchangeID:  ex.ID,
 		})

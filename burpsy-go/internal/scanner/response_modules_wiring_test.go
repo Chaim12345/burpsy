@@ -55,17 +55,22 @@ func TestACapturedResponseWithALeakedKeyProducesAStoredFindingCarryingTheExchang
 			"the capture path, or the wiring dropped this module. Findings: %d", len(got))
 	}
 	if secret.Description == "" {
-		t.Error("finding carries no description; the redacted excerpt is the one thing an operator needs")
+		t.Error("finding carries no description")
 	}
-	// core's finding model has no evidence field, so the translator folds the redacted excerpt into
-	// the description. Asserting it arrives SOMEWHERE is the honest claim; asserting a dedicated
-	// field would be asserting a field that does not exist.
-	if !strings.Contains(secret.Description, "Evidence:") {
-		t.Errorf("description %q carries no evidence excerpt; the redacted credential is the whole "+
-			"reason this finding is actionable", secret.Description)
+	// The excerpt rides its OWN field now (burpsy-react-ui-cx31). It used to arrive glued into
+	// Description as a workaround for core having nowhere to put it, so the description must NOT
+	// carry it any more — otherwise every stored module finding holds the excerpt twice and a
+	// reader cannot tell which copy is canonical.
+	if secret.Evidence == "" {
+		t.Errorf("finding carries no evidence; the redacted credential is the whole reason this "+
+			"finding is actionable (description was %q)", secret.Description)
 	}
-	if strings.Contains(secret.Description, "wJalrXUtnFEMI") {
-		t.Errorf("the stored finding carries the whole secret: %q", secret.Description)
+	if strings.Contains(secret.Description, "Evidence:") {
+		t.Errorf("description %q still carries a concatenated excerpt; it belongs in the Evidence "+
+			"field alone now", secret.Description)
+	}
+	if strings.Contains(secret.Evidence, "wJalrXUtnFEMI") {
+		t.Errorf("the stored finding carries the whole secret: %q", secret.Evidence)
 	}
 	if secret.Target.Host != "h" || secret.Target.Path != "/config" {
 		t.Errorf("finding target is %+v; a module finding must be deduplicated and located against "+
