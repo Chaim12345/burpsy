@@ -67,6 +67,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/intruder/run": true,
  "/api/issues": false,
  "/api/issues/": true,
+ "/api/issues/consolidation": false,
  "/api/issues/record": false,
  "/api/issues/triage": false,
  "/api/message/": false,

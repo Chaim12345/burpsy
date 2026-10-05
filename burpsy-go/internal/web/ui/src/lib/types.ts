@@ -368,6 +368,8 @@ export interface Finding {
  /** The parameter this finding was observed at; absent for resource-level findings. */
  param?: string;
  times_seen: number;
+ /** How many later reports of this issue a keep_existing merge folded in (oorl). */
+ merged_count: number;
  occurrences: Occurrence[];
  /** Present when the check resolved to a catalogue entry. */
  advisory?: Advisory | null;

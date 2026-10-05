@@ -575,6 +575,12 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "comment", "TEXT"); err != nil {
 		return err
 	}
+	// merged_count (burpsy-react-ui-oorl): how many observations a keep_existing merge folded in.
+	// Nullable rather than DEFAULT 0, so a row written before the count existed is distinguishable
+	// from a finding that genuinely never merged — see LoadFindings.
+	if err := s.addColumn("findings", "merged_count", "INTEGER"); err != nil {
+		return err
+	}
 	// scope_rules_v3 gained enabled for the per-rule disable switch (burpsy-react-ui-1xb).
 	// NOT NULL with a default of 1 because ALTER TABLE cannot add a NOT NULL column without
 	// one, and 1 is the only safe value: every row written before this column existed was an
@@ -991,12 +997,12 @@ func (s *Store) SaveFinding(f *core.Finding) {
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		  target_host, target_port, target_tls, target_path, params, task_id,
-		  severity_override, confidence_override, false_positive, comment, confirm)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  severity_override, confidence_override, false_positive, comment, confirm, merged_count)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
 		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
-		sevOverride, confOverride, fp, f.Comment, f.Confirm)
+		sevOverride, confOverride, fp, f.Comment, f.Confirm, f.MergedCount)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -1007,7 +1013,7 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		        target_host, target_port, target_tls, target_path, params, task_id,
-		        severity_override, confidence_override, false_positive, comment, confirm
+		        severity_override, confidence_override, false_positive, comment, confirm, merged_count
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1028,9 +1034,10 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// four, which must load as "no triage" rather than fail the whole restore.
 		var sevOverride, confOverride, fp sql.NullInt64
 		var comment sql.NullString
+		var merged sql.NullInt64
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
 			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
-			&sevOverride, &confOverride, &fp, &comment, &confirmCol); err != nil {
+			&sevOverride, &confOverride, &fp, &comment, &confirmCol, &merged); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
@@ -1078,6 +1085,15 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 				return nil, err
 			}
 			f.Inserted = inserted
+		}
+		if merged.Valid {
+			f.MergedCount = int(merged.Int64)
+		} else if len(f.Occurrences) > 1 {
+			// A row from before the count existed. Every merge then appended the observation's
+			// occurrence, so occurrences beyond the first are the best available reading — exact for
+			// the passive path, which files one occurrence per observation, and an estimate only for a
+			// producer that filed several at once.
+			f.MergedCount = len(f.Occurrences) - 1
 		}
 		out = append(out, f)
 	}
@@ -2479,6 +2495,21 @@ func (s *Store) SaveBrowserSettings(raw []byte) error {
 // LoadBrowserSettings returns the stored JSON, or nil when none was saved.
 func (s *Store) LoadBrowserSettings() ([]byte, error) {
 	v, err := s.getSetting("browser.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveFindingConsolidation persists the operator's issue-consolidation policy
+// (burpsy-react-ui-oorl) with the project, as the policy JSON.
+func (s *Store) SaveFindingConsolidation(raw []byte) error {
+	return s.setSetting("findings.consolidation", string(raw))
+}
+
+// LoadFindingConsolidation returns the stored policy JSON, or nil when none was saved.
+func (s *Store) LoadFindingConsolidation() ([]byte, error) {
+	v, err := s.getSetting("findings.consolidation")
 	if err != nil || v == "" {
 		return nil, err
 	}

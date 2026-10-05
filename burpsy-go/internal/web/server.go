@@ -113,6 +113,10 @@ type Server struct {
 	scanBaseline *scanner.ScanConfig
 	// Custom history/Intruder extractor columns (burpsy-react-ui-28n8), project-level; see
 	// api_history_extractors.go.
+	// consolidation is the operator's issue-consolidation policy, remembered so a finding store
+	// swapped in by WithFindings gets it too (burpsy-react-ui-oorl). Nil until one is set or restored.
+	consolidationMu sync.Mutex
+	consolidation   *core.ConsolidationPolicy
 	histExtractMu   sync.Mutex
 	histExtractDefs []sessionExtractDto
 	histExtractRun  []*session.Extraction
@@ -316,6 +320,7 @@ func (s *Server) followLive() {
 	// tells the finding store which catalog rows dedup per host rather than per path, knowledge that
 	// only the scanner's check registry has — see scanner.DedupPolicy.
 	s.findings.SetDedupPolicy(scanner.DedupPolicy())
+	s.reapplyConsolidation()
 	s.toolLog.OnChange(func() { s.live.notify(changeToolLog) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
@@ -542,6 +547,8 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreProjectScanState(p)
 		// Custom extractor columns are project-level too (burpsy-react-ui-28n8).
 		s.restoreHistoryExtractors(p)
+		// So is the issue consolidation policy (burpsy-react-ui-oorl).
+		s.restoreFindingConsolidation(p)
 	}
 	return s
 }
@@ -941,6 +948,7 @@ func (s *Server) setupRoutes() {
 	// would be swallowed by the id path if it matched an id shape — it does not (it is not
 	// numeric), but registering it explicitly keeps handleIssueByID's numeric-only guard honest.
 	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
+	s.mux.HandleFunc("/api/issues/consolidation", s.handleIssueConsolidation)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.

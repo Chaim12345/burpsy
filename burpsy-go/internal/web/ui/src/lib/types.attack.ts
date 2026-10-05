@@ -160,6 +160,8 @@ export interface FindingDetail {
   */
  params?: string[];
  times_seen: number;
+ /** How many later reports of this issue a keep_existing merge folded in (oorl). */
+ merged_count?: number;
  /**
   * The dashboard task that raised this finding, absent when nothing tracked it (a manual
   * recording, a collaborator's result imported from elsewhere).

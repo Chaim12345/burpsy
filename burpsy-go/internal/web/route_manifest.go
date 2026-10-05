@@ -453,6 +453,10 @@ var manifest = map[string]route{
 		methods: []string{"PUT", "PATCH", "DELETE"}, risk: riskDestructive, subPath: "0",
 		summary: "operator triage of one finding — severity/confidence override, false-positive, comment — or delete it",
 	},
+	"/api/issues/consolidation": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "the issue consolidation policy — keep existing (merge), keep both or keep new on a duplicate, for every issue type with per-type overrides — and how many collisions each run resolved which way",
+	},
 	"/api/issues/record": {
 		// POST creates the operator's hand-recorded finding and attaches it to one exchange. It
 		// writes engagement evidence (like the triage PUT beside it) but discards nothing, so

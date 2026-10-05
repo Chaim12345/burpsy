@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { filterByIssueSource, ISSUE_SOURCE_FILTERS, type IssueSourceFilter } from "../lib/issue-source-filter";
 import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
-import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, SlidersHorizontal , Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Combine, SlidersHorizontal, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
@@ -16,6 +16,7 @@ import { AdvisoryReader } from "../ui/advisory";
 import { HttpEditor } from "../ui/editor";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
+import { ConsolidationDialog } from "../ui/consolidation-dialog";
 import {
  Badge,
  Button,
@@ -193,6 +194,7 @@ export function ScannerPage(): JSX.Element {
  const [severities, setSeverities] = useState<Set<string>>(new Set());
  const [confidences, setConfidences] = useState<Set<string>>(new Set());
  const [hideFalsePositives, setHideFalsePositives] = useState(false);
+ const [consolidationOpen, setConsolidationOpen] = useState(false);
  // The source facet (burpsy-react-ui-exiu): which producer raised a finding. Two states only —
  // see lib/issue-source-filter for why this does not split BCheck from a native check.
  const [sourceFilter, setSourceFilter] = useState<IssueSourceFilter>("");
@@ -734,6 +736,9 @@ export function ScannerPage(): JSX.Element {
          ? [{ label: "Parameter", value: selected.finding.param }]
          : []),
        { label: "Times seen", value: selected.finding.times_seen },
+       // How many later reports of this issue were merged into it (oorl) — shown only when some
+       // were, so a finding seen once does not carry a row of zeros.
+       ...((selected.finding.merged_count ?? 0) > 0 ? [{ label: "Duplicates merged", value: selected.finding.merged_count ?? 0 }] : []),
        { label: "Occurrences", value: selected.finding.occurrences.length },
        // Triage state, shown only when there is something to show: a row of "no comment"
        // placeholders for every untouched finding trains the eye to skip the block.
@@ -855,6 +860,11 @@ export function ScannerPage(): JSX.Element {
         <SlidersHorizontal size={13} />
         Scanner controls
        </Button>
+       {/* burpsy-react-ui-oorl: keep existing / keep both / keep new on a duplicate issue. */}
+       <Button variant="outline" size="small" onClick={() => setConsolidationOpen(true)}>
+        <Combine size={13} />
+        Consolidation
+       </Button>
        <Input
         aria-label="Report host filter"
         value={hostReportFilter}
@@ -927,6 +937,11 @@ export function ScannerPage(): JSX.Element {
 
    <SplitPane storageId="issues" orientation="horizontal" defaultMasterSize="34" minMasterSize="20" master={treePane} detail={advisory} />
 
+   <ConsolidationDialog
+    open={consolidationOpen}
+    onOpenChange={setConsolidationOpen}
+    issueNames={[...new Set((issues?.findings ?? []).flatMap((finding) => (finding.check_name ? [finding.check_name] : [])))].sort()}
+   />
   </div>
  );
 }

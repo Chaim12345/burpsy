@@ -1407,7 +1407,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "consolidate_passive_issues",
 		burpKey: "scanner/audit_optimization/consolidate_passive_issues",
-		what:    "not applied: the passive tracker already records one finding per issue per response; there is no scan-wide consolidation step to switch",
+		what:    "not applied: a run cannot switch merging off for its own passive findings — duplicate issues are merged at intake by the finding store for the whole project, under the operator's consolidation action (keep existing / keep both / keep new, set in Issues › Consolidation)",
 		applies: false,
 	},
 	{

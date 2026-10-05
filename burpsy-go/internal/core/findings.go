@@ -326,6 +326,10 @@ type Finding struct {
 	Params []string
 	// Target is the logical location this finding is about. See NewFinding.Target.
 	Target FindingTarget
+	// MergedCount is how many later observations were folded into this finding by a keep_existing
+	// merge (burpsy-react-ui-oorl) — the difference between "seen once" and "seen forty times and
+	// shown once". keep_new resets it: the content it counted is gone.
+	MergedCount int
 
 	// SeverityOverride is the operator's severity for this finding, nil while the engine's own
 	// severity stands. An override beats both the engine's report and a later merge that would
@@ -398,6 +402,12 @@ type FindingStore struct {
 	// with the finding's id, must not call back into the store, and must not fail the in-memory
 	// delete — memory is authoritative, SQLite is durable backup.
 	onDelete func(id uint64)
+
+	// consolidation is the operator's action on a collision (burpsy-react-ui-oorl); the zero value
+	// resolves to keep_existing. tally and tallyByTask count what each collision became.
+	consolidation ConsolidationPolicy
+	tally         ConsolidationTally
+	tallyByTask   map[uint64]*ConsolidationTally
 }
 
 // NewFindingStore creates a new finding store.
@@ -512,7 +522,17 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 	key, mergeable := fs.dedupKeyFor(finding.Name, finding.Target, finding.MergeKey)
 	if mergeable {
 		if existing, ok := fs.byKey[key]; ok {
-			fs.mergeLocked(existing, finding)
+			action := fs.actionForLocked(finding.Name)
+			fs.noteCollisionLocked(finding.TaskID, action)
+			if action == ConsolidateKeepBoth {
+				// Filed below as its own finding; byKey keeps the oldest owner (see the guard there).
+				goto file
+			}
+			if action == ConsolidateKeepNew {
+				fs.replaceLocked(existing, finding)
+			} else {
+				fs.mergeLocked(existing, finding)
+			}
 			// onAdd, not a separate update hook: the sink is a write-through mirror of a finding's
 			// current state, and persist.Store.SaveFinding is an INSERT OR REPLACE keyed on the id,
 			// so re-offering the merged finding rewrites its row rather than inserting a second
@@ -527,6 +547,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		}
 	}
 
+file:
 	id := fs.nextID
 	fs.nextID++
 
@@ -560,7 +581,11 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		if fs.byKey == nil {
 			fs.byKey = make(map[string]*Finding)
 		}
-		fs.byKey[key] = f
+		// keep_both files a second finding for a key that already has an owner; the owner stays the
+		// oldest, so the next keep_existing observation lands where the first did.
+		if _, owned := fs.byKey[key]; !owned {
+			fs.byKey[key] = f
+		}
 	}
 	if fs.onAdd != nil {
 		fs.onAdd(f)
@@ -571,6 +596,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 
 // mergeLocked folds one new observation into an existing finding. Called with the write lock held.
 func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
+	existing.MergedCount++
 	existing.Occurrences = append(existing.Occurrences, incoming.Occurrences...)
 	if incoming.Param != "" && !existing.HasParam(incoming.Param) {
 		existing.Params = append(existing.Params, incoming.Param)
@@ -769,6 +795,10 @@ func (fs *FindingStore) Clear() {
 	fs.findings = fs.findings[:0]
 	fs.byKey = make(map[string]*Finding)
 	fs.nextID = 0
+	// The tallies describe what happened to findings that are now gone, so they go with them. The
+	// policy is the operator's setting and stays.
+	fs.tally = ConsolidationTally{}
+	fs.tallyByTask = nil
 	fs.signalChangeLocked()
 }
 
