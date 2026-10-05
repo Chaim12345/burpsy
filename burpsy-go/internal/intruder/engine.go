@@ -467,6 +467,19 @@ type Attack struct {
 	// resolved sets and replaying the plan's arithmetic — which is fine inside the handler that
 	// just ran the attack and impossible for anything handed the report afterwards.
 	StorePayloads bool
+	// Evasion is the optional WAF-evasion composition (burpsy-react-ui-tfqk): User-Agent rotation,
+	// jitter, and header-order randomisation applied around every send this attack makes. Nil —
+	// the default — leaves the attack byte-for-byte and timing-for-timing what it was.
+	//
+	// Held as a configured value rather than applied by the caller so the setting travels WITH the
+	// attack: a surface that builds an Attack and hands it to Run cannot forget to wrap, and a
+	// recursive chain's later links get the same evasion as the first without re-wrapping at each
+	// hop. Run performs the wrap exactly once, around the SendFn it was given.
+	//
+	// It composes with Limits rather than replacing them: the jitter waits INSIDE the wrapped send,
+	// so the RateLimiter's own reserve/acquire still runs and the two delays add. See evasion.go
+	// for why collapsing them into one wait would give up one of the two guarantees.
+	Evasion *WAFEvasion
 }
 
 // NewAttack builds an attack with defaults sized for a UI: enough rows to render a small attack,
@@ -1072,6 +1085,15 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	// Background here is what the driver's SuiteGate call already uses; Control is what makes
 	// it stoppable.
 	ctx := context.Background()
+	// The WAF-evasion wrap (burpsy-react-ui-tfqk), applied ONCE here and before the recursive
+	// branch below, so every send this attack makes — the fanned-out plan, a recursive chain's
+	// every link, and the retries inside doSend — goes through the same wrapped function. Wrapping
+	// at each call site instead would be four places to forget, and a chain whose second link lost
+	// the operator's evasion is the kind of silent half-application this project treats as a defect.
+	//
+	// Nil Evasion returns the caller's SendFn unchanged, so an attack that configured none is
+	// byte-for-byte and timing-for-timing what it was.
+	send = a.Evasion.wrapOrIdentity(send)
 	limiter := NewRateLimiter(&a.Limits)
 	col := newCollector(a, record)
 
