@@ -79,7 +79,24 @@ type Config struct {
 	MaxMessageBytes     int
 	MaxRegistrations    int
 
-	Logger *zap.Logger
+	// ReloadOnStart loads every allowlisted plugin as NewHost returns, instead of waiting for the
+	// operator to press Load (burpsy-react-ui-1ye7).
+	//
+	// OFF by default, and the default is the careful one: "burpsy was started with -plugins" must
+	// not silently mean "burpsy executed three binaries on boot" — see NewHost's own note. A plugin
+	// author who is iterating turns it on; an operator running someone else's plugins leaves it off.
+	ReloadOnStart bool
+	// AutoReload re-loads a loaded plugin when its executable changes on disk, so an author who has
+	// just rebuilt does not have to press Unload and Load to see the new binary.
+	//
+	// Polling rather than inotify, deliberately: the watch set is the allowlist — a handful of paths
+	// at most — and a poll costs one stat each per interval, against a filesystem-notification
+	// dependency that behaves differently on every platform this runs on. The cost is bounded and
+	// the behaviour is the same everywhere.
+	AutoReload bool
+	// ReloadInterval is how often AutoReload stats the watch set. Zero takes DefaultReloadInterval.
+	ReloadInterval time.Duration
+	Logger         *zap.Logger
 }
 
 func (c Config) withDefaults() Config {
@@ -103,6 +120,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxRegistrations <= 0 {
 		c.MaxRegistrations = DefaultMaxRegistrations
+	}
+	if c.ReloadInterval <= 0 {
+		c.ReloadInterval = DefaultReloadInterval
 	}
 	if c.Logger == nil {
 		c.Logger = zap.NewNop()
@@ -138,6 +158,10 @@ type plugin struct {
 	// stopping distinguishes an exit we asked for from one we did not, which is the
 	// difference between StateUnloaded and StateCrashed.
 	stopping bool
+	// binStamp is the executable's mtime+size as of the load that produced the current session —
+	// the baseline Config.AutoReload compares against on each poll (burpsy-react-ui-1ye7). Zero
+	// for a plugin that has never loaded, which is why the watcher checks state before comparing.
+	binStamp binStamp
 }
 
 // Host owns every allowlisted plugin and the processes they run as.
@@ -174,6 +198,17 @@ func NewHost(cfg Config) *Host {
 	// construction, and a list whose order came from Go's map iteration would
 	// reshuffle the operator's table on every refresh.
 	sort.Strings(h.ordered)
+	// ReloadOnStart first, then the watcher: the loads must already have happened when the watch
+	// takes its first baseline, or the first poll would see every just-loaded plugin as "changed
+	// since I looked" and reload each one once for nothing (burpsy-react-ui-1ye7).
+	//
+	// Both are off by default, which keeps NewHost's own contract above intact: it still starts
+	// nothing unless the operator asked, and "burpsy was started with -plugins" still does not mean
+	// "burpsy executed three binaries on boot".
+	if cfg.ReloadOnStart {
+		h.loadAllowlist()
+	}
+	h.startAutoReload()
 	return h
 }
 
@@ -419,6 +454,11 @@ func (h *Host) Load(name string) (PluginView, error) {
 	p.refused = refused
 	p.loadedAtMs = time.Now().UnixMilli()
 	p.session = sess
+	// The baseline Config.AutoReload's watch compares against, taken here — at the load that
+	// produced this session — rather than at the poll. A stamp read later would be the stamp of
+	// whatever is on disk by then, so a rebuild that landed DURING the load would be recorded as
+	// the thing already running and never reloaded (burpsy-react-ui-1ye7).
+	p.binStamp, _ = stampOf(p.spec.Path)
 	view := p.viewLocked()
 	p.mu.Unlock()
 

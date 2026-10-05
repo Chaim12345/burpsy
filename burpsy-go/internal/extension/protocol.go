@@ -82,6 +82,12 @@ const (
 	// DefaultMaxRegistrations bounds what one plugin may register. A manifest with
 	// ten thousand menu items is not a feature.
 	DefaultMaxRegistrations = 64
+	// DefaultReloadInterval is how often Config.AutoReload stats each loaded plugin's executable
+	// looking for a rebuild (burpsy-react-ui-1ye7). One second: fast enough that an author who has
+	// just rebuilt sees the reload before they switch windows, slow enough that the watch costs one
+	// stat per allowlisted plugin per second, which is nothing against a watch set that is a
+	// handful of paths by construction.
+	DefaultReloadInterval = time.Second
 )
 
 // Kind is one of the registration points that have an honest web analogue.
