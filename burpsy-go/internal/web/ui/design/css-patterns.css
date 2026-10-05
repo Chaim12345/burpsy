@@ -1,0 +1,897 @@
+/* ===========================================================================
+   CSS Patterns Reference — burpsy operator console
+   ============================================================================
+   Concrete code snippets for the 8 design-pattern areas. All values reference
+   the existing token system (primitives.css → semantic.css → pending.css).
+   This file is a REFERENCE, not imported by the app — copy the snippets you
+   need into styles.css or a component-scoped stylesheet.
+
+   Token dependency map:
+     --s1..--s8         fluid spacing (primitives)
+     --fs-2xs..--fs-4xl fluid type (primitives)
+     --text-2xs..--text-4xl  intent aliases (semantic)
+     --gap-xs..--gap-3xl      intent aliases (semantic)
+     --paper/--paper-raised/--paper-deep/--paper-sunken  surfaces (semantic)
+     --line/--line-strong      borders (semantic)
+     --text/--text-soft/--muted  type roles (semantic)
+     --accent/--accent-strong/--accent-contrast  accent family (semantic+pending)
+     --good/--warn/--bad/--info  severity (semantic)
+     --font-body/--font-code  type stacks (semantic)
+   =========================================================================== */
+
+
+/* ===========================================================================
+   1. SPACING — using --s* tokens
+   ============================================================================
+   The scale: --s1 (3→6px), --s2 (6→11), --s3 (9→16), --s4 (12→21),
+              --s5 (15→26), --s6 (18→31), --s8 (22→40).
+   Intent aliases: --gap-xs..--gap-3xl, --pad-page.
+
+   Rules of thumb:
+   - --s1: tight internal gaps (icon + label, dot + text)
+   - --s2: control padding, small gaps between related items
+   - --s3: card/panel padding, section gaps
+   - --s4: page-level padding (--pad-page), major section breaks
+   - --s5+: rare — full-bleed sections, hero spacing
+   =========================================================================== */
+
+/* --- Internal gaps (icon + label, inline elements) --- */
+.inline-gap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);          /* 3→6px — tight, items read as one unit */
+}
+
+/* --- Control padding (buttons, inputs, toggles) --- */
+.control-pad {
+  padding: var(--s1) var(--s2);  /* vertical: 3→6, horizontal: 6→11 */
+  min-height: var(--control-h);  /* 26→34px, fixed chrome height */
+}
+
+/* --- Card/panel padding --- */
+.card-padding {
+  padding: var(--s3);             /* 9→16px — the standard card inset */
+}
+
+/* --- Page-level padding --- */
+.page-inset {
+  padding: var(--pad-page);       /* alias for --s4: 12→21px */
+}
+
+/* --- Section breaks (vertical rhythm) --- */
+.section-gap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);         /* 9→16px between sections */
+}
+
+.section-gap > * + * {
+  margin-top: var(--s3);  /* fallback for browsers without gap support */
+}
+
+/* --- Dense list rows (table, history) --- */
+.dense-row {
+  min-height: var(--row-h);         /* 24→34px — the canonical row */
+  padding: 0 var(--s2);             /* horizontal only; vertical is the row height */
+}
+
+.dense-row-compact {
+  min-height: var(--row-h-compact); /* 20→28px */
+  padding: 0 var(--s2);
+}
+
+/* --- Avoid token-exempt optical nudges --- */
+/* The existing codebase has a few sub-grid nudges smaller than --s1 (e.g.,
+   button-sm's 2px top padding). These are documented as token-exempt:
+   "sub-grid optical nudge, smaller than --s1; not part of the fluid spacing
+   scale". New code should NOT introduce more — use --s1 as the floor. */
+
+
+/* ===========================================================================
+   2. TYPOGRAPHY — using --fs* and --text* tokens
+   ============================================================================
+   Scale: --fs-2xs (11→12), --fs-xs (11→13), --fs-sm (12→14),
+          --fs-md (13→15), --fs-lg (14→16), --fs-xl (15→18),
+          --fs-2xl (19→26), --fs-3xl (21→30), --fs-4xl (30→54).
+
+   Intent aliases: --text-2xs..--text-4xl (same values, semantic role).
+
+   Two families:
+   - --font-body (sans): UI chrome, labels, descriptions
+   - --font-code (mono): data, URLs, paths, headers, payloads
+
+   Weights: --font-weight-regular (400), --font-weight-bold (700) only.
+   =========================================================================== */
+
+/* --- Body text (the base type) --- */
+body {
+  font: var(--font-weight-regular) var(--text-lg)/1.5 var(--font-body);
+  /* --text-lg = --fs-lg = 14→16px. line-height 1.5 is the default for body. */
+}
+
+/* --- Dense table cells --- */
+.table-cell {
+  font: var(--font-weight-regular) var(--text-xs)/1 var(--font-body);
+  /* --text-xs = 11→13px. Tight line-height for 24px rows. */
+}
+
+/* --- Data/code (mono, for wire content) --- */
+.data-value {
+  font: var(--font-weight-regular) var(--text-sm)/1.4 var(--font-code);
+  /* --text-sm = 12→14px. Mono signals "this is the wire, not our words". */
+}
+
+/* --- Eyebrow labels (uppercase mono, section markers) --- */
+.eyebrow {
+  color: var(--muted);
+  font: var(--font-weight-bold) var(--text-2xs)/1.5 var(--font-code);
+  letter-spacing: var(--tracking-caps-loose);  /* 0.12em */
+  text-transform: uppercase;
+}
+
+/* --- Panel titles --- */
+.panel-title {
+  font: var(--font-weight-bold) var(--text-lg)/1 var(--font-body);
+}
+
+/* --- Metric values (large numbers) --- */
+.metric {
+  font: var(--font-weight-bold) var(--text-2xl)/1 var(--font-code);
+  font-variant-numeric: tabular-nums;
+  /* Tabular-nums keeps columns aligned when numbers change. */
+}
+
+/* --- Status text (severity-coloured) --- */
+.status-good { color: var(--good); }
+.status-warn { color: var(--warn); }
+.status-bad  { color: var(--bad); }
+.status-info { color: var(--info); }
+
+/* --- Monospace for all wire data --- */
+.request-url, .header-name, .header-value, .payload-hex {
+  font-family: var(--font-code);
+  font-size: var(--text-xs);   /* 11→13px — dense data rows */
+}
+
+
+/* ===========================================================================
+   3. STATUS BADGES — using existing .badge patterns
+   ============================================================================
+   Current shape: 1px border, paper-deep bg, bold mono, uppercase, caps tracking.
+   Tint formula: color-mix(in srgb, <severity> 3%, var(--paper-raised)) for bg.
+   Border formula: color-mix(in srgb, <severity> 42%, var(--line)).
+
+   The 3% tint was found by axe-core: 11% failed all 8 tone/theme combos
+   (4.0–4.44:1), 3% clears all with real margin (4.54–5.50:1).
+   =========================================================================== */
+
+/* --- Base badge (reuses existing .badge) --- */
+.badge-ref {
+  width: fit-content;
+  min-height: calc(var(--control-h-sm) * 0.82);
+  border: 1px solid var(--line);
+  background: var(--paper-deep);
+  color: var(--text-soft);
+  padding: 1px var(--s2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  white-space: nowrap;
+  font: var(--font-weight-bold) var(--text-xs) var(--font-code);
+  letter-spacing: var(--tracking-caps);   /* 0.08em */
+  text-transform: uppercase;
+}
+
+/* --- Severity variants (existing, proven at 3% tint) --- */
+.badge-good {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 42%, var(--line));
+  background: color-mix(in srgb, var(--good) 3%, var(--paper-raised));
+}
+
+.badge-warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 42%, var(--line));
+  background: color-mix(in srgb, var(--warn) 3%, var(--paper-raised));
+}
+
+.badge-bad {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 42%, var(--line));
+  background: color-mix(in srgb, var(--bad) 3%, var(--paper-raised));
+}
+
+.badge-info {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 42%, var(--line));
+  background: color-mix(in srgb, var(--info) 3%, var(--paper-raised));
+}
+
+/* --- Accent badge (filled, for emphasis) --- */
+.badge-accent {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* --- Pill variant (for filter toggles, compact tags) --- */
+.badge-pill {
+  border-radius: 10px;   /* token-exempt: pill radius is shape, not scale */
+  min-height: 18px;
+  padding: 0 var(--s1);
+  font: var(--font-weight-regular) var(--text-2xs) var(--font-code);
+}
+
+/* --- Dot indicator (inline severity) --- */
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-dot.live { background: var(--good); }
+.status-dot.stale { background: var(--warn); }
+
+
+/* ===========================================================================
+   4. BUTTONS — using existing button patterns
+   ============================================================================
+   Base shape: min-height var(--control-h), 1px transparent border,
+   padding var(--s1) var(--s2), bold md text, 120ms ease transitions.
+
+   Variants: primary (accent fill), outline (bordered), danger (bad fill),
+   ghost/quiet (transparent until hover), icon-button (square, icon-only).
+   =========================================================================== */
+
+/* --- Base button --- */
+.btn {
+  min-height: var(--control-h);
+  border: 1px solid transparent;
+  background: transparent;
+  padding: var(--s1) var(--s2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s2);
+  cursor: pointer;
+  text-decoration: none;
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-bold);
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.btn:disabled {
+  opacity: 0.45;   /* --opacity-disabled from pending.css */
+  cursor: not-allowed;
+}
+
+/* --- Small variant --- */
+.btn-sm {
+  min-height: var(--control-h-sm);
+  padding: 2px var(--s2);  /* token-exempt: sub-grid optical nudge */
+  font-size: var(--text-sm);
+}
+
+/* --- Primary (accent fill) --- */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+/* --- Outline (bordered) --- */
+.btn-outline {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.btn-outline:hover:not(:disabled) {
+  background: var(--paper-deep);
+}
+
+/* --- Danger (error fill) --- */
+.btn-danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--accent-contrast);
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* --- Ghost/Quiet (transparent until hover) --- */
+.btn-ghost {
+  color: var(--text-soft);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--paper-deep);
+  color: var(--text);
+}
+
+/* --- Icon button (square, icon-only) --- */
+.icon-btn {
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  flex: none;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+  color: var(--text-soft);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--paper-deep);
+  color: var(--text);
+}
+
+.icon-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+
+/* ===========================================================================
+   5. TRANSITIONS & ANIMATIONS — motion budget (MOTION=3)
+   ============================================================================
+   The existing codebase uses:
+   - 120ms ease for colour/background transitions (buttons, tabs, inputs)
+   - 140ms ease for structural transforms (switch toggle, progress)
+   - No entry/exit animations currently
+
+   The motion budget is low (MOTION=3): subtle, functional, never decorative.
+   Transitions communicate state change, not delight.
+
+   For entry/exit animations (toasts, menus, dialogs), CSS @starting-style
+   with transition-behavior: allow-discrete is the modern approach — no JS
+   needed. But given the low motion budget, these should be optional and
+   respect prefers-reduced-motion.
+   =========================================================================== */
+
+/* --- Standard colour transition (buttons, tabs, inputs) --- */
+.transition-color {
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+/* --- Structural transition (switches, expand/collapse) --- */
+.transition-structural {
+  transition:
+    transform 140ms ease,
+    background-color 140ms ease;
+}
+
+/* --- Width transition (resize handles, progress bars) --- */
+.transition-width {
+  transition: width 140ms ease;
+}
+
+/* --- Focus ring transition --- */
+.transition-focus {
+  transition:
+    border-color 120ms ease,
+    outline 120ms ease;
+}
+
+/* --- Entry/exit animation (for toasts, menus, dialogs) --- */
+/* Uses @starting-style for CSS-only enter/exit. Wrap in a
+   prefers-reduced-motion check to respect user preference. */
+
+@keyframes slide-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes slide-out-bottom {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.toast-enter {
+  animation: slide-in-bottom 200ms ease both;
+
+  /* @starting-style defines the "before first paint" state */
+  @starting-style {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.toast-exit {
+  animation: slide-out-bottom 150ms ease both;
+  transition-behavior: allow-discrete;  /* lets opacity animating to 0 trigger display:none */
+}
+
+/* --- Reduced motion preference --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+/* ===========================================================================
+   6. BOX SHADOWS & ELEVATION — flat hierarchy
+   ============================================================================
+   DESIGN.md: "Elevation is carried by 1px hairlines and small background
+   steps between surfaces, never by shadows or gradients."
+
+   Existing shadows are the exception, not the rule:
+   - --shadow-menu: 0 6px 20px #00000029 (dropdowns, context menus)
+   - --shadow-dialog: 0 16px 44px #00000042 (modal dialogs)
+
+   The general elevation model is background-step, not shadow:
+     paper < paper-raised < paper-deep (recessed) < paper-sunken (wells)
+
+   Rules:
+   - Cards/panels: background step + 1px border, NO shadow
+   - Menus/dropdowns: --shadow-menu (the one exception for floating elements)
+   - Dialogs/modals: --shadow-dialog + overlay
+   - Toasts: --shadow-menu (small floating element, same as menus)
+   - Everything else: hairlines only
+   =========================================================================== */
+
+/* --- Elevation levels (background steps, no shadows) --- */
+.elev-0 { background: var(--paper); }           /* page level */
+.elev-1 { background: var(--paper-raised); }    /* cards, toolbars */
+.elev-2 { background: var(--paper-deep); }      /* recessed panels, wells */
+.elev-3 { background: var(--paper-sunken); }    /* deepest wells, editors */
+
+/* --- Card (the standard elevated surface) --- */
+.card-elevated {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  padding: var(--s3);
+  min-width: 0;
+  /* NO shadow — elevation is the background step + hairline */
+}
+
+/* --- Floating element (menus, toasts — the shadow exception) --- */
+.floating {
+  box-shadow: var(--shadow-menu);   /* 0 6px 20px #00000029 */
+}
+
+/* --- Dialog (modal — heavier shadow) --- */
+.dialog-surface {
+  box-shadow: var(--shadow-dialog); /* 0 16px 44px #00000042 */
+}
+
+/* --- Overlay (behind dialog/menu) --- */
+.overlay {
+  background: var(--overlay);       /* rgba(0,0,0,60%) dark / rgba(43,43,43,45%) light */
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+}
+
+/* --- Inset well (recessed from page) --- */
+.well {
+  background: var(--paper-sunken);
+  border: 1px solid var(--line);
+  padding: var(--s2);
+}
+
+/* --- Hairline separator (the primary elevation signal) --- */
+.separator {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+
+.separator-strong {
+  border-top: 1px solid var(--line-strong);
+}
+
+
+/* ===========================================================================
+   7. LAYOUT — grid/flex patterns
+   ============================================================================
+   The app shell is a CSS Grid with fixed chrome heights:
+     grid-template-rows: var(--menubar-h) var(--toolbar-h)
+                         minmax(0, 1fr) var(--statusbar-h);
+
+   Key patterns:
+   - App shell: grid with fixed header/footer rows
+   - Editor panels: grid with 1px gap + line background (hairline gutters)
+   - Tool panels: grid with auto header + minmax(0,1fr) content
+   - Forms: flex with gap for inline, grid for stacked
+   - Container queries for responsive inspector collapse
+   =========================================================================== */
+
+/* --- App shell (the outermost grid) --- */
+.app-shell {
+  height: 100%;
+  display: grid;
+  grid-template-rows:
+    var(--menubar-h)      /* 21→30px */
+    var(--toolbar-h)      /* 29→44px */
+    minmax(0, 1fr)        /* workspace — takes all slack */
+    var(--statusbar-h);   /* 19→28px */
+  isolation: isolate;
+}
+
+/* --- With sub-tabs (Target, Proxy have a third strip) --- */
+.app-shell-subtabs {
+  grid-template-rows:
+    var(--menubar-h)
+    var(--toolbar-h)
+    var(--subtab-h)       /* 24→34px */
+    minmax(0, 1fr)
+    var(--statusbar-h);
+}
+
+/* --- Editor grid (request/response panels with hairline gutters) --- */
+.editor-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: var(--line);  /* the gap color IS the hairline */
+}
+
+.editor-grid > * {
+  min-width: 0;
+  background: var(--paper); /* content sits on paper, line shows through the gap */
+}
+
+/* --- Three-column with inspector --- */
+.editor-grid-inspected {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 0.62fr);
+}
+
+/* --- Tool panel (header + scrollable content) --- */
+.tool-panel {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--paper-raised);
+}
+
+.tool-pane {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  grid-auto-rows: min-content;
+  gap: var(--gap);          /* --s3: 9→16px */
+  padding: var(--s3);
+  scrollbar-width: thin;
+}
+
+/* --- Responsive inspector collapse --- */
+@container workspace (max-width: 1100px) {
+  .editor-grid-inspected {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .editor-grid-inspected > .inspector {
+    display: none;
+  }
+}
+
+/* --- Flex row (for inline actions, chip rows) --- */
+.flex-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+
+/* --- Flex column (for stacked sections) --- */
+.flex-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+/* --- Section heading (title + actions row) --- */
+.section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+/* --- Scan type grid (auto-fit responsive cards) --- */
+.scan-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--s2);
+}
+
+
+/* ===========================================================================
+   8. CONTROL PANEL PATTERNS — avionics aesthetic
+   ============================================================================
+   The burpsy console is an operator tool, not a consumer app. The aesthetic
+   is avionics/instrument-panel: dense, flat, every pixel carries information.
+
+   Key principles:
+   - Density is the product (CRAFT=7, DENSITY=9)
+   - 24px rows, 12-13px body text, 22-38px chrome bands
+   - Zero decoration: no gradients, no glows, no shadows on panels
+   - Every colour means something (severity, scope, user highlight)
+   - Keyboard first (mod+K palette, ? shortcuts, alt+1…0 tools)
+
+   Patterns below are composite recipes combining the primitives above.
+   =========================================================================== */
+
+/* --- Status bar (bottom strip, live counts) --- */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  height: var(--statusbar-h);
+  padding: 0 var(--s2);
+  background: var(--chrome);
+  border-top: 1px solid var(--line);
+  font: var(--font-weight-regular) var(--text-2xs) var(--font-body);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.status-bar .status-dot {
+  margin-right: var(--s1);
+}
+
+/* --- Tool tab strip (horizontal tabs in toolbar) --- */
+.tool-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--line);
+}
+
+.tool-tab {
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  padding: 0 var(--s2);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.tool-tab:hover {
+  background: var(--chrome-hover);
+  color: var(--text);
+}
+
+.tool-tab-active {
+  background: var(--paper);
+  color: var(--text);
+  border-bottom: 1px solid var(--paper);  /* fill the gap */
+  font-weight: var(--font-weight-bold);
+}
+
+/* --- Filter toggle (pill, on/off) --- */
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  height: 18px;
+  border-radius: 10px;
+  padding: 0 var(--s1);
+  font: var(--font-weight-regular) var(--text-2xs) var(--font-code);
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-sunken);
+  color: var(--muted);
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.filter-toggle[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* --- Keyboard shortcut key --- */
+.kbd {
+  min-width: 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--paper-deep);
+  color: var(--muted);
+  padding: 1px var(--s1);
+  font: var(--text-xs) var(--font-code);
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* --- Skeleton loading (progressive dimming) --- */
+.skeleton-row {
+  height: var(--row-h);
+  background: var(--skeleton-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.skeleton-row:nth-child(2) { background: var(--skeleton-2); }
+.skeleton-row:nth-child(3) { background: var(--skeleton-3); }
+.skeleton-row:nth-child(4) { background: var(--skeleton-4); }
+
+/* --- Toast (the only element allowed a shadow) --- */
+.toast {
+  width: 304px;
+  min-height: 40px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  padding: var(--s2) var(--s3);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+/* Error toast with accent bar */
+.toast-error {
+  border-left: 3px solid var(--accent-strong);
+}
+
+/* --- Highlight picker (inline swatch row) --- */
+.highlight-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);       /* 4px between swatches */
+  padding: var(--s1) var(--s2);
+  background: var(--paper-raised);
+  border-radius: var(--radius-md);
+}
+
+.highlight-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+
+.highlight-swatch[aria-checked="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --- Reorder handle (drag grip) --- */
+.reorder-handle {
+  width: 10px;
+  height: 16px;
+  cursor: grab;
+  color: var(--highlight-gray);  /* #8B8D98 — user-chosen, same in both themes */
+  /* Six-dot grip pattern, rendered as CSS or inline SVG */
+}
+
+/* --- Page header (eyebrow + title + description) --- */
+.page-header {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s2) var(--s3);
+}
+
+.page-header h1 {
+  font: var(--font-weight-bold) var(--text-xl)/1 var(--font-body);
+}
+
+.page-header .eyebrow {
+  color: var(--muted);
+  font: var(--font-weight-bold) var(--text-2xs)/1.5 var(--font-code);
+  letter-spacing: var(--tracking-caps-loose);
+  text-transform: uppercase;
+}
+
+.page-header p {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 72ch;
+}
+
+
+/* ===========================================================================
+   QUICK REFERENCE — token → value mapping
+   ===========================================================================
+
+   SPACING          INTENT             VALUE (dark → light)
+   ─────────────    ─────────────      ────────────────────
+   --s1             --gap-xs           3→6px
+   --s2             --gap-sm           6→11px
+   --s3             --gap-md, --gap    9→16px
+   --s4             --gap-lg, --pad    12→21px
+   --s5             --gap-xl           15→26px
+   --s6             --gap-2xl          18→31px
+   --s8             --gap-3xl          22→40px
+
+   TYPE             INTENT             VALUE
+   ─────────────    ─────────────      ────────────────────
+   --fs-2xs         --text-2xs         11→12px  (eyebrow, statusbar)
+   --fs-xs          --text-xs          11→13px  (table cells, dense data)
+   --fs-sm          --text-sm          12→14px  (body, most UI)
+   --fs-md          --text-md          13→15px  (emphasised body)
+   --fs-lg          --text-lg          14→16px  (panel titles)
+   --fs-xl          --text-xl          15→18px  (section headings)
+   --fs-2xl         --text-2xl         19→26px  (metric values)
+
+   CHROME HEIGHTS
+   ─────────────
+   --menubar-h      21→30px
+   --toolbar-h      29→44px
+   --subtab-h       24→34px
+   --statusbar-h    19→28px
+   --control-h      26→34px
+   --control-h-sm   24→30px
+   --icon-btn       26→34px
+   --row-h          24→34px
+   --row-h-compact  20→28px
+
+   SURFACES (dark → light)
+   ────────────────────────
+   --paper          #3C3F41 → #F2F2F2
+   --paper-raised   #414547 → #FFFFFF
+   --paper-deep     #323232 → #E8E8E8
+   --paper-sunken   #2B2B2B → #DCDCDC
+
+   SEVERITY (dark → light)
+   ────────────────────────
+   --good           #9BC47F → #2E7D32
+   --warn           #C9C33A → #96600A
+   --bad            #FF9B98 → #C62828
+   --info           #93BDE0 → #1565C0
+
+   TRANSITIONS
+   ───────────
+   Colour:     120ms ease (buttons, tabs, inputs)
+   Structural: 140ms ease (switches, progress, expand)
+   Entry:      200ms ease + @starting-style (toasts, menus)
+   Exit:       150ms ease + transition-behavior: allow-discrete
+
+   SHADOWS (the two exceptions)
+   ────────────────────────────
+   --shadow-menu:    0 6px 20px #00000029
+   --shadow-dialog:  0 16px 44px #00000042
+
+   Z-INDICES
+   ─────────
+   --z-sticky:   2
+   --z-overlay:  60
+   --z-dialog:   61
+   --z-menu:     80
+   --z-tooltip:  90
+   --z-skip:     200
+   =========================================================================== */
