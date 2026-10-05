@@ -235,6 +235,10 @@ type sessionActionDto struct {
 	Replacement string `json:"replacement,omitempty"`
 	Regex       bool   `json:"regex,omitempty"`
 	Extension   string `json:"extension,omitempty"`
+	// Script is a run_script action's JavaScript (burpsy-react-ui-ydmj). Carried both ways like every
+	// other kind-specific field: a DTO that dropped it would install a script action with no script,
+	// which ValidateAction refuses — or worse, read one back as empty.
+	Script string `json:"script,omitempty"`
 	// ValidateEvery is Burp's `validate_every_num_requests` (us12): check the session only on every
 	// Nth request the rule handles. Zero is omitted from the wire, which is the pre-field behaviour
 	// and what a client reading an older server's rules sees.
@@ -551,6 +555,7 @@ func actionToDto(a *session.Action) sessionActionDto {
 		Replacement: a.Replacement,
 		Regex:       a.Regex,
 		Extension:   a.Extension,
+		Script:      a.Script,
 		// Only a check carries it, so only a check reports it: a non-zero value on any other kind is
 		// refused by session.ValidateAction, and a rule that could not have been installed must not
 		// read back as carrying a setting.
@@ -602,6 +607,7 @@ func actionsToModel(dtos []sessionActionDto) ([]*session.Action, error) {
 			Regex:         d.Regex,
 			ValidateEvery: d.ValidateEvery,
 			Extension:     d.Extension,
+			Script:        d.Script,
 		}
 		for _, s := range d.Macro {
 			headers := make(map[string]string, len(s.Headers))

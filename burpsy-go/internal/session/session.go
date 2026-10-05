@@ -1486,6 +1486,13 @@ func NewSessionRule(name string, hosts []string, steps []MacroStep) *SessionRule
 type Coordinator struct {
 	mu     sync.RWMutex
 	rules  map[RuleID]*SessionRule
+	// scriptStores is each rule's pre-request script store (burpsy-react-ui-ydmj): the small string
+	// map a RunScript action reads and writes through `store`, kept across requests so a token
+	// captured from one response is there for the next request. Per rule, so two rules' scripts
+	// cannot read each other's captured credentials. Guarded by scriptMu, not mu — a script run must
+	// not hold the rule table's lock.
+	scriptMu     sync.Mutex
+	scriptStores map[RuleID]map[string]string
 	order  []RuleID
 	nextID int64
 	jarMgr *CookieJarManager

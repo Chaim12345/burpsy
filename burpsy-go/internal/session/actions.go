@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/jsexec"
 )
 
 // ---- Rule actions -------------------------------------------------------------------------------
@@ -83,6 +85,12 @@ const (
 	// ask, the walk stops without sending: the action exists to gate the send on a human being's
 	// answer, and a request that goes out anyway makes the action a lie.
 	ActionPromptForBrowserRecovery
+	// ActionRunScript runs a short sandboxed JavaScript pre-request script (burpsy-react-ui-ydmj) with
+	// the outgoing request as a mutable object, read access to the last response and a small per-rule
+	// store — so refreshing a JWT, recomputing a signature or stamping a nonce is a few lines rather
+	// than a plugin. Burp's Montoya pre-request handling; Caido's pre-request scripts. No network, no
+	// filesystem: see internal/jsexec.RunRequestScript.
+	ActionRunScript
 	// ActionKindCount must stay last. It exists so tests can walk the enum and so
 	// actionKindNames can be an array the compiler sizes: a kind added without a wire name is then
 	// a build failure rather than a rule that reads back as something else. Same shape as
@@ -103,6 +111,7 @@ var actionKindNames = [ActionKindCount]string{
 	ActionReplace:                  "replace",
 	ActionInvokeExtension:          "invoke_extension",
 	ActionPromptForBrowserRecovery: "prompt_for_browser_recovery",
+	ActionRunScript:                "run_script",
 }
 
 // actionKindLabels are Burp's own words for each action, so the editor reads like the documentation
@@ -118,6 +127,7 @@ var actionKindLabels = [ActionKindCount]string{
 	ActionReplace:                  "Replace matching part of the request",
 	ActionInvokeExtension:          "Invoke an extension",
 	ActionPromptForBrowserRecovery: "Prompt the user for in-browser session recovery",
+	ActionRunScript:                "Run a pre-request script",
 }
 
 // ActionKindName is the wire name for a kind. An out-of-range kind says so rather than naming the
@@ -218,6 +228,11 @@ type Action struct {
 	// lists it, and whether that registration is a session action rather than a context-menu item.
 	Extension        string `json:"extension,omitempty"`
 	ExtensionSession string `json:"extension_session,omitempty"`
+	// Script is a RunScript action's JavaScript source. It sees `request` (method, url, headers,
+	// body — mutable), `response` (the last observed response, frozen, or null), `store` (get/set/
+	// delete, kept per rule across requests — where a captured token lives), `log(...)`, and the pure
+	// helpers on `burpsy` (hmacSha256Hex/Base64, sha256Hex, base64Encode/UrlEncode/Decode, randomHex).
+	Script string `json:"script,omitempty"`
 }
 
 // ValidateAction refuses an action whose fields do not describe the kind it claims to be.
@@ -274,6 +289,12 @@ func ValidateAction(a *Action, path string) error {
 		if err := require(a.Extension, "extension registration name"); err != nil {
 			return err
 		}
+	case ActionRunScript:
+		// Compiled at install time: a syntax error refused here names itself, where one found at send
+		// time would fail every request the rule covers with the same message.
+		if err := jsexec.CheckRequestScript(a.Script); err != nil {
+			return fmt.Errorf("%s (%s): %v", path, ActionKindLabel(a.Kind), err)
+		}
 	case ActionCheckValidity:
 		// A negative interval is refused rather than read as "always" (the zero value's job) or
 		// "never": "validate never" is a rule that has silently stopped protecting the session, and
@@ -285,6 +306,12 @@ func ValidateAction(a *Action, path string) error {
 	case ActionRunMacro, ActionRunPostRequestMacro, ActionAddCookiesFromJar, ActionPromptForBrowserRecovery:
 		// Nothing beyond the kind and its switches. The prompt asks the operator, not the rule, for
 		// what comes next — there is no field to state.
+	}
+	if a.Kind != ActionRunScript && strings.TrimSpace(a.Script) != "" {
+		// Refused rather than ignored, the same rule as every other kind-specific field: a script on a
+		// set-header action would read as though it ran.
+		return fmt.Errorf("%s (%s): only a pre-request script action carries a script",
+			path, ActionKindLabel(a.Kind))
 	}
 	if a.Kind != ActionCheckValidity && (len(a.Then) > 0 || len(a.Else) > 0) {
 		return fmt.Errorf("%s (%s): only a validity check has conditional sub-actions",

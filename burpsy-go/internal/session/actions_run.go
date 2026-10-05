@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/jsexec"
 )
 
 // ---- Running a rule's actions -------------------------------------------------------------------
@@ -226,6 +228,8 @@ func (w *actionWalk) perform(a *Action) {
 		w.invokeExtension(a)
 	case ActionPromptForBrowserRecovery:
 		w.promptForBrowserRecovery(a)
+	case ActionRunScript:
+		w.runScript(a)
 	default:
 		// Unreachable through ValidateRule, which refuses an unknown kind. Recorded rather than
 		// ignored because this is the branch a kind added to the enum but not to this switch would
@@ -531,6 +535,79 @@ func (w *actionWalk) invokeExtension(a *Action) {
 	w.request = next
 	w.record(a.Kind, fmt.Sprintf("invoked extension registration %q", a.Extension),
 		!sameMacroStep(before, w.request))
+}
+
+// runScript runs a pre-request script over the request (burpsy-react-ui-ydmj).
+//
+// On a script error the request is left exactly as it was and the trace says why: a script that threw
+// halfway through recomputing a signature has produced a request that LOOKS signed and is not, which
+// is worse than the unsigned request it started from. The walk carries on — the same as an action
+// that changed nothing — rather than refusing to send, because a pre-request script is a rewrite, not
+// a gate; a rule that must not send without it can follow it with a validity check.
+func (w *actionWalk) runScript(a *Action) {
+	ruleID := w.c.ruleIDOf(w.rule)
+	req := jsexec.ScriptRequest{Method: w.request.Method, URL: w.request.URL, Headers: copyHeaders(w.request.Headers), Body: w.request.Body}
+	var resp *jsexec.ScriptResponse
+	if w.response != nil {
+		resp = &jsexec.ScriptResponse{Status: w.response.Status, Headers: copyHeaders(w.response.Headers), Body: string(w.response.Body)}
+	}
+	result, err := jsexec.RunRequestScript(a.Script, req, resp, w.c.scriptStore(ruleID))
+	logNote := ""
+	if len(result.Log) > 0 {
+		logNote = "; log: " + strings.Join(result.Log, " | ")
+	}
+	if err != nil {
+		w.record(a.Kind, "the pre-request script failed and the request was left unchanged: "+err.Error()+logNote, false)
+		return
+	}
+	w.c.setScriptStore(ruleID, result.Store)
+	before := cloneMacroStep(w.request)
+	w.request = MacroStep{Method: result.Request.Method, URL: result.Request.URL, Headers: result.Request.Headers, Body: result.Request.Body}
+	changed := !sameMacroStep(before, w.request)
+	msg := "ran the pre-request script; the request is unchanged"
+	if changed {
+		msg = "ran the pre-request script; it rewrote the request"
+	}
+	w.record(a.Kind, msg+logNote, changed)
+}
+
+// scriptStore returns a copy of a rule's script store, so a script run never holds scriptMu.
+func (c *Coordinator) scriptStore(id RuleID) map[string]string {
+	c.scriptMu.Lock()
+	defer c.scriptMu.Unlock()
+	out := make(map[string]string, len(c.scriptStores[id]))
+	for k, v := range c.scriptStores[id] {
+		out[k] = v
+	}
+	return out
+}
+
+// setScriptStore replaces a rule's script store with what a successful run left. Bounded so a script
+// cannot grow it without limit across requests: past the bound the run's writes are refused whole
+// and the previous store stands.
+func (c *Coordinator) setScriptStore(id RuleID, next map[string]string) {
+	const maxEntries, maxBytes = 64, 64 * 1024
+	total := 0
+	for k, v := range next {
+		total += len(k) + len(v)
+	}
+	if len(next) > maxEntries || total > maxBytes {
+		return
+	}
+	c.scriptMu.Lock()
+	defer c.scriptMu.Unlock()
+	if c.scriptStores == nil {
+		c.scriptStores = make(map[RuleID]map[string]string)
+	}
+	c.scriptStores[id] = next
+}
+
+func copyHeaders(h map[string]string) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		out[k] = v
+	}
+	return out
 }
 
 // promptForBrowserRecovery is Burp's "prompt the user for in-browser session recovery", and the one
