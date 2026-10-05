@@ -162,6 +162,8 @@ export interface FindingDetail {
  times_seen: number;
  /** How many later reports of this issue a keep_existing merge folded in (oorl). */
  merged_count?: number;
+ /** The excerpt the check quoted — for a leaked secret, the redacted key (8j0d). */
+ evidence?: string;
  /**
   * The dashboard task that raised this finding, absent when nothing tracked it (a manual
   * recording, a collaborator's result imported from elsewhere).

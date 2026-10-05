@@ -370,6 +370,8 @@ export interface Finding {
  times_seen: number;
  /** How many later reports of this issue a keep_existing merge folded in (oorl). */
  merged_count: number;
+ /** The excerpt the check quoted — for a leaked secret, the redacted key (8j0d). */
+ evidence?: string;
  occurrences: Occurrence[];
  /** Present when the check resolved to a catalogue entry. */
  advisory?: Advisory | null;

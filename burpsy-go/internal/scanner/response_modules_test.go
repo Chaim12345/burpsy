@@ -12,7 +12,8 @@ func TestSecretsModuleDetectsAWSAccessKeyID(t *testing.T) {
 	if len(findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d: %+v", len(findings), findings)
 	}
-	if findings[0].Name != "AWS access key ID exposed" {
+	// Through the gitleaks corpus since 8j0d: its aws-access-token rule replaced the hand-written one.
+	if findings[0].Name != "Secret exposed: AWS access token" {
 		t.Errorf("unexpected finding name %q", findings[0].Name)
 	}
 	if findings[0].Severity != "high" {
@@ -32,22 +33,31 @@ func TestSecretsModuleDetectsAWSSecretKey(t *testing.T) {
 	}
 }
 
-func TestSecretsModuleDetectsJWT(t *testing.T) {
+// A JWT in a response is how every login works, not a leak: the module does not report one
+// (excludedGitleaksRules), and burpsy's JWT checks read tokens for the weaknesses that are findings.
+func TestSecretsModuleDoesNotReportAJWTAsALeak(t *testing.T) {
 	m := &SecretsModule{}
 	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
 	body := []byte(`{"token":"` + jwt + `"}`)
-	findings := m.Analyze(body, nil)
-	if len(findings) != 1 || findings[0].Name != "JSON Web Token exposed" {
-		t.Fatalf("expected JWT finding, got %+v", findings)
+	if findings := m.Analyze(body, nil); len(findings) != 0 {
+		t.Fatalf("a session JWT was reported as a leaked secret: %+v", findings)
 	}
 }
 
-func TestSecretsModuleDetectsGenericAPIKey(t *testing.T) {
+// A provider token is named by its provider — the corpus knows sk_live_ is Stripe — rather than as a
+// generic "API key", and its finding names the rule and where in the body it was.
+func TestSecretsModuleNamesAProviderTokenByItsProvider(t *testing.T) {
 	m := &SecretsModule{}
-	body := []byte(`{"api_key": "sk_live_abcdefghijklmnop1234"}`)
+	body := []byte("{\n  \"api_key\": \"sk_live_abcdefghijklmnop1234\"}")
 	findings := m.Analyze(body, nil)
-	if len(findings) != 1 || findings[0].Name != "API key exposed" {
-		t.Fatalf("expected API key finding, got %+v", findings)
+	if len(findings) != 1 || findings[0].Name != "Secret exposed: Stripe access token" {
+		t.Fatalf("expected one Stripe finding, got %+v", findings)
+	}
+	if !strings.Contains(findings[0].Detail, "stripe-access-token") || !strings.Contains(findings[0].Detail, "line 2") {
+		t.Errorf("detail does not name the rule and the location: %q", findings[0].Detail)
+	}
+	if strings.Contains(findings[0].Evidence, "abcdefghijklmnop") {
+		t.Errorf("evidence is not redacted: %q", findings[0].Evidence)
 	}
 }
 
@@ -64,6 +74,8 @@ func TestSecretsModuleDetectsAzureStorageConnectionString(t *testing.T) {
 	m := &SecretsModule{}
 	body := []byte(`DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=abcd1234ABCD5678efgh9012IJKL3456mnop==;EndpointSuffix=core.windows.net`)
 	findings := m.Analyze(body, nil)
+	// One finding: the corpus's generic rule also matches the AccountKey, and yields to the provider
+	// rule that names it.
 	if len(findings) != 1 || findings[0].Name != "Azure storage account key exposed" {
 		t.Fatalf("expected Azure finding, got %+v", findings)
 	}
@@ -189,7 +201,7 @@ func TestRunResponseModulesAggregatesFindingsAcrossModules(t *testing.T) {
 		`<form><input type="password"></form>`)
 	headers := map[string]string{"Server": "nginx"}
 	findings := RunResponseModules(DefaultResponseModules(), body, headers)
-	if !containsFinding(findings, "API key exposed") {
+	if !containsFinding(findings, "Secret exposed: Stripe access token") {
 		t.Errorf("expected secrets finding, got %+v", findings)
 	}
 	if !containsFinding(findings, "Login form detected") {

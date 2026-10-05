@@ -581,6 +581,17 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("findings", "merged_count", "INTEGER"); err != nil {
 		return err
 	}
+	// evidence (burpsy-react-ui-cx31/8j0d): the redacted excerpt a check quoted. Core has carried it
+	// since cx31, but without a column it was gone after a restart — a leaked-key finding would come
+	// back saying a key leaked and no longer which one.
+	if err := s.addColumn("findings", "evidence", "TEXT"); err != nil {
+		return err
+	}
+	// merge_key: the producer's dedup identity (7tc1), so a restored finding is re-indexed under the
+	// key it was filed by rather than its path.
+	if err := s.addColumn("findings", "merge_key", "TEXT"); err != nil {
+		return err
+	}
 	// scope_rules_v3 gained enabled for the per-rule disable switch (burpsy-react-ui-1xb).
 	// NOT NULL with a default of 1 because ALTER TABLE cannot add a NOT NULL column without
 	// one, and 1 is the only safe value: every row written before this column existed was an
@@ -997,12 +1008,12 @@ func (s *Store) SaveFinding(f *core.Finding) {
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		  target_host, target_port, target_tls, target_path, params, task_id,
-		  severity_override, confidence_override, false_positive, comment, confirm, merged_count)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  severity_override, confidence_override, false_positive, comment, confirm, merged_count, evidence, merge_key)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
 		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
-		sevOverride, confOverride, fp, f.Comment, f.Confirm, f.MergedCount)
+		sevOverride, confOverride, fp, f.Comment, f.Confirm, f.MergedCount, f.Evidence, f.MergeKey)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -1013,7 +1024,7 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
 		        target_host, target_port, target_tls, target_path, params, task_id,
-		        severity_override, confidence_override, false_positive, comment, confirm, merged_count
+		        severity_override, confidence_override, false_positive, comment, confirm, merged_count, evidence, merge_key
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1035,14 +1046,17 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		var sevOverride, confOverride, fp sql.NullInt64
 		var comment sql.NullString
 		var merged sql.NullInt64
+		var evidence, mergeKey sql.NullString
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
 			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
-			&sevOverride, &confOverride, &fp, &comment, &confirmCol, &merged); err != nil {
+			&sevOverride, &confOverride, &fp, &comment, &confirmCol, &merged, &evidence, &mergeKey); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
 		f.TaskID = uint64(taskID.Int64)
 		f.Confirm = confirmCol.String
+		f.Evidence = evidence.String
+		f.MergeKey = mergeKey.String
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
@@ -2499,6 +2513,22 @@ func (s *Store) LoadBrowserSettings() ([]byte, error) {
 		return nil, err
 	}
 	return []byte(v), nil
+}
+
+// SaveSecretDetection persists whether captured responses are scanned for leaked secrets
+// (burpsy-react-ui-8j0d) with the project.
+func (s *Store) SaveSecretDetection(on bool) error {
+	v := "off"
+	if on {
+		v = "on"
+	}
+	return s.setSetting("scanner.secret_detection", v)
+}
+
+// LoadSecretDetection returns the stored switch; a project that never set it reads as off.
+func (s *Store) LoadSecretDetection() (bool, error) {
+	v, err := s.getSetting("scanner.secret_detection")
+	return v == "on", err
 }
 
 // SaveFindingConsolidation persists the operator's issue-consolidation policy

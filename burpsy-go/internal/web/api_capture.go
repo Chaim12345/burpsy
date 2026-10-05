@@ -868,6 +868,9 @@ type issueFindingView struct {
 	// (burpsy-react-ui-oorl) — distinct from times_seen, which counts occurrences and so also counts
 	// several filed at once by one producer.
 	MergedCount int `json:"merged_count"`
+	// Evidence is the excerpt the check quoted — for a leaked secret, the redacted key that says WHICH
+	// one leaked (burpsy-react-ui-cx31/8j0d). Omitted when the check quoted nothing.
+	Evidence string `json:"evidence,omitempty"`
 	// Triage state (burpsy-react-ui-pwd). Severity/Confidence are the *effective* values — the
 	// operator's override when one stands, the engine's report otherwise — so every consumer that
 	// just displays or counts by severity keeps working without learning about overrides. The
@@ -960,6 +963,7 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 		Params:          f.Params,
 		TimesSeen:       len(f.Occurrences),
 		MergedCount:     f.MergedCount,
+		Evidence:        f.Evidence,
 		TaskID:          f.TaskID,
 		TimestampUnixMs: int64(f.Timestamp),
 		Source:          issueSource(f),

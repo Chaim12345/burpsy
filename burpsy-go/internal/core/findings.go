@@ -330,6 +330,11 @@ type Finding struct {
 	// merge (burpsy-react-ui-oorl) — the difference between "seen once" and "seen forty times and
 	// shown once". keep_new resets it: the content it counted is gone.
 	MergedCount int
+	// MergeKey is the identity this finding was filed under when its producer gave one (see
+	// NewFinding.MergeKey). Kept so the dedup index can be rebuilt after a restore or a policy change:
+	// without it a restored leaked-key or weak-JWT finding was re-indexed by its path, and the next
+	// sighting of the same secret filed a second finding.
+	MergeKey string
 
 	// SeverityOverride is the operator's severity for this finding, nil while the engine's own
 	// severity stands. An override beats both the engine's report and a later merge that would
@@ -442,7 +447,7 @@ func (fs *FindingStore) SetDedupPolicy(p *DedupPolicy) {
 func (fs *FindingStore) rebuildIndexLocked() {
 	fs.byKey = make(map[string]*Finding, len(fs.findings))
 	for _, f := range fs.findings {
-		if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok {
+		if key, ok := fs.dedupKeyFor(f.Name, f.Target, f.MergeKey); ok {
 			if _, clash := fs.byKey[key]; !clash {
 				fs.byKey[key] = f
 			}
@@ -566,6 +571,7 @@ file:
 		Timestamp:   uint64(getTimestamp()),
 		Param:       finding.Param,
 		Target:      finding.Target,
+		MergeKey:    finding.MergeKey,
 	}
 	if finding.Param != "" {
 		f.Params = []string{finding.Param}

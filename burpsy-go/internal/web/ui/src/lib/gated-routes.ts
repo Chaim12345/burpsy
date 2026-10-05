@@ -104,6 +104,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/scanner/coverage": false,
  "/api/scanner/live": true,
  "/api/scanner/passive-branch": false,
+ "/api/scanner/secrets": false,
  "/api/schedules": true,
  "/api/schedules/": true,
  "/api/scope": true,

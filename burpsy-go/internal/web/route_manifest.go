@@ -724,6 +724,13 @@ var manifest = map[string]route{
 		summary: "enable or disable one corpus check by name; a name the corpus does not contain is " +
 			"refused before anything is recorded",
 	},
+	"/api/scanner/secrets": {
+		// riskLocal: the secret scan reads responses burpsy already captured and sends nothing; the
+		// switch changes which findings future captures file, which is this tool's own state.
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "secret detection over every captured response — the gitleaks rule corpus plus burpsy's own provider rules, " +
+			"raising a finding per leaked key with its rule, location and a redacted excerpt; off until switched on (burpsy-react-ui-8j0d)",
+	},
 	"/api/scanner/coverage": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "what the check set covers, and what it declines to look at",

@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 )
 
 // ResponseFinding is one observation a ResponseModule makes about a single response. It is a
@@ -38,6 +39,10 @@ type ResponseFinding struct {
 	Detail string
 	// Evidence is the (possibly redacted) matched text that justifies the finding.
 	Evidence string
+	// MergeKey, when set, is this finding's identity for deduplication in place of its location —
+	// see core.NewFinding.MergeKey. The secrets module sets it to the rule plus a hash of the secret,
+	// so two keys on one page are two findings and one key on every page of a host is one.
+	MergeKey string
 }
 
 // ResponseModule analyzes one captured response and reports what it found. Analyze must not
@@ -83,27 +88,26 @@ func RunResponseModules(modules []ResponseModule, response []byte, headers map[s
 // Secrets module
 // ---------------------------------------------------------------------------
 
-// SecretsModule detects credential material leaked into a response body: AWS access/secret keys,
-// JWTs, generic API keys, and GCP/Azure cloud credentials. It addresses the generic
-// secret/credential detection gap tracked as burpsy-react-ui-8j0d.
+// SecretsModule detects credential material leaked into a response body (burpsy-react-ui-8j0d).
+//
+// The engine is the gitleaks rule corpus (secrets_gitleaks.go): ~220 maintained provider rules, each
+// finding carrying its rule, its line and column, and a redacted excerpt. Three hand-written rules
+// stay beside it because the corpus has no equivalent — a labelled AWS secret access key (gitleaks
+// matches the key ID, not the secret half), an Azure Storage connection string, and the GCP
+// service-account JSON marker. The hand rules that DID overlap the corpus (AWS key ID, generic API
+// key, JWT) are gone rather than kept as a second name for the same key.
+//
+// A response whose Content-Type is binary (an image, a font, an archive) is not scanned: regexes over
+// compressed or encoded bytes find noise, not keys.
 type SecretsModule struct{}
 
 func (m *SecretsModule) Name() string { return "secrets" }
 
 var (
-	// awsAccessKeyIDRe matches an AWS access key ID. The AKIA/ASIA/etc. prefixes are the
-	// documented AWS key-class markers; 16 trailing base32-ish characters is the fixed shape.
-	awsAccessKeyIDRe = regexp.MustCompile(`\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b`)
 	// awsSecretKeyRe matches a labelled AWS secret access key: a 40-character base64-alphabet
 	// value assigned to a key/variable whose name mentions "secret" and "key" (or "access" and
 	// "key"), which is how these leak in dumped config files and .env content.
 	awsSecretKeyRe = regexp.MustCompile(`(?i)aws[a-z_]*secret[a-z_]*key[a-z_]*["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?`)
-	// jwtRe matches a three-part JWT. "eyJ" is the base64 encoding of `{"` — every JWT header
-	// starts with it because every JWT header is a JSON object.
-	jwtRe = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b`)
-	// genericAPIKeyRe matches a labelled generic API key: a variable/JSON-key whose name is some
-	// spelling of "api key" or "apikey", assigned a token-shaped value.
-	genericAPIKeyRe = regexp.MustCompile(`(?i)api[_-]?key["']?\s*[:=]\s*["']([A-Za-z0-9_\-]{16,64})["']`)
 	// gcpServiceAccountRe matches the distinctive shape of a GCP service-account JSON key file:
 	// the "type": "service_account" field is present in every such file and in essentially
 	// nothing else.
@@ -113,28 +117,16 @@ var (
 	azureStorageConnStringRe = regexp.MustCompile(`(?i)DefaultEndpointsProtocol=https?;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{20,}`)
 )
 
-func (m *SecretsModule) Analyze(response []byte, _ map[string]string) []ResponseFinding {
+func (m *SecretsModule) Analyze(response []byte, headers map[string]string) []ResponseFinding {
+	if binaryContentType(headerLookupFold(headers, "content-type")) {
+		return nil
+	}
 	body := string(response)
 	var out []ResponseFinding
-
-	if matches := awsAccessKeyIDRe.FindAllString(body, -1); len(matches) > 0 {
-		out = append(out, ResponseFinding{
-			Module:     m.Name(),
-			Name:       "AWS access key ID exposed",
-			Severity:   "high",
-			Confidence: "firm",
-			Detail:     fmt.Sprintf("%d AWS access key ID(s) found in the response body", len(matches)),
-			// Not redacted, and deliberately so — an AWS access key ID is a public identifier (it
-			// appears in IAM listings and CloudTrail), so echoing it costs nothing and the operator
-			// needs it to know WHICH key leaked. The secret half on the branch below is a different
-			// matter and IS redacted. Stating the asymmetry here rather than leaving one branch
-			// unreconciled: a reader checking whether this file honours its own "never reproduce the
-			// whole secret" rule needs to see that it does in both directions, not infer it.
-			Evidence: matches[0],
-		})
-	}
+	var covered []string
 
 	if match := awsSecretKeyRe.FindStringSubmatch(body); match != nil {
+		covered = append(covered, match[0])
 		out = append(out, ResponseFinding{
 			Module:     m.Name(),
 			Name:       "AWS secret access key exposed",
@@ -142,28 +134,7 @@ func (m *SecretsModule) Analyze(response []byte, _ map[string]string) []Response
 			Confidence: "tentative",
 			Detail:     "a labelled AWS secret access key was found in the response body",
 			Evidence:   redactSecret(match[1]),
-		})
-	}
-
-	if matches := jwtRe.FindAllString(body, -1); len(matches) > 0 {
-		out = append(out, ResponseFinding{
-			Module:     m.Name(),
-			Name:       "JSON Web Token exposed",
-			Severity:   "medium",
-			Confidence: "firm",
-			Detail:     fmt.Sprintf("%d JWT(s) found in the response body", len(matches)),
-			Evidence:   redactSecret(matches[0]),
-		})
-	}
-
-	if match := genericAPIKeyRe.FindStringSubmatch(body); match != nil {
-		out = append(out, ResponseFinding{
-			Module:     m.Name(),
-			Name:       "API key exposed",
-			Severity:   "medium",
-			Confidence: "tentative",
-			Detail:     "a labelled API key was found in the response body",
-			Evidence:   redactSecret(match[1]),
+			MergeKey:   secretMergeKey("aws-secret-access-key", match[1]),
 		})
 	}
 
@@ -179,6 +150,7 @@ func (m *SecretsModule) Analyze(response []byte, _ map[string]string) []Response
 	}
 
 	if match := azureStorageConnStringRe.FindString(body); match != "" {
+		covered = append(covered, match)
 		out = append(out, ResponseFinding{
 			Module:     m.Name(),
 			Name:       "Azure storage account key exposed",
@@ -186,10 +158,32 @@ func (m *SecretsModule) Analyze(response []byte, _ map[string]string) []Response
 			Confidence: "firm",
 			Detail:     "an Azure Storage connection string carrying an AccountKey was found in the response body",
 			Evidence:   redactSecret(match),
+			MergeKey:   secretMergeKey("azure-storage-connection-string", match),
 		})
 	}
 
-	return out
+	// The corpus first in the answer, as the broader and better-named source; its generic rule
+	// yields to a key the provider rules above already named.
+	return append(gitleaksFindings(m.Name(), response, covered), out...)
+}
+
+// binaryContentType reports whether a Content-Type names bytes no text rule can read.
+func binaryContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	for _, prefix := range []string{"image/", "audio/", "video/", "font/"} {
+		if strings.HasPrefix(ct, prefix) {
+			return !strings.HasPrefix(ct, "image/svg")
+		}
+	}
+	switch ct {
+	case "application/octet-stream", "application/zip", "application/gzip", "application/x-gzip",
+		"application/pdf", "application/wasm", "application/x-7z-compressed", "application/x-tar":
+		return true
+	}
+	return false
 }
 
 // redactSecret keeps a short prefix/suffix and blanks the middle, so evidence in a finding proves a
@@ -386,7 +380,7 @@ func moduleFindings(store *core.TrafficStore, ex *core.Exchange, modules []Respo
 			headers[name] = string(v)
 		}
 	}
-	raw := RunResponseModules(modules, msg.Body(), headers)
+	raw := RunResponseModules(modules, readableBody(msg), headers)
 	if len(raw) == 0 {
 		return nil
 	}
@@ -402,8 +396,32 @@ func moduleFindings(store *core.TrafficStore, ex *core.Exchange, modules []Respo
 			Confidence:  f.Confidence,
 			Description: f.Detail,
 			Evidence:    f.Evidence,
+			MergeKey:    f.MergeKey,
 			ExchangeID:  ex.ID,
 		})
 	}
 	return out
+}
+
+// readableBody returns a stored response's body as the application sent it: chunk framing removed
+// and a gzip/deflate Content-Encoding decoded. Decoding is opt-in on the proxy path
+// (unpack_compressed_responses), so a stored body is usually still compressed — and a CDN-served JS
+// bundle is exactly where a leaked key lives, so a module reading raw bytes would miss the headline
+// case. Where the bytes cannot be decoded (br, zstd, a broken stream) the stored body is returned
+// as it is: a module then reads what it can rather than nothing.
+func readableBody(msg *core.StoredMessage) []byte {
+	body := msg.Body()
+	if te := msg.Header("Transfer-Encoding"); strings.EqualFold(strings.TrimSpace(string(te)), "chunked") {
+		if plain, ok := httputil.Dechunk(body); ok {
+			body = plain
+		}
+	}
+	enc := strings.TrimSpace(string(msg.Header("Content-Encoding")))
+	if enc == "" || strings.EqualFold(enc, "identity") || !httputil.Unpackable(enc) {
+		return body
+	}
+	if plain, err := httputil.DecodeBody(enc, body); err == nil {
+		return plain
+	}
+	return body
 }

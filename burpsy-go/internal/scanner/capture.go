@@ -504,7 +504,8 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 	// ResponseFinding shape (no catalog issue to resolve by name, no insertion point), so each is
 	// translated into the check shape below rather than appended directly: a finding that bypassed
 	// coreNewFindingFor would carry no exchange and be unreachable from history.
-	findings = append(findings, moduleFindings(c.Store, ex, c.ResponseModules)...)
+	modules := append(c.ResponseModules[:len(c.ResponseModules):len(c.ResponseModules)], c.Scanner.ResponseModules()...)
+	findings = append(findings, moduleFindings(c.Store, ex, modules)...)
 
 	for _, f := range findings {
 		EnrichFinding(f)

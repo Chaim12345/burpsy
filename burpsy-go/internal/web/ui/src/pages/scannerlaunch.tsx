@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { formatDuration } from "../lib/api";
 import { useRunAudit, useScannerConfigs, useScannerCoverage, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { useScannerConfig, useSaveScannerConfig } from "../lib/data";
+import { useSecretDetection, useSetSecretDetection } from "../lib/data.secrets";
 import type { ScannerConfig } from "../lib/types";
 import { useApp } from "../lib/store";
 import type { AuditResult } from "../lib/types.attack";
@@ -183,6 +184,50 @@ function AuditChecksSection(): JSX.Element {
 /* ---- live audit + coverage ----------------------------------------------------------------------
    Moved verbatim from pages/scanner.tsx: the launch surface owns the live toggle and what the
    passive checks have covered; the Issues page keeps reading findings. */
+
+/**
+ * Secret detection (burpsy-react-ui-8j0d): the gitleaks rule corpus over every captured response —
+ * proxy, crawl, Repeater, API scan — raising one finding per leaked key with its rule, its line and a
+ * redacted excerpt. Passive: it reads responses already captured and sends nothing. Off until
+ * switched on, so a project never starts filing findings nobody asked for.
+ */
+function SecretDetectionCard(): JSX.Element {
+  const { data, error, refetch } = useSecretDetection();
+  const set = useSetSecretDetection();
+  return (
+    <Card>
+      <SectionHeading
+        title="Secret detection"
+        detail="Scans every captured response — decompressed and dechunked first — for leaked API keys, cloud credentials, tokens and private keys. Passive: nothing is sent."
+        actions={
+          data ? (
+            <Switch
+              id="secret-detection"
+              label="Scan captured responses for leaked secrets"
+              checked={data.enabled}
+              onCheckedChange={(on) =>
+                set.mutate(on, {
+                  onSuccess: () => toast.success(on ? "Secret detection is on for new captures" : "Secret detection is off"),
+                  onError: (err) => toast.error(err.message),
+                })
+              }
+            />
+          ) : null
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {data ? (
+        <p className="cell-dim">
+          {data.enabled ? "On" : "Off"} — {data.rules.toLocaleString()} rules from {data.corpus}, plus {data.extra.join(", ")}.{" "}
+          {Object.entries(data.excluded)
+            .map(([rule, why]) => `Not reported: ${rule} (${why}).`)
+            .join(" ")}{" "}
+          Applies to responses captured from now on; a body over 4 MiB is scanned up to that size.
+        </p>
+      ) : null}
+    </Card>
+  );
+}
 
 function LiveAuditCard(): JSX.Element {
   const { data, error, isFetching } = useScannerLive();
@@ -484,6 +529,7 @@ export function ScannerLaunchPage(): JSX.Element {
       />
       <TargetedAudit />
       <LiveAuditCard />
+      <SecretDetectionCard />
       <AuditChecksSection />
       <CoverageCard />
     </div>

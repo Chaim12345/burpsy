@@ -739,6 +739,8 @@ export function ScannerPage(): JSX.Element {
        // How many later reports of this issue were merged into it (oorl) — shown only when some
        // were, so a finding seen once does not carry a row of zeros.
        ...((selected.finding.merged_count ?? 0) > 0 ? [{ label: "Duplicates merged", value: selected.finding.merged_count ?? 0 }] : []),
+       // The quoted excerpt — for a leaked secret, the redacted key that says WHICH one (8j0d).
+       ...(selected.finding.evidence ? [{ label: "Evidence", value: selected.finding.evidence }] : []),
        { label: "Occurrences", value: selected.finding.occurrences.length },
        // Triage state, shown only when there is something to show: a row of "no comment"
        // placeholders for every untouched finding trains the eye to skip the block.

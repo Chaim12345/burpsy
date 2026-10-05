@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -756,6 +757,27 @@ type PassiveScanner struct {
 
 	findings   []*Finding
 	findingsMu sync.RWMutex
+
+	// secrets switches the secret-detection response module (burpsy-react-ui-8j0d) on for every
+	// capture that runs this scanner — proxy, crawl, Repeater, API scan alike, because each builds its
+	// Capture around this one scanner. Off by default: a module that always ran would be a surface
+	// reporting findings nobody enabled.
+	secrets atomic.Bool
+}
+
+// SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.
+func (s *PassiveScanner) SetSecretDetection(on bool) { s.secrets.Store(on) }
+
+// SecretDetection reports whether captured responses are scanned for leaked secrets.
+func (s *PassiveScanner) SecretDetection() bool { return s.secrets.Load() }
+
+// ResponseModules is the module set the scanner's own switches install, run by Capture.ScanExchange
+// after any modules the Capture names itself.
+func (s *PassiveScanner) ResponseModules() []ResponseModule {
+	if s == nil || !s.secrets.Load() {
+		return nil
+	}
+	return []ResponseModule{&SecretsModule{}}
 }
 
 // NewPassiveScanner creates a passive scanner with the built-in header/cookie

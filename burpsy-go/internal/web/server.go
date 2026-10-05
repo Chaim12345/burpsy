@@ -549,6 +549,8 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreHistoryExtractors(p)
 		// So is the issue consolidation policy (burpsy-react-ui-oorl).
 		s.restoreFindingConsolidation(p)
+		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
+		s.restoreSecretDetection(p)
 	}
 	return s
 }
@@ -949,6 +951,7 @@ func (s *Server) setupRoutes() {
 	// numeric), but registering it explicitly keeps handleIssueByID's numeric-only guard honest.
 	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
 	s.mux.HandleFunc("/api/issues/consolidation", s.handleIssueConsolidation)
+	s.mux.HandleFunc("/api/scanner/secrets", s.handleScannerSecrets)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a
 	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
 	// here without ambiguity.
