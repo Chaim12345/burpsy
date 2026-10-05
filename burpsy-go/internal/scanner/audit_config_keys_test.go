@@ -131,10 +131,16 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 38, 4, 16
-	// 38/4/16 since burpsy-react-ui-y4om: skip_ineffective_checks moved from reported to applied,
-	// which is the one change this table exists to make visible. A key that stops reporting as
-	// unapplied without the count moving is the silent-coverage-change defect the pin prevents.
+	const wantApplied, wantPartial, wantReported = 40, 4, 14
+	// 40/4/14 since burpsy-react-ui-ev7y: scan_speed and scan_accuracy moved from reported to
+	// applied together. Both had claimed "not applied" on a reading of Burp that was wrong about the
+	// mechanism — neither is run-level pacing; scan_speed selects per-check mutation SETS and
+	// scan_accuracy bounds mutation TOKENS (4/8/10) — so two shipped presets loaded as silent
+	// no-ops. This pin is what makes a coverage claim move visibly instead of quietly.
+	//
+	// It was 38/4/16 since burpsy-react-ui-y4om (skip_ineffective_checks moved the same way). A key
+	// that stops reporting as unapplied without the count moving is the silent-coverage-change
+	// defect this pin exists to prevent.
 	//
 	// The count follows the TABLE, not an intention. An earlier revision of this constant claimed
 	// 40/4/18 on the strength of scan_speed and scan_accuracy having moved to applied; both rows

@@ -64,6 +64,19 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 	// set applies one decoded value to the field its row reads.
 	set := func(row int, raw json.RawMessage) error {
 		k := builtInConfigKeys[row]
+		// The two audit_optimization selectors carry Burp's uiName SPELLINGS, not numbers:
+		// `"scan_speed": "thorough"`, `"scan_accuracy": "minimise_false_positives"` (checked against
+		// the shipped Minimize false positives.json / Audit coverage - maximum.json). They sit in a
+		// section whose other keys are counts and minutes, so they are matched by name here for the
+		// same reason skip_ineffective_checks is: a section-wide rule would read a string as a number
+		// and reject a file Burp itself writes.
+		if rank, ok, err := burpConfigNamedRank(k.burpKey, raw); ok {
+			if err != nil {
+				return err
+			}
+			setBurpConfigField(&out, k.name, SomeUint32(rank))
+			return nil
+		}
 		if isNumericBurpKey(k.burpKey) {
 			n, err := burpConfigUint(raw)
 			if err != nil {
@@ -155,6 +168,10 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.MaximumAuditTimeMinutes = val
 	case "max_items_in_progress":
 		c.MaxItemsInProgress = val
+	case "scan_speed":
+		c.ScanSpeed = val
+	case "scan_accuracy":
+		c.ScanAccuracy = val
 	case "max_insertion_points_per_base_request":
 		c.MaxInsertionPointsPerRequest = val
 	case "use_nested_insertion_points":
@@ -233,4 +250,48 @@ func b2u(b bool) uint32 {
 		return 1
 	}
 	return 0
+}
+
+// burpConfigNamedRank decodes the two audit_optimization keys whose values are names rather than
+// numbers, returning the rank, whether this key is one of them, and any decode error.
+//
+// Three returns rather than two because "not this key" and "this key, bad value" must not collapse:
+// the first falls through to the numeric/boolean handling, the second has to fail the file. A
+// configuration naming a speed this engine does not know is refused rather than read as the
+// default — a typo that silently narrowed a scan would be the quiet-wrong-answer this package
+// exists to avoid.
+func burpConfigNamedRank(burpKey string, raw json.RawMessage) (uint32, bool, error) {
+	switch burpKey {
+	case "scanner/audit_optimization/scan_speed":
+		name, err := burpConfigString(raw)
+		if err != nil {
+			return 0, true, fmt.Errorf("burp scan configuration: %s: %w", burpKey, err)
+		}
+		speed, ok := ParseCheckSpeed(name)
+		if !ok {
+			return 0, true, fmt.Errorf("burp scan configuration: %s: %q is not one of fast, normal or thorough", burpKey, name)
+		}
+		return uint32(speed), true, nil
+	case "scanner/audit_optimization/scan_accuracy":
+		name, err := burpConfigString(raw)
+		if err != nil {
+			return 0, true, fmt.Errorf("burp scan configuration: %s: %w", burpKey, err)
+		}
+		accuracy, ok := ParseCheckAccuracy(name)
+		if !ok {
+			return 0, true, fmt.Errorf("burp scan configuration: %s: %q is not one of minimise_false_negatives, "+
+				"normal or minimise_false_positives", burpKey, name)
+		}
+		return uint32(accuracy), true, nil
+	}
+	return 0, false, nil
+}
+
+// burpConfigString decodes a JSON string value, naming what arrived when it is not one.
+func burpConfigString(raw json.RawMessage) (string, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", fmt.Errorf("expected a name, got %s", strings.TrimSpace(string(raw)))
+	}
+	return s, nil
 }

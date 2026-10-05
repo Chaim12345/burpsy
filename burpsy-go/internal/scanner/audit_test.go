@@ -939,6 +939,18 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
 				}
 				got, wantSet, wantUnset = 0, 0, 0
+			case "scan_speed":
+				// The per-check mutation-set selector (burpsy-react-ui-ev7y). Named here because the
+				// guard below refuses an applying key this oracle cannot check, and the check is the
+				// ordinary one: the row's value reaches its own field.
+				got = uint64(applied.ScanSpeed.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
+			case "scan_accuracy":
+				// The mutation-token count (4/8/10). Same contract as scan_speed above.
+				got = uint64(applied.ScanAccuracy.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
 			default:
 				// A key with no field and no apply path can only be reported, never overlaid, so the
 				// contract this test checks for it is that it did not reach a scalar. Naming all of

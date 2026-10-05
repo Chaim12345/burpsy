@@ -586,6 +586,14 @@ type AuditConfig struct {
 	// JavaScriptAnalysis is Burp's `scanner/issues_reported/scan_type_javascript_analysis`: false
 	// turns off the DOM family (ScanConfig.CheckDOM) for this run.
 	JavaScriptAnalysis OptUint32
+	// ScanSpeed is Burp's `scanner/audit_optimization/scan_speed` as a CheckSpeed rank
+	// (burpsy-react-ui-ev7y). Unset leaves every check admitted, which is what a configuration that
+	// never mentions speed means — not 'fast', which would silently narrow a run nobody narrowed.
+	ScanSpeed OptUint32
+	// ScanAccuracy is Burp's `scanner/audit_optimization/scan_accuracy` as a CheckAccuracy level,
+	// bounding how many mutation attempts a check spends per candidate (4/8/10, Zs_2.java:8). Unset
+	// leaves the engine's own per-check bounds alone.
+	ScanAccuracy OptUint32
 	// InsertionKinds names the bcheck point classes this run enumerates, overriding the engine
 	// default (DefaultProbeInsertionKinds) when non-empty. Written by the
 	// `scanner/insertion_point_types/*` preset keys; a run-level caller may set it directly.
@@ -1054,6 +1062,8 @@ type BuiltInConfig struct {
 	MediumActiveChecks    OptUint32
 	IntrusiveActiveChecks OptUint32
 	JavaScriptAnalysis    OptUint32
+	ScanSpeed             OptUint32
+	ScanAccuracy          OptUint32
 	StoreQueueItems       OptUint32
 
 	// The two `scanner/misc_insertion_point_options/*` keys: how many insertion points one base
@@ -1415,14 +1425,18 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_accuracy",
 		burpKey: "scanner/audit_optimization/scan_accuracy",
-		what:    "not applied: Burp's accuracy presets change which checks run per issue type; here the check set is decided by the family switches",
-		applies: false,
+		what:    "how many mutation attempts a check spends per candidate: minimise_false_negatives 4, normal 8, minimise_false_positives 10 (Burp's own table)",
+		read:    func(c BuiltInConfig) OptUint32 { return c.ScanAccuracy },
+		apply:   func(a *AuditConfig, v uint32) { a.ScanAccuracy = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "scan_speed",
 		burpKey: "scanner/audit_optimization/scan_speed",
-		what:    "not applied: Burp's speed presets trade check coverage for time; a run here is bounded by request budget and wall clock instead",
-		applies: false,
+		what:    "which per-check mutation sets run: fast admits only the cheapest checks, thorough admits every one, and a check with no declared speed runs at every level",
+		read:    func(c BuiltInConfig) OptUint32 { return c.ScanSpeed },
+		apply:   func(a *AuditConfig, v uint32) { a.ScanSpeed = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "skip_ineffective_checks",

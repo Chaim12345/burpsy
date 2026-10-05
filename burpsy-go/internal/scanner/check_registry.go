@@ -152,6 +152,7 @@ func nativeActiveCheckSet() []activeCheck {
 			scope:        d.Scope,
 			enabled:      d.Enabled,
 			invasiveness: d.Invasiveness,
+			speed:        d.Speed,
 			phase:        d.Phase,
 			passive:      d.Passive,
 			run:          run,

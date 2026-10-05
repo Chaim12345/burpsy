@@ -7,6 +7,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"strings"
 )
 
 // CheckImplementation describes where an evaluator comes from. These values are
@@ -132,6 +133,141 @@ const (
 	TierIntrusive
 )
 
+// CheckSpeed is a check's rank on Burp's fast/normal/thorough axis — the SECOND, independent
+// per-check selector the `scanner/audit_optimization/scan_speed` key chooses on
+// (burpsy-react-ui-ev7y, Zsv7.java:7-62).
+//
+// It is deliberately NOT a synonym for invasiveness. Invasiveness ranks a check by what it does to
+// the target (does this change server state); speed ranks it by what it costs to run (how many
+// mutations does it try). A blind-SQLi timing probe is light on both; a mixed-case URL payload set
+// is cheap and invasive-free but only worth sending on a thorough run. Burp keeps the two axes
+// apart and so does this, because collapsing them would mean an operator who asked for a faster
+// run silently got a less invasive one.
+//
+// A descriptor declares the MINIMUM run speed at which it participates, and the comparison is
+// Burp's own (speed >= required). The zero value is SpeedFast, which means "every run", so a check
+// added without a declared speed is admitted everywhere — the same safe-by-default rule
+// CheckInvasiveness's zero value follows, and for the same reason: forgetting to rank a check must
+// not silently remove it from runs.
+type CheckSpeed uint8
+
+const (
+	// SpeedFast is every run. A check ranked here is sent even when the operator asked for the
+	// fastest scan, so this is the rank for a check whose cost is one or two requests.
+	SpeedFast CheckSpeed = iota
+	// SpeedNormal is the default run and above — the rank for a check whose mutation set is big
+	// enough to notice on a large audit but is still ordinary coverage.
+	SpeedNormal
+	// SpeedThorough is the thorough run only: the payload sets Burp adds exclusively at THOROUGH
+	// (Zbxl.java:42-46's mixed-case prefixed URL set, Zch1.java's %] and ;//';";%>?> breakouts).
+	SpeedThorough
+)
+
+// String names the rank with Burp's own uiName spellings (Zhd_.java:61-63), so an operator reading
+// "thorough" here and `"scan_speed": "thorough"` in their preset is reading the same word twice.
+func (s CheckSpeed) String() string {
+	switch s {
+	case SpeedNormal:
+		return "normal"
+	case SpeedThorough:
+		return "thorough"
+	default:
+		return "fast"
+	}
+}
+
+// RunsAt reports whether a check of this rank participates in a run configured at `run`.
+//
+// Burp's predicate exactly (Zsv7.Zi(o) = speed >= o.speed): a thorough run includes everything, a
+// fast run includes only what is ranked fast. Stated as a method rather than open-coded at the
+// admission site so the one comparison that decides this cannot drift from the doc above it.
+func (s CheckSpeed) RunsAt(run CheckSpeed) bool {
+	return run >= s
+}
+
+// ParseCheckSpeed reads Burp's three uiName spellings. The second return distinguishes an
+// unrecognised value from a legitimate "fast", which matters at the config boundary: a preset
+// carrying a speed this engine does not know must be reported, never silently read as the
+// fastest — that would turn a typo into a quietly narrower scan.
+func ParseCheckSpeed(name string) (CheckSpeed, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "fast":
+		return SpeedFast, true
+	case "normal":
+		return SpeedNormal, true
+	case "thorough":
+		return SpeedThorough, true
+	}
+	return SpeedFast, false
+}
+
+// CheckAccuracy is the run-level accuracy selector `scanner/audit_optimization/scan_accuracy`
+// chooses (burpsy-react-ui-ev7y, Zgnf.java:7-43).
+//
+// Unlike speed it is NOT a per-check rank. Burp's whole mechanism is one map from the accuracy
+// level to a mutation-token COUNT — Zs_2.java:8, Map.of(MINIMIZE_FALSE_NEGATIVES, 4, NORMAL, 8,
+// MINIMIZE_FALSE_POSITIVES, 10) — consumed per check as a bound on how many attempts it makes.
+//
+// The direction surprises people, so it is worth stating: minimising FALSE POSITIVES costs MORE
+// attempts (10), not fewer. An attempt here is a confirmation, and a finding confirmed ten ways is
+// less likely to be wrong than one confirmed four ways. Minimising false NEGATIVES spends its
+// budget the other way — fewer confirmations per candidate, so more candidates get looked at.
+type CheckAccuracy uint8
+
+const (
+	// AccuracyMinimiseFalseNegatives spends the fewest attempts per candidate (Burp: 4).
+	AccuracyMinimiseFalseNegatives CheckAccuracy = iota
+	// AccuracyNormal is Burp's default (8).
+	AccuracyNormal
+	// AccuracyMinimiseFalsePositives confirms hardest (Burp: 10).
+	AccuracyMinimiseFalsePositives
+)
+
+// burpAccuracyAttempts is Zs_2.java:8 verbatim. Kept as a table rather than arithmetic because it
+// IS a table in Burp — the three numbers are not on a curve, and deriving them would invent a
+// relationship the original does not have.
+var burpAccuracyAttempts = map[CheckAccuracy]int{
+	AccuracyMinimiseFalseNegatives: 4,
+	AccuracyNormal:                 8,
+	AccuracyMinimiseFalsePositives: 10,
+}
+
+// Attempts is how many mutation tokens a check may spend per candidate at this accuracy.
+func (a CheckAccuracy) Attempts() int {
+	if n, ok := burpAccuracyAttempts[a]; ok {
+		return n
+	}
+	return burpAccuracyAttempts[AccuracyNormal]
+}
+
+// String names the level with Burp's uiName spellings (Zhd_.java:65-74), BRITISH spelling included:
+// the shipped presets write "minimise_false_positives", and a parser that only accepted the
+// American spelling would reject Burp's own files.
+func (a CheckAccuracy) String() string {
+	switch a {
+	case AccuracyMinimiseFalseNegatives:
+		return "minimise_false_negatives"
+	case AccuracyMinimiseFalsePositives:
+		return "minimise_false_positives"
+	default:
+		return "normal"
+	}
+}
+
+// ParseCheckAccuracy reads Burp's three spellings, accepting both the British form its shipped
+// configs use and the American form an operator may type.
+func ParseCheckAccuracy(name string) (CheckAccuracy, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "minimise_false_negatives", "minimize_false_negatives":
+		return AccuracyMinimiseFalseNegatives, true
+	case "normal":
+		return AccuracyNormal, true
+	case "minimise_false_positives", "minimize_false_positives":
+		return AccuracyMinimiseFalsePositives, true
+	}
+	return AccuracyNormal, false
+}
+
 // String names the tier for the configuration key matrix and the launch warning. The names are
 // Burp's, so an operator reading "intrusive" here and "scan_type_intrusive_active" in their preset
 // is reading the same word twice.
@@ -173,6 +309,10 @@ type CheckContext struct {
 	// the queue displayed and not one byte of what was sent (burpsy-react-ui-povm).
 	InsertionKinds []string
 	// EnumerateOptions is the run's insertion-point tuning — the per-request ceiling
+	// ScanAccuracy is the run's `scanner/audit_optimization/scan_accuracy` level, bounding how many
+	// mutation tokens a check spends per candidate (burpsy-react-ui-ev7y). Unset leaves a check's own
+	// payload list intact.
+	ScanAccuracy OptUint32
 	// (`max_insertion_points_per_base_request`) and whether nested points are expanded
 	// (`use_nested_insertion_points`). The zero value is the engine default, which is what a
 	// context built outside a dispatched audit gets.
@@ -311,6 +451,7 @@ func NewCheckContext(scanner *ActiveScanner, exchange, stored *core.Exchange) *C
 		Config:           cfg,
 		InsertionKinds:   base.insertionKinds(),
 		EnumerateOptions: base.enumerateOptions(),
+		ScanAccuracy:     base.ScanAccuracy,
 	}
 }
 
@@ -325,6 +466,10 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 	if cfg, ok := runConfigFrom(ctx); ok {
 		cc.InsertionKinds = cfg.insertionKinds()
 		cc.EnumerateOptions = cfg.enumerateOptions()
+		// The accuracy bound travels the same way and for the same reason (burpsy-react-ui-ev7y): a
+		// run launched under a named configuration must probe to THAT configuration's accuracy, not
+		// the server-wide default's. Without this the preset would reach the queue row and not the wire.
+		cc.ScanAccuracy = cfg.ScanAccuracy
 	}
 	// The light-audit tier rides the same context (7bkj): the dispatcher puts the run's
 	// state on, so every check the run dispatches sees one prior. Absent (a context built
@@ -396,6 +541,11 @@ type CheckDescriptor struct {
 	Run            CheckRunner
 	DeclineReason  string
 	Invasiveness   CheckInvasiveness
+	// Speed is the minimum run speed at which this check participates (burpsy-react-ui-ev7y).
+	// The zero value is SpeedFast — every run — so a check added without a declared speed is
+	// never silently dropped. Independent of Invasiveness: see CheckSpeed for why the two axes
+	// are kept apart.
+	Speed CheckSpeed
 	// Passive marks a check that reads a captured exchange without sending a probe of its own. Those
 	// hang from `scan_type_passive`, not from the three active tiers, so a preset that turns every
 	// active tier off still runs them — a passive check cannot change server state, which is the

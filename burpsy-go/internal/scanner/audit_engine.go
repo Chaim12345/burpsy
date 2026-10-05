@@ -46,6 +46,9 @@ import (
 // see the file header for why that is the point rather than an oversight.
 type activeCheck struct {
 	name string
+	// speed is the minimum run speed this check participates at (burpsy-react-ui-ev7y). Zero —
+	// SpeedFast — is every run, so an unranked check is admitted everywhere.
+	speed CheckSpeed
 	// typeIndex is the catalogue's issue type, which is what an operator's SELECTED ISSUES list
 	// names. Check names are the labels Burp's own UI shows and are stable enough to select by, but
 	// the type index is the identity the catalogue and its coverage accounting use, so a selection
@@ -208,7 +211,7 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	// The per-issue filter is applied here as well as on the no-gate path, and must be LAST: it is
 	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
 	// or neither.
-	checks := s.enabledChecksInTiers(base, activeTiers(cfg))
+	checks := s.enabledChecksInTiers(base, activeTiers(cfg), cfg.ScanSpeed)
 	return filterByIssueTypes(checks, cfg.IssueTypes)
 }
 
@@ -226,6 +229,13 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 	// from every other test: a preset with no family switch and a selection would quietly audit
 	// everything (burpsy-react-ui-kvmx).
 	if len(cfg.IssueTypes) > 0 {
+		return true
+	}
+	if cfg.ScanSpeed.Set {
+		// A speed selector narrows the check set on its own axis, so a configuration that sets ONLY
+		// scan_speed still needs the gated path (burpsy-react-ui-ev7y). Without this the ungated
+		// shortcut returns before the speed filter is ever consulted, and the key reaches the queue
+		// row while every check still runs — a preset that reads as applied and changes nothing.
 		return true
 	}
 	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0
@@ -317,14 +327,14 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 // scanner's own — the mechanism the audit-level gate overlays with. The ledger bit-stability rule
 // is unchanged: the set is snapshotted once per run, before any item is admitted.
 func (s *ActiveScanner) enabledChecksIn(cfg ScanConfig) []activeCheck {
-	return s.enabledChecksInTiers(cfg, nil)
+	return s.enabledChecksInTiers(cfg, nil, OptUint32{})
 }
 
 // enabledChecksInTiers is enabledChecksIn under a tier selection. A nil tiers map admits every
 // check the base switches do, which is what a run with no `scan_type_*_active` key set means. A
 // non-nil map admits a check only when its OWN tier is in the set — so light and medium are
 // independent selections, and a preset that enables one does not inherit the others.
-func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInvasiveness]bool) []activeCheck {
+func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInvasiveness]bool, speed OptUint32) []activeCheck {
 	if s == nil {
 		return nil
 	}
@@ -341,6 +351,16 @@ func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInva
 		// Excluding it because every active tier was off would be the collapsed gate's old mistake in
 		// a new place.
 		if tiers != nil && !c.passive && !tiers[c.invasiveness] {
+			continue
+		}
+		// The speed axis (burpsy-react-ui-ev7y), independent of the tier gate above and applied
+		// after it: a check must satisfy BOTH, because they answer different questions — what this
+		// check does to the target, and what it costs to run.
+		//
+		// Passive checks are exempt for the same reason they are exempt from the tiers: they send
+		// nothing, so there is no cost for a speed selector to trade away. An unset ScanSpeed admits
+		// everything, which is what a configuration that never mentioned speed means.
+		if speed.Set && !c.passive && !c.speed.RunsAt(CheckSpeed(speed.Value)) {
 			continue
 		}
 		out = append(out, c)

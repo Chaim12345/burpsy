@@ -87,9 +87,12 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	}
 
 	h := &ProbeHarness{scanner: s, exchange: exchange, reqBytes: raw}
-	// The run-level accuracy bound is not wired onto CheckContext yet (ev7y is
-	// mid-refactor); zero is the field's own "unset — no bound" value.
-	_ = cc
+	// The run's accuracy becomes this harness's per-check payload bound (burpsy-react-ui-ev7y).
+	// Unset leaves it zero, which boundPayloads reads as "no bound" — the behaviour every run had
+	// before the key was honoured.
+	if cc.ScanAccuracy.Set {
+		h.accuracy = CheckAccuracy(cc.ScanAccuracy.Value).Attempts()
+	}
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)
@@ -236,6 +239,7 @@ func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, p
 func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
 
+	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
 	payloads = h.orderPayloads(point, payloads)
 	for _, payload := range payloads {
@@ -348,4 +352,21 @@ func (h *ProbeHarness) Coverage(probes []InjectionProbe, pointsTested int) Probe
 		}
 	}
 	return cov
+}
+
+// boundPayloads truncates a check's payload list to the run's accuracy bound (burpsy-react-ui-ev7y,
+// Burp's Zs_2.java:8 token counts: 4 / 8 / 10).
+//
+// Truncation rather than sampling, because the order is already meaningful: orderPayloads puts the
+// payloads most likely to work first, using what the guide learned about this place. Taking the
+// first N keeps that ordering's value; taking a random N would throw away the one piece of
+// knowledge the run has accumulated.
+//
+// A zero or negative bound means unset and returns the list untouched, which is every run that
+// never named an accuracy.
+func (h *ProbeHarness) boundPayloads(payloads []string) []string {
+	if h == nil || h.accuracy <= 0 || len(payloads) <= h.accuracy {
+		return payloads
+	}
+	return payloads[:h.accuracy]
 }
