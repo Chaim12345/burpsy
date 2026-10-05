@@ -609,6 +609,14 @@ type Report struct {
 	// different facts about a target, and one number cannot carry both.
 	JSONDocumentsRead  int `json:"json_documents_read"`
 	JSONLocationsFound int `json:"json_locations_found"`
+	// JavaScriptRead counts script responses read for locations, JavaScriptLocationsFound the
+	// candidates the two extractors produced before admit()'s gates (burpsy-react-ui-jwy5).
+	// JavaScriptParseFailures counts scripts the AST pass could not parse — the text miner still read
+	// them — and JavaScriptTruncated those read only up to MaxParseBytes.
+	JavaScriptRead           int `json:"javascript_read,omitempty"`
+	JavaScriptLocationsFound int `json:"javascript_locations_found,omitempty"`
+	JavaScriptParseFailures  int `json:"javascript_parse_failures,omitempty"`
+	JavaScriptTruncated      int `json:"javascript_truncated,omitempty"`
 	// APIDocumentsRead counts API definitions (OpenAPI, Swagger, WSDL) the crawl read, and
 	// APIEndpointsFound the operations they declared (burpsy-react-ui-bwwg). Reported as a pair for
 	// the same reason the JSON pair is: a definition read is not a definition understood, and a
@@ -1958,6 +1966,15 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	// A JavaScript response (burpsy-react-ui-jwy5): a SPA's routes live in its bundles, and before
+	// this an external script reached the not-HTML skip below with every path inside it unread. A
+	// SIBLING of the HTML gate, like the sitemap and JSON readers above, for the same reason.
+	if LooksLikeJavaScript(contentType, item.url.Path) {
+		c.consumeJavaScript(ctx, item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
 	if !isHTML(contentType) {
 		fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 		c.recordLocation(fetch.Fingerprint, item.url.String(), &fetch, rep)
@@ -2222,6 +2239,44 @@ func (c *Crawler) consumeSitemap(item frontierItem, contentType string, body []b
 			rep.SitemapIndexesFollowed++
 		}
 		c.admit(discoveredLink{raw: e.Loc, tag: "sitemap", text: e.LastMod}, item.url, item.depth+1, rep, lim)
+	}
+}
+
+// consumeJavaScript reads one script for locations and admits them (burpsy-react-ui-jwy5). See
+// jsextract.go for the two extractors and why their union is taken.
+//
+// Passive in the sense the bead asks for: reading the script sends nothing. The one request this
+// function can cause itself is the script's own source map, through fetchSourceMap — the same path an
+// inline script's map already takes — and every location it admits goes through admit()'s gates like
+// any link.
+func (c *Crawler) consumeJavaScript(ctx context.Context, item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	rep.JavaScriptRead++
+
+	parse := body
+	if max := c.limits.MaxParseBytes; max > 0 && len(parse) > max {
+		// Bounded like every other parse: a 40 MB vendor bundle is read up to the cap and the report
+		// says so, rather than the crawl stalling on one file.
+		parse = parse[:max]
+		rep.JavaScriptTruncated++
+	}
+	cands, parseFailed := extractJavaScript(parse)
+	if parseFailed {
+		rep.JavaScriptParseFailures++
+	}
+	for _, cand := range cands {
+		rep.JavaScriptLocationsFound++
+		c.admit(discoveredLink{raw: cand.raw, tag: cand.tag, text: cand.note}, item.url, item.depth+1, rep, lim)
+	}
+
+	// The script's own source map, resolved against the script — the map is the bundle's original file
+	// list, and an external bundle's map was never followed before because external bundles were never
+	// read.
+	if ref := sourceMapReference(string(body)); ref != "" {
+		if mapURL, err := resolveAgainst(item.url, ref); err == nil {
+			c.fetchSourceMap(ctx, mapURL.String(), item, rep, lim)
+		}
 	}
 }
 

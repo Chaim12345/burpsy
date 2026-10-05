@@ -46,6 +46,9 @@ const (
 	PhaseAPIDocument    CrawlPhase = "10-api-document"
 	PhaseGraphQL        CrawlPhase = "11-graphql"
 	PhaseEmbeddedObject CrawlPhase = "12-embedded-object"
+	// PhaseJavaScript is a location read out of a JavaScript response — an external bundle or its
+	// source map — by the jsluice AST pass and burpsy's own path miner together (burpsy-react-ui-jwy5).
+	PhaseJavaScript CrawlPhase = "13-javascript"
 )
 
 // CrawlPhaseAll is every phase, in order. A caller renders a legend from this rather than
@@ -53,7 +56,7 @@ const (
 var CrawlPhaseAll = []CrawlPhase{
 	PhaseSeeds, PhaseRobots, PhaseRobotsSitemap, PhaseSitemap, PhaseRedirect,
 	PhaseRendered, PhaseFrontierWalk, PhaseSpeculative, PhaseJSONDocument,
-	PhaseAPIDocument, PhaseGraphQL, PhaseEmbeddedObject,
+	PhaseAPIDocument, PhaseGraphQL, PhaseEmbeddedObject, PhaseJavaScript,
 }
 
 // PhaseOfTag maps a discovery tag to the phase that produced it.
@@ -83,6 +86,9 @@ func PhaseOfTag(tag string) CrawlPhase {
 		return PhaseSitemap
 	case "speculative":
 		return PhaseSpeculative
+	case "script":
+		// An external script a page referenced, fetched to be read for locations (jwy5).
+		return PhaseJavaScript
 	default:
 		// Prefixed families, which carry the document kind: "json:next", "api:openapi",
 		// "graphql:Query.user".
@@ -93,6 +99,8 @@ func PhaseOfTag(tag string) CrawlPhase {
 			return PhaseAPIDocument
 		case hasTagPrefix(tag, "graphql:"):
 			return PhaseGraphQL
+		case hasTagPrefix(tag, "js:"):
+			return PhaseJavaScript
 		}
 		return PhaseNone
 	}

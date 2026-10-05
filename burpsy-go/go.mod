@@ -20,7 +20,14 @@ require (
 )
 
 require (
+	github.com/ditashi/jsbeautifier-go v0.0.0-20141206144643-2520a8026a9c // indirect
+	github.com/odvcencio/gotreesitter v0.6.1-0.20260306002001-fbe5983c6f41 // indirect
+	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
+)
+
+require (
 	git.sr.ht/~jackmordaunt/go-toast/v2 v2.0.3 // indirect
+	github.com/BishopFox/jsluice v0.0.0-20240110145140-0ddfab153e06
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
@@ -63,3 +70,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/BishopFox/jsluice => github.com/Mzack9999/jsluice v0.0.0-20260306161058-30114a312f98

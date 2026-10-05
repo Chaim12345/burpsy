@@ -330,6 +330,16 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 					}
 				}
 			case "script":
+				// An EXTERNAL script is fetched so its contents can be read for locations
+				// (burpsy-react-ui-jwy5): a SPA's routes live in its bundles, and before this a
+				// <script src> was never followed at all, so the JavaScript reader had nothing to read.
+				// It is admitted as a discovered link through the same gates as any other — scope,
+				// dedup, depth — and deliberately NOT added to linkTargets: a page's location
+				// fingerprint is its navigational structure, and folding its asset list into it would
+				// make two identical pages look different whenever a bundle hash changed.
+				if src, ok := attr(n, "src"); ok && strings.TrimSpace(src) != "" && admit() {
+					out.links = append(out.links, discoveredLink{raw: src, tag: "script"})
+				}
 				// A script body is the other place a hidden path lives — a single-page app's
 				// router table is a list of URL strings inside a <script> block. The script's
 				// own text is not rendered, so it is invisible to the wire read and to the
