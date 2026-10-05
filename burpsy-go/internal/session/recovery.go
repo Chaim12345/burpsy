@@ -86,6 +86,14 @@ const (
 	// Validity carries the rule's own check of the answer when it states one, Indeterminate
 	// otherwise — including for a rule whose actions never check, which has no verdict to report.
 	RecoveryRuleApplied
+	// RecoveryPromptDeclined: a browser-recovery prompt ended without the session being
+	// recovered — the operator said no, or the prompt could not be asked at all. A kind of
+	// its own rather than folding into RecoveryAlreadyValid, which is the opposite of what
+	// happened: the operator was asked whether the session is fine, and the answer was no.
+	// The walk stopped, so no request was sent and nothing was checked — that is the fact
+	// this kind states, and the reason it cannot share a value with an outcome that means
+	// "nothing needed doing".
+	RecoveryPromptDeclined
 )
 
 // RecoveryOutcome is what handling one observed response produced. Every variant is reachable and
@@ -502,12 +510,31 @@ func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, 
 		}
 	}
 
+	// The prompt gates the walk on a human being's answer, so its state is read before the
+	// already-valid fall-through below. A declined prompt (or one that could not be asked)
+	// stopped the walk with no request sent and nothing checked — that is RecoveryPromptDeclined,
+	// and reading it as RecoveryAlreadyValid would say the opposite of what happened: the
+	// operator was asked whether the session is fine and the answer was no. A succeeded prompt
+	// is not a recovery by itself either — the session the operator established reaches the
+	// retried request through the jar — but the walk DID continue past it, so the normal
+	// outcomes below still apply and no special kind is invented for it.
+	if res.PromptDeclined {
+		return RecoveryOutcome{Kind: RecoveryPromptDeclined, Actions: res.Trace}
+	}
+
 	// Two reasons to re-send, and the second is not the first: a macro that succeeded left the bytes
 	// identical and changed the *jar*, and the retried request has to carry the new cookies or the
 	// login was performed for nothing. The pre-action flow resent on a successful login for exactly
 	// this reason, so leaving the jar out here would silently break every re-login.
+	//
+	// A succeeded browser-recovery prompt is the same kind of reason by a different route: the
+	// operator logged in through their own browser, the jar changed under it, and the retried
+	// request has to go out with the jar as they left it. A prompt that succeeded with no other
+	// action on the walk is exactly the case — nothing else changed the request, so treating it
+	// as already-valid would skip the re-send the prompt exists to cause and hand the operator
+	// an outcome that says the session was fine all along.
 	macroSucceeded := res.MacroRan && res.MacroOutcome.Kind == LoginSucceeded
-	if !res.Changed && !macroSucceeded {
+	if !res.Changed && !macroSucceeded && !res.PromptSucceeded {
 		return RecoveryOutcome{Kind: RecoveryAlreadyValid, Actions: res.Trace}
 	}
 

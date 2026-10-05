@@ -247,12 +247,6 @@ type sessionActionKindDto struct {
 	Label string `json:"label"`
 }
 
-// sessionDeclinedActionDto records a Burp action this build deliberately does not implement.
-type sessionDeclinedActionDto struct {
-	Name   string `json:"name"`
-	Reason string `json:"reason"`
-}
-
 // sessionRulesResp mirrors the UI's RulesResp.
 type sessionRulesResp struct {
 	Wired bool             `json:"wired"`
@@ -271,14 +265,6 @@ type sessionRulesResp struct {
 	// ActionKinds is the action palette, built from this build's own vocabulary rather than a copy in
 	// the UI — same reasoning and same failure mode as Tools above.
 	ActionKinds []sessionActionKindDto `json:"action_kinds"`
-	// DeclinedActions names the Burp actions this port does not implement, with the reason it does
-	// not. Served so the editor can show them with the reason attached: an action that is simply
-	// absent from the palette reads as one the operator has not found yet, and this is the difference
-	// between "burpsy does not do this" and "burpsy forgot".
-	//
-	// Never omitempty, for the same reason Tools is not: an empty list would then be
-	// indistinguishable from a client that is too old to be told.
-	DeclinedActions []sessionDeclinedActionDto `json:"declined_actions"`
 }
 
 // sessionCookiesResp mirrors the UI's CookiesResp.
@@ -834,11 +820,10 @@ func (s *Server) sessionRulesGet(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sessionRulesResp{
-		Wired:           true,
-		Rules:           dtos,
-		Tools:           toolNames(),
-		ActionKinds:     sessionActionKinds(),
-		DeclinedActions: sessionDeclinedActions(),
+		Wired:       true,
+		Rules:       dtos,
+		Tools:       toolNames(),
+		ActionKinds: sessionActionKinds(),
 	})
 }
 
@@ -852,23 +837,6 @@ func sessionActionKinds() []sessionActionKindDto {
 		out = append(out, sessionActionKindDto{Kind: session.ActionKindName(kind), Label: session.ActionKindLabel(kind)})
 	}
 	return out
-}
-
-// sessionDeclinedActions is the Burp actions this build does not implement, named with the reason.
-//
-// One entry, and it is here rather than in a comment because Burp's own rule editor shows nine
-// actions and this one shows eight: an operator following Burp's documentation would otherwise be
-// left to conclude the ninth was overlooked. Each reason states what burpsy has instead, so the
-// operator can reach a decision rather than only learning a thing is missing.
-func sessionDeclinedActions() []sessionDeclinedActionDto {
-	return []sessionDeclinedActionDto{{
-		Name: "Prompt the user for in-browser session recovery",
-		Reason: "burpsy has no browser window to open for the operator: the console is a page the " +
-			"operator opens themselves, and the headless engine this port owns (internal/domexec) " +
-			"confirms findings rather than asking a person a question. Nothing here will silently wait " +
-			"for someone who was never asked. Use the intercept hold queue to hand-edit the next request, " +
-			"or an Invoke-an-extension action against a plugin that can do it.",
-	}}
 }
 
 func (s *Server) sessionRulesPost(w http.ResponseWriter, r *http.Request) {
@@ -1160,6 +1128,14 @@ func loginOutcomeResponse(o session.RecoveryOutcome) (int, sessionLoginResp) {
 		return http.StatusBadGateway, sessionLoginResp{
 			Outcome: "retry_failed", LoginAttempts: &attempts, Error: o.Error,
 			Actions: sessionActionsView(o.Actions),
+		}
+	case session.RecoveryPromptDeclined:
+		// 200, not an error status: the operator's answer was a legitimate outcome of a working
+		// control — they were asked and they said no. A 5xx here would tell the console something
+		// broke, when what happened is that a human declined a recovery, which is the entire point
+		// of the prompt. The outcome tag says what happened, and the trace says which action asked.
+		return http.StatusOK, sessionLoginResp{
+			Outcome: "prompt_declined", Actions: sessionActionsView(o.Actions),
 		}
 	}
 	// A RecoveryOutcomeKind this mapping does not know is reported as such rather than silently

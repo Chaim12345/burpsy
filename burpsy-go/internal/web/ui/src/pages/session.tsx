@@ -1070,7 +1070,6 @@ export function SessionPage(): JSX.Element {
  // The action palette and the declined list come from the same response as the rules, so the
  // editor's vocabulary cannot drift from what this build validates — see the response's own note.
  const actionKinds = rulesQuery.data?.action_kinds;
- const declinedActions = rulesQuery.data?.declined_actions;
  const dirty = editing !== null && JSON.stringify(editing) !== baseline;
 
  // Re-adopt the server's copy of the open rule only while nothing is unsaved.
@@ -1957,17 +1956,6 @@ export function SessionPage(): JSX.Element {
         ))}
        </div>
       )}
-      {/* Burp's rule editor shows nine actions and this build shows eight. Named here with the reason
-          so an operator following Burp's documentation learns what is missing and what to use
-          instead, rather than concluding the ninth was overlooked. */}
-      {(declinedActions ?? []).map((entry) => (
-       <div className="notice notice-warn" key={entry.name}>
-        <span>
-         <strong>Not implemented: {entry.name}.</strong> {entry.reason}
-        </span>
-       </div>
-      ))}
-
       <SectionHeading
        title="Macro steps"
        detail="Replayed in order. A later step can send an earlier step's extracted value as {{name}}."
