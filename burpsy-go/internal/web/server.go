@@ -108,6 +108,9 @@ type Server struct {
 	// use; see api_browser.go.
 	browserOnce sync.Once
 	browser     *browser.Launcher
+	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
+	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
+	scanBaseline *scanner.ScanConfig
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -529,6 +532,9 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		// The browser's settings and its default profile directory follow the project too — two
 		// engagements' browsers must not share cookies (burpsy-react-ui-bufa).
 		s.restoreBrowserSettings()
+		// Project-level scan state — the scan overrides and the live sweep's seen ledger — follows the
+		// project too (burpsy-react-ui-z4ml).
+		s.restoreProjectScanState(p)
 	}
 	return s
 }

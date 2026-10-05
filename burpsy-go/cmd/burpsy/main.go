@@ -631,19 +631,10 @@ func main() {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
 
-	// Persisted scan-config overrides apply last, after the flag chain: what the operator set
-	// through /api/scanner/config in a previous run is a later decision than what this process was
-	// launched with, and it must win. A database that never saved overrides leaves the flag-built
-	// defaults untouched.
-	if persistStore != nil {
-		saved, err := persistStore.LoadScanConfig()
-		if err != nil {
-			logger.Warn("Failed to load saved scan configuration; using launch defaults", zap.Error(err))
-		} else if saved != nil {
-			activeScanner.UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *saved })
-			logger.Info("Applied persisted scan-configuration overrides")
-		}
-	}
+	// Persisted scan-config overrides still apply last, after the flag chain — but through
+	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level
+	// and must be reloaded when the console switches project, and the restore there first captures
+	// these flag-built defaults as the baseline a project with no overrides gets (burpsy-react-ui-z4ml).
 
 	// The blind-XSS callback channel, bound before the web server so the API can report either the live
 	// listener or the reason there is none. A bind failure is deliberately not fatal: everything else
@@ -749,15 +740,9 @@ func main() {
 		// Close whichever project file is open at exit — after an in-console switch that is no
 		// longer persistStore (burpsy-react-ui-dlw2).
 		defer webServer.CloseProject()
-		// The live sweep's cross-run seen ledger (apfh) survives restarts: re-seen request
-		// content stays REQUEST_TO_AUDIT_DEDUPLICATED instead of re-auditing everything the
-		// last process already covered. Loaded here onto the state the sweep consults, before
-		// StartLiveAuditSweep runs its first tick.
-		if blob, err := persistStore.LoadLiveSeenLedger(); err != nil {
-			logger.Warn("could not restore the live sweep's seen ledger", zap.Error(err))
-		} else if len(blob) > 0 {
-			webServer.LoadLiveSeenLedger(blob)
-		}
+		// The live sweep's cross-run seen ledger (apfh) survives restarts: WithPersist above loads it
+		// (restoreProjectScanState) before StartLiveAuditSweep runs its first tick, and reloads it on
+		// an in-console project switch so one engagement's audit history does not suppress another's.
 		// Runtime edits to the TLS passthrough list survive restarts. The persisted
 		// patterns apply on top of whatever the flags configured — a flag rule and a
 		// UI-added rule are both real rules, and dedupe keeps a pattern that arrived
