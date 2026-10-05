@@ -24,6 +24,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
@@ -2439,6 +2440,31 @@ func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
 		return err
 	}
 	return s.setSetting("network.settings", string(encoded))
+}
+
+// SaveSequencerSettings persists Burp's sequencer.* analysis settings (burpsy-react-ui-nm81) with the
+// project, so the tests an engagement's verdicts rest on travel with its database.
+func (s *Store) SaveSequencerSettings(set sequencer.Settings) error {
+	encoded, err := json.Marshal(set)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("sequencer.settings", string(encoded))
+}
+
+// LoadSequencerSettings restores them, normalised — a document saved before a key existed reads as
+// that analysis running. Absence yields nil and no error, meaning "Burp's defaults".
+func (s *Store) LoadSequencerSettings() (*sequencer.Settings, error) {
+	v, err := s.getSetting("sequencer.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var out sequencer.Settings
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	norm := out.Normalise()
+	return &norm, nil
 }
 
 // LoadNetworkSettings restores the persisted network settings.

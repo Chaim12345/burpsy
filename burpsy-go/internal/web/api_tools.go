@@ -1699,6 +1699,14 @@ type sequencerAnalyseReq struct {
 	// bytes it encodes, not the alphabet it is written in. A token that is not valid base64 is
 	// refused by the engine naming which one, rather than analysed as a different sample.
 	Base64Decode *bool `json:"base64_decode"`
+	// DisabledTests is Burp's per-test switch for this one analysis (burpsy-react-ui-3iao): the
+	// AnalysisTest ids to leave out, e.g. ["compression"]. A pointer so "absent" — run what the saved
+	// sequencer settings leave on — is distinct from an explicit empty list, which runs every test
+	// whatever the settings say. An unknown id is refused naming the accepted set: an id silently
+	// ignored would leave the operator reading a verdict that still counted the test they removed.
+	// "Redo analysis" is this request sent again with a different list; the report marks each
+	// disabled test as not run, by name.
+	DisabledTests *[]string `json:"disabled_tests"`
 }
 
 // parsePadMode maps the wire's "none" | "start" | "end" onto the engine's PadMode. Unknown values
@@ -1791,8 +1799,23 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 		}
 		opts.PadByte = (*req.PadByte)[0]
 	}
+	// The saved analysis settings (burpsy-react-ui-nm81) govern whatever this request does not say for
+	// itself: which tests run, and whether tokens are base64-decoded first.
+	saved := s.sequencerSettings()
+	opts.Base64Decode = saved.TokenHandling.Base64DecodeBeforeAnalyzing
 	if req.Base64Decode != nil {
 		opts.Base64Decode = *req.Base64Decode
+	}
+	opts.DisabledTests = saved.DisabledTests()
+	if req.DisabledTests != nil {
+		for _, id := range *req.DisabledTests {
+			if !sequencer.KnownAnalysisTest(id) {
+				http.Error(w, fmt.Sprintf("disabled_tests names %s, which is not a test this analysis runs; the tests are %s",
+					strconv.Quote(id), strings.Join(sequencerTestIDs(), ", ")), http.StatusBadRequest)
+				return
+			}
+		}
+		opts.DisabledTests = append([]string(nil), *req.DisabledTests...)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

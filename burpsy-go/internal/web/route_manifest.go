@@ -746,7 +746,14 @@ var manifest = map[string]route{
 	},
 	"/api/sequencer/analyse": {
 		methods: []string{"POST"}, risk: riskRead,
-		summary: "statistical analysis of a token sample; sends nothing",
+		summary: "statistical analysis of a token sample; sends nothing. disabled_tests leaves named tests " +
+			"out of this one run (they are reported as not run); absent, the saved sequencer settings decide",
+	},
+	"/api/sequencer/settings": {
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "Burp's Sequencer analysis settings under Burp's keys: sequencer.token_analysis.* (which " +
+			"tests run) and token_handling.base_64_decode_before_analyzing; saved with the project and applied " +
+			"to every analysis that does not name its own tests",
 	},
 	"/api/sequencer/capture": {
 		methods: []string{"POST"}, risk: riskAttack,

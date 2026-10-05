@@ -23,6 +23,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -97,6 +98,11 @@ type Server struct {
 	loginRuns    *sessionLoginRuns
 	intercept    *intercept.Engine
 	persist      *persist.Store
+	// seqSettings is Burp's sequencer.* analysis configuration (burpsy-react-ui-nm81), project-level:
+	// restored by WithPersist, so a project switch brings the incoming project's settings. A nil map
+	// means "never set" and reads as sequencer.DefaultSettings. Guarded by seqMu.
+	seqMu       sync.Mutex
+	seqSettings sequencer.Settings
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -511,6 +517,10 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		}
 		s.toolLog.SetPersistenceSink(p.SaveToolLog)
 		s.restorePools(p)
+		// Sequencer analysis settings are project-level, so they are (re)loaded here — on startup and
+		// on every in-console project switch, which re-runs WithPersist. A project that never saved any
+		// reads as Burp's defaults rather than keeping the outgoing project's switches.
+		s.restoreSequencerSettings(p)
 	}
 	return s
 }
@@ -983,6 +993,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/audit/selected", s.handleAuditSelected)
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
+	// Burp's Sequencer Analysis Settings — the ten sequencer.* keys (burpsy-react-ui-nm81).
+	s.mux.HandleFunc("/api/sequencer/settings", s.handleSequencerSettings)
 	// Two patterns, because they are two operations: the exact path starts a capture, the subtree
 	// reads one and stops one. Registered exact-first for readability only — ServeMux picks the
 	// longest matching pattern regardless of registration order.
