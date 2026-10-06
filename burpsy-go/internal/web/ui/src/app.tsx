@@ -49,7 +49,7 @@ import {
 } from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
 import { settingsPaletteActions } from "./lib/settings-sections";
-import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
+import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
 import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
@@ -96,6 +96,7 @@ function useThemeEffect(): void {
  const theme = useApp((state) => state.theme);
  const uiScale = useApp((state) => state.uiScale);
  const editorFont = useApp((state) => state.editorFont);
+ const editorFontFamily = useApp((state) => state.editorFontFamily);
  useEffect(() => {
   const apply = () => document.documentElement.setAttribute("data-theme", resolveTheme(theme));
   apply();
@@ -112,6 +113,15 @@ function useThemeEffect(): void {
  useEffect(() => {
   document.documentElement.style.setProperty("--editor-font-size", editorFont);
  }, [editorFont]);
+ // The editor font family (burpsy-react-ui-mqrn): a non-default choice sets --editor-font-family,
+ // which the editor's CodeMirror theme reads; "default" removes the property so the editor falls
+ // back to the stylesheet's --font-mono. Family and size are separate custom properties so one can
+ // change without disturbing the other.
+ useEffect(() => {
+  const stack = editorFontStack(editorFontFamily);
+  if (stack) document.documentElement.style.setProperty("--editor-font-family", stack);
+  else document.documentElement.style.removeProperty("--editor-font-family");
+ }, [editorFontFamily]);
 }
 
 /**

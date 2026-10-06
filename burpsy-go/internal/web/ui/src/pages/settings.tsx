@@ -48,7 +48,7 @@ import {
  type SettingsSectionId,
 } from "../lib/settings-sections";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
-import { useApp, type Density, type EditorFont, type Theme, type UiScale } from "../lib/store";
+import { useApp, type Density, type EditorFont, type EditorFontFamily, type Theme, type UiScale } from "../lib/store";
 import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -92,6 +92,20 @@ const EDITOR_FONTS: { value: EditorFont; label: string }[] = [
  { value: "14px", label: "14px" },
  { value: "16px", label: "16px" },
  { value: "18px", label: "18px" },
+];
+
+// The editor font family (burpsy-react-ui-mqrn), Burp's http_message_display.font_name. "Default"
+// keeps the stylesheet's own --font-mono stack; the rest name common monospace faces, each shown in
+// its own family so the operator previews the face in the menu before picking it.
+const EDITOR_FONT_FAMILIES: { value: EditorFontFamily; label: string; css: string }[] = [
+ { value: "default", label: "Default (IBM Plex Mono)", css: "var(--font-mono)" },
+ { value: "ibm-plex-mono", label: "IBM Plex Mono", css: '"IBM Plex Mono", monospace' },
+ { value: "cascadia-code", label: "Cascadia Code", css: '"Cascadia Code", monospace' },
+ { value: "jetbrains-mono", label: "JetBrains Mono", css: '"JetBrains Mono", monospace' },
+ { value: "sf-mono", label: "SF Mono", css: '"SF Mono", monospace' },
+ { value: "consolas", label: "Consolas", css: "Consolas, monospace" },
+ { value: "menlo", label: "Menlo", css: "Menlo, monospace" },
+ { value: "courier-new", label: "Courier New", css: '"Courier New", monospace' },
 ];
 
 export function ScopeSection(): JSX.Element {
@@ -1633,6 +1647,8 @@ function AppearanceSection(): JSX.Element {
  const setDensity = useApp((state) => state.setDensity);
  const editorFont = useApp((state) => state.editorFont);
  const setEditorFont = useApp((state) => state.setEditorFont);
+ const editorFontFamily = useApp((state) => state.editorFontFamily);
+ const setEditorFontFamily = useApp((state) => state.setEditorFontFamily);
  const uiScale = useApp((state) => state.uiScale);
  const setUiScale = useApp((state) => state.setUiScale);
 
@@ -1682,6 +1698,25 @@ function AppearanceSection(): JSX.Element {
       <Select id={id} value={editorFont} onChange={(event) => setEditorFont(event.target.value as EditorFont)}>
        {EDITOR_FONTS.map((option) => (
         <option key={option.value} value={option.value}>
+         {option.label}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+    {/* The editor font family (burpsy-react-ui-mqrn), Burp's http_message_display.font_name. Each
+        option is rendered in its own face so the menu previews the font; a family the machine lacks
+        falls back to generic monospace, so the HTTP bytes never land in the body sans. */}
+    <Field label="Editor font" hint="The monospace family the HTTP message editors read in.">
+     {(id) => (
+      <Select
+       id={id}
+       value={editorFontFamily}
+       onChange={(event) => setEditorFontFamily(event.target.value as EditorFontFamily)}
+       style={{ fontFamily: EDITOR_FONT_FAMILIES.find((f) => f.value === editorFontFamily)?.css }}
+      >
+       {EDITOR_FONT_FAMILIES.map((option) => (
+        <option key={option.value} value={option.value} style={{ fontFamily: option.css }}>
          {option.label}
         </option>
        ))}

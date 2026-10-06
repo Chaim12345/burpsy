@@ -20,6 +20,52 @@ export type EditorFont = "12px" | "13px" | "14px" | "16px" | "18px";
 export type UiScale = "100%" | "110%" | "125%" | "150%";
 
 /**
+ * The message editor's font *family* (burpsy-react-ui-mqrn), the companion knob to `editorFont`'s
+ * size — together they are Burp's http_message_display.font_name + font_size. "default" keeps the
+ * stylesheet's own --font-mono stack (Penpot-canonical, IBM Plex Mono first); the rest are common
+ * monospace families an operator may have installed locally, each named explicitly so it is picked
+ * if present and falling back to the browser's generic monospace if not. Like editorFont and uiScale
+ * this is a browser-side appearance preference — persisted here, applied as --editor-font-family.
+ */
+export type EditorFontFamily =
+ | "default"
+ | "ibm-plex-mono"
+ | "cascadia-code"
+ | "jetbrains-mono"
+ | "sf-mono"
+ | "consolas"
+ | "menlo"
+ | "courier-new";
+
+/**
+ * The CSS font-family stack for a stored family, or "" for "default" — the empty string means
+ * "leave --editor-font-family unset so the editor falls back to the stylesheet's --font-mono". Each
+ * named family ends in the generic `monospace` keyword, so a machine without that face still renders
+ * the HTTP bytes in a monospace font rather than the body sans. Anything unrecognised is treated as
+ * "default", so a corrupted preference reads in the canonical stack rather than an empty family.
+ */
+export function editorFontStack(family: string): string {
+ switch (family) {
+  case "ibm-plex-mono":
+   return '"IBM Plex Mono", monospace';
+  case "cascadia-code":
+   return '"Cascadia Code", monospace';
+  case "jetbrains-mono":
+   return '"JetBrains Mono", monospace';
+  case "sf-mono":
+   return '"SF Mono", ui-monospace, monospace';
+  case "consolas":
+   return "Consolas, monospace";
+  case "menlo":
+   return "Menlo, monospace";
+  case "courier-new":
+   return '"Courier New", monospace';
+  default:
+   return "";
+ }
+}
+
+/**
  * The CSS value of --ui-scale for a stored scale: a unitless factor ("1.1" for "110%"), because the
  * property multiplies px lengths and px × % is invalid CSS (burpsy-react-ui-9nlz). Anything
  * unparseable is 1, so a corrupted preference renders at the default size rather than in a fallback
@@ -472,6 +518,9 @@ interface AppState {
  collaboratorRead: number[];
  collaboratorAnnotations: Record<number, CollaboratorAnnotation>;
  editorFont: EditorFont;
+ /** Message-editor font family (burpsy-react-ui-mqrn); drives the editor theme via
+  *  --editor-font-family. "default" keeps the stylesheet's --font-mono. */
+ editorFontFamily: EditorFontFamily;
  /** URL-encode as you type (burpsy-react-ui-js1) — Burp's editor toggle: special characters
   * typed into a request are encoded automatically. Persisted: a typing preference is a
   * layout-class choice, the same one editorFont is. */
@@ -584,6 +633,7 @@ interface AppState {
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
  setEditorFont: (font: EditorFont) => void;
+ setEditorFontFamily: (family: EditorFontFamily) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
  setShortcutsOpen: (open: boolean) => void;
@@ -655,6 +705,7 @@ export function persistedWorkspace(state: AppState) {
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
   editorFont: state.editorFont,
+  editorFontFamily: state.editorFontFamily,
   urlEncodeAsYouType: state.urlEncodeAsYouType,
   uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
@@ -703,6 +754,7 @@ export const useApp = create<AppState>()(
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
+   editorFontFamily: "default",
   urlEncodeAsYouType: false,
    uiScale: "100%",
    paletteOpen: false,
@@ -748,6 +800,7 @@ export const useApp = create<AppState>()(
    setCollaboratorAnnotation: (id, annotation) =>
     set((state) => ({ collaboratorAnnotations: { ...state.collaboratorAnnotations, [id]: annotation } })),
    setEditorFont: (editorFont) => set({ editorFont }),
+   setEditorFontFamily: (editorFontFamily) => set({ editorFontFamily }),
   setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),

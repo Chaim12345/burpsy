@@ -347,13 +347,16 @@ function nonPrintingEOLPlugin(rawRef: { current: string }) {
  */
 const editorTheme = EditorView.theme({
  "&": { backgroundColor: "var(--editor-bg)", color: "var(--editor-fg)", fontSize: "var(--editor-font-size, 12px)" },
- ".cm-content": { fontFamily: "var(--font-mono)", padding: "8px 0", caretColor: "var(--accent)" },
+ // The editor font family (burpsy-react-ui-mqrn): --editor-font-family when the operator picked a
+ // family, else the stylesheet's --font-mono. The content and the gutter read the same property so
+ // the line numbers and the bytes stay in one face.
+ ".cm-content": { fontFamily: "var(--editor-font-family, var(--font-mono))", padding: "8px 0", caretColor: "var(--accent)" },
  ".cm-gutters": {
   backgroundColor: "var(--editor-gutter-bg)",
   color: "var(--editor-gutter-fg)",
   border: "0",
   borderRight: "1px solid var(--editor-line)",
-  fontFamily: "var(--font-mono)",
+  fontFamily: "var(--editor-font-family, var(--font-mono))",
   fontSize: "calc(var(--editor-font-size, 12px) - 1px)",
  },
  ".cm-activeLine": { backgroundColor: "var(--editor-active-line)" },
