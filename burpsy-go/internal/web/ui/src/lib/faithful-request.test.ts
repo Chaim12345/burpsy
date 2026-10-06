@@ -39,16 +39,7 @@ describe("requestBodyChanged — when a stored faithful binary body goes stale (
     expect(requestBodyChanged(base, edited)).toBe(false);
   });
 
-  test("the Protobuf Apply sequence leaves the new base64 on the tab", () => {
-    // The store clears requestBodyBase64 when the body text changes without the base64 in the patch,
-    // then restores it when the base64 is set. Model that two-step: clear iff body changed, then set.
-    let stored: string | undefined = btoa("BODY");
-    const applyBody = "POST /x HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\n\r\nNEW";
-    // Step 1 — onChange: request becomes applyBody, no base64 in the patch.
-    if (requestBodyChanged(base, applyBody)) stored = undefined;
-    expect(stored).toBeUndefined();
-    // Step 2 — onBodyBytesChange: the just-encoded base64 is set.
-    stored = btoa("NEW");
-    expect(stored).toBe(btoa("NEW"));
-  });
+  // The store wiring that uses this helper — clear-on-body-edit, keep-on-header-edit, and the
+  // Apply-order requirement — is driven against the real store in repeater-binary-body.test.ts,
+  // which would fail if the rule in updateRepeaterTab were removed or inverted.
 });
