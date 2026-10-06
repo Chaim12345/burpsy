@@ -143,6 +143,14 @@ export interface RepeaterTab {
   *  see internal/web/repeater_options.go for what each key does and what is deliberately absent. */
  options?: RepeaterSendOptions;
  /**
+  * The request body's exact bytes, base64, when it is binary (a protobuf/gRPC body) — the faithful
+  * source of truth the lossy `request` text cannot be (burpsy-react-ui-ytkk). Set when the tab is
+  * opened from a binary-bodied exchange, and updated when the operator edits the body in the Protobuf
+  * view. The send uses it (as request_base64) so the exact octets reach the target; the head is still
+  * taken fresh from `request`, so editing headers works. Absent for an ordinary text request.
+  */
+ requestBodyBase64?: string;
+ /**
   * Whether this tab uses the global send defaults rather than its own `options`
   * (burpsy-react-ui-aa0p). Burp lets a tab override the global settings wholesale, marks it while
   * it does, and offers "Restore global default". Absent or true = inheriting (the send ignores
@@ -582,7 +590,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;
@@ -747,7 +755,7 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
@@ -764,6 +772,7 @@ export const useApp = create<AppState>()(
         target,
         protocol,
         request,
+        ...(requestBodyBase64 ? { requestBodyBase64 } : {}),
         fromExchange,
         // The ws half (6ex) rides the same spread: a tab that was opened as a frame must keep
         // its kind and payload, or the strip shows a WS tab whose pane is an HTTP request editor

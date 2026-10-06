@@ -258,12 +258,25 @@ export function useExchangeActions(): {
 
  const sendToRepeater = async (exchange: Exchange) => {
   try {
-   const raw = await fetchRaw(exchange.request);
+   // Fetch the whole MessageView, not just fetchRaw's lossy `text` (burpsy-react-ui-ytkk): a
+   // binary request body — a protobuf/gRPC capture is the motivating case — survives the trip
+   // only as base64 (`body_base64`, populated server-side exactly when the body is not UTF-8).
+   // Carrying it into the tab as `requestBodyBase64` is what lets Repeater decode the Protobuf
+   // tab faithfully and resend the edited bytes; a text body leaves it undefined and nothing
+   // changes.
+   if (exchange.request === null) {
+    throw new Error(
+     "This exchange has no request to read — it is a blind tunnel, and burpsy did not look inside it. " +
+     "Turn interception off for this host to relay its bytes untouched.",
+    );
+   }
+   const message = await api<MessageView>(`/api/message/${exchange.request}`);
    openRepeaterTab({
     name: `#${exchange.id} ${exchange.method} ${exchange.path}`.slice(0, 42),
     target: exchangeAuthority(exchange),
     protocol: schemeOf(exchange),
-    request: raw,
+    request: message.text ?? "",
+    requestBodyBase64: message.body_base64,
     fromExchange: exchange.id,
    });
    setRoute("repeater");

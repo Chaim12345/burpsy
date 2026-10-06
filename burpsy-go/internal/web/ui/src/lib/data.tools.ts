@@ -104,6 +104,9 @@ export class SendCancelled extends Error {
 export interface RepeaterSendBody {
   target: string;
   request: string;
+  /** The request's exact bytes, base64, when the body is binary (burpsy-react-ui-ytkk). Takes
+   *  precedence over `request` server-side; a JSON string cannot carry a non-UTF-8 body. */
+  request_base64?: string;
   protocol: string;
   from_exchange?: number;
   options?: RepeaterSendOptions;

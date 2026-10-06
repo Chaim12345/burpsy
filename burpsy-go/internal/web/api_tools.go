@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +35,12 @@ type repeaterSendReq struct {
 	Target   string `json:"target"`   // e.g. "http://host:port" or "host:port"
 	Protocol string `json:"protocol"` // optional "http" / "https"
 	Request  string `json:"request"`  // raw request text
+	// RequestBase64, when set, is the request's exact bytes base64-encoded, and takes precedence over
+	// Request (burpsy-react-ui-ytkk). A JSON string cannot carry a binary body: a non-UTF-8 byte is
+	// replaced with U+FFFD on the way through, so a protobuf/gRPC body edited in Repeater and sent as
+	// `request` would go out corrupted. Base64 round-trips the exact octets, and Go's
+	// string([]byte)/[]byte(string) is byte-exact, so the decoded bytes reach the sender unchanged.
+	RequestBase64 string `json:"request_base64,omitempty"`
 	// FromExchange is the exchange this send was built from, when the operator reached Repeater via
 	// send-to rather than by typing a request. Recorded as the new exchange's parent so a resend can
 	// be traced back to the capture it came from. A pointer because exchange 0 is a real exchange and
@@ -290,7 +297,16 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, req.Request, req.Options, req.FromExchange)
+	request := req.Request
+	if req.RequestBase64 != "" {
+		b, derr := base64.StdEncoding.DecodeString(req.RequestBase64)
+		if derr != nil {
+			http.Error(w, "request_base64 is not valid base64", http.StatusBadRequest)
+			return
+		}
+		request = string(b)
+	}
+	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, request, req.Options, req.FromExchange)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return

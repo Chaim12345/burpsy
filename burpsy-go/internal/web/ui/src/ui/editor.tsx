@@ -521,6 +521,7 @@ export function HttpEditor({
  menuGroups,
  payloadMarks,
  auditSelection,
+ onBodyBytesChange,
  messageId,
 }: {
  value: string;
@@ -565,6 +566,12 @@ export function HttpEditor({
   * the message, and the byte offsets would name the wrong thing.
   */
  auditSelection?: (span: [number, number]) => void;
+ /**
+  * Persist the request body as faithful bytes when the Protobuf view re-encodes an edit
+  * (burpsy-react-ui-ytkk). A binary body cannot survive the editor's `value` string on the way to
+  * the server, so a surface that can resend it (Repeater) stores the base64 here and sends it as
+  * request_base64. Absent on read-only panes. */
+ onBodyBytesChange?: (bodyBase64: string) => void;
  /**
   * The stored-message id behind this editor's value, when there is one. This is what makes a
   * loaded plugin's editor-tab registrations real (burpsy-react-ui-ww5): `editor.render` takes
@@ -1507,15 +1514,18 @@ export function HttpEditor({
        bodyBase64={protoBodyBase64}
        grpc={protoGrpc}
        onApply={
-        readOnly || !onChange
+        readOnly || (!onChange && !onBodyBytesChange)
          ? undefined
          : (newBodyBase64) => {
             // The body in `value` is Latin-1, so atob's output (one char per byte) is the exact wire
-            // body; splice it back and correct Content-Length (burpsy-react-ui-3x2g).
+            // body; splice it back and correct Content-Length (burpsy-react-ui-3x2g). The faithful
+            // bytes also go to onBodyBytesChange so Repeater can resend them without the lossy string
+            // (burpsy-react-ui-ytkk).
             const newBody = atob(newBodyBase64);
             const offset = parseMessage(value).bodyOffset;
             const head = withContentLength(value.slice(0, offset), newBody.length);
-            onChange(head + newBody);
+            onChange?.(head + newBody);
+            onBodyBytesChange?.(newBodyBase64);
            }
        }
       />

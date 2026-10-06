@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, X } from "lucide-react";
 import { TAB_COLOURS } from "../ui/highlight-icons";
+import { faithfulRequestBase64 } from "../lib/message";
 import { cn } from "../lib/cn";
 import { reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
@@ -256,10 +257,15 @@ export function RepeaterPage(): JSX.Element {
     // The exact draft text that goes on the wire, captured here so the history entry below records
     // what was sent rather than what the draft says later.
     const sentRequest = tab.request;
+    // A binary body (protobuf/gRPC) goes out as faithful bytes, not the lossy request string
+    // (burpsy-react-ui-ytkk): the head is taken fresh from the current text, the body from the stored
+    // exact octets, so editing headers still works and the body survives the JSON transport.
+    const requestBase64 = tab.requestBodyBase64 ? faithfulRequestBase64(sentRequest, tab.requestBodyBase64) : undefined;
     send.mutate(
       {
         target: tab.target,
         request: sentRequest,
+        ...(requestBase64 ? { request_base64: requestBase64 } : {}),
         protocol: schemeOf(tab.target),
         from_exchange: tab.fromExchange,
         // Absent options means "standing behaviour" — the backend validates and applies whatever
@@ -1414,6 +1420,11 @@ export function RepeaterPage(): JSX.Element {
             value={viewedRequest ?? active.request}
             readOnly={viewedRequest != null}
             onChange={(value) => updateRepeaterTab(active.id, { request: value })}
+            // The draft's faithful binary body, so a protobuf/gRPC request decodes in the Protobuf
+            // view and an edit there is re-encoded to exact bytes (burpsy-react-ui-ytkk, 3x2g). Only
+            // for the live draft — a past send is read-only.
+            bodyBase64={viewedRequest != null ? undefined : active.requestBodyBase64}
+            onBodyBytesChange={viewedRequest != null ? undefined : (b64) => updateRepeaterTab(active.id, { requestBodyBase64: b64 })}
             filename="repeater-request.txt"
             placeholder="GET / HTTP/1.1"
             menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}

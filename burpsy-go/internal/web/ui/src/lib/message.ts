@@ -1001,3 +1001,18 @@ export function withContentLength(head: string, bodyLength: number): string {
   if (re.test(head)) return head.replace(re, `$1 ${bodyLength}`);
   return head;
 }
+
+/**
+ * Build the faithful base64 of a request whose body is binary (burpsy-react-ui-ytkk): its ASCII head
+ * (headers up to the blank-line separator) concatenated with the exact body bytes from `bodyBase64`.
+ *
+ * A JSON string cannot carry a binary body — a non-UTF-8 byte becomes U+FFFD — so a protobuf/gRPC
+ * body edited in Repeater must go to the server base64-encoded, not as the request text. The head is
+ * ASCII and the body bytes (atob → one char per byte) are ≤ 0xFF, so btoa over head+body yields the
+ * exact request octets. The caller is responsible for the head's Content-Length matching the body.
+ */
+export function faithfulRequestBase64(requestText: string, bodyBase64: string): string {
+  const offset = parseMessage(requestText).bodyOffset;
+  const head = requestText.slice(0, offset);
+  return btoa(head + atob(bodyBase64));
+}
