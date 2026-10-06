@@ -972,6 +972,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/dominvader", s.handleDomInvader)
 	s.mux.HandleFunc("/api/dominvader/hit", s.handleDomInvaderHit)
 	s.mux.HandleFunc("/api/dominvader/hits", s.handleDomInvaderHits)
+	s.mux.HandleFunc("/api/protobuf/decode", s.handleProtobufDecode)
+	s.mux.HandleFunc("/api/protobuf/encode", s.handleProtobufEncode)
 	s.mux.HandleFunc("/api/authz/identities", s.handleAuthzIdentities)
 	s.mux.HandleFunc("/api/authz/test", s.handleAuthzTest)
 	// The write path for the same resource: operator triage and delete, per finding. Registered as a

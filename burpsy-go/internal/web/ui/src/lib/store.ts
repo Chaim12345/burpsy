@@ -61,7 +61,7 @@ export type InspectorPanelState = "auto" | "collapsed";
  * model — Raw cannot be removed (it is the bytes themselves), and a model that could hide the
  * one view every message has would let an operator strand themselves.
  */
-export type OptionalEditorTab = "render" | "graphql" | "jwt" | "params" | "headers" | "queryparams" | "bodyparams" | "cookies" | "attributes";
+export type OptionalEditorTab = "render" | "graphql" | "jwt" | "params" | "protobuf" | "headers" | "queryparams" | "bodyparams" | "cookies" | "attributes";
 
 /**
  * Tab order: the strip renders hidden-off, then in this order. The stored list need not name
@@ -85,7 +85,7 @@ export const defaultEditorTabPrefs: EditorTabPrefs = { hidden: [], order: [] };
 export function moveEditorTab(prefs: EditorTabPrefs, tab: OptionalEditorTab, direction: -1 | 1): EditorTabPrefs {
  const base = prefs.order.length
   ? prefs.order
-  : (["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+  : (["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
  const at = base.indexOf(tab);
  if (at < 0) return { ...prefs, order: base };
  const to = at + direction;

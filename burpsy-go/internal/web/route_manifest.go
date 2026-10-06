@@ -732,6 +732,14 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "re-send one captured request under each saved identity and classify access control per identity: Enforced, Bypassed (the identity got the baseline's privileged content) or Ambiguous — Autorize's three-state BOLA/IDOR verdict",
 	},
+	"/api/protobuf/decode": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "decode a protobuf or gRPC-framed body into a field tree without a .proto (burpsy-react-ui-3x2g), so an operator can read an otherwise opaque binary body; a pure transform that sends nothing",
+	},
+	"/api/protobuf/encode": {
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "re-encode an edited protobuf field tree back to body bytes, re-framing it when it was gRPC (burpsy-react-ui-3x2g)",
+	},
 	"/api/dominvader": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the operator-side DOM auditor (burpsy-react-ui-wl94): the canary the browser extension watches, the on/off switch, and the source/sink hits it has reported — read and set burpsy's own auditor state, nothing is sent",

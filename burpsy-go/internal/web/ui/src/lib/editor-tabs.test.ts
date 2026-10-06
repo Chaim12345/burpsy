@@ -13,9 +13,11 @@ const ALL_TABS: OptionalEditorTab[] = ["render", "graphql", "jwt", "params", "he
 describe("moveEditorTab", () => {
   test("the first move materialises the default order once, then moves within it", () => {
     const first = moveEditorTab(defaultEditorTabPrefs, "headers", -1);
-    // headers sits at index 4 by default (render, graphql, jwt, params, headers, ...); up one is jwt's slot
-    expect(first.order.indexOf("headers"), "an operator's first reorder should not have to fight an empty array").toBe(3);
-    expect(first.order.indexOf("params")).toBe(4);
+    // headers sits at index 5 by default (render, graphql, jwt, params, protobuf, headers, ...); up
+    // one swaps it with protobuf, while params keeps its slot.
+    expect(first.order.indexOf("headers"), "an operator's first reorder should not have to fight an empty array").toBe(4);
+    expect(first.order.indexOf("protobuf")).toBe(5);
+    expect(first.order.indexOf("params")).toBe(3);
   });
 
   test("a move at the edge is a no-op that returns the same order, not a wrap", () => {

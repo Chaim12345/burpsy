@@ -86,6 +86,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/project/name": false,
  "/api/project/open": true,
  "/api/projects": false,
+ "/api/protobuf/decode": false,
+ "/api/protobuf/encode": false,
  "/api/protocols": false,
  "/api/proxy/ca": false,
  "/api/proxy/ca/export": true,

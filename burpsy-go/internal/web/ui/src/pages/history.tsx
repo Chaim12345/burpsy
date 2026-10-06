@@ -916,6 +916,9 @@ export function HistoryPage(): JSX.Element {
       : (request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
     }
     filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
+    // The body's real bytes, so a binary request (a gRPC/protobuf call) decodes in the Protobuf view
+    // rather than from `text`, which replaces non-UTF-8 bytes (burpsy-react-ui-3x2g).
+    bodyBase64={request.data?.body_base64}
     menuGroups={actions.menu(selected)}
     // Actively audit a selected byte range (burpsy-react-ui-c6oq): only on a request that
     // exists (not a blind tunnel's null) — auditing a response is not a thing the

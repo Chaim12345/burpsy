@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength } from "../lib/message";
 import {
  breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
@@ -47,6 +47,7 @@ import { HexEditor } from "./hex-editor";
 import { ContextMenu, DropdownMenu, hasMenuActions, type MenuGroup } from "./menu";
 import { Button, IconButton, Modal } from "./primitives";
 import { GraphQLView, JwtView, ParamsView } from "./typed-views";
+import { ProtobufView } from "./protobuf-view";
 
 const START_LINE = Decoration.mark({ class: "cm-http-start" });
 const HEADER_NAME = Decoration.mark({ class: "cm-http-header-name" });
@@ -446,6 +447,7 @@ type MessageView =
  | "graphql"
  | "jwt"
  | "params"
+ | "protobuf"
  | "headers"
  | "queryparams"
  | "bodyparams"
@@ -463,6 +465,7 @@ const VIEW_LABELS: Record<MessageView, string> = {
  graphql: "GraphQL",
  jwt: "JWT",
  params: "Params",
+ protobuf: "Protobuf",
  headers: "Headers",
  queryparams: "Query params",
  bodyparams: "Body params",
@@ -854,6 +857,23 @@ export function HttpEditor({
  const graphql = useMemo(() => (views ? detectGraphQL(value) : null), [views, value]);
  const jwt = useMemo(() => (views ? findJwts(value) : null), [views, value]);
  const params = useMemo(() => (views ? paramsOf(value) : null), [views, value]);
+ // Protobuf / gRPC (burpsy-react-ui-3x2g): the Protobuf tab exists when the content type names gRPC
+ // or protobuf. The body bytes go to the decoder base64-encoded; the body in `value` is Latin-1 (one
+ // char per byte, see the imageDataUrl note above), so btoa over it recovers the exact wire bytes.
+ const protoGrpc = useMemo(() => /application\/grpc/.test(contentType), [contentType]);
+ const protoEligible = useMemo(
+  () => views && (protoGrpc || /application\/(x-)?protobuf|application\/vnd\.google\.protobuf/.test(contentType)),
+  [views, protoGrpc, contentType],
+ );
+ const protoBodyBase64 = useMemo(() => {
+  if (!protoEligible) return null;
+  if (bodyBase64) return bodyBase64;
+  try {
+   return btoa(bodyOf(value));
+  } catch {
+   return null;
+  }
+ }, [protoEligible, bodyBase64, value]);
 
  // A loaded plugin's editor-tab registrations, when this editor has a stored message behind it
  // (burpsy-react-ui-ww5). The built-in typed views each warrant themselves by the message's
@@ -889,6 +909,7 @@ export function HttpEditor({
    ...(graphql ? (["graphql"] as MessageView[]) : []),
    ...(jwt && jwt.tokens.length ? (["jwt"] as MessageView[]) : []),
    ...(params && params.rows.length ? (["params"] as MessageView[]) : []),
+   ...(protoBodyBase64 ? (["protobuf"] as MessageView[]) : []),
    ...extraTabs,
   ];
   const order = editorTabs.order.length ? editorTabs.order : [];
@@ -899,7 +920,7 @@ export function HttpEditor({
   return optional.filter((tab) => !editorTabs.hidden.includes(tab as OptionalEditorTab)).sort((a, b) => rank(a) - rank(b));
   // extraTabs is derived from value; listing it would double-count. value covers it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [renderable, graphql, jwt, params, editorTabs, value]);
+ }, [renderable, graphql, jwt, params, protoBodyBase64, editorTabs, value]);
 
  const available: MessageView[] = !views
   ? []
@@ -1288,11 +1309,11 @@ export function HttpEditor({
        </summary>
        <div className="editor-tabs-settings-panel" role="group" aria-label="Optional tabs">
         <p className="field-hint">Pretty and Raw are always shown — Raw is the bytes themselves.</p>
-        {(["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]).map((tab) => {
+        {(["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]).map((tab) => {
          const hidden = editorTabs.hidden.includes(tab);
          const order = editorTabs.order.length
           ? editorTabs.order
-          : (["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
+          : (["render", "graphql", "jwt", "params", "protobuf", "headers", "queryparams", "bodyparams", "cookies", "attributes"] as OptionalEditorTab[]);
          const at = order.indexOf(tab);
          return (
           <div key={tab} className="editor-tabs-settings-row">
@@ -1481,6 +1502,23 @@ export function HttpEditor({
       <JwtView report={jwt} />
      ) : active === "params" && params ? (
       <ParamsView report={params} />
+     ) : active === "protobuf" && protoBodyBase64 ? (
+      <ProtobufView
+       bodyBase64={protoBodyBase64}
+       grpc={protoGrpc}
+       onApply={
+        readOnly || !onChange
+         ? undefined
+         : (newBodyBase64) => {
+            // The body in `value` is Latin-1, so atob's output (one char per byte) is the exact wire
+            // body; splice it back and correct Content-Length (burpsy-react-ui-3x2g).
+            const newBody = atob(newBodyBase64);
+            const offset = parseMessage(value).bodyOffset;
+            const head = withContentLength(value.slice(0, offset), newBody.length);
+            onChange(head + newBody);
+           }
+       }
+      />
      ) : active === "headers" ? (
       <HeadersTab raw={value} />
      ) : active === "queryparams" ? (

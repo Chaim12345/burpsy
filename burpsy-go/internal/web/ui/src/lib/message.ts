@@ -988,3 +988,16 @@ export function addBodyParam(raw: string, name: string, value: string): string {
   const at = bodyOffset + brace + 1;
   return fixContentLength(`${raw.slice(0, at)}${text}${raw.slice(at)}`);
 }
+
+/**
+ * Return `head` (a message's headers plus the blank-line separator) with its Content-Length set to
+ * `bodyLength`, when it carries a Content-Length at all (burpsy-react-ui-3x2g). A head with none is
+ * returned unchanged — a gRPC-over-HTTP/2 body does not use Content-Length, and inventing one would
+ * be a header the operator did not have; Repeater's "update Content-Length" send option covers the
+ * HTTP/1 case where the server does want it recomputed.
+ */
+export function withContentLength(head: string, bodyLength: number): string {
+  const re = /^(content-length:)[^\r\n]*/im;
+  if (re.test(head)) return head.replace(re, `$1 ${bodyLength}`);
+  return head;
+}
