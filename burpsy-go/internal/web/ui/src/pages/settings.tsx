@@ -48,7 +48,7 @@ import {
  type SettingsSectionId,
 } from "../lib/settings-sections";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
-import { useApp, type Density, type EditorFont, type EditorFontFamily, type Theme, type UiScale } from "../lib/store";
+import { editorFontStack, useApp, type Density, type EditorFont, type EditorFontFamily, type Theme, type UiScale } from "../lib/store";
 import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -95,18 +95,25 @@ const EDITOR_FONTS: { value: EditorFont; label: string }[] = [
 ];
 
 // The editor font family (burpsy-react-ui-mqrn), Burp's http_message_display.font_name. "Default"
-// keeps the stylesheet's own --font-mono stack; the rest name common monospace faces, each shown in
-// its own family so the operator previews the face in the menu before picking it.
-const EDITOR_FONT_FAMILIES: { value: EditorFontFamily; label: string; css: string }[] = [
- { value: "default", label: "Default (IBM Plex Mono)", css: "var(--font-mono)" },
- { value: "ibm-plex-mono", label: "IBM Plex Mono", css: '"IBM Plex Mono", monospace' },
- { value: "cascadia-code", label: "Cascadia Code", css: '"Cascadia Code", monospace' },
- { value: "jetbrains-mono", label: "JetBrains Mono", css: '"JetBrains Mono", monospace' },
- { value: "sf-mono", label: "SF Mono", css: '"SF Mono", monospace' },
- { value: "consolas", label: "Consolas", css: "Consolas, monospace" },
- { value: "menlo", label: "Menlo", css: "Menlo, monospace" },
- { value: "courier-new", label: "Courier New", css: '"Courier New", monospace' },
+// keeps the stylesheet's own --font-mono stack (not labelled with a face name — IBM Plex Mono leads
+// that stack but is not bundled, so what "Default" renders as depends on the operator's machine).
+// The rest name common monospace faces. The preview face comes from editorFontStack, the one source
+// of truth the actual --editor-font-family is built from, so the menu cannot drift from the result.
+const EDITOR_FONT_FAMILIES: { value: EditorFontFamily; label: string }[] = [
+ { value: "default", label: "Default" },
+ { value: "ibm-plex-mono", label: "IBM Plex Mono" },
+ { value: "cascadia-code", label: "Cascadia Code" },
+ { value: "jetbrains-mono", label: "JetBrains Mono" },
+ { value: "sf-mono", label: "SF Mono" },
+ { value: "consolas", label: "Consolas" },
+ { value: "menlo", label: "Menlo" },
+ { value: "courier-new", label: "Courier New" },
 ];
+
+/** The CSS family a menu option previews in — the stored family's stack, or --font-mono for "default". */
+function editorFontPreview(value: EditorFontFamily): string {
+ return editorFontStack(value) || "var(--font-mono)";
+}
 
 export function ScopeSection(): JSX.Element {
  const { data, error, isFetching, isLoading, refetch } = useScopeView();
@@ -1713,10 +1720,10 @@ function AppearanceSection(): JSX.Element {
        id={id}
        value={editorFontFamily}
        onChange={(event) => setEditorFontFamily(event.target.value as EditorFontFamily)}
-       style={{ fontFamily: EDITOR_FONT_FAMILIES.find((f) => f.value === editorFontFamily)?.css }}
+       style={{ fontFamily: editorFontPreview(editorFontFamily) }}
       >
        {EDITOR_FONT_FAMILIES.map((option) => (
-        <option key={option.value} value={option.value} style={{ fontFamily: option.css }}>
+        <option key={option.value} value={option.value} style={{ fontFamily: editorFontPreview(option.value) }}>
          {option.label}
         </option>
        ))}

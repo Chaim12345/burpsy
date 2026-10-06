@@ -1016,3 +1016,18 @@ export function faithfulRequestBase64(requestText: string, bodyBase64: string): 
   const head = requestText.slice(0, offset);
   return btoa(head + atob(bodyBase64));
 }
+
+/**
+ * Whether two request texts differ in their *body* — the bytes after the header separator — ignoring
+ * any change confined to the head (burpsy-react-ui-ytkk). Compares the body slices rather than the
+ * byte offsets, because a header edit shifts the offset without touching the body and must count as
+ * unchanged.
+ *
+ * This decides when a tab's stored faithful binary body (requestBodyBase64) has gone stale: a body
+ * edit in the raw editor — or a body-encoding transform, or loading a different request — rewrites
+ * the body text and must drop the base64 so the operator's edit is what resends; a header-only edit
+ * keeps it, so editing headers around a binary body still works.
+ */
+export function requestBodyChanged(prev: string, next: string): boolean {
+  return prev.slice(parseMessage(prev).bodyOffset) !== next.slice(parseMessage(next).bodyOffset);
+}

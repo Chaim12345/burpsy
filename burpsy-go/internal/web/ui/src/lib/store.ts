@@ -3,7 +3,7 @@ import { persist } from "zustand/middleware";
 import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
-import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS } from "./message";
+import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
 import type { MessageVariant } from "../ui/variant-picker";
 
 export type Theme = "light" | "dark" | "system";
@@ -844,7 +844,28 @@ export const useApp = create<AppState>()(
    },
    updateRepeaterTab: (id, patch) =>
     set((state) => ({
-     repeaterTabs: state.repeaterTabs.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)),
+     repeaterTabs: state.repeaterTabs.map((tab) => {
+      if (tab.id !== id) return tab;
+      const next = { ...tab, ...patch };
+      // Drop a now-stale faithful binary body (burpsy-react-ui-ytkk). Every path that rewrites the
+      // request text funnels through here — the raw editor, a body-encoding transform, loading a
+      // different request — so this is the one place that can tell a body edit from a header edit.
+      // If the body changed and the caller did not itself set requestBodyBase64, the stored base64
+      // no longer matches what the operator sees, and resending it would silently discard their
+      // edit; clearing it falls the send back to the (now authoritative) request text. A header-only
+      // edit keeps it, so editing headers around a binary body still resends the exact bytes. The
+      // Protobuf view's Apply sets request first (clears) then requestBodyBase64 (restores), so its
+      // order matters — see editor.tsx.
+      if (
+       patch.request !== undefined &&
+       !("requestBodyBase64" in patch) &&
+       tab.requestBodyBase64 !== undefined &&
+       requestBodyChanged(tab.request, next.request)
+      ) {
+       next.requestBodyBase64 = undefined;
+      }
+      return next;
+     }),
     })),
    closeRepeaterTab: (id) =>
     set((state) => {

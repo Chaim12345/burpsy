@@ -1527,6 +1527,9 @@ export function HttpEditor({
             const newBody = atob(newBodyBase64);
             const offset = parseMessage(value).bodyOffset;
             const head = withContentLength(value.slice(0, offset), newBody.length);
+            // Order matters: onChange rewrites the request body, which the store reads as a stale
+            // faithful body and clears (burpsy-react-ui-ytkk); onBodyBytesChange then restores it to
+            // the just-encoded bytes. Swapping them would clear what we just set.
             onChange?.(head + newBody);
             onBodyBytesChange?.(newBodyBase64);
            }
