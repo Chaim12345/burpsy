@@ -63,6 +63,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "suite performance startup shutdown temporary files updates early adopter close confirm interception at startup ca directory",
   },
   {
+    id: "rest-api",
+    title: "REST API",
+    summary: "Every HTTP route this console exposes, classified by what it can do, and where the console is bound. Read-only.",
+    keywords: "api routes endpoints surface exposure risk gated classification bind address network json",
+  },
+  {
     id: "resource-pools",
     title: "Resource pools",
     summary: "Saved limits every tool can reference by name, instead of each run re-specifying its own.",

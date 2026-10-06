@@ -7,7 +7,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { api, CONFIRM_HEADER, confirmUrlFor, gatedPatternFor, manifestPatternFor } from "./api";
 import { ROUTE_GATED } from "./gated-routes";
-import { gatedTable, parseGatedRiskClasses, parseManifestRisks, renderGatedRoutesModule } from "./route-manifest";
+import { ROUTE_RISK } from "./route-risk";
+import { gatedTable, parseGatedRiskClasses, parseManifestRisks, renderGatedRoutesModule, renderRouteRiskModule, riskTable } from "./route-manifest";
 
 const web = join(import.meta.dir, "..", "..", "..");
 const manifestGo = readFileSync(join(web, "route_manifest.go"), "utf8");
@@ -22,6 +23,10 @@ describe("the generated table matches the Go manifest", () => {
 
  test("gated-routes.ts is current — run `bun run gen:gated-routes` if this fails", () => {
   expect(renderGatedRoutesModule(ROUTE_GATED)).toBe(renderGatedRoutesModule(gatedTable(manifestGo, agentToolsGo)));
+ });
+
+ test("route-risk.ts is current — the REST-API page's inventory matches the server's classes (wt0r)", () => {
+  expect(renderRouteRiskModule(ROUTE_RISK)).toBe(renderRouteRiskModule(riskTable(manifestGo)));
  });
 
  test("known routes are classified as the server classifies them", () => {

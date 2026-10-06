@@ -50,6 +50,8 @@ import {
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
 import { editorFontStack, useApp, type Density, type EditorFont, type EditorFontFamily, type Theme, type UiScale } from "../lib/store";
 import { parseThemeFile, THEME_SLOT_FAMILIES } from "../lib/theme-import";
+import { ROUTE_RISK } from "../lib/route-risk";
+import { ROUTE_GATED } from "../lib/gated-routes";
 import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -57,7 +59,7 @@ import type { FrameProgramResponse } from "../lib/types.policy";
 import type { TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
 
@@ -3153,9 +3155,103 @@ function SuiteSection(): JSX.Element {
  );
 }
 
+// The risk classes the Go manifest assigns, least to most powerful, each with the server's own one-
+// line definition (route_manifest.go) and a tone. The order is the reading order of "how much can
+// this do", so the page descends from static assets to the irreversible.
+const RISK_LEGEND: { id: string; label: string; tone: Tone; blurb: string }[] = [
+ { id: "riskAsset", label: "Asset", tone: "neutral", blurb: "Serves a static asset — the console itself, the CA certificate." },
+ { id: "riskRead", label: "Read", tone: "neutral", blurb: "Reads state and sends nothing outbound." },
+ { id: "riskLocal", label: "Local write", tone: "info", blurb: "Changes burpsy's own state — annotations, rules, settings — without sending traffic." },
+ { id: "riskEgress", label: "Egress", tone: "info", blurb: "Sends a bounded amount of traffic to the target: one request, or a handful." },
+ { id: "riskExecute", label: "Execute", tone: "warn", blurb: "Runs operator-supplied code in this process's privileges — starts a plugin or a script." },
+ { id: "riskScope", label: "Scope", tone: "warn", blurb: "Changes what the engagement is allowed to touch — it removes the thing that says no." },
+ { id: "riskCredential", label: "Credential", tone: "warn", blurb: "Reads or replays credentials — the cookie jar, session macros." },
+ { id: "riskAttack", label: "Attack", tone: "bad", blurb: "Sends unbounded traffic: an attack, an audit, a crawl, a capture." },
+ { id: "riskDestructive", label: "Destructive", tone: "bad", blurb: "Irreversibly discards evidence." },
+];
+
+/**
+ * The REST-API surface (burpsy-react-ui-wt0r). Burp's REST API is a 12-key settings page; burpsy IS a
+ * JSON API of ~150 routes, and nothing described, classified, or located it. This renders that
+ * inventory from the same manifest route_manifest_test.go asserts against (src/lib/route-risk.ts,
+ * generated and drift-checked), grouped by the risk class the server assigns, and shows where the
+ * console is bound so an operator can see what is reachable over the network. Read-only; no backend.
+ */
+function RestApiSection(): JSX.Element {
+ const stats = useStats();
+ const webBind = stats.data?.web_bind;
+ const total = Object.keys(ROUTE_RISK).length;
+
+ // Group patterns by class, and derive which classes are confirmation-gated from the generated gate
+ // table, so the "confirm-gated" marks here cannot drift from what the client actually enforces.
+ const byClass = new Map<string, string[]>();
+ const gatedClasses = new Set<string>();
+ for (const [pattern, risk] of Object.entries(ROUTE_RISK)) {
+  (byClass.get(risk) ?? byClass.set(risk, []).get(risk)!).push(pattern);
+  if (ROUTE_GATED[pattern]) gatedClasses.add(risk);
+ }
+
+ // A loopback bind is reachable only from this machine; anything else is reachable from the network,
+ // which is the fact an operator most needs to see next to a surface this large.
+ const loopback = webBind ? /^(127\.|\[?::1\]?|localhost)/.test(webBind) : false;
+
+ return (
+  <Card>
+   <SectionHeading
+    title="REST API"
+    detail="Every HTTP route this console exposes, classified by what it can do. Read from the server's own route manifest, so it cannot drift from the routes."
+   />
+   <p className="field-hint">
+    This console is a JSON API of <strong>{total}</strong> routes
+    {webBind ? (
+     <>
+      , bound at <code>{webBind}</code> —{" "}
+      {loopback
+       ? "loopback only, reachable from this machine."
+       : "reachable from the network: anything that can route to this address can call these routes, subject to the confirmation gate below."}
+     </>
+    ) : (
+     ". The bind address is unknown to this view."
+    )}
+   </p>
+   <div className="stack">
+    {RISK_LEGEND.map((cls) => {
+     const patterns = (byClass.get(cls.id) ?? []).sort();
+     if (patterns.length === 0) return null;
+     const gated = gatedClasses.has(cls.id);
+     return (
+      <details key={cls.id}>
+       <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: "var(--gap-sm)", flexWrap: "wrap" }}>
+        <Badge tone={cls.tone}>{cls.label}</Badge>
+        <span className="cell-dim">{patterns.length} route{patterns.length === 1 ? "" : "s"}</span>
+        {gated ? <Badge tone="accent">confirm-gated</Badge> : null}
+        <span>{cls.blurb}</span>
+       </summary>
+       <ul style={{ margin: "var(--gap-sm) 0 0", paddingLeft: "var(--gap-lg)" }}>
+        {patterns.map((pattern) => (
+         <li key={pattern}>
+          <code>{pattern}</code>
+         </li>
+        ))}
+       </ul>
+      </details>
+     );
+    })}
+   </div>
+   <p className="field-hint">
+    A <strong>confirm-gated</strong> class cannot be mutated without a one-time confirmation token the
+    console mints — the same gate that stops an unattended caller from launching an attack or discarding
+    evidence by surprise. Reads are never gated. Bind the console to loopback (the <code>-web</code>
+    flag) to keep this surface off the network entirely.
+   </p>
+  </Card>
+ );
+}
+
 const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  proxy: ProxySettingsSection,
  suite: SuiteSection,
+ "rest-api": RestApiSection,
  "resource-pools": ResourcePoolsSection,
  "scheduled-tasks": ScheduledTasksSection,
  protocols: ProtocolSection,
