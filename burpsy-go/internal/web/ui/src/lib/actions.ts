@@ -217,6 +217,9 @@ export function useExchangeActions(): {
  filterByHost: (exchange: Exchange) => void;
  addToScope: (exchange: Exchange) => Promise<void>;
  auditExchange: (exchange: Exchange) => Promise<void>;
+ /** Actively audit a marked selection: posts the exchange with insertion_spans so the scanner
+  *  probes only the selected byte range (burpsy-react-ui-c6oq, backend: burpsy-react-ui-806w). */
+ auditSelection: (exchange: Exchange, spans: [number, number][]) => Promise<void>;
  sendToDecoder: (exchange: Exchange) => Promise<void>;
  copyRequestToFile: (exchange: Exchange) => Promise<void>;
  saveItems: (exchange: Exchange) => Promise<void>;
@@ -392,6 +395,15 @@ const addToSiteMap = async (exchange: Exchange) => {
   try {
    await api<unknown>(`/api/audit/${exchange.id}`, json("POST", {}));
    toast.success(`Active audit queued for exchange #${exchange.id}`);
+  } catch (error) {
+   toast.error(`Could not start the audit: ${error instanceof Error ? error.message : String(error)}`);
+  }
+ };
+
+const auditSelection = async (exchange: Exchange, spans: [number, number][]) => {
+  try {
+   await api<unknown>(`/api/audit/${exchange.id}`, json("POST", { insertion_spans: spans }));
+   toast.success(`Active audit queued for the marked span on exchange #${exchange.id}`);
   } catch (error) {
    toast.error(`Could not start the audit: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -820,6 +832,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
   filterByHost,
   addToScope,
   auditExchange,
+  auditSelection,
   sendToDecoder,
   copyRequestToFile,
   copyLinks,

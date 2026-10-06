@@ -1417,6 +1417,7 @@ export function RepeaterPage(): JSX.Element {
             filename="repeater-request.txt"
             placeholder="GET / HTTP/1.1"
             menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
+            auditSelection={sentExchange.data && viewedRequest != null ? (span) => void actions.auditSelection(sentExchange.data!, [span]) : undefined}
           />
         )}
         <div className="stack">

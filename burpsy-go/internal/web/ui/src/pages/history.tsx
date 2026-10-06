@@ -917,6 +917,10 @@ export function HistoryPage(): JSX.Element {
     }
     filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
     menuGroups={actions.menu(selected)}
+    // Actively audit a selected byte range (burpsy-react-ui-c6oq): only on a request that
+    // exists (not a blind tunnel's null) — auditing a response is not a thing the
+    // scanner's insertion-point model can even express.
+    auditSelection={request.data ? (span) => void actions.auditSelection(selected, [span]) : undefined}
     // The stored-message id behind this reading, so a loaded plugin's editor tab can render
     // from the bytes the operator is looking at (burpsy-react-ui-ww5).
     messageId={requestId ?? undefined}

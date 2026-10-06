@@ -147,6 +147,61 @@ export function byteOffsetToCharIndex(value: string, byteOffset: number): number
   return value.length;
 }
 
+/**
+ * The UTF-8 byte offset at which the character at `charIndex` begins.
+ *
+ * Inverse of `byteOffsetToCharIndex`. Used to turn a CodeMirror selection (UTF-16
+ * code-unit indices) into the `[start, end)` byte span the server's audit endpoint
+ * needs (burpsy-react-ui-c6oq) — the raw request is `[]byte(string)` on the Go side,
+ * so a character's byte offset is the cumulative UTF-8 width of every character
+ * before it.
+ */
+export function charIndexToByteOffset(value: string, charIndex: number): number {
+  if (charIndex <= 0) return 0;
+  let bytes = 0;
+  let index = 0;
+  while (index < value.length && index < charIndex) {
+    const code = value.codePointAt(index)!;
+    const width = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    bytes += width;
+    index += code > 0xffff ? 2 : 1;
+  }
+  return bytes;
+}
+
+/**
+ * Map a position in a CodeMirror document back to the position it names in the raw
+ * `value` string (burpsy-react-ui-c6oq).
+ *
+ * CM6 normalises line breaks in the document: "\r\n" and "\r" both become "\n"
+ * (the editor's rawTextRef comment says so), so an editor selection indexes the
+ * NORMALISED text while the audit span the server wants indexes the raw bytes. Every
+ * "\r" between the two spellings is a one-byte shift: a selection on the third header
+ * line of a CRLF request is two ahead in the document of where it sits in the request.
+ *
+ * The lockstep walk consumes a value-side "\r\n" as one document character, so the
+ * returned position always lands where the operator's selection starts in the raw
+ * string. A docPos that stops at a normalised break returns the break's own value-side
+ * index (the "\r"), which is the first byte of the pair — a span beginning there names
+ * the break, never a position inside it, because the document holds no position
+ * between the "\r" and the "\n" to stop at.
+ */
+export function docPosToValuePos(value: string, docPos: number): number {
+  if (docPos <= 0) return 0;
+  let vi = 0;
+  let di = 0;
+  while (di < docPos && vi < value.length) {
+    if (value.charCodeAt(vi) === 13) {
+      di += 1;
+      vi += value.charCodeAt(vi + 1) === 10 ? 2 : 1;
+    } else {
+      di += 1;
+      vi += 1;
+    }
+  }
+  return vi;
+}
+
 /* ===========================================================================
    JWT
    ===========================================================================

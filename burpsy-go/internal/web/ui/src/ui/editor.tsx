@@ -3,12 +3,12 @@ import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
-import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
+import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
 import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans } from "../lib/message";
 import {
- breakGlyphs, bodyTokens, byteOffsetToCharIndex, decodeHoverToken, detectGraphQL, findJwts, paramsOf,
+ breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
 } from "../lib/message-views";
 import { pairSpans } from "../lib/message";
@@ -517,6 +517,7 @@ export function HttpEditor({
  views = true,
  menuGroups,
  payloadMarks,
+ auditSelection,
  messageId,
 }: {
  value: string;
@@ -553,6 +554,14 @@ export function HttpEditor({
  payloadMarks?: {
   onAdd: (span: { start: number; end: number; text: string }) => void;
  };
+ /**
+  * Actively audit a selected byte range (burpsy-react-ui-c6oq). When given, the Raw view's
+  * context menu gains an "Actively audit this selection" entry that converts the CodeMirror
+  * selection (UTF-16 indices) to a UTF-8 byte span and hands it to the caller for posting
+  * to /api/audit/{id} with insertion_spans. Only the Raw view is safe — Pretty may reformat
+  * the message, and the byte offsets would name the wrong thing.
+  */
+ auditSelection?: (span: [number, number]) => void;
  /**
   * The stored-message id behind this editor's value, when there is one. This is what makes a
   * loaded plugin's editor-tab registrations real (burpsy-react-ui-ww5): `editor.render` takes
@@ -1074,6 +1083,34 @@ export function HttpEditor({
     ],
    });
   }
+  if (auditSelection && !charsetActive) {
+   groups.push({
+    id: "audit-selection",
+    actions: [
+     {
+      id: "audit-this-selection",
+      label: "Actively audit this selection",
+      icon: Radar,
+      disabled: !hasSelection,
+      onSelect: () => {
+       const cm = cmViewRef.current;
+       if (!cm) return;
+       const sel = cm.state.selection.main;
+       if (sel.empty) return;
+       // The span must index the raw bytes the server stored, and the selection indexes
+       // the CodeMirror document — which has CRLF normalised away and (under a charset
+       // override, excluded above) is not the wire text at all. Map the document position
+       // back to the raw string first, then to its UTF-8 bytes: Go stores the message as
+       // []byte(text), so the byte offset is the cumulative UTF-8 width of the characters
+       // before the position.
+       const start = charIndexToByteOffset(value, docPosToValuePos(value, sel.from));
+       const end = charIndexToByteOffset(value, docPosToValuePos(value, sel.to));
+       auditSelection([start, end]);
+      },
+     },
+    ],
+   });
+  }
   const codec = (id: string, label: string, shortcut: string, transform: (input: string) => string) => ({
    id,
    label,
@@ -1130,7 +1167,7 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks]);
+ }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value]);
 
  const allGroups = useMemo<MenuGroup[]>(
   () => [...(menuGroups ?? []), ...selectionGroups],
