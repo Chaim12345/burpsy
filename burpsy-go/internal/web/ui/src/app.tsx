@@ -50,6 +50,7 @@ import {
 import { onDesktopEvent } from "./lib/runtime";
 import { settingsPaletteActions } from "./lib/settings-sections";
 import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
+import { THEME_SLOTS, themeTokenVars } from "./lib/theme-import";
 import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
@@ -97,6 +98,7 @@ function useThemeEffect(): void {
  const uiScale = useApp((state) => state.uiScale);
  const editorFont = useApp((state) => state.editorFont);
  const editorFontFamily = useApp((state) => state.editorFontFamily);
+ const customTheme = useApp((state) => state.customTheme);
  useEffect(() => {
   const apply = () => document.documentElement.setAttribute("data-theme", resolveTheme(theme));
   apply();
@@ -122,6 +124,21 @@ function useThemeEffect(): void {
   if (stack) document.documentElement.style.setProperty("--editor-font-family", stack);
   else document.documentElement.style.removeProperty("--editor-font-family");
  }, [editorFontFamily]);
+ // The imported theme (burpsy-react-ui-fpew): set an inline override on <html> for every slot the
+ // theme names (an inline property beats semantic.css's :root rule), and remove every other slot the
+ // theme could have named so a reverted or narrowed theme falls back to the Penpot default instead of
+ // keeping a stale override. Walking THEME_SLOTS rather than a remembered key set means the cleanup is
+ // correct even across a reload where the previous overrides were never in this document's inline style.
+ useEffect(() => {
+  const style = document.documentElement.style;
+  const vars = customTheme ? themeTokenVars(customTheme) : {};
+  for (const slot of THEME_SLOTS) {
+   const prop = `--${slot}`;
+   const value = vars[prop];
+   if (value !== undefined) style.setProperty(prop, value);
+   else style.removeProperty(prop);
+  }
+ }, [customTheme]);
 }
 
 /**

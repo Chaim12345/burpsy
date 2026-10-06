@@ -4,6 +4,7 @@ import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
+import type { ImportedTheme } from "./theme-import";
 import type { MessageVariant } from "../ui/variant-picker";
 
 export type Theme = "light" | "dark" | "system";
@@ -521,6 +522,13 @@ interface AppState {
  /** Message-editor font family (burpsy-react-ui-mqrn); drives the editor theme via
   *  --editor-font-family. "default" keeps the stylesheet's --font-mono. */
  editorFontFamily: EditorFontFamily;
+ /**
+  * An imported JSON theme (burpsy-react-ui-fpew), or null for the Penpot defaults. Overlays only the
+  * ui.text/ui.background/ui.editor.message token slots the file named; app.tsx applies it as inline
+  * custom properties on <html> and clears the rest. Browser-side appearance state, like the theme
+  * and the editor font — it does not travel with the capture.
+  */
+ customTheme: ImportedTheme | null;
  /** URL-encode as you type (burpsy-react-ui-js1) — Burp's editor toggle: special characters
   * typed into a request are encoded automatically. Persisted: a typing preference is a
   * layout-class choice, the same one editorFont is. */
@@ -634,6 +642,8 @@ interface AppState {
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
  setEditorFont: (font: EditorFont) => void;
  setEditorFontFamily: (family: EditorFontFamily) => void;
+ /** Apply an imported theme, or null to revert to the Penpot defaults (burpsy-react-ui-fpew). */
+ setCustomTheme: (theme: ImportedTheme | null) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
  setShortcutsOpen: (open: boolean) => void;
@@ -706,6 +716,7 @@ export function persistedWorkspace(state: AppState) {
   collaboratorAnnotations: state.collaboratorAnnotations,
   editorFont: state.editorFont,
   editorFontFamily: state.editorFontFamily,
+  customTheme: state.customTheme,
   urlEncodeAsYouType: state.urlEncodeAsYouType,
   uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
@@ -755,6 +766,7 @@ export const useApp = create<AppState>()(
    collaboratorAnnotations: {},
    editorFont: "12px",
    editorFontFamily: "default",
+   customTheme: null,
   urlEncodeAsYouType: false,
    uiScale: "100%",
    paletteOpen: false,
@@ -801,6 +813,7 @@ export const useApp = create<AppState>()(
     set((state) => ({ collaboratorAnnotations: { ...state.collaboratorAnnotations, [id]: annotation } })),
    setEditorFont: (editorFont) => set({ editorFont }),
    setEditorFontFamily: (editorFontFamily) => set({ editorFontFamily }),
+   setCustomTheme: (customTheme) => set({ customTheme }),
   setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),

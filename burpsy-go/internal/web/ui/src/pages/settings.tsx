@@ -49,6 +49,7 @@ import {
 } from "../lib/settings-sections";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, parseHeaderNames } from "../lib/message";
 import { editorFontStack, useApp, type Density, type EditorFont, type EditorFontFamily, type Theme, type UiScale } from "../lib/store";
+import { parseThemeFile, THEME_SLOT_FAMILIES } from "../lib/theme-import";
 import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
@@ -1731,7 +1732,109 @@ function AppearanceSection(): JSX.Element {
      )}
     </Field>
    </div>
+   <ThemeImport />
   </Card>
+ );
+}
+
+/**
+ * The JSON theme import (burpsy-react-ui-fpew), Burp's ThemeFactory.loadCustom scoped to burpsy's own
+ * tokens. A palette is pasted or loaded from a file, applied live (the preview — every slot it names
+ * overrides the Penpot default), and reverted with one button. A file that names a slot burpsy has no
+ * token for is refused, naming the slot, rather than partly applied.
+ *
+ * Paste and file both, mirroring the CA-certificate import below: an operator on an SSH-forwarded
+ * console has the JSON as text already, and a file picker there reaches into the wrong machine.
+ */
+function ThemeImport(): JSX.Element {
+ const customTheme = useApp((state) => state.customTheme);
+ const setCustomTheme = useApp((state) => state.setCustomTheme);
+ const [text, setText] = useState("");
+ const [fileName, setFileName] = useState("");
+ const [error, setError] = useState<string | null>(null);
+ const fileRef = useRef<HTMLInputElement>(null);
+
+ const apply = () => {
+  const result = parseThemeFile(text);
+  if ("error" in result) {
+   setError(result.error);
+   return;
+  }
+  setError(null);
+  setCustomTheme(result.theme);
+ };
+
+ return (
+  <div className="stack" style={{ marginTop: "var(--gap)" }}>
+   <SectionHeading
+    title="Theme import"
+    detail={`A JSON palette filling only the slots it names — ${THEME_SLOT_FAMILIES.map((f) => f.family).join(", ")}. The rest stay at the defaults.`}
+   />
+   {customTheme ? (
+    <p className="field-hint">
+     Applied: <strong>{customTheme.name || "an imported theme"}</strong> — {Object.keys(customTheme.tokens).length} token
+     {Object.keys(customTheme.tokens).length === 1 ? "" : "s"} overridden.
+    </p>
+   ) : null}
+   <Field label="Theme JSON" hint='An object with a `tokens` map, e.g. {"name":"House","tokens":{"paper":"#0b0b0b","text":"#e6e6e6"}}.'>
+    {(id) => (
+     <Textarea
+      id={id}
+      value={text}
+      onChange={(event) => {
+       setText(event.target.value);
+       setFileName("");
+       setError(null);
+      }}
+      rows={6}
+      placeholder={'{\n  "name": "House palette",\n  "tokens": {\n    "paper": "#0b0b0b",\n    "text": "#e6e6e6",\n    "editor-bg": "#111111"\n  }\n}'}
+      aria-label="Theme JSON"
+     />
+    )}
+   </Field>
+   <Toolbar>
+    <Button size="small" onClick={apply} disabled={!text.trim()}>
+     Apply theme
+    </Button>
+    <Button variant="outline" size="small" onClick={() => fileRef.current?.click()}>
+     Load from file
+    </Button>
+    {fileName ? <span className="cell-dim">{fileName}</span> : null}
+    {customTheme ? (
+     <Button
+      variant="outline"
+      size="small"
+      onClick={() => {
+       setCustomTheme(null);
+       setError(null);
+      }}
+     >
+      Revert to default
+     </Button>
+    ) : null}
+    <input
+     ref={fileRef}
+     type="file"
+     accept="application/json,.json"
+     className="sr-only"
+     aria-hidden="true"
+     tabIndex={-1}
+     onChange={(event) => {
+      const file = event.target.files?.[0];
+      // Cleared so re-picking the same file fires change again — an edited palette saved over the
+      // same path is the ordinary way to iterate on a colour that read wrong.
+      event.target.value = "";
+      if (!file) return;
+      void file.text().then((contents) => {
+       setText(contents);
+       setFileName(file.name);
+       setError(null);
+      });
+     }}
+    />
+   </Toolbar>
+   {error ? <ErrorNotice error={error} title="This theme was refused" /> : null}
+  </div>
  );
 }
 
