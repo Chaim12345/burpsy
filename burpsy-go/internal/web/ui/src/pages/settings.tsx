@@ -1749,31 +1749,43 @@ function AppearanceSection(): JSX.Element {
 function ThemeImport(): JSX.Element {
  const customTheme = useApp((state) => state.customTheme);
  const setCustomTheme = useApp((state) => state.setCustomTheme);
+ const themePreview = useApp((state) => state.themePreview);
+ const setThemePreview = useApp((state) => state.setThemePreview);
  const [text, setText] = useState("");
  const [fileName, setFileName] = useState("");
  const [error, setError] = useState<string | null>(null);
  const fileRef = useRef<HTMLInputElement>(null);
 
- const apply = () => {
+ // Preview, not keep: a bad palette (dark text on dark paper) would make this very page unreadable —
+ // the Revert button included — so applying parses into themePreview, which is not persisted and so is
+ // escaped by a reload. "Keep this theme" is the deliberate second step that survives one.
+ const preview = () => {
   const result = parseThemeFile(text);
   if ("error" in result) {
    setError(result.error);
    return;
   }
   setError(null);
-  setCustomTheme(result.theme);
+  setThemePreview(result.theme);
  };
+
+ const tokenCount = (t: { tokens: Record<string, string> }) => Object.keys(t.tokens).length;
 
  return (
   <div className="stack" style={{ marginTop: "var(--gap)" }}>
    <SectionHeading
     title="Theme import"
-    detail={`A JSON palette filling only the slots it names — ${THEME_SLOT_FAMILIES.map((f) => f.family).join(", ")}. The rest stay at the defaults.`}
+    detail={`A JSON palette filling only the slots it names — ${THEME_SLOT_FAMILIES.map((f) => f.family).join(", ")}. The rest stay at the defaults; the editor's syntax colours (header, body highlighting) are not themeable yet.`}
    />
-   {customTheme ? (
+   {themePreview ? (
     <p className="field-hint">
-     Applied: <strong>{customTheme.name || "an imported theme"}</strong> — {Object.keys(customTheme.tokens).length} token
-     {Object.keys(customTheme.tokens).length === 1 ? "" : "s"} overridden.
+     Previewing <strong>{themePreview.name || "an imported theme"}</strong> ({tokenCount(themePreview)} token
+     {tokenCount(themePreview) === 1 ? "" : "s"}) — not kept yet; a reload discards it.
+    </p>
+   ) : customTheme ? (
+    <p className="field-hint">
+     Applied: <strong>{customTheme.name || "an imported theme"}</strong> — {tokenCount(customTheme)} token
+     {tokenCount(customTheme) === 1 ? "" : "s"} overridden.
     </p>
    ) : null}
    <Field label="Theme JSON" hint='An object with a `tokens` map, e.g. {"name":"House","tokens":{"paper":"#0b0b0b","text":"#e6e6e6"}}.'>
@@ -1793,14 +1805,30 @@ function ThemeImport(): JSX.Element {
     )}
    </Field>
    <Toolbar>
-    <Button size="small" onClick={apply} disabled={!text.trim()}>
-     Apply theme
+    <Button size="small" onClick={preview} disabled={!text.trim()}>
+     Preview theme
     </Button>
     <Button variant="outline" size="small" onClick={() => fileRef.current?.click()}>
      Load from file
     </Button>
     {fileName ? <span className="cell-dim">{fileName}</span> : null}
-    {customTheme ? (
+    {themePreview ? (
+     <>
+      <Button
+       size="small"
+       onClick={() => {
+        setCustomTheme(themePreview);
+        setThemePreview(null);
+       }}
+      >
+       Keep this theme
+      </Button>
+      <Button variant="outline" size="small" onClick={() => setThemePreview(null)}>
+       Discard preview
+      </Button>
+     </>
+    ) : null}
+    {customTheme && !themePreview ? (
      <Button
       variant="outline"
       size="small"

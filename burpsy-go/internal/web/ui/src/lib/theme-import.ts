@@ -100,6 +100,14 @@ export function parseThemeFile(text: string): { theme: ImportedTheme } | { error
  */
 export function themeTokenVars(theme: ImportedTheme): Record<string, string> {
  const vars: Record<string, string> = {};
- for (const [slot, value] of Object.entries(theme.tokens)) vars[`--${slot}`] = value;
+ // `theme.tokens ?? {}` and the per-entry guards tolerate a corrupted *persisted* theme — a shape
+ // that never passed parseThemeFile, e.g. an object with no `tokens` or a stray slot from an older
+ // build. Without this a bad localStorage value would throw inside the root theme effect and take the
+ // whole app down on every load; uiScaleFactor and editorFontStack guard their persisted prefs the
+ // same way. A stray slot is dropped rather than set, so a persisted theme cannot inject an arbitrary
+ // custom property.
+ for (const [slot, value] of Object.entries(theme.tokens ?? {})) {
+  if (THEME_SLOTS.has(slot) && typeof value === "string") vars[`--${slot}`] = value;
+ }
  return vars;
 }

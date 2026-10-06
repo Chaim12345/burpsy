@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { isThemeColour, parseThemeFile, themeTokenVars, THEME_SLOTS } from "./theme-import";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { isThemeColour, parseThemeFile, themeTokenVars, THEME_SLOTS, type ImportedTheme } from "./theme-import";
 
 // burpsy-react-ui-fpew: a JSON theme import scoped to burpsy's own tokens. The parser is the honest
 // part — it fills only named slots, refuses a slot burpsy has no token for (rather than silently
@@ -64,5 +66,26 @@ describe("themeTokenVars", () => {
    "--paper": "#fff",
    "--editor-bg": "#000",
   });
+ });
+
+ test("tolerates a corrupted persisted theme instead of throwing on load", () => {
+  // A localStorage value that never passed parseThemeFile — no tokens, or a stray slot — must not
+  // take the app down inside the root theme effect; it yields no overrides (or drops the stray slot).
+  expect(themeTokenVars({} as ImportedTheme)).toEqual({});
+  expect(themeTokenVars({ tokens: { bogus: "#fff", paper: "#000" } } as ImportedTheme)).toEqual({ "--paper": "#000" });
+ });
+});
+
+describe("theme persistence is safe by construction (burpsy-react-ui-fpew)", () => {
+ // Structural, the ui-scale.test.ts style: a kept theme must survive a reload, but a live preview
+ // must NOT — a preview that made the console unreadable is escaped only because a reload drops it.
+ const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
+
+ test("the kept theme is persisted", () => {
+  expect(store).toMatch(/customTheme: state\.customTheme/);
+ });
+
+ test("the live preview is deliberately not persisted", () => {
+  expect(store).not.toMatch(/themePreview: state\.themePreview/);
  });
 });

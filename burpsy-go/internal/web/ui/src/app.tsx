@@ -99,6 +99,7 @@ function useThemeEffect(): void {
  const editorFont = useApp((state) => state.editorFont);
  const editorFontFamily = useApp((state) => state.editorFontFamily);
  const customTheme = useApp((state) => state.customTheme);
+ const themePreview = useApp((state) => state.themePreview);
  useEffect(() => {
   const apply = () => document.documentElement.setAttribute("data-theme", resolveTheme(theme));
   apply();
@@ -131,14 +132,19 @@ function useThemeEffect(): void {
  // correct even across a reload where the previous overrides were never in this document's inline style.
  useEffect(() => {
   const style = document.documentElement.style;
-  const vars = customTheme ? themeTokenVars(customTheme) : {};
+  // A live preview overlays the kept theme (themePreview ?? customTheme): previewing shows the file
+  // before it is kept, and a preview that read badly is escaped by a reload because themePreview is
+  // not persisted. themeTokenVars tolerates a corrupted persisted theme (an object without tokens)
+  // rather than letting Object.entries throw and take the whole app down on load.
+  const active = themePreview ?? customTheme;
+  const vars = active ? themeTokenVars(active) : {};
   for (const slot of THEME_SLOTS) {
    const prop = `--${slot}`;
    const value = vars[prop];
    if (value !== undefined) style.setProperty(prop, value);
    else style.removeProperty(prop);
   }
- }, [customTheme]);
+ }, [customTheme, themePreview]);
 }
 
 /**

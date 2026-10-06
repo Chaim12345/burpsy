@@ -529,6 +529,13 @@ interface AppState {
   * and the editor font — it does not travel with the capture.
   */
  customTheme: ImportedTheme | null;
+ /**
+  * A theme being previewed but not yet kept (burpsy-react-ui-fpew). Deliberately NOT persisted: a
+  * preview that made the console unreadable (dark text on dark paper) must be escapable by a reload,
+  * and a kept theme — customTheme — is the only one that survives one. app.tsx applies
+  * themePreview ?? customTheme, so a live preview overlays the kept theme without replacing it.
+  */
+ themePreview: ImportedTheme | null;
  /** URL-encode as you type (burpsy-react-ui-js1) — Burp's editor toggle: special characters
   * typed into a request are encoded automatically. Persisted: a typing preference is a
   * layout-class choice, the same one editorFont is. */
@@ -642,8 +649,10 @@ interface AppState {
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
  setEditorFont: (font: EditorFont) => void;
  setEditorFontFamily: (family: EditorFontFamily) => void;
- /** Apply an imported theme, or null to revert to the Penpot defaults (burpsy-react-ui-fpew). */
+ /** Keep an imported theme, or null to revert to the Penpot defaults (burpsy-react-ui-fpew). */
  setCustomTheme: (theme: ImportedTheme | null) => void;
+ /** Preview a theme live without keeping it; null ends the preview (burpsy-react-ui-fpew). */
+ setThemePreview: (theme: ImportedTheme | null) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
  setShortcutsOpen: (open: boolean) => void;
@@ -767,6 +776,7 @@ export const useApp = create<AppState>()(
    editorFont: "12px",
    editorFontFamily: "default",
    customTheme: null,
+   themePreview: null,
   urlEncodeAsYouType: false,
    uiScale: "100%",
    paletteOpen: false,
@@ -814,6 +824,7 @@ export const useApp = create<AppState>()(
    setEditorFont: (editorFont) => set({ editorFont }),
    setEditorFontFamily: (editorFontFamily) => set({ editorFontFamily }),
    setCustomTheme: (customTheme) => set({ customTheme }),
+   setThemePreview: (themePreview) => set({ themePreview }),
   setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
