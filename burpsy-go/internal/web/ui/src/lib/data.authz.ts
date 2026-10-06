@@ -11,6 +11,10 @@ export interface AuthzIdentity {
  cookie: string;
  headers: Record<string, string>;
  strip_cookie: boolean;
+ /** When set, the identity is sourced from this session rule (burpsy-react-ui-q7f8): the rule's login
+  *  macro is run before the test and the cookie its jar would attach becomes this identity's cookie.
+  *  Cookie/strip_cookie are ignored; extra headers still apply. */
+ session_rule_id?: number;
 }
 
 export interface AuthzVerdict {

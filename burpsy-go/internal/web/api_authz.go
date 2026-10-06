@@ -14,6 +14,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"go.uber.org/zap"
 )
 
@@ -24,10 +25,11 @@ import (
 // calibration of the high-privilege identity, then each other identity's one response diffed against
 // it, so an endpoint whose body carries a timestamp does not read as an anomaly every time.
 //
-// The identities are held here as cookie/header sets rather than sourced from the session store: a
-// role in an access-control test is a credential bundle an operator pastes (the cookie of a logged-in
-// low-priv user, a second user's bearer token), which is exactly Autorize's model. Sourcing an
-// identity from a session rule is a natural follow-up, filed separately.
+// An identity is a credential bundle an operator pastes (the cookie of a logged-in low-priv user, a
+// second user's bearer token), which is Autorize's model — OR, since burpsy-react-ui-q7f8, a reference
+// to a session rule: a logged-in session the operator already holds in the session store becomes a
+// role without copy-paste, and its cookie is refreshed by running the rule's login macro before the
+// test rather than pasted stale. See resolveSessionIdentities.
 
 // authzIdentity is one named role: the cookies and headers that make a request act as that identity.
 type authzIdentity struct {
@@ -46,6 +48,12 @@ type authzIdentity struct {
 	// explicit no-auth identity, distinct from "leave the captured cookie" (which is Cookie=="" and
 	// StripCookie false meaning "unchanged").
 	StripCookie bool `json:"strip_cookie"`
+	// SessionRuleID, when set, sources this identity from a session rule (burpsy-react-ui-q7f8) instead
+	// of a pasted Cookie: before the test, the rule's login macro is run so its jar is fresh, and the
+	// Cookie that jar would attach to the target request is this identity's cookie. A pointer because
+	// rule 0 is a real id, so "no rule" cannot be spelled as 0. Headers still apply on top (a bearer
+	// token the operator adds by hand); Cookie/StripCookie are ignored when this is set.
+	SessionRuleID *int64 `json:"session_rule_id,omitempty"`
 }
 
 // maxAuthzIdentities bounds the set — each is a full re-send of the request, calibration included.
@@ -116,6 +124,18 @@ func (s *Server) handleAuthzIdentities(w http.ResponseWriter, r *http.Request) {
 			seen[id.Label] = true
 			if id.Baseline {
 				baselines++
+			}
+			// A session-sourced identity (q7f8) is refused at save time if its rule does not exist, so a
+			// typo'd reference is a clear error here rather than an Ambiguous row at test time.
+			if id.SessionRuleID != nil {
+				if s.sessionCoordinator == nil {
+					http.Error(w, "this instance has no session store, so an identity cannot be sourced from a session rule", http.StatusBadRequest)
+					return
+				}
+				if s.sessionCoordinator.Rule(session.RuleID(*id.SessionRuleID)) == nil {
+					http.Error(w, fmt.Sprintf("identity %q references session rule %d, which does not exist", id.Label, *id.SessionRuleID), http.StatusBadRequest)
+					return
+				}
 			}
 		}
 		if len(body.Identities) > 0 && baselines != 1 {
@@ -243,11 +263,26 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 		samples = 20
 	}
 
+	ctx := r.Context()
+
+	// Session-sourced identities (q7f8): run each referenced rule's login macro so its jar is current,
+	// then resolve the Cookie that jar would attach to this target into the identity's own Cookie, so
+	// the rest of the test treats it exactly like a pasted one. A rule that is gone or could not log in
+	// yields sessionErrs[label], which the verdict loop reports as Ambiguous rather than sending a
+	// request with no credentials and calling the result a bypass.
+	sessionErrs := s.resolveSessionIdentities(ctx, ex, identities)
+
 	var baseline authzIdentity
 	for _, id := range identities {
 		if id.Baseline {
 			baseline = id
 		}
+	}
+	// A baseline that could not be logged in makes every verdict meaningless — the others would be
+	// compared against an unauthenticated reference — so this is a whole-test failure, not one row.
+	if msg := sessionErrs[baseline.Label]; msg != "" {
+		http.Error(w, "the baseline identity's session rule could not be logged in: "+msg, http.StatusBadGateway)
+		return
 	}
 	idMap := map[string]authzIdentity{}
 	for _, id := range identities {
@@ -255,8 +290,6 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 	}
 	raw := append([]byte(nil), reqMsg.Raw()...)
 	snd := &authzRawSender{s: s, ex: ex, rawReq: raw, ids: idMap, lastReqID: map[string]uint64{}, lastRspID: map[string]uint64{}}
-
-	ctx := r.Context()
 	// Access control is a question about CONTENT, not latency: a role that gets the baseline's body
 	// and status has bypassed the control however fast the server answered. Timing deviation is noise
 	// here (it flagged a faster low-priv response as "different" and so Enforced), so it is neutered —
@@ -283,6 +316,14 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 			v.Verdict = "Baseline"
 			v.Status = base.ModalStatus()
 			v.BodyLen = int(base.AvgBodyLen())
+			verdicts = append(verdicts, v)
+			continue
+		}
+		// A session identity that could not be logged in is reported as Ambiguous, not sent: a request
+		// with no credentials would look like the no-auth row and its result would be read as a bypass.
+		if msg := sessionErrs[id.Label]; msg != "" {
+			v.Verdict = "Ambiguous"
+			v.Error = "session rule could not be logged in: " + msg
 			verdicts = append(verdicts, v)
 			continue
 		}
@@ -319,6 +360,57 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 		"samples":     samples,
 		"verdicts":    verdicts,
 	})
+}
+
+// resolveSessionIdentities turns every session-sourced identity (q7f8) into a cookie-bearing one, in
+// place: for each identity with a SessionRuleID, it runs the rule's login macro (so the jar is fresh
+// rather than whatever a previous test left) and sets the identity's Cookie to what that jar would
+// attach to ex's target. The returned map carries, per label, why an identity could not be resolved —
+// the rule was deleted, or the login macro failed — so the caller reports it rather than sending an
+// unauthenticated request.
+//
+// ex's path is used for the jar lookup because a cookie's Path attribute scopes which requests it
+// rides; the access-control test re-sends ex, so ex's path is the one that matters.
+func (s *Server) resolveSessionIdentities(ctx context.Context, ex *core.Exchange, identities []authzIdentity) map[string]string {
+	errs := map[string]string{}
+	if s.sessionCoordinator == nil {
+		for _, id := range identities {
+			if id.SessionRuleID != nil {
+				errs[id.Label] = "no session store is wired"
+			}
+		}
+		return errs
+	}
+	runner := s.macroRunner(ctx)
+	for i := range identities {
+		if identities[i].SessionRuleID == nil {
+			continue
+		}
+		rule := s.sessionCoordinator.Rule(session.RuleID(*identities[i].SessionRuleID))
+		if rule == nil {
+			errs[identities[i].Label] = fmt.Sprintf("no session rule with id %d", *identities[i].SessionRuleID)
+			continue
+		}
+		// A rule with a login macro is logged in first; one with no macro (a rule that only threads a
+		// jar the operator populated elsewhere) is used as-is. EnsureLoggedIn on a macro-less rule would
+		// report GaveUp, which is not a failure here — the jar may already hold the cookie.
+		if len(rule.Steps) > 0 {
+			if out := s.sessionCoordinator.EnsureLoggedIn(rule, runner); out.Kind == session.LoginMacroFailed {
+				errs[identities[i].Label] = "the rule's login macro failed"
+				continue
+			}
+		}
+		cookie := s.sessionCoordinator.CookieHeader(ex.Host, ex.Port, ex.TLS, ex.Path)
+		if cookie == "" {
+			errs[identities[i].Label] = "the session rule's jar holds no cookie for this target after login"
+			continue
+		}
+		// Sourced from the session, not pasted: take the resolved cookie, and never strip (that is the
+		// no-auth row's job, and a session identity is the opposite of no-auth).
+		identities[i].Cookie = cookie
+		identities[i].StripCookie = false
+	}
+	return errs
 }
 
 // applyIdentity renders the request under one identity: the Cookie header replaced or stripped, and

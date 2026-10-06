@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { GitCompare, Play, Plus, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthzIdentities, useRunAuthzTest, useSaveAuthzIdentities, type AuthzIdentity, type AuthzVerdict } from "../lib/data.authz";
+import { useSessionRulesFull } from "../lib/data.policy";
 import { useLoadMessage } from "../lib/data.workbench";
 import { useApp } from "../lib/store";
 import { PageHeader } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Select, Textarea } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /**
@@ -24,6 +25,7 @@ export function AuthzPage(): JSX.Element {
  const setRoute = useApp((s) => s.setRoute);
 
  const [identities, setIdentities] = useState<AuthzIdentity[]>([]);
+ const sessionRules = useSessionRulesFull();
  const [exchangeId, setExchangeId] = useState("");
  const [result, setResult] = useState<AuthzVerdict[] | null>(null);
 
@@ -129,8 +131,26 @@ export function AuthzPage(): JSX.Element {
           <Trash2 size={13} />
          </Button>
         </div>
+        <Field label="Source from session rule" hint="run a logged-in session's login macro and use its fresh cookie (burpsy-react-ui-q7f8), instead of pasting one">
+         {(fid) => (
+          <Select
+           id={fid}
+           value={id.session_rule_id === undefined ? "" : String(id.session_rule_id)}
+           onChange={(e) => patch(i, { session_rule_id: e.target.value === "" ? undefined : Number(e.target.value) })}
+          >
+           <option value="">Paste a cookie below</option>
+           {(sessionRules.data?.rules ?? [])
+            .filter((r) => r.id !== undefined)
+            .map((r) => (
+             <option key={r.id} value={String(r.id)}>
+              {r.name || `rule ${r.id}`}
+             </option>
+            ))}
+          </Select>
+         )}
+        </Field>
         <Field label="Cookie" hint="replaces the request's Cookie header; leave blank to keep the captured one unless Strip is set">
-         {(fid) => <Input id={fid} value={id.cookie} onChange={(e) => patch(i, { cookie: e.target.value })} placeholder="session=...; role=user" />}
+         {(fid) => <Input id={fid} value={id.cookie} onChange={(e) => patch(i, { cookie: e.target.value })} placeholder="session=...; role=user" disabled={id.session_rule_id !== undefined} />}
         </Field>
         <Field label="Extra headers" hint="one per line, Name: value (Authorization, X-API-Key)">
          {(fid) => <Textarea id={fid} rows={2} value={headersText(id.headers)} onChange={(e) => patch(i, { headers: parseHeaders(e.target.value) })} />}
