@@ -254,6 +254,9 @@ export interface MessageView {
  /** The body's exact octets, base64 — present when the body is not valid UTF-8 and `text`
   *  cannot carry it (a JSON string would arrive with those bytes already destroyed). */
  body_base64?: string;
+ /** The message's Content-Encoding, when it has one. body_base64 is the body with it undone, so a
+  *  surface that resends head + body_base64 must not do so under an encoding head (3pco). */
+ content_encoding?: string;
 }
 
 export interface CoverageBreakdown {
@@ -429,6 +432,9 @@ export interface RepeaterResult {
  status: number;
  duration_ms: number;
  response: string;
+ /** The response body's exact octets when `response` cannot carry them (not UTF-8), so the response
+  *  pane can show a binary body such as a gRPC reply in the Protobuf tab (burpsy-react-ui-3pco). */
+ response_body_base64?: string;
  exchange_id: number;  /**
    * The redirect chain this send produced, present only when the response was a 30x.
    *

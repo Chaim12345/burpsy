@@ -945,6 +945,7 @@ export function HistoryPage(): JSX.Element {
       : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
     }
     bodyBase64={response.data?.body_base64}
+    requestPath={selected.path}
     filename={`exchange-${selected.id}-response-${responseVariant}.txt`}
     menuGroups={actions.menu(selected)}
     // Same rule as the request pane: the response message id, undefined when this exchange

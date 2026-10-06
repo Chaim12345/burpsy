@@ -96,3 +96,64 @@ func TestProtobufDecodeReportsNonProtobuf(t *testing.T) {
 		t.Error("a non-protobuf body did not report a decode error")
 	}
 }
+
+// burpsy-react-ui-3pco: with a .proto supplied, decode names the fields; a schema that does not parse
+// or names no such message is a 400 rather than a silently unnamed tree.
+func TestProtobufDecodeNamesFieldsFromAProto(t *testing.T) {
+	s := newTestServer()
+	b64 := base64.StdEncoding.EncodeToString(protoSample(t))
+	const proto = `syntax = "proto3"; package demo; message Req { int32 user_id = 1; string label = 2; }`
+
+	rec := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("decode = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp protoDecodeResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// One message in the schema, so it is chosen without the operator naming it.
+	if resp.Message != "demo.Req" || len(resp.Messages) != 1 {
+		t.Fatalf("message = %q, messages = %v", resp.Message, resp.Messages)
+	}
+	f := resp.Frames[0].Fields
+	if f[0].Name != "user_id" || f[0].Type != "int32" || f[1].Name != "label" {
+		t.Fatalf("fields were not named: %+v", f)
+	}
+
+	// Without a proto the response is the schemaless view, unchanged.
+	plain := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64})
+	var plainResp protoDecodeResponse
+	_ = json.Unmarshal(plain.Body.Bytes(), &plainResp)
+	if plainResp.Frames[0].Fields[0].Name != "" || plainResp.Messages != nil {
+		t.Fatalf("no proto must mean no names: %+v", plainResp)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"unparseable proto": {"body_base64": b64, "proto": "message {"},
+		"unknown message":   {"body_base64": b64, "proto": proto, "message": "Nope"},
+	} {
+		if r := postJSON(t, s, "/api/protobuf/decode", body); r.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", name, r.Code)
+		}
+	}
+}
+
+// burpsy-react-ui-3pco: a gRPC call path names the message for each direction, so request and
+// response are read as their own types without the operator choosing.
+func TestProtobufDecodeResolvesTheMessageFromTheRPCPath(t *testing.T) {
+	s := newTestServer()
+	b64 := base64.StdEncoding.EncodeToString(protoSample(t))
+	const proto = `package p; message A { int32 a_id = 1; string a_s = 2; } message B { int32 b_id = 1; string b_s = 2; }
+service S { rpc Call (A) returns (B); }`
+	for dir, want := range map[string]string{"request": "a_id", "response": "b_id"} {
+		rec := postJSON(t, s, "/api/protobuf/decode", map[string]any{"body_base64": b64, "proto": proto, "rpc_path": "/p.S/Call", "direction": dir})
+		var resp protoDecodeResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", dir, rec.Code, rec.Body.String())
+		}
+		if got := resp.Frames[0].Fields[0].Name; got != want {
+			t.Errorf("%s: field 1 named %q, want %q (message %q)", dir, got, want, resp.Message)
+		}
+	}
+}

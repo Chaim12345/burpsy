@@ -1153,6 +1153,7 @@ export function OrganizerPage(): JSX.Element {
           label="Request"
           readOnly
           value={savedRequest.data?.text ?? (savedRequest.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+          bodyBase64={savedRequest.data?.body_base64}
           filename={`organizer-${selected.id}-request.txt`}
          />
         </TabsContent>
@@ -1166,6 +1167,7 @@ export function OrganizerPage(): JSX.Element {
             : (savedResponse.data?.text ?? (savedResponse.isFetching ? "Loading response bytes…" : "No response bytes captured."))
           }
           bodyBase64={savedResponse.data?.body_base64}
+          requestPath={selected.path}
           filename={`organizer-${selected.id}-response.txt`}
          />
         </TabsContent>

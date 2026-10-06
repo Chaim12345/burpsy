@@ -15,6 +15,10 @@ export interface ProtoField {
  string?: string;
  bytes_hex?: string;
  message?: ProtoField[];
+ /** Set when a .proto was supplied (burpsy-react-ui-3pco); presentation only — encode ignores them. */
+ name?: string;
+ type?: string;
+ enum_name?: string;
 }
 
 export interface ProtoFrame {
@@ -28,10 +32,23 @@ export interface ProtoFrame {
 export interface ProtoDecodeResponse {
  grpc: boolean;
  frames: ProtoFrame[];
+ /** With a .proto: every message it declares, and the one the fields were named against ("" when the
+  *  schema has several and none was chosen or implied by the gRPC call path). */
+ messages?: string[];
+ message?: string;
 }
 
-export function decodeProtobuf(bodyBase64: string, grpc: boolean): Promise<ProtoDecodeResponse> {
- return api<ProtoDecodeResponse>("/api/protobuf/decode", json("POST", { body_base64: bodyBase64, grpc }));
+/** What names the fields (burpsy-react-ui-3pco). All optional: without `proto` the decode is the
+ *  schemaless numbers-and-wire-types view. `message` wins over the type a gRPC `rpc_path` implies. */
+export interface ProtoSchemaOptions {
+ proto?: string;
+ message?: string;
+ rpc_path?: string;
+ direction?: "request" | "response";
+}
+
+export function decodeProtobuf(bodyBase64: string, grpc: boolean, schema: ProtoSchemaOptions = {}): Promise<ProtoDecodeResponse> {
+ return api<ProtoDecodeResponse>("/api/protobuf/decode", json("POST", { body_base64: bodyBase64, grpc, ...schema }));
 }
 
 export function encodeProtobuf(grpc: boolean, frames: ProtoFrame[]): Promise<{ body_base64: string }> {

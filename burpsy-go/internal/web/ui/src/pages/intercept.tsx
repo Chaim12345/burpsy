@@ -25,6 +25,7 @@ import {
 } from "../lib/intercept-target";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
 import { HttpEditor } from "../ui/editor";
+import { faithfulRequestBase64, requestBodyChanged } from "../lib/message";
 import { Inspector } from "../ui/inspector";
 import { PageHeader, SplitPane } from "../ui/layout";
 import {
@@ -625,6 +626,14 @@ export function InterceptPage(): JSX.Element {
   */
  const [confirmDropAll, setConfirmDropAll] = useState(false);
  const [raw, setRaw] = useState("");
+ // The held body's exact octets, when `raw` cannot carry them (burpsy-react-ui-3pco) — the same shadow
+ // Repeater keeps for a binary body. A body edit through the text drops it (it no longer matches what
+ // the operator sees); a header edit keeps it; the Protobuf tab's Apply clears and then restores it.
+ const [rawBodyBase64, setRawBodyBase64] = useState<string | undefined>(undefined);
+ const editRaw = (next: string) => {
+  if (rawBodyBase64 !== undefined && requestBodyChanged(raw, next)) setRawBodyBase64(undefined);
+  setRaw(next);
+ };
  const [fixContentLength, setFixContentLength] = useState(true);
  // Burp's two newline corrections (80tg), read from the server rather than seeded with the
  // defaults: both are OFF by default and a previous session or a plugin may have set one, so a
@@ -661,6 +670,7 @@ export function InterceptPage(): JSX.Element {
  // same message — otherwise every 1.5s poll would overwrite an operator's in-progress edit.
  useEffect(() => {
   setRaw(selected?.raw ?? "");
+  setRawBodyBase64(selected?.raw_body_base64);
   setCommentDraft(selected?.comment ?? "");
   setHighlightDraft(selected?.highlight ?? "");
   // The destination draft follows the selection for the same reason: a target edited on one held
@@ -700,6 +710,20 @@ export function InterceptPage(): JSX.Element {
   * previous message's edit buffer as its body, and the success toast would name the one that
   * actually went. See burpsy-react-ui-3g5.
   */
+ // What a forward sends for message `id` whose buffer is `body` (burpsy-react-ui-3pco). Unedited: no raw
+ // at all, so the server forwards exactly the held bytes — sending the text back would replace a binary
+ // body with its mangled JSON rendering. Edited with the faithful body in hand (the detail selection,
+ // e.g. a Protobuf Apply): the exact bytes as raw_base64. Otherwise: the edited text.
+ const forwardPayload = (id: number, body: string): { raw?: string; rawBase64?: string } => {
+  const held = heldAll.find((h) => h.id === id);
+  const isSelection = selected?.id === id && body === raw;
+  if (isSelection && rawBodyBase64 !== undefined) {
+   if (held && body === held.raw && rawBodyBase64 === held.raw_body_base64) return {};
+   return { rawBase64: faithfulRequestBase64(body, rawBodyBase64) };
+  }
+  if (held && body === held.raw) return {};
+  return { raw: body };
+ };
  const forwardMessage = (
   id: number,
   body: string,
@@ -708,7 +732,7 @@ export function InterceptPage(): JSX.Element {
   target?: InterceptTarget,
  ) => {
   forwardHeld.mutate(
-   { id, raw: body, fixContentLength: fixCL, holdResponse, target },
+   { id, ...forwardPayload(id, body), fixContentLength: fixCL, holdResponse, target },
    {
     onSuccess: () => {
      setSelectedId(null);
@@ -809,7 +833,9 @@ export function InterceptPage(): JSX.Element {
   const failed: number[] = [];
   for (const target of targets) {
    try {
-    await forwardHeld.mutateAsync({ id: target.id, raw: target.raw, fixContentLength: fixContentLength, holdResponse: false });
+    // No raw: an unedited bulk forward sends exactly the held bytes. Sending target.raw back would
+    // replace a binary body with its U+FFFD-mangled text (burpsy-react-ui-3pco).
+    await forwardHeld.mutateAsync({ id: target.id, fixContentLength: fixContentLength, holdResponse: false });
     ok += 1;
    } catch {
     failed.push(target.id);
@@ -1205,7 +1231,10 @@ export function InterceptPage(): JSX.Element {
      <HttpEditor
       label="Held bytes"
       value={raw}
-      onChange={setRaw}
+      onChange={editRaw}
+      bodyBase64={rawBodyBase64}
+      onBodyBytesChange={setRawBodyBase64}
+      requestPath={selected.direction === "response" ? selected.path : undefined}
       filename={`held-${selected.id}.txt`}
       menuGroups={heldMenu(selected)}
      />
@@ -1217,7 +1246,7 @@ export function InterceptPage(): JSX.Element {
       <Inspector
        raw={raw}
        label={`Inspector · held ${selected.direction}`}
-       onChange={setRaw}
+       onChange={editRaw}
       />
      ) : null}
     </div>

@@ -1031,3 +1031,37 @@ export function faithfulRequestBase64(requestText: string, bodyBase64: string): 
 export function requestBodyChanged(prev: string, next: string): boolean {
   return prev.slice(parseMessage(prev).bodyOffset) !== next.slice(parseMessage(next).bodyOffset);
 }
+
+/**
+ * The path of a request's target — "/pkg.Service/Method" for a gRPC call — from its request line, or
+ * undefined for anything that is not a request (burpsy-react-ui-3pco). An absolute-form target (a
+ * proxied request line, "POST https://h/p HTTP/1.1") keeps only its path. The query is kept; the gRPC
+ * resolver ignores it.
+ */
+export function requestTargetPath(raw: string): string | undefined {
+  const target = /^[A-Z]+ (\S+)/.exec(raw)?.[1];
+  if (!target) return undefined;
+  if (target.startsWith("/")) return target;
+  try {
+    return new URL(target).pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The body_base64 an *editable* surface may hold as the faithful body (burpsy-react-ui-3pco): a
+ * MessageView's body_base64 is the body with Content-Encoding and chunking undone, so rebuilding the
+ * message as head + those bytes is only exact when the head describes no encoding. Otherwise the
+ * rebuilt message would send a decoded body under a head that still claims gzip or chunked. Returns
+ * undefined then, and the surface falls back to the text — no Protobuf editing, rather than a corrupt
+ * resend. Read-only views can use body_base64 directly.
+ */
+export function editableBodyBase64(view: { text?: string; body_base64?: string; content_encoding?: string }): string | undefined {
+  if (!view.body_base64) return undefined;
+  const encoding = view.content_encoding?.trim().toLowerCase();
+  if (encoding && encoding !== "identity") return undefined;
+  const head = (view.text ?? "").slice(0, parseMessage(view.text ?? "").bodyOffset);
+  if (/^transfer-encoding:[^\r\n]*chunked/im.test(head)) return undefined;
+  return view.body_base64;
+}

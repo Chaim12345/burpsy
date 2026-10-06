@@ -307,6 +307,7 @@ function StoredMessage({ id, label, onClose }: { id: number; label: string; onCl
               ? `Could not load message ${id}: ${message.error instanceof Error ? message.error.message : String(message.error)}`
               : "No bytes stored for this message.")
         }
+        bodyBase64={message.data?.body_base64}
         filename={`intruder-message-${id}.txt`}
       />
     </Modal>
@@ -2159,6 +2160,7 @@ export function IntruderPage(): JSX.Element {
                         : "No bytes stored for this message.")
                 }
                 payloadMarks={{ onAdd: onAddManualSpan }}
+                bodyBase64={baseMessage.data?.body_base64}
                 filename={`intruder-base-${msgId}.txt`}
               />
             </Card>

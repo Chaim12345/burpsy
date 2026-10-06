@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -62,6 +63,10 @@ type heldView struct {
 	HeldMs    int64  `json:"held_ms"`
 	Len       int    `json:"len"`
 	Raw       string `json:"raw"`
+	// RawBodyBase64 is the held message's body octets when `raw` cannot carry them (not UTF-8) and they
+	// are the plain wire body (burpsy-react-ui-3pco) — so the Protobuf tab can read and edit a held gRPC
+	// body, and the forward can send the edit back byte-exact as raw_base64.
+	RawBodyBase64 string `json:"raw_body_base64,omitempty"`
 	// Opcode is the WebSocket frame type ("text", "binary", …) and is absent for
 	// HTTP. Sent because a held frame's payload alone does not say how to read it:
 	// an operator shown binary bytes with no marking will edit them as text.
@@ -107,20 +112,21 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 			status = &sc
 		}
 		views = append(views, heldView{
-			ID:        h.ID,
-			Direction: h.Direction.String(),
-			Host:      h.Host,
-			Port:      h.Port,
-			TLS:       h.TLS,
-			Method:    h.Method,
-			Path:      h.Path,
-			Status:    status,
-			HeldMs:    now.Sub(h.HeldAt).Milliseconds(),
-			Len:       len(h.Raw),
-			Raw:       string(h.Raw),
-			Opcode:    h.Opcode,
-			Comment:   h.Comment,
-			Highlight: h.Highlight,
+			ID:            h.ID,
+			Direction:     h.Direction.String(),
+			Host:          h.Host,
+			Port:          h.Port,
+			TLS:           h.TLS,
+			Method:        h.Method,
+			Path:          h.Path,
+			Status:        status,
+			HeldMs:        now.Sub(h.HeldAt).Milliseconds(),
+			Len:           len(h.Raw),
+			Raw:           string(h.Raw),
+			RawBodyBase64: editableBodyBase64(h.Raw),
+			Opcode:        h.Opcode,
+			Comment:       h.Comment,
+			Highlight:     h.Highlight,
 		})
 	}
 
@@ -518,7 +524,11 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 			// forwards what was held. On a WebSocket frame an empty payload is ordinary, and the
 			// old plain string treated "" as "unchanged" — so an operator who deleted the payload
 			// got the original forwarded, answered 200, with no sign the edit was discarded.
-			Raw              *string `json:"raw"`
+			Raw *string `json:"raw"`
+			// RawBase64 is the edited message's exact bytes, base64, and wins over Raw when set
+			// (burpsy-react-ui-3pco): a JSON string cannot carry a binary body, so a protobuf field edited
+			// in a held request would otherwise forward as U+FFFD-mangled bytes.
+			RawBase64        *string `json:"raw_base64"`
 			FixContentLength bool    `json:"fix_content_length"`
 			// HoldResponse arms a one-shot hold for this request's response (burpsy-react-ui-v6jw):
 			// Burp's "Do intercept > Response to this request". Refused for anything but a held
@@ -535,6 +545,15 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+		if req.RawBase64 != nil {
+			decoded, derr := base64.StdEncoding.DecodeString(*req.RawBase64)
+			if derr != nil {
+				http.Error(w, "raw_base64 is not valid base64", http.StatusBadRequest)
+				return
+			}
+			exact := string(decoded) // string([]byte) is byte-exact; Forward reads it back with []byte()
+			req.Raw = &exact
 		}
 		if req.HoldResponse {
 			if err := s.intercept.ArmResponseHold(id); err != nil {

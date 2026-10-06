@@ -278,6 +278,7 @@ export function AuditQueuePage(): JSX.Element {
            label="Request"
            readOnly
            value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+           bodyBase64={request.data?.body_base64}
            filename={`audit-${selected.seq}-request.txt`}
            menuGroups={actions.menu(exchange)}
           />
@@ -292,6 +293,7 @@ export function AuditQueuePage(): JSX.Element {
              : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
            }
            bodyBase64={response.data?.body_base64}
+           requestPath={exchange.path}
            filename={`audit-${selected.seq}-response.txt`}
            menuGroups={actions.menu(exchange)}
           />

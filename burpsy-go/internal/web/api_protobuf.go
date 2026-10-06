@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/grpcproto"
 )
@@ -35,6 +36,11 @@ type protoFrameView struct {
 type protoDecodeResponse struct {
 	GRPC   bool             `json:"grpc"`
 	Frames []protoFrameView `json:"frames"`
+	// Messages and Message are set only when a .proto was supplied (burpsy-react-ui-3pco): every
+	// message the schema declares, and the one the fields were named against ("" when the schema has
+	// several and the operator has not chosen, in which case the fields are shown unnamed).
+	Messages []string `json:"messages,omitempty"`
+	Message  string   `json:"message,omitempty"`
 }
 
 // handleProtobufDecode serves POST /api/protobuf/decode. riskLocal.
@@ -46,10 +52,44 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		BodyBase64 string `json:"body_base64"`
 		GRPC       bool   `json:"grpc"`
+		// Proto is optional .proto source and Message the message type to read the body as; together
+		// they turn `#1 varint 150` into `user_id (int32) 150`. Without Proto the response is the
+		// schemaless view, unchanged.
+		Proto   string `json:"proto"`
+		Message string `json:"message"`
+		// RPCPath and Direction let a gRPC body name its own type: the call path (/pkg.Service/Method)
+		// plus the schema's service block give the request and response messages, so the operator
+		// need not pick one. Direction is "request" or "response". Message, when set, wins.
+		RPCPath   string `json:"rpc_path"`
+		Direction string `json:"direction"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
-		http.Error(w, `the body must be {"body_base64":"...","grpc":bool}`, http.StatusBadRequest)
+		http.Error(w, `the body must be {"body_base64":"...","grpc":bool,"proto":"...","message":"..."}`, http.StatusBadRequest)
 		return
+	}
+	var schema *grpcproto.Schema
+	if strings.TrimSpace(body.Proto) != "" {
+		parsed, perr := grpcproto.ParseProto(body.Proto)
+		if perr != nil {
+			// 400, not a silent schemaless fallback: an operator who pasted a schema and sees unnamed
+			// fields would assume the schema did not match the body, when it did not parse.
+			http.Error(w, perr.Error(), http.StatusBadRequest)
+			return
+		}
+		schema = parsed
+		if body.Message == "" && body.RPCPath != "" {
+			body.Message = schema.MessageForRPC(body.RPCPath, body.Direction)
+		}
+		if body.Message == "" {
+			body.Message = schema.DefaultMessage()
+		}
+		if body.Message != "" {
+			// Validate the name up front so a typo is a clear 400 rather than an unnamed tree.
+			if _, aerr := schema.Annotate(nil, body.Message); aerr != nil {
+				http.Error(w, aerr.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 	raw, err := base64.StdEncoding.DecodeString(body.BodyBase64)
 	if err != nil {
@@ -75,7 +115,7 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 				if fields, derr := grpcproto.Decode(fr.Message); derr != nil {
 					view.Error = derr.Error()
 				} else {
-					view.Fields = fields
+					view.Fields = annotateFields(schema, body.Message, fields)
 				}
 			}
 			resp.Frames = append(resp.Frames, view)
@@ -86,11 +126,29 @@ func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 		if derr != nil {
 			view.Error = derr.Error()
 		} else {
-			view.Fields = fields
+			view.Fields = annotateFields(schema, body.Message, fields)
 		}
 		resp.Frames = []protoFrameView{view}
 	}
+	if schema != nil {
+		resp.Messages = schema.Messages()
+		resp.Message = body.Message
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// annotateFields names fields against the chosen message, or returns them untouched when there is no
+// schema or no message chosen. The message was validated before decoding began, so an Annotate error
+// here cannot happen; falling back to the unnamed tree keeps the handler total regardless.
+func annotateFields(schema *grpcproto.Schema, message string, fields []grpcproto.Field) []grpcproto.Field {
+	if schema == nil || message == "" {
+		return fields
+	}
+	named, err := schema.Annotate(fields, message)
+	if err != nil {
+		return fields
+	}
+	return named
 }
 
 // handleProtobufEncode serves POST /api/protobuf/encode. riskLocal.

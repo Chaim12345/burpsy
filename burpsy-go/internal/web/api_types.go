@@ -358,10 +358,39 @@ func wireMsgID(ex *core.Exchange, dir core.Direction, variant core.Variant) *uin
 // inflate in the tree was WebSocket-only. The raw bytes stay exactly as captured; see
 // MessageView.Decoded for why the decode is added alongside rather than swapped in.
 func messageView(msg *core.StoredMessage) *MessageView {
-	raw := msg.Raw()
+	return messageViewOf(uint64(msg.ID), msg.Len(), msg.Raw())
+}
+
+// displayBodyBase64 is the body_base64 a MessageView would carry for raw — the body with its framing
+// and Content-Encoding undone, base64, and only when it is not UTF-8. For read-only views of bytes that
+// are not a stored message yet (a Repeater send's response, burpsy-react-ui-3pco).
+func displayBodyBase64(raw []byte) string {
+	return messageViewOf(0, len(raw), raw).Body64
+}
+
+// editableBodyBase64 is the body after the head, base64, when it is not UTF-8 AND it is the plain wire
+// body — no Content-Encoding, not chunked (burpsy-react-ui-3pco). An editable surface rebuilds the
+// message as head + these bytes, so a body that is the *decoded* form of what the head describes would
+// go out under a head that still claims gzip or chunking. Such a message gets "" and the surface falls
+// back to the text, which is the honest degradation: no Protobuf tab, rather than a corrupt resend.
+func editableBodyBase64(raw []byte) string {
+	head, body := splitHeadBody(raw)
+	if len(body) == 0 || isUTF8(body) {
+		return ""
+	}
+	if enc := firstHeaderValue(head, "Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
+		return ""
+	}
+	if strings.Contains(strings.ToLower(firstHeaderValue(head, "Transfer-Encoding")), "chunked") {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(body)
+}
+
+func messageViewOf(id uint64, length int, raw []byte) *MessageView {
 	view := &MessageView{
-		ID:   uint64(msg.ID),
-		Len:  msg.Len(),
+		ID:   id,
+		Len:  length,
 		Text: string(raw),
 	}
 	head, body := splitHeadBody(raw)

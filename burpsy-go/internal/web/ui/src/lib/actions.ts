@@ -26,6 +26,7 @@ import { openDetailWindow } from "../pages/detailwindow";
 import { toast } from "sonner";
 import { openUrlInBrowser } from "./data.browser";
 import { useHotkeys } from "react-hotkeys-hook";
+import { editableBodyBase64 } from "./message";
 import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
 import { useAnnotateExchange } from "./data";
@@ -276,7 +277,9 @@ export function useExchangeActions(): {
     target: exchangeAuthority(exchange),
     protocol: schemeOf(exchange),
     request: message.text ?? "",
-    requestBodyBase64: message.body_base64,
+    // editableBodyBase64, not body_base64 as-is: the tab resends head + these bytes, which is only exact
+    // when the head describes no Content-Encoding or chunking (burpsy-react-ui-3pco).
+    requestBodyBase64: editableBodyBase64(message),
     fromExchange: exchange.id,
    });
    setRoute("repeater");

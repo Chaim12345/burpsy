@@ -154,6 +154,7 @@ export function DetailWindowPage(): JSX.Element {
      label="Request"
      readOnly
      value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+     bodyBase64={request.data?.body_base64}
      filename={`exchange-${exchange.id}-request.txt`}
     />
    </div>
@@ -162,6 +163,8 @@ export function DetailWindowPage(): JSX.Element {
      label="Response"
      readOnly
      value={response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured.")}
+     bodyBase64={response.data?.body_base64}
+     requestPath={exchange.path}
      filename={`exchange-${exchange.id}-response.txt`}
     />
    </div>
@@ -172,6 +175,7 @@ export function DetailWindowPage(): JSX.Element {
     label="Request"
     readOnly
     value={request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured.")}
+    bodyBase64={request.data?.body_base64}
     filename={`exchange-${exchange.id}-request.txt`}
    />
   </div>

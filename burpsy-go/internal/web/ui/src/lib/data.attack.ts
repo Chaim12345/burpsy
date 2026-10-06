@@ -118,13 +118,15 @@ export function useForwardHeld() {
  return useMutation<
   unknown,
   Error,
-  { id: number; raw: string; fixContentLength: boolean; holdResponse?: boolean; target?: InterceptTarget }
+  // raw absent = forward exactly the bytes that were held; rawBase64 = the edited message byte-exact
+  // (a binary body a JSON string would mangle), and it wins over raw (burpsy-react-ui-3pco).
+  { id: number; raw?: string; rawBase64?: string; fixContentLength: boolean; holdResponse?: boolean; target?: InterceptTarget }
  >({
-  mutationFn: ({ id, raw, fixContentLength, holdResponse, target }) =>
+  mutationFn: ({ id, raw, rawBase64, fixContentLength, holdResponse, target }) =>
    api<unknown>(
     `/api/intercept/${id}/forward`,
     json("POST", {
-     raw,
+     ...(rawBase64 !== undefined ? { raw_base64: rawBase64 } : raw !== undefined ? { raw } : {}),
      fix_content_length: fixContentLength,
      hold_response: holdResponse ?? false,
      ...(target ? { host: target.host, port: target.port, tls: target.tls } : {}),

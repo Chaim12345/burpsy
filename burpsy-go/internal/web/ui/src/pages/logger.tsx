@@ -88,8 +88,15 @@ function LinkedBytes({ exchangeId, rowId }: { exchangeId: number; rowId: number 
    : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."));
  return (
   <div className="editor-grid" style={{ minHeight: 240 }}>
-   <HttpEditor label="Request" readOnly value={requestText} filename={`toollog-${rowId}-request.txt`} />
-   <HttpEditor label="Response" readOnly value={responseText} filename={`toollog-${rowId}-response.txt`} />
+   <HttpEditor label="Request" readOnly value={requestText} bodyBase64={request.data?.body_base64} filename={`toollog-${rowId}-request.txt`} />
+   <HttpEditor
+    label="Response"
+    readOnly
+    value={responseText}
+    bodyBase64={exchange.data.response === null ? undefined : response.data?.body_base64}
+    requestPath={exchange.data.path}
+    filename={`toollog-${rowId}-response.txt`}
+   />
   </div>
  );
 }

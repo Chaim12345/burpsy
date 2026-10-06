@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength, requestTargetPath } from "../lib/message";
 import {
  breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
@@ -526,6 +526,7 @@ export function HttpEditor({
  auditSelection,
  onBodyBytesChange,
  messageId,
+ requestPath,
 }: {
  value: string;
  /** The body's exact octets, base64 (MessageView.body_base64). Given, the Render view's image
@@ -575,6 +576,12 @@ export function HttpEditor({
   * the server, so a surface that can resend it (Repeater) stores the base64 here and sends it as
   * request_base64. Absent on read-only panes. */
  onBodyBytesChange?: (bodyBase64: string) => void;
+ /**
+  * The request's path, for a response editor (burpsy-react-ui-3pco). A request editor reads its own
+  * path off the request line; a response cannot, and for gRPC the path (/pkg.Service/Method) is what
+  * names the response's message type in a loaded .proto. Optional: without it the operator picks.
+  */
+ requestPath?: string;
  /**
   * The stored-message id behind this editor's value, when there is one. This is what makes a
   * loaded plugin's editor-tab registrations real (burpsy-react-ui-ww5): `editor.render` takes
@@ -884,6 +891,12 @@ export function HttpEditor({
    return null;
   }
  }, [protoEligible, bodyBase64, value]);
+ // Which side of the exchange this is, and the gRPC call path, so a loaded .proto can name the message
+ // for each direction from the service's rpc signature (burpsy-react-ui-3pco).
+ const protoDirection: "request" | "response" = /^HTTP\/\d/.test(value) ? "response" : "request";
+ const protoRpcPath = useMemo(() => {
+  return protoDirection === "response" ? requestPath : requestTargetPath(value);
+ }, [protoDirection, requestPath, value]);
 
  // A loaded plugin's editor-tab registrations, when this editor has a stored message behind it
  // (burpsy-react-ui-ww5). The built-in typed views each warrant themselves by the message's
@@ -1516,6 +1529,8 @@ export function HttpEditor({
       <ProtobufView
        bodyBase64={protoBodyBase64}
        grpc={protoGrpc}
+       direction={protoDirection}
+       rpcPath={protoRpcPath}
        onApply={
         readOnly || (!onChange && !onBodyBytesChange)
          ? undefined

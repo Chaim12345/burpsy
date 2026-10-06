@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, X } from "lucide-react";
 import { TAB_COLOURS } from "../ui/highlight-icons";
-import { faithfulRequestBase64 } from "../lib/message";
+import { faithfulRequestBase64, requestTargetPath } from "../lib/message";
 import { cn } from "../lib/cn";
 import { reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
@@ -1486,6 +1486,11 @@ export function RepeaterPage(): JSX.Element {
                         ? "Cancelled. No response arrived, and no exchange was recorded — but anything already written to the target was sent."
                         : "Send the request to see the response bytes.")
                   }
+              // The reply's exact body when `response` cannot carry it, and the call path it answers, so
+              // a gRPC reply decodes — and names its fields — in the Protobuf tab (burpsy-react-ui-3pco).
+              // Only for the response itself: a redirect hop on screen is a different message.
+              bodyBase64={chainResponse == null ? httpResult?.response_body_base64 : undefined}
+              requestPath={requestTargetPath(viewedRequest ?? active.request)}
               filename="repeater-response.txt"
               menuGroups={messageMenu}
             />

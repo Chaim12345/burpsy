@@ -60,6 +60,10 @@ type repeaterSendResp struct {
 	RequestMsgID  uint64          `json:"request_msg_id"`
 	ResponseMsgID uint64          `json:"response_msg_id"`
 	ExchangeID    core.ExchangeID `json:"exchange_id"`
+	// ResponseBodyBase64 is the response body's exact octets when they are not UTF-8 — the same rule and
+	// the same decoding as a MessageView's body_base64 — so the response pane can show a binary body
+	// (a gRPC reply in the Protobuf tab, burpsy-react-ui-3pco) that `response` cannot carry.
+	ResponseBodyBase64 string `json:"response_body_base64,omitempty"`
 	// Redirects is the chain this send produced, and it is present only when the response was a 30x.
 	//
 	// `response` above stays the response to the request the operator wrote — that is the contract
@@ -248,12 +252,13 @@ func (s *Server) recordRepeaterExchange(
 		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
 	return repeaterSendResp{
-		Status:        intOrZero(status),
-		DurationMs:    ex.Duration.Millis(),
-		Response:      string(rawResp),
-		RequestMsgID:  uint64(reqMsgID),
-		ResponseMsgID: uint64(respMsgID),
-		ExchangeID:    ex.ID,
+		Status:             intOrZero(status),
+		DurationMs:         ex.Duration.Millis(),
+		Response:           string(rawResp),
+		RequestMsgID:       uint64(reqMsgID),
+		ResponseMsgID:      uint64(respMsgID),
+		ExchangeID:         ex.ID,
+		ResponseBodyBase64: displayBodyBase64(rawResp),
 	}, ex
 }
 

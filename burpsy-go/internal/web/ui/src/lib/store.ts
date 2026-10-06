@@ -536,6 +536,18 @@ interface AppState {
   * themePreview ?? customTheme, so a live preview overlays the kept theme without replacing it.
   */
  themePreview: ImportedTheme | null;
+ /**
+  * The loaded .proto (burpsy-react-ui-3pco), shared by every message editor so a schema loaded once
+  * names fields in History, Repeater, Intercept and the rest alike. Persisted: it is the operator's
+  * description of the target's API, which outlives a reload. null = schemaless view.
+  */
+ protoSchema: { name: string; text: string } | null;
+ /**
+  * The message type each direction is read as, when the operator chose one. Empty = automatic: the
+  * gRPC call path's rpc signature, or the schema's only message. Per direction because a request and
+  * its response are different messages.
+  */
+ protoMessages: { request?: string; response?: string };
  /** URL-encode as you type (burpsy-react-ui-js1) — Burp's editor toggle: special characters
   * typed into a request are encoded automatically. Persisted: a typing preference is a
   * layout-class choice, the same one editorFont is. */
@@ -653,6 +665,8 @@ interface AppState {
  setCustomTheme: (theme: ImportedTheme | null) => void;
  /** Preview a theme live without keeping it; null ends the preview (burpsy-react-ui-fpew). */
  setThemePreview: (theme: ImportedTheme | null) => void;
+ setProtoSchema: (schema: { name: string; text: string } | null) => void;
+ setProtoMessage: (direction: "request" | "response", message: string) => void;
  setUiScale: (scale: UiScale) => void;
  setPaletteOpen: (open: boolean) => void;
  setShortcutsOpen: (open: boolean) => void;
@@ -726,6 +740,8 @@ export function persistedWorkspace(state: AppState) {
   editorFont: state.editorFont,
   editorFontFamily: state.editorFontFamily,
   customTheme: state.customTheme,
+  protoSchema: state.protoSchema,
+  protoMessages: state.protoMessages,
   urlEncodeAsYouType: state.urlEncodeAsYouType,
   uiScale: state.uiScale,
   // Where the Inspector sits and how much of it is open are layout choices an
@@ -777,6 +793,8 @@ export const useApp = create<AppState>()(
    editorFontFamily: "default",
    customTheme: null,
    themePreview: null,
+   protoSchema: null,
+   protoMessages: {},
   urlEncodeAsYouType: false,
    uiScale: "100%",
    paletteOpen: false,
@@ -825,6 +843,10 @@ export const useApp = create<AppState>()(
    setEditorFontFamily: (editorFontFamily) => set({ editorFontFamily }),
    setCustomTheme: (customTheme) => set({ customTheme }),
    setThemePreview: (themePreview) => set({ themePreview }),
+   // A new schema clears the per-direction choices: they named messages of the old one.
+   setProtoSchema: (protoSchema) => set({ protoSchema, protoMessages: {} }),
+   setProtoMessage: (direction, message) =>
+    set((state) => ({ protoMessages: { ...state.protoMessages, [direction]: message || undefined } })),
   setUrlEncodeAsYouType: (urlEncodeAsYouType) => set({ urlEncodeAsYouType }),
    setUiScale: (uiScale) => set({ uiScale }),
    setPaletteOpen: (paletteOpen) => set({ paletteOpen }),

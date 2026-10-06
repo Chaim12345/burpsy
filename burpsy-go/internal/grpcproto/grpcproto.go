@@ -60,6 +60,14 @@ type Field struct {
 	String   string  `json:"string,omitempty"`    // wire 2, LenString
 	BytesHex string  `json:"bytes_hex,omitempty"` // wire 2, LenBytes
 	Message  []Field `json:"message,omitempty"`   // wire 2, LenMessage
+
+	// Name, Type and EnumName are filled by Schema.Annotate when a .proto was supplied
+	// (burpsy-react-ui-3pco) and are presentation only: Encode ignores them, so an annotated tree and
+	// a bare one encode to the same bytes. Empty means the field is not in the schema (or there is no
+	// schema), and the editor falls back to the number and wire type.
+	Name     string `json:"name,omitempty"`      // declared field name
+	Type     string `json:"type,omitempty"`      // declared type, e.g. "int32", "repeated string"
+	EnumName string `json:"enum_name,omitempty"` // for an enum-typed varint, the value's name
 }
 
 // Decode walks raw as a protobuf message into a flat, ordered list of fields (nested messages recurse
