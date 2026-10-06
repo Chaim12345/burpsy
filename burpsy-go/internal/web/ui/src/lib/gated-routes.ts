@@ -15,6 +15,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/authz/identities": false,
  "/api/authz/test": true,
  "/api/backup": true,
+ "/api/backup/config": false,
  "/api/blindxss": true,
  "/api/blindxss/payload": false,
  "/api/browser/clear": true,

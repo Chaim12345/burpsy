@@ -72,6 +72,10 @@ func (s *Server) CloseProject() {
 	projectSwitchMu.Lock()
 	defer projectSwitchMu.Unlock()
 	if s.persist != nil {
+		// Burp's "delete backup file on clean shutdown" (burpsy-react-ui-jkvb): this runs only on a
+		// clean close, so a crash leaves the snapshots in place. Done before Close while the config and
+		// the database path are still readable.
+		s.deleteBackupsOnShutdown()
 		if err := s.persist.Close(); err != nil {
 			s.logger.Warn("closing the project database", zap.String("path", s.persist.Path()), zap.Error(err))
 		}

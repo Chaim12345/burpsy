@@ -945,6 +945,9 @@ func (s *Server) setupRoutes() {
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
 	s.mux.HandleFunc("/api/backup", s.handleBackup)
+	// The automatic-backup setting — interval schedule and delete-on-clean-shutdown (jkvb). See
+	// api_backup_config.go.
+	s.mux.HandleFunc("/api/backup/config", s.handleBackupConfig)
 	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)

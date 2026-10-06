@@ -148,6 +148,17 @@ var manifest = map[string]route{
 		summary: "snapshot the project database now via VACUUM INTO, then prune snapshots beyond the " +
 			"retention count; refuses with 503 when the instance has no -db",
 	},
+	"/api/backup/config": {
+		// riskLocal, not riskDestructive, and the line is where the effect lands. The PUT writes
+		// burpsy's own backup setting and reconciles one managed schedule — it takes no snapshot and
+		// deletes no file itself. A destructive consequence (a scheduled prune, a delete-on-shutdown
+		// sweep) is deferred to the schedule firing or to a clean shutdown, and each of those is already
+		// bounded to the name pattern this feature writes. Saving the setting is the shape riskLocal
+		// names: it changes burpsy's own state and sends nothing outbound.
+		methods: []string{"GET", "PUT"}, risk: riskLocal,
+		summary: "read or set the automatic-backup settings — the interval that drives a managed backup " +
+			"schedule, and the delete-on-clean-shutdown switch; refuses with 503 when the instance has no -db",
+	},
 	"/api/blindxss": {
 		// riskCredential, not riskRead, and the classification is the interesting part. A blind-XSS
 		// callback carries `document.cookie` as the victim's browser saw it — a session token belonging

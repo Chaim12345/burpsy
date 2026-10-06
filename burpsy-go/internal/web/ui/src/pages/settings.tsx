@@ -33,7 +33,7 @@ import {
  useRemoveNetworkProxyRule,
  useSaveNetworkProxy,
 } from "../lib/data.network";
-import { useBackupNow, useCaCert, useCaStatus, useExportCa, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough, useSetPassthroughSwitches } from "../lib/data.policy";
+import { useBackupNow, useBackupConfig, useSaveBackupConfig, useCaCert, useCaStatus, useExportCa, useImportCaCert, useRegenerateCaCert, useEventHubStats, useProtocols, useScopeView, useSendFrameProgram, useUpdateScope, usePassthrough, useAddPassthrough, useRemovePassthrough, useSetPassthroughSwitches } from "../lib/data.policy";
 import { useUninterestingHeaders, useSetUninterestingHeaders } from "../lib/data.workbench";
 import { cn } from "../lib/cn";
 import {
@@ -2028,6 +2028,7 @@ function ProjectBackupSection(): JSX.Element {
     title="Project backup"
     detail="A consistent snapshot of the project database, taken with SQLite's own VACUUM INTO rather than a file copy."
    />
+   <AutomaticBackup />
    <div className="form-grid">
     <label htmlFor="backup-dir">Directory</label>
     <Input
@@ -2077,11 +2078,118 @@ function ProjectBackupSection(): JSX.Element {
     </span>
    </Toolbar>
    <p className="field-hint">
-    For a recurring backup, add a scheduled task of kind <code>backup</code> below. A snapshot is a
-    whole copy of the project database, so it costs time and disk proportional to the project —
-    which is why it runs on a schedule rather than on every write.
+    A snapshot is a whole copy of the project database, so it costs time and disk proportional to the
+    project — which is why the automatic backup above runs on an interval rather than on every write.
+    It appears as a schedule named <code>Automatic backup</code> in the Scheduled tasks section, the
+    same path a clicked backup takes.
    </p>
   </Card>
+ );
+}
+
+/**
+ * The automatic-backup setting (burpsy-react-ui-jkvb): Burp's configPanelAutomaticProjectBackup
+ * interval and its "delete backup file on clean shutdown of Burp" switch. The interval is a real
+ * schedule under the covers — the one a clicked and a scheduled backup already share — so setting it
+ * here and seeing it in Scheduled tasks are the same fact. 0 minutes turns it off.
+ *
+ * The in-scope-only narrowing Burp also offers is declined with its reason: burpsy's snapshot is a
+ * VACUUM INTO of one SQLite file, and filtering it to in-scope rows would be a second, differently
+ * shaped export — a different feature, not a switch on this one.
+ */
+function AutomaticBackup(): JSX.Element {
+ const config = useBackupConfig();
+ const save = useSaveBackupConfig();
+ // Drafts start null so a background refetch cannot clobber an in-progress edit; they fall back to the
+ // saved value until the operator types.
+ const [intervalDraft, setIntervalDraft] = useState<string | null>(null);
+ const [dirDraft, setDirDraft] = useState<string | null>(null);
+ const [retentionDraft, setRetentionDraft] = useState<string | null>(null);
+
+ const saved = config.data;
+ const interval = intervalDraft ?? (saved ? String(saved.interval_minutes) : "0");
+ const autoDir = dirDraft ?? (saved?.dir ?? "");
+ const autoRetention = retentionDraft ?? (saved ? String(saved.retention) : "7");
+ const deleteOnShutdown = saved?.delete_on_shutdown ?? false;
+ const dirty = intervalDraft !== null || dirDraft !== null || retentionDraft !== null;
+
+ const commit = (patch: { delete_on_shutdown?: boolean }) => {
+  const minutes = Number(interval);
+  if (!Number.isInteger(minutes) || minutes < 0) {
+   toast.error("The backup interval must be a whole number of minutes (0 turns it off).");
+   return;
+  }
+  save.mutate(
+   {
+    interval_minutes: minutes,
+    dir: autoDir.trim(),
+    retention: Number(autoRetention) || 0,
+    delete_on_shutdown: patch.delete_on_shutdown ?? deleteOnShutdown,
+   },
+   {
+    onSuccess: () => {
+     setIntervalDraft(null);
+     setDirDraft(null);
+     setRetentionDraft(null);
+     toast.success(minutes === 0 ? "Automatic backup turned off." : `Automatic backup every ${minutes} minute${minutes === 1 ? "" : "s"}.`);
+    },
+    onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Could not save the backup setting"),
+   },
+  );
+ };
+
+ return (
+  <div className="stack" style={{ marginBottom: "var(--gap)" }}>
+   <div className="form-grid">
+    <label htmlFor="backup-interval">Every</label>
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--gap-sm)" }}>
+     <Input
+      id="backup-interval"
+      aria-label="Automatic backup interval in minutes"
+      type="number"
+      min={0}
+      style={{ maxWidth: 120 }}
+      value={interval}
+      onChange={(event) => setIntervalDraft(event.target.value)}
+     />
+     <span className="cell-dim">minutes — 0 is off</span>
+    </div>
+    <label htmlFor="auto-backup-dir">Directory</label>
+    <Input
+     id="auto-backup-dir"
+     aria-label="Automatic backup directory"
+     placeholder="blank writes beside the live database"
+     value={autoDir}
+     onChange={(event) => setDirDraft(event.target.value)}
+    />
+    <label htmlFor="auto-backup-retention">Keep</label>
+    <Input
+     id="auto-backup-retention"
+     aria-label="How many automatic snapshots to keep"
+     type="number"
+     min={-1}
+     style={{ maxWidth: 120 }}
+     value={autoRetention}
+     onChange={(event) => setRetentionDraft(event.target.value)}
+    />
+   </div>
+   <Switch
+    checked={deleteOnShutdown}
+    label="Delete the backup on a clean shutdown"
+    onCheckedChange={(checked) => commit({ delete_on_shutdown: checked })}
+   />
+   <Toolbar>
+    <Button size="small" disabled={!dirty || save.isPending} onClick={() => commit({})}>
+     {save.isPending ? "Saving…" : "Save automatic backup"}
+    </Button>
+    {config.isError ? <span className="cell-dim">Backup settings need a project database (-db).</span> : null}
+   </Toolbar>
+   <p className="field-hint">
+    In-scope-only backups are not offered: the snapshot is a single-file VACUUM INTO of the whole
+    database, and narrowing it to in-scope rows would be a second, differently shaped export — a
+    different feature, not a switch on this one.
+   </p>
+  </div>
  );
 }
 

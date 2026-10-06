@@ -1749,6 +1749,30 @@ func (s *Store) LoadInterceptLive() bool {
 	return v == "true"
 }
 
+// ---- Automatic backup configuration -------------------------------------------------------------
+
+// SaveBackupConfig persists the automatic-backup settings (burpsy-react-ui-jkvb): Burp's
+// configPanelAutomaticProjectBackup interval and "delete backup file on clean shutdown". The value
+// is the web layer's own JSON blob — stored opaquely here, the same way a schedule's per-kind Params
+// are, so this package stays free of the backup feature's shape. The recurring backup itself is an
+// ordinary persisted schedule of kind "backup"; what cannot live there is the delete-on-shutdown
+// flag and the directory it applies to, which is what this carries.
+func (s *Store) SaveBackupConfig(configJSON string) {
+	if err := s.setSetting("backup.config", configJSON); err != nil {
+		s.log("backup config", err)
+	}
+}
+
+// LoadBackupConfig reads the stored blob, or ("", false) when none was ever written — the web layer
+// reads that as "automatic backup off", the seed that matches a project that never configured one.
+func (s *Store) LoadBackupConfig() (string, bool) {
+	v, err := s.getSetting("backup.config")
+	if err != nil || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
 // ---- Match & Replace ---------------------------------------------------------------------------
 
 // MatchRuleSettings is the set-wide state that travels with the Match & Replace rule list.

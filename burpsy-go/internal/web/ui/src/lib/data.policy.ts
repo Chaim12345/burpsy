@@ -262,6 +262,37 @@ export function useBackupNow() {
  });
 }
 
+/** The automatic-backup setting (burpsy-react-ui-jkvb): the interval that drives a managed backup
+ *  schedule, and Burp's delete-on-clean-shutdown switch. 0 minutes means off. */
+export interface BackupConfig {
+ interval_minutes: number;
+ dir: string;
+ retention: number;
+ delete_on_shutdown: boolean;
+}
+
+/** Read the automatic-backup setting. Absent config reads as all-zero (off). */
+export function useBackupConfig() {
+ return useQuery<BackupConfig>({
+  queryKey: ["backup-config"],
+  queryFn: () => api<BackupConfig>("/api/backup/config"),
+ });
+}
+
+/** Save the automatic-backup setting; the server validates the interval and reconciles the managed
+ *  schedule in the same request. */
+export function useSaveBackupConfig() {
+ const client = useQueryClient();
+ return useMutation<BackupConfig, Error, BackupConfig>({
+  mutationFn: (body) => api<BackupConfig>("/api/backup/config", json("PUT", body)),
+  onSuccess: () => {
+   void client.invalidateQueries({ queryKey: ["backup-config"] });
+   // The managed schedule just changed; the Scheduled-tasks list should show it.
+   void client.invalidateQueries({ queryKey: ["schedules"] });
+  },
+ });
+}
+
 /* --- writes -------------------------------------------------------------- */
 
 function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
