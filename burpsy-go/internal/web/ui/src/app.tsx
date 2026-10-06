@@ -141,6 +141,26 @@ function useDocumentTitle(): void {
  }, [route]);
 }
 
+/**
+ * Ask before the console tab closes or reloads, when the operator opted in (burpsy-react-ui-fyua).
+ * A beforeunload handler with a non-empty returnValue is the only prompt a browser still honours, and
+ * only while it is installed — so the listener is added exactly when the preference is on, and the
+ * browser shows its own generic confirmation. Off by default, so nothing changes for an operator who
+ * never visits the setting.
+ */
+function useConfirmOnClose(): void {
+ const confirmOnClose = useApp((state) => state.confirmOnClose);
+ useEffect(() => {
+  if (!confirmOnClose) return;
+  const onBeforeUnload = (event: BeforeUnloadEvent) => {
+   event.preventDefault();
+   event.returnValue = "";
+  };
+  window.addEventListener("beforeunload", onBeforeUnload);
+  return () => window.removeEventListener("beforeunload", onBeforeUnload);
+ }, [confirmOnClose]);
+}
+
 /** Keep the URL hash and the store's route in sync in both directions. */
 function useHashRoute(): void {
  const route = useApp((state) => state.route);
@@ -195,6 +215,7 @@ function App(): JSX.Element {
  };
 
  useThemeEffect();
+ useConfirmOnClose();
  useDocumentTitle();
  useHashRoute();
  useEventStream();

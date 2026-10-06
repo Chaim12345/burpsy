@@ -57,6 +57,12 @@ type caStatusResponse struct {
 	// success with a silent partial failure is the shape this codebase treats as a defect.
 	PersistError string `json:"persist_error,omitempty"`
 	Hint         string `json:"hint,omitempty"`
+	// Directory is where burpsy keeps the signing CA on disk (burpsy-react-ui-fyua), so an operator
+	// can answer the operational question "where does my state live". Empty when no -ca-dir is set
+	// (the CA is in force for this process only). Read-only: relocating it is a restart-time choice
+	// (-ca-dir), not a runtime one, because the live engine has already loaded the CA from here and
+	// moving it under the running process would desync the two.
+	Directory string `json:"directory,omitempty"`
 }
 
 func (s *Server) caStatus() caStatusResponse {
@@ -74,6 +80,7 @@ func (s *Server) caStatus() caStatusResponse {
 		Configured: true,
 		Subject:    subject,
 		NotAfter:   notAfter.UTC().Format(time.RFC3339),
+		Directory:  s.caDir,
 	}
 }
 

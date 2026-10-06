@@ -124,6 +124,8 @@ export interface CaStatus {
  persisted: boolean;
  persist_error?: string;
  hint?: string;
+ /** Where the signing CA lives on disk (burpsy-react-ui-fyua); empty when set for this process only. */
+ directory?: string;
 }
 
 export const useCaStatus = (): UseQueryResult<CaStatus> =>

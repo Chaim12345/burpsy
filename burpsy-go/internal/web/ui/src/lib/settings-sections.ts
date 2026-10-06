@@ -57,6 +57,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "listener bind port capture interception startup",
   },
   {
+    id: "suite",
+    title: "Suite",
+    summary: "Startup behaviour, where burpsy keeps its state on disk, and the suite-level settings Burp exposes.",
+    keywords: "suite performance startup shutdown temporary files updates early adopter close confirm interception at startup ca directory",
+  },
+  {
     id: "resource-pools",
     title: "Resource pools",
     summary: "Saved limits every tool can reference by name, instead of each run re-specifying its own.",

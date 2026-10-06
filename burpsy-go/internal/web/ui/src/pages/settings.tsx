@@ -41,6 +41,7 @@ import {
  filterSettingsSections,
  matchesAllWords,
  onSettingsSectionRequest,
+ requestSettingsSection,
  settingsSectionAnchor,
  takePendingSettingsSection,
  type SettingsSection,
@@ -2774,8 +2775,106 @@ function UpstreamProxySection(): JSX.Element {
  * is a typecheck failure rather than a dead nav entry an operator discovers by clicking it.
  * That, not the runtime test, is what makes the one-list rule hold.
  */
+/**
+ * The Suite-level settings (burpsy-react-ui-fyua). Burp's Settings opens on a "Suite" category with
+ * Performance, Startup, Shutdown, Temporary files, Updates and Early adopter; burpsy had none of them
+ * as a section, so their absence read as "burpsy cannot do this" rather than "not built" or "lives on
+ * a flag". This section names each: the two that are real (startup interception, which is configured
+ * under Proxy; and asking before the console closes), where burpsy keeps its state on disk, and the
+ * four that are declined, each with the reason — the same honesty the rest of this page already
+ * applies to the settings it cannot offer.
+ */
+function SuiteSection(): JSX.Element {
+ const ca = useCaStatus();
+ const confirmOnClose = useApp((state) => state.confirmOnClose);
+ const setConfirmOnClose = useApp((state) => state.setConfirmOnClose);
+ return (
+  <Card>
+   <SectionHeading
+    title="Suite"
+    detail="Startup behaviour, where burpsy keeps its state on disk, and the suite-level settings Burp exposes."
+   />
+
+   <div className="stack">
+    <div>
+     <h3>Startup</h3>
+     <p className="field-hint">
+      Whether Proxy interception is on when the server starts is Burp's one built startup setting
+      (enable_proxy_interception_at_startup). It lives with the rest of the Proxy controls.
+     </p>
+     <Button variant="outline" size="small" onClick={() => requestSettingsSection("proxy")}>
+      Open it under Proxy settings
+     </Button>
+    </div>
+
+    <div>
+     <h3>Ask before closing</h3>
+     <Switch
+      id="suite-confirm-on-close"
+      label="Ask before the console tab closes or reloads"
+      checked={confirmOnClose}
+      onCheckedChange={(on) => {
+       setConfirmOnClose(on);
+       toast.success(on ? "The browser will ask before you close or reload the console" : "Closing the console no longer prompts");
+      }}
+     />
+     <p className="field-hint">
+      Burp's "Suppress confirmation on close", inverted to an opt-in. Off by default — a proxy console is
+      not a document with unsaved edits. The browser shows its own generic prompt; it cannot be styled.
+     </p>
+    </div>
+
+    <div>
+     <h3>Where burpsy keeps its state</h3>
+     {ca.data?.directory ? (
+      <p className="field-hint">
+       The signing CA is stored in <code>{ca.data.directory}</code>. Relocating it is a restart-time choice
+       (<code>-ca-dir</code>), not a runtime one: the live engine has already loaded the CA from here, so moving
+       it under the running process would desync the two — Burp's temporary-files relocation needs a restart for
+       the same reason.
+      </p>
+     ) : (
+      <p className="field-hint">
+       {ca.data?.configured
+        ? "The signing CA is held for this process only (no -ca-dir is set), so a restart returns to the previous one. Start burpsy with -ca-dir to persist it to a directory."
+        : "TLS interception is off, so there is no signing CA on disk. The project database (-db) is burpsy's other on-disk state."}
+      </p>
+     )}
+    </div>
+
+    <div>
+     <h3>Not built yet</h3>
+     <div className="notice notice-warn">
+      Four of Burp's Suite settings have no counterpart here, and are named rather than silently absent:
+      <ul style={{ margin: "var(--s1) 0 0", paddingLeft: "1.2em" }}>
+       <li>
+        <strong>Performance feedback</strong> — Burp tunes a desktop JVM's thread and memory budgets; burpsy's
+        concurrency is bounded per-run by resource pools (see Resource pools), not by a global suite dial.
+       </li>
+       <li>
+        <strong>Startup tuning</strong> (beyond interception) — Burp restores a saved project and window layout
+        at launch; burpsy is a server started against one <code>-db</code>, so there is no project picker or
+        layout to restore.
+       </li>
+       <li>
+        <strong>Automatic updates</strong> — burpsy ships as a single binary with no in-process updater; updating
+        is replacing the binary, which an in-app toggle would misrepresent as something the process does.
+       </li>
+       <li>
+        <strong>Early adopter channel</strong> — there is one build, not a stable/early split, so a channel
+        selector would choose between options that do not exist.
+       </li>
+      </ul>
+     </div>
+    </div>
+   </div>
+  </Card>
+ );
+}
+
 const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  proxy: ProxySettingsSection,
+ suite: SuiteSection,
  "resource-pools": ResourcePoolsSection,
  "scheduled-tasks": ScheduledTasksSection,
  protocols: ProtocolSection,

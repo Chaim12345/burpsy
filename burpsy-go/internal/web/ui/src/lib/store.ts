@@ -456,6 +456,10 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Whether to ask before the console tab is closed or reloaded (burpsy-react-ui-fyua), Burp's
+  *  suppress_confirm_on_close inverted to a positive opt-in. Off by default — a proxy console is
+  *  not a document with unsaved edits, so the prompt is a preference, not a safety default. */
+ confirmOnClose: boolean;
  /** Message-editor font size (burpsy-react-ui-7bd); drives the editor theme via --editor-font-size. */
  collaboratorRead: number[];
  collaboratorAnnotations: Record<number, CollaboratorAnnotation>;
@@ -568,6 +572,7 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setConfirmOnClose: (confirmOnClose: boolean) => void;
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
  setEditorFont: (font: EditorFont) => void;
@@ -638,6 +643,7 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  confirmOnClose: state.confirmOnClose,
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
   editorFont: state.editorFont,
@@ -727,6 +733,8 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   confirmOnClose: false,
+   setConfirmOnClose: (confirmOnClose) => set({ confirmOnClose }),
    markCollaboratorRead: (id) =>
     set((state) => (state.collaboratorRead.includes(id) ? state : { collaboratorRead: [...state.collaboratorRead, id] })),
    setCollaboratorAnnotation: (id, annotation) =>
