@@ -3195,6 +3195,16 @@ function RestApiSection(): JSX.Element {
  // which is the fact an operator most needs to see next to a surface this large.
  const loopback = webBind ? /^(127\.|\[?::1\]?|localhost)/.test(webBind) : false;
 
+ // Render every class the manifest actually uses, not only the ones the legend names: a risk class
+ // added in Go must not drop its routes off this page silently. Known classes keep their order and
+ // blurb; an unknown one falls to the end with a neutral badge and no blurb until the legend learns it.
+ const known = new Set(RISK_LEGEND.map((c) => c.id));
+ const extra: { id: string; label: string; tone: Tone; blurb: string }[] = [...byClass.keys()]
+  .filter((id) => !known.has(id))
+  .sort()
+  .map((id) => ({ id, label: id.replace(/^risk/, ""), tone: "neutral" as Tone, blurb: "" }));
+ const classes = [...RISK_LEGEND, ...extra];
+
  return (
   <Card>
    <SectionHeading
@@ -3215,7 +3225,7 @@ function RestApiSection(): JSX.Element {
     )}
    </p>
    <div className="stack">
-    {RISK_LEGEND.map((cls) => {
+    {classes.map((cls) => {
      const patterns = (byClass.get(cls.id) ?? []).sort();
      if (patterns.length === 0) return null;
      const gated = gatedClasses.has(cls.id);
