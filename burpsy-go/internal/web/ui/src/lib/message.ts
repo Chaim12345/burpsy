@@ -1065,3 +1065,39 @@ export function editableBodyBase64(view: { text?: string; body_base64?: string; 
   if (/^transfer-encoding:[^\r\n]*chunked/im.test(head)) return undefined;
   return view.body_base64;
 }
+
+/**
+ * The cookie name/value spans of one Cookie or Set-Cookie header line, line-relative, for the editor's
+ * cookie colouring (burpsy-react-ui-axm9 — Burp colours cookies in the message editor, cookieName /
+ * cookieValue). A Cookie line yields every `name=value` pair; a Set-Cookie line only its first pair,
+ * because what follows the first `;` are attributes (Path, Secure, …), not cookies. Any other line
+ * yields nothing.
+ */
+export function cookieHeaderTokens(line: string): { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] {
+  const colon = line.indexOf(":");
+  if (colon <= 0) return [];
+  const header = line.slice(0, colon).trim().toLowerCase();
+  if (header !== "cookie" && header !== "set-cookie") return [];
+  const out: { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] = [];
+  let cursor = colon + 1;
+  while (cursor < line.length) {
+    const semi = line.indexOf(";", cursor);
+    const stop = semi < 0 ? line.length : semi;
+    const chunk = line.slice(cursor, stop);
+    const lead = chunk.length - chunk.trimStart().length;
+    const pair = chunk.trim();
+    if (pair !== "") {
+      const start = cursor + lead;
+      const eq = pair.indexOf("=");
+      if (eq < 0) {
+        out.push({ cls: "cookie-name", start, end: start + pair.length });
+      } else {
+        if (eq > 0) out.push({ cls: "cookie-name", start, end: start + eq });
+        if (eq + 1 < pair.length) out.push({ cls: "cookie-value", start: start + eq + 1, end: start + pair.length });
+      }
+    }
+    if (header === "set-cookie") break;
+    cursor = stop + 1;
+  }
+  return out;
+}

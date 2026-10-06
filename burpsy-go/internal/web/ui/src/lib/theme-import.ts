@@ -1,9 +1,9 @@
 /**
  * A JSON theme import scoped to the tokens burpsy already has (burpsy-react-ui-fpew). This is NOT
- * Burp's 240-slot look-and-feel indirection, and NOT the group/highlight/status colour families
- * (those are burpsy-react-ui-axm9). It is the one affordance Burp's ThemeFactory.loadCustom gives an
- * operator — load a named palette — narrowed to the three semantic families burpsy's tokens model:
- * ui.text, ui.background, and the message editor's own colours.
+ * Burp's 240-slot look-and-feel indirection, and NOT Burp's group or annotation-highlight colour
+ * families. It is the one affordance Burp's ThemeFactory.loadCustom gives an operator — load a named
+ * palette — narrowed to the semantic families burpsy's tokens model: ui.text, ui.background, the
+ * message editor's own colours, and (since burpsy-react-ui-axm9 gave severity one scale) ui.issue.
  *
  * A theme file names a subset of these slots and a colour for each; the import fills only the slots
  * the file names and leaves the rest at the Penpot defaults (semantic.css). A file that names a slot
@@ -24,6 +24,9 @@ export const THEME_SLOT_FAMILIES: { family: string; slots: string[] }[] = [
   slots: ["paper", "paper-raised", "paper-deep", "paper-sunken", "field-bg", "chrome", "chrome-hover", "line", "line-strong"],
  },
  { family: "ui.editor.message", slots: ["editor-bg", "editor-fg", "editor-gutter-bg", "editor-gutter-fg"] },
+ // Burp's issue-severity family (burpsy-react-ui-axm9): the --severity-* scale every finding badge and
+ // tree dot reads through lib/severity.ts. Defaults alias the semantic status roles (styles.css).
+ { family: "ui.issue", slots: ["severity-critical", "severity-high", "severity-medium", "severity-low", "severity-informational"] },
 ];
 
 /** Every slot a theme file may legally name, flattened. */

@@ -27,6 +27,7 @@ import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
 import { EngagementView, type EngagementSeedRequest } from "./engagement";
 import { cn } from "../lib/cn";
+import { severityTone } from "../lib/severity";
 
 interface FlatRow {
  node: SiteNode;
@@ -284,21 +285,6 @@ function TreeRow({
    </div>
   </ContextMenu>
  );
-}
-
-/** Burp's severity colours for the inline node-findings list (burpsy-react-ui-zzz). */
-function findingTone(severity: string): "bad" | "warn" | "info" | "neutral" {
- switch (severity) {
-  case "Critical":
-  case "High":
-   return "bad";
-  case "Medium":
-   return "warn";
-  case "Low":
-   return "info";
-  default:
-   return "neutral";
- }
 }
 
 /** Deduplicated absolute URLs for every captured exchange under a tree row (burpsy-react-ui-gfx). */
@@ -985,7 +971,7 @@ export function SiteMapPage(): JSX.Element {
         ]}
        >
         <td>
-         <Badge tone={findingTone(finding.severity)}>{finding.severity}</Badge>
+         <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
         </td>
         <td title={finding.detail ?? undefined}>{finding.issue_name ?? finding.check_name ?? "Unnamed finding"}</td>
         <td>{finding.host}</td>

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength, requestTargetPath } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
 import {
  breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
@@ -82,6 +82,8 @@ const TOKEN_DECORATIONS: Record<TokenClass, Decoration> = {
  "css-value": Decoration.mark({ class: "cm-tok-css-value" }),
  "url-param-name": Decoration.mark({ class: "cm-tok-url-param-name" }),
  "url-param-value": Decoration.mark({ class: "cm-tok-url-param-value" }),
+ "cookie-name": Decoration.mark({ class: "cm-tok-cookie-name" }),
+ "cookie-value": Decoration.mark({ class: "cm-tok-cookie-value" }),
 };
 
 /**
@@ -243,6 +245,11 @@ function buildDecorations(view: EditorView): DecorationSet {
     if (colon > 0) {
      builder.add(line.from, line.from + colon, HEADER_NAME);
      if (line.from + colon + 1 < line.to) builder.add(line.from + colon + 1, line.to, HEADER_VALUE);
+     // Cookie / Set-Cookie pairs (burpsy-react-ui-axm9), nested inside the value mark. They start after
+     // the value mark's own start and come back in increasing order, which RangeSetBuilder requires.
+     for (const token of cookieHeaderTokens(line.text)) {
+      if (token.end > token.start) builder.add(line.from + token.start, line.from + token.end, TOKEN_DECORATIONS[token.cls]);
+     }
     }
    }
    if (line.to >= doc.length) break;

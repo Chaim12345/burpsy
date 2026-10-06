@@ -665,7 +665,10 @@ export type TokenClass =
   | "css-property"
   | "css-value"
   | "url-param-name"
-  | "url-param-value";
+  | "url-param-value"
+  // Cookie and Set-Cookie header pairs (burpsy-react-ui-axm9), coloured inside the header block.
+  | "cookie-name"
+  | "cookie-value";
 
 export interface BodyToken extends Span {
   cls: TokenClass;

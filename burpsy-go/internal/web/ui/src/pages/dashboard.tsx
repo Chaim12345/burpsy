@@ -18,6 +18,7 @@ import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
+import { severityTone } from "../lib/severity";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
  const value = state.toLowerCase();
@@ -25,23 +26,6 @@ function taskTone(state: string): "good" | "bad" | "warn" | "info" {
  if (value === "done" || value === "complete" || value === "completed") return "good";
  if (value === "cancelled" || value === "stopped") return "warn";
  return "info";
-}
-
-/** Burp's severity colours for the activity feed, the same mapping sitemap.tsx's findingTone uses —
- * copied rather than imported because both are tiny and a shared home would invent a module for one
- * switch statement. If a third copy appears, that is the signal to move it. */
-function findingTone(severity: string): "bad" | "warn" | "info" | "neutral" {
- switch (severity) {
-  case "Critical":
-  case "High":
-   return "bad";
-  case "Medium":
-   return "warn";
-  case "Low":
-   return "info";
-  default:
-   return "neutral";
- }
 }
 
 /**
@@ -1172,7 +1156,7 @@ function TaskDetail({
           ]}
          >
           <td>
-           <Badge tone={findingTone(finding.severity)}>{finding.severity}</Badge>
+           <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
           </td>
           <td title={finding.detail ?? undefined}>
            {finding.issue_name ?? finding.check_name ?? "Unnamed finding"}

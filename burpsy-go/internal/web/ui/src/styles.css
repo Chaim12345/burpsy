@@ -50,6 +50,17 @@
   --fs-xl: calc(clamp(15px, 0.95vw, 18px) * var(--ui-scale));
   --fs-2xl: calc(clamp(19px, 1.5vw, 26px) * var(--ui-scale));
   --fs-3xl: calc(clamp(21px, 1.7vw, 30px) * var(--ui-scale));
+  /* The issue-severity family (burpsy-react-ui-axm9): Burp's five issue severities as one named,
+     themeable scale instead of a colour decided in each component. Pure aliases of the semantic
+     status roles — which is why they live here and not in Penpot (semantic.css's header: a pure alias
+     of another semantic token stays hand-authored). Theme-independent by construction: the roles
+     they alias already switch with [data-theme]. lib/severity.ts is the one reader; the JSON theme
+     import may override each slot. */
+  --severity-critical: var(--bad);
+  --severity-high: var(--bad);
+  --severity-medium: var(--warn);
+  --severity-low: var(--info);
+  --severity-informational: var(--muted);
 }
 
 :root,
@@ -99,6 +110,11 @@
   --editor-css-value: #7f004f;
   --editor-url-param-name: #790e0e;
   --editor-url-param-value: #067d17;
+  /* Cookie pairs (burpsy-react-ui-axm9; Burp's cookieName/cookieValue). The values reuse this block's
+     already-measured AA colours on --editor-bg (json-number's blue, header-value's green) rather than
+     introducing new hexes with no contrast record. */
+  --editor-cookie-name: #0b53c1;
+  --editor-cookie-value: #067d17;
   --editor-match: rgb(255 198 0 / 45%);
   --editor-match-border: rgb(150 96 10 / 60%);
   --editor-match-selected: rgb(255 168 0 / 65%);
@@ -150,6 +166,8 @@
   --editor-css-value: #f2979d;
   --editor-url-param-name: #f5a4a4;
   --editor-url-param-value: #8fb573;
+  --editor-cookie-name: #9ebeff;
+  --editor-cookie-value: #8fb573;
   --editor-match: rgb(187 181 41 / 35%);
   --editor-match-border: rgb(187 181 41 / 70%);
   --editor-match-selected: rgb(187 181 41 / 60%);
@@ -1444,6 +1462,8 @@ tbody td {
 .cm-tok-css-value { color: var(--editor-css-value); }
 .cm-tok-url-param-name { color: var(--editor-url-param-name); font-weight: 700; }
 .cm-tok-url-param-value { color: var(--editor-url-param-value); }
+.cm-tok-cookie-name { color: var(--editor-cookie-name); font-weight: var(--weight-bold); }
+.cm-tok-cookie-value { color: var(--editor-cookie-value); }
 
 .cm-nonprinting {
   color: var(--accent-strong);
@@ -3071,11 +3091,11 @@ tbody td {
   background: var(--muted);
 }
 
-.sev-critical { background: var(--bad); outline: var(--border-strong) solid color-mix(in srgb, var(--bad) 35%, transparent); outline-offset: 1px; }
-.sev-high { background: var(--bad); }
-.sev-medium { background: var(--warn); }
-.sev-low { background: var(--info); }
-.sev-informational { background: var(--muted); }
+.sev-critical { background: var(--severity-critical); outline: var(--border-strong) solid color-mix(in srgb, var(--severity-critical) 35%, transparent); outline-offset: 1px; }
+.sev-high { background: var(--severity-high); }
+.sev-medium { background: var(--severity-medium); }
+.sev-low { background: var(--severity-low); }
+.sev-informational { background: var(--severity-informational); }
 
 /* The advisory prose scrolls; the request/response tabs hand their whole track to the editor. */
 .advisory-body {

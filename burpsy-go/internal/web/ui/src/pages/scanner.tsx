@@ -37,6 +37,7 @@ import {
 } from "../ui/primitives";
 import { DetailList } from "../ui/json";
 import { cn } from "../lib/cn";
+import { severityTone } from "../lib/severity";
 
 const SEVERITIES = ["Critical", "High", "Medium", "Low", "Informational"];
 const CONFIDENCES = ["Certain", "Firm", "Tentative"];
@@ -49,20 +50,6 @@ const REPORT_FORMATS = [
 
 function severityRank(severity: string): number {
  return SEVERITY_RANK[severity] ?? -1;
-}
-
-function severityTone(severity: string): Tone {
- switch (severity) {
-  case "Critical":
-  case "High":
-   return "bad";
-  case "Medium":
-   return "warn";
-  case "Low":
-   return "info";
-  default:
-   return "neutral";
- }
 }
 
 function confidenceTone(confidence: string): Tone {

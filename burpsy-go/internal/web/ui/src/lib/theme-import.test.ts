@@ -89,3 +89,18 @@ describe("theme persistence is safe by construction (burpsy-react-ui-fpew)", () 
   expect(store).not.toMatch(/themePreview: state\.themePreview/);
  });
 });
+
+describe("the severity family is themeable (burpsy-react-ui-axm9)", () => {
+ test("a theme may set a severity slot, and it lands on the --severity-* token", () => {
+  const result = parseThemeFile('{"tokens":{"severity-high":"#c00000"}}');
+  expect("theme" in result).toBe(true);
+  if ("theme" in result) expect(themeTokenVars(result.theme)).toEqual({ "--severity-high": "#c00000" });
+ });
+ test("every severity slot the theme can set is a token styles.css defines", () => {
+  const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+  for (const key of ["critical", "high", "medium", "low", "informational"]) {
+   expect(THEME_SLOTS.has(`severity-${key}`)).toBe(true);
+   expect(css).toMatch(new RegExp(`--severity-${key}:`));
+  }
+ });
+});
