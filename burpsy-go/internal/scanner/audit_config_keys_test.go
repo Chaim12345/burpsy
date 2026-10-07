@@ -134,8 +134,8 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	const wantApplied, wantPartial, wantReported = 42, 2, 14
 	// 42/2/14 since burpsy-react-ui-saq3.1: select_individual_issues and scan_only_selected_issues
 	// moved from partial to applied. They are booleans that choose Burp's mode (Zmzw.java:80-87),
-	// which is all a boolean carries, and they now have fields; selected_issues stays partial while
-	// its detection_methods are recorded and not acted on.
+	// which is all a boolean carries, and they now have fields; selected_issues stays partial because
+	// a method it enables that burpsy's check does not implement (Burp Infiltrator always) cannot run.
 	// 40/4/14 since burpsy-react-ui-ev7y: scan_speed and scan_accuracy moved from reported to
 	// applied together. Both had claimed "not applied" on a reading of Burp that was wrong about the
 	// mechanism — neither is run-level pacing; scan_speed selects per-check mutation SETS and

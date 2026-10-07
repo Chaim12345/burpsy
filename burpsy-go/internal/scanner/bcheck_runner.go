@@ -135,6 +135,7 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 			// row, and a whitelist drops a check it cannot name, so the configuration named for
 			// running BChecks ran none of them (burpsy-react-ui-saq3.1).
 			typeIndex: BCheckGeneratedTypeIndex,
+			methods:   []string{MethodActiveChecks},
 			scope:     scope,
 			enabled: func(cfg *ScanConfig) bool {
 				return cfg != nil && cfg.CheckCorpus

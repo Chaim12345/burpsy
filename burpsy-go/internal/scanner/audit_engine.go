@@ -76,6 +76,9 @@ type activeCheck struct {
 	// turns every active tier off still runs them — a passive check cannot change server state,
 	// which is the property the intrusive tier exists to protect.
 	passive bool
+	// methods are the Burp detection methods this check uses (CheckDescriptor.DetectionMethods). A run
+	// whose configuration disabled one of them for typeIndex does not dispatch the check.
+	methods []string
 	// run executes the check. The error is the evaluator's refusal, not a transport detail: a
 	// check the evaluator cannot run at all returns errCheckUnsupported so the audit engine
 	// counts it DispositionUnsupported (Skipped) rather than a clean miss, and any other error
@@ -216,7 +219,7 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 	// The deny half of the selection narrows the set exactly as the whitelist does, and leaving it out
 	// of this predicate would be kvmx again: an imported "all except time-based" configuration would
 	// take the ungated shortcut and dispatch the five issue types it removed.
-	if len(cfg.DisabledIssueTypes) > 0 {
+	if len(cfg.DisabledIssueTypes) > 0 || len(cfg.DisabledDetectionMethods) > 0 {
 		return true
 	}
 	if cfg.ScanSpeed.Set {
@@ -916,6 +919,13 @@ type AuditOutcome struct {
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
+	// MethodsDeclined is every detection method a dispatched check of this item did not run, each
+	// with its reason (burpsy-react-ui-2hze): a method the configuration disabled, with the probes
+	// that were withheld because of it, and a method the configuration enabled that burpsy's check
+	// does not implement — "Burp Infiltrator" above all. A qualifier on the checks that ran, not a
+	// tenth disposition: the check was considered and dispatched, and what it did not do is listed
+	// here rather than folded into a count that would read as a clean result. Marshals as [].
+	MethodsDeclined MethodDeclines `json:"methods_declined"`
 }
 
 // Considered is every check that reached a disposition. Equals the size of the enabled check set
@@ -1010,6 +1020,9 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.FindingsDropped > 0 {
 		fmt.Fprintf(&b, "; %d finding(s) dropped for want of a probe response", o.FindingsDropped)
+	}
+	if n := len(o.MethodsDeclined); n > 0 {
+		fmt.Fprintf(&b, "; %d detection method(s) declined", n)
 	}
 	if o.Error != "" {
 		fmt.Fprintf(&b, " (%s)", o.Error)
@@ -1518,7 +1531,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		}
 	}
 
-	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg)
+	// The item's detection-method ledger (2hze): every check this item dispatches records into it,
+	// both the probes a disabled method withheld and the enabled methods the check cannot run.
+	methodDeclines := NewMethodDeclineLedger()
+	ictx := withMethodDeclines(withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg), methodDeclines)
 	// The effectiveness ledger rides the context ONLY when the gate is on. A run with
 	// skip_ineffective_checks set to zero must not even BUILD a prior: recording evidence
 	// nobody will act on is not free, and the count it produced would then be reported
@@ -1695,6 +1711,14 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				// host for the item's entire duration and a cap of N would admit N items rather than N
 				// probes. This region is deliberately linear, with no `continue` between the acquire and
 				// the release, which is what makes the pairing safe here rather than only apparently safe.
+				// The methods this configuration ENABLED for the check's type that burpsy's check does
+				// not implement are declined on every item the check runs on, so an item's outcome says
+				// what its SQL injection check did not try, not only what the configuration said.
+				for _, d := range run.cfg.DeclinedDetectionMethods {
+					if d.Method != "" && d.TypeIndex == checks[check].typeIndex {
+						methodDeclines.Record(d)
+					}
+				}
 				run.perHostInFlight(ctx, ex.Host)
 				before := meter.snapshot()
 				verdict, runErr := checks[check].run(s, ictx, ex)
@@ -1896,6 +1920,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// and summed into the run's outcome, because the gate's evidence is spread across the
 	// items that probed and the items whose places it then dropped.
 	o.PointsJudgedIneffective += run.pointEffectiveness.Count()
+	o.MethodsDeclined = methodDeclines.List()
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

@@ -329,6 +329,19 @@ type CheckContext struct {
 	// as "the tier is off" — a unit test or a direct check call must not skip points on the
 	// strength of a run it never joined. Set by the dispatcher to the run's own state.
 	LightAudit *RunLightAudit
+	// CheckTypeIndex and CheckIssue name the catalogue row of the check this context was built for
+	// (burpsy-react-ui-2hze). Zero and empty outside a dispatched native check, which is how a probe
+	// knows it has no detection-method selection to honour.
+	CheckTypeIndex uint32
+	CheckIssue     string
+	// DisabledMethods are the detection methods the run's configuration disabled for
+	// CheckTypeIndex. The probe harness withholds a probe of a disabled method and records it in
+	// MethodDeclines — never a silent skip.
+	DisabledMethods map[string]bool
+	// MethodDeclines is the audit item's ledger of detection methods it did not run, with reasons.
+	// Never nil on a context this package builds, so a withheld probe always has somewhere to be
+	// counted.
+	MethodDeclines *MethodDeclineLedger
 }
 
 // RunLightAudit is what a check context sees of the audit run's light-audit tier: the
@@ -447,7 +460,27 @@ func NewCheckContext(scanner *ActiveScanner, exchange, stored *core.Exchange) *C
 		InsertionKinds:   base.insertionKinds(),
 		EnumerateOptions: base.enumerateOptions(),
 		ScanAccuracy:     base.ScanAccuracy,
+		MethodDeclines:   NewMethodDeclineLedger(),
 	}
+}
+
+// newCheckContextForCheck is newCheckContextForRun bound to one descriptor: the check's catalogue
+// row, and the detection methods the run disabled for it (burpsy-react-ui-2hze). wrapDescriptor is
+// the only dispatched caller, which is what makes "every native check knows its own selection" true
+// rather than conventional.
+func newCheckContextForCheck(ctx context.Context, scanner *ActiveScanner, exchange, stored *core.Exchange, d CheckDescriptor) *CheckContext {
+	cc := newCheckContextForRun(ctx, scanner, exchange, stored)
+	cc.CheckTypeIndex = d.TypeIndex
+	cc.CheckIssue = d.Name
+	cfg, ok := runConfigFrom(ctx)
+	if !ok {
+		cfg = DefaultAuditConfig()
+		if scanner != nil {
+			cfg = scanner.AuditConfig()
+		}
+	}
+	cc.DisabledMethods = cfg.disabledMethodsFor(d.TypeIndex)
+	return cc
 }
 
 // newCheckContextForRun builds the context for a check dispatched by an audit: NewCheckContext plus
@@ -477,6 +510,11 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 	// as enabled. Nil when the run set it to zero, which is how "the operator turned it off" reaches
 	// a check as an absent ledger rather than as a flag it has to honour.
 	cc.PointEffectiveness = pointEffectivenessFrom(ctx)
+	// The item's detection-method ledger (2hze), so a probe this check withholds is counted on the
+	// item's outcome. A context outside a dispatched audit keeps its own ledger, readable by its caller.
+	if l := methodDeclinesFrom(ctx); l != nil {
+		cc.MethodDeclines = l
+	}
 	return cc
 }
 
@@ -546,6 +584,11 @@ type CheckDescriptor struct {
 	// active tier off still runs them — a passive check cannot change server state, which is the
 	// property the intrusive tier exists to protect.
 	Passive bool
+	// DetectionMethods are the Burp detection methods (issue_selection.go's vocabulary) this check
+	// actually uses, from burpsyDetectionMethods. A configuration that disables one of them for this
+	// type withholds the check; one that enables a method not listed here is told it was declined.
+	// Empty means the check is selected by its type alone.
+	DetectionMethods []string
 }
 
 func (d CheckDescriptor) Runnable() bool {

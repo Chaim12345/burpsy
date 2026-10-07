@@ -63,6 +63,13 @@ type ProbeHarness struct {
 	// place than a minimise_false_negatives run (accuracy=4), which is the whole
 	// point of the trade-off.
 	accuracy int
+
+	// The detection-method selection this check runs under (burpsy-react-ui-2hze): its catalogue
+	// row, the methods the run disabled for that row, and where a withheld probe is counted.
+	typeIndex uint32
+	issue     string
+	disabled  map[string]bool
+	declines  *MethodDeclineLedger
 }
 
 // NewProbeHarness captures the baseline and enumerates insertion points.
@@ -93,6 +100,7 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	if cc.ScanAccuracy.Set {
 		h.accuracy = CheckAccuracy(cc.ScanAccuracy.Value).Attempts()
 	}
+	h.typeIndex, h.issue, h.disabled, h.declines = cc.CheckTypeIndex, cc.CheckIssue, cc.DisabledMethods, cc.MethodDeclines
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)
@@ -234,6 +242,29 @@ func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, p
 	return out
 }
 
+// withhold is the detection-method gate every probe kind passes through (burpsy-react-ui-2hze). It
+// answers whether a probe of this method may be sent for this check's issue type, and when it may
+// not, it records the decline with the number of requests withheld — so a run under "all except
+// time-based detection methods" can show that its timing probes were withheld, not that they ran
+// clean.
+//
+// Keyed by the check's type because Burp resolves a method name inside its type (Zwx_.java:43-61):
+// "Time delays" disabled for request smuggling says nothing about SQL injection.
+func (h *ProbeHarness) withhold(method string, probes int) bool {
+	if h == nil || !h.disabled[method] {
+		return false
+	}
+	h.declines.Record(MethodDecline{TypeIndex: h.typeIndex, Issue: h.issue, Method: method,
+		Reason: methodDisabledReason, ProbesWithheld: probes})
+	return true
+}
+
+// withheldProbe is the marker a gated probe returns in place of a sent one.
+func withheldProbe(point bcheck.InsertionPoint, payload, method string) InjectionProbe {
+	return InjectionProbe{Payload: payload, Withheld: true, Evidence: InjectionEvidenceNone,
+		Detail: fmt.Sprintf("%s %q: not sent — %s is disabled for this issue type", point.Kind, point.Name, method)}
+}
+
 // ProbeErrorSignatures sends each payload and looks for signatures the baseline did not have.
 //
 // The list is coverage-guided (burpsy-react-ui-6c90): payloads that have opened new
@@ -245,6 +276,12 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 
 	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
+	if h.withhold(MethodErrorMessages, len(payloads)) {
+		for _, payload := range payloads {
+			out = append(out, withheldProbe(point, payload, MethodErrorMessages))
+		}
+		return out
+	}
 	payloads = h.orderPayloads(point, payloads)
 	for _, payload := range payloads {
 		out = append(out, h.probe(ctx, point, payload,
@@ -266,6 +303,9 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 func (h *ProbeHarness) ProbeEvaluation(ctx context.Context, point bcheck.InsertionPoint,
 	payload, expected string) InjectionProbe {
 
+	if h.withhold(MethodStringEcho, 1) {
+		return withheldProbe(point, payload, MethodStringEcho)
+	}
 	return h.probe(ctx, point, payload,
 		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 			ev := ClassifyEvaluation(baseline.Body, injected.Body, payload, expected)
@@ -279,6 +319,9 @@ func (h *ProbeHarness) ProbeEvaluation(ctx context.Context, point bcheck.Inserti
 func (h *ProbeHarness) ProbeTiming(ctx context.Context, point bcheck.InsertionPoint,
 	payload string, delay time.Duration) InjectionProbe {
 
+	if h.withhold(MethodTimeDelays, 1) {
+		return withheldProbe(point, payload, MethodTimeDelays)
+	}
 	return h.probe(ctx, point, payload,
 		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 			ev := ClassifyTimingEvidence(baseline.Duration, injected.Duration, delay)
@@ -293,6 +336,9 @@ func (h *ProbeHarness) ProbeBoolean(ctx context.Context, point bcheck.InsertionP
 	truePayload, falsePayload string) InjectionProbe {
 
 	out := InjectionProbe{Payload: truePayload + " / " + falsePayload}
+	if h.withhold(MethodBooleanConditions, 2) {
+		return withheldProbe(point, out.Payload, MethodBooleanConditions)
+	}
 	whenTrue, err := h.Send(ctx, point, truePayload)
 	if err != nil {
 		out.Evidence = InjectionEvidenceInconclusive
@@ -341,6 +387,9 @@ type ProbeCoverage struct {
 	// fell is legible: without it, points the gate later drops read as points that were never
 	// enumerated.
 	PointsJudgedIneffective int
+	// PayloadsWithheld counts probes not sent because their detection method is disabled for this
+	// issue type (burpsy-react-ui-2hze). They are not in PayloadsSent: a withheld probe asked nothing.
+	PayloadsWithheld int
 }
 
 // Coverage summarises a probe set for reporting.
@@ -348,9 +397,13 @@ func (h *ProbeHarness) Coverage(probes []InjectionProbe, pointsTested int) Probe
 	cov := ProbeCoverage{
 		PointsTested:   pointsTested,
 		PointsDeclined: len(h.declined),
-		PayloadsSent:   len(probes),
 	}
 	for _, p := range probes {
+		if p.Withheld {
+			cov.PayloadsWithheld++
+			continue
+		}
+		cov.PayloadsSent++
 		if p.Evidence == InjectionEvidenceInconclusive {
 			cov.Inconclusive++
 		}

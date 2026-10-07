@@ -753,11 +753,14 @@ type AuditConfig struct {
 	DisabledIssueTypes []uint32
 	// DisabledDetectionMethods are the (issue type, detection method) pairs a configuration's
 	// selected_issues turned off — "Time delays" for SQL injection, say. Keyed per type because Burp
-	// resolves a method name inside its type (Zwx_.java:43-61).
+	// resolves a method name inside its type (Zwx_.java:43-61). A check that declares a disabled
+	// method is not dispatched (filterBySelection); a probe of one is withheld at the harness.
 	DisabledDetectionMethods []IssueDetectionMethod
 	// DeclinedDetectionMethods is what the configuration's selection named that this engine did not
-	// act on, each with its reason. Recorded at load time so the configuration view can show it and
-	// every run under it can repeat it.
+	// act on, each with its reason: an enabled method burpsy's check does not implement ("Burp
+	// Infiltrator" always), a method name Burp itself would ignore, a type outside the catalogue.
+	// Recorded at load time so the configuration view can show it, and repeated onto the outcome of
+	// every item whose check of that type runs (AuditOutcome.MethodsDeclined).
 	DeclinedDetectionMethods MethodDeclines
 }
 
@@ -1424,7 +1427,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:       "selected_issues",
 		burpKey:    "scanner/issues_reported/selected_issues",
-		what:       "partly applied: in per-issue mode an entry with enabled false removes that issue type from the run, and under scan_only_selected_issues the enabled entries are the whole run. Each entry's detection_methods are recorded per issue type but not yet enforced: this engine does not gate a check by detection method. Outside per-issue mode Burp ignores the list, and a non-empty one is reported unapplied",
+		what:       "partly applied: in per-issue mode an entry with enabled false removes that issue type from the run, and under scan_only_selected_issues the enabled entries are the whole run. A detection method set false is withheld for that issue type — a check that uses it is not dispatched, and a probe of it is not sent and is counted in the item's methods_declined. A method set true that burpsy's check does not implement (Burp Infiltrator always; for SQL injection everything but Error messages) cannot run, and is named in declined_detection_methods with the reason. Outside per-issue mode Burp ignores the list, and a non-empty one is reported unapplied",
 		listShaped: true,
 		applies:    true,
 	},

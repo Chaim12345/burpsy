@@ -31,10 +31,12 @@ package scanner
 // (a whitelist) would have silently narrowed a full audit to nine checks.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Burp's detection-method display names (Zwx_.java, constructor table recovered in
@@ -146,6 +148,172 @@ var burpIssueDetectionMethods = map[uint32][]string{
 	0x08000000: {MethodPassiveChecks, MethodActiveChecks},                                                                                                                                                             // EXTENSION_GENERATED
 	0x09000000: {MethodPassiveChecks, MethodActiveChecks},                                                                                                                                                             // BCHECK_GENERATED
 	0x09008000: {MethodPassiveChecks, MethodActiveChecks, MethodCollaborator},                                                                                                                                         // BAMBDA_GENERATED
+}
+
+// burpsyDetectionMethods is what burpsy's OWN check for each type actually does, spelled in Burp's
+// method vocabulary. It is the half the selection is enforced against: a check is withheld when a
+// method it declares here is disabled for its type, and a method the configuration enables that is
+// not listed here is declined by name, because burpsy will not run it.
+//
+// Every entry was read from the check it describes, not inferred from the row name:
+//   - SQL injection sends quote fragments and reads database error signatures only
+//     (checkSQLInjectionCore → ProbeErrorSignatures); it has no boolean, timing, Collaborator or
+//     database-specific variant, and ProbeTiming has no production caller at all.
+//   - OS command, PHP, SSI and server-side template injection prove execution by an echoed marker
+//     or arithmetic result (ProbeEvaluation): Burp's "String echo".
+//   - Path traversal and XXE read a known file's content back in band: "File retrieval".
+//   - LDAP compares an always-true and a negated filter (ProbeBoolean). Its error-signature probe is
+//     not a Burp method of the LDAP type, so it carries no method of its own.
+//   - XPath and XML injection read parser error signatures: "Error messages".
+//   - Broken access control compares two sessions' responses: "Response diffing".
+//   - Stored XSS re-reads a planted canary in a later response: "In-band".
+//   - Request smuggling pipelines a CL.TE / TE.CL pair down one connection and reads the response
+//     that follows — Burp's socket-poisoning method, not its timing one.
+//   - Reflected XSS confirms a client-side markup or script breakout: "Client-side".
+//   - The DOM rows run in the instrumented browser (domexec); the static DOM pass runs on the
+//     passive path, outside these descriptors: "Javascript dynamic analysis".
+//   - External service interaction plants an interactsh domain: Burp's "Burp Collaborator".
+//   - A loaded corpus check is a BCheck's active half: "Active checks".
+var burpsyDetectionMethods = map[uint32][]string{
+	0x00100100:               {MethodStringEcho},             // OS command injection
+	0x00100200:               {MethodErrorMessages},          // SQL injection
+	0x00100300:               {MethodFileRetrieval},          // File path traversal
+	0x00100400:               {MethodFileRetrieval},          // XML external entity injection
+	0x00100500:               {MethodBooleanConditions},      // LDAP injection
+	0x00100600:               {MethodErrorMessages},          // XPath injection
+	0x00100700:               {MethodErrorMessages},          // XML injection
+	0x00100850:               {MethodResponseDiffing},        // Broken access control
+	0x00100c00:               {MethodStringEcho},             // PHP code injection
+	0x00101080:               {MethodStringEcho},             // Server-side template injection
+	0x00101100:               {MethodStringEcho},             // SSI injection
+	0x00200100:               {MethodInBand},                 // Cross-site scripting (stored)
+	0x00200140:               {MethodBackEndSocketPoisoning}, // HTTP request smuggling
+	0x00200300:               {MethodClientSide},             // Cross-site scripting (reflected)
+	0x00300200:               {MethodCollaborator},           // External service interaction (DNS)
+	0x00300210:               {MethodCollaborator},           // External service interaction (HTTP)
+	BCheckGeneratedTypeIndex: {MethodActiveChecks},
+}
+
+// burpsyMethodlessTypes are the types Burp defines methods for whose burpsy check uses none of
+// them, each with the reason. Such a check is selected by type alone; every method a configuration
+// enables for it is declined.
+var burpsyMethodlessTypes = map[uint32]string{
+	0x00100210:                  "burpsy's second-order SQL injection row decides on a planted canary's later sighting, which is none of Burp's SQL injection methods",
+	0x00400110:                  "burpsy's spoofable-client-IP row reads the captured request's headers passively and sends nothing",
+	ExtensionGeneratedTypeIndex: "a provenance label for findings an extension filed; burpsy has no extension mechanism and the row reads a ledger, never a target",
+	0x09008000:                  "a provenance label for findings a Bambda filed; the row reads a ledger, never a target",
+}
+
+func init() {
+	// Every DOM-based type Burp defines (static and dynamic analysis) is driven by the instrumented
+	// browser here. Filled from Burp's own table rather than typed out, so a DOM row cannot be missed.
+	for t, methods := range burpIssueDetectionMethods {
+		if len(methods) == 2 && methods[0] == MethodJavaScriptDynamic && methods[1] == MethodJavaScriptStatic {
+			burpsyDetectionMethods[t] = []string{MethodJavaScriptDynamic}
+		}
+	}
+}
+
+// infiltratorDeclineReason is why "Burp Infiltrator" never runs here, whatever the configuration says.
+const infiltratorDeclineReason = "Burp Infiltrator instruments the target application with an agent that " +
+	"reports which server-side APIs a payload reached; burpsy has no such agent, so this method never runs here"
+
+// methodDeclineReason explains an enabled method burpsy's check for the type does not implement.
+func methodDeclineReason(def IssueDefinition, method string) string {
+	if method == MethodInfiltrator {
+		return infiltratorDeclineReason
+	}
+	if why, ok := burpsyMethodlessTypes[def.TypeIndex]; ok {
+		return why
+	}
+	have := burpsyDetectionMethods[def.TypeIndex]
+	if len(have) == 0 {
+		return fmt.Sprintf("burpsy's %s check implements none of Burp's detection methods for this type", def.Name)
+	}
+	return fmt.Sprintf("burpsy's %s check does not implement %q detection (it detects by %s), so this enabled method never runs here",
+		def.Name, method, strings.Join(have, ", "))
+}
+
+// burpsyImplements reports whether burpsy's check for the type uses the method.
+func burpsyImplements(typeIndex uint32, method string) bool {
+	for _, m := range burpsyDetectionMethods[typeIndex] {
+		if m == method {
+			return true
+		}
+	}
+	return false
+}
+
+// disabledMethodsFor is the set of methods the run disabled for one type. Nil when none are.
+func (cfg AuditConfig) disabledMethodsFor(typeIndex uint32) map[string]bool {
+	var out map[string]bool
+	for _, m := range cfg.DisabledDetectionMethods {
+		if m.TypeIndex != typeIndex {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[m.Method] = true
+	}
+	return out
+}
+
+// methodDisabledReason is the decline reason a run records when it withholds a disabled method.
+const methodDisabledReason = "disabled for this issue type by the scan configuration (selected_issues detection_methods)"
+
+// MethodDeclineLedger accumulates one audit item's detection-method declines. Records merge on
+// (type, method, reason), summing the probes withheld, so a check whose four payloads were all
+// withheld reads as one decline of four requests rather than four rows. Safe for concurrent use.
+type MethodDeclineLedger struct {
+	mu   sync.Mutex
+	rows MethodDeclines
+}
+
+// NewMethodDeclineLedger returns an empty ledger.
+func NewMethodDeclineLedger() *MethodDeclineLedger { return &MethodDeclineLedger{} }
+
+// Record adds one decline, merging with an existing row for the same (type, method, reason).
+func (l *MethodDeclineLedger) Record(d MethodDecline) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i := range l.rows {
+		r := &l.rows[i]
+		if r.TypeIndex == d.TypeIndex && r.Method == d.Method && r.Reason == d.Reason {
+			r.ProbesWithheld += d.ProbesWithheld
+			return
+		}
+	}
+	l.rows = append(l.rows, d)
+}
+
+// List returns a copy of the declines, never nil.
+func (l *MethodDeclineLedger) List() MethodDeclines {
+	out := MethodDeclines{}
+	if l == nil {
+		return out
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append(out, l.rows...)
+}
+
+// methodDeclinesKeyCtx carries an audit item's ledger to the checks it dispatches.
+type methodDeclinesKeyCtx struct{}
+
+func withMethodDeclines(ctx context.Context, l *MethodDeclineLedger) context.Context {
+	return context.WithValue(ctx, methodDeclinesKeyCtx{}, l)
+}
+
+func methodDeclinesFrom(ctx context.Context) *MethodDeclineLedger {
+	if ctx == nil {
+		return nil
+	}
+	l, _ := ctx.Value(methodDeclinesKeyCtx{}).(*MethodDeclineLedger)
+	return l
 }
 
 // BurpDetectionMethods returns the detection methods Burp defines for one issue type, in Burp's
@@ -348,6 +516,13 @@ func (c BuiltInConfig) applyIssueSelection(a *AuditConfig, rep *configApplyRepor
 			if !m.Enabled {
 				a.DisabledDetectionMethods = append(a.DisabledDetectionMethods,
 					IssueDetectionMethod{TypeIndex: e.TypeIndex, Method: m.Name})
+				continue
+			}
+			// Enabled, and the type itself runs: if burpsy's check cannot do it, say so by name —
+			// "Burp Infiltrator" above all, which has no counterpart here at all.
+			if e.Enabled && !burpsyImplements(e.TypeIndex, m.Name) {
+				declined = append(declined, MethodDecline{TypeIndex: e.TypeIndex, Issue: def.Name, Method: m.Name,
+					Reason: methodDeclineReason(def, m.Name)})
 			}
 		}
 	}
@@ -367,9 +542,16 @@ func (cfg AuditConfig) issueTypeDisabled(typeIndex uint32) bool {
 
 // filterBySelection is the second stage of Burp's two-stage dispatch (Zwy6.java:36-75): the
 // whitelist when scan_only_selected_issues put one in force, then the per-type overrides.
+//
+// Then the method rule. Burp keeps a check while ANY (type, method) pair it registers is enabled
+// (Zwy6.java:170-184) and gates the rest inside the check. burpsy withholds a check when ANY method
+// it declares is disabled: every burpsy check declares one method today, where the two rules agree,
+// and a check that declared two could not withhold one of them by itself — running it would send
+// the probes the operator turned off. A method a check does NOT declare is gated at the probe
+// instead (ProbeHarness.withhold), which is where an undeclared timing probe would be caught.
 func filterBySelection(checks []activeCheck, cfg AuditConfig) []activeCheck {
 	checks = filterByIssueTypes(checks, cfg.IssueTypes)
-	if len(cfg.DisabledIssueTypes) == 0 {
+	if len(cfg.DisabledIssueTypes) == 0 && len(cfg.DisabledDetectionMethods) == 0 {
 		return checks
 	}
 	out := make([]activeCheck, 0, len(checks))
@@ -377,7 +559,19 @@ func filterBySelection(checks []activeCheck, cfg AuditConfig) []activeCheck {
 		if c.typeIndex != 0 && cfg.issueTypeDisabled(c.typeIndex) {
 			continue
 		}
+		if disabled := cfg.disabledMethodsFor(c.typeIndex); disabled != nil && anyDisabled(c.methods, disabled) {
+			continue
+		}
 		out = append(out, c)
 	}
 	return out
+}
+
+func anyDisabled(methods []string, disabled map[string]bool) bool {
+	for _, m := range methods {
+		if disabled[m] {
+			return true
+		}
+	}
+	return false
 }
