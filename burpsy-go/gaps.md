@@ -1678,3 +1678,24 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Decoder digests: 23 of Burp's 62 DigestAlgorithm values (2026-10, burpsy-react-ui-7tgt)
+
+Burp's `CryptoUtils.generateDigest` takes the 62-constant `DigestAlgorithm` enum
+(`/root/burp-re/out/burp/api/montoya/utilities/DigestAlgorithm.java`, Montoya 2026.7). burpsy's hash
+step (`internal/tools/digest.go`, one table; the UI list is test-pinned to it) computes the 23 that the
+Go standard library and `golang.org/x/crypto` provide: MD4, MD5, SHA-1, RIPEMD-160, SHA-224/256/384/512,
+SHA-512/224, SHA-512/256, SHA3-224/256/384/512, Keccak-256/512, SHAKE128-256, SHAKE256-512,
+BLAKE2b-160/256/384/512 and BLAKE2s-256 — plus eight HMACs (MD5, SHA-1, SHA-224/256/384/512,
+SHA3-256/512), which Burp exposes through its Decoder rather than this enum.
+
+**Not offered (39), by name:** BLAKE2S_128, BLAKE2S_160, BLAKE2S_224, BLAKE3_256, DSTU7564_256/384/512,
+GOST3411, GOST3411_2012_256/512, HARAKA_256/512, KECCAK_224/288/384, MD2, PARALLEL_HASH_128_256,
+PARALLEL_HASH_256_512, RIPEMD_128/256/320, SKEIN (all 13 variants), SM3, TIGER, TUPLEHASH_128_256,
+TUPLEHASH_256_512, WHIRLPOOL.
+
+**Why:** Burp gets these from BouncyCastle. None is in Go's standard library or `x/crypto` (BLAKE2s
+there exposes only the 256-bit and the keyed 128-bit form; legacy Keccak only 256/512), so each would be a
+new third-party dependency in a security tool, for algorithms that rarely appear in a web engagement.
+The route refuses every one by name (400 listing the supported set), never by falling back to SHA-256.
+**Re-open:** a concrete engagement need for a specific algorithm, and a vetted pure-Go implementation.

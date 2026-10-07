@@ -54,7 +54,7 @@ const VALUE_FAMILY: Record<string, EncodingFamily> = {
   ascii: "ascii",
   rot13: "rot13",
   // Every digest and HMAC the hash step can send is one hash family, taken from the shared list so a
-  // newly offered algorithm can never be left untinted (burpsy-react-ui-7tgt widened it from 4 to 28).
+  // newly offered algorithm can never be left untinted (burpsy-react-ui-7tgt widened it from 4 to 31).
   ...Object.fromEntries(HASH_ALGORITHMS.map((name) => [name, "hash" as const])),
 };
 

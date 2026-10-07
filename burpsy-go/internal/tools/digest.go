@@ -37,6 +37,9 @@ type DigestAlgorithm struct {
 	Name  string
 	Keyed bool
 	New   func() hash.Hash
+	// Sum is set instead of New for an extendable-output function (SHAKE), which has no fixed-size
+	// hash.Hash; the name fixes the output length, as Burp's SHAKE_128_256 / SHAKE_256_512 do.
+	Sum func(data []byte) []byte
 }
 
 func mustBlake2b(size int) func() hash.Hash {
@@ -57,6 +60,14 @@ func mustBlake2s256() hash.Hash {
 	return h
 }
 
+func shake(size int, sum func(out, data []byte)) func([]byte) []byte {
+	return func(data []byte) []byte {
+		out := make([]byte, size)
+		sum(out, data)
+		return out
+	}
+}
+
 // digestAlgorithms is ordered weakest-first within each family, the order the UI lists them in.
 var digestAlgorithms = []DigestAlgorithm{
 	{Name: "md4", New: md4.New},
@@ -75,6 +86,9 @@ var digestAlgorithms = []DigestAlgorithm{
 	{Name: "sha3-512", New: sha3.New512},
 	{Name: "keccak-256", New: sha3.NewLegacyKeccak256},
 	{Name: "keccak-512", New: sha3.NewLegacyKeccak512},
+	{Name: "shake128-256", Sum: shake(32, sha3.ShakeSum128)},
+	{Name: "shake256-512", Sum: shake(64, sha3.ShakeSum256)},
+	{Name: "blake2b-160", New: mustBlake2b(20)},
 	{Name: "blake2b-256", New: mustBlake2b(32)},
 	{Name: "blake2b-384", New: mustBlake2b(48)},
 	{Name: "blake2b-512", New: mustBlake2b(64)},
@@ -127,6 +141,9 @@ func ComputeDigest(alg DigestAlgorithm, data, key []byte) ([]byte, error) {
 	}
 	if len(key) > 0 {
 		return nil, fmt.Errorf("%s is not keyed; send no key, or choose an hmac-* algorithm", alg.Name)
+	}
+	if alg.Sum != nil {
+		return alg.Sum(data), nil
 	}
 	h := alg.New()
 	h.Write(data)
