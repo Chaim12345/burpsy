@@ -6,6 +6,7 @@ import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useImportHar, useMessage, useStats } from "../lib/data";
+import { messageDisplayText } from "../lib/message";
 import { useAuditSelected } from "../lib/data.observe";
 import { useScopeView } from "../lib/data.policy";
 import { QUERY_PANEL } from "../lib/reference";
@@ -913,7 +914,7 @@ export function HistoryPage(): JSX.Element {
     value={
      selected.request === null
       ? "No request was captured for this exchange — it is a blind tunnel, relayed without being read."
-      : (request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
+      : (request.isFetching ? "Loading request bytes…" : messageDisplayText(request.data ?? {}, "No request bytes captured."))
     }
     filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
     // The body's real bytes, so a binary request (a gRPC/protobuf call) decodes in the Protobuf view
@@ -942,7 +943,7 @@ export function HistoryPage(): JSX.Element {
     value={
      selected.response === null
       ? "No response was captured for this exchange."
-      : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+      : (response.isFetching ? "Loading response bytes…" : messageDisplayText(response.data ?? {}, "No response bytes captured."))
     }
     bodyBase64={response.data?.body_base64}
     requestPath={selected.path}
@@ -1383,7 +1384,7 @@ export function HistoryPage(): JSX.Element {
     )}
     {inspector ? (
      <Inspector
-      raw={request.data?.text ?? ""}
+      raw={messageDisplayText(request.data ?? {}, "")}
       label="Inspector · request"
       readOnlyNote="This request has already been sent, so it is read-only here. Send it to Repeater to change it and try again."
      />
