@@ -24,7 +24,7 @@ import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
-import { intruderSendSettingsFields } from "../lib/send-settings";
+import { connectionReuseSummary, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
@@ -512,6 +512,7 @@ function AttackResult({
   attemptMenu?: (attempt: Attempt) => MenuGroup[];
 }): JSX.Element {
   const { report, payload_sets: sets, redirects_followed: redirectsFollowed } = view;
+  const connections = connectionReuseSummary(view);
 
   // Ordinal → payload combination, shared with the CSV export so the sheet and the
   // table can never disagree about what a row's payloads were (lib/intruder-export.ts
@@ -963,6 +964,13 @@ function AttackResult({
             <small>additional requests this attack sent chasing a 3xx</small>
           </div>
         ) : null}
+        {connections ? (
+          <div className="card metric">
+            <span>Connections</span>
+            <strong>{formatCount(view.connections_opened ?? 0)}</strong>
+            <small>{connections}</small>
+          </div>
+        ) : null}
       </div>
 
       {caveats.length ? (
@@ -1170,6 +1178,8 @@ export function IntruderPage(): JSX.Element {
     setConnectionClose,
     storePayloads,
     responseTimeoutMS,
+    http1ConnectionReuse,
+    httpVersion,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1205,6 +1215,8 @@ export function IntruderPage(): JSX.Element {
   // The send settings (xixe.1 Phase 1): persisted with the attack, and turned into request fields by
   // intruderSendSettingsFields so the step from screen to wire is tested outside the page.
   const setResponseTimeoutMS = field("responseTimeoutMS");
+  const setHTTP1ConnectionReuse = field("http1ConnectionReuse");
+  const setHTTPVersion = field("httpVersion");
 
   /**
    * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
@@ -3129,6 +3141,29 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+              <Field
+                label="HTTP version"
+                hint="Burp's per-attack override. A pin that cannot be honoured is reported as a downgrade, never silently changed."
+              >
+                {(id) => (
+                  <Select id={id} value={httpVersion ?? ""} onChange={(event) => setHTTPVersion(event.target.value as "" | "http1" | "http2")}>
+                    <option value="">Negotiate (HTTP/2 when the target offers it)</option>
+                    <option value="http1">HTTP/1.1</option>
+                    <option value="http2">HTTP/2 where the request can be carried</option>
+                  </Select>
+                )}
+              </Field>
+              <Checkbox
+                checked={reuseRequested({ http1ConnectionReuse, setConnectionClose })}
+                disabled={setConnectionClose}
+                onCheckedChange={(v) => setHTTP1ConnectionReuse(v)}
+                label="HTTP/1 connection reuse"
+              />
+              <p className="cell-dim">
+                {setConnectionClose
+                  ? "Off while Set Connection header is on: every request says Connection: close, and a connection that said it is never reused."
+                  : "Requests ride idle HTTP/1 connections to the target, at most as many as the attack runs at once. A connection is reused only after a response that ended cleanly with no Connection: close on either side. HTTP/2 exchanges are not pooled — pin HTTP/1.1 to reuse against an HTTP/2 target. Every request is still checked against scope."}
+              </p>
             </div>
           </Card>
         </TabsContent>

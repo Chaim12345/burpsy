@@ -51,6 +51,13 @@ type intruderSendPlan struct {
 	// report's own proof that the setting did something. Atomic because every attempt's send runs on
 	// its own goroutine (engine.go's driver loop), all writing through one plan.
 	redirectsFollowed atomic.Int64
+
+	// pref is the attack's HTTP version (http_version, xhqr), applied to every first-hop send.
+	pref sender.ProtocolPreference
+	// reuse is "HTTP/1 connection reuse" (xhqr); pool is its pool, built by startPool once the
+	// attack's concurrency is final and closed by close. Nil pool means one connection per request.
+	reuse bool
+	pool  *sender.ConnPool
 }
 
 // buildIntruderSendPlan resolves req's send settings for an attack on host:port. Every error is a
@@ -67,6 +74,16 @@ func (s *Server) buildIntruderSendPlan(
 	redirectPolicy, err := intruderRedirectPolicy(req.FollowRedirects, s.sender.Network().Redirects)
 	if err != nil {
 		return nil, err
+	}
+	pref, err := intruderHTTPVersion(req.HTTPVersion)
+	if err != nil {
+		return nil, err
+	}
+	reuse := req.HTTP1ConnectionReuse != nil && *req.HTTP1ConnectionReuse
+	if reuse && req.SetConnectionClose != nil && *req.SetConnectionClose {
+		return nil, fmt.Errorf("http1_connection_reuse and set_connection_close are both on: every request " +
+			"would say Connection: close, and a connection that said it is never reused, so the attack would " +
+			"ask for reuse and never get any. Turn one of them off")
 	}
 	var responseTimeout time.Duration
 	if rt := req.ResponseTimeoutMS; rt != nil {
@@ -87,6 +104,8 @@ func (s *Server) buildIntruderSendPlan(
 		timeout:         timeout,
 		responseTimeout: responseTimeout,
 		redirectPolicy:  redirectPolicy,
+		pref:            pref,
+		reuse:           reuse,
 		// The session cookie jar, applied to every spliced request. Burp's jar "is shared between all
 		// of Burp's tools"; before this it reached only the Repeater, so an attack against an
 		// authenticated endpoint reported the login wall instead of the endpoint.
@@ -95,8 +114,54 @@ func (s *Server) buildIntruderSendPlan(
 	}, nil
 }
 
-// close releases what the plan holds once the attack is over.
-func (p *intruderSendPlan) close() {}
+// intruderHTTPVersion maps http_version onto the sender's protocol preference.
+func intruderHTTPVersion(v *string) (sender.ProtocolPreference, error) {
+	if v == nil {
+		return sender.ProtocolPreferenceAuto, nil
+	}
+	switch *v {
+	case "":
+		return sender.ProtocolPreferenceAuto, nil
+	case "http1":
+		return sender.ProtocolPreferenceHTTP1, nil
+	case "http2":
+		return sender.ProtocolPreferenceForceH2, nil
+	}
+	return sender.ProtocolPreferenceAuto, fmt.Errorf(
+		"http_version: unknown version %q (want http1, http2, or empty to negotiate)", *v)
+}
+
+// startPool builds the connection pool when reuse was asked for, bounded at the attack's
+// concurrency. Called once, after the attack's limits are final and before the first send.
+func (p *intruderSendPlan) startPool(maxInFlight int) {
+	if p.reuse && p.pool == nil {
+		p.pool = sender.NewConnPool(maxInFlight)
+	}
+}
+
+// connectionsOpened and connectionsReused report the pool's counts, or nil when reuse was off.
+func (p *intruderSendPlan) connectionsOpened() *int64 {
+	if p.pool == nil {
+		return nil
+	}
+	n := p.pool.Opened()
+	return &n
+}
+
+func (p *intruderSendPlan) connectionsReused() *int64 {
+	if p.pool == nil {
+		return nil
+	}
+	n := p.pool.Reused()
+	return &n
+}
+
+// close releases what the plan holds once the attack is over: the pool's idle connections.
+func (p *intruderSendPlan) close() {
+	if p.pool != nil {
+		p.pool.Close()
+	}
+}
 
 // sendFn is the engine's SendFn for this plan, bound to the attack's context.
 func (p *intruderSendPlan) sendFn(ctx context.Context) intruder.SendFn {
@@ -122,7 +187,15 @@ func (p *intruderSendPlan) send(ctx context.Context, raw []byte) (intruder.Sent,
 	// After the splice, never before: insertion points are byte spans into the base request, and a
 	// header added to the base would shift every span after it.
 	raw = applyJarCookies(raw, p.jarHeader, p.exemptCookies)
-	res, err := p.auth.Send(sctx, raw)
+	// One gate either way: SendReusing authorises every request exactly as SendAs does, and only then
+	// decides whether an idle connection carries it.
+	var res sender.AuthorisedResult
+	var err error
+	if p.pool != nil {
+		res, err = p.auth.SendReusing(sctx, p.pool, raw, p.pref)
+	} else {
+		res, err = p.auth.SendAs(sctx, raw, p.pref)
+	}
 	if err != nil {
 		return intruder.Sent{}, err
 	}

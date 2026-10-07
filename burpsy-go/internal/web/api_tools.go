@@ -621,6 +621,19 @@ type intruderRunReq struct {
 	// whether a client's saved attack resumes with the setting on or off.
 	SetConnectionClose *bool `json:"set_connection_close,omitempty"`
 	StorePayloads      *bool `json:"store_full_payloads,omitempty"`
+	// HTTP1ConnectionReuse is Burp's "HTTP/1 connection reuse" (burpsy-react-ui-xhqr): requests ride
+	// idle HTTP/1 connections to the target, at most max_in_flight of them, instead of dialling once
+	// per request. Every request is still authorised on its own bytes (AuthorisedSender.SendReusing).
+	// Nil or false is the old behaviour — one connection per request, closed after the response. The
+	// bundled UI sends true, Burp's own default; an API client that never names it keeps what it had.
+	// Refused together with set_connection_close: a request that says Connection: close is never
+	// reused, so the pair would describe an attack that asked for reuse and could never get any.
+	HTTP1ConnectionReuse *bool `json:"http1_connection_reuse,omitempty"`
+	// HTTPVersion is Burp's per-attack "HTTP version" override (xhqr): "" (or absent) negotiates as
+	// every send does, "http1" pins HTTP/1.1 so the bytes go out as written, "http2" requires h2
+	// where the request can be carried over it. Pins that do not happen are reported as downgrades,
+	// the same as Repeater's protocol_preference.
+	HTTPVersion *string `json:"http_version,omitempty"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -791,6 +804,13 @@ type RunView struct {
 	// or every hop was refused by policy or scope — the same "prove the setting did something"
 	// discipline AutoThrottleEngaged already holds the rate limiter to.
 	RedirectsFollowed int `json:"redirects_followed"`
+	// ConnectionsOpened and ConnectionsReused are what HTTP/1 connection reuse did (xhqr): sockets
+	// this attack dialled, and requests that completed on a socket an earlier request had used. Both
+	// null when reuse was off — every request then had a connection of its own and nothing was
+	// counted — so "reuse was off" and "reuse was on and never happened" are different JSON. Redirect
+	// hops always dial their own connection and are in neither count.
+	ConnectionsOpened *int64 `json:"connections_opened"`
+	ConnectionsReused *int64 `json:"connections_reused"`
 }
 
 // intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
@@ -1276,6 +1296,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	})
 	defer s.attacks.remove(task.ID())
 
+	// HTTP/1 connection reuse (xhqr) is bounded by the attack's own concurrency, read off the attack
+	// after every adjustment above, so the pool can never hold more sockets than the attack can use.
+	sendPlan.startPool(attack.Limits.MaxInFlight)
 	report := intruder.Run(attack, send, record)
 	task.Advance(uint64(report.Sent + report.Failed))
 	// Stop, not Finish, for an attack that was halted. A stopped run reported as done is a report over
@@ -1365,6 +1388,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		PayloadSets:       resolved,
 		SessionCookies:    intruderSessionCookieView(sendPlan.jarHeader, sendPlan.exemptCookies),
 		RedirectsFollowed: int(sendPlan.redirectsFollowed.Load()),
+		ConnectionsOpened: sendPlan.connectionsOpened(),
+		ConnectionsReused: sendPlan.connectionsReused(),
 	})
 }
 

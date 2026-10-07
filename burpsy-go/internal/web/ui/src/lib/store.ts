@@ -322,6 +322,17 @@ export interface IntruderConfig {
   * and an explicit value stay two different attacks.
   */
  responseTimeoutMS: string;
+ /**
+  * Burp's "HTTP/1 connection reuse" (burpsy-react-ui-xhqr). On by default, as Burp's own reset
+  * defaults select it (the decompiled Intruder panel's reset sets both its override switch and
+  * "default HTTP/1 keep-alive if supported" to selected). The server's default for an absent field is
+  * off, so this is the one place the Burp default is chosen. Not sent while Set Connection header is
+  * on: the server refuses the pair, because a Connection: close request is never reused.
+  */
+ http1ConnectionReuse: boolean;
+ /** Burp's per-attack "HTTP version" override (xhqr): "" negotiates, "http1" pins HTTP/1.1, "http2"
+  *  requires h2 where the request can be carried over it. */
+ httpVersion: "" | "http1" | "http2";
 }
 
 /**
@@ -451,6 +462,8 @@ export function emptyIntruderConfig(): IntruderConfig {
   setConnectionClose: false,
   storePayloads: false,
   responseTimeoutMS: "",
+  http1ConnectionReuse: true,
+  httpVersion: "",
  };
 }
 

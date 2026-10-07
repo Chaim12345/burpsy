@@ -210,6 +210,13 @@ export interface RunView {
    * absent reads as 0, which is what every such server's behaviour actually was.
    */
   redirects_followed?: number;
+  /**
+   * What HTTP/1 connection reuse did (xhqr): sockets the attack dialled, and requests that completed
+   * on a socket an earlier request had used. null when reuse was off — nothing was counted, every
+   * request had its own connection. Optional because an older server never sent either.
+   */
+  connections_opened?: number | null;
+  connections_reused?: number | null;
 }
 
 /** Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/settings.html). */

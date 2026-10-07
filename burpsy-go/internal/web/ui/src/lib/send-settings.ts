@@ -25,11 +25,38 @@ export function parseResponseTimeoutMS(text: string): number | undefined {
 }
 
 /** The Intruder settings this module owns, as the run request's fields. */
-export type IntruderSendSettings = Pick<IntruderConfig, "responseTimeoutMS">;
+export type IntruderSendSettings = Pick<
+  IntruderConfig,
+  "responseTimeoutMS" | "http1ConnectionReuse" | "httpVersion" | "setConnectionClose"
+>;
+
+/**
+ * Whether HTTP/1 connection reuse is actually requested. Set Connection header wins: every request
+ * then says Connection: close, which the server never reuses, and it refuses the pair outright —
+ * so the control is shown off and nothing is sent, rather than a launch that fails.
+ */
+export function reuseRequested(config: Pick<IntruderSendSettings, "http1ConnectionReuse" | "setConnectionClose">): boolean {
+  return config.http1ConnectionReuse !== false && !config.setConnectionClose;
+}
 
 export function intruderSendSettingsFields(config: IntruderSendSettings): Record<string, unknown> {
   const fields: Record<string, unknown> = {};
   const responseTimeout = parseResponseTimeoutMS(config.responseTimeoutMS ?? "");
   if (responseTimeout !== undefined) fields.response_timeout_ms = responseTimeout;
+  // Sent only when on: an absent field is the server's "one connection per request".
+  if (reuseRequested(config)) fields.http1_connection_reuse = true;
+  if (config.httpVersion === "http1" || config.httpVersion === "http2") fields.http_version = config.httpVersion;
   return fields;
+}
+
+/**
+ * The report's connection counts as one line, or null when the attack did not count them (reuse was
+ * off, or an older server). Null is not zero: "every request had its own connection" and "reuse was
+ * on and never happened" are different findings about the target.
+ */
+export function connectionReuseSummary(view: { connections_opened?: number | null; connections_reused?: number | null }): string | null {
+  const opened = view.connections_opened;
+  const reused = view.connections_reused;
+  if (typeof opened !== "number" || typeof reused !== "number") return null;
+  return `${opened} opened, ${reused} ${reused === 1 ? "request" : "requests"} on a reused connection`;
 }

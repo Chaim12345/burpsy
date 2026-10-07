@@ -1610,3 +1610,30 @@ read timeout for every tool. The shared settings are never mutated.
   so tabs that disagree about the timeout are refused by name rather than having all but one dropped.
 - Not covered: the typed `Sender.Send` path (net/http's client). Nothing that offers the option sends
   through it.
+
+### HTTP/1 connection reuse and the HTTP version override (xhqr)
+
+**Burp:** Intruder settings "HTTP/1 connection reuse … can greatly increase the speed of your
+attacks"; "HTTP version … Override the project-level HTTP/2 setting". Reuse is on by default: the
+decompiled panel's reset (`Zruy.Zc5`) selects both `intruderOverrideHttp1KeepAliveSwitch` and
+`intruderDefaultHttp1KeepAliveIfSupportedCheckbox`.
+**burpsy:** `http1_connection_reuse` and `http_version` on the run request; `sender.ConnPool` +
+`AuthorisedSender.SendReusing` (`internal/sender/connpool.go`). Every request is still authorised on
+its own bytes before a connection is checked out. The report carries `connections_opened` and
+`connections_reused` (both `null` when reuse is off, so "off" and "on but never reused" differ).
+
+- **Default differs by surface, on purpose.** The bundled UI sends `http1_connection_reuse: true`
+  (Burp's default). An API request that omits the field gets `false` — one connection per request,
+  what every client got before this field existed — so no scripted attack changes behaviour silently.
+- **h2 is not pooled.** Burp has a separate "HTTP/2 connection reuse"; burpsy does not. A send that
+  offers h2 to an authority not already known to decline it dials fresh, and an h2 exchange closes
+  its connection (counted as opened, never as reused). Against an h2 target with `http_version`
+  negotiating, `connections_reused` is therefore 0 — reported, not hidden. Pin `http1` to reuse.
+- **Stricter than Burp about what is reused.** A connection goes back only after a response delimited
+  by its own framing (never read-to-close), with nothing buffered past it, no `Connection: close` or
+  HTTP/1.0 on either side, a final status, and not after HEAD or CONNECT. An idle connection is
+  probed (1 ms read) before reuse; one that died between the probe and the write is retried on a
+  fresh connection only for an idempotent method (net/http's rule).
+- `http1_connection_reuse` with `set_connection_close` is refused naming both: the pair asks for
+  reuse that can never happen.
+- Redirect hops (`follow_redirects`) dial their own connections and are in neither count.

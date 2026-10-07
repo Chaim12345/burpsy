@@ -86,6 +86,8 @@ function fullConfig(): IntruderConfig {
   autoPauseCaseSensitive: true,
   // The send settings (xixe.1 Phase 1), non-default for the same reason.
   responseTimeoutMS: "20000",
+  http1ConnectionReuse: false,
+  httpVersion: "http1",
   };
 }
 
