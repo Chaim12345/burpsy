@@ -1339,6 +1339,10 @@ type toolLogEntry struct {
 	// never 0: the traffic store counts rows from zero, so 0 is a real exchange and a null-less zero
 	// would show the viewer the wrong message pair.
 	Exchange *uint64 `json:"exchange"`
+	// Mime is the response media type the row was recorded with (toollog.Entry.Mime), projected so the
+	// MIME view filter and a MIME column can read it. Null when no type was measured — a transport
+	// failure or a whole-run row — and "" when a response declared none; the two are different facts.
+	Mime *string `json:"mime"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
@@ -1470,6 +1474,7 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := q.Get("filter")
 	search := q.Get("search")
+	view := parseToolLogView(q)
 	limit := 0
 	if raw := q.Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -1489,21 +1494,21 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	}
 	matched := make([]*toollog.Entry, 0, len(entries))
 	for _, e := range entries {
-		if !toolLogMatches(e, filter, search) {
+		if !toolLogMatches(e, filter, search) || !s.toolLogViewMatches(e, view) {
 			continue
 		}
 		matched = append(matched, e)
 		counts[e.Tool.String()]++
 	}
 
-	view := make([]toolLogEntry, 0, len(matched))
+	rows := make([]toolLogEntry, 0, len(matched))
 	if limit > 0 {
-		for i := len(matched) - 1; i >= 0 && len(view) < limit; i-- {
-			view = append(view, toolLogEntryView(matched[i]))
+		for i := len(matched) - 1; i >= 0 && len(rows) < limit; i-- {
+			rows = append(rows, toolLogEntryView(matched[i]))
 		}
 	} else {
 		for _, e := range matched {
-			view = append(view, toolLogEntryView(e))
+			rows = append(rows, toolLogEntryView(e))
 		}
 	}
 
@@ -1529,10 +1534,10 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
 		Total:           len(matched),
-		Shown:           len(view),
+		Shown:           len(rows),
 		Dropped:         s.toolLog.Dropped(),
 		Counts:          counts,
-		Entries:         view,
+		Entries:         rows,
 		Capturing:       capturing,
 		Uncaptured:      uncaptured,
 		UncapturedTotal: uncapturedTotal,

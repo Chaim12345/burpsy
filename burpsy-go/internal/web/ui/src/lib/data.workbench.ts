@@ -29,7 +29,7 @@ import type { EffectiveEntropyReport } from "./sequencer-significance";
 export const workbenchKeys = {
  /** Distinct from data.ts's keys.toolLog: that key omits `limit`, so sharing it
   *  would let the Dashboard's 20-row window and this page's full read collide. */
- toolLog: (filter: string, search: string, limit: number) => ["toollog", "logger", filter, search, limit] as const,
+ toolLog: (filter: string, search: string, limit: number, view = "") => ["toollog", "logger", filter, search, limit, view] as const,
  sequencerCapture: (id: string) => ["sequencer", "capture", id] as const,
  sequencerSettings: ["sequencer", "settings"] as const,
 };
@@ -441,8 +441,34 @@ export function useLoadMessage() {
 
 /* --- tool log ------------------------------------------------------------- */
 
-export const useToolLogView = (filter: string, search: string, limit = 1_000) =>
- useResource<ToolLogView>(workbenchKeys.toolLog(filter, search, limit), `/api/tools/log${query({ limit, filter, search })}`);
+/**
+ * Logger's reversible VIEW axes (uvpb), judged by the server at query time — distinct from the capture
+ * filter, which decides what is recorded at all. Empty fields are no constraint and are not sent.
+ */
+export interface ToolLogViewAxes {
+ scopeOnly?: boolean;
+ hasResponse?: boolean;
+ parameterized?: boolean;
+ /** Comma-separated media types, e.g. "text/html,application/json". */
+ mime?: string;
+ /** Comma-separated file extensions, with or without the dot. */
+ ext?: string;
+}
+
+export const useToolLogView = (filter: string, search: string, limit = 1_000, view: ToolLogViewAxes = {}) => {
+ const axes = {
+  scope_only: view.scopeOnly ? "1" : "",
+  has_response: view.hasResponse ? "1" : "",
+  parameterized: view.parameterized ? "1" : "",
+  mime: (view.mime ?? "").trim(),
+  ext: (view.ext ?? "").trim(),
+ };
+ const viewKey = Object.values(axes).join("|");
+ return useResource<ToolLogView>(
+  workbenchKeys.toolLog(filter, search, limit, viewKey),
+  `/api/tools/log${query({ limit, filter, search, ...axes })}`,
+ );
+};
 
 /**
  * Toggle one tool's capture axis. This is the destructive arm, so the UI must

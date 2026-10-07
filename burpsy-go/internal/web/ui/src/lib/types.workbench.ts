@@ -397,6 +397,11 @@ export interface ToolLogRow {
  comment: string;
  /** The operator's colour tag, "" when unset. Same vocabulary as Organizer's and history's. */
  highlight: string;
+ /**
+  * The response media type the row was recorded with. null when no type was measured (a transport
+  * failure, a whole-run row); "" when a response declared none — different facts (uvpb).
+  */
+ mime: string | null;
 }
 
 export interface ToolLogView {
