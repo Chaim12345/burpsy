@@ -32,9 +32,10 @@ func TestTwoRoutingFragmentsAreTwoLocations(t *testing.T) {
 	// renders the route, so the server sees the document repeatedly. That is correct.
 	if hits < 3 {
 		t.Errorf("the crawl made %d requests; two routing fragments should each be a location, so "+
-			"the page is fetched once per route. Fetches: %v", hits, fetchLog(rep))
+			"the page is fetched once per route. Fetches: %v Skips: %s", hits, fetchLog(rep), reasonCounts(rep))
 	}
-	for _, want := range []string{"#/orders/7", "#/orders/8"} {
+	// url.Fragment excludes the leading '#', so the route `#/orders/7` is stored as "/orders/7".
+	for _, want := range []string{"/orders/7", "/orders/8"} {
 		found := false
 		for _, f := range rep.Fetches {
 			if f.Fragment == want {
