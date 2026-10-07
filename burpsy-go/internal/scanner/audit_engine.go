@@ -160,6 +160,14 @@ func filterByIssueTypes(checks []activeCheck, selected []uint32) []activeCheck {
 // AuditOutcome.Considered must equal for a dispatched item.
 func (s *ActiveScanner) ActiveCheckCount() int { return len(s.enabledChecks()) }
 
+// ActiveCheckCountUnder is the size of the check set a run under cfg dispatches — what
+// AuditOutcome.Considered equals for a dispatched item of that run. ActiveCheckCount ignores the
+// run's configuration, so a reply quoting it beside a run whose configuration removed issue types
+// stated a larger check set than the one it accounted for (burpsy-react-ui-saq3.1).
+func (s *ActiveScanner) ActiveCheckCountUnder(cfg AuditConfig) int {
+	return len(s.enabledChecksUnder(cfg))
+}
+
 // auditLevelPassiveFamilies are the ScanConfig switches the passive check families hang from. They
 // are what `scanner/issues_reported/scan_type_passive` gates: a shipped configuration that turns
 // passive checking off zeroes exactly these, and a check survives only if its own family switch

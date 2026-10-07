@@ -237,3 +237,28 @@ ever wanted again.
 
 None. All 183 catalog issues fall into exactly one bucket above; the partition is exhaustive and
 sums to 183, asserted by `TestDeclinedCatalogDescriptors`.
+
+## Per-issue selection in an imported scan configuration (saq3.1, 2hze, gmdk)
+
+A Burp scan configuration loaded with `-scan-config /path/to/file.json` (`scanner.ApplyBurpConfigFile`)
+selects issues the way Burp 2026.7.1 (build 51467) does — `internal/scanner/issue_selection.go` carries
+the citations:
+
+| Burp key | What burpsy does |
+|---|---|
+| `select_individual_issues` / `scan_only_selected_issues` | Either one puts the run in per-issue mode, where the `scan_type_*` keys are **not consulted** (`Zmzw.java:80-87`). |
+| `selected_issues` without `scan_only_selected_issues` | **Per-issue overrides**, not a whitelist (`Zwnn.java:13-25`): an unlisted type still runs, `enabled: false` removes the type. |
+| `selected_issues` with `scan_only_selected_issues` | A whitelist of the enabled entries; an empty list restricts nothing. |
+| `selected_issues[].detection_methods[]` set false | Keyed per issue type (`Zwx_.java:43-61`). A check whose declared method is disabled is not dispatched; a probe of a disabled method is withheld at the harness and counted in the item's `methods_declined` with the requests withheld. |
+| `selected_issues[].detection_methods[]` set true that burpsy does not implement | Named in `declined_detection_methods` with the reason and repeated on every item whose check of that type runs. **Burp Infiltrator** always lands here. |
+| `skip_server_side_injection_for_parameters` | Parameter names (API) are not probed by Burp's server-side-injection set: SQL injection, second-order SQL injection and XPath always (`Zppj.java:166`); the rest — reflected and stored XSS included — only while `skip_ineffective_checks` is on (`Zfhb.java:81-82`). See `server_side_injection.go`. |
+
+What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. The gap it shows
+is real coverage, not a configuration artefact: **SQL injection is error-based only** (no boolean,
+time-delay, Collaborator or database-specific variant), and **no native check sends a time-delay
+probe** — `ProbeTiming` has no production caller. Disabling "Time delays" therefore removes no traffic
+today; the harness gate is what keeps that true when a timing probe is added.
+
+Every shipped configuration that sets `issues_reported` is pinned to behaviour matching its name by
+`TestEveryShippedSelectionConfigurationBehavesAsItsNameSays`, over the 29 files vendored byte-for-byte
+in `internal/scanner/testdata/burp-configs`.

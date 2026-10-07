@@ -1587,3 +1587,24 @@ reason can express that, because nothing was refused. Two options, neither taken
 work: record the discovered-but-not-queued subresource hosts as an explicit coverage statement on the
 report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
 honest one and is the smaller.
+
+## Scan-configuration selection: where burpsy diverges from Burp (saq3.1, 2hze, gmdk — 2026-10-07)
+
+Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than
+Burp rather than wider:
+
+- **A check that declares a disabled method is withheld whole.** Burp keeps a check while any of its
+  (type, method) pairs is enabled and gates the rest inside the check (`Zwy6.java:170-184`). Every
+  burpsy check declares exactly one method today, where the two rules agree; a future check declaring
+  two will be withheld whole when either is disabled, until it can gate one alone.
+- **Detection methods burpsy does not implement cannot run**, whatever a configuration enables:
+  Burp Infiltrator everywhere; for SQL injection everything but Error messages; for OS command and PHP
+  code injection Time delays and Collaborator. They are declined by name
+  (`AuditConfig.DeclinedDetectionMethods`, `AuditOutcome.MethodsDeclined`), never silently ignored.
+- **Skip lists from a Burp file**: Burp's value is a list of match rules
+  (`{parameter, item, match_type, expression}`). burpsy honours parameter NAMES set through
+  `/api/scanner/configs`; a file's empty rule list is honoured and a non-empty one is reported unapplied.
+- **Server-side-injection class, PROBABLE rows**: Perl, Ruby, Python and unidentified code injection
+  take the code-injection family's class (`Zsn3.java:74-76`); their own Burp runner was not located.
+- **No console route imports a Burp configuration file.** The import path is the `-scan-config` flag;
+  the web console lists the six transcribed presets and saved configurations only.
