@@ -35,7 +35,7 @@ export interface EncodeResponse {
  output: BytesView;
 }
 
-/** Digest is hex, so `output.len` is twice the digest size in bytes. */
+/** Digest text in the requested output encoding (hex by default). */
 export interface HashResponse {
  algorithm: string;
  output: BytesView;
@@ -53,6 +53,12 @@ export interface TransformStep {
  value: string;
  /** Only meaningful for a smart decode; sent as `guess_alphabets`. */
  guess: boolean;
+ /** HMAC key, sent only for an hmac-* algorithm. */
+ key?: string;
+ /** How `key` is written: utf8 (default), hex or base64. */
+ keyEncoding?: string;
+ /** How a hash step writes its digest: hex (default), base64 or base64url. */
+ output?: string;
 }
 
 export interface TransformResult {

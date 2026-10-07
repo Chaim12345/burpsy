@@ -99,8 +99,49 @@ export const ENCODE_ENCODINGS = [
  "rot13",
 ] as const;
 
-/** Weakest first. These four are the whole accepted set; anything else is a 400. */
-export const HASH_ALGORITHMS = ["md5", "sha1", "sha256", "sha512"] as const;
+/**
+ * The server's whole digest table (internal/tools/digest.go), in its order; anything else is a 400.
+ * A web test reads this array and fails if it drifts from the Go table. hmac-* need a key.
+ */
+export const HASH_ALGORITHMS = [
+ "md4",
+ "md5",
+ "sha1",
+ "ripemd160",
+ "sha224",
+ "sha256",
+ "sha384",
+ "sha512",
+ "sha512-224",
+ "sha512-256",
+ "sha3-224",
+ "sha3-256",
+ "sha3-384",
+ "sha3-512",
+ "keccak-256",
+ "keccak-512",
+ "blake2b-256",
+ "blake2b-384",
+ "blake2b-512",
+ "blake2s-256",
+ "hmac-md5",
+ "hmac-sha1",
+ "hmac-sha224",
+ "hmac-sha256",
+ "hmac-sha384",
+ "hmac-sha512",
+ "hmac-sha3-256",
+ "hmac-sha3-512",
+] as const;
+
+/** How a hash step reads its HMAC key, and how it writes the digest (base64url is unpadded, as a JWS signature). */
+export const HASH_KEY_ENCODINGS = ["utf8", "hex", "base64"] as const;
+export const HASH_OUTPUTS = ["hex", "base64", "base64url"] as const;
+
+/** True for the keyed (HMAC) algorithms, which the server refuses without a key. */
+export function hashNeedsKey(algorithm: string): boolean {
+ return algorithm.startsWith("hmac-");
+}
 
 /** How the Sequencer may read a token's bits. Empty string means "let the server detect". */
 export const SEQUENCER_ENCODINGS = ["hex", "base64", "raw"] as const;
@@ -284,7 +325,18 @@ async function runStep(input: string, step: TransformStep): Promise<TransformRes
   const response = await api<EncodeResponse>("/api/tools/encode", json("POST", { input, encoding: step.value }));
   return { ...base, ...viewFields(response.output), layers: null };
  }
- const response = await api<HashResponse>("/api/tools/hash", json("POST", { input, algorithm: step.value }));
+ const keyed = hashNeedsKey(step.value);
+ const response = await api<HashResponse>(
+  "/api/tools/hash",
+  json("POST", {
+   input,
+   algorithm: step.value,
+   // A key is sent only for the HMAC family: the server refuses a key on a bare digest rather than
+   // silently ignoring it, so a stale key left in the field must not turn a plain hash into a 400.
+   ...(keyed ? { key: step.key ?? "", key_encoding: step.keyEncoding ?? "utf8" } : {}),
+   output: step.output ?? "hex",
+  }),
+ );
  return { ...base, ...viewFields(response.output), layers: null };
 }
 

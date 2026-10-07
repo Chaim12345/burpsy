@@ -1945,34 +1945,51 @@ func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// input_encoding / key_encoding: utf8 (default), hex or base64 (standard or URL-safe, padded or
+	// not). output: hex (default), base64, or base64url (unpadded — a JWS signature). key is required
+	// by the hmac-* family and refused by every other algorithm (burpsy-react-ui-wi55, -7tgt).
 	var req struct {
-		Input     string `json:"input"`
-		Algorithm string `json:"algorithm"`
+		Input         string `json:"input"`
+		InputEncoding string `json:"input_encoding"`
+		Algorithm     string `json:"algorithm"`
+		Key           string `json:"key"`
+		KeyEncoding   string `json:"key_encoding"`
+		Output        string `json:"output"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	h := tools.NewHasher()
-	var digest string
-	// Named exhaustively, with no default branch. An unknown algorithm used to fall through to SHA-256
-	// while the reply echoed back the algorithm that was *asked for*, so a caller storing
-	// {algorithm, output} recorded a digest under a name that did not produce it — and a typo in the
-	// field ("sha-256", "sha265") silently returned a plausible-looking hash rather than a complaint.
-	// An empty algorithm still means SHA-256, because that is the documented default and every existing
-	// caller that omits the field relies on it; a *stated* algorithm now has to be one this can compute.
-	switch strings.ToLower(strings.TrimSpace(req.Algorithm)) {
-	case "md5":
-		digest = h.MD5(req.Input)
-	case "sha1":
-		digest = h.SHA1(req.Input)
-	case "sha512":
-		digest = h.SHA512(req.Input)
-	case "sha256", "":
-		digest = h.SHA256(req.Input)
-	default:
-		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of md5, sha1, sha256, sha512",
-			req.Algorithm), http.StatusBadRequest)
+	// Named exhaustively by the tools table, with no fallback. An unknown algorithm used to fall
+	// through to SHA-256 while the reply echoed back the algorithm that was *asked for*, so a caller
+	// storing {algorithm, output} recorded a digest under a name that did not produce it. An empty
+	// algorithm still means SHA-256, the documented default every caller that omits the field relies on.
+	alg, ok := tools.LookupDigest(req.Algorithm)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of %s",
+			req.Algorithm, strings.Join(tools.DigestAlgorithmNames(), ", ")), http.StatusBadRequest)
+		return
+	}
+	data, err := tools.DecodeDigestInput(req.Input, req.InputEncoding)
+	if err != nil {
+		http.Error(w, "input: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var key []byte
+	if req.Key != "" {
+		if key, err = tools.DecodeDigestInput(req.Key, req.KeyEncoding); err != nil {
+			http.Error(w, "key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	sum, err := tools.ComputeDigest(alg, data, key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	digest, err := tools.EncodeDigest(sum, req.Output)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

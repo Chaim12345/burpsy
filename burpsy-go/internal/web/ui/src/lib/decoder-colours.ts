@@ -37,7 +37,7 @@ export type EncodingFamily =
  * family because that is the honest unit an operator reasons about: base64url
  * is base64 over the URL-safe alphabet; gzip and deflate are both compression;
  * hex, octal and binary are one byte rendered in a numeric base (`radix`); the
- * four digests are one hash. A distinct name inside a family would still tint
+ * digests and HMACs are one hash. A distinct name inside a family would still tint
  * identically, so the family, not the raw name, is what a colour can mean.
  */
 const VALUE_FAMILY: Record<string, EncodingFamily> = {
@@ -53,10 +53,9 @@ const VALUE_FAMILY: Record<string, EncodingFamily> = {
   jwt: "jwt",
   ascii: "ascii",
   rot13: "rot13",
-  md5: "hash",
-  sha1: "hash",
-  sha256: "hash",
-  sha512: "hash",
+  // Every digest and HMAC the hash step can send is one hash family, taken from the shared list so a
+  // newly offered algorithm can never be left untinted (burpsy-react-ui-7tgt widened it from 4 to 28).
+  ...Object.fromEntries(HASH_ALGORITHMS.map((name) => [name, "hash" as const])),
 };
 
 /** The family a single encoding name belongs to, or null if it is unknown. */
