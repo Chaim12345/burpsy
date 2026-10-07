@@ -46,23 +46,36 @@ func funcPtr(f func(*ScanConfig) bool) uintptr {
 // returns the findings they produced. Nil-safe on scanner and exchange; an exchange with
 // no response yields nothing (the passive rows read the response).
 //
+// # cfg is the run configuration, and it narrows exactly as it narrows an audit
+//
+// The check set is enabledChecksUnder(cfg) — the same selection the audit dispatch reads — and
+// not the scanner's bare family switches. Before burpsy-react-ui-saq3.3.2 this walked
+// enabledChecks(), so a configuration that set scan_type_passive false, or deselected a passive
+// issue type through selected_issues, stopped that type in every audit session and left it
+// raising findings on every captured exchange the live sweep admitted: the sweep's ACTIVE half
+// honoured the run's selection and its passive half, one loop earlier, did not. There is one
+// selection implementation (issue_selection.go's filterBySelection, reached through
+// enabledChecksUnder) and this is now one more caller of it, not a second copy.
+//
+// The run configuration also rides the context, as it does for a dispatched check, so a passive
+// row that reads it (enumeration options, say) reads the run's and not the server default.
+//
 // The context is threaded so a future passive row that does bounded work (a body scan
 // under a budget) can be cancelled like everything else.
-func (s *ActiveScanner) RunPassiveChecks(ctx context.Context, ex *core.Exchange) []*Finding {
+func (s *ActiveScanner) RunPassiveChecks(ctx context.Context, ex *core.Exchange, cfg AuditConfig) []*Finding {
 	if s == nil || ex == nil || ex.Response == nil {
 		return nil
 	}
-	snap := s.ConfigSnapshot()
+	ctx = withRunConfig(ctx, cfg)
 	var out []*Finding
-	for _, c := range s.enabledChecks() {
+	for _, c := range s.enabledChecksUnder(cfg) {
 		if c.run == nil || c.enabled == nil {
 			continue
 		}
+		// Not one of the two passive families. The family switches themselves were already applied
+		// by enabledChecksUnder, along with scan_type_passive and the per-issue selection.
 		if !passiveGateFns[funcPtr(c.enabled)] {
-			continue // not one of the two passive families
-		}
-		if !c.enabled(&snap) {
-			continue // the family is switched off
+			continue
 		}
 		findings, err := c.run(s, ctx, ex)
 		if err != nil {

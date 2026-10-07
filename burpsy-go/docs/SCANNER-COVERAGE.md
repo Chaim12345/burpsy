@@ -253,6 +253,14 @@ the citations:
 | `selected_issues[].detection_methods[]` set true that burpsy does not implement | Named in `declined_detection_methods` with the reason and repeated on every item whose check of that type runs. **Burp Infiltrator** always lands here. |
 | `skip_server_side_injection_for_parameters` | Parameter names (API) are not probed by Burp's server-side-injection set: SQL injection, second-order SQL injection and XPath always (`Zppj.java:166`); the rest — reflected and stored XSS included — only while `skip_ineffective_checks` is on (`Zfhb.java:81-82`). See `server_side_injection.go`. |
 
+The live sweep's passive pass (`RunPassiveChecks`, run over every admitted exchange before the sweep's
+audit session) reads the same run configuration through the same `enabledChecksUnder` selection: a
+deselected passive type, a disabled method, or `scan_type_passive` false stops it there too
+(saq3.3.2, `TestTheSweepPassivePassDoesNotRaiseAnIssueTypeTheRunConfigurationDeselected`). Before
+that fix the sweep's active half honoured the selection and its passive half, one loop earlier, did
+not. The proxy-capture pass (`Capture.ScanExchange`: BCheck passive checks and the static DOM pass)
+is not a configured run and still does not read it.
+
 What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. The gap it shows
 is real coverage, not a configuration artefact: **SQL injection is error-based only** (no boolean,
 time-delay, Collaborator or database-specific variant), and **no native check sends a time-delay
