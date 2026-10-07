@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { connectionReuseSummary, intruderSendSettingsFields, parseResponseTimeoutMS } from "./send-settings";
+import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, parseResponseTimeoutMS } from "./send-settings";
 import { emptyIntruderConfig, mergePersistedWorkspace } from "./store";
 
 // ---- what the send-settings controls put on the wire (burpsy-react-ui-xixe.1, Phase 1) ------------
@@ -58,6 +58,27 @@ describe("HTTP/1 connection reuse and the HTTP version (xhqr)", () => {
   });
 });
 
+describe("Update Host header to match target (ety8)", () => {
+  test("on by default, as in Burp, and sent", () => {
+    expect(intruderSendSettingsFields(emptyIntruderConfig()).update_host_header).toBe(true);
+  });
+
+  test("off sends nothing, which the server reads as leave the Host header as captured", () => {
+    expect(intruderSendSettingsFields({ ...emptyIntruderConfig(), updateHostHeader: false })).not.toHaveProperty(
+      "update_host_header",
+    );
+  });
+
+  test("a skipped setting and untouched requests become result caveats, and silence means applied", () => {
+    expect(hostHeaderCaveats({ host_header_skipped: "", host_header_untouched: 0 })).toEqual([]);
+    expect(hostHeaderCaveats({})).toEqual([]);
+    const caveats = hostHeaderCaveats({ host_header_skipped: 'position "Host" covers the Host header', host_header_untouched: 2 });
+    expect(caveats).toHaveLength(2);
+    expect(caveats[0]).toContain("covers the Host header");
+    expect(caveats[1]).toContain("2 requests");
+  });
+});
+
 describe("a persisted attack from before a setting existed", () => {
   test("hydrates the missing setting with its default rather than with undefined", () => {
     const current = { intruder: emptyIntruderConfig(), other: 1 };
@@ -65,12 +86,14 @@ describe("a persisted attack from before a setting existed", () => {
     delete old.responseTimeoutMS;
     delete old.http1ConnectionReuse;
     delete old.httpVersion;
+    delete old.updateHostHeader;
     const merged = mergePersistedWorkspace({ intruder: old }, current);
     expect(merged.intruder.msgId).toBe("9");
     expect(merged.intruder.responseTimeoutMS).toBe("");
     // A true default must come back true, not undefined-and-therefore-off.
     expect(merged.intruder.http1ConnectionReuse).toBe(true);
     expect(merged.intruder.httpVersion).toBe("");
+    expect(merged.intruder.updateHostHeader).toBe(true);
     expect(merged.other).toBe(1);
   });
 });

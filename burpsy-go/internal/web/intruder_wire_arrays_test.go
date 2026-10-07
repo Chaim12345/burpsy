@@ -119,3 +119,76 @@ func TestACleanIntruderRunSendsArraysNotNullsForEveryRowField(t *testing.T) {
 	// request_id on a row with nothing stored — so only the fields named above are contractual
 	// arrays, and naming them is what makes this a check rather than a grep.
 }
+
+// The send-settings fields the Results tab reads (burpsy-react-ui-xixe.1, Phase 1) are always present
+// in the marshalled report, and each has the JSON type types.tools.ts declares. None of them is an
+// array, so the hazard is different from the one above: an absent key, or a null where the page does
+// arithmetic. connections_* are null BY DESIGN when reuse is off — "not counted" — and a number when
+// it is on, and the two runs below pin both.
+func TestIntruderSendSettingsFieldsAreOnTheWireWithTheirTypes(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+
+	for _, reuse := range []bool{false, true} {
+		var body json.RawMessage
+		code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+			"msg_id":                 id,
+			"target":                 "http://" + addr,
+			"mode":                   "sniper",
+			"manual_points":          []map[string]int{{"start": start, "end": start + 3}},
+			"payload_sets":           [][]string{{"xyz", "wxyz"}},
+			"rps":                    1000,
+			"http1_connection_reuse": reuse,
+			"update_host_header":     true,
+		}, &body)
+		if code != http.StatusOK {
+			t.Fatalf("reuse=%v: run status = %d: %s", reuse, code, body)
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(body, &top); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		kind := func(name string) string {
+			t.Helper()
+			raw, ok := top[name]
+			if !ok {
+				t.Fatalf("reuse=%v: %s is absent from the response: %s", reuse, name, body)
+			}
+			switch {
+			case string(raw) == "null":
+				return "null"
+			case string(raw) == "true" || string(raw) == "false":
+				return "bool"
+			case raw[0] == '"':
+				return "string"
+			case raw[0] == '-' || (raw[0] >= '0' && raw[0] <= '9'):
+				return "number"
+			}
+			return "other:" + string(raw)
+		}
+		wantCount := "null"
+		if reuse {
+			wantCount = "number"
+		}
+		for name, want := range map[string]string{
+			"connections_opened":    wantCount,
+			"connections_reused":    wantCount,
+			"host_header_updated":   "bool",
+			"host_header_skipped":   "string",
+			"host_header_untouched": "number",
+		} {
+			if got := kind(name); got != want {
+				t.Fatalf("reuse=%v: %s is %s on the wire, want %s: %s", reuse, name, got, want, top[name])
+			}
+		}
+		if string(top["host_header_updated"]) != "true" {
+			t.Fatalf("update_host_header was asked for and the report says %s", top["host_header_updated"])
+		}
+	}
+}

@@ -1,8 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -58,12 +62,19 @@ type intruderSendPlan struct {
 	// attack's concurrency is final and closed by close. Nil pool means one connection per request.
 	reuse bool
 	pool  *sender.ConnPool
+
+	// hostValue is the Host header every request is rewritten to ("Update Host header to match
+	// target", ety8), or "" when the setting is off or was skipped; hostSkipped says why it was
+	// skipped. hostUntouched counts requests a payload left with other than one Host header.
+	hostValue     string
+	hostSkipped   string
+	hostUntouched atomic.Int64
 }
 
 // buildIntruderSendPlan resolves req's send settings for an attack on host:port. Every error is a
 // refusal of the request as written (a 400), returned before any request is sent.
 func (s *Server) buildIntruderSendPlan(
-	req intruderRunReq, selected []intruder.InsertionPoint, host string, port uint16, tls bool,
+	req intruderRunReq, base []byte, selected []intruder.InsertionPoint, host string, port uint16, tls bool,
 ) (*intruderSendPlan, error) {
 	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
 	if req.TimeoutMS != nil {
@@ -96,7 +107,13 @@ func (s *Server) buildIntruderSendPlan(
 		}
 		responseTimeout = time.Duration(*rt) * time.Millisecond
 	}
+	hostValue, hostSkipped := "", ""
+	if req.UpdateHostHeader != nil && *req.UpdateHostHeader {
+		hostValue, hostSkipped = hostHeaderPlan(base, selected, host, port, tls)
+	}
 	return &intruderSendPlan{
+		hostValue:       hostValue,
+		hostSkipped:     hostSkipped,
 		host:            host,
 		port:            port,
 		tls:             tls,
@@ -187,6 +204,14 @@ func (p *intruderSendPlan) send(ctx context.Context, raw []byte) (intruder.Sent,
 	// After the splice, never before: insertion points are byte spans into the base request, and a
 	// header added to the base would shift every span after it.
 	raw = applyJarCookies(raw, p.jarHeader, p.exemptCookies)
+	// Same place and same reason as the jar: after the splice, so no span offset moves.
+	if p.hostValue != "" {
+		if rewritten, ok := rewriteHostHeader(raw, p.hostValue); ok {
+			raw = rewritten
+		} else {
+			p.hostUntouched.Add(1)
+		}
+	}
 	// One gate either way: SendReusing authorises every request exactly as SendAs does, and only then
 	// decides whether an idle connection carries it.
 	var res sender.AuthorisedResult
@@ -225,4 +250,91 @@ func (p *intruderSendPlan) send(ctx context.Context, raw []byte) (intruder.Sent,
 	// followed, "how long this attempt took" means the whole chain, the same way Burp's own timing
 	// describes what an operator waited for, not the first response of several.
 	return intruder.Sent{Raw: respRaw, Duration: time.Since(sendStarted), Status: status}, nil
+}
+
+// targetAuthority is the Host header value for an attack's target: the default port omitted, an IPv6
+// literal bracketed, and the name the operator typed — never an address it resolved to, because a
+// resolution override changes where the socket goes and not what the request names.
+func targetAuthority(host string, port uint16, tls bool) string {
+	if (tls && port == 443) || (!tls && port == 80) {
+		if strings.Contains(host, ":") {
+			return "[" + host + "]"
+		}
+		return host
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+}
+
+// headerLine is one header line in a request head: [start, end) excludes the CRLF.
+type headerLine struct{ start, end int }
+
+// hostHeaderLines returns every Host header line in raw's head, by byte range.
+func hostHeaderLines(raw []byte) []headerLine {
+	headEnd := bytes.Index(raw, []byte("\r\n\r\n"))
+	if headEnd < 0 {
+		return nil
+	}
+	var out []headerLine
+	// Skip the request line: a request target can contain "Host:" and is not a header.
+	pos := bytes.Index(raw, []byte("\r\n"))
+	for pos >= 0 && pos < headEnd {
+		start := pos + 2
+		end := start + bytes.Index(raw[start:], []byte("\r\n"))
+		if end < start {
+			break
+		}
+		line := raw[start:end]
+		if i := bytes.IndexByte(line, ':'); i > 0 && strings.EqualFold(string(line[:i]), "Host") {
+			out = append(out, headerLine{start, end})
+		}
+		pos = end
+	}
+	return out
+}
+
+// hostHeaderPlan decides, once from the base request, whether "Update Host header to match target"
+// can apply: the value to write, or "" and the reason it cannot.
+//
+// Skipped when a selected position overlaps the Host header line — the same rule exemptCookieNames
+// applies to the jar: the position being fuzzed is the question, and overwriting it would send the
+// same request every time. Skipped too when the base request carries no Host header (there is no
+// header to keep in step) or more than one (a duplicated-Host probe, where rewriting either would
+// change what is being tested).
+func hostHeaderPlan(base []byte, selected []intruder.InsertionPoint, host string, port uint16, tls bool) (string, string) {
+	lines := hostHeaderLines(base)
+	switch {
+	case len(lines) == 0:
+		return "", "the base request has no Host header to update"
+	case len(lines) > 1:
+		return "", fmt.Sprintf("the base request carries %d Host headers; rewriting one would change what a duplicated-Host request tests", len(lines))
+	}
+	line := lines[0]
+	for _, p := range selected {
+		// Inclusive at both ends, so a zero-length position at the line's edge counts as covering it.
+		if p.Span.Offset <= line.end && line.start <= p.Span.Offset+p.Span.Len {
+			return "", fmt.Sprintf("position %q covers the Host header, and the position being fuzzed is not overwritten", p.Label)
+		}
+	}
+	return targetAuthority(host, port, tls), ""
+}
+
+// rewriteHostHeader sets the value of raw's one Host header, keeping the name's spelling and the
+// whitespace after the colon. ok is false, and raw is returned unchanged, when the request does not
+// carry exactly one Host header.
+func rewriteHostHeader(raw []byte, value string) ([]byte, bool) {
+	lines := hostHeaderLines(raw)
+	if len(lines) != 1 {
+		return raw, false
+	}
+	line := lines[0]
+	colon := line.start + bytes.IndexByte(raw[line.start:line.end], ':')
+	valueStart := colon + 1
+	for valueStart < line.end && (raw[valueStart] == ' ' || raw[valueStart] == '\t') {
+		valueStart++
+	}
+	out := make([]byte, 0, len(raw)-(line.end-valueStart)+len(value))
+	out = append(out, raw[:valueStart]...)
+	out = append(out, value...)
+	out = append(out, raw[line.end:]...)
+	return out, true
 }

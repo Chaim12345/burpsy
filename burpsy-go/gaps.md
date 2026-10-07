@@ -1637,3 +1637,20 @@ its own bytes before a connection is checked out. The report carries `connection
 - `http1_connection_reuse` with `set_connection_close` is refused naming both: the pair asks for
   reuse that can never happen.
 - Redirect hops (`follow_redirects`) dial their own connections and are in neither count.
+
+### Update Host header to match target (ety8)
+
+**Burp:** positions.html — "By default, Update Host header to match target is selected."
+**burpsy:** `update_host_header` on the run request. Every request's Host header is rewritten to the
+target authority (default port omitted, IPv6 bracketed, the typed name — never a resolved address)
+after the payload splice, where the session jar is applied, so no span offset moves.
+
+- **Default differs by surface, on purpose.** The bundled UI sends `true` (Burp's default); an API
+  request that omits the field gets `false`, the captured Host as before, so no scripted attack
+  changes the bytes it sends without saying so.
+- Stood aside, and reported in `host_header_skipped`, when a selected position covers the Host
+  header (the position being fuzzed wins — the jar's rule for fuzzed cookies) or the base request
+  does not carry exactly one Host header (none to keep in step, or a duplicated-Host probe that a
+  rewrite would defeat).
+- A request a payload left with other than one Host header is sent as spliced and counted in
+  `host_header_untouched`, rather than having one of two Host headers chosen for it.

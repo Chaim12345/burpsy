@@ -333,6 +333,13 @@ export interface IntruderConfig {
  /** Burp's per-attack "HTTP version" override (xhqr): "" negotiates, "http1" pins HTTP/1.1, "http2"
   *  requires h2 where the request can be carried over it. */
  httpVersion: "" | "http1" | "http2";
+ /**
+  * Burp's "Update Host header to match target" (burpsy-react-ui-ety8). On by default, as in Burp
+  * ("By default, Update Host header to match target is selected"); the server's default for an
+  * absent field is off. The server stands the setting aside, and says so, when a position covers
+  * the Host header.
+  */
+ updateHostHeader: boolean;
 }
 
 /**
@@ -464,6 +471,7 @@ export function emptyIntruderConfig(): IntruderConfig {
   responseTimeoutMS: "",
   http1ConnectionReuse: true,
   httpVersion: "",
+  updateHostHeader: true,
  };
 }
 

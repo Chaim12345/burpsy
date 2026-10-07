@@ -24,7 +24,7 @@ import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
-import { connectionReuseSummary, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
+import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
@@ -894,6 +894,7 @@ function AttackResult({
     // way to a full result set says so, the way Burp's own results mark retried requests.
     report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
     report.baseline ? "Item 0 is the unmodified baseline request (no payloads) — every other row is one ordinal higher than the payload set's arithmetic." : null,
+    ...hostHeaderCaveats(view),
   ].filter((value): value is string => value !== null);
 
   return (
@@ -1180,6 +1181,7 @@ export function IntruderPage(): JSX.Element {
     responseTimeoutMS,
     http1ConnectionReuse,
     httpVersion,
+    updateHostHeader,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1217,6 +1219,7 @@ export function IntruderPage(): JSX.Element {
   const setResponseTimeoutMS = field("responseTimeoutMS");
   const setHTTP1ConnectionReuse = field("http1ConnectionReuse");
   const setHTTPVersion = field("httpVersion");
+  const setUpdateHostHeader = field("updateHostHeader");
 
   /**
    * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
@@ -2047,6 +2050,11 @@ export function IntruderPage(): JSX.Element {
               <Field label="Target authority">
                 {(id) => <Input id={id} value={target} onChange={(event) => setTarget(event.target.value)} placeholder="https://host:443" />}
               </Field>
+              <Checkbox
+                checked={updateHostHeader !== false}
+                onCheckedChange={(v) => setUpdateHostHeader(v)}
+                label="Update Host header to match target"
+              />
               <Field label="Attack type">
                 {(id) => (
                   <Select id={id} value={mode} onChange={(event) => setMode(event.target.value as AttackMode)}>

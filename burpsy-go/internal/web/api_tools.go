@@ -634,6 +634,14 @@ type intruderRunReq struct {
 	// where the request can be carried over it. Pins that do not happen are reported as downgrades,
 	// the same as Repeater's protocol_preference.
 	HTTPVersion *string `json:"http_version,omitempty"`
+	// UpdateHostHeader is Burp's "Update Host header to match target" (burpsy-react-ui-ety8): every
+	// request's Host header is rewritten to the attack's target authority, after the payload splice,
+	// so a captured request retargeted at another host does not go out naming the old one. Skipped —
+	// and the report says why — when a selected position covers the Host header (the position being
+	// fuzzed wins, Burp's rule for cookies too) or the base request does not carry exactly one Host
+	// header. The bundled UI sends true, Burp's default; an absent field means false, which is what
+	// every API client got before this existed. gaps.md records the split.
+	UpdateHostHeader *bool `json:"update_host_header,omitempty"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -811,6 +819,16 @@ type RunView struct {
 	// hops always dial their own connection and are in neither count.
 	ConnectionsOpened *int64 `json:"connections_opened"`
 	ConnectionsReused *int64 `json:"connections_reused"`
+	// HostHeaderUpdated says "Update Host header to match target" (ety8) was applied: every request's
+	// Host header was rewritten to the target authority, except the HostHeaderUntouched ones.
+	// HostHeaderSkipped is why it was not applied at all when it was asked for — a position covers
+	// the Host header, or the base request does not carry exactly one — and empty otherwise.
+	// HostHeaderUntouched counts requests a payload left with other than one Host header, which were
+	// sent as spliced rather than rewritten: a payload that adds a Host header is a probe, and
+	// choosing which of two to rewrite would change what it tests.
+	HostHeaderUpdated   bool   `json:"host_header_updated"`
+	HostHeaderSkipped   string `json:"host_header_skipped"`
+	HostHeaderUntouched int    `json:"host_header_untouched"`
 }
 
 // intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
@@ -945,7 +963,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// The send settings, resolved before any payload is generated: a refused setting must not leave
 	// minted Collaborator addresses behind in the hub, and must not be discovered on the first send.
 	// See intruder_send.go.
-	sendPlan, err := s.buildIntruderSendPlan(req, selected, host, port, tls)
+	sendPlan, err := s.buildIntruderSendPlan(req, msg.Raw(), selected, host, port, tls)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -1383,13 +1401,16 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
-		Report:            *report,
-		Examples:          examples,
-		PayloadSets:       resolved,
-		SessionCookies:    intruderSessionCookieView(sendPlan.jarHeader, sendPlan.exemptCookies),
-		RedirectsFollowed: int(sendPlan.redirectsFollowed.Load()),
-		ConnectionsOpened: sendPlan.connectionsOpened(),
-		ConnectionsReused: sendPlan.connectionsReused(),
+		Report:              *report,
+		Examples:            examples,
+		PayloadSets:         resolved,
+		SessionCookies:      intruderSessionCookieView(sendPlan.jarHeader, sendPlan.exemptCookies),
+		RedirectsFollowed:   int(sendPlan.redirectsFollowed.Load()),
+		ConnectionsOpened:   sendPlan.connectionsOpened(),
+		ConnectionsReused:   sendPlan.connectionsReused(),
+		HostHeaderUpdated:   sendPlan.hostValue != "",
+		HostHeaderSkipped:   sendPlan.hostSkipped,
+		HostHeaderUntouched: int(sendPlan.hostUntouched.Load()),
 	})
 }
 

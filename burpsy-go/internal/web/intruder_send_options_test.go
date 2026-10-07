@@ -358,3 +358,107 @@ func TestIntruderHTTPVersionHTTP1PinsAnH2CapableTarget(t *testing.T) {
 		t.Fatalf("http_version=http1 arrived as %v, want HTTP/1.x for both", got)
 	}
 }
+
+// ---- ety8: Update Host header to match target -----------------------------------------------------
+
+func TestIntruderUpdateHostHeaderRewritesHostOnTheWire(t *testing.T) {
+	echo := startKeepAliveEcho(t, false)
+	srv, id, points := intruderSendFixture(t, "GET /search?q=alpha HTTP/1.1\r\nhost:  shop.test\r\nAccept: */*\r\n\r\n")
+	run := func(update bool) (sendSettingsView, []string) {
+		t.Helper()
+		before := len(echo.hostHeaders())
+		body := map[string]any{
+			"msg_id": id, "target": "http://" + echo.addr, "mode": "sniper",
+			"manual_points": points, "payload_sets": [][]string{{"x", "yy", "zzz"}},
+			"rps": 1000, "max_in_flight": 1, "retries": 0,
+		}
+		if update {
+			body["update_host_header"] = true
+		}
+		var view sendSettingsView
+		if code := postJSONInto(t, srv, "/api/intruder/run", body, &view); code != http.StatusOK {
+			t.Fatalf("run = %d", code)
+		}
+		return view, echo.hostHeaders()[before:]
+	}
+
+	// Control: without the setting the captured Host goes out, which is the bug the setting fixes.
+	view, hosts := run(false)
+	if view.HostHeaderUpdated || len(hosts) != 3 || hosts[0] != "shop.test" {
+		t.Fatalf("control: updated=%v hosts=%v, want the captured shop.test on every request", view.HostHeaderUpdated, hosts)
+	}
+	view, hosts = run(true)
+	if !view.HostHeaderUpdated || view.HostHeaderSkipped != "" {
+		t.Fatalf("updated=%v skipped=%q, want the setting applied", view.HostHeaderUpdated, view.HostHeaderSkipped)
+	}
+	if len(hosts) != 3 {
+		t.Fatalf("the listener saw %d requests, want 3", len(hosts))
+	}
+	for _, h := range hosts {
+		if h != echo.addr {
+			t.Fatalf("a request went out with Host %q, want the target authority %q (all: %v)", h, echo.addr, hosts)
+		}
+	}
+}
+
+// A position on the Host header is the question being asked, so the setting stands aside — and the
+// report says so instead of claiming it applied.
+func TestIntruderUpdateHostHeaderLeavesAHostPositionAlone(t *testing.T) {
+	echo := startKeepAliveEcho(t, false)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	srv, id, _ := intruderSendFixture(t, raw)
+	start := strings.Index(raw, "shop.test")
+	var view sendSettingsView
+	if code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id": id, "target": "http://" + echo.addr, "mode": "sniper",
+		"manual_points":      []map[string]int{{"start": start, "end": start + len("shop.test")}},
+		"payload_sets":       [][]string{{"a.test", "bb.test"}},
+		"rps":                1000,
+		"max_in_flight":      1,
+		"retries":            0,
+		"update_host_header": true,
+	}, &view); code != http.StatusOK {
+		t.Fatalf("run = %d", code)
+	}
+	if view.HostHeaderUpdated || !strings.Contains(view.HostHeaderSkipped, "covers the Host header") {
+		t.Fatalf("updated=%v skipped=%q, want it skipped because a position covers Host", view.HostHeaderUpdated, view.HostHeaderSkipped)
+	}
+	hosts := echo.hostHeaders()
+	if len(hosts) != 2 || hosts[0] != "a.test" || hosts[1] != "bb.test" {
+		t.Fatalf("the listener saw Host %v, want the payloads a.test and bb.test untouched", hosts)
+	}
+}
+
+func TestHostHeaderHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		host string
+		port uint16
+		tls  bool
+		want string
+	}{
+		{"shop.test", 80, false, "shop.test"},
+		{"shop.test", 443, true, "shop.test"},
+		{"shop.test", 443, false, "shop.test:443"},
+		{"shop.test", 8443, true, "shop.test:8443"},
+		{"::1", 443, true, "[::1]"},
+		{"::1", 8080, false, "[::1]:8080"},
+	} {
+		if got := targetAuthority(tc.host, tc.port, tc.tls); got != tc.want {
+			t.Errorf("targetAuthority(%q, %d, %v) = %q, want %q", tc.host, tc.port, tc.tls, got, tc.want)
+		}
+	}
+	got, ok := rewriteHostHeader([]byte("GET /Host: x HTTP/1.1\r\nhOsT:\told.test\r\nX: 1\r\n\r\nbody"), "new.test:8080")
+	if !ok || string(got) != "GET /Host: x HTTP/1.1\r\nhOsT:\tnew.test:8080\r\nX: 1\r\n\r\nbody" {
+		t.Fatalf("rewrite = %q (%v): the name's spelling, the whitespace, the request line and the body must survive", got, ok)
+	}
+	dup := []byte("GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n")
+	if out, ok := rewriteHostHeader(dup, "c"); ok || string(out) != string(dup) {
+		t.Fatalf("two Host headers were rewritten: %q", out)
+	}
+	if v, why := hostHeaderPlan(dup, nil, "c", 80, false); v != "" || !strings.Contains(why, "2 Host headers") {
+		t.Fatalf("plan for a duplicated Host = %q, %q; want it skipped and named", v, why)
+	}
+	if v, why := hostHeaderPlan([]byte("GET / HTTP/1.0\r\n\r\n"), nil, "c", 80, false); v != "" || why == "" {
+		t.Fatalf("plan with no Host header = %q, %q; want it skipped and named", v, why)
+	}
+}

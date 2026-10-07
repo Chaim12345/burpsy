@@ -53,6 +53,16 @@ dialling directly — that fallback was the defect it replaced. The scope check 
 bytes, per request, because a payload spliced into a `PointURLPathFolder`/`PointURLPathFilename`
 position rewrites the request line and may address something the named target never covered.
 
+### How a spliced request reaches the wire is decided in `internal/web/intruder_send.go`
+
+The engine hands each spliced request to a `SendFn`; the web layer's `buildIntruderSendPlan` builds
+that function from the run request and refuses a bad setting before anything is sent. Every setting
+that changes the wire rather than the payloads lives there: the session jar, follow-redirects, the
+total `timeout_ms`, the per-request `response_timeout_ms` (carried on the context as
+`sender.SendOptions`), `http_version`, HTTP/1 connection reuse (`sender.ConnPool` via
+`AuthorisedSender.SendReusing`) and Update Host header to match target. A new wire setting belongs in
+that plan, not in this package, so the engine stays a pure splice-send-bucket loop.
+
 ### Divergence from Rust: the `Guard` was kept, not removed
 
 The Rust `AGENTS.md` says the `Option<Guard>` was deleted and must not be reintroduced. **The Go

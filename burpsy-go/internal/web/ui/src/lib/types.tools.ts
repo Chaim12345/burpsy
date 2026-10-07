@@ -217,6 +217,14 @@ export interface RunView {
    */
   connections_opened?: number | null;
   connections_reused?: number | null;
+  /**
+   * Update Host header to match target (ety8): whether it was applied, why not when it was asked for
+   * and stood aside, and how many requests a payload left with other than one Host header (sent as
+   * spliced). Optional because an older server never sent them.
+   */
+  host_header_updated?: boolean;
+  host_header_skipped?: string;
+  host_header_untouched?: number;
 }
 
 /** Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/settings.html). */

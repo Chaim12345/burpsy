@@ -168,6 +168,8 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   // HTTP/1 connection reuse and the HTTP version override (xhqr).
   http1ConnectionReuse: bool,
   httpVersion: oneOf(["", "http1", "http2"]),
+  // Update Host header to match target (ety8).
+  updateHostHeader: bool,
   // Burp's auto-pause (2cvk). The block is saved whole, enabled flag first, because a saved
   // configuration that dropped it would resume as a different attack that looks like the saved
   // one — the exact failure this file exists to prevent, and the one fmxv's settings had.

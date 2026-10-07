@@ -27,7 +27,7 @@ export function parseResponseTimeoutMS(text: string): number | undefined {
 /** The Intruder settings this module owns, as the run request's fields. */
 export type IntruderSendSettings = Pick<
   IntruderConfig,
-  "responseTimeoutMS" | "http1ConnectionReuse" | "httpVersion" | "setConnectionClose"
+  "responseTimeoutMS" | "http1ConnectionReuse" | "httpVersion" | "setConnectionClose" | "updateHostHeader"
 >;
 
 /**
@@ -46,7 +46,27 @@ export function intruderSendSettingsFields(config: IntruderSendSettings): Record
   // Sent only when on: an absent field is the server's "one connection per request".
   if (reuseRequested(config)) fields.http1_connection_reuse = true;
   if (config.httpVersion === "http1" || config.httpVersion === "http2") fields.http_version = config.httpVersion;
+  // Sent only when on: an absent field is the server's "leave the Host header as captured". `!== false`
+  // so an attack persisted before the setting existed gets Burp's default rather than nothing.
+  if (config.updateHostHeader !== false) fields.update_host_header = true;
   return fields;
+}
+
+/**
+ * What the report says Update Host header to match target did NOT do, as result caveats: the whole
+ * setting stood aside (a position covers Host, or the base request does not carry exactly one), or
+ * some requests kept the Host header a payload gave them. Empty when there is nothing to say.
+ */
+export function hostHeaderCaveats(view: { host_header_skipped?: string; host_header_untouched?: number }): string[] {
+  const out: string[] = [];
+  if (view.host_header_skipped) out.push(`Host header not updated to match the target: ${view.host_header_skipped}.`);
+  const untouched = view.host_header_untouched ?? 0;
+  if (untouched > 0) {
+    out.push(
+      `${untouched} request${untouched === 1 ? "" : "s"} kept the Host header the payload produced (not exactly one Host header, so none was rewritten).`,
+    );
+  }
+  return out;
 }
 
 /**

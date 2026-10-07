@@ -88,6 +88,7 @@ function fullConfig(): IntruderConfig {
   responseTimeoutMS: "20000",
   http1ConnectionReuse: false,
   httpVersion: "http1",
+  updateHostHeader: false,
   };
 }
 
