@@ -2,9 +2,11 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 )
@@ -44,6 +46,13 @@ type repeaterSendOptions struct {
 	// operator who edited a body without fixing the header sends a request that truncates or
 	// overruns; this makes the header follow the body instead of the other way round.
 	UpdateContentLength bool `json:"update_content_length,omitempty"`
+	// ResponseTimeoutMS is Burp's per-request response timeout (RequestOptions.withResponseTimeout,
+	// burpsy-react-ui-mmca): how long this send waits for its response, in place of the network
+	// settings' read timeout — for this send only. A deliberately slow time-based probe in one tab
+	// used to mean raising the global read timeout for every tool. Nil is the standing read timeout.
+	// It rides the send's context (sender.WithSendOptions), so it bounds every hop of a followed
+	// redirect chain too and never mutates NetworkSettings.
+	ResponseTimeoutMS *int64 `json:"response_timeout_ms,omitempty"`
 }
 
 // validate refuses the whole options object when any key it names is not understood, naming the key
@@ -60,7 +69,23 @@ func (o repeaterSendOptions) validate() error {
 	default:
 		return fmt.Errorf("protocol_preference: unknown preference %q (want auto, http1, http2, or empty for auto)", o.ProtocolPreference)
 	}
+	if o.ResponseTimeoutMS != nil {
+		if err := sender.ValidateResponseTimeoutMS("response_timeout_ms", *o.ResponseTimeoutMS); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// sendContext is ctx carrying this send's response timeout, or ctx itself when there is none. Only
+// called post-validate.
+func (o repeaterSendOptions) sendContext(ctx context.Context) context.Context {
+	if o.ResponseTimeoutMS == nil {
+		return ctx
+	}
+	return sender.WithSendOptions(ctx, sender.SendOptions{
+		ResponseTimeout: time.Duration(*o.ResponseTimeoutMS) * time.Millisecond,
+	})
 }
 
 // protocolPreference maps the wire value onto the sender's enum. Only called post-validate.

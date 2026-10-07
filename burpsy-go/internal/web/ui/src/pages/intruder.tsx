@@ -24,6 +24,7 @@ import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
+import { intruderSendSettingsFields } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
@@ -1168,6 +1169,7 @@ export function IntruderPage(): JSX.Element {
     baseline,
     setConnectionClose,
     storePayloads,
+    responseTimeoutMS,
   } = config;
 
   const setMsgId = field("msgId");
@@ -1200,6 +1202,9 @@ export function IntruderPage(): JSX.Element {
   // screen.
   const setSetConnectionClose = field("setConnectionClose");
   const setStorePayloads = field("storePayloads");
+  // The send settings (xixe.1 Phase 1): persisted with the attack, and turned into request fields by
+  // intruderSendSettingsFields so the step from screen to wire is tested outside the page.
+  const setResponseTimeoutMS = field("responseTimeoutMS");
 
   /**
    * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
@@ -1673,6 +1678,9 @@ export function IntruderPage(): JSX.Element {
       // a saved attack resumes byte-for-byte as it did.
       ...(setConnectionClose ? { set_connection_close: true } : {}),
       ...(storePayloads ? { store_full_payloads: true } : {}),
+      // Response timeout (mmca) and the other send settings: omitted when left at the standing
+      // behaviour. See lib/send-settings.ts.
+      ...intruderSendSettingsFields(config),
     };
     if (useSources) {
       body.payload_sources = payloadTypes.map((t, i) => {
@@ -3095,6 +3103,30 @@ export function IntruderPage(): JSX.Element {
                       </option>
                     ))}
                   </Select>
+                )}
+              </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Connections"
+              detail="How each request reaches the target. These apply to this attack only; the Network settings every other tool reads are not changed."
+            />
+            <div className="form-grid">
+              <Field
+                label="Response timeout (ms)"
+                hint="How long each request waits for its response — Burp's per-request response timeout. Blank uses the standing read timeout from Network settings. A followed redirect hop is bounded by it too."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={1}
+                    value={responseTimeoutMS}
+                    onChange={(event) => setResponseTimeoutMS(event.target.value)}
+                    placeholder="standing read timeout"
+                  />
                 )}
               </Field>
             </div>

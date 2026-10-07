@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +33,9 @@ type intruderSendPlan struct {
 
 	// timeout is the total per-attempt deadline (timeout_ms), covering a redirect chain as a whole.
 	timeout time.Duration
+	// responseTimeout is each request's own read bound (response_timeout_ms, mmca), carried on the
+	// send's context as sender.SendOptions. Zero is the standing network read timeout.
+	responseTimeout time.Duration
 
 	// redirectPolicy is Burp's "Follow redirections" (tirx), resolved before any request goes out.
 	redirectPolicy sender.RedirectSettings
@@ -64,13 +68,25 @@ func (s *Server) buildIntruderSendPlan(
 	if err != nil {
 		return nil, err
 	}
+	var responseTimeout time.Duration
+	if rt := req.ResponseTimeoutMS; rt != nil {
+		if err := sender.ValidateResponseTimeoutMS("response_timeout_ms", *rt); err != nil {
+			return nil, err
+		}
+		if req.TimeoutMS != nil && *req.TimeoutMS > 0 && uint64(*rt) > *req.TimeoutMS {
+			return nil, fmt.Errorf("response_timeout_ms (%d) is longer than timeout_ms (%d), the total "+
+				"per-attempt deadline, so the response timeout could never apply", *rt, *req.TimeoutMS)
+		}
+		responseTimeout = time.Duration(*rt) * time.Millisecond
+	}
 	return &intruderSendPlan{
-		host:           host,
-		port:           port,
-		tls:            tls,
-		auth:           sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls),
-		timeout:        timeout,
-		redirectPolicy: redirectPolicy,
+		host:            host,
+		port:            port,
+		tls:             tls,
+		auth:            sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls),
+		timeout:         timeout,
+		responseTimeout: responseTimeout,
+		redirectPolicy:  redirectPolicy,
 		// The session cookie jar, applied to every spliced request. Burp's jar "is shared between all
 		// of Burp's tools"; before this it reached only the Repeater, so an attack against an
 		// authenticated endpoint reported the login wall instead of the endpoint.
@@ -97,6 +113,11 @@ func (p *intruderSendPlan) send(ctx context.Context, raw []byte) (intruder.Sent,
 	if p.timeout > 0 {
 		sctx, cancel = context.WithTimeout(ctx, p.timeout)
 		defer cancel()
+	}
+	if p.responseTimeout > 0 {
+		// On the context, so it bounds every request this attempt makes — a followed redirect hop
+		// included — and never touches the shared NetworkSettings (sendopts.go).
+		sctx = sender.WithSendOptions(sctx, sender.SendOptions{ResponseTimeout: p.responseTimeout})
 	}
 	// After the splice, never before: insertion points are byte spans into the base request, and a
 	// header added to the base would shift every span after it.

@@ -1,0 +1,124 @@
+package sender
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"time"
+)
+
+// Per-send options carried on the context (burpsy-react-ui-mmca).
+//
+// # Why on the context and not on NetworkSettings
+//
+// NetworkSettings is one process-wide document: the scanner, Repeater, Intruder and the crawler all
+// read the same Timeouts through Sender.Network(). Burp's RequestOptions.withResponseTimeout is the
+// opposite shape — a bound for *this* request — and the only way to give one Repeater tab a
+// deliberately long read (a time-based probe that sleeps for 20 seconds) used to be raising the
+// global read timeout for every tool at once. Mutating the shared settings for one send would also be
+// raced by every other send in the process.
+//
+// So the option rides the send's own context, the one value every raw send path in this package is
+// already handed, and setDeadline prefers it over Network().readTimeout(host). Nothing in
+// NetworkSettings changes, which TestAContextResponseTimeoutBoundsOneSendAndLeavesTheNetworkAlone
+// pins with a DeepEqual before and after.
+//
+// # Which paths honour it
+//
+// Every raw-byte path that bounds its exchange through setDeadline: SendRawOutcome (HTTP/1.1 and
+// h2), SendPipelined, SendKeepAlive, TimedRead's write half, SendSynchronized, SendFrameProgram and
+// the pooled path in connpool.go. The typed Sender.Send path rides net/http's own client and is not
+// covered; nothing that offers this option sends through it.
+
+// SendOptions is one send's overrides of the standing network settings.
+type SendOptions struct {
+	// ResponseTimeout bounds how long this send waits for its response, replacing the network
+	// settings' read timeout for this send only. Zero means "no override": the standing read timeout
+	// applies exactly as before. A context deadline that falls earlier still wins — a caller that set
+	// one is describing the whole operation, which a response timeout is a part of.
+	ResponseTimeout time.Duration
+}
+
+type sendOptionsKey struct{}
+
+// WithSendOptions returns a context carrying opts for every send made with it.
+func WithSendOptions(ctx context.Context, opts SendOptions) context.Context {
+	return context.WithValue(ctx, sendOptionsKey{}, opts)
+}
+
+// SendOptionsFrom returns the options ctx carries, and whether it carries any.
+func SendOptionsFrom(ctx context.Context) (SendOptions, bool) {
+	opts, ok := ctx.Value(sendOptionsKey{}).(SendOptions)
+	return opts, ok
+}
+
+// responseTimeoutOf is the per-send response timeout ctx carries, or zero.
+func responseTimeoutOf(ctx context.Context) time.Duration {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok || opts.ResponseTimeout <= 0 {
+		return 0
+	}
+	return opts.ResponseTimeout
+}
+
+// overrideDeadline is the deadline a per-send response timeout imposes on an exchange starting now,
+// clamped to the context's own deadline when that falls earlier. ok is false when ctx carries no
+// override, and the caller then applies the standing rule unchanged.
+//
+// The clamp is the whole reason this is not a one-liner. An Intruder attempt always runs under a
+// context deadline (its total per-attempt bound, timeout_ms), and setDeadline used to let any context
+// deadline short-circuit everything else — so an override consulted after that branch would never
+// fire in Intruder at all. Here the earlier of the two wins, whichever it is.
+func overrideDeadline(ctx context.Context) (time.Time, bool) {
+	rt := responseTimeoutOf(ctx)
+	if rt <= 0 {
+		return time.Time{}, false
+	}
+	deadline := time.Now().Add(rt)
+	if ctxDeadline, has := ctx.Deadline(); has && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	return deadline, true
+}
+
+// hasOwnBound reports whether ctx bounds its sends itself — a context deadline or a per-send response
+// timeout. The event-stream promoter re-arms the read with the streaming window only when neither is
+// present: extending a read past a bound the caller set for this send would make the override a
+// suggestion.
+func hasOwnBound(ctx context.Context) bool {
+	if _, has := ctx.Deadline(); has {
+		return true
+	}
+	return responseTimeoutOf(ctx) > 0
+}
+
+// explainResponseTimeout names a deadline error that the per-send response timeout produced, so it
+// reads as the operator's own bound rather than as a bare "i/o timeout" that blames the network. It
+// returns err unchanged when ctx carries no override, when the context itself has ended (that is
+// explainCancellation's account to give), or when err is not a deadline error.
+func explainResponseTimeout(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	rt := responseTimeoutOf(ctx)
+	if rt <= 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		return err
+	}
+	return fmt.Errorf("no response within this send's response timeout of %s: %w", rt, err)
+}
+
+// ValidateResponseTimeoutMS refuses a per-send response timeout an API caller cannot mean: zero or
+// negative (omit the field for the standing read timeout — a zero here would read as "no bound at
+// all", the opposite of what a field named for a bound asks), or longer than the longest bound the
+// network settings accept. field names the request key, so the refusal says which one.
+func ValidateResponseTimeoutMS(field string, ms int64) error {
+	if ms <= 0 {
+		return fmt.Errorf("%s is %d; give a positive number of milliseconds, or omit it to use the "+
+			"standing read timeout", field, ms)
+	}
+	if ms > MaxTimeoutMS {
+		return fmt.Errorf("%s is %d, longer than the %d ms this tool will wait", field, ms, MaxTimeoutMS)
+	}
+	return nil
+}

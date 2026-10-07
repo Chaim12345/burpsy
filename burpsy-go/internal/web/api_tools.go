@@ -274,6 +274,9 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
 	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
 	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	// The tab's response timeout (mmca) rides the context, so it bounds this send and every redirect
+	// hop below without touching the network settings the next send reads.
+	ctx = spec.Options.sendContext(ctx)
 	sendStarted := time.Now()
 	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
 	elapsed := time.Since(sendStarted)
@@ -587,7 +590,17 @@ type intruderRunReq struct {
 	// a different number. See intruder.DelayVariation.
 	DelaySeed   *uint64 `json:"delay_seed"`
 	MaxRequests *int    `json:"max_requests"`
-	TimeoutMS   *uint64 `json:"timeout_ms"`
+	// TimeoutMS is the TOTAL per-attempt deadline: the whole send, a followed redirect chain included.
+	// Nil is intruderDefaultTimeoutMS. Unchanged by response_timeout_ms below, which is a different
+	// bound.
+	TimeoutMS *uint64 `json:"timeout_ms"`
+	// ResponseTimeoutMS is Burp's per-request response timeout (RequestOptions.withResponseTimeout,
+	// burpsy-react-ui-mmca): how long each request in this attack waits for its response, replacing
+	// the network settings' read timeout for this attack's sends only — the shared settings every
+	// other tool reads are not touched. Nil is the standing read timeout. It is clamped by timeout_ms
+	// when that is shorter, and refused when it is longer than a timeout_ms that was given, because
+	// the operator typed two bounds and one of them could never apply.
+	ResponseTimeoutMS *int64 `json:"response_timeout_ms,omitempty"`
 	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
 	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
 	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own

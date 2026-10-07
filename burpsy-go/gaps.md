@@ -1587,3 +1587,26 @@ reason can express that, because nothing was refused. Two options, neither taken
 work: record the discovered-but-not-queued subresource hosts as an explicit coverage statement on the
 report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
 honest one and is the smaller.
+
+## Intruder and Repeater send settings (burpsy-react-ui-xixe.1, Phase 1, 2026-10-08)
+
+Burp-parity, not Rust-parity: `crates/` has none of these. Recorded here because each one is a
+place burpsy's defaults or reach differ from Burp's in a way an operator cannot see from the UI.
+
+### Per-send response timeout (mmca)
+
+**Burp:** `RequestOptions.withResponseTimeout` — "the timeout to be used while reading the response".
+**burpsy:** `response_timeout_ms` on the Intruder run request and on Repeater's per-tab options. It
+rides the send's context (`sender.WithSendOptions`) and `setDeadline` prefers it over
+`NetworkSettings.readTimeout`, so one tab's slow time-based probe no longer means raising the global
+read timeout for every tool. The shared settings are never mutated.
+
+- Intruder keeps its existing `timeout_ms` as the TOTAL per-attempt deadline (redirect chain
+  included). `response_timeout_ms` is clamped by it, and refused when it is longer than a `timeout_ms`
+  the request also gave.
+- Zero is refused rather than read as "no bound": the network settings use 0 for "no deadline of our
+  own", and a field named for a bound must not be able to mean its opposite.
+- Repeater's single-connection group mode shares one deadline across every request on the socket,
+  so tabs that disagree about the timeout are refused by name rather than having all but one dropped.
+- Not covered: the typed `Sender.Send` path (net/http's client). Nothing that offers the option sends
+  through it.

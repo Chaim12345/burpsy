@@ -162,6 +162,9 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   // third state a saved configuration could be in.
   setConnectionClose: bool,
   storePayloads: bool,
+  // Burp's per-request response timeout (mmca). Text, like retries: "" is "the standing read
+  // timeout", which is not the same attack as any number.
+  responseTimeoutMS: str,
   // Burp's auto-pause (2cvk). The block is saved whole, enabled flag first, because a saved
   // configuration that dropped it would resume as a different attack that looks like the saved
   // one — the exact failure this file exists to prevent, and the one fmxv's settings had.

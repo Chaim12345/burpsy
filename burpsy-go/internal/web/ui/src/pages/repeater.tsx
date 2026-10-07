@@ -12,6 +12,7 @@ import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEnc
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useSendRepeaterGroup } from "../lib/data.tools";
+import { parseResponseTimeoutMS } from "../lib/send-settings";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
@@ -1676,6 +1677,20 @@ function SendOptionsPanel({
               <option value="http1">Force HTTP/1.1</option>
               <option value="http2">Force HTTP/2</option>
             </Select>
+          )}
+        </Field>
+        <Field label="Response timeout (ms)">
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={1}
+              style={{ width: 140 }}
+              value={options?.response_timeout_ms ?? ""}
+              placeholder="standing"
+              title="How long this tab's send waits for its response. Blank uses the Network settings' read timeout."
+              onChange={(event) => onChange({ response_timeout_ms: parseResponseTimeoutMS(event.target.value) })}
+            />
           )}
         </Field>
         <Button variant="outline" onClick={onRestoreGlobal} disabled={!overriding} title="Send this tab with the global defaults instead of its own overrides">

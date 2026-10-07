@@ -1163,6 +1163,12 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 // not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
 // read instantly.
 func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
+	// A per-send response timeout (sendopts.go) replaces the standing read bound for this send only,
+	// clamped to the context's deadline when that is earlier.
+	if deadline, ok := overrideDeadline(ctx); ok {
+		conn.SetDeadline(deadline)
+		return
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 		return

@@ -162,7 +162,7 @@ func eventStreamPromoter(ctx context.Context, conn net.Conn, settings NetworkSet
 		if !httputil.ResponseIsFrameless(head) && !httputil.ResponseIsChunked(head) {
 			return false
 		}
-		if _, has := ctx.Deadline(); !has {
+		if !hasOwnBound(ctx) {
 			if window := time.Duration(settings.Streaming.TimeoutMS) * time.Millisecond; window > 0 {
 				_ = conn.SetReadDeadline(time.Now().Add(window))
 			}

@@ -84,6 +84,8 @@ function fullConfig(): IntruderConfig {
   autoPauseExpressions: ["account locked", "", "429"],
   autoPauseSimple: false,
   autoPauseCaseSensitive: true,
+  // The send settings (xixe.1 Phase 1), non-default for the same reason.
+  responseTimeoutMS: "20000",
   };
 }
 

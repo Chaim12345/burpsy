@@ -315,6 +315,13 @@ export interface IntruderConfig {
   */
  setConnectionClose: boolean;
  storePayloads: boolean;
+ /**
+  * Burp's per-request response timeout (RequestOptions.withResponseTimeout, burpsy-react-ui-mmca),
+  * in milliseconds, as typed. Empty means the standing network read timeout; the server receives
+  * `response_timeout_ms` only when this holds a positive number. Text, like `retries`, so "not set"
+  * and an explicit value stay two different attacks.
+  */
+ responseTimeoutMS: string;
 }
 
 /**
@@ -443,7 +450,28 @@ export function emptyIntruderConfig(): IntruderConfig {
   baseline: false,
   setConnectionClose: false,
   storePayloads: false,
+  responseTimeoutMS: "",
  };
+}
+
+/**
+ * Hydrate the persisted workspace over the live defaults.
+ *
+ * zustand's default merge is shallow, so a persisted `intruder` object REPLACES the default one
+ * wholesale — and an attack saved before a setting existed comes back with that setting undefined.
+ * For a boolean whose default is true (Burp's "Update Host header to match target", its HTTP/1
+ * connection reuse) undefined reads as off and sends nothing, so a reload would quietly change what
+ * the attack does. Filling the attack from emptyIntruderConfig() first means a field the page grew
+ * later arrives with its own default rather than with nothing.
+ */
+export function mergePersistedWorkspace<T extends { intruder: IntruderConfig }>(persisted: unknown, current: T): T {
+ if (typeof persisted !== "object" || persisted === null) return current;
+ const saved = persisted as Partial<T>;
+ const merged = { ...current, ...saved } as T;
+ if (saved.intruder && typeof saved.intruder === "object") {
+  merged.intruder = { ...emptyIntruderConfig(), ...saved.intruder };
+ }
+ return merged;
 }
 
 let sequence = 0;
@@ -1084,7 +1112,7 @@ export const useApp = create<AppState>()(
    setCheckedExchanges: (checkedExchanges) => set({ checkedExchanges }),
    focusIssue: (issueFocus) => set({ issueFocus }),
   }),
-  { name: "burpsy.workspace", partialize: persistedWorkspace },
+  { name: "burpsy.workspace", partialize: persistedWorkspace, merge: mergePersistedWorkspace },
  ),
 );
   /** Move one tab to `index` in the strip (fkj). A pure reorder: membership, colour and content
