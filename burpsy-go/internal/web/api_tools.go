@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -910,6 +909,15 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(selected)), http.StatusBadRequest)
 		return
 	}
+	// The send settings, resolved before any payload is generated: a refused setting must not leave
+	// minted Collaborator addresses behind in the hub, and must not be discovered on the first send.
+	// See intruder_send.go.
+	sendPlan, err := s.buildIntruderSendPlan(req, selected, host, port, tls)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer sendPlan.close()
 
 	// A literal list is a PayloadSource variant, so the three request shapes collapse to one type
 	// here and everything downstream — count checks, resolution, processing — happens once.
@@ -1112,86 +1120,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound).WithCopies(copyFrom)
 
-	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
-	if req.TimeoutMS != nil {
-		timeout = time.Duration(*req.TimeoutMS) * time.Millisecond
-	}
-
-	// Burp's "Follow redirections" (tirx): resolved once, before the send closure, so a bad mode
-	// is refused before any request goes out rather than discovered on the first 30x.
-	redirectPolicy, rerr := intruderRedirectPolicy(req.FollowRedirects, s.sender.Network().Redirects)
-	if rerr != nil {
-		http.Error(w, rerr.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// One authorising sender for the whole attack. The scope decision still happens once per
-	// spliced request — which is what matters, because a payload landing in a path position
-	// rewrites the request line, so the request that goes out may address something a host-level
-	// check never saw.
-	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	ctx := r.Context()
-
-	// The session cookie jar, applied to every spliced request. Burp's jar "is shared between all of
-	// Burp's tools"; before this it reached only the Repeater, so an attack against an authenticated
-	// endpoint reported the login wall instead of the endpoint. Resolved once here rather than per
-	// request: an attack must ask the same question of every payload, and a jar that changed
-	// mid-attack would make the buckets incomparable.
-	//
-	// exemptCookies are the cookie names this attack is fuzzing. Burp: "when the Scanner or Intruder
-	// makes a request that manipulates a cookie […] the session handling action is not applied to
-	// that request." Refreshing the position being fuzzed from the jar would send the same request
-	// every time and produce one meaningless bucket. See internal/web/intruder_cookies.go.
-	jarHeader := s.cookieHeaderFor(host, port, tls, targetPathOf(req.Target))
-	exemptCookies := exemptCookieNames(selected)
-
-	// redirectsFollowed counts every hop this attack actually sent, across every attempt — the
-	// report's own proof that the setting did something, the same discipline AutoThrottleEngaged
-	// already holds to. Atomic because every attempt's send runs on its own goroutine (engine.go's
-	// driver loop), all writing through this one closure.
-	var redirectsFollowed atomic.Int64
-	send := func(raw []byte) (intruder.Sent, error) {
-		sendStarted := time.Now()
-		sctx := ctx
-		var cancel context.CancelFunc
-		if timeout > 0 {
-			sctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-		// After the splice, never before: insertion points are byte spans into the base request, and
-		// a header added to the base would shift every span after it.
-		raw = applyJarCookies(raw, jarHeader, exemptCookies)
-		res, err := auth.Send(sctx, raw)
-		if err != nil {
-			return intruder.Sent{}, err
-		}
-		respRaw, status := res.Raw, res.Status
-		if redirectPolicy.Mode != sender.RedirectNever {
-			// Every hop re-authorised on its own rendered bytes through the same AuthorisedSender the
-			// first send used — the intruder.go file header's whole point: "if an attack ever needs to
-			// follow a redirect it must do so per hop, re-authorising the new authority through the
-			// scope chokepoint, because a 30x is exactly how a target steers an attack somewhere nobody
-			// authorised." A chain FollowRedirectsAfterPolicy could not evaluate, or that the policy or
-			// scope refused past the first hop, leaves respRaw as the 30x itself — result.Final is
-			// always that response in that case, never a fabrication (see FollowRedirectsAfterPolicy's
-			// own doc), which is exactly what an operator who asked to follow and got refused should see.
-			if result, ferr := auth.FollowRedirectsAfterPolicy(sctx, raw, res.Raw, redirectPolicy); ferr == nil && result.Final != nil {
-				// Final.Raw is always set on this entry point (FollowRedirectsAfterPolicy builds Final
-				// from responseFromRaw or a followed hop's own wire bytes, never the typed transport
-				// path that has none — see FollowResult.Final's own doc), so this is the response the
-				// engine's grep, reflection and bucketing will actually see.
-				respRaw = result.Final.Raw
-				status = &result.Final.StatusCode
-				if result.Sent > 1 {
-					redirectsFollowed.Add(int64(result.Sent - 1))
-				}
-			}
-		}
-		// Timed across the whole closure, not just the first hop's res.Duration: once redirects are
-		// being followed, "how long this attempt took" means the whole chain, the same way Burp's own
-		// timing describes what an operator waited for, not the first response of several.
-		return intruder.Sent{Raw: respRaw, Duration: time.Since(sendStarted), Status: status}, nil
-	}
+	send := sendPlan.sendFn(ctx)
 	// The response recorder remains the engine's one-per-bucket exemplar rule. The exact-request
 	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
@@ -1420,8 +1350,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		Report:            *report,
 		Examples:          examples,
 		PayloadSets:       resolved,
-		SessionCookies:    intruderSessionCookieView(jarHeader, exemptCookies),
-		RedirectsFollowed: int(redirectsFollowed.Load()),
+		SessionCookies:    intruderSessionCookieView(sendPlan.jarHeader, sendPlan.exemptCookies),
+		RedirectsFollowed: int(sendPlan.redirectsFollowed.Load()),
 	})
 }
 
