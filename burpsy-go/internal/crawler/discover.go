@@ -103,6 +103,9 @@ type discoveredForm struct {
 	// hasFileInput records that the form carries a file input, which is why a urlencoded submission
 	// of it would not be the submission the application expects.
 	hasFileInput bool
+	// isLoginForm identifies this form as a login form (burpsy-react-ui-uzil): contains an input
+	// element with type=password. This is Burp's own rule for identifying login forms.
+	isLoginForm bool
 }
 
 // signature is the form's identity for the per-form submission cap (burpsy-react-ui-u0k3).
@@ -738,6 +741,16 @@ func readInput(n *html.Node, f *discoveredForm, label *strings.Builder) {
 		// Recorded rather than filled: a urlencoded submission cannot carry a file, and pretending
 		// otherwise would send the application a request no browser would produce.
 		f.hasFileInput = true
+		return
+	case "password":
+		// Login form detection (burpsy-react-ui-uzil): Burp identifies login forms as those
+		// containing an input with type=password. Mark the form accordingly.
+		f.isLoginForm = true
+		name, ok := attr(n, "name")
+		if !ok || name == "" {
+			return
+		}
+		f.fields = append(f.fields, formField{name: name, value: fillValue(typ, existing)})
 		return
 	}
 
