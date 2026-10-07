@@ -112,13 +112,32 @@ jobs:
           go build -o "$HOME/go/bin/nuclei" github.com/projectdiscovery/nuclei/v3/cmd/nuclei \
             || { echo "::error::building pinned nuclei failed (see the link/compile error above)"; exit 1; }
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      # The guard checks BOTH locations nuclei has used, and reports what it found.
+      #
+      # It used to check only ~/.local/nuclei-templates/http while `nuclei
+      # -update-templates` under the pinned v3.3.9 installs to ~/nuclei-templates — so this
+      # step failed on a runner where the update had just succeeded. That is the SECOND
+      # half of burpsy-react-ui-d4iu: once the install was fixed the job still went red,
+      # one step further along, for a path that was simply wrong. The Go-side test had the
+      # same wrong assumption and was fixed with it.
+      #
+      # `|| true` on the update is kept: it is a network call to projectdiscovery.io, and
+      # a transient failure there should be reported by the guard below naming the
+      # directories it actually checked, not by a bare curl error.
       - name: Fetch nuclei template corpus
         run: |
           nuclei -update-templates >/dev/null 2>&1 || true
-          test -d "$HOME/.local/nuclei-templates/http" || {
-            echo "::error::nuclei template corpus did not land in ~/.local/nuclei-templates"
-            exit 1
-          }
+          for dir in "$HOME/.local/nuclei-templates/http" "$HOME/nuclei-templates/http"; do
+            if [ -d "$dir" ]; then
+              echo "nuclei corpus present at $dir ($(find "$dir" -name '*.yaml' | wc -l) templates)"
+              exit 0
+            fi
+          done
+          echo "::error::nuclei template corpus did not land in any location nuclei uses:"
+          echo "::error::  $HOME/.local/nuclei-templates/http"
+          echo "::error::  $HOME/nuclei-templates/http"
+          echo "::error::without a corpus nuclei runs and matches nothing, so the live test would pass for an empty scan"
+          exit 1
 
       - name: gofmt
         run: |

@@ -49,16 +49,41 @@ func toolOnPath(name string) bool {
 	return err == nil
 }
 
+// nucleiTemplatesHTTPDir returns the directory holding nuclei's HTTP templates, or
+// empty when there is none — and it checks BOTH locations nuclei has used, because
+// a single hard-coded one is what broke this file's caller in CI (burpsy-react-ui-d4iu).
+//
+// `nuclei -update-templates` under v3.3.9 installs to $HOME/nuclei-templates, and
+// this file used to look only in $HOME/.local/nuclei-templates. On a machine where
+// nobody had hand-placed the corpus under .local, the check said "no templates"
+// while a perfectly good corpus sat one directory up — so the workflow's own
+// `test -d "$HOME/.local/nuclei-templates/http"` guard failed on a runner where the
+// preceding `nuclei -update-templates` had just succeeded. The binary and the
+// templates were both present and the gate still reported red.
+//
+// .local is kept first because a pre-existing local checkout (or an older nuclei
+// that did use XDG paths) should still win over a freshly downloaded corpus.
+func nucleiTemplatesHTTPDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	for _, dir := range []string{
+		filepath.Join(home, ".local", "nuclei-templates", "http"),
+		filepath.Join(home, "nuclei-templates", "http"),
+	} {
+		if info, statErr := os.Stat(dir); statErr == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
 // nucleiTemplatesPresent reports whether nuclei has a template corpus to run.
 // The binary alone is not the capability: nuclei with no templates runs and
 // matches nothing, which would let an empty result pass for a real scan.
 func nucleiTemplatesPresent() bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(home, ".local", "nuclei-templates", "http"))
-	return err == nil && info.IsDir()
+	return nucleiTemplatesHTTPDir() != ""
 }
 
 // liveServer is the throwaway target. It answers a couple of guessable paths so
@@ -191,10 +216,13 @@ func TestLiveNucleiMatchesRealTemplates(t *testing.T) {
 		t.Fatalf("Authorise: %v", err)
 	}
 
-	home, _ := os.UserHomeDir()
+	// The corpus directory is whatever nucleiTemplatesHTTPDir found, so this test and
+	// the skip check above cannot disagree about where the templates live — which is
+	// exactly the disagreement that failed the CI gate (burpsy-react-ui-d4iu).
+	template := filepath.Join(nucleiTemplatesHTTPDir(), "technologies", "tech-detect.yaml")
 	res := RunNuclei(t.Context(), Config{Tools: map[string]string{ToolNuclei: "nuclei"}},
 		scope, target, NucleiOptions{
-			Templates: []string{filepath.Join(home, ".local", "nuclei-templates", "http", "technologies", "tech-detect.yaml")},
+			Templates: []string{template},
 		})
 	if res.Outcome != OutcomeCompleted {
 		t.Fatalf("outcome = %v (%v); command was %v", res.Outcome, res.Err, res.Command)

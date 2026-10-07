@@ -71,7 +71,9 @@ There is no Rust crate counterpart.
 go test ./internal/extscan/...
 ```
 
-The live tests need `ffuf` and `nuclei` (with a template corpus under `~/.local/nuclei-templates`) on
+The live tests need `ffuf` and `nuclei` (with a template corpus under `~/nuclei-templates` or
+`~/.local/nuclei-templates`; `nuclei -update-templates` under the pinned v3.3.9 writes the former,
+and `nucleiTemplatesHTTPDir` checks both) on
 PATH. **Their absence fails the package rather than skipping quietly** — a skipped test and a passing
 test are both silent, so a machine without the binaries would report green having verified nothing
 about the tools this package claims to integrate. `BURPSY_ALLOW_UNVERIFIED_EXTSCAN=1` accepts a
