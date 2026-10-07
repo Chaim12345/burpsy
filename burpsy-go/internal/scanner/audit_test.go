@@ -896,9 +896,9 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				}
 				got, wantSet, wantUnset = uint64(applied.resolvedMaxItemsInProgress()), want, 0
 			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
-				// Field-less by design: this engine has no per-issue selection, the row reports
-				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
-				// to check beyond that it must not have been treated as a scalar.
+				// The booleans choose Burp's mode and carry no value of their own onto the run
+				// (applyIssueSelection reads them; issue_selection_test.go covers what each mode
+				// does). Nothing on the applied config to compare to a scalar here.
 				got, wantSet, wantUnset = 1, 1, 1
 			case "relocate_body_to_url", "relocate_body_to_cookie", "relocate_url_to_body",
 				"relocate_url_to_cookie", "relocate_cookie_to_body", "relocate_cookie_to_url":

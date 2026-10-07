@@ -894,7 +894,7 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		}
 		fmt.Printf("\n%d of the %d configurations Burp ships are transcribed above; %d of them set at\n"+
 			"least one key this engine honours, so loading one of those files takes effect. The others\n"+
-			"set crawl tuning, per-issue selection or DOM analysis this engine has no equivalent of:\n"+
+			"set only crawl tuning or DOM analysis this engine has no equivalent of:\n"+
 			"every such key is attributed rather than dropped, listed by `-scan-config list-unapplied`.\n"+
 			"A Burp configuration file can be loaded directly by passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount,
@@ -917,11 +917,10 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		if err != nil {
 			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
 		}
-		parsed, perr := scanner.ParseBurpConfig(data)
+		applied, unapplied, perr := scanner.ApplyBurpConfigFile(base, data)
 		if perr != nil {
 			return base, fmt.Errorf("-scan-config: %w", perr)
 		}
-		applied, unapplied := parsed.ApplyWithReport(base)
 		if len(unapplied) > 0 {
 			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
 		}

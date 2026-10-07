@@ -498,8 +498,9 @@ func (s ItemState) MarshalJSON() ([]byte, error) { return json.Marshal(s.Label()
 //
 // The `scanner/issues_reported/*` and `scanner/insertion_point_types/*` keys are the sanctioned
 // exception: a shipped configuration names check classes and point classes a run must honour, and
-// a preset overlay (BuiltInConfig.Apply) writes them here. The overlay is an approximation and
-// auditLevelNotes says exactly where it bends.
+// a preset overlay (BuiltInConfig.Apply) writes them here. Where the overlay bends, the key row's
+// own text says so (BuiltInConfigKeys), and what a selection named but did not act on is carried in
+// DeclinedDetectionMethods.
 // DefaultLightAuditSamplePerKind is the inherited light-audit threshold (7bkj): twenty
 // CLEAN same-(kind, host) points in one run. Burp's own bank does not name a number; twenty
 // is a prior strong enough that a 21st identical-clean point is evidence the type is
@@ -740,7 +741,24 @@ type AuditConfig struct {
 	//
 	// It is a set of type indexes rather than names because the catalogue is the identity: a name is
 	// a label, and a label an operator typed against Burp's own UI has to mean the same thing here.
+	//
+	// A WHITELIST, and only one of Burp's two readings of selected_issues: an imported file fills it
+	// only under scan_only_selected_issues. Without that flag Burp's list is per-issue overrides —
+	// see DisabledIssueTypes and issue_selection.go — and filling this from it would narrow a full
+	// audit to the handful of types the file happened to override.
 	IssueTypes []uint32
+	// DisabledIssueTypes is the deny half of Burp's per-issue selection: the types a configuration's
+	// selected_issues marks `enabled: false`. A check of one of these types is not dispatched, and a
+	// type not named here is untouched. Empty means nothing is removed.
+	DisabledIssueTypes []uint32
+	// DisabledDetectionMethods are the (issue type, detection method) pairs a configuration's
+	// selected_issues turned off — "Time delays" for SQL injection, say. Keyed per type because Burp
+	// resolves a method name inside its type (Zwx_.java:43-61).
+	DisabledDetectionMethods []IssueDetectionMethod
+	// DeclinedDetectionMethods is what the configuration's selection named that this engine did not
+	// act on, each with its reason. Recorded at load time so the configuration view can show it and
+	// every run under it can repeat it.
+	DeclinedDetectionMethods MethodDeclines
 }
 
 // IssueTypesFrom is the per-run selection carried over from a scanner's live configuration, so the
@@ -1061,10 +1079,16 @@ type BuiltInConfig struct {
 	// FollowUpPasses is `scanner/error_handling/number_of_follow_up_passes`.
 	FollowUpPasses OptUint32
 
-	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured; the three
-	// per-issue selection keys (scan_only_selected_issues, select_individual_issues, selected_issues)
-	// have no field because this engine has no per-issue selection — their rows carry no read and
-	// Apply reports them unapplied rather than pretending.
+	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured. The three
+	// per-issue selection keys are read the way Burp reads them (issue_selection.go): the two
+	// booleans choose the mode, and selected_issues is per-issue overrides unless
+	// scan_only_selected_issues makes it a whitelist.
+	SelectIndividualIssues OptUint32
+	ScanOnlySelectedIssues OptUint32
+	// SelectedIssues is the parsed selected_issues list; SelectedIssuesSet tells "the file carried an
+	// empty list" from "the file did not name the key", which select different behaviour.
+	SelectedIssues        []SelectedIssue
+	SelectedIssuesSet     bool
 	PassiveChecks         OptUint32
 	LightActiveChecks     OptUint32
 	MediumActiveChecks    OptUint32
@@ -1084,10 +1108,20 @@ type BuiltInConfig struct {
 	// so a loaded configuration has to be able to say either.
 	SkipIneffectiveChecks OptUint32
 
-	// UnrepresentableKeys records keys a parsed source named that this engine has no field for — the
-	// per-issue selection trio. Only ParseBurpConfig fills it; the six transcribed presets never do.
-	// ApplyWithReport reports them unapplied, so a loaded configuration never drops a key silently.
+	// IgnoredParameterRules counts, per `scanner/ignored_insertion_points/*` key the source set, how
+	// many match rules its list carried. Burp's value is a list of rule objects, not of names; an
+	// empty list is fully honoured (there is nothing to skip) and a non-empty one is reported, because
+	// this engine has no matcher for Burp's rule shape.
+	IgnoredParameterRules map[string]int
+
+	// UnrepresentableKeys records keys a parsed source named that this engine has no field for. Only
+	// ParseBurpConfig fills it; the six transcribed presets never do. ApplyWithReport reports them
+	// unapplied, so a loaded configuration never drops a key silently.
 	UnrepresentableKeys []string
+	// ParsedKeys is every `scanner/*` key the source named, section-qualified
+	// (`issues_reported/selected_issues`). It is the denominator of the apply report: every one of
+	// them must come back either applied or unapplied, never neither (burpsy-react-ui-saq3.1).
+	ParsedKeys []string
 }
 
 // builtInConfigKeys is the one description of what a shipped configuration can change.
@@ -1317,7 +1351,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_passive",
 		burpKey: "scanner/issues_reported/scan_type_passive",
-		what:    "whether the passive check families run (0 turns them off for the run)",
+		what:    "whether the passive check families run (0 turns them off for the run); not consulted when select_individual_issues or scan_only_selected_issues is true, as in Burp (Zmzw.java:86)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.PassiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.PassiveChecks = SomeUint32(v) },
 		applies: true,
@@ -1325,7 +1359,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_light_active",
 		burpKey: "scanner/issues_reported/scan_type_light_active",
-		what:    "whether the light-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
+		what:    "whether the light-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches; not consulted when select_individual_issues or scan_only_selected_issues is true, as in Burp (Zmzw.java:86)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.LightActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.LightActiveChecks = SomeUint32(v) },
 		applies: true,
@@ -1333,7 +1367,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_medium_active",
 		burpKey: "scanner/issues_reported/scan_type_medium_active",
-		what:    "whether the medium-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
+		what:    "whether the medium-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches; not consulted when select_individual_issues or scan_only_selected_issues is true, as in Burp (Zmzw.java:86)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.MediumActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.MediumActiveChecks = SomeUint32(v) },
 		applies: true,
@@ -1341,7 +1375,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_intrusive_active",
 		burpKey: "scanner/issues_reported/scan_type_intrusive_active",
-		what:    "whether the intrusive-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches",
+		what:    "whether the intrusive-tier checks run; each Burp active tier selects its own ranked checks, and an unset key inherits the base switches; not consulted when select_individual_issues or scan_only_selected_issues is true, as in Burp (Zmzw.java:86)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.IntrusiveActiveChecks },
 		apply:   func(a *AuditConfig, v uint32) { a.IntrusiveActiveChecks = SomeUint32(v) },
 		applies: true,
@@ -1349,7 +1383,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "scan_type_javascript_analysis",
 		burpKey: "scanner/issues_reported/scan_type_javascript_analysis",
-		what:    "whether the DOM-based checks run (0 turns them off for the run)",
+		what:    "whether the DOM-based checks run (0 turns them off for the run); not consulted when select_individual_issues or scan_only_selected_issues is true, as in Burp (Zmzw.java:86)",
 		read:    func(c BuiltInConfig) OptUint32 { return c.JavaScriptAnalysis },
 		apply:   func(a *AuditConfig, v uint32) { a.JavaScriptAnalysis = SomeUint32(v) },
 		applies: true,
@@ -1363,32 +1397,34 @@ var builtInConfigKeys = []struct {
 		applies: true,
 	},
 	{
-		// Burp's three selection keys form ONE control: scan_only_selected_issues says the run is
-		// restricted to a list, select_individual_issues says the operator picked issues by hand, and
-		// selected_issues IS the list (Zwy6.java:36-75, and the per-check predicate at :170-184).
+		// Burp's three selection keys form ONE control, read as Burp reads it (issue_selection.go):
+		// either boolean puts the run in selection mode, where the scan_type_* flags are not consulted
+		// (Zmzw.java:80-87); scan_only_selected_issues additionally makes selected_issues a whitelist
+		// (Zwnn.java:13-25). The two booleans are scalars with a field each; the list is applied by
+		// applyIssueSelection after the row walk, because selection mode takes back the tiers.
 		//
-		// So the first two are BOOLEANS and the third is the value. Reporting all three as "not
-		// applied" was a false statement in an operator-facing table for a control that now works,
-		// and the two booleans are the shape this engine's list-valued path cannot carry — so they are
-		// PARTIAL: honoured as far as a boolean can be (selecting is the one state that matters, and
-		// an empty list means no restriction), and named as such rather than claimed or denied flat.
-		name:       "scan_only_selected_issues",
-		burpKey:    "scanner/issues_reported/scan_only_selected_issues",
-		what:       "partly applied: true is the default reading — an empty selected_issues list means no restriction — so a configuration that only sets this is unchanged; false is not distinguishable here from an empty list",
-		listShaped: true,
-		applies:    true,
+		// The booleans used to be "partly applied" rows with no field, and the parser recorded them in
+		// UnrepresentableKeys, where the listShaped skip in ApplyWithReport dropped them from both the
+		// applied and the unapplied answer (burpsy-react-ui-saq3.1).
+		name:    "scan_only_selected_issues",
+		burpKey: "scanner/issues_reported/scan_only_selected_issues",
+		what:    "true makes selected_issues a whitelist: only its enabled entries run, and a type it does not list does not run (an empty list restricts nothing). Either this or select_individual_issues puts the run in per-issue mode, where the scan_type_* keys are not consulted",
+		read:    func(c BuiltInConfig) OptUint32 { return c.ScanOnlySelectedIssues },
+		apply:   func(*AuditConfig, uint32) {},
+		applies: true,
 	},
 	{
-		name:       "select_individual_issues",
-		burpKey:    "scanner/issues_reported/select_individual_issues",
-		what:       "partly applied: the operator DID pick the set, and this engine honours it — the flag itself carries nothing further, because a selection is expressed by which issues are in selected_issues",
-		listShaped: true,
-		applies:    true,
+		name:    "select_individual_issues",
+		burpKey: "scanner/issues_reported/select_individual_issues",
+		what:    "true puts the run in per-issue mode: selected_issues decides each type and the scan_type_* keys are not consulted. Without scan_only_selected_issues the list is per-issue overrides, so a type it does not list still runs",
+		read:    func(c BuiltInConfig) OptUint32 { return c.SelectIndividualIssues },
+		apply:   func(*AuditConfig, uint32) {},
+		applies: true,
 	},
 	{
 		name:       "selected_issues",
 		burpKey:    "scanner/issues_reported/selected_issues",
-		what:       "partly applied: a run dispatches only these catalogue issue types, and an empty list means no restriction. Burp's value also carries a per-issue enabled flag; here the presence of a type IS the enable",
+		what:       "partly applied: in per-issue mode an entry with enabled false removes that issue type from the run, and under scan_only_selected_issues the enabled entries are the whole run. Each entry's detection_methods are recorded per issue type but not yet enforced: this engine does not gate a check by detection method. Outside per-issue mode Burp ignores the list, and a non-empty one is reported unapplied",
 		listShaped: true,
 		applies:    true,
 	},
@@ -1605,7 +1641,7 @@ var builtInConfigKeys = []struct {
 		// listShaped marks it as the second, which keeps it OUT of the "not applied" list an
 		// operator reads as "this control is unsupported" while keeping the reason text naming what
 		// is genuinely missing.
-		what:       "partly applied: a parameter NAME in this list has its insertion points dropped from every check. Burp's own value is a list of match rules ({parameter, item, match_type, expression}), and this engine has no matcher over item or expression, so a rule that matched by expression arrives as a name that matches nothing",
+		what:       "partly applied: a parameter NAME in this list (set through /api/scanner/configs) has its insertion points dropped from every check. Burp's own value is a list of match rules ({parameter, item, match_type, expression}) and this engine has no matcher for them: a loaded file's empty list is honoured as the no-op it is, and a non-empty one is reported unapplied rather than read as names",
 		listShaped: true,
 		applies:    true,
 	},
@@ -1902,6 +1938,22 @@ func (c BuiltInConfig) Apply(base AuditConfig) AuditConfig {
 // only the bare name was a silent drop: a parsed per-issue key was recorded, never reported, and a
 // configuration saying "scan only these issues" read as fully honoured.
 func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string) {
+	applied, rep := c.applyWithAccounting(base)
+	return applied, rep.Unapplied
+}
+
+// configApplyReport is the full accounting of one overlay, by row name: every key the source set
+// lands in exactly one of the two lists. ApplyWithReport returns the second; the first exists so a
+// test can prove the partition holds rather than trusting that a key missing from "unapplied" was
+// applied (burpsy-react-ui-saq3.1 was a key in neither).
+type configApplyReport struct {
+	Applied   []string
+	Unapplied []string
+}
+
+// applyWithAccounting is ApplyWithReport with the applied half of the answer kept.
+func (c BuiltInConfig) applyWithAccounting(base AuditConfig) (AuditConfig, configApplyReport) {
+	var rep configApplyReport
 	if c.anyInsertionKeySet() {
 		c.applyInsertionPointTypes(&base)
 	}
@@ -1912,22 +1964,46 @@ func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string)
 	for _, name := range c.UnrepresentableKeys {
 		parsed[name] = true
 	}
-	var unapplied []string
+	named := func(k string) bool {
+		for _, row := range builtInConfigKeys {
+			if row.name == k {
+				return parsed[strings.TrimPrefix(row.burpKey, "scanner/")] || parsed[row.name]
+			}
+		}
+		return false
+	}
 	for _, k := range builtInConfigKeys {
 		switch {
 		case k.listShaped:
-			// Honoured through a reduced form of Burp's value, and named nowhere in the unapplied list
-			// because that list reads as "this control is unsupported" (burpsy-react-ui-86le). The
-			// row's own text is where the operator reads what is missing.
+			// Honoured through a reduced form of Burp's value. Accounted below by the handler that
+			// owns the value's shape — never skipped outright: that skip is what left a parsed
+			// selected_issues in neither list (burpsy-react-ui-saq3.1).
 			continue
-		case k.read == nil:
-			if parsed[strings.TrimPrefix(k.burpKey, "scanner/")] || parsed[k.name] {
-				unapplied = append(unapplied, k.name)
+		case k.read != nil && k.read(c).Set:
+			if !k.applies {
+				rep.Unapplied = append(rep.Unapplied, k.name)
+				continue
 			}
-		case k.read(c).Set && !k.applies:
-			unapplied = append(unapplied, k.name)
-		case k.read(c).Set:
 			k.apply(&base, k.read(c).Value)
+			rep.Applied = append(rep.Applied, k.name)
+		case named(k.name):
+			// The source named the key and there is no value here this engine can act on.
+			rep.Unapplied = append(rep.Unapplied, k.name)
+		}
+	}
+	c.applyIssueSelection(&base, &rep, named("selected_issues"))
+	c.accountIgnoredParameterRules(&rep, named)
+	// A recorded key no row claims — a `scanner/*` key or section this table has never heard of — is
+	// reported as the source spelled it. Without this the parser recorded it and the report, which
+	// only walks rows, never said so: the same neither-applied-nor-reported hole, one level out.
+	rowFor := make(map[string]bool, 2*len(builtInConfigKeys))
+	for _, k := range builtInConfigKeys {
+		rowFor[strings.TrimPrefix(k.burpKey, "scanner/")] = true
+		rowFor[k.name] = true
+	}
+	for _, recorded := range c.UnrepresentableKeys {
+		if !rowFor[recorded] {
+			rep.Unapplied = append(rep.Unapplied, recorded)
 		}
 	}
 	// The light tier's per-kind set is derived from the eight quick_scan_* fields, so it is built
@@ -1936,7 +2012,29 @@ func (c BuiltInConfig) ApplyWithReport(base AuditConfig) (AuditConfig, []string)
 	// would be indistinguishable from one that did. A single rebuild after the loop is both cheaper
 	// and the only version a test can pin.
 	base.rebuildLightAuditKinds()
-	return base, unapplied
+	return base, rep
+}
+
+// accountIgnoredParameterRules accounts for the list-shaped `ignored_insertion_points` rows a
+// source set. Burp's value is a list of match rules; this engine honours parameter NAMES set
+// through its own API and has no matcher for Burp's rule objects. An empty list asks for nothing and
+// is therefore honoured in full; a non-empty one is reported — reading a rule object as a name
+// would skip a parameter nobody named, or none of the ones that were.
+func (c BuiltInConfig) accountIgnoredParameterRules(rep *configApplyReport, named func(string) bool) {
+	for _, k := range builtInConfigKeys {
+		if !k.listShaped || !strings.HasPrefix(k.burpKey, "scanner/ignored_insertion_points/") {
+			continue
+		}
+		n, set := c.IgnoredParameterRules[k.name]
+		switch {
+		case set && n == 0:
+			rep.Applied = append(rep.Applied, k.name)
+		case set:
+			rep.Unapplied = append(rep.Unapplied, k.name)
+		case named(k.name):
+			rep.Unapplied = append(rep.Unapplied, k.name)
+		}
+	}
 }
 
 // BuiltInConfigNames lists every shipped configuration's name, in table order.
@@ -1966,14 +2064,13 @@ const BurpShippedConfigCount = 29
 // question from "how many are transcribed as built-in presets" (6).
 //
 // The two numbers were conflated in the CLI listing, which said 6 of 29 configurations set a key
-// this engine honours. Six presets are *transcribed*; fifteen shipped files actually set a key that
-// takes effect, because nine more configure only `issues_reported/*` keys, which this engine has
-// honoured all along. Re-derived on 2026-09-14 by walking every `scanner/*` leaf in
-// /root/burp-re/in/extract/resources/BuiltInConfigs and intersecting it with this table's
-// applies=true rows; the key table it was derived against is pinned by
-// audit_config_keys_test.go, so promoting a key moves this constant deliberately rather than
-// silently.
-const BurpShippedConfigsSettingAnHonouredKey = 15
+// this engine honours. Six presets are *transcribed*; eighteen shipped files set a key that takes
+// effect here. Re-derived on 2026-10-07 (burpsy-react-ui-saq3.1) from the files themselves: each is
+// vendored byte-for-byte in testdata/burp-configs, and
+// TestTheHonouredShippedConfigurationCountIsDerivedFromBurpsOwnFiles counts the ones whose import
+// applies at least one key. It was 15 on 2026-09-14; scan_speed and scan_accuracy (ev7y) and the
+// eight quick_scan_* and number_of_follow_up_passes parser mappings (saq3.1) are what moved it.
+const BurpShippedConfigsSettingAnHonouredKey = 18
 
 // BuiltInConfigs is the six shipped configurations that set a key this engine implements.
 //

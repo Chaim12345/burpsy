@@ -284,11 +284,6 @@ func (i CheckInvasiveness) String() string {
 	}
 }
 
-// checkTierNote is what the approximation note says when every active tier is on. Once the engine
-// ranks checks, the three keys are independent and this text is retired; the note remains only for
-// per-issue selection, which still has no representation here.
-const tieredEngineNote = "per-issue selection (scan_only_selected_issues, select_individual_issues, selected_issues) is not applied"
-
 // CheckContext is the stable boundary between dispatch and check logic. It carries
 // handles and shared services; evaluators must not own transport or persistence.
 type CheckContext struct {

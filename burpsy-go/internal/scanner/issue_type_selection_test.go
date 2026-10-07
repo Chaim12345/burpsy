@@ -207,31 +207,30 @@ func TestCoverageReportsNoSuppressionWithoutASelection(t *testing.T) {
 	}
 }
 
-// The three keys now apply, as partial: honoured as far as a boolean can be, and named as such rather
-// than claimed or denied flat.
+// The three keys apply. The two booleans are scalars with a field each and apply in full — they choose
+// Burp's mode (Zmzw.java:80-87), which is all a boolean carries (burpsy-react-ui-saq3.1). The list
+// stays partial while any part of its value is not acted on, and its row has to say which part.
 func TestTheThreeSelectionKeysNowApply(t *testing.T) {
 	want := map[string]bool{
-		"scan_only_selected_issues": true,
-		"select_individual_issues":  true,
+		"scan_only_selected_issues": false,
+		"select_individual_issues":  false,
 		"selected_issues":           true,
 	}
 	seen := map[string]bool{}
 	for _, k := range BuiltInConfigKeys() {
-		if _, tracked := want[k.Name]; !tracked {
+		partial, tracked := want[k.Name]
+		if !tracked {
 			continue
 		}
 		seen[k.Name] = true
 		if !k.Applies {
-			t.Errorf("%s still reports as not applied (%q) while AuditConfig.IssueTypes narrows a run",
-				k.Name, k.What)
+			t.Errorf("%s still reports as not applied (%q) while the selection narrows a run", k.Name, k.What)
 		}
-		if !k.Partial {
-			t.Errorf("%s is marked applied in FULL; a boolean flag carries nothing beyond the presence "+
-				"of a selection, so claiming full support for it is the mirror-image lie", k.Name)
+		if k.Partial != partial {
+			t.Errorf("%s: partial = %v, want %v", k.Name, k.Partial, partial)
 		}
 		if len(k.What) == 0 {
-			t.Errorf("%s is partial with no description; the row is where the operator reads what the "+
-				"reduced form cannot do", k.Name)
+			t.Errorf("%s has no description; the row is where the operator reads what it does", k.Name)
 		}
 	}
 	for name := range want {

@@ -103,7 +103,11 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 	}
 
 	apply := func(fullKey string, raw json.RawMessage) error {
+		out.ParsedKeys = append(out.ParsedKeys, strings.TrimPrefix(fullKey, "scanner/"))
 		row, ok := byBurpKey[fullKey]
+		if ok && builtInConfigKeys[row].listShaped {
+			return setListShaped(&out, builtInConfigKeys[row].name, fullKey, raw)
+		}
 		if !ok || builtInConfigKeys[row].read == nil {
 			out.UnrepresentableKeys = append(out.UnrepresentableKeys, strings.TrimPrefix(fullKey, "scanner/"))
 			return nil
@@ -128,6 +132,49 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 		}
 	}
 	return out, nil
+}
+
+// setListShaped decodes a key whose Burp value is a list rather than a scalar, into the typed field
+// its handler reads. These keys never go to UnrepresentableKeys: their rows are accounted by
+// applyIssueSelection and accountIgnoredParameterRules, which say applied or unapplied for each.
+func setListShaped(out *BuiltInConfig, name, fullKey string, raw json.RawMessage) error {
+	switch {
+	case name == "selected_issues":
+		issues, err := parseSelectedIssues(raw)
+		if err != nil {
+			return fmt.Errorf("burp scan configuration: %s: %w", fullKey, err)
+		}
+		out.SelectedIssues = issues
+		out.SelectedIssuesSet = true
+		return nil
+	case strings.HasPrefix(fullKey, "scanner/ignored_insertion_points/"):
+		var rules []json.RawMessage
+		if err := json.Unmarshal(raw, &rules); err != nil {
+			return fmt.Errorf("burp scan configuration: %s: expected a list of rules: %w", fullKey, err)
+		}
+		if out.IgnoredParameterRules == nil {
+			out.IgnoredParameterRules = map[string]int{}
+		}
+		out.IgnoredParameterRules[name] = len(rules)
+		return nil
+	}
+	// A list-shaped row this parser has no decoder for is recorded, so the report still names it.
+	out.UnrepresentableKeys = append(out.UnrepresentableKeys, strings.TrimPrefix(fullKey, "scanner/"))
+	return nil
+}
+
+// ApplyBurpConfigFile is the import path for one of Burp's own scan-configuration files: parse it,
+// overlay it on base, and return every key the file set that this engine could not apply.
+//
+// It exists so the CLI's -scan-config and anything else that imports a file share ONE path, and so a
+// test can drive exactly that path rather than a re-assembly of it.
+func ApplyBurpConfigFile(base AuditConfig, data []byte) (AuditConfig, []string, error) {
+	parsed, err := ParseBurpConfig(data)
+	if err != nil {
+		return base, nil, err
+	}
+	applied, unapplied := parsed.ApplyWithReport(base)
+	return applied, unapplied, nil
 }
 
 // isNumericBurpKey reports whether the key carries a count or a duration rather than a boolean.
@@ -206,6 +253,10 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.JavaScriptAnalysis = val
 	case "store_issues_within_queue_items":
 		c.StoreQueueItems = val
+	case "select_individual_issues":
+		c.SelectIndividualIssues = val
+	case "scan_only_selected_issues":
+		c.ScanOnlySelectedIssues = val
 	case "relocate_body_to_url":
 		c.RelocateBodyToURL = val
 	case "relocate_body_to_cookie":
@@ -218,6 +269,28 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.RelocateCookieToBody = val
 	case "relocate_cookie_to_url":
 		c.RelocateCookieToURL = val
+	// The nine below had rows with readers and no entry here, so a loaded file's value was parsed,
+	// validated and then dropped: the row read unset, and the report named the key in neither list
+	// (found by TestEveryShippedConfigurationAccountsForEveryScannerKeyItNames, saq3.1). "Audit
+	// coverage - maximum" sets all eight quick_scan keys; two shipped files set the follow-up count.
+	case "number_of_follow_up_passes":
+		c.FollowUpPasses = val
+	case "quick_scan_url_params":
+		c.QuickScanURLParams = val
+	case "quick_scan_body_params":
+		c.QuickScanBodyParams = val
+	case "quick_scan_cookies":
+		c.QuickScanCookies = val
+	case "quick_scan_http_headers":
+		c.QuickScanHTTPHeaders = val
+	case "quick_scan_param_name":
+		c.QuickScanParamName = val
+	case "quick_scan_url_path_filename":
+		c.QuickScanURLPathFilename = val
+	case "quick_scan_url_path_folders":
+		c.QuickScanURLPathFolders = val
+	case "quick_scan_entire_body":
+		c.QuickScanEntireBody = val
 	}
 }
 

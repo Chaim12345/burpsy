@@ -55,10 +55,10 @@ type activeCheck struct {
 	// made against the catalogue and one made against the UI are the same selection rather than two
 	// vocabularies that have to be kept in step (burpsy-react-ui-kvmx).
 	//
-	// Zero for a check the catalogue does not describe — a synthesized corpus entry with no type
-	// index of its own. Such a check is NOT selectable and NOT excludable by a list, and the doc on
-	// SelectedIssueTypes says so, because "a list that silently did not apply to half the check set"
-	// is the failure this exists to remove.
+	// Zero for a check the catalogue does not describe. Such a check is NOT selectable and NOT
+	// excludable by a list, because "a list that silently did not apply to half the check set" is the
+	// failure this exists to remove. A loaded corpus check is not one of them: it carries
+	// BCheckGeneratedTypeIndex, the row Burp files and selects every BCheck under.
 	typeIndex uint32
 	scope     DispatchScope
 	enabled   func(*ScanConfig) bool
@@ -172,24 +172,6 @@ var auditLevelPassiveFamilies = []string{
 // auditLevelJavaScriptFamilies is the DOM family.
 var auditLevelJavaScriptFamilies = []string{"CheckDOM"}
 
-// auditLevelNotesText is the honest statement of where the issues_reported overlay bends, reported
-// beside the resolved configuration so an operator comparing burpsy against Burp's own preview of
-// the same preset sees the difference explained rather than discovered.
-//
-// The light/medium/intrusive tiers are no longer part of it: each check carries a rank and each key
-// selects its own set. What remains is the per-issue selection trio, which has no representation in
-// this engine.
-const auditLevelNotesText = tieredEngineNote
-
-// auditLevelNotes reports the approximation text when the configuration narrows the check set, and
-// nothing when it does not — a run under the base switches has nothing to disclaim.
-func auditLevelNotes(cfg AuditConfig) string {
-	if cfg.hasAuditLevelGate() {
-		return auditLevelNotesText
-	}
-	return ""
-}
-
 // enabledChecksUnder is the check set one run dispatches under an audit-level overlay: the base
 // switch set from ScanConfig, narrowed by the `scanner/issues_reported/*` keys the run's
 // configuration carries. Unset keys leave the base alone, so a run without an overlay is exactly
@@ -212,7 +194,7 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
 	// or neither.
 	checks := s.enabledChecksInTiers(base, activeTiers(cfg), cfg.ScanSpeed)
-	return filterByIssueTypes(checks, cfg.IssueTypes)
+	return filterBySelection(checks, cfg)
 }
 
 // hasAuditLevelGate reports whether the configuration narrows the check set at all.
@@ -229,6 +211,12 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 	// from every other test: a preset with no family switch and a selection would quietly audit
 	// everything (burpsy-react-ui-kvmx).
 	if len(cfg.IssueTypes) > 0 {
+		return true
+	}
+	// The deny half of the selection narrows the set exactly as the whitelist does, and leaving it out
+	// of this predicate would be kvmx again: an imported "all except time-based" configuration would
+	// take the ungated shortcut and dispatch the five issue types it removed.
+	if len(cfg.DisabledIssueTypes) > 0 {
 		return true
 	}
 	if cfg.ScanSpeed.Set {
@@ -365,11 +353,18 @@ func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInva
 		}
 		out = append(out, c)
 	}
-	if cfg.CheckCorpus {
-		// Corpus checks are loaded by the operator rather than declared in the registry, so they
-		// carry no rank. They join every tier: a preset that narrows the built-in checks has not
-		// said anything about an operator's own corpus, and dropping it would silently change what
-		// the corpus switch means.
+	// Corpus checks are ranked where Burp ranks every BCheck: BCHECK_GENERATED carries the INTRUSIVE
+	// scan type alone (/root/burp-re/out/deobf_merged/burp/Zcot.java:1189-1191), and in scan-type
+	// mode a type runs only when every scan type it carries is enabled (Zx9y.java:24-58). The one
+	// exception Burp makes is a BCheck's PASSIVE method under scan_type_passive (Zx9y.java:60-65),
+	// and these are the corpus's ACTIVE checks.
+	//
+	// They used to join every tier on the reading that a preset "has not said anything about an
+	// operator's own corpus". Burp's own presets do say: "Audit checks - passive" dispatched the
+	// operator's active BChecks — probes against the target — under a configuration named for not
+	// sending any (burpsy-react-ui-saq3.1). A tier map that never set the intrusive key (nil) still
+	// leaves the corpus alone, as it leaves the built-in checks alone.
+	if cfg.CheckCorpus && (tiers == nil || tiers[TierIntrusive]) {
 		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
 	}
 	return out
