@@ -7,14 +7,22 @@ name: Go
 # The four commands here are the same four AGENTS.md names as the gate, in the same order, each its
 # own step so a failure says which one broke rather than "the job failed".
 
+# Pushes run only on master. Every other branch is covered by its pull request, so a push to a PR
+# branch no longer runs the gate twice for the same commit.
 on:
   push:
-    branches: [master, ui-react-comparison]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push to the same branch or PR cancels the run it supersedes. The suite takes tens of
+# minutes; finishing a run for a commit nobody will merge only delays the one that matters.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 defaults:
   run:
@@ -68,14 +76,43 @@ jobs:
       # own feet is not a gate. The template corpus is fetched with the binary it belongs to; the
       # test checks ~/.local/nuclei-templates/http directly, since a binary with no templates runs
       # and matches nothing, which would let an empty result pass for a real scan.
+      #
+      # Both tools come from their published release binaries, not `go install`. Compiling them
+      # with this module's toolchain broke the gate: nuclei v3.3.9 pulls an old bytedance/sonic that
+      # go:linknames encoding/json internals, and Go 1.26 refuses that at link time
+      # ("invalid reference to encoding/json.unquoteBytes"), so every run since the toolchain bump
+      # died here before a single test ran. A prebuilt binary carries the toolchain it was built
+      # with, so the tools stop depending on ours. The SHA-256 values are pinned here, not read
+      # from the release's own checksums file: that file only proves the download is intact, while
+      # a hash in this workflow also proves the release is the one that was reviewed. nuclei is
+      # v3.8.0, the version the extscan live tests are developed against locally.
       - name: Install ffuf and nuclei (extscan live tests)
+        working-directory: ${{ runner.temp }}
+        env:
+          FFUF_VERSION: 2.1.0
+          FFUF_SHA256: fc2c82736c14dcbea4daf3d3cf3878c1c4773008ba45c2bc0fceba7d17b40bb5
+          NUCLEI_VERSION: 3.8.0
+          NUCLEI_SHA256: cd4ea43c88b50af8ab96eb6ad3fb4debd8e9d51efaff4d4c2d99106041578943
         run: |
-          go install github.com/ffuf/ffuf/v2@v2.1.0
-          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.9
-          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          bin="$HOME/.local/bin"
+          mkdir -p "$bin"
+          curl -fsSL -o ffuf.tar.gz \
+            "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz"
+          echo "${FFUF_SHA256}  ffuf.tar.gz" | sha256sum -c -
+          tar -xzf ffuf.tar.gz -C "$bin" ffuf
+          curl -fsSL -o nuclei.zip \
+            "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
+          echo "${NUCLEI_SHA256}  nuclei.zip" | sha256sum -c -
+          unzip -o -q nuclei.zip nuclei -d "$bin"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/ffuf" -V
+          "$bin/nuclei" -version
+      # Output is kept: a rate-limited or misdirected template fetch is exactly what this step
+      # exists to surface, and silencing it left only the test below to say "not there".
       - name: Fetch nuclei template corpus
         run: |
-          nuclei -update-templates >/dev/null 2>&1 || true
+          nuclei -update-templates || true
           test -d "$HOME/.local/nuclei-templates/http" || {
             echo "::error::nuclei template corpus did not land in ~/.local/nuclei-templates"
             exit 1
