@@ -958,6 +958,23 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				got = uint64(applied.ScanAccuracy.Value)
 				wantSet = uint64(k.Value)
 				wantUnset = 0
+			case "follow_redirections", "audit_connect_timeout", "audit_normal_timeout",
+				"javascript_use_static_analysis", "javascript_use_dynamic_analysis",
+				"javascript_max_static_time_per_item", "javascript_max_dynamic_time_per_item":
+				// The per-run project overrides (o2p3) and javascript_analysis keys (9mti): each row's
+				// value reaches its own OptUint32 field, spelled here by hand.
+				field := map[string]OptUint32{
+					"follow_redirections":                  applied.FollowRedirects,
+					"audit_connect_timeout":                applied.ConnectTimeout,
+					"audit_normal_timeout":                 applied.NormalTimeout,
+					"javascript_use_static_analysis":       applied.JavaScriptStaticAnalysis,
+					"javascript_use_dynamic_analysis":      applied.JavaScriptDynamicAnalysis,
+					"javascript_max_static_time_per_item":  applied.MaxStaticTimePerItem,
+					"javascript_max_dynamic_time_per_item": applied.MaxDynamicTimePerItem,
+				}[k.Name]
+				got = uint64(field.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
 			default:
 				// A key with no field and no apply path can only be reported, never overlaid, so the
 				// contract this test checks for it is that it did not reach a scalar. Naming all of

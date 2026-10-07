@@ -121,6 +121,12 @@ type auditConfigView struct {
 	FollowRedirections *bool   `json:"follow_redirections"`
 	ConnectTimeoutS    *uint32 `json:"connect_timeout_s"`
 	NormalTimeoutS     *uint32 `json:"normal_timeout_s"`
+	// The javascript_analysis keys (burpsy-react-ui-9mti). Null is unset: both techniques on, no
+	// per-item limit. The limits are whole seconds, 0 meaning no limit.
+	JavaScriptStaticAnalysis  *bool   `json:"javascript_static_analysis"`
+	JavaScriptDynamicAnalysis *bool   `json:"javascript_dynamic_analysis"`
+	MaxStaticTimePerItemS     *uint32 `json:"max_static_time_per_item_s"`
+	MaxDynamicTimePerItemS    *uint32 `json:"max_dynamic_time_per_item_s"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -199,6 +205,16 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if cfg.NormalTimeout.Set {
 		n := cfg.NormalTimeout.Value
 		v.NormalTimeoutS = &n
+	}
+	v.JavaScriptStaticAnalysis = optBoolPtr(cfg.JavaScriptStaticAnalysis)
+	v.JavaScriptDynamicAnalysis = optBoolPtr(cfg.JavaScriptDynamicAnalysis)
+	if cfg.MaxStaticTimePerItem.Set {
+		n := cfg.MaxStaticTimePerItem.Value
+		v.MaxStaticTimePerItemS = &n
+	}
+	if cfg.MaxDynamicTimePerItem.Set {
+		n := cfg.MaxDynamicTimePerItem.Value
+		v.MaxDynamicTimePerItemS = &n
 	}
 	return v
 }

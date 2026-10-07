@@ -1623,3 +1623,16 @@ Burp rather than wider:
   (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
   engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
   at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## JavaScript analysis keys: where burpsy differs from Burp (9mti — 2026-10-07)
+
+- **Zero means no limit**, from Burp's documentation ("zero or a blank value"); Burp's settings panel
+  itself bounds the fields at 1 and above (`Zrde.java:36-37`).
+- **A limit keeps the partial result and counts the stop** (`javascript_analysis_skips`, and Skipped for
+  a stopped DOM check). Burp "truncates analysis" and raises an alert naming the item; there is no
+  separate alert channel here.
+- **Not reached by these keys:** the proxy-capture static pass (`Capture.ScanExchange`), which is not a
+  configured run; the deferred stored-DOM render in `FinishScan`, which is scan-level and starts the
+  browser when stored canaries were planted; and the crawl's rendered-location pass, which honours
+  `use_dynamic_analysis` but not `max_dynamic_time_per_item` (it has its own location cap).
+- **`fetch_out_of_scope_resources` and `request_missing_dependencies` remain unapplied**, as before.

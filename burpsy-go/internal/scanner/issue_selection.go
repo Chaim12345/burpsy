@@ -170,8 +170,9 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - Request smuggling pipelines a CL.TE / TE.CL pair down one connection and reads the response
 //     that follows — Burp's socket-poisoning method, not its timing one.
 //   - Reflected XSS confirms a client-side markup or script breakout: "Client-side".
-//   - The DOM rows run in the instrumented browser (domexec); the static DOM pass runs on the
-//     passive path, outside these descriptors: "Javascript dynamic analysis".
+//   - The DOM rows run in the instrumented browser (domexec): "Javascript dynamic analysis". The
+//     static DOM pass is not a descriptor — it is the audit item's JavaScript tail
+//     (javascriptAnalysisFor) — so its "Javascript static analysis" is in burpsyEngineMethods.
 //   - External service interaction plants an interactsh domain: Burp's "Burp Collaborator".
 //   - A loaded corpus check is a BCheck's active half: "Active checks".
 var burpsyDetectionMethods = map[uint32][]string{
@@ -204,12 +205,23 @@ var burpsyMethodlessTypes = map[uint32]string{
 	0x09008000:                  "a provenance label for findings a Bambda filed; the row reads a ledger, never a target",
 }
 
+// burpsyEngineMethods are methods burpsy runs for a type OUTSIDE its check descriptor, so they are not
+// in the descriptor's DetectionMethods (which decide whether the check is withheld) but are still
+// methods burpsy implements and must not be declined as unimplemented. Today that is the static DOM
+// pass: javascriptAnalysisFor runs it at the end of every audit item, honours "Javascript static
+// analysis" disabled for a type, and reports the type's static candidates when dynamic analysis is off
+// for it (burpsy-react-ui-9mti). Before that pass was an audit stage, an enabled static method was
+// declined here as never running.
+var burpsyEngineMethods = map[uint32][]string{}
+
 func init() {
-	// Every DOM-based type Burp defines (static and dynamic analysis) is driven by the instrumented
-	// browser here. Filled from Burp's own table rather than typed out, so a DOM row cannot be missed.
+	// Every DOM-based type Burp defines (static and dynamic analysis): the descriptor drives the
+	// instrumented browser, and the audit's JavaScript tail is the static half. Filled from Burp's own
+	// table rather than typed out, so a DOM row cannot be missed.
 	for t, methods := range burpIssueDetectionMethods {
 		if len(methods) == 2 && methods[0] == MethodJavaScriptDynamic && methods[1] == MethodJavaScriptStatic {
 			burpsyDetectionMethods[t] = []string{MethodJavaScriptDynamic}
+			burpsyEngineMethods[t] = []string{MethodJavaScriptStatic}
 		}
 	}
 }
@@ -237,6 +249,11 @@ func methodDeclineReason(def IssueDefinition, method string) string {
 // burpsyImplements reports whether burpsy's check for the type uses the method.
 func burpsyImplements(typeIndex uint32, method string) bool {
 	for _, m := range burpsyDetectionMethods[typeIndex] {
+		if m == method {
+			return true
+		}
+	}
+	for _, m := range burpsyEngineMethods[typeIndex] {
 		if m == method {
 			return true
 		}

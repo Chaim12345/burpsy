@@ -286,3 +286,29 @@ page reflects input: not requested and no finding when false, requested and foun
 scope rules) and `TestNormalTimeoutBoundsTheRunsProbesAndLeavesTheEngagementSenderAlone` (a 1.5 s
 endpoint is a counted send failure under `normal_timeout` 1 and runs under no override; the engagement
 sender is the same object with the same settings afterwards and still waits the answer out).
+
+## JavaScript analysis keys (9mti)
+
+Read from Burp 2026.7.1 (build 51467) at `Zxc3.java:27-31`; `internal/scanner/js_analysis.go` carries
+the citations. In burpsy, **static** is the audit's lexical source-to-sink pass over an item's own
+response (`AnalyzeDOMDocument`) and **dynamic** is everything that drives the headless browser: the DOM
+check families and the confirmation of static candidates.
+
+| Burp key | What burpsy does |
+|---|---|
+| `use_static_analysis` | False stops the static pass and the confirmation it seeds; the browser-driven DOM checks still run. |
+| `use_dynamic_analysis` | False takes every browser-driven DOM check out of the run's check set and skips confirmation, so **the run starts no browser**; the static candidates are then reported as tentative findings that say dynamic analysis was off. The crawl's rendered-location pass declines with the reason. |
+| `max_static_time_per_item` | Seconds (Burp's panel labels it so, `Zrde.java:204,230`); 0 is no limit, as the documentation says of zero or blank. When it runs out the pass keeps what it found, marks the analysis incomplete, and the item's `javascript_analysis_skips` names the static pass and the limit. |
+| `max_dynamic_time_per_item` | Seconds; 0 is no limit. One clock per item, started by its first browser use and shared by its DOM checks and the confirmation tier. A DOM check it stops, or never lets start, is counted **Skipped** — not clean, and not a send failure that trips the breaker — and named in `javascript_analysis_skips`. |
+| `max_time_per_item` | Burp's pre-split spelling, which Burp reads into the static limit (`Zxc3.java:30`). No shipped file carries it, so it has no row: a file naming it is told the key did nothing. |
+
+The selection a run carries applies to what this tail reports: a deselected type, or "Javascript static
+analysis" disabled for a type, removes its static candidates; "Javascript dynamic analysis" disabled for
+a type reports its candidates static-only. `scan_type_javascript_analysis` false now stops the tail
+too — before, it removed the DOM checks and left the confirmation tier starting the browser.
+
+Proved through `AuditSession` against vulnapp: `TestAStaticOnlyRunStartsNoBrowserAndReportsTheStaticCandidate`
+(zero `Browser()` calls, a tentative DOM-based finding, and a control run that does call it),
+`TestMaxStaticTimePerItemStopsThePassAndCountsTheSkip`, and
+`TestMaxDynamicTimePerItemIsACountedSkipNotACleanResultOrABreakerTrip` (real Chrome against a page that
+answers after 1.5 s under a 1 s limit; skipped, and says so, where Chrome is absent).
