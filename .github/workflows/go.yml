@@ -108,11 +108,26 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/ffuf" -V
           "$bin/nuclei" -version
-      # Output is kept: a rate-limited or misdirected template fetch is exactly what this step
-      # exists to surface, and silencing it left only the test below to say "not there".
+      # The corpus is a pinned release archive, not `nuclei -update-templates`. On a fresh runner
+      # the updater printed "nuclei-templates are not installed, installing..." and exited within a
+      # second having installed nothing and said nothing (an unauthenticated GitHub API call from a
+      # shared runner IP is the likely cause). The archive comes from codeload, which that limit
+      # does not apply to, and the corpus no longer moves between runs. burpsy runs nuclei with -duc
+      # and explicit -t paths (internal/extscan/nuclei.go), so nuclei's own updater is never needed.
+      # v10.4.8 is the corpus the live tests run against locally.
       - name: Fetch nuclei template corpus
+        working-directory: ${{ runner.temp }}
+        env:
+          TEMPLATES_VERSION: 10.4.8
+          TEMPLATES_SHA256: 53ae80d9bcfff638fbff62c4b730c436564b6bf5e05cf4f86a7eefe37c7ecc47
         run: |
-          nuclei -update-templates || true
+          set -euo pipefail
+          dir="$HOME/.local/nuclei-templates"
+          mkdir -p "$dir"
+          curl -fsSL -o templates.tar.gz \
+            "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${TEMPLATES_VERSION}.tar.gz"
+          echo "${TEMPLATES_SHA256}  templates.tar.gz" | sha256sum -c -
+          tar -xzf templates.tar.gz -C "$dir" --strip-components=1
           test -d "$HOME/.local/nuclei-templates/http" || {
             echo "::error::nuclei template corpus did not land in ~/.local/nuclei-templates"
             exit 1
