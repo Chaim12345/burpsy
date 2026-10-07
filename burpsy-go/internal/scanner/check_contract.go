@@ -342,6 +342,10 @@ type CheckContext struct {
 	// Never nil on a context this package builds, so a withheld probe always has somewhere to be
 	// counted.
 	MethodDeclines *MethodDeclineLedger
+	// SkipServerSideParams are the parameters this check must not probe because the run exempted
+	// them from server-side injection checks and this check is one (gmdk). Empty for every other
+	// check, which is the point: the exemption rides only the enumeration of the checks it names.
+	SkipServerSideParams []string
 }
 
 // RunLightAudit is what a check context sees of the audit run's light-audit tier: the
@@ -416,6 +420,9 @@ func (cc *CheckContext) ProbeEnumerateOptions() bcheck.EnumerateOptions {
 	if cc.PointEffectiveCheck != "" {
 		opts.CheckName = cc.PointEffectiveCheck
 	}
+	// The server-side-injection exemption is per CHECK, so it is added here and never to the run's
+	// enumerateOptions: the queue row and every other check still see the parameter.
+	opts.SkipServerSideInjectionForParameters = cc.SkipServerSideParams
 	return opts
 }
 
@@ -480,6 +487,9 @@ func newCheckContextForCheck(ctx context.Context, scanner *ActiveScanner, exchan
 		}
 	}
 	cc.DisabledMethods = cfg.disabledMethodsFor(d.TypeIndex)
+	if d.ServerSideInjection.skipsServerSideParams(cfg.skipIneffectiveResolved()) {
+		cc.SkipServerSideParams = cfg.SkipServerSideInjectionForParameters
+	}
 	return cc
 }
 
@@ -589,6 +599,9 @@ type CheckDescriptor struct {
 	// type withholds the check; one that enables a method not listed here is told it was declined.
 	// Empty means the check is selected by its type alone.
 	DetectionMethods []string
+	// ServerSideInjection is whether this check honours skip_server_side_injection_for_parameters,
+	// and when (server_side_injection.go). Set from serverSideInjectionByType for every descriptor.
+	ServerSideInjection ServerSideInjectionClass
 }
 
 func (d CheckDescriptor) Runnable() bool {

@@ -939,6 +939,13 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
 				}
 				got, wantSet, wantUnset = 0, 0, 0
+			case "skip_server_side_injection_for_parameters":
+				// The same list shape as the skip-all key (burpsy-react-ui-gmdk), checked the same way.
+				if len(applied.SkipServerSideInjectionForParameters) != 0 {
+					t.Errorf("preset %q reported %s as applied but a preset cannot carry a "+
+						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 0, 0, 0
 			case "scan_speed":
 				// The per-check mutation-set selector (burpsy-react-ui-ev7y). Named here because the
 				// guard below refuses an applying key this oracle cannot check, and the check is the

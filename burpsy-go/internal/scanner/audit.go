@@ -702,11 +702,16 @@ type AuditConfig struct {
 	// every kind before the per-request cap, and the drop is a bcheck.Declined so the audit
 	// item's queue row says the parameter was skipped rather than absent.
 	//
-	// Burp's softer sibling — skip_server_side_injection_for_parameters, which exempts only
-	// the injection checks — is deliberately not modelled: burpsy's check families do not yet
-	// partition into server-side-injection versus rest, and a skip list that could not name
-	// what it exempts would be a control silently testing more than it claims to skip.
+	// Burp's softer sibling is SkipServerSideInjectionForParameters, below.
 	SkipAllTestsForParameters []string
+	// SkipServerSideInjectionForParameters is Burp's
+	// scanner/ignored_insertion_points/skip_server_side_injection_for_parameters: parameters, by
+	// name, that the server-side injection checks do not probe while every other check still does
+	// (burpsy-react-ui-gmdk). Which checks those are, and when, is Burp's own split
+	// (server_side_injection.go): SQL injection and XPath always; the rest — reflected XSS included —
+	// only while skip_ineffective_checks is on. Applied per check, never to the run-wide
+	// enumeration, and each drop is a bcheck.Declined on that check's coverage.
+	SkipServerSideInjectionForParameters []string
 	// FollowUpPasses is Burp's scanner/error_handling/number_of_follow_up_passes: how many extra
 	// passes a FAILED item is re-dispatched (Zxdx.java:27,36; shipped default 1 at Zp0d.java:120-121).
 	//
@@ -1651,8 +1656,12 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "skip_server_side_injection_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_server_side_injection_for_parameters",
-		what:    "not applied: needs the same rule matcher skip_all_tests_for_parameters needs, and additionally a server-side-injection classification of the check set - CheckDescriptor carries a phase and a dispatch scope but no injection-class grouping, so there is no set of checks to exclude a parameter from",
-		applies: false,
+		// Applied since burpsy-react-ui-gmdk, through the same reduced value shape as the skip-all
+		// list: parameter NAMES set through the API, and Burp's rule objects reported when a file
+		// carries them. The classification of the check set it needed is server_side_injection.go.
+		what:       "partly applied: a parameter NAME in this list (set through /api/scanner/configs) is not probed by the server-side injection checks — SQL injection and XPath always, and OS command, code, template, XSS, XXE, path traversal, LDAP and the rest of Burp's set while skip_ineffective_checks is on — and is still probed by every other check. Burp's own value is a list of match rules ({parameter, item, match_type, expression}) and this engine has no matcher for them: a loaded file's empty list is honoured as the no-op it is, and a non-empty one is reported unapplied",
+		listShaped: true,
+		applies:    true,
 	},
 	{
 		name:    "javascript_use_static_analysis",

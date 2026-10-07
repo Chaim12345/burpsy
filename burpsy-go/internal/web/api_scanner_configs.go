@@ -76,6 +76,17 @@ type auditConfigView struct {
 	// operator cleared the list" — unlike the numeric keys there is no zero-value ambiguity,
 	// because absent and empty mean the same thing for a list.
 	SkipAllTestsForParameters []string `json:"skip_all_tests_for_parameters"`
+	// SkipServerSideInjectionForParameters is Burp's skip_server_side_injection_for_parameters
+	// (burpsy-react-ui-gmdk): parameter names the server-side injection checks do not probe while
+	// every other check still does. Written like the skip-all list — absent leaves it alone, [] clears
+	// it — and always read back as an array, [] when empty.
+	SkipServerSideInjectionForParameters []string `json:"skip_server_side_injection_for_parameters"`
+	// The deny half of Burp's per-issue selection and what it could not act on (saq3.1, 2hze).
+	// Read-only here: an imported configuration fills them. Each is always an array, [] when empty,
+	// so a console never reads an absent list as "nothing removed".
+	DisabledIssueTypes       []uint32                       `json:"disabled_issue_types"`
+	DisabledDetectionMethods []scanner.IssueDetectionMethod `json:"disabled_detection_methods"`
+	DeclinedDetectionMethods scanner.MethodDeclines         `json:"declined_detection_methods"`
 	// LightAuditKinds is the DERIVED per-kind set the light-audit tier is gated on
 	// (burpsy-react-ui-02qi). Reported rather than set: the eight quick_scan_* keys are the operator's
 	// control, and this is what they resolved to, so a console can show "your light audit covers
@@ -154,6 +165,10 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if len(cfg.IssueTypes) > 0 {
 		v.IssueTypes = cfg.IssueTypes
 	}
+	v.SkipServerSideInjectionForParameters = append([]string{}, cfg.SkipServerSideInjectionForParameters...)
+	v.DisabledIssueTypes = append([]uint32{}, cfg.DisabledIssueTypes...)
+	v.DisabledDetectionMethods = append([]scanner.IssueDetectionMethod{}, cfg.DisabledDetectionMethods...)
+	v.DeclinedDetectionMethods = append(scanner.MethodDeclines{}, cfg.DeclinedDetectionMethods...)
 	if excluded := cfg.LightAuditKinds.ExcludedKinds(); len(excluded) > 0 {
 		v.LightAuditKindsExcluded = excluded
 	}
@@ -182,8 +197,8 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 // would have done exactly that: a save that sent only a ceiling would have stored a configuration
 // with a zero time budget and every breaker disabled, under the operator's name.
 //
-// Three keys are writable here: the two misc_insertion_point_options keys and the operator's
-// parameter skip list (v9cg). The rest of the view is still read-only and says so at the
+// Writable here: the two misc_insertion_point_options keys, the operator's parameter skip list (v9cg)
+// and its server-side-injection sibling (gmdk), among the fields applyTo reads below. The rest of the view is still read-only and says so at the
 // endpoint, rather than accepting a field and storing nothing.
 func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, error) {
 	if v.MaxInsertionPointsPerRequest != nil {
@@ -246,6 +261,19 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 			names = append(names, name)
 		}
 		cfg.SkipAllTestsForParameters = names
+	}
+	// The server-side list follows the skip-all list's rules exactly (gmdk): present overlays, [] clears,
+	// an empty name is refused rather than dropped.
+	if v.SkipServerSideInjectionForParameters != nil {
+		names := make([]string, 0, len(v.SkipServerSideInjectionForParameters))
+		for _, raw := range v.SkipServerSideInjectionForParameters {
+			name := strings.TrimSpace(raw)
+			if name == "" {
+				return cfg, errors.New("skip_server_side_injection_for_parameters: every entry needs a parameter name")
+			}
+			names = append(names, name)
+		}
+		cfg.SkipServerSideInjectionForParameters = names
 	}
 	return cfg, nil
 }
