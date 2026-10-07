@@ -429,10 +429,21 @@ func fragmentIsRouting(fragment string) bool {
 	return strings.ContainsAny(fragment, "/\\?=&") == true
 }
 
-// resolveAgainstRoute is resolveAgainst plus the routing-fragment decision: when fragments are
-// being treated as routes AND this fragment looks like one, it is returned alongside the
-// fragment-less URL so the caller can carry it as identity without ever sending it.
-func resolveAgainstRoute(base *url.URL, raw string, fragmentsRoute bool) (*url.URL, string, error) {
+// resolveAgainstRoute is resolveAgainst plus the routing-fragment decision: when this fragment
+// looks like a client-side route it is returned alongside the fragment-less URL so the caller can
+// carry it as identity without ever sending it.
+//
+// force is Config.FragmentsRoute, the operator's override, and the two halves are NOT the same
+// test. Burp's automatic character rule is always on — that is what "By default, if a fragment
+// contains any of ... the crawler assumes that it is used for client-side routing" says — and the
+// scan-configuration option exists for the app the character rule MISSES ("If an app that uses
+// fragments for client-side routing does not perform as expected, make sure that the ... option is
+// selected"). So an anchor-shaped fragment becomes a route when EITHER the automatic rule fires OR
+// the operator forced it. Gating the automatic half on the switch as well was a real bug caught by
+// TestTwoRoutingFragmentsAreTwoLocations: with the switch off — its default — every routing
+// fragment was stripped and a hash-routed SPA collapsed to one location, which is the exact defect
+// this work exists to fix.
+func resolveAgainstRoute(base *url.URL, raw string, force bool) (*url.URL, string, error) {
 	ref, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return nil, "", err
@@ -445,7 +456,7 @@ func resolveAgainstRoute(base *url.URL, raw string, fragmentsRoute bool) (*url.U
 	}
 	out.Fragment = ""
 	out.RawFragment = ""
-	if fragmentsRoute && fragmentIsRouting(frag) {
+	if fragmentIsRouting(frag) || (force && frag != "") {
 		return out, frag, nil
 	}
 	return out, "", nil
