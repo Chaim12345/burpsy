@@ -475,12 +475,27 @@ func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true
 // from here, so attaching the pacer at this one construction point bounds all of them. A fresh
 // AuthorisedSender per call is fine and the shared limiter is the whole point: the senders are
 // per-exchange, the bound is per-pool.
-func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
+//
+// # The run's own sender (burpsy-react-ui-o2p3)
+//
+// ctx is how a run's project-option overrides reach the gate. An audit configuration that carries
+// scanner/audit_project_option_overrides/{connect_timeout,normal_timeout} gets a sender derived for
+// that run alone (sender.DeriveWithTimeouts, built once per run in auditRunSender) and it rides the
+// dispatch context; this is the one place that reads it. The derived sender is still wrapped in an
+// AuthorisedSender bound to the same scope handle, so it is the same chokepoint with different
+// timeouts rather than a second way out of the process — and the engagement sender, which Repeater,
+// Intruder and every other run share, is never touched. A context with no run sender (no override,
+// or a send outside a dispatched audit) gets the engagement sender, exactly as before.
+func (s *ActiveScanner) probeGate(ctx context.Context, exchange *core.Exchange) *sender.AuthorisedSender {
 	var gate sender.ScopeChecker = noEngagementScope{}
 	if s.scope != nil {
 		gate = s.scope
 	}
-	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
+	net := s.sender
+	if run := runSenderFrom(ctx); run != nil {
+		net = run
+	}
+	return sender.NewAuthorisedSender(gate, net, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
 }
 
 // sendTestRequest dispatches a crafted test request through the sender when
@@ -536,7 +551,7 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 	if s.sender != nil {
 		meter := meterFrom(ctx)
 		meter.attempt()
-		gate := s.probeGate(exchange)
+		gate := s.probeGate(ctx, exchange)
 		resp, err := gate.SendRequest(ctx, &sender.Request{
 			Method: exchange.Method,
 			Host:   exchange.Host,
@@ -597,7 +612,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,
@@ -655,7 +670,7 @@ func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,

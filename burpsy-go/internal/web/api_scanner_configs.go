@@ -115,6 +115,12 @@ type auditConfigView struct {
 	// PerHostMaxInFlight is Burp's resource-pool concurrent_request_limit: the ceiling on
 	// probes in flight to ONE host at a time. Null means no per-host cap.
 	PerHostMaxInFlight *uint32 `json:"per_host_max_in_flight"`
+	// The per-run project-option overrides (burpsy-react-ui-o2p3), reported as the run carries them.
+	// Null is "not overridden" — the engagement's own setting applies — which is a different answer
+	// from false or 0, so each is a pointer. Timeouts are whole seconds, as Burp writes them.
+	FollowRedirections *bool   `json:"follow_redirections"`
+	ConnectTimeoutS    *uint32 `json:"connect_timeout_s"`
+	NormalTimeoutS     *uint32 `json:"normal_timeout_s"`
 }
 
 // optBoolPtr maps an OptUint32 bool onto a JSON pointer: unset becomes null.
@@ -184,6 +190,15 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 	if cfg.PerHostMaxInFlight.Set {
 		n := cfg.PerHostMaxInFlight.Value
 		v.PerHostMaxInFlight = &n
+	}
+	v.FollowRedirections = optBoolPtr(cfg.FollowRedirects)
+	if cfg.ConnectTimeout.Set {
+		n := cfg.ConnectTimeout.Value
+		v.ConnectTimeoutS = &n
+	}
+	if cfg.NormalTimeout.Set {
+		n := cfg.NormalTimeout.Value
+		v.NormalTimeoutS = &n
 	}
 	return v
 }

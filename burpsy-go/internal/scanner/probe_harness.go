@@ -29,10 +29,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 )
 
 // DefaultProbeInsertionKinds is the point set an injection evaluator walks when it does not
@@ -45,6 +47,23 @@ type ProbeResponse struct {
 	Body     string
 	Status   int
 	Duration time.Duration
+	// Followed is the page a redirect chain landed on, when this probe was sent with SendFollowing,
+	// the run follows redirects (follow_redirections, burpsy-react-ui-o2p3) and the response was a
+	// redirect the policy let it follow at least one hop of. Nil otherwise — including when the chain
+	// was refused or filtered at its first hop, where the 30x above is all there is.
+	Followed *ProbeResponse
+	// FollowedTo is the absolute URL Followed came from. Empty when Followed is nil.
+	FollowedTo string
+}
+
+// landing is the response a browser would render for this probe: the end of a followed redirect
+// chain when there is one, the response itself otherwise. A browser following a 30x never renders
+// the 30x's own body, so a check that asks "would this execute" asks it of the landing page.
+func (r ProbeResponse) landing() ProbeResponse {
+	if r.Followed != nil {
+		return *r.Followed
+	}
+	return r
 }
 
 // ProbeHarness holds one exchange's baseline and insertion points for a run of payloads.
@@ -129,21 +148,29 @@ func (h *ProbeHarness) DeclinedPoints() []bcheck.Declined { return h.declined }
 // become a way around the scope chokepoint. A scope refusal is metered as a refusal, not a
 // generic failure, so the audit's refusal ledger stays accurate.
 func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, error) {
-	gate := h.scanner.probeGate(h.exchange)
+	gate := h.scanner.probeGate(ctx, h.exchange)
 	if gate == nil {
 		return ProbeResponse{}, errors.New("no authorised sender")
 	}
+	resp, _, err := h.sendVia(ctx, gate, raw)
+	return resp, err
+}
+
+// sendVia is send through a gate the caller holds, returning the wire bytes as well as the readable
+// response — a redirect follower needs the bytes as they arrived and the same gate the probe left
+// through, so its hops are refused and counted on the counters the probe's own refusal would be.
+func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSender, raw []byte) (ProbeResponse, []byte, error) {
 	meter := meterFrom(ctx)
 	meter.attempt()
 	refusedBefore := gate.Refused()
 	res, err := gate.Send(ctx, raw)
 	if gate.Refused() > refusedBefore {
 		meter.refusal()
-		return ProbeResponse{}, fmt.Errorf("refused: outside the engagement scope: %w", err)
+		return ProbeResponse{}, nil, fmt.Errorf("refused: outside the engagement scope: %w", err)
 	}
 	if err != nil {
 		meter.failure()
-		return ProbeResponse{}, err
+		return ProbeResponse{}, nil, err
 	}
 	meter.succeeded()
 
@@ -165,7 +192,79 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 	if out.Status == 429 || out.Status == 503 {
 		meter.rateLimited(out.Status)
 	}
-	return out, nil
+	return out, res.Raw, nil
+}
+
+// SendFollowing is Send for a check that needs the page a redirect lands on (burpsy-react-ui-o2p3):
+// when the run follows redirects and the probe's response is one, the chain is followed and its
+// landing page rides the result as Followed. The 30x stays the response, so nothing the check reads
+// from it changes; a run that does not follow returns exactly what Send would.
+//
+// Every hop is a request the run sent, so it is treated like one: authorised on its own rendered
+// bytes by a fresh AuthorisedSender sharing the probe's scope handle and resource pool
+// (sender.FollowRedirectsAfterPolicy), metered as an attempt with its outcome, and counted against the
+// run's request budget. A hop the scope refused is a refusal on the probe's own gate.
+func (h *ProbeHarness) SendFollowing(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	mutated, err := point.Apply(h.reqBytes, payload, false)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	gate := h.scanner.probeGate(ctx, h.exchange)
+	if gate == nil {
+		return ProbeResponse{}, errors.New("no authorised sender")
+	}
+	resp, wire, err := h.sendVia(ctx, gate, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	policy, follow := h.scanner.redirectPolicy(ctx)
+	if !follow || resp.Status < 300 || resp.Status >= 400 {
+		return resp, nil
+	}
+	h.follow(ctx, gate, mutated, wire, policy, &resp)
+	return resp, nil
+}
+
+// follow walks the redirect chain that starts at a probe's response and attaches the landing page.
+// A chain that cannot be followed is not an error: the 30x is the response, which is the truthful
+// result, and the reason sits on the hop the follower recorded.
+func (h *ProbeHarness) follow(ctx context.Context, gate *sender.AuthorisedSender, raw, wire []byte,
+	policy sender.RedirectSettings, resp *ProbeResponse) {
+
+	meter := meterFrom(ctx)
+	refusedBefore := gate.Refused()
+	result, err := gate.FollowRedirectsAfterPolicy(ctx, raw, wire, policy)
+	for i := gate.Refused() - refusedBefore; i > 0; i-- {
+		meter.attempt()
+		meter.refusal()
+	}
+	if err != nil || result == nil {
+		return
+	}
+	// The landing page is the LAST followed hop's own bytes, read off the hop rather than off
+	// result.Final: a hop whose answer could not be parsed is still followed and keeps its bytes, but
+	// Final stays the response before it, and attaching that would present a 30x as the landing page.
+	var landedOn string
+	var landedRaw []byte
+	for _, hop := range result.Hops {
+		switch {
+		case hop.Followed:
+			meter.attempt()
+			meter.succeeded()
+			landedOn, landedRaw = hop.To, hop.ResponseRaw
+		case strings.HasPrefix(hop.Reason, "the hop was authorised but could not be sent"):
+			meter.attempt()
+			meter.failure()
+		}
+	}
+	if landedOn == "" || len(landedRaw) == 0 {
+		return
+	}
+	readable, _ := readableResponse(landedRaw)
+	landing := ProbeResponse{Raw: readable, Body: responseBody(string(readable)), Status: responseStatus(string(readable))}
+	resp.Followed = &landing
+	resp.FollowedTo = landedOn
 }
 
 // Send places payload at point and dispatches the resulting request.

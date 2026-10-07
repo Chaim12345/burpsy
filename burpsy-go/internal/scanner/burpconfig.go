@@ -77,6 +77,14 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 			setBurpConfigField(&out, k.name, SomeUint32(rank))
 			return nil
 		}
+		// Burp writes -1 for an audit project-option override that is not set (Zbuj.java:27-28) and
+		// reads `> -1` as set (:19-22), so a file Burp itself exported with no override carries -1.
+		// Refusing it would reject Burp's own output; reading it as a number it is not would install an
+		// override nobody asked for. It is recorded as asked-for-nothing and reported applied.
+		if strings.HasPrefix(k.burpKey, "scanner/audit_project_option_overrides/") && isMinusOne(raw) {
+			out.InheritedOverrides = append(out.InheritedOverrides, k.name)
+			return nil
+		}
 		if isNumericBurpKey(k.burpKey) {
 			n, err := burpConfigUint(raw)
 			if err != nil {
@@ -194,8 +202,23 @@ func isNumericBurpKey(burpKey string) bool {
 	if burpKey == "scanner/audit_optimization/skip_ineffective_checks" {
 		return false
 	}
+	// follow_redirections is the same section's other boolean (Zhd_.java:41 reads it with the boolean
+	// getter). Before it had a reader the key never reached this function; with one, the section rule
+	// would read `"follow_redirections": true` as a number and reject four of Burp's shipped files.
+	if burpKey == "scanner/audit_optimization/follow_redirections" {
+		return false
+	}
 	return strings.HasPrefix(burpKey, "scanner/error_handling/") ||
-		strings.HasPrefix(burpKey, "scanner/audit_optimization/")
+		strings.HasPrefix(burpKey, "scanner/audit_optimization/") ||
+		// Whole seconds (Zbuj.java:19-22). Without this they would fall to the boolean decoder, which
+		// accepts a number as "non-zero" — a 10-second override would load as 1.
+		strings.HasPrefix(burpKey, "scanner/audit_project_option_overrides/")
+}
+
+// isMinusOne reports whether a raw JSON value is the integer -1.
+func isMinusOne(raw json.RawMessage) bool {
+	var n float64
+	return json.Unmarshal(raw, &n) == nil && n == -1
 }
 
 // setBurpConfigField is the parse-side field map, keyed by row name. It exists so the parser does
@@ -291,6 +314,13 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.QuickScanURLPathFolders = val
 	case "quick_scan_entire_body":
 		c.QuickScanEntireBody = val
+	// The three per-run project overrides (burpsy-react-ui-o2p3).
+	case "follow_redirections":
+		c.FollowRedirections = val
+	case "audit_connect_timeout":
+		c.AuditConnectTimeout = val
+	case "audit_normal_timeout":
+		c.AuditNormalTimeout = val
 	}
 }
 

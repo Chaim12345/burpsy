@@ -162,7 +162,7 @@ func (s *ActiveScanner) RefetchStoredTargets(ctx context.Context) (StoredRefetch
 
 	for _, t := range s.storedRefetchTargets() {
 		out.Candidates++
-		gate := s.probeGate(t.exchange)
+		gate := s.probeGate(ctx, t.exchange)
 		if gate == nil {
 			out.Refused++
 			continue

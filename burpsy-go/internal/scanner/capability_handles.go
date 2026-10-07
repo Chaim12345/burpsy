@@ -243,7 +243,7 @@ func (cc *CheckContext) RequireEgress() error {
 	if cc.Scanner.sender == nil {
 		return errors.New("egress: no sender is configured for this scan, so an active probe cannot be sent and this check cannot report a verdict")
 	}
-	if cc.Scanner.probeGate(cc.Exchange) == nil {
+	if cc.Scanner.probeGate(context.Background(), cc.Exchange) == nil {
 		return errors.New("egress: no authorised sender for this exchange, so an active probe cannot be sent")
 	}
 	return nil

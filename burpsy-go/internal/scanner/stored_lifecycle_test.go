@@ -133,7 +133,7 @@ func TestAStoredClaimIsNotSettledByAnotherExchangesCanary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetExchange: %v", err)
 	}
-	gate := scan.probeGate(ex)
+	gate := scan.probeGate(context.Background(), ex)
 	if gate == nil {
 		t.Fatal("no authorised sender, so nothing could be submitted")
 	}

@@ -67,7 +67,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 		return nil, errors.New("no sender configured for active bcheck probes")
 	}
 	k.meter.attempt()
-	gate := k.sc.probeGate(k.ex)
+	gate := k.sc.probeGate(k.ctx, k.ex)
 	resp, err := sendProbe(k.ctx, gate, raw, k.probeBudget)
 	if gate.Refused() > 0 {
 		// A refusal counts as a failure too: nothing left the process, so the

@@ -82,7 +82,7 @@ func TestARefetchSeesACanaryThatNoCapturedResponseCouldHaveContained(t *testing.
 	if err != nil {
 		t.Fatalf("GetExchange: %v", err)
 	}
-	gate := scan.probeGate(ex)
+	gate := scan.probeGate(context.Background(), ex)
 	if gate == nil {
 		t.Fatal("no authorised sender for the seeded exchange, so nothing could be planted")
 	}

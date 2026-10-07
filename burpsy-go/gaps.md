@@ -1608,3 +1608,18 @@ Burp rather than wider:
   take the code-injection family's class (`Zsn3.java:74-76`); their own Burp runner was not located.
 - **No console route imports a Burp configuration file.** The import path is the `-scan-config` flag;
   the web console lists the six transcribed presets and saved configurations only.
+
+## Per-run project-option overrides: where burpsy differs from Burp (o2p3 — 2026-10-07)
+
+- **`follow_redirections` follows for the reflected-XSS check only.** Burp's documentation names that
+  check as the reason for the setting; its per-check "where necessary" predicate was not located in the
+  decompiled tree. Following inside every probe would break open redirection and header injection, which
+  read the 30x itself. Reopen if Burp's predicate is found to cover other checks (stored XSS, error-based
+  injection on an error page reached by redirect).
+- **The hop budget and cookie replay of a followed chain are the engagement's network settings**
+  (`redirects.max_hops`, default 5; `redirects.replay_cookies`), because Burp's scan configuration names
+  neither.
+- **Timeout overrides apply to the probes a run sends while it runs.** The deferred phase
+  (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
+  engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
+  at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.

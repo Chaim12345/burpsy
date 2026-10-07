@@ -270,3 +270,19 @@ today; the harness gate is what keeps that true when a timing probe is added.
 Every shipped configuration that sets `issues_reported` is pinned to behaviour matching its name by
 `TestEveryShippedSelectionConfigurationBehavesAsItsNameSays`, over the 29 files vendored byte-for-byte
 in `internal/scanner/testdata/burp-configs`.
+
+## Per-run project-option overrides (o2p3)
+
+Read from Burp 2026.7.1 (build 51467); `internal/scanner/run_overrides.go` carries the citations.
+
+| Burp key | What burpsy does |
+|---|---|
+| `audit_optimization/follow_redirections` | A boolean (`Zhd_.java:41`), not the four-way project redirect mode (`Zxt4.java`). True makes the **reflected-XSS check** follow a probe's redirect — within the engagement scope, or to the same host and port when no scope is configured (the documented in-scope / out-of-scope rule) — with every hop authorised on its own bytes, paced by the run's resource pool and counted against its request budget, and look for the breakout on the landing page. **Every other check reads the 30x itself**: open redirection and header injection depend on it, and Burp's own per-check "where necessary" predicate was not located. False or unset follows nothing. |
+| `audit_project_option_overrides/connect_timeout`, `normal_timeout` | Whole seconds (`Zbuj.java:19-22`); `-1` is "not overridden" and is honoured as such; `0` never times out. The run gets its **own derived sender** (`sender.DeriveWithTimeouts`) behind the same scope gate: connect bounds the dial and handshake, normal bounds the wait for the response, and a shorter per-probe budget still wins. The engagement sender Repeater, Intruder and every other run share is never changed. Probes sent after the run returns (the deferred stored and out-of-band phases) use the engagement's timeouts. |
+
+Proved through `AuditSession` against vulnapp by
+`TestFollowRedirectionsDecidesWhetherTheReflectedXSSProbeFollowsAVulnappRedirect` (a 302 whose landing
+page reflects input: not requested and no finding when false, requested and found when true, under both
+scope rules) and `TestNormalTimeoutBoundsTheRunsProbesAndLeavesTheEngagementSenderAlone` (a 1.5 s
+endpoint is a counted send failure under `normal_timeout` 1 and runs under no override; the engagement
+sender is the same object with the same settings afterwards and still waits the answer out).

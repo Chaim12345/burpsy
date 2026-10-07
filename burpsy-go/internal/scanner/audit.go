@@ -58,6 +58,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 )
 
 // OptUint32 is Rust's Option<u32> as a comparable Go value.
@@ -720,6 +721,20 @@ type AuditConfig struct {
 	// refusing — and must not read as "unset", which is why this is an OptUint32 like the breakers.
 	FollowUpPasses OptUint32
 
+	// FollowRedirects is Burp's scanner/audit_optimization/follow_redirections, a boolean
+	// (Zhd_.java:41). Unset or 0 follows nothing — every probe reads the 30x it got, which is what
+	// every audit did before the key was read. 1 makes the reflected-XSS check follow a probe's
+	// redirect within the engagement scope (on-site only when no scope is configured) and look for its
+	// breakout on the landing page too. See run_overrides.go for the mapping and for why it is that one
+	// check.
+	FollowRedirects OptUint32
+	// ConnectTimeout and NormalTimeout are Burp's scanner/audit_project_option_overrides/
+	// {connect_timeout,normal_timeout}, in whole SECONDS (Zbuj.java:19-22). Unset leaves the
+	// engagement's bound; zero is Burp's "never time out". Either one set gives the run its own derived
+	// sender (runSenderFor), so the engagement sender every other tool shares is never changed.
+	ConnectTimeout OptUint32
+	NormalTimeout  OptUint32
+
 	// The eight `scanner/frequently_occurring_insertion_points/quick_scan_*` keys, carried on the RUN
 	// as well as on the preset: they are applied per run, and the set they resolve to is what the
 	// light tier's gate reads.
@@ -1086,6 +1101,16 @@ type BuiltInConfig struct {
 
 	// FollowUpPasses is `scanner/error_handling/number_of_follow_up_passes`.
 	FollowUpPasses OptUint32
+	// FollowRedirections, AuditConnectTimeout and AuditNormalTimeout are the three per-run project
+	// overrides (burpsy-react-ui-o2p3). The two timeouts are seconds; Burp's -1 ("not overridden")
+	// leaves them unset and is recorded in InheritedOverrides.
+	FollowRedirections  OptUint32
+	AuditConnectTimeout OptUint32
+	AuditNormalTimeout  OptUint32
+	// InheritedOverrides names the override rows a file set to -1, Burp's "not overridden"
+	// (Zbuj.java:27-28). They ask for nothing and are honoured as asked, so they are reported applied —
+	// never in neither list.
+	InheritedOverrides []string
 
 	// The nine `scanner/issues_reported/*` keys. See AuditConfig for how each is honoured. The three
 	// per-issue selection keys are read the way Burp reads them (issue_selection.go): the two
@@ -1465,8 +1490,13 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "follow_redirections",
 		burpKey: "scanner/audit_optimization/follow_redirections",
-		what:    "not applied: redirect following is the sender's policy for the whole engagement, not a per-run audit key this engine reads",
-		applies: false,
+		// Burp's boolean "Follow redirections where necessary" (Zhd_.java:41,55). The documentation's
+		// reason for it is the check burpsy applies it to; Burp's own per-check predicate was not
+		// located, so this names exactly what follows and what does not (run_overrides.go).
+		what:    "true makes the reflected-XSS check follow a probe's redirect — within the engagement scope, or to the same host and port when no scope is configured, every hop authorised and paced like a probe — and look for its breakout on the page it lands on as well as in the 30x. Every other check reads the 30x itself either way (open redirection and header injection depend on it). False or unset follows nothing, as before",
+		read:    func(c BuiltInConfig) OptUint32 { return c.FollowRedirections },
+		apply:   func(a *AuditConfig, v uint32) { a.FollowRedirects = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "maintain_session",
@@ -1520,14 +1550,20 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "audit_connect_timeout",
 		burpKey: "scanner/audit_project_option_overrides/connect_timeout",
-		what:    "not applied: probe timeouts come from the sender's own configuration, which an audit run does not override",
-		applies: false,
+		what:    "seconds this run's probes may spend connecting (TCP connect and TLS handshake), in place of the engagement's network setting and for this run only: the run gets its own derived sender behind the same scope gate, and the engagement sender Repeater and Intruder share is unchanged. 0 never times out; -1 (Burp's \"not overridden\") leaves the engagement's bound. Probes sent after the run returns — the deferred stored and out-of-band phases — use the engagement's",
+		read:    func(c BuiltInConfig) OptUint32 { return c.AuditConnectTimeout },
+		apply:   func(a *AuditConfig, v uint32) { a.ConnectTimeout = SomeUint32(v) },
+		max:     sender.MaxTimeoutMS / 1000,
+		applies: true,
 	},
 	{
 		name:    "audit_normal_timeout",
 		burpKey: "scanner/audit_project_option_overrides/normal_timeout",
-		what:    "not applied: probe timeouts come from the sender's own configuration, which an audit run does not override",
-		applies: false,
+		what:    "seconds this run's probes wait for a response once connected before the probe is recorded as a send failure, in place of the engagement's network setting and for this run only (its own derived sender, the engagement sender unchanged); a shorter per-probe budget still wins. 0 never times out — the probe is then bounded only by the audit's time budget; -1 (Burp's \"not overridden\") leaves the engagement's bound. Probes sent after the run returns use the engagement's",
+		read:    func(c BuiltInConfig) OptUint32 { return c.AuditNormalTimeout },
+		apply:   func(a *AuditConfig, v uint32) { a.NormalTimeout = SomeUint32(v) },
+		max:     sender.MaxTimeoutMS / 1000,
+		applies: true,
 	},
 	{
 		name:    "quick_scan_url_params",
@@ -2003,6 +2039,8 @@ func (c BuiltInConfig) applyWithAccounting(base AuditConfig) (AuditConfig, confi
 			rep.Unapplied = append(rep.Unapplied, k.name)
 		}
 	}
+	// An override the source set to Burp's -1 asked for nothing and got nothing: applied, as asked.
+	rep.Applied = append(rep.Applied, c.InheritedOverrides...)
 	c.applyIssueSelection(&base, &rep, named("selected_issues"))
 	c.accountIgnoredParameterRules(&rep, named)
 	// A recorded key no row claims — a `scanner/*` key or section this table has never heard of — is

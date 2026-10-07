@@ -36,6 +36,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
 
@@ -556,6 +557,13 @@ type auditRun struct {
 	cfg      AuditConfig
 	deadline time.Time
 	ledger   *AuditLedger
+
+	// sender is the run's own derived sender when its configuration overrides the engagement's
+	// timeouts (burpsy-react-ui-o2p3), nil otherwise. senderErr is why an override could not be
+	// applied; every item of such a run is refused with it rather than run under the engagement's
+	// timeouts the configuration said not to use.
+	sender    *sender.Sender
+	senderErr error
 
 	// lightAudit is the light-audit tier's per-run state (burpsy-react-ui-7bkj): how many
 	// CLEAN same-(kind, host) points each type has produced this run. Burp's Zq5 bank calls
@@ -1186,6 +1194,8 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
+	run.sender, run.senderErr = s.runSenderFor(cfg)
+	defer run.sender.CloseIdleConnections()
 	checks := s.enabledChecksUnder(cfg)
 	// Queued before dispatch, not after it answers. An audit of a slow host holds this goroutine for
 	// up to the whole time budget, and a queue that only showed items once they finished would be
@@ -1226,6 +1236,10 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
 	checks := s.enabledChecksUnder(cfg)
 	run := newAuditRun(cfg)
+	// Built once per run, never per probe: a derived sender owns a transport, and one per probe would
+	// throw away connection reuse for exactly the runs that set tight timeouts.
+	run.sender, run.senderErr = s.runSenderFor(cfg)
+	defer run.sender.CloseIdleConnections()
 	breaker := newSessionBreaker(cfg)
 	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
 
@@ -1446,6 +1460,11 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// and BEFORE scope, because a cancelled item is still a real item about a real request: the row
 	// must carry its host and path so the queue can show which URL the operator reclaimed, and a
 	// cancel that arrived before the engine got here must not lose the identity to save one lookup.
+	// A run whose timeout override cannot be applied runs nothing (o2p3): the operator named the
+	// bounds, and probing under the engagement's instead would be a run they did not configure.
+	if run.senderErr != nil {
+		return refuse(ex, ItemStateUnauditable, run.senderErr.Error())
+	}
 	if run.cfg.Items.Cancelled(exchangeID) {
 		// The row already holds ItemStateCancelled from Cancel, so this returns the state the
 		// operator asked for rather than a second, differently-worded one.
@@ -1548,6 +1567,9 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// both the probes a disabled method withheld and the enabled methods the check cannot run.
 	methodDeclines := NewMethodDeclineLedger()
 	ictx := withMethodDeclines(withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg), methodDeclines)
+	// The run's own sender, when its configuration overrides the engagement's timeouts. probeGate is
+	// the one reader, so every probe this item sends — and nothing else — leaves through it.
+	ictx = withRunSender(ictx, run.sender)
 	// The effectiveness ledger rides the context ONLY when the gate is on. A run with
 	// skip_ineffective_checks set to zero must not even BUILD a prior: recording evidence
 	// nobody will act on is not free, and the count it produced would then be reported

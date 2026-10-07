@@ -180,7 +180,13 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// breakout follows, which is the honest half of the result.
 		observed := newXSSCanary()
 		var contexts []xssContext
-		if res, err := h.Send(ctx, point, observed); err == nil {
+		// landedOn names the page a followed redirect reached when the breakout was found there
+		// (follow_redirections, burpsy-react-ui-o2p3) — Burp's own example for the setting is XSS in an
+		// error message returned only after a redirect. Everything below reads the page a browser
+		// would render: the landing page when the run followed, the response itself otherwise.
+		landedOn := ""
+		if sent, err := h.SendFollowing(ctx, point, observed); err == nil {
+			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
 			if strings.Contains(res.Body, observed) {
 				evidence |= XSSEvidenceReflected
@@ -195,10 +201,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// different payloads.
 		for _, payload := range xssPayloadsForContexts(contexts) {
 			canary := newXSSCanary()
-			res, err := h.Send(ctx, point, payload.build(canary))
+			sent, err := h.SendFollowing(ctx, point, payload.build(canary))
 			if err != nil {
 				continue
 			}
+			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
 			if !strings.Contains(res.Body, canary) {
 				continue
@@ -228,6 +235,7 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 					xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
 			}
 			if xssBreakoutConfirmed(evidence) {
+				landedOn = sent.FollowedTo
 				break
 			}
 		}
@@ -241,6 +249,9 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			remediation = definition.Remediation
 		}
 		detail := fmt.Sprintf("%s %q: %s", point.Kind, point.Name, xssEvidenceText(evidence))
+		if landedOn != "" {
+			detail += "; the breakout was on " + landedOn + ", reached by following the probe's redirect (follow_redirections)"
+		}
 		if capped > 0 {
 			detail += fmt.Sprintf("; %d further insertion point(s) were NOT probed (cap %d reached)",
 				capped, MaxInjectionPointsPerCheck)
