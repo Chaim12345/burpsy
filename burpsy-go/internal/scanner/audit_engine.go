@@ -205,6 +205,11 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
 	// or neither.
 	checks := s.enabledChecksInTiers(base, activeTiers(cfg), cfg.ScanSpeed)
+	// The scanner's OWN selection (ScanConfig.IssueTypes, set through /api/scanner/config) narrows
+	// this path exactly as it narrows the ungated one in enabledChecks. It was missing here, so any run
+	// configuration with a gate — now including an imported deny-only selection — silently dropped an
+	// operator's whitelist and dispatched every type.
+	checks = filterByIssueTypes(checks, base.IssueTypes)
 	return filterBySelection(checks, cfg)
 }
 

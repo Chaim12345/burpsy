@@ -468,3 +468,20 @@ func TestTheHonouredShippedConfigurationCountIsDerivedFromBurpsOwnFiles(t *testi
 			honoured, BurpShippedConfigsSettingAnHonouredKey)
 	}
 }
+
+// The scanner's own whitelist (ScanConfig.IssueTypes) survives a run configuration that takes the
+// gated path — an imported deny-only selection among them. It used to be dropped there.
+func TestTheScannerWhitelistSurvivesAGatedRunConfiguration(t *testing.T) {
+	scan := everyFamilyScanner(t)
+	cfg := scan.ConfigSnapshot()
+	cfg.IssueTypes = []uint32{0x00100200}
+	scan = scan.WithConfig(&cfg)
+	run, _, err := ApplyBurpConfigFile(DefaultAuditConfig(), readShippedConfig(t, "Audit checks - all except time-based detection methods"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := typesOf(scan.enabledChecksUnder(run))
+	if len(got) != 1 || got[0x00100200] == 0 {
+		t.Errorf("dispatched types = %v; the scanner's whitelist of SQL injection must still hold", got)
+	}
+}
