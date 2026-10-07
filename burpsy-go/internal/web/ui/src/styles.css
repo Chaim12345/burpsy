@@ -3418,6 +3418,12 @@ tbody td {
   min-height: 0;
 }
 
+/* Comparer "Disable line wrapping" (2vuk): long lines scroll instead of folding, so columns stay aligned. */
+.diff-pane-nowrap {
+  white-space: pre;
+  word-break: normal;
+}
+
 /* Insert, delete and replace each get their own hue AND a leading mark, so the
    diff is still readable without colour vision. */
 .diff-insert,

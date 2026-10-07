@@ -415,13 +415,20 @@ export function useCompare() {
  return useMutation<
   CompareResponse,
   Error,
-  { a: string; b: string; response?: boolean; granularity?: "bytes" | "words" }
+  {
+   a?: string;
+   b?: string;
+   /** A side loaded from a binary file (ppqw), sent instead of its text — never both. */
+   a_base64?: string;
+   b_base64?: string;
+   response?: boolean;
+   granularity?: "bytes" | "words";
+  }
  >({
   // `response` selects which uninteresting-header list applies (W6 #81/#82). Omitted means the
   // request list, which is empty unless the operator populated it — so leaving it out reproduces
   // the behaviour this endpoint had before the field existed.
-  mutationFn: ({ a, b, response, granularity }) =>
-   api<CompareResponse>("/api/tools/compare", json("POST", { a, b, response, granularity })),
+  mutationFn: (body) => api<CompareResponse>("/api/tools/compare", json("POST", body)),
  });
 }
 

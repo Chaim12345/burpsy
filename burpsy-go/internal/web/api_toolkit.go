@@ -2037,12 +2037,35 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		Response bool `json:"response"`
 		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
 		Granularity string `json:"granularity"`
+		// ABase64 / BBase64 carry a side as base64 instead of text (burpsy-react-ui-ppqw): a file
+		// loaded from disk can be binary, and a JSON string would replace every non-UTF-8 byte
+		// with U+FFFD before the diff ever saw it. A side may be sent one way or the other, not both.
+		ABase64 string `json:"a_base64"`
+		BBase64 string `json:"b_base64"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
+	for _, side := range []struct {
+		name, text, b64 string
+		into            *[]byte
+	}{{"a", req.A, req.ABase64, &a}, {"b", req.B, req.BBase64, &b}} {
+		if side.b64 == "" {
+			continue
+		}
+		if side.text != "" {
+			http.Error(w, fmt.Sprintf("side %s was sent both as %q and as %q; send one", side.name, side.name, side.name+"_base64"), http.StatusBadRequest)
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(side.b64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%s_base64 is not standard base64: %v", side.name, err), http.StatusBadRequest)
+			return
+		}
+		*side.into = raw
+	}
 	granularity := strings.ToLower(strings.TrimSpace(req.Granularity))
 	if granularity == "" {
 		granularity = "bytes"
