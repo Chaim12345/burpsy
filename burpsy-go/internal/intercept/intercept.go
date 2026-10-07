@@ -11,6 +11,7 @@
 package intercept
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -84,7 +85,51 @@ const (
 	FieldURL
 	FieldStatusCode
 	FieldContentType
+	// The four below are the axes burpsy had no way to write a rule about, so "hold requests to
+	// port 8443" and "hold the response whose body contains X" were not expressible at all
+	// (burpsy-react-ui-1cuc). Burp's rule dialog offers 18 match types (Zero.java:18-54, an 18-case
+	// factory; the dialog's own labels at map_root.tsv:27646-27661) and burpsy had seven.
+	//
+	// Appended, never inserted: a Field is a wire value, and an operator's saved rule names one.
+	// Re-numbering the existing seven would silently re-point every rule already written.
+	//
+	// Port and Protocol are request-shaped facts the message already carries. RequestBody and
+	// ResponseBody read the message's own bytes, and are the only additions that make a rule's
+	// DEPEND on content — which is the point: in a high-volume stream the response that matters is
+	// usually the one carrying a token or a stack trace, and a rule that cannot see bodies cannot
+	// hold it.
+	FieldPort
+	FieldProtocol
+	FieldRequestBody
+	FieldResponseBody
+	// The four below are Burp's cookie/header match types (ajpn): a rule cannot name an
+	// individual header or a cookie without them. Burp offers them as four ordinals (Zpkq = the
+	// header list, request and response; Zpky = the cookie NAME, request and response; Zpkc =
+	// the cookie VALUE, request and response) — Zero.java:16-62, an 18-case factory. burpsy
+	// models them as four Fields with the NAME carried in the rule's own text, which is what
+	// "Cookie: session" reads as: the field says which list, the rule says which member.
+	//
+	// Appended, never inserted: a Field is a wire value, and an operator's saved rule names
+	// one. Re-numbering the existing eleven would silently re-point every rule already written.
+	FieldRequestHeader
+	FieldResponseHeader
+	FieldRequestCookie
+	FieldResponseCookie
 )
+
+// IsMember reports whether a field names a MEMBER of a list rather than a whole message value:
+// a named header or a named cookie (ajpn). Only those can carry a Member.
+//
+// Exported because the wire layer validates with it (a member on a host rule is refused rather
+// than stored and ignored) and because the console's field table mirrors the same split — one
+// definition, so the two cannot come to different conclusions about which fields have members.
+func (f Field) IsMember() bool {
+	switch f {
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		return true
+	}
+	return false
+}
 
 func (f Field) String() string {
 	switch f {
@@ -100,6 +145,22 @@ func (f Field) String() string {
 		return "url"
 	case FieldStatusCode:
 		return "status_code"
+	case FieldPort:
+		return "port"
+	case FieldProtocol:
+		return "protocol"
+	case FieldRequestBody:
+		return "request_body"
+	case FieldResponseBody:
+		return "response_body"
+	case FieldRequestHeader:
+		return "request_header"
+	case FieldResponseHeader:
+		return "response_header"
+	case FieldRequestCookie:
+		return "request_cookie"
+	case FieldResponseCookie:
+		return "response_cookie"
 	default:
 		return "content_type"
 	}
@@ -122,6 +183,22 @@ func ParseField(s string) (Field, error) {
 		return FieldStatusCode, nil
 	case "content_type":
 		return FieldContentType, nil
+	case "port":
+		return FieldPort, nil
+	case "protocol":
+		return FieldProtocol, nil
+	case "request_body":
+		return FieldRequestBody, nil
+	case "response_body":
+		return FieldResponseBody, nil
+	case "request_header":
+		return FieldRequestHeader, nil
+	case "response_header":
+		return FieldResponseHeader, nil
+	case "request_cookie":
+		return FieldRequestCookie, nil
+	case "response_cookie":
+		return FieldResponseCookie, nil
 	default:
 		return FieldHost, fmt.Errorf("unknown match field %q", s)
 	}
@@ -168,6 +245,49 @@ func (a RuleAction) String() string {
 	return "hold"
 }
 
+// RuleOp is how one rule combines with the rules ABOVE it in the list.
+//
+// Burp has this column and this is why (settings/tools/proxy.html:246-268): "Each rule is
+// combined to the rules above in order, using the selected boolean operator." Without it a
+// conjunction cannot be written at all — "hold requests to host A and path /admin" is two rules
+// that evaluate as a disjunction, so the operator either over-holds or writes one brittle rule
+// that has to enumerate both facts in a single matcher. It is the most-written interception rule
+// after "hold on this host".
+//
+// The default is RuleOpOr, and that default is not a convenience: it is what every list written
+// before this field existed evaluates as, so the fold below reproduces the old first-matching-rule
+// behaviour exactly when no rule says AND. See evaluate.
+type RuleOp int
+
+const (
+	// RuleOpOr combines with the rules above by disjunction. The zero value, and therefore the
+	// answer for a rule decoded from a document written before the field existed.
+	RuleOpOr RuleOp = iota
+	// RuleOpAnd combines by conjunction: every rule up to and including this one must match.
+	RuleOpAnd
+)
+
+func (o RuleOp) String() string {
+	if o == RuleOpAnd {
+		return "and"
+	}
+	return "or"
+}
+
+// ParseRuleOp reads the wire spelling, defaulting anything unrecognised to OR.
+//
+// Defaulting rather than refusing is the same choice the action parser makes, and for the same
+// reason: an unknown operator in a saved list must not stop the list working, and OR is the
+// behaviour every pre-existing list has.
+func ParseRuleOp(s string) RuleOp {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "and":
+		return RuleOpAnd
+	default:
+		return RuleOpOr
+	}
+}
+
 // Rule is one hold condition. Enabled rules are ANDed with the list switch;
 // a list with any enabled rule holds only matching messages, a list with no
 // enabled rules holds everything (unconditional).
@@ -178,6 +298,16 @@ type Rule struct {
 	Enabled     bool
 	Comment     string
 	Action      RuleAction
+	// Op combines THIS rule with the rules above it. It is ignored for the first enabled rule, which
+	// has nothing above it — there is nothing to combine with — so setting AND on the top rule is
+	// ignored rather than an error, which is what an operator who typed it expects.
+	Op RuleOp
+	// Member is the header or cookie NAME a member field matches against (ajpn): the field says
+	// which list, this says which member of it. Empty for every non-member field, and a member
+	// field with an empty Member matches nothing — a rule that names no header has no header to
+	// read, and the alternative (match the first one) would report a match the operator never
+	// asked for. The name folds, like every HTTP field name and cookie name.
+	Member string
 
 	re *regexp.Regexp
 }
@@ -185,8 +315,35 @@ type Rule struct {
 // NewRule compiles a rule, refusing a malformed regex (matching Burp, which
 // reports a bad pattern when the list is saved rather than when it fires).
 func NewRule(field Field, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
+	return NewMemberRule(field, "", cat, match, enabled, comment, action)
+}
+
+// newRule compiles a Rule literal, validating it the same way NewMemberRule does. It is the
+// test-facing constructor: a test that writes the struct directly would otherwise skip the
+// member validation and could assert a rule the wire layer refuses.
+func newRule(r Rule) (*Rule, error) {
+	return NewMemberRule(r.Field, r.Member, r.Category, r.StringMatch, r.Enabled, r.Comment, r.Action)
+}
+
+// NewMemberRule is NewRule with the member name a header/cookie rule matches against (ajpn).
+//
+// A separate constructor rather than a parameter on NewRule: the member is meaningless for the
+// other eleven fields, and a caller that has to pass "" for eleven of them is a caller that can
+// pass the name on the wrong one. Empty is the correct value for every field that is not a member
+// of a list, and it is what NewRule supplies.
+func NewMemberRule(field Field, member string, cat Category, match string, enabled bool, comment string, action RuleAction) (*Rule, error) {
+	if member != "" && !field.IsMember() {
+		return nil, fmt.Errorf("%s does not name a member, so it cannot carry the member %q", field, member)
+	}
+	if member == "" && field.IsMember() {
+		// A member field with no member has nothing to look up. Refused here as well as at the
+		// wire, because the engine is reachable from more than one caller and a rule that
+		// matches nothing while looking configured is the failure this field exists to avoid.
+		return nil, fmt.Errorf("%s names a list, so a rule on it needs the member name to match against", field)
+	}
 	r := &Rule{
 		Field:       field,
+		Member:      member,
 		Category:    cat,
 		StringMatch: match,
 		Enabled:     enabled,
@@ -210,7 +367,7 @@ func (r *Rule) Match(m *Message) bool {
 	if !r.Enabled || r.StringMatch == "" {
 		return false
 	}
-	value := m.FieldValue(r.Field)
+	value := r.value(m)
 	if value == "" {
 		return false
 	}
@@ -218,6 +375,20 @@ func (r *Rule) Match(m *Message) bool {
 		return strings.Contains(strings.ToLower(value), strings.ToLower(r.StringMatch))
 	}
 	return r.re.MatchString(value)
+}
+
+// value reads the rule's field from the message, dispatching on whether the field names a MEMBER
+// of a list (a header, a cookie) rather than a whole value (ajpn).
+//
+// The split is the rule's own: a member field has no single value to return, so the name travels
+// with the rule and the lookup happens here rather than in FieldValue — which has no rule to read
+// a name from and is also what the console renders a field's current value with.
+func (r *Rule) value(m *Message) string {
+	switch r.Field {
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		return m.MemberValue(r.Field, r.Member)
+	}
+	return m.FieldValue(r.Field)
 }
 
 // List is one direction's rule set plus its master switch.
@@ -265,9 +436,37 @@ type Message struct {
 	Opcode string
 }
 
+// DirectionHasField reports whether a message in direction d can supply field f at all.
+//
+// This is the dead-weight rule: a rule naming a field its direction cannot supply matches NOTHING,
+// silently, and a rule that can never match is indistinguishable from a target that never sends it.
+// So the two are told apart here and the caller can say so — a response list whose rule matches on
+// RequestBody is a rule the operator wrote wrong, not a quiet one.
+//
+// The request/response split is the shape that matters: a request has no status code, content type
+// or response body, and a response has no request body. Port, protocol, host, path, extension,
+// method and url are supplied by BOTH, so a rule on those works in either list.
+func (d Direction) HasField(f Field) bool {
+	switch f {
+	case FieldStatusCode, FieldContentType, FieldResponseBody, FieldResponseHeader, FieldResponseCookie:
+		return d == DirectionResponse
+	case FieldRequestBody, FieldRequestHeader, FieldRequestCookie:
+		return d == DirectionRequest
+	case FieldHost, FieldPath, FieldExtension, FieldMethod, FieldURL, FieldPort, FieldProtocol:
+		return true
+	default:
+		return false
+	}
+}
+
 // FieldValue returns the message's value for a rule field, or "" when the
 // direction has none (a request has no status code or content type).
 func (m *Message) FieldValue(f Field) string {
+	// A field this direction cannot supply is "" before any lookup, so every caller gets the same
+	// answer and the dead-weight check above is the only place that has to know the split.
+	if !m.Direction.HasField(f) {
+		return ""
+	}
 	switch f {
 	case FieldHost:
 		return m.Host
@@ -286,9 +485,217 @@ func (m *Message) FieldValue(f Field) string {
 		return strconv.Itoa(*m.Status)
 	case FieldContentType:
 		return m.ContentType
+	case FieldPort:
+		if m.Port == 0 {
+			return ""
+		}
+		return strconv.Itoa(int(m.Port))
+	case FieldProtocol:
+		// "http" or "https", which is the axis an operator means by protocol when holding traffic
+		// to one service rather than the other. A WebSocket frame's own protocol is not this: the
+		// question a rule asks is which listener received it.
+		if m.TLS {
+			return "https"
+		}
+		return "http"
+	case FieldRequestBody:
+		return bodyOf(m.Raw, DirectionRequest)
+	case FieldResponseBody:
+		return bodyOf(m.Raw, DirectionResponse)
+	case FieldRequestHeader, FieldResponseHeader, FieldRequestCookie, FieldResponseCookie:
+		// A member field has no single value: "the request header" is a list, and which
+		// member a rule means is the RULE's business, not the message's. So the value is the
+		// whole head (so a rule that names no member can still be seen to match nothing rather
+		// than silently matching the first header), and Rule.Match calls MemberValue for the
+		// named lookup. See MemberValue.
+		return headOf(m.Raw, headerSide(f))
 	default:
 		return ""
 	}
+}
+
+// MemberValue returns the named member's value for a header or cookie field (ajpn), or "" when the
+// message does not carry it.
+//
+// The name folds (RFC 9110 §5.1): "SESSION" and "session" are the same cookie, and an operator who
+// typed the wrong case must not get a rule that silently matches nothing. An empty member returns
+// "" rather than the first member found — a rule that names no member has nothing to look up, and
+// the caller reports that as a dead rule rather than guessing which one was meant.
+func (m *Message) MemberValue(f Field, member string) string {
+	if !m.Direction.HasField(f) || member == "" {
+		return ""
+	}
+	switch f {
+	case FieldRequestHeader, FieldResponseHeader:
+		return headerValueOf(m.Raw, headerSide(f), member)
+	case FieldRequestCookie, FieldResponseCookie:
+		return cookieValueOf(m.Raw, cookieSide(f), member)
+	default:
+		return ""
+	}
+}
+
+// headerSide and cookieSide name which end of the exchange a member lookup reads. Both are the
+// direction's own split: a request header comes from the request bytes and a response header from
+// the response bytes, and the engine already knows which is which.
+func headerSide(f Field) Direction {
+	if f == FieldResponseHeader {
+		return DirectionResponse
+	}
+	return DirectionRequest
+}
+
+func cookieSide(f Field) Direction {
+	if f == FieldResponseCookie {
+		return DirectionResponse
+	}
+	return DirectionRequest
+}
+
+// headOf returns the header block of a raw HTTP message in the wanted direction, or "".
+//
+// The head is the region before the blank line that ends it, which is the same boundary
+// splitRawMessage finds — reusing it rather than a second splitter, because two splitters
+// eventually disagree about where a body begins.
+func headOf(raw []byte, want Direction) string {
+	dir, _, ok := splitRawMessage(raw)
+	if !ok || dir != want {
+		return ""
+	}
+	headEnd := indexCRLFCRLF(raw)
+	if headEnd < 0 {
+		headEnd = indexLFLF(raw)
+	}
+	if headEnd < 0 {
+		return string(raw)
+	}
+	return string(raw[:headEnd])
+}
+
+// headerLines splits a head into its header lines, dropping the start line. Folded
+// continuation lines (a line starting with SP or HTAB) are joined onto the header above them,
+// because a value split across lines is one header and a rule reading it must see the whole
+// value — Burp's own parser does the same.
+func headerLines(head string) []string {
+	lines := strings.Split(strings.ReplaceAll(head, "\r\n", "\n"), "\n")
+	if len(lines) <= 1 {
+		return nil
+	}
+	out := make([]string, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		if line == "" {
+			continue
+		}
+		if (line[0] == ' ' || line[0] == '\t') && len(out) > 0 {
+			out[len(out)-1] += " " + strings.TrimSpace(line)
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// headerFromHead returns the named header's value from a head, or "" when the message does not
+// carry it. The name folds (RFC 9110 §5.1); first match wins.
+func headerFromHead(head, name string) string {
+	for _, line := range headerLines(head) {
+		key, value, found := strings.Cut(line, ":")
+		if !found {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// headerValueOf returns the named header's value from raw, or "".
+//
+// First match wins, and the search stops at the end of the head: a header name appearing in a
+// body is not a header, and a rule matching it would be a false positive that only shows up on
+// a body that happens to contain the name.
+func headerValueOf(raw []byte, want Direction, name string) string {
+	return headerFromHead(headOf(raw, want), name)
+}
+
+// cookieValueOf returns the named cookie's value from raw, or "".
+//
+// A request carries one `Cookie:` header of `name=value; name2=value2` pairs; a response carries
+// one `Set-Cookie:` per cookie, each `name=value; attributes…`. The two are handled separately
+// because one parser for both would read the first attribute of a Set-Cookie as a second cookie —
+// which is the bug that makes a rule on `session` match a response carrying `session=; Path=/`.
+func cookieValueOf(raw []byte, want Direction, name string) string {
+	head := headOf(raw, want)
+	if head == "" {
+		return ""
+	}
+	if want == DirectionRequest {
+		for _, pair := range strings.Split(headerFromHead(head, "cookie"), ";") {
+			key, value, found := strings.Cut(pair, "=")
+			if found && strings.EqualFold(strings.TrimSpace(key), name) {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+	for _, line := range headerLines(head) {
+		key, value, found := strings.Cut(line, ":")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "set-cookie") {
+			continue
+		}
+		// The first pair only: everything after the first `;` is attributes.
+		pair, _, _ := strings.Cut(value, ";")
+		ckKey, ckValue, ckFound := strings.Cut(pair, "=")
+		if ckFound && strings.EqualFold(strings.TrimSpace(ckKey), name) {
+			return strings.TrimSpace(ckValue)
+		}
+	}
+	return ""
+}
+
+// bodyOf is the body half of a raw HTTP message, or "" when the bytes are not an HTTP message at
+// all (a WebSocket frame, an unreadable message).
+//
+// A bounded read rather than the whole tail: a rule matching a body is asking a question about
+// content, and a 12 MB upload answered with a copy of itself per evaluation is a cost a LIST endpoint
+// is not supposed to pay. The bound is generous enough for the JSON, HTML and stack-trace bodies
+// these rules are written for, and a body past it matches nothing rather than matching its prefix —
+// which is stated rather than silent because a rule that stops matching at 1 MB would otherwise look
+// like the target changed.
+const ruleBodyReadLimit = 1 << 20
+
+func bodyOf(raw []byte, want Direction) string {
+	dir, body, ok := splitRawMessage(raw)
+	if !ok || dir != want {
+		return ""
+	}
+	if len(body) > ruleBodyReadLimit {
+		body = body[:ruleBodyReadLimit]
+	}
+	return string(body)
+}
+
+// splitRawMessage answers which direction a raw message is and where its body starts, reusing the
+// same tolerant CRLF-or-LF split the engine parses with — two splitters would eventually disagree
+// about where a body begins, and a body rule matching one boundary while the capture used the other is
+// a rule that works in testing and not against a real target.
+func splitRawMessage(raw []byte) (Direction, []byte, bool) {
+	headEnd, sep := indexCRLFCRLF(raw), 4
+	if headEnd < 0 {
+		// Bare LF, because a client that does not use CRLF is a real one and its body must be
+		// matchable — a body rule that worked in testing against a hand-written fixture and never
+		// against that client is worse than no rule, because it reads as configured.
+		headEnd, sep = indexLFLF(raw), 2
+	}
+	if headEnd < 0 {
+		return DirectionRequest, nil, false
+	}
+	dir := DirectionRequest
+	if bytes.HasPrefix(raw, []byte("HTTP/")) {
+		dir = DirectionResponse
+	}
+	return dir, raw[headEnd+sep:], true
 }
 
 // URL reconstructs the absolute URL for the url field.
@@ -334,6 +741,37 @@ const (
 	ActionDrop
 )
 
+// Target is a destination an operator has retargeted a held message to.
+//
+// Burp's intercept header bar carries an "Edit target" pencil beside the authority label
+// (BurpClass9694.java: proxyInterceptEditTargetButton, tooltip "Click to modify"), which lets the
+// operator send the item they are holding to a different host, port or scheme than the one the
+// client asked for. burpsy rendered the authority twice and read-only, and the wire carried no
+// destination at all, so the capability was absent end to end rather than merely unrendered
+// (burpsy-react-ui-akv).
+//
+// # Why it is a value the caller must be given rather than a field anyone may read
+//
+// A retarget changes where bytes land, which is the one thing the engagement scope exists to decide.
+// The proxy therefore has to see the edited destination *before* it authorises the request, and it
+// cannot get that by reading a field off the hold whenever it likes — a field read after the
+// decision would be an authorisation answered about one host and applied to another. So the target
+// is returned from Wait, alongside the bytes, as part of one decision, and the proxy re-runs its
+// scope check against what came back.
+type Target struct {
+	Host string
+	Port uint16
+	TLS  bool
+}
+
+// SameAs reports whether this target is the destination the message already had, so a caller can
+// treat "the operator retyped the same host" exactly like "the operator changed nothing" — a
+// distinction that matters because the retargeted path dials a fresh connection when the original
+// connection is still usable.
+func (t Target) SameAs(host string, port uint16, tls bool) bool {
+	return t.Host == host && t.Port == port && t.TLS == tls
+}
+
 // Held is one queued message. The proxy blocks on Wait until the operator
 // resolves it; the result carries the edited bytes for forwarding.
 type Held struct {
@@ -350,28 +788,67 @@ type Held struct {
 	// Opcode mirrors Message.Opcode: the WebSocket frame type, empty for HTTP.
 	Opcode string
 
+	// Comment and Highlight are the operator's annotation on the held message
+	// (burpsy-react-ui-5q8u). They live on the hold, not on any exchange — a held
+	// message has no exchange yet — and they ride forward: when the hold resolves
+	// into a recorded exchange, the proxy carries them to Record so the annotation
+	// appears in HTTP history against the bytes the operator was looking at, which
+	// is exactly Burp's "annotations that you make also appear against the item in
+	// the HTTP history".
+	Comment   string
+	Highlight string
+
 	done     chan struct{}
 	mu       sync.Mutex
 	resolved bool
 	action   Action
 	outRaw   []byte
-	reason   string
+	// target is the operator's edited destination, nil when they left it alone. Set only by Forward:
+	// a dropped message has no destination, and inventing one would let a drop carry a retarget into
+	// the history row of an exchange that never happened.
+	target *Target
+	// userEdited says the operator's edit buffer differed from the bytes the message arrived with,
+	// which is Burp's history "Edited" column: "Flag whether the request or response were modified by
+	// the user" (ProxyHttpRequestResponse.edited()).
+	//
+	// # Why this is decided here and not by whoever reads the bytes back
+	//
+	// The console sends the editor's current contents on *every* forward — intercept.tsx forwards
+	// row.raw, the same buffer it rendered — so "a buffer was supplied" is not an edit, and a caller
+	// downstream cannot tell an untouched buffer from a retyped one without comparing against
+	// something it does not have. This struct is the only place holding both the bytes the operator
+	// was shown (Raw) and the bytes they sent back.
+	//
+	// It is deliberately *not* derived from the recorded bytes differing from an earlier stage of
+	// them. That reading counts burpsy's own rewrites as the operator's work: a request whose
+	// Proxy-Connection header an egress option strips, or whose Content-Length fixContentLength
+	// corrects, differs from the client's bytes without anyone having edited anything — and history
+	// then reported "Edited" for traffic nobody had touched (burpsy-react-ui-sd0d).
+	userEdited bool
+	reason     string
 }
 
 // Wait blocks until the operator forwards or drops the message. It is safe to
 // call once; the returned bytes are the possibly-edited message to put on the
 // wire (forward) or nil (drop).
-func (h *Held) Wait() (Action, []byte) {
+//
+// The target is the operator's edited destination, nil when they left it alone. It is returned here
+// rather than exposed as an accessor because it has to reach the caller as part of the same
+// decision as the bytes: the proxy authorises the request against the destination it is about to
+// use, and a destination fetched separately could be read before the operator's edit landed. The
+// last value, userEdited, is returned for the same reason — it is the operator's decision about
+// *this* message, and it is what history's "Edited" column must be told, not recomputed.
+func (h *Held) Wait() (Action, []byte, *Target, bool) {
 	<-h.done
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.action, h.outRaw
+	return h.action, h.outRaw, h.target, h.userEdited
 }
 
 // resolve marks the message resolved exactly once; a second resolve (e.g. an
 // API request arriving twice) is ignored so the proxy cannot act on a stale
 // decision.
-func (h *Held) resolve(a Action, raw []byte, reason string) bool {
+func (h *Held) resolve(a Action, raw []byte, target *Target, userEdited bool, reason string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.resolved {
@@ -380,6 +857,8 @@ func (h *Held) resolve(a Action, raw []byte, reason string) bool {
 	h.resolved = true
 	h.action = a
 	h.outRaw = raw
+	h.target = target
+	h.userEdited = userEdited
 	h.reason = reason
 	close(h.done)
 	return true
@@ -396,9 +875,17 @@ type Engine struct {
 	// frame would have been matched against the response rules and held or released on the wrong
 	// operator's intent. Indexing makes the direction the address instead of a branch, so adding
 	// one cannot land in the wrong list.
-	lists  [DirectionCount]List
-	nextID uint64
-	held   map[uint64]*Held
+	lists [DirectionCount]List
+	// newlines is Burp's pair of newline corrections for an edited interception, both OFF by default
+	// because each one rewrites bytes the operator wrote and neither is a correction anyone would
+	// want applied to a request they did not edit (burpsy-react-ui-80tg). It is an engine setting
+	// rather than a per-forward argument for the same reason fixContentLength is a per-forward
+	// argument and these are not: they are part of how the interception tool behaves, an operator sets
+	// them once, and threading them through Forward would put a setting on every call site that could
+	// forget it.
+	newlines NewlineCorrection
+	nextID   uint64
+	held     map[uint64]*Held
 	// pending one-shot response holds (burpsy-react-ui-v6jw): Burp's "Do intercept >
 	// Response to this request". Each names the request it was armed from; the first
 	// response with identical attributes is held and the entry consumed, so arming
@@ -573,6 +1060,26 @@ func (e *Engine) SetEnabled(v bool) {
 	e.enabled = v
 }
 
+// SetNewlineCorrection sets Burp's two newline fixes for edited interceptions
+// (burpsy-react-ui-80tg). Both default off; see NewlineCorrection for why each is a separate switch
+// and why the trailing-newline one only touches a urlencoded body.
+func (e *Engine) SetNewlineCorrection(n NewlineCorrection) {
+	e.mu <- struct{}{}
+	// Registered before the unlock defer, so LIFO runs it after: the signal must never be delivered
+	// with this lock held. Same two lines as every other mutation here.
+	defer e.signalChange()
+	defer func() { <-e.mu }()
+	e.newlines = n
+}
+
+// NewlineCorrections reports the configured corrections, so a surface can show what is on rather
+// than assuming the defaults.
+func (e *Engine) NewlineCorrections() NewlineCorrection {
+	e.mu <- struct{}{}
+	defer func() { <-e.mu }()
+	return e.newlines
+}
+
 // SetRules replaces one direction's list. A malformed regex is refused and the
 // list is left unchanged, matching Burp's save-time compilation.
 func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
@@ -593,22 +1100,26 @@ func (e *Engine) SetRules(d Direction, active bool, rules []Rule) error {
 			}
 			compiled = append(compiled, &Rule{
 				Field:       r.Field,
+				Member:      r.Member,
 				Category:    r.Category,
 				StringMatch: r.StringMatch,
 				Enabled:     r.Enabled,
 				Comment:     r.Comment,
 				Action:      r.Action,
+				Op:          r.Op,
 				re:          re,
 			})
 			continue
 		}
 		compiled = append(compiled, &Rule{
 			Field:       r.Field,
+			Member:      r.Member,
 			Category:    r.Category,
 			StringMatch: r.StringMatch,
 			Enabled:     r.Enabled,
 			Comment:     r.Comment,
 			Action:      r.Action,
+			Op:          r.Op,
 		})
 	}
 
@@ -691,18 +1202,49 @@ func (e *Engine) shouldHold(d Direction, m *Message) bool {
 	if len(enabled) == 0 {
 		return false
 	}
-	// First matching rule wins (burpsy-react-ui-35i4): Burp's per-rule Do/Don't
-	// intercept. A list of hold-only rules behaves exactly as before — the first
-	// match holds, and reaching the end means no rule matched — so every list
-	// written before actions existed evaluates identically. The default below is
-	// deliberately not "hold": with enabled rules present and nothing matching,
-	// the list passes, which is the same default the loop above implemented.
+	// Left-to-right fold over the enabled rules, each combined with what is above it by its own
+	// operator (burpsy-react-ui-80tg, matching settings/tools/proxy.html:246-268).
+	//
+	// An all-OR list folds to exactly the old "first matching rule wins" behaviour (35i4): the first
+	// rule that matches short-circuits and decides, and reaching the end means nothing matched. So
+	// every list written before Op existed evaluates identically, which is why the default is OR and
+	// not a special case in the code.
+	//
+	// An AND short-circuits the other way — a rule that does not match cannot be rescued by anything
+	// below it — so the fold returns false as soon as one fails, rather than continuing to a later
+	// rule that might hold.
+	// A rule that combines with AND is only meaningful once something above it has held. Until then
+	// there is no conjunction for it to extend, so it is treated as its own standalone condition
+	// rather than silently becoming the accumulator: a lone "and path /admin" on an empty list above
+	// it should read as "hold /admin", not as a chain with a missing first link.
+	//
+	// The accumulator is the OR-fold over everything reached so far. An AND rule ANDs into it: the
+	// chain holds only if the accumulator is already true AND this rule matches.
+	acc := false
+	started := false
 	for _, r := range enabled {
-		if r.Match(m) {
-			return r.Action == RuleActionHold
+		matched := r.Match(m)
+		if r.Op == RuleOpAnd && started {
+			if !matched {
+				return false
+			}
+			// Every rule so far matched and this one does too, so the hold stands. The action here is
+			// irrelevant: an AND rule narrows an existing hold, it does not create one.
+			continue
 		}
+		// First rule, or an OR rule: the accumulator is the disjunction of every OR-rule matched so
+		// far. An OR rule that matches decides immediately when it HOLDS, which is what makes
+		// "hold this host, but pass that path" expressible; a matching PASS rule short-circuits to
+		// false, because a disjunction is satisfied by exactly one positive term.
+		if matched {
+			if r.Action == RuleActionPass && r.Op != RuleOpAnd {
+				return false
+			}
+			acc = true
+		}
+		started = true
 	}
-	return false
+	return acc
 }
 
 // Hold evaluates a message and, if it should be held, queues it and returns the
@@ -732,6 +1274,28 @@ func (e *Engine) Hold(m *Message) *Held {
 	}
 	e.held[h.ID] = h
 	return h
+}
+
+// SetAnnotation writes the operator's comment and highlight onto one held message.
+// Empty highlight clears it — "" is the picker's no-colour value, the same
+// vocabulary every other annotated surface uses. Unknown ids error rather than
+// passing, so a stale queue render cannot believe it annotated a message that
+// was already resolved.
+func (e *Engine) SetAnnotation(id uint64, comment, highlight string) error {
+	e.mu <- struct{}{}
+	h := e.held[id]
+	if h == nil {
+		<-e.mu
+		return fmt.Errorf("no held message %d", id)
+	}
+	h.Comment = comment
+	h.Highlight = highlight
+	<-e.mu
+	// signalChange after the lock is released: it takes the same mutex-channel itself, and
+	// calling it with the slot held deadlocks the caller against its own acquire (the same
+	// rule OnChange documents — the signal is never delivered with the lock held).
+	e.signalChange()
+	return nil
 }
 
 // Held returns a snapshot of the queue for the API, newest last.
@@ -776,7 +1340,19 @@ func (e *Engine) Get(id uint64) *Held {
 // line looks like a header block to that function — so forwarding a held WebSocket message with the
 // default settings would have injected a Content-Length header into the middle of application data.
 // Skipped by direction, because the direction is a fact and the bytes are a guess.
-func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error {
+//
+// # The target
+//
+// nil means "send it where the client asked", which is what every caller that has no opinion gets.
+// A non-nil Target replaces the destination for this one request — Burp's "Edit target" pencil,
+// which is per-item and not a repointing of the connection. A target equal to the one the message
+// already has collapses to nil, so the console can send the authority it is showing without
+// changing the path the proxy takes.
+//
+// A target the engine cannot dial is refused with the hold left unresolved: resolving it and then
+// failing to dial would either drop the request or send it to the original destination, and both
+// are the opposite of the instruction.
+func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool, target *Target) error {
 	e.mu <- struct{}{}
 	h := e.held[id]
 	<-e.mu
@@ -787,10 +1363,60 @@ func (e *Engine) Forward(id uint64, edited *string, fixContentLength bool) error
 	if edited != nil {
 		raw = []byte(*edited)
 	}
+	// Burp's two newline corrections (settings/tools/proxy.html:273-292), and only on an EDITED
+	// message. Untouched traffic is already well-formed by construction — it came off the wire — so
+	// rewriting it could only change bytes the target accepted as they were. An edit is where the
+	// operator introduces the defect: dropping the blank line after the headers, or leaving a trailing
+	// newline in a form body.
+	if edited != nil && !h.Direction.IsWebSocket() {
+		raw = e.newlines.Apply(raw)
+	}
 	if fixContentLength && !h.Direction.IsWebSocket() {
 		raw = rewriteContentLength(raw)
 	}
-	if !h.resolve(ActionForward, raw, "") {
+	// A destination the engine cannot dial is refused here rather than at the dial, and the hold is
+	// left untouched so the operator can correct it: resolving the hold with a target that fails
+	// would release the request down the original path, which is precisely not what they asked for.
+	if target != nil {
+		// Trimmed here rather than only at the API, because the engine is the last thing between an
+		// operator's field and a dial: a host of " " is an empty host that the wire's own validation
+		// would have caught, and a value that reaches this far by another route must be caught too.
+		// Normalised on a copy so the caller's struct is left as it was passed.
+		normalised := *target
+		normalised.Host = strings.TrimSpace(normalised.Host)
+		if normalised.Host == "" {
+			return fmt.Errorf("a retarget needs a host: an empty one would dial the local machine")
+		}
+		if normalised.Port == 0 {
+			return fmt.Errorf("a retarget needs a port in 1..65535")
+		}
+		if h.Direction.IsWebSocket() {
+			return fmt.Errorf("a WebSocket frame has no destination of its own; retarget the handshake instead")
+		}
+		// The unchanged case collapses to no target at all, so a caller that always sends the current
+		// authority (the console does, because the operator may have retyped it) still takes the
+		// ordinary path and reuses the connection the proxy already has.
+		if normalised.SameAs(h.Host, h.Port, h.TLS) {
+			target = nil
+		} else {
+			target = &normalised
+		}
+	}
+	// The bytes the operator was shown versus the bytes they handed back, decided against the
+	// operator's own buffer rather than against what goes on the wire below. The rewrite between them
+	// is burpsy's, not the operator's: fixContentLength recomputes a header the operator may not even
+	// have looked at, and counting it as a manual edit would mark every forward of a request whose
+	// framing burpsy corrected. See Held.userEdited for why no caller can make this call.
+	userEdited := edited != nil && !bytes.Equal([]byte(*edited), h.Raw)
+	// A second way to modify an item by hand, and it leaves the bytes alone: Burp's "Edit target".
+	// `target` is nil both when the operator named no destination and when they named the one the
+	// message already had (the collapse above), so what survives is a destination the client did not
+	// ask for — an item that is not the one the client sent even when it is byte-for-byte the same.
+	// See core.Exchange.UserEdited, which names this case.
+	if target != nil {
+		userEdited = true
+	}
+	if !h.resolve(ActionForward, raw, target, userEdited, "") {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	// Remove from the hold map so a long-running proxy does not leak one full
@@ -812,7 +1438,7 @@ func (e *Engine) Drop(id uint64, reason string) error {
 	if h == nil {
 		return fmt.Errorf("no held message %d", id)
 	}
-	if !h.resolve(ActionDrop, nil, reason) {
+	if !h.resolve(ActionDrop, nil, nil, false, reason) {
 		return fmt.Errorf("message %d was already resolved", id)
 	}
 	e.mu <- struct{}{}
@@ -859,7 +1485,9 @@ func (e *Engine) ForwardAll() int {
 		// h.Raw, not nil: the resolve payload IS the proxy side's answer, and nil
 		// reads as an empty message there — a forward of nothing. The client's own
 		// held bytes are the unmodified content this method promises.
-		if h.resolve(ActionForward, h.Raw, "") {
+		// false, not a comparison: "unmodified" is this method's contract, so there is nothing an
+		// operator edited here to notice.
+		if h.resolve(ActionForward, h.Raw, nil, false, "") {
 			forwarded = append(forwarded, h)
 		}
 	}
@@ -893,7 +1521,7 @@ func (e *Engine) DropAll(reason string) int {
 	<-e.mu
 	dropped := make([]*Held, 0, len(all))
 	for _, h := range all {
-		if h.resolve(ActionDrop, nil, reason) {
+		if h.resolve(ActionDrop, nil, nil, false, reason) {
 			dropped = append(dropped, h)
 		}
 	}
@@ -909,6 +1537,205 @@ func (e *Engine) DropAll(reason string) int {
 	<-e.mu
 	e.signalChange()
 	return len(dropped)
+}
+
+// NewlineCorrection is Burp's pair of newline fixes for an edited interception
+// (settings/tools/proxy.html:273-292): add a missing blank line after the headers, and remove
+// trailing newlines from a URL-encoded body.
+//
+// # Why both, and why they are not one setting
+//
+// They are two different defects with two different symptoms, and an operator who has edited a
+// request and watched the target reject it has no way to tell which they made. The missing blank
+// line is a framing error — the target reads the first body byte as a header name. The trailing
+// newline in a form body is a value error — the field parses with a trailing CR or LF glued to the
+// last character, which a signature or an equality check then fails. Fixing one does not fix the
+// other, so they are separate switches and either can be on alone.
+//
+// # Why the trailing-newline fix is scoped to urlencoded
+//
+// Because that is what Burp scopes it to, and the scoping is the point: a trailing newline in a
+// JSON body is ordinary and meaningful inside a string, and silently trimming it would corrupt
+// payloads the operator wrote deliberately. The Content-Type decides, not the body — an
+// unparseable or absent header is left alone rather than guessed at, because guessing wrong here
+// changes bytes without saying so.
+type NewlineCorrection struct {
+	// AddMissingBlankLine inserts the CRLFCRLF an edit dropped between the headers and the body.
+	AddMissingBlankLine bool
+	// TrimTrailingNewlinesInURLEncodedBody strips trailing CR/LF from a urlencoded body only.
+	TrimTrailingNewlinesInURLEncodedBody bool
+}
+
+// Apply runs the enabled corrections over a raw HTTP message, in the order that makes them
+// independent: the blank line is restored first, because the trailing-newline fix reads the body
+// boundary and would otherwise see headers where there should be a body.
+func (n NewlineCorrection) Apply(raw []byte) []byte {
+	if !n.AddMissingBlankLine && !n.TrimTrailingNewlinesInURLEncodedBody {
+		return raw
+	}
+	headEnd := indexCRLFCRLF(raw)
+	if headEnd < 0 {
+		// No blank line anywhere, which is exactly the case AddMissingBlankLine exists for: an edit
+		// that dropped it leaves the header block running into the body with nothing to separate them.
+		// The LAST CRLF is the boundary -- everything before it is headers, everything after is what
+		// the target would misread as a header name.
+		//
+		// A message with no CRLF at all is not an HTTP message this can repair, and inventing a
+		// boundary would produce bytes no client wrote.
+		if !n.AddMissingBlankLine {
+			return raw
+		}
+		// The boundary is the LAST line ending of the header block. Header lines are
+		// "Name: value" or continuations, so the run of lines that all look like headers ends at the
+		// first line that does not -- and that line is the start of the body.
+		//
+		// Guessing "last CRLF" instead truncates the body by two bytes, which is worse than the
+		// defect being repaired: the operator would see a request whose body silently lost its first
+		// characters and no reason why. Guessing "first CRLF" throws the headers away. So this walks
+		// the lines and asks what each one is.
+		text := string(raw)
+		head, body, ok := splitAtHeaderBlockEnd(text)
+		if !ok {
+			// Nothing that looks like a header block, so there is no boundary to restore and
+			// inventing one would produce bytes no client wrote.
+			return raw
+		}
+		// Content-Length is recomputed here too: a body the target could not previously find has
+		// usually also been mis-measured, and announcing the old length would be a second rejection
+		// on top of the first.
+		if rewritten, ok := setContentLength(head, len(body)); ok {
+			head = rewritten
+		}
+		return append([]byte(head+"\r\n\r\n"), body...)
+	}
+	head := string(raw[:headEnd])
+	body := raw[headEnd+4:]
+	changed := false
+
+	if n.TrimTrailingNewlinesInURLEncodedBody && isURLEncoded(head) {
+		if trimmed := trimTrailingNewlines(body); len(trimmed) != len(body) {
+			body = trimmed
+			changed = true
+		}
+	}
+	// Content-Length is recomputed after every body change, or a trimmed body would be announced
+	// with the length of the untrimmed one. Rewriting it here rather than leaving it to the
+	// caller's toggle is deliberate: a correction that changes the body and leaves a now-wrong
+	// length behind is a request the target will reject for a reason the operator cannot see.
+	if changed {
+		if rewritten, ok := setContentLength(head, len(body)); ok {
+			head = rewritten
+		}
+	}
+	if !changed {
+		return raw
+	}
+	return append([]byte(head+"\r\n\r\n"), body...)
+}
+
+// isURLEncoded reports whether the header block declares a urlencoded body.
+//
+// Only the exact media types Burp's own setting is about: application/x-www-form-urlencoded and the
+// multipart form type that shares its trailing-newline sensitivity. Anything else — including a
+// missing Content-Type — is false, because this correction rewrites bytes and must not do that to a
+// body whose format it has not recognised.
+func isURLEncoded(head string) bool {
+	for _, line := range strings.Split(head, "\r\n") {
+		colon := strings.Index(line, ":")
+		if colon < 0 {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(line[:colon]), "content-type") {
+			continue
+		}
+		value := strings.ToLower(strings.TrimSpace(line[colon+1:]))
+		mediaType := value
+		if semi := strings.Index(value, ";"); semi >= 0 {
+			mediaType = strings.TrimSpace(value[:semi])
+		}
+		return mediaType == "application/x-www-form-urlencoded" || mediaType == "multipart/form-data"
+	}
+	return false
+}
+
+// trimTrailingNewlines removes trailing CR and LF bytes, and nothing else. A body that is nothing
+// but newlines becomes empty rather than keeping one, because a form with no fields is empty and a
+// form with a newline is a field whose name is a line break.
+func trimTrailingNewlines(body []byte) []byte {
+	end := len(body)
+	for end > 0 && (body[end-1] == '\r' || body[end-1] == '\n') {
+		end--
+	}
+	return body[:end]
+}
+
+// setContentLength rewrites the header's Content-Length to n, reporting whether there was one to
+// rewrite. A message with no Content-Length is left alone: this is a correction to what the operator
+// wrote, not a decision to start framing their request.
+func setContentLength(head string, n int) (string, bool) {
+	lines := strings.Split(head, "\r\n")
+	for i, line := range lines {
+		if len(line) >= 15 && strings.EqualFold(strings.TrimSpace(line[:15]), "Content-Length:") {
+			lines[i] = "Content-Length: " + strconv.Itoa(n)
+			return strings.Join(lines, "\r\n"), true
+		}
+	}
+	return head, false
+}
+
+// splitAtHeaderBlockEnd splits a message whose blank line is missing into its header block and its
+// body, reporting false when there is no header block to find.
+//
+// A header line is "Name: value" — a colon before any space that would make it a body line — or a
+// folded continuation, which begins with whitespace. The block ends at the first line that is
+// neither, or at the end of the message when every line is a header.
+func splitAtHeaderBlockEnd(text string) (head, body string, ok bool) {
+	lines := strings.Split(text, "\r\n")
+	if len(lines) == 0 {
+		return "", "", false
+	}
+	// The request line is not a header line and must not end the block.
+	sawHeader := false
+	for idx := 1; idx < len(lines); idx++ {
+		line := lines[idx]
+		if line == "" {
+			// An explicit empty line IS the boundary — the message was well formed after all and this
+			// function was called on a path that already knew otherwise.
+			return strings.Join(lines[:idx], "\r\n"), strings.Join(lines[idx+1:], "\r\n"), true
+		}
+		if isHeaderLine(line) {
+			sawHeader = true
+			continue
+		}
+		return strings.Join(lines[:idx], "\r\n"), strings.Join(lines[idx:], "\r\n"), sawHeader
+	}
+	if !sawHeader {
+		return "", "", false
+	}
+	return strings.Join(lines, "\r\n"), "", true
+}
+
+// isHeaderLine reports whether one line of a request head looks like a header rather than the first
+// line of a body.
+//
+// The colon test is deliberately strict: a body line like "name=bob" has no colon and is correctly
+// not a header, while a JSON body's opening line "{"a":"b"}" has a colon and would be misread — which
+// is why the caller only reaches this for a message that ALREADY has no blank line, where the
+// alternative is a request the target cannot parse at all.
+func isHeaderLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	if line[0] == ' ' || line[0] == '\t' {
+		return true // folded continuation
+	}
+	colon := strings.Index(line, ":")
+	if colon <= 0 {
+		return false
+	}
+	// A space or tab BEFORE the colon means it is not a header name — that is how a body line like
+	// "a b: c" avoids being read as one.
+	return strings.IndexAny(line[:colon], " \t") < 0
 }
 
 // fixContentLength rewrites the Content-Length header to match the body. If the
@@ -934,6 +1761,19 @@ func rewriteContentLength(raw []byte) []byte {
 		return raw
 	}
 	return append([]byte(strings.Join(lines, "\r\n")+"\r\n\r\n"), body...)
+}
+
+// indexLFLF finds a bare-LF header terminator, for the client that does not use CRLF. Scanned only
+// after indexCRLFCRLF has failed, so a well-formed message never pays for it.
+func indexLFLF(b []byte) int {
+	for i := 0; i+1 < len(b); i++ {
+		// A CRLF contains an LF, so the byte BEFORE a candidate is checked to avoid finding the tail
+		// of a CRLFCRLF that indexCRLFCRLF already rejected for a different reason.
+		if b[i] == '\n' && b[i+1] == '\n' && (i == 0 || b[i-1] != '\r') {
+			return i
+		}
+	}
+	return -1
 }
 
 func indexCRLFCRLF(b []byte) int {

@@ -119,6 +119,56 @@ func TestNilEventLogIsAWorkingNoOp(t *testing.T) {
 	}
 }
 
+// Clearing the log empties the window an operator reads and resets the bound counter with it: after
+// a deliberate discard there is no window for "N dropped" to qualify. The signal fires so a clear in
+// one browser reaches the others through the live stream.
+func TestClearEmptiesTheLogResetsDroppedAndSignalsOnce(t *testing.T) {
+	l := NewEventLog().WithCapacity(3)
+	for i := 0; i < 10; i++ {
+		l.Record(EventCrawlRefused, SeverityWarn, "refused")
+	}
+	if l.Count() != 3 || l.Dropped() != 7 {
+		t.Fatalf("before clear: count/dropped = %d/%d, want 3/7", l.Count(), l.Dropped())
+	}
+
+	var signals int
+	l.OnChange(func() { signals++ })
+	l.Clear()
+
+	if l.Count() != 0 {
+		t.Errorf("count after clear = %d, want 0", l.Count())
+	}
+	if l.Dropped() != 0 {
+		t.Errorf("dropped after clear = %d, want 0 — a discarded window has no bound to report", l.Dropped())
+	}
+	if signals != 1 {
+		t.Errorf("onChange fired %d times, want exactly 1 so the live stream refetches once", signals)
+	}
+
+	// The cleared window marshals as an empty array, never JSON null: the TS Dashboard.events type is
+	// a non-nullable array, and a nil slice would cross the wire as null and break it. Recent uses
+	// make([]Event, 0, n), so this asserts the marshalled bytes rather than trusting the slice.
+	raw, err := json.Marshal(l.Recent(0))
+	if err != nil {
+		t.Fatalf("marshal Recent(0) after clear: %v", err)
+	}
+	if string(raw) != "[]" {
+		t.Errorf("Recent(0) after clear marshals to %s, want []", raw)
+	}
+
+	// Ids stay unique across the clear: the next event is not id 1 again.
+	if id := l.Record(EventScopeChanged, SeverityInfo, "after clear"); id != 11 {
+		t.Errorf("first id after clearing 10 events = %d, want 11 (ids do not reset)", id)
+	}
+}
+
+// A nil log clears without panicking, so a caller wired to the "Clear event log" action never has to
+// guard the receiver — the same contract every other method keeps.
+func TestClearOnNilLogIsANoOp(t *testing.T) {
+	var l *EventLog
+	l.Clear()
+}
+
 // ---- the registry's lifecycle events ------------------------------------------------------------
 
 // One wiring call must give every task start and finish events, so a crawl registered from a package

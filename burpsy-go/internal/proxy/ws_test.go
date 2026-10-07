@@ -25,6 +25,14 @@ import (
 // arrived are exactly what is under test, and any HTTP library would normalise
 // them on the way through.
 func startWsOrigin(t *testing.T, afterUpgrade []byte) (host string, port uint16, received chan []byte) {
+	return startWsOriginAccepting(t, afterUpgrade, 1)
+}
+
+// startWsOriginAccepting is startWsOrigin for a test that drives several
+// handshakes at one origin — the live-flip test re-connects rather than
+// re-listening, because the switch under test must be observable on a proxy
+// that was already running.
+func startWsOriginAccepting(t *testing.T, afterUpgrade []byte, handshakes int) (host string, port uint16, received chan []byte) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -32,36 +40,39 @@ func startWsOrigin(t *testing.T, afterUpgrade []byte) (host string, port uint16,
 	}
 	t.Cleanup(func() { ln.Close() })
 
-	received = make(chan []byte, 1)
+	received = make(chan []byte, handshakes)
 	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		br := bufio.NewReader(conn)
-		var raw []byte
-		for {
-			line, err := br.ReadString('\n')
+		for i := 0; i < handshakes; i++ {
+			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			raw = append(raw, line...)
-			if line == "\r\n" || line == "\n" {
-				break
+			br := bufio.NewReader(conn)
+			var raw []byte
+			for {
+				line, err := br.ReadString('\n')
+				if err != nil {
+					conn.Close()
+					return
+				}
+				raw = append(raw, line...)
+				if line == "\r\n" || line == "\n" {
+					break
+				}
 			}
+			received <- raw
+			conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n" +
+				"Upgrade: websocket\r\n" +
+				"Connection: Upgrade\r\n" +
+				"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
+			if len(afterUpgrade) > 0 {
+				conn.Write(afterUpgrade)
+			}
+			// Held open so the relay's two goroutines are still pumping when the
+			// test reads; the origin closing immediately would race the capture.
+			time.Sleep(500 * time.Millisecond)
+			conn.Close()
 		}
-		received <- raw
-		conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n" +
-			"Upgrade: websocket\r\n" +
-			"Connection: Upgrade\r\n" +
-			"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"))
-		if len(afterUpgrade) > 0 {
-			conn.Write(afterUpgrade)
-		}
-		// Held open so the relay's two goroutines are still pumping when the
-		// test reads; the origin closing immediately would race the capture.
-		time.Sleep(500 * time.Millisecond)
 	}()
 
 	h, p, _ := net.SplitHostPort(ln.Addr().String())
@@ -169,12 +180,52 @@ func TestARewrittenHandshakeDoesNotLookPristineInHistory(t *testing.T) {
 	}
 
 	// What history shows for the request must be what upstream received.
-	req, err := store.Get(ex.Request)
+	req, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("stored request: %v", err)
 	}
 	if strings.Contains(strings.ToLower(string(req.Raw())), core.WsExtensionsHeader) {
 		t.Error("history shows the client's original request while a different one went upstream; the recorded bytes must be the bytes sent")
+	}
+}
+
+// The flip has to be observable on a proxy that is already running: the switch
+// the operator moves lives in the same option set the handshake reads, and the
+// whole point of the live option set is that no restart stands between the
+// click and the relay. So one proxy, three handshakes — stripped (the default),
+// passed through after the option set is edited the way PUT /api/proxy/options
+// would edit it, stripped again after flipping back.
+func TestTheSettingsSwitchFlipsStrippingOnALiveProxyWithoutARestart(t *testing.T) {
+	host, port, received := startWsOriginAccepting(t, nil, 3)
+	store := core.NewTrafficStore()
+	config := NewProxyConfig(store)
+	proxyAddr := startProxy(t, NewServer(config.
+		WithScope(testScope()).
+		WithLogger(zap.NewNop())))
+
+	// Default: stripping on, the origin never sees the offer.
+	openWsThroughProxy(t, proxyAddr, host, port)
+	if got := awaitOrigin(t, received); strings.Contains(strings.ToLower(got), core.WsExtensionsHeader) {
+		t.Fatalf("stripping was on by default and the origin was offered the extension anyway:\n%s", got)
+	}
+
+	// The edit the settings panel's PUT performs, on the same set the relay reads.
+	if err := config.Options().Set(OptStripWsExtensions, false); err != nil {
+		t.Fatalf("Set on the live option set: %v", err)
+	}
+	openWsThroughProxy(t, proxyAddr, host, port)
+	got := awaitOrigin(t, received)
+	if !strings.Contains(strings.ToLower(got), core.WsExtensionsHeader) {
+		t.Fatalf("the option set said stripping is off and the offer was removed anyway:\n%s", got)
+	}
+
+	// And back on, still without touching the listener.
+	if err := config.Options().Set(OptStripWsExtensions, true); err != nil {
+		t.Fatalf("Set on the live option set: %v", err)
+	}
+	openWsThroughProxy(t, proxyAddr, host, port)
+	if got := awaitOrigin(t, received); strings.Contains(strings.ToLower(got), core.WsExtensionsHeader) {
+		t.Fatalf("the option set said stripping is on and the offer reached the origin anyway:\n%s", got)
 	}
 }
 

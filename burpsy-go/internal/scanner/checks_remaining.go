@@ -309,7 +309,7 @@ func checkTLSCertificate(ctx context.Context, cc *CheckContext) ([]*Finding, err
 // ---------------------------------------------------------------------------
 
 func checkSMTPHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +522,7 @@ func oobCheck(row, protocol string) CheckRunner {
 		if err := cc.RequireEgress(); err != nil {
 			return nil, fmt.Errorf("%s: %w", row, err)
 		}
-		h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+		h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 		if err != nil {
 			return nil, err
 		}
@@ -738,17 +738,17 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 			crossDomainPolicyCheck("Silverlight cross-domain policy", "/clientaccesspolicy.xml", ParseSilverlightPolicy)),
 
 		nativeDescriptor("XML external entity injection", DispatchScopePerUrl, remainingChecksEnabled, checkXXE),
-		nativeDescriptor("XML entity expansion", DispatchScopePerUrl, remainingChecksEnabled, checkXMLEntityExpansion),
+		intrusiveDescriptor("XML entity expansion", DispatchScopePerUrl, remainingChecksEnabled, checkXMLEntityExpansion),
 
 		nativeDescriptor("File upload functionality", DispatchScopePerHost, remainingChecksEnabled, checkFileUploadFunctionality),
 		nativeDescriptor("OpenAPI definition found (passive scan check)", DispatchScopePerUrl, remainingChecksEnabled, checkOpenAPIDefinitionPassive),
 
-		nativeDescriptor("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("Out-of-band resource load (HTTP)", "http")),
-		nativeDescriptor("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("External service interaction (DNS)", "dns")),
-		nativeDescriptor("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("External service interaction (HTTP)", "http")),
+		descriptorWithTier("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("Out-of-band resource load (HTTP)", "http"), TierIntrusive, ""),
+		descriptorWithTier("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("External service interaction (DNS)", "dns"), TierIntrusive, ""),
+		descriptorWithTier("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("External service interaction (HTTP)", "http"), TierIntrusive, ""),
 
 		nativeDescriptor("React Server Components remote code execution (React2Shell)", DispatchScopePerUrl, remainingChecksEnabled, checkReact2Shell),
 		nativeDescriptor("SQL statement in request parameter", DispatchScopePerUrl, remainingChecksEnabled, checkSQLStatementInParameter),

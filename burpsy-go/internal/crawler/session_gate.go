@@ -50,7 +50,14 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 )
+
+// crawlTool is the tool every request this crawl makes is attributed to, for the tools scope of a
+// session rule (so3). Named from toollog's vocabulary rather than spelled as a literal here: that
+// package owns the names, and a second spelling would drift from the one the Logger's filter and the
+// rule editor both offer.
+func crawlTool() string { return toollog.ToolCrawler.String() }
 
 // SessionCoordinator is the session-handling seam a crawl can be wired to. nil keeps
 // the static-Headers behaviour unchanged; *session.Coordinator satisfies it.
@@ -59,17 +66,24 @@ import (
 // already uses — a coordinator wired for proxied traffic is wired for the crawl the
 // same way, so there is no second, drift-prone way to think about re-login.
 type SessionCoordinator interface {
-	// MatchingRule returns the first enabled rule whose scope covers `host`, or nil.
-	MatchingRule(host string) *session.SessionRule
+	// MatchingRuleForRequest returns the first enabled rule whose URL scope covers `req`, or
+	// nil. The request identity rather than a bare host (7nh2): a rule scoped to a path, port
+	// or scheme must not claim a crawl item outside its own stated scope, and a host-only
+	// lookup cannot tell the difference. params is nil here — a crawl item has a method and a
+	// URL, not a parsed parameter set, and MatchParams reads nil as "unknown" rather than as
+	// "carries none".
+	MatchingRuleForRequest(req session.RequestIdentity, params []string, scopeContains func() bool) *session.SessionRule
 	// EnsureLoggedIn runs the rule's login macro, single-flight per rule, and reports
 	// the outcome as an enum rather than as an error string.
 	EnsureLoggedIn(rule *session.SessionRule, runner session.MacroStepRunner) session.LoginOutcome
-	// HandleResponse lets the coordinator absorb a macro step's Set-Cookie into its
-	// jar, exactly as the web surface's runner does.
-	HandleResponse(host string, port uint16, tls bool, status int, hdrs map[string]string, body []byte)
+	// HandleResponseFor lets the coordinator absorb a macro step's Set-Cookie into its
+	// jar, exactly as the web surface's runner does, and judge the step's validity against
+	// the step's own request identity — path, port, scheme and the tool that sent it (so3) —
+	// rather than its host alone.
+	HandleResponseFor(req session.RequestIdentity, status int, hdrs map[string]string, body []byte, scopeContains func() bool)
 	// CookieHeader returns the jar's Cookie header value for an origin, or "" when
 	// the jar holds nothing for it.
-	CookieHeader(host string, port uint16, tls bool) string
+	CookieHeader(host string, port uint16, tls bool, path string) string
 }
 
 // loggedOut is the expiry detector's verdict for one response.
@@ -132,9 +146,29 @@ const (
 // rather than as quietly unauthenticated.
 func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *LimitReport) (raw []byte, result recoverResult, detail string) {
 	host := item.url.Hostname()
-	rule := c.cfg.SessionCoordinator.MatchingRule(host)
+	// The full identity, not the hostname: a rule scoped to a path or port must not be the rule
+	// that fires a login macro for a crawl item its own editor excludes (7nh2). The suite-scope
+	// verdict is this crawl's own scope handle, read live.
+	// The tool too (so3): these are the crawler's own requests, so a rule the operator restricted
+	// to another tool must not re-login on the crawl's behalf — and one restricted to the crawler
+	// must, even though it names no host.
+	rule := c.cfg.SessionCoordinator.MatchingRuleForRequest(
+		session.RequestIdentity{
+			Host: host,
+			Path: item.url.EscapedPath(),
+			Port: portOf(item.url),
+			TLS:  strings.EqualFold(item.url.Scheme, "https"),
+			Tool: crawlTool(),
+		},
+		nil,
+		func() bool {
+			if c.cfg.Scope == nil {
+				return false
+			}
+			return c.cfg.Scope.Contains(host, portOf(item.url), item.url.EscapedPath(), strings.EqualFold(item.url.Scheme, "https"))
+		})
 	if rule == nil {
-		return nil, reloginFailed, "no session rule covers host " + host
+		return nil, reloginFailed, "no session rule covers " + item.url.String()
 	}
 	if c.relogins >= c.limits.MaxRelogins {
 		lim.record(StopReloginBudget)
@@ -148,7 +182,7 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 	}
 
 	tls := strings.EqualFold(item.url.Scheme, "https")
-	cookie := c.cfg.SessionCoordinator.CookieHeader(host, portOf(item.url), tls)
+	cookie := c.cfg.SessionCoordinator.CookieHeader(host, portOf(item.url), tls, item.url.Path)
 	if cookie == "" {
 		// The login ran and the jar came back empty: the macro completed without
 		// establishing anything the request could use. Retrying with no cookie is
@@ -175,6 +209,14 @@ func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *Li
 // exactly one skip, so a login page is never silently dropped.
 func (c *Crawler) handleExpired(ctx context.Context, item frontierItem, verdict loggedOut, rep *Report, lim *LimitReport) {
 	rebuilt, result, detail := c.recoverSession(ctx, item, lim)
+	// The consecutive authentication-failure streak the pause policy reads (o0c5): a failed re-login
+	// extends it, a restored session ends it. A spent budget is not counted — the crawl did not try.
+	switch result {
+	case recovered:
+		c.noteAuth(true)
+	case reloginFailed:
+		c.noteAuth(false)
+	}
 	switch result {
 	case recovered:
 		c.perform(ctx, item, rebuilt, rep, lim)
@@ -246,7 +288,7 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 		// The coordinator attaches the jar's cookie to a step it owns; only fill one in
 		// when the step did not carry one, matching the web runner.
 		if _, has := req.Headers["Cookie"]; !has {
-			if cookie := c.cfg.SessionCoordinator.CookieHeader(host, port, tls); cookie != "" {
+			if cookie := c.cfg.SessionCoordinator.CookieHeader(host, port, tls, req.Path); cookie != "" {
 				req.Headers["Cookie"] = cookie
 			}
 		}
@@ -258,11 +300,28 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				c.cfg.SessionCoordinator.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+				c.cfg.SessionCoordinator.HandleResponseFor(
+					session.RequestIdentity{Host: host, Path: stepPath(step.URL), Port: port, TLS: tls, Tool: crawlTool()},
+					resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body, nil)
 			}
 		}
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
+}
+
+// stepPath is the path a macro step's URL names, for the URL-scope axes the coordinator matches a
+// step's response on (7nh2).
+//
+// "/" when the URL states no path — that is what an absent path means in HTTP, and it means a rule
+// scoped to "/api" does not claim a step that names the bare origin. A URL that will not parse
+// yields "/" for the same reason: the honest answer is "this step's path is unknown", and an
+// unknown path must not satisfy a path-scoped rule.
+func stepPath(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Path == "" {
+		return "/"
+	}
+	return u.Path
 }
 
 // buildRequestWithCookie is buildRequest with one addition: a Cookie header written

@@ -107,6 +107,11 @@ const (
 	EventLiveAuditSkipped  = "liveaudit.skipped"
 	EventLiveAuditBounded  = "liveaudit.bounded"
 	EventLedgerReset       = "audit.ledger_reset"
+	// EventAuditBounded is a bulk audit that stopped before it ran everything — the crawl-and-audit
+	// scan's audit phase. Its own kind rather than reusing EventLiveAuditBounded: "liveaudit" names
+	// the always-on sweep over proxied traffic, and an operator filtering the log for what the live
+	// sweep did should not get rows from a scan they launched by hand.
+	EventAuditBounded = "audit.bounded"
 	// EventCrawlBounded and EventCrawlRefused are declared here, unused by this package, so the
 	// crawler names its events rather than inventing spellings the UI has never seen.
 	EventCrawlBounded = "crawl.bounded"
@@ -280,4 +285,31 @@ func (l *EventLog) Restore(events []Event) {
 	}
 	l.dropped = 0
 	l.evictLocked()
+}
+
+// Clear discards every remembered event, emptying the window the dashboard reads. It backs the
+// "Clear event log" action (Burp's burp.Zbuz): the source the feed reads is cleared, not a
+// client-side view of it, so after a clear the feed is genuinely empty and the next thing the tool
+// does is its first row again.
+//
+// dropped is reset with it, following Restore rather than toollog.Clear. dropped counts what was
+// evicted at the capacity bound so that a window is never presented as the whole history; once the
+// operator has discarded the window on purpose there is no window left for that count to qualify,
+// and reporting "0 events, 312 dropped at the bound" would be a caveat about history that was just
+// thrown away deliberately. nextID is left untouched so ids stay unique across a clear, the same
+// contract Restore keeps.
+//
+// onChange fires under the lock, the same contract as RecordFor: it tells the live stream the
+// dashboard aggregate is stale, so a clear driven from one browser empties the feed in every other.
+func (l *EventLog) Clear() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = nil
+	l.dropped = 0
+	if l.onChange != nil {
+		l.onChange()
+	}
 }

@@ -3,6 +3,7 @@ package intruder
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Pausing, resuming and stopping a running attack.
@@ -71,6 +72,12 @@ type Control struct {
 	completed bool
 	// stopReason is what the report and the dashboard note say about why the attack ended early.
 	stopReason string
+
+	// settledSends and settledFails count outcomes as the engine's collector absorbs them, so the
+	// control routes can answer "is it doing anything" while the attack runs. They are the same
+	// totals the eventual report carries, so a live view cannot disagree with it.
+	settledSends atomic.Int64
+	settledFails atomic.Int64
 }
 
 // NewControl returns a control for an attack that has not started.
@@ -156,6 +163,29 @@ func (c *Control) StopOnContext(ctx context.Context, done <-chan struct{}, why s
 	}()
 }
 
+// note records one settled send for the live progress view. Run's collector loop calls it as each
+// outcome lands, so the counts move with real results rather than with enumerated ordinals.
+func (c *Control) note(ok bool) {
+	if c == nil {
+		return
+	}
+	if ok {
+		c.settledSends.Add(1)
+	} else {
+		c.settledFails.Add(1)
+	}
+}
+
+// Progress is how much of the attack has settled so far: sent and failed, the same totals the
+// eventual report carries. A paused attack holds its counts; a stopped attack's last in-flight
+// sends still land and are counted, as they are in the report.
+func (c *Control) Progress() (sent, failed int) {
+	if c == nil {
+		return 0, 0
+	}
+	return int(c.settledSends.Load()), int(c.settledFails.Load())
+}
+
 // Status is where the attack is now.
 func (c *Control) Status() AttackStatus {
 	if c == nil {
@@ -196,6 +226,59 @@ func (c *Control) gate() bool {
 		c.cond.Wait()
 	}
 	return !c.stopped
+}
+
+// holding reports whether the attack is paused or stopped RIGHT NOW, without blocking. gate() is
+// the blocking form and is what the driver waits on; this is the question the driver has to ask a
+// second time, after it has waited for something else.
+//
+// It exists because waiting is not free of state changes. The driver gates, then queues for an
+// in-flight permit, and a pause raised while it was queueing — by the operator, or by the
+// auto-pause predicate reading the very response that freed the permit — was invisible to the gate
+// it had already passed. Asking again with the permit in hand costs one mutex and closes that
+// window; see gateForSend.
+func (c *Control) holding() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.paused || c.stopped
+}
+
+// gateForSend takes the in-flight permit this ordinal will be sent under, and re-checks the hold
+// with it in hand. It returns the permit to send under, or nil when the attack was stopped and the
+// driver should stop enumerating.
+//
+// # Why the first gate is not enough
+//
+// Auto-pause (and any operator pause) is raised from inside a send that is already in flight. The
+// driver's next iteration gates BEFORE it queues for a permit, so at concurrency 1 the sequence was:
+// ordinal n+1 passes the gate while ordinal n is still on the wire, ordinal n's response trips the
+// lockout predicate, Pause() is set, ordinal n releases its permit, and ordinal n+1 — already past
+// the gate — takes that permit and sends. Exactly one request escaped every halt in the engine:
+// every auto-pause, every dashboard stop, every operator pause. For the predicate this feature
+// exists to serve ("ACCOUNT LOCKED"), that escapee is one more login attempt against an account the
+// operator has already been told is locked. burpsy-react-ui-xqwe filed the test that saw it as
+// flaky; the test was right and only intermittently lucky enough to look.
+//
+// The permit is released before waiting and re-taken after, so the invariant the plan loop states —
+// a paused attack holds no in-flight permit, because a held permit throttles nothing and would
+// block the first send of a resume — still holds. The loop, rather than a single re-check, covers a
+// pause raised while this ordinal was re-queueing.
+//
+// A nil Control never holds, so an uncontrolled attack pays one non-blocking mutex per request and
+// behaves exactly as before.
+func gateForSend(c *Control, limiter *RateLimiter) *Permit {
+	permit := limiter.Acquire()
+	for c.holding() {
+		permit.Release()
+		if !c.gate() {
+			return nil
+		}
+		permit = limiter.Acquire()
+	}
+	return permit
 }
 
 // reportStatus is the status to put on a finished report.

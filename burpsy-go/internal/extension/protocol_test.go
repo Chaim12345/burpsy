@@ -187,11 +187,14 @@ func Test_every_registration_kind_has_exactly_one_invocation_method(t *testing.T
 			t.Errorf("method for kind %q, which validKinds refuses at load", kind)
 		}
 	}
-	// Three, and stated as a number: the ten Montoya registration points that hand Burp a Swing object
-	// are deliberately absent, and a fourth appearing here should be a decision rather than a diff.
-	if len(validKinds) != 3 {
-		t.Errorf("this host accepts %d registration kinds, and the three with an honest web analogue "+
-			"are context-menu, menu and editor-tab. Adding a fourth means deciding what it renders as.",
+	// Five, and stated as a number: the ten Montoya registration points that hand Burp a Swing
+	// object are deliberately absent, and a sixth appearing here should be a decision rather
+	// than a diff. The fifth was hotkey (wsu4): a chord is data the console can install through
+	// its own keymap, so it has an honest web analogue where a Swing component does not.
+	if len(validKinds) != 5 {
+		t.Errorf("this host accepts %d registration kinds, and the five with an honest web analogue "+
+			"are context-menu, menu, editor-tab, session-action and hotkey. Adding a sixth means "+
+			"deciding what it renders as.",
 			len(validKinds))
 	}
 }

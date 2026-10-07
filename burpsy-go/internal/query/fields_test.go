@@ -93,6 +93,8 @@ type stubRow struct {
 	highlight       string
 	comment         string
 	annotationKnown bool
+	task            uint64
+	hasTask         bool
 }
 
 func (r stubRow) Host() string               { return r.host }
@@ -102,6 +104,7 @@ func (r stubRow) Status() int                { return r.status }
 func (r stubRow) Mime() string               { return r.mime }
 func (r stubRow) Body() []byte               { return r.body }
 func (r stubRow) ResponseLen() (int64, bool) { return r.length, r.hasLength }
+func (r stubRow) TaskID() (uint64, bool)     { return r.task, r.hasTask }
 
 // headers is nil by default, so a stub that says nothing about headers reports every header
 // absent — which fails every comparison, the same rule the real adapters carry.

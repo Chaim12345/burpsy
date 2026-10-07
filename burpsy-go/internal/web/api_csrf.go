@@ -44,7 +44,7 @@ func (s *Server) handleCSRF(w http.ResponseWriter, r *http.Request, id core.Exch
 		http.Error(w, "Exchange not found", http.StatusNotFound)
 		return
 	}
-	msg, err := s.message(uint64(ex.Request))
+	msg, err := s.message(uint64(core.MsgOrZero(ex.Request)))
 	if err != nil {
 		http.Error(w, "Request bytes unavailable", http.StatusNotFound)
 		return

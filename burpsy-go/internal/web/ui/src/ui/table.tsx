@@ -4,12 +4,13 @@ import {
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
+  type ColumnOrderState,
   type Row,
   type SortingState,
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, Copy } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy, GripVertical } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
@@ -72,6 +73,101 @@ function columnLabel(header: unknown, id: string): string {
   return typeof header === "string" ? header : id;
 }
 
+// --- column order (burpsy-react-ui-mem3) ---------------------------------------------------------
+//
+// Burp: "Move columns - Drag and drop the column header to a new location", on every table it
+// shows. VirtualTable had sizing and visibility but no order at all — the columns array's own
+// order was the only order a page could ever see.
+
+/** The id TanStack itself would derive for a column def that names no explicit `id`. */
+function columnKey<T>(def: Column<T>, index: number): string {
+  if (def.id) return def.id;
+  const accessorKey = (def as { accessorKey?: string }).accessorKey;
+  return accessorKey ?? `column-${index}`;
+}
+
+/**
+ * A stored order is only trusted for the id set it was written for — filtered down to ids still
+ * present, then whatever is new in `fallback` (a page's own column addition, or simply a
+ * first-ever visit) is appended in the page's own order. A stored order for a different table
+ * shape entirely (found via key collision, or hand-edited storage) degrades to the fallback rather
+ * than reordering columns it was never told about.
+ */
+function reconcileOrder(order: string[], fallback: string[]): string[] {
+  const known = new Set(fallback);
+  const kept = order.filter((id) => known.has(id));
+  const missing = fallback.filter((id) => !kept.includes(id));
+  return [...kept, ...missing];
+}
+
+function readStoredOrder(key: string, fallback: string[]): ColumnOrderState {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === "string")) return fallback;
+    return reconcileOrder(parsed, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Column order, persisted per table shape rather than per page.
+ *
+ * `ariaLabel` was the obvious storage key and is wrong: Site map hands VirtualTable a fresh one
+ * per node (`Requests under ${path}`), so keying on it would forget the operator's arrangement
+ * the moment they clicked a different folder. The column *id set* a page renders does not change
+ * between those clicks, and does differ between actually different tables (History's ids are not
+ * Site map's), which makes it a fingerprint for "this kind of table" good enough to persist
+ * against — with no prop and no change required in any of VirtualTable's callers.
+ */
+function useColumnOrder(defaultOrder: string[]): [ColumnOrderState, (updater: ColumnOrderState | ((current: ColumnOrderState) => ColumnOrderState)) => void] {
+  const fingerprint = [...defaultOrder].sort().join("|");
+  const storageKey = `burpsy.table-column-order.${fingerprint}`;
+
+  const [order, setOrderState] = useState<ColumnOrderState>(() => readStoredOrder(storageKey, defaultOrder));
+
+  // The column set itself changing (a page adds/removes a column, or this is a different table
+  // reusing the hook) reconciles rather than resets, for the reason readStoredOrder does.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    setOrderState((current) => {
+      const next = reconcileOrder(current, defaultOrder);
+      // Same sequence already: bail out so this cannot loop against the persist effect below just
+      // because `defaultOrder` is a fresh array reference on every render.
+      return next.length === current.length && next.every((id, i) => id === current[i]) ? current : next;
+    });
+  }, [fingerprint]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(order));
+    } catch {
+      // A private window or cleared site data: the order still holds for this session.
+    }
+  }, [storageKey, order]);
+
+  const setOrder = useCallback(
+    (updater: ColumnOrderState | ((current: ColumnOrderState) => ColumnOrderState)) => {
+      setOrderState((current) => (typeof updater === "function" ? updater(current) : updater));
+    },
+    [],
+  );
+
+  return [order, setOrder];
+}
+
+/** Move `moving` to sit immediately before `target` in `order`. A `target` no longer present
+ *  (dropped between drag-start and drop, or a stale event) is a no-op rather than a silent drop
+ *  of the moved column off the end. */
+function moveColumnBefore(order: readonly string[], moving: string, target: string): string[] {
+  const without = order.filter((id) => id !== moving);
+  const at = without.indexOf(target);
+  if (at < 0) return [...order];
+  return [...without.slice(0, at), moving, ...without.slice(at)];
+}
+
 export interface VirtualTableProps<T> {
   data: T[];
   columns: Column<T>[];
@@ -80,6 +176,16 @@ export interface VirtualTableProps<T> {
   selectedId?: string | null;
   onSelect?: (row: T) => void;
   /** Enter or double-click. Falls back to onSelect when omitted. */
+  /**
+   * Double-click ONLY, and distinct from onActivate on purpose.
+   *
+   * onActivate is Enter-or-double-click, so an operator who has bound Enter to "send to Repeater"
+   * must keep it: taking the double-click away from that would make the only way to open a detached
+   * window a gesture, and the keyboard path would then have no gesture left to share it with. A
+   * double-click that means one thing on one page and another on the next is worse than a missing
+   * affordance, which is why the split is here rather than in each page.
+   */
+  onDoubleActivate?: (row: T) => void;
   onActivate?: (row: T) => void;
   menuGroups?: (row: T) => MenuGroup[];
   rowClassName?: (row: T) => string | undefined;
@@ -123,6 +229,7 @@ export function VirtualTable<T>({
   selectedId,
   onSelect,
   onActivate,
+  onDoubleActivate,
   menuGroups,
   rowClassName,
   loading = false,
@@ -164,14 +271,23 @@ export function VirtualTable<T>({
   const columnMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const columnMenuPanelRef = useRef<HTMLDivElement>(null);
 
+  // Drag-to-reorder (burpsy-react-ui-mem3): always on, unlike visibility, because every page gets
+  // it for free — see useColumnOrder for why persistence needs no prop from the caller either.
+  const defaultColumnOrder = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const [columnOrder, setColumnOrder] = useColumnOrder(defaultColumnOrder);
+  // Which column's header is mid-drag, purely to know what a drop on another header should move.
+  // Not persisted itself — only the resulting order is.
+  const [draggingColumn, setDraggingColumn] = useState<string | null>(null);
+
   const table = useReactTable({
     data,
     columns,
-    state: { sorting, columnVisibility: visibility },
+    state: { sorting, columnVisibility: visibility, columnOrder },
     onSortingChange: setSorting,
     onColumnVisibilityChange: (updater) => {
       setVisibility(typeof updater === "function" ? updater(visibility) : updater);
     },
+    onColumnOrderChange: setColumnOrder,
     getRowId,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -374,6 +490,19 @@ export function VirtualTable<T>({
                   // "HTML", "—" are presentation); the data is what a wordlist wants.
                   const rawHeader = header.column.columnDef.header;
                   const columnLabel = typeof rawHeader === "string" ? rawHeader : header.column.id;
+                  // A column declared with no header text — the row-select checkbox, a grip-only
+                  // column, an actions column — still needs an accessible name, and axe is right to
+                  // say so (#history, burpsy-react-ui-wj9k): an empty <th> tells a screen-reader user
+                  // that this column exists and nothing about what it holds, which is exactly the
+                  // column whose purpose the cells underneath it do not reveal.
+                  //
+                  // The column id is the name because it is the one identifier here already unique,
+                  // already declared, and already what a caller passes back as the "path" argument —
+                  // so the accessible name and the name in the transcript are the same string. Carried
+                  // as clipped text rather than only aria-label on the cell, because text content also
+                  // names the column to a table-navigation cursor, and .sr-only costs no layout.
+                  const headerText = typeof rawHeader === "string" ? rawHeader.trim() : "";
+                  const cellName = headerText === "" ? header.column.id : undefined;
                   const copyColumn = () => {
                     if (!rows.length) {
                       toast.error("No rows to copy");
@@ -395,7 +524,40 @@ export function VirtualTable<T>({
                     <span className="th-label">{flexRender(header.column.columnDef.header, header.getContext())}</span>
                   );
                   return (
-                    <th key={header.id} style={{ width: header.getSize() }} aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}>
+                    <th
+                      key={header.id}
+                      style={{ width: header.getSize() }}
+                      aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
+                      className={cn(draggingColumn && draggingColumn !== header.column.id && "th-drop-target")}
+                      // The drop target is the whole header, not just the grip: Burp's own drag
+                      // and drop lands wherever the header is released, not on a fixed-size handle.
+                      onDragOver={(event) => {
+                        if (draggingColumn && draggingColumn !== header.column.id) event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (!draggingColumn || draggingColumn === header.column.id) return;
+                        setColumnOrder((current) => moveColumnBefore(current, draggingColumn, header.column.id));
+                        setDraggingColumn(null);
+                      }}
+                      aria-label={cellName}
+                    >
+                      {cellName ? <span className="sr-only">{cellName}</span> : null}
+                      <span
+                        className="col-drag-handle"
+                        aria-hidden="true"
+                        title="Drag to reorder this column"
+                        draggable
+                        onDragStart={(event) => {
+                          event.dataTransfer.effectAllowed = "move";
+                          // Firefox refuses to start a drag with no data set on it at all.
+                          event.dataTransfer.setData("text/plain", header.column.id);
+                          setDraggingColumn(header.column.id);
+                        }}
+                        onDragEnd={() => setDraggingColumn(null)}
+                      >
+                        <GripVertical size={11} />
+                      </span>
                       <ContextMenu
                         groups={[
                           {
@@ -439,6 +601,7 @@ export function VirtualTable<T>({
                   className={rowClassName?.(row.original)}
                   onSelect={onSelect}
                   onActivate={onActivate}
+                  onDoubleActivate={onDoubleActivate}
                   menuGroups={menuGroups}
                 />
               );
@@ -468,6 +631,7 @@ function TableRow<T>({
   className,
   onSelect,
   onActivate,
+  onDoubleActivate,
   menuGroups,
 }: {
   row: Row<T>;
@@ -476,6 +640,7 @@ function TableRow<T>({
   className?: string;
   onSelect?: (row: T) => void;
   onActivate?: (row: T) => void;
+  onDoubleActivate?: (row: T) => void;
   menuGroups?: (row: T) => MenuGroup[];
 }): JSX.Element {
   const element = (
@@ -484,7 +649,10 @@ function TableRow<T>({
       aria-selected={selected}
       className={cn("data-row", selected && "selected-row", onSelect && "clickable", className)}
       onClick={() => onSelect?.(row.original)}
-      onDoubleClick={() => (onActivate ?? onSelect)?.(row.original)}
+      // Double-click prefers the dedicated handler, then onActivate, then plain selection — so a
+      // table that was not given one behaves exactly as it always did, and one that was gets the
+      // gesture it asked for without losing the other two.
+      onDoubleClick={() => (onDoubleActivate ?? onActivate ?? onSelect)?.(row.original)}
       // Right-clicking a row should act on that row, matching desktop tools.
       onContextMenu={() => onSelect?.(row.original)}
     >
@@ -527,6 +695,139 @@ export function MenuRow({
   );
 }
 
+/**
+ * A sortable table for bounded row sets (burpsy-react-ui-4rd).
+ *
+ * VirtualTable carries selection, virtualization and context menus for the
+ * traffic tables; Intruder's result tables are report-shaped — fixed columns,
+ * every row rendered, no row semantics — and SimpleTable gave them nothing but
+ * static headers. This keeps SimpleTable's footprint (table-frame, density,
+ * plain rows) and adds click-to-sort headers over raw accessor values, which
+ * Burp's results documentation treats as the way to read an attack: "click on
+ * the column header to sort the results".
+ *
+ * Filtering is deliberately not in here: the page filters the rows it passes
+ * (lib/table-filter.ts's filterTableRows) so the count it prints next to the
+ * filter box is computed from the same rows the table renders, by construction,
+ * rather than two implementations that could drift.
+ *
+ * `menuGroups` is the same right-click contract VirtualTable carries, and it is
+ * here for the same reason it is there: a row an operator can read but cannot
+ * act on is a dead end. Intruder's results were exactly that until
+ * burpsy-react-ui-79u. Omit it and the rows render as plain `<tr>`s, which is
+ * what every other caller still gets.
+ */
+export function SortableTable<T>({
+  data,
+  columns,
+  getRowId,
+  ariaLabel,
+  initialSort = [],
+  rowClassName,
+  menuGroups,
+  density: densityProp,
+}: {
+  data: T[];
+  columns: Column<T>[];
+  getRowId: (row: T) => string;
+  ariaLabel: string;
+  initialSort?: SortingState;
+  rowClassName?: (row: T) => string | undefined;
+  menuGroups?: (row: T) => MenuGroup[];
+  density?: "comfortable" | "compact";
+}): JSX.Element {
+  const storeDensity = useApp((state) => state.density);
+  const density = densityProp ?? storeDensity;
+  const [sorting, setSorting] = useState<SortingState>(initialSort);
+  const table = useReactTable({
+    data,
+    columns,
+    state: { sorting },
+    onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getRowId,
+  });
+
+  return (
+    <div className={cn("table-frame", `density-${density}`)} role="group" aria-label={ariaLabel}>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            {table.getHeaderGroups().map((group) => (
+              <tr key={group.id}>
+                {group.headers.map((header) => {
+                  const sorted = header.column.getIsSorted();
+                  const canSort = header.column.getCanSort();
+                  return (
+                    <th
+                      key={header.id}
+                      aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : undefined}
+                    >
+                      {canSort ? (
+                        <button type="button" className="th-sort" onClick={header.column.getToggleSortingHandler()}>
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                          {sorted === "asc" ? (
+                            <ArrowUp size={11} />
+                          ) : sorted === "desc" ? (
+                            <ArrowDown size={11} />
+                          ) : null}
+                        </button>
+                      ) : (
+                        <span className="th-label">
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </span>
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((row) => (
+              <SortableRow
+                key={row.id}
+                row={row}
+                className={rowClassName?.(row.original)}
+                menuGroups={menuGroups}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One `SortableTable` row, optionally wrapped in its right-click menu.
+ *
+ * This is a component and not an inline `.map()` body for the reason `MenuRow` above spells out:
+ * wrapping the `<tr>` inside the callback moves the key onto a child of the mapped element and
+ * leaves the list keyless. `SortableRow` *is* the mapped element, so the key lands on it either
+ * way, and the `<tr>` stays the direct child of `<tbody>`.
+ */
+function SortableRow<T>({
+  row,
+  className,
+  menuGroups,
+}: {
+  row: Row<T>;
+  className?: string;
+  menuGroups?: (row: T) => MenuGroup[];
+}): JSX.Element {
+  const element = (
+    <tr className={className}>
+      {row.getVisibleCells().map((cell) => (
+        <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
+      ))}
+    </tr>
+  );
+  if (!menuGroups) return element;
+  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
+}
+
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
 export function SimpleTable({
   headers,
@@ -549,9 +850,28 @@ export function SimpleTable({
         <table>
           <thead>
             <tr>
-              {headers.map((header) => (
-                <th key={header}>{header}</th>
-              ))}
+              {headers.map((header, index) => {
+                // A header declared "" is this tree's convention for the per-row action column, and
+                // ~15 call sites do it (#proxysettings, #auditqueue, #extenderapis and others all
+                // carried an unnamed <th> before this, burpsy-react-ui-wj9k). The cell is still a
+                // column, and an unnamed column tells a screen-reader user that something is there
+                // and nothing about what it is.
+                //
+                // Named by POSITION, because SimpleTable takes a bare string[] with no id to borrow
+                // and "Actions" would be a claim this component cannot make: one caller's trailing
+                // column is a note field, another's is a menu, and the component sees only a string.
+                //
+                // Keyed by index in the empty case, which also fixes a live React bug — settings.tsx
+                // passes ["Name","Source","Keys set","",""] and two headers of "" were both keyed "",
+                // so the browser logged "Encountered two children with the same key".
+                const empty = header.trim() === "";
+                const name = `Column ${index + 1}`;
+                return (
+                  <th key={empty ? `empty-${index}` : header} scope="col" aria-label={empty ? name : undefined}>
+                    {empty ? <span className="sr-only">{name}</span> : header}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>{children}</tbody>

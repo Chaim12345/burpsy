@@ -45,6 +45,23 @@ const (
 	// OptUnhideHiddenFormFields rewrites `type="hidden"` to `type="text"` on
 	// `<input>` elements, so a hidden field can be edited in the browser.
 	OptUnhideHiddenFormFields OptionKey = "unhide_hidden_form_fields"
+	// OptEnableDisabledFormFields removes the `disabled` attribute from form
+	// controls — input, textarea, select, option, button and the fieldset that
+	// disables its descendants — so a greyed-out control can be used. Burp's
+	// "Enable disabled form fields" (configPanelProxyModificationRules:121).
+	//
+	// Burp renders a "Prominently highlight unhidden fields" sub-option next to
+	// unhide_hidden_form_fields; that sub-option is deliberately not implemented.
+	// It injects marker markup the origin never sent into a body burpsy also
+	// records and passively scans, which unhideHiddenFormFields already rejects
+	// for exactly that reason — the field's type in history is the record of what
+	// happened. The same decision covers highlighting.
+	OptEnableDisabledFormFields OptionKey = "enable_disabled_form_fields"
+	// OptRemoveInputFieldLengthLimits removes `maxlength` attributes from
+	// `<input>` and `<textarea>` elements, so an over-long value can be submitted.
+	// Burp's "Remove input field length limits"
+	// (configPanelProxyModificationRules:129).
+	OptRemoveInputFieldLengthLimits OptionKey = "remove_input_field_length_limits"
 	// OptRemoveObjectTags removes `<object>…</object>` elements and their content.
 	OptRemoveObjectTags OptionKey = "remove_object_tags"
 	// OptRemoveJSFormValidation removes `onsubmit` and `onreset` handler
@@ -56,6 +73,18 @@ const (
 	// OptConvertHTTPSLinks rewrites `https://` to `http://` inside href, src and
 	// action attribute values.
 	OptConvertHTTPSLinks OptionKey = "convert_https_links_to_http"
+	// OptRemoveSecureFlagFromCookies removes the `Secure` attribute from
+	// Set-Cookie response headers, so a session cookie the origin marked
+	// HTTPS-only is transmitted over plaintext HTTP and can be captured. Burp's
+	// "Remove secure flag from cookies" (configPanelProxyModificationRules:169).
+	//
+	// Not a body rule and not in responseRules: it rewrites the head, and it must
+	// reach every response — a gzip body's headers are plaintext, and a JSON
+	// endpoint can set cookies just as an HTML page can — so Content-Type and
+	// Content-Encoding, which gate the body rules, must not gate it. It runs on
+	// the same live option set and is counted by the same counters as the body
+	// rules; like them it cannot reach an HTTP/2 relayed response (NoteRelayedHTTP2).
+	OptRemoveSecureFlagFromCookies OptionKey = "remove_secure_flag_from_cookies"
 	// OptStripAcceptEncoding removes the Accept-Encoding header from requests on
 	// the way out. Burp's own wording for this option ends "(if not unpacking
 	// compressed data)", which is exactly this build's situation: it has no
@@ -87,6 +116,70 @@ const (
 	// — and a response carrying one is counted as SkippedUnsupportedEncoding rather
 	// than reported as unpacked. See internal/httputil.Unpackable.
 	OptUnpackCompressedResponses OptionKey = "unpack_compressed_responses"
+	// OptStripWsExtensions removes the client's Sec-WebSocket-Extensions offer from
+	// an upgrade request before it is forwarded, so the origin cannot negotiate
+	// permessage-deflate and the relayed frames are captured in the clear rather
+	// than as opaque DEFLATE blocks. Burp's
+	// proxy.miscellaneous.strip_sec_websocket_extensions_headers_in_incoming_requests.
+	//
+	// Not a response rule and not applied through ApplyRequest: it rewrites the
+	// handshake, which no other message ever carries, so the strip lives on the
+	// WebSocket path (stripWsHandshake) and reads this set live — the same
+	// set-on/off-without-a-restart contract the response rules have. On by
+	// default, seeded by NewProxyConfig, because a proxy that let the extension
+	// be negotiated would record compressed frames and call them messages.
+	OptStripWsExtensions OptionKey = "strip_sec_websocket_extensions"
+	// OptDontLogOutOfScope decides whether an exchange the scope excludes is
+	// recorded at all — Burp's "don't send items to Proxy history or live tasks,
+	// if out of scope" (configPanelProxyMiscellaneousDontLogOutOfScopeItems), one
+	// third of Burp's Proxy history logging panel, whose other two choices ("Ask
+	// me what to do each time", "Do nothing") have no burpsy equivalent.
+	//
+	// Not a response rule and not in responseRules: it rewrites nothing. It is a
+	// retention decision read live at each record site — the same
+	// set-on/off-without-a-restart contract the rules have — and it deliberately
+	// does not gate what the rules do to the bytes, only whether the exchange
+	// survives them: scope decides what is *retained*, never what is *rewritten*.
+	//
+	// Seeded ON, unlike Burp's default "Do nothing", because this engine has never
+	// retained out-of-scope traffic: every record site has always gated on the
+	// scope verdict. Seeding OFF would silently start writing third-party traffic
+	// to the store on upgrade. The switch's value is the other direction — an
+	// operator who wants Burp's log-everything behaviour can now have it — and the
+	// exchanges it drops are counted (Counters.DroppedOutOfScope) so an empty
+	// history is distinguishable from a mis-set scope.
+	OptDontLogOutOfScope OptionKey = "dont_log_out_of_scope"
+	// OptInvisibleProxy decides whether an origin-form request (`GET /path`) whose
+	// authority arrives only in its Host header is forwarded to that host — Burp's
+	// "Support invisible proxying (enable only if needed)". A non-proxy-aware client
+	// whose DNS points an origin's name at this listener speaks exactly this shape;
+	// with the option off the listener answers 400, which is the honest answer for a
+	// plain proxy that was sent a request it cannot attribute.
+	//
+	// Seeded ON, unlike Burp's default-off, because this engine has always honoured
+	// the Host-header fallback: flipping the default would break working setups on
+	// upgrade in exchange for nothing. The switch exists so the behaviour can be
+	// tightened, and the divergence from Burp's default is deliberate and stated.
+	OptInvisibleProxy OptionKey = "invisible_proxy"
+	// OptStripProxyHeaders removes the Proxy-* header family from incoming
+	// requests before they are forwarded — Burp's
+	// "strip Proxy-* headers in incoming requests"
+	// (configPanelProxyMiscellaneous). These headers are instructions to a proxy
+	// from the client; forwarded to an origin they are smuggling surface, and
+	// Burp strips them for exactly that reason. Seeded ON, unlike Burp's
+	// default-off, because this engine has never forwarded one — flipping the
+	// default would change behaviour on upgrade for nothing. The switch exists
+	// to be able to send them, which is occasionally what a test of an origin's
+	// own Proxy-header handling needs.
+	OptStripProxyHeaders OptionKey = "strip_proxy_headers"
+	// OptSetConnectionClose rewrites the request's Connection header to close
+	// and sets it on the response — Burp's "Set "Connection: close" on
+	// requests and on responses" (configPanelProxyMiscellaneous). Off by
+	// default: the relay already honours the client's own Connection header,
+	// and forcing close on everything trades keep-alive throughput for a
+	// determinism most sessions do not need. When on, both directions close
+	// after one exchange.
+	OptSetConnectionClose OptionKey = "set_connection_close"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -94,13 +187,21 @@ const (
 // caller guess, and so a key added here appears in both without a second edit.
 var OptionKeys = []OptionKey{
 	OptUnhideHiddenFormFields,
+	OptEnableDisabledFormFields,
+	OptRemoveInputFieldLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
 	OptConvertHTTPSLinks,
+	OptRemoveSecureFlagFromCookies,
 	OptStripAcceptEncoding,
 	OptUnpackCompressedRequests,
 	OptUnpackCompressedResponses,
+	OptStripWsExtensions,
+	OptDontLogOutOfScope,
+	OptInvisibleProxy,
+	OptStripProxyHeaders,
+	OptSetConnectionClose,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -126,6 +227,11 @@ var ErrUnknownOption = errors.New("unknown proxy option")
 // arriving in this set would make every response look eligible.
 var responseRules = []OptionKey{
 	OptUnhideHiddenFormFields,
+	// The two form-control rules are placed with unhide rather than in Burp's
+	// render order: all three edit the same controls, and their order relative to
+	// each other cannot matter — each touches a different attribute.
+	OptEnableDisabledFormFields,
+	OptRemoveInputFieldLengthLimits,
 	OptRemoveObjectTags,
 	OptRemoveJSFormValidation,
 	OptRemoveAllJavaScript,
@@ -193,6 +299,17 @@ type Counters struct {
 	// Modified - ModifiedUnrecorded is the number findable in history, by
 	// construction.
 	ModifiedUnrecorded uint64 `json:"responses_modified_unrecorded"`
+	// DroppedOutOfScope counts exchanges the proxy forwarded but did not record
+	// because the scope excluded them while dont_log_out_of_scope was on. It is
+	// the answer to "why is my history empty" that a silent drop cannot give: a
+	// scope typo and a quiet target look identical without it, and an operator
+	// auditing what was retained — or, sharper, what was *not* retained, which is
+	// the whole point of the switch — needs the number.
+	//
+	// It counts drops caused by the switch only. An exchange recorded because the
+	// operator turned the switch off is not a drop, and neither is traffic the
+	// blind CONNECT tunnel cannot see.
+	DroppedOutOfScope uint64 `json:"exchanges_dropped_out_of_scope"`
 }
 
 // Options is the live option set. Safe for concurrent use: the proxy reads it once
@@ -216,6 +333,7 @@ type Options struct {
 	acceptEncodingStripped atomic.Uint64
 	dechunked              atomic.Uint64
 	modifiedUnrecorded     atomic.Uint64
+	droppedOutOfScope      atomic.Uint64
 }
 
 // NewOptions returns an option set with every rule off.
@@ -294,6 +412,7 @@ func (o *Options) Counters() Counters {
 		AcceptEncodingStripped:     o.acceptEncodingStripped.Load(),
 		Dechunked:                  o.dechunked.Load(),
 		ModifiedUnrecorded:         o.modifiedUnrecorded.Load(),
+		DroppedOutOfScope:          o.droppedOutOfScope.Load(),
 	}
 }
 
@@ -310,6 +429,19 @@ func (o *Options) NoteUnrecordedModification() {
 		return
 	}
 	o.modifiedUnrecorded.Add(1)
+}
+
+// NoteOutOfScopeDrop records that one exchange was forwarded but not stored,
+// because the scope excluded it and dont_log_out_of_scope is on.
+//
+// Called by the proxy at each record site it skips for this reason, so the count
+// is the number of exchanges the switch cost the operator, wherever the record
+// decision lives. Turning the switch off stops the counter, not the traffic.
+func (o *Options) NoteOutOfScopeDrop() {
+	if o == nil {
+		return
+	}
+	o.droppedOutOfScope.Add(1)
 }
 
 // NoteRelayedHTTP2 records that one HTTP/2 response went past without the response
@@ -461,12 +593,11 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		}
 	}
 	unpacking := o.flags[OptUnpackCompressedResponses]
+	cookieStrip := o.flags[OptRemoveSecureFlagFromCookies]
 	o.mu.RUnlock()
-	// Unpacking counts as something to do on its own. It is not a rewriting rule — it makes the
-	// response *readable*, in history and in every consumer downstream — so a response that is
-	// decompressed and matched by no rule is still a response this changed, and returning early on
-	// `!any` would have made the switch a no-op unless another box was also ticked.
-	if !any && !unpacking {
+	// The cookie-flag strip counts as something to do on its own, exactly as
+	// unpacking does: it is a rule, only aimed at the head instead of the body.
+	if !any && !unpacking && !cookieStrip {
 		return raw
 	}
 	o.considered.Add(1)
@@ -481,15 +612,20 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		// the whole point of the switch: "the rule found nothing to rewrite" and "the rule was never
 		// allowed to look" were the two states this package was built to distinguish, and a
 		// compressed body was permanently in the second.
+		//
+		// Every early return here still offers the head to the cookie-flag strip first: a gzip
+		// body's headers are plaintext, and a Set-Cookie header is as strippable on a compressed
+		// response as on any other. The strip is the only change that can survive these skips,
+		// because it is the only one that does not depend on reading the body.
 		if !unpacking {
 			o.skippedCompressed.Add(1)
-			return raw
+			return o.headOnlyResult(raw, head, sep, body, cookieStrip)
 		}
 		unpacked, uok := o.unpack(raw, &o.unpackedResponses)
 		if !uok {
 			// unpack counted the reason. SkippedCompressed is added there too, so the panel's
 			// "Skipped: compressed" total still covers every compressed response no rule reached.
-			return raw
+			return o.headOnlyResult(raw, head, sep, body, cookieStrip)
 		}
 		// Re-split, because the head and the framing have both changed. Recursion is deliberately not
 		// used: the message now carries no Content-Encoding, so a second pass could not reach this
@@ -503,13 +639,43 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		if !any {
 			// Decompressed, and no rewriting rule to run. The decompressed message is the result: the
 			// switch's job is to make the body readable, and Modified counts it because the bytes
-			// really did change.
+			// really did change. The cookie-flag strip rides along on the decompressed head, which is
+			// the head the browser actually receives.
+			if head, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
+				o.modified.Add(1)
+				return concatMessage(head, sep, body)
+			}
 			o.modified.Add(1)
 			return raw
 		}
 	}
+	// The cookie-flag strip runs after the unpack branch so it rewrites the head the browser will
+	// receive — the decompressed head, when unpacking happened — and before the body gates, which
+	// must not gate it: Content-Type and Content-Encoding say nothing about whether a Set-Cookie
+	// header is present.
+	headChanged := false
+	if cookieStrip {
+		if newHead, changed := stripSecureCookieAttributes(head, true); changed {
+			head, headChanged = newHead, true
+		}
+	}
+	if !any {
+		// Only the unpacking and cookie switches were enabled, and this response gave them
+		// nothing to do: no Content-Encoding to unpack, no Secure flag to strip. Counted
+		// unchanged rather than silent, on the same principle as every other no-op here.
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
+		o.unchanged.Add(1)
+		return raw
+	}
 	if !isHTMLResponse(head) {
 		o.skippedNotHTML.Add(1)
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
 		return raw
 	}
 
@@ -519,6 +685,14 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 		decoded, ok := dechunk(body)
 		if !ok {
 			o.skippedUnframed.Add(1)
+			// The body rules are out, but the head rule is not: it never needed the body. A
+			// strip that already happened must survive this skip, exactly as it survives the
+			// not-HTML one above — the two skips differ in what they could read, not in
+			// whether the cookie flag is still there to remove.
+			if headChanged {
+				o.modified.Add(1)
+				return concatMessage(head, sep, body)
+			}
 			return raw
 		}
 		plain = decoded
@@ -541,14 +715,32 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 	if enabled[OptUnhideHiddenFormFields] {
 		out = unhideHiddenFormFields(out)
 	}
+	if enabled[OptEnableDisabledFormFields] {
+		out = enableDisabledFormFields(out)
+	}
+	if enabled[OptRemoveInputFieldLengthLimits] {
+		out = removeInputFieldLengthLimits(out)
+	}
 	if enabled[OptConvertHTTPSLinks] {
 		out = convertHTTPSLinks(out)
 	}
 
 	if bytes.Equal(out, plain) {
-		// Nothing fired. Return the original bytes, chunk framing and all: a
-		// response the rules did not change must not be re-framed as a side effect
-		// of having been looked at.
+		// Nothing in the BODY fired. The original bytes go back, chunk framing and all — a
+		// body the rules did not change must not be re-framed as a side effect of having
+		// been looked at.
+		//
+		// The head rule is checked first, and that ordering is the fix for a real bug: this
+		// branch used to return `raw` unconditionally, so with a body rule ticked and nothing
+		// for it to match, a Set-Cookie Secure flag the operator had asked to strip was
+		// silently kept — and the response was counted `unchanged`, which said the option had
+		// nothing to do when in fact it had done the work and had the result thrown away.
+		// Every other skip path already offered the head its change first; this one and the
+		// unparseable-chunking one are the two that did not.
+		if headChanged {
+			o.modified.Add(1)
+			return concatMessage(head, sep, body)
+		}
 		o.unchanged.Add(1)
 		return raw
 	}
@@ -628,6 +820,134 @@ func unhideHiddenFormFields(body []byte) []byte {
 
 func convertHTTPSLinks(body []byte) []byte {
 	return reHTTPSAttribute.ReplaceAll(body, []byte(`${1}http://`))
+}
+
+// enableDisabledFormFields and removeInputFieldLengthLimits each delete one
+// attribute from the form controls that carry it, in each of the spellings HTML
+// allows: bare (`disabled`), `disabled="disabled"`, `disabled='disabled'`, and
+// with whitespace around the `=`. RE2 has no backreferences and the value is
+// always the attribute's own name, so one pattern per attribute covers every
+// quoting style the way the hidden-type rule above covers them with three.
+//
+// The controls listed are the ones the HTML spec defines `disabled` on; a
+// `disabled` on anything else is not a form control and is left alone.
+var (
+	// The trailing `([\s/>])` plays the part a lookahead would: it guarantees the
+	// word ended — `disabled` must not match inside `disabledx` or a value's
+	// continuation — and is written back unchanged through ${3}.
+	//
+	// The prefix is `tagPrefix`, not `[^>]*?`, and that is the whole correctness of these two
+	// rules. `[^>]*?` can stop anywhere, including in the middle of a quoted attribute VALUE, so
+	// these deleted the word `disabled` out of ordinary prose:
+	//
+	//	<input type="text" title="temporarily disabled sorry">
+	//	-> <input type="text" title="temporarily sorry">
+	//
+	// — silently corrupting a page the operator was reading, in a rule they had enabled for an
+	// unrelated reason (burpsy-react-ui-q1cm). Burp's implementation is parser-based and does not
+	// touch text.
+	//
+	// RE2 has no lookbehind and no backreferences, so "not inside a quoted value" cannot be
+	// asserted directly. tagPrefix gets there structurally instead: it consumes either a character
+	// that is not a quote or `>`, or an ENTIRE quoted run. It therefore cannot stop part-way
+	// through a value — it either takes the whole thing or stops before it opens.
+	reDisabledAttribute  = regexp.MustCompile(`(?is)(<(?:input|textarea|select|option|button|fieldset)\b` + tagPrefix + `)\s+disabled(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+	reMaxlengthAttribute = regexp.MustCompile(`(?is)(<(?:input|textarea)\b` + tagPrefix + `)\s+maxlength(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?([\s/>])`)
+)
+
+// tagPrefix matches the attributes between a tag name and the attribute a rule is looking for,
+// treating a quoted value as one indivisible unit. See reDisabledAttribute for why that matters.
+const tagPrefix = `(?:[^>"']|"[^"]*"|'[^']*')*?`
+
+func enableDisabledFormFields(body []byte) []byte {
+	return reDisabledAttribute.ReplaceAll(body, []byte(`${1}${3}`))
+}
+
+func removeInputFieldLengthLimits(body []byte) []byte {
+	return reMaxlengthAttribute.ReplaceAll(body, []byte(`${1}${3}`))
+}
+
+// stripSecureCookieAttributes removes the `Secure` attribute from every
+// Set-Cookie header in a response head. It reports false, and changes nothing,
+// when no header carried one — so a head the rule did not touch is never
+// rebuilt, and the caller can return the original bytes.
+//
+// Only an attribute that is exactly `Secure` (case-insensitive) is removed: a
+// cookie *value* that merely contains the letters, or another attribute such as
+// `SiteSafe`, survives. Other headers are not examined, so a body or a
+// non-cookie header mentioning "Secure" cannot be touched by a rule aimed at
+// cookie flags.
+func stripSecureCookieAttributes(head []byte, enabled bool) ([]byte, bool) {
+	if !enabled {
+		return head, false
+	}
+	changed := false
+	lines := bytes.Split(head, []byte("\n"))
+	for i, line := range lines {
+		if i == 0 {
+			continue // the status line cannot carry a cookie
+		}
+		trimmed := bytes.TrimRight(line, "\r")
+		if len(trimmed) < len("set-cookie:") {
+			continue
+		}
+		name, value, found := bytes.Cut(trimmed, []byte(":"))
+		if !found || !strings.EqualFold(string(name), "set-cookie") {
+			continue
+		}
+		parts := strings.Split(string(value), ";")
+		kept := parts[:0]
+		stripped := false
+		for _, part := range parts {
+			if strings.EqualFold(strings.TrimSpace(part), "secure") {
+				stripped = true
+				continue
+			}
+			kept = append(kept, part)
+		}
+		if !stripped {
+			continue
+		}
+		changed = true
+		newLine := append(bytes.Clone(name), ':')
+		newLine = append(newLine, strings.Join(kept, ";")...)
+		if bytes.HasSuffix(line, []byte("\r")) {
+			newLine = append(newLine, '\r')
+		}
+		lines[i] = newLine
+	}
+	if !changed {
+		return head, false
+	}
+	return bytes.Join(lines, []byte("\n")), true
+}
+
+// headOnlyResult answers a response whose body rules could not or did not run,
+// but whose head the cookie-flag strip may have changed. When the strip changed
+// nothing the original bytes come back untouched; when it did, the new head is
+// spliced onto the untouched body and the change is counted as a modification —
+// the message the client receives is not the message the origin sent, which is
+// the definition every counter here is written around.
+//
+// The body is spliced verbatim, framing included: no header describing it
+// changed, so no framing decision is made on its behalf.
+func (o *Options) headOnlyResult(raw, head, sep, body []byte, cookieStrip bool) []byte {
+	if newHead, changed := stripSecureCookieAttributes(head, cookieStrip); changed {
+		o.modified.Add(1)
+		return concatMessage(newHead, sep, body)
+	}
+	return raw
+}
+
+// concatMessage splices a head back onto a body with the separator that divided
+// them. Used where only the head changed: rebuild would recompute
+// Content-Length and normalise framing, and a body that was not edited must not
+// be re-framed as a side effect of its head being edited.
+func concatMessage(head, sep, body []byte) []byte {
+	out := make([]byte, 0, len(head)+len(sep)+len(body))
+	out = append(out, head...)
+	out = append(out, sep...)
+	return append(out, body...)
 }
 
 // ---- message surgery -----------------------------------------------------------
@@ -730,6 +1050,112 @@ func removeHeader(raw []byte, name string) ([]byte, bool) {
 	out.Write(sep)
 	out.Write(body)
 	return out.Bytes(), true
+}
+
+// stripProxyHeaderFamily deletes every header whose name begins with "Proxy-" from a
+// request — Burp's "strip Proxy-* headers in incoming requests". The prefix match is
+// the point: the family (Proxy-Connection, Proxy-Authorization, …) is defined by the
+// prefix, not by a closed list.
+func stripProxyHeaderFamily(raw []byte) ([]byte, bool) {
+	head, body, sep, ok := splitMessage(raw)
+	if !ok {
+		return raw, false
+	}
+	crlf := bytes.Contains(head, []byte("\r\n"))
+	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
+	lines := bytes.Split(normalised, []byte("\n"))
+
+	kept := make([][]byte, 0, len(lines))
+	removed := false
+	for i, line := range lines {
+		if i > 0 && strings.HasPrefix(strings.ToLower(string(line)), "proxy-") {
+			removed = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !removed {
+		return raw, false
+	}
+	eol := []byte("\n")
+	if crlf {
+		eol = []byte("\r\n")
+	}
+	var out bytes.Buffer
+	out.Grow(len(raw))
+	for i, line := range kept {
+		if i > 0 {
+			out.Write(eol)
+		}
+		out.Write(line)
+	}
+	out.Write(sep)
+	out.Write(body)
+	return out.Bytes(), true
+}
+
+// forceConnectionClose rewrites the request's Connection header to "close" (adding one
+// when absent) — Burp's "Set Connection: close on requests and on responses". The
+// response half is the relay's job: it closes after one exchange when this option is on.
+func forceConnectionClose(raw []byte) []byte {
+	head, body, sep, ok := splitMessage(raw)
+	if !ok {
+		return raw
+	}
+	crlf := bytes.Contains(head, []byte("\r\n"))
+	normalised := bytes.ReplaceAll(head, []byte("\r\n"), []byte("\n"))
+	lines := bytes.Split(normalised, []byte("\n"))
+
+	found := false
+	for i, line := range lines {
+		if i > 0 && strings.HasPrefix(strings.ToLower(string(line)), "connection:") {
+			if strings.EqualFold(strings.TrimSpace(string(line[len("connection:"):])), "close") {
+				return raw
+			}
+			lines[i] = []byte("Connection: close")
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, []byte("Connection: close"))
+	}
+	eol := []byte("\n")
+	if crlf {
+		eol = []byte("\r\n")
+	}
+	var out bytes.Buffer
+	out.Grow(len(raw) + 24)
+	for i, line := range lines {
+		if i > 0 {
+			out.Write(eol)
+		}
+		out.Write(line)
+	}
+	out.Write(sep)
+	out.Write(body)
+	return out.Bytes()
+}
+
+// ApplyRequestEgress runs the two Miscellaneous knobs that shape an outgoing request:
+// strip Proxy-* headers (Burp's configPanelProxyMiscellaneous strip) and set
+// Connection: close. Called by the relay after Match & Replace and intercept — on the
+// bytes that will actually go on the wire, so what the operator edits and what history
+// records stay one set.
+func (o *Options) ApplyRequestEgress(raw []byte) []byte {
+	if o == nil {
+		return raw
+	}
+	out := raw
+	if o.Get(OptStripProxyHeaders) {
+		if stripped, changed := stripProxyHeaderFamily(out); changed {
+			out = stripped
+		}
+	}
+	if o.Get(OptSetConnectionClose) {
+		out = forceConnectionClose(out)
+	}
+	return out
 }
 
 // rebuild reassembles a message around a new body, fixing Content-Length and — when

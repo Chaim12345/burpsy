@@ -211,6 +211,11 @@ type CoverageReport struct {
 	Checks []CheckCoverage `json:"checks"`
 	// Skips holds one count per ScanSkip reason, in ScanSkipAll order.
 	Skips []SkipCount `json:"skips"`
+	// UndecodedBodies counts responses the checks ran on with a body this build could not decode
+	// (br, zstd, a chain of encodings, a broken stream) — so they matched encoded bytes. Not a skip:
+	// header checks still ran. A caveat: a clean result on one of these is not evidence the body is
+	// clean (burpsy-react-ui-jgnf).
+	UndecodedBodies uint64 `json:"undecoded_bodies"`
 }
 
 // Count reports how many loaded checks are in state.
@@ -277,6 +282,13 @@ type CoverageTracker struct {
 	// Scan increments exactly one counter and nothing else, so there is no batch to fold in the
 	// way RecordScan folds a whole check set.
 	skips [4]atomic.Uint64
+	// undecoded counts scans over a body that could not be decoded; see CoverageReport.UndecodedBodies.
+	undecoded atomic.Uint64
+}
+
+// RecordUndecoded records one scan over a body this build could not decode.
+func (t *CoverageTracker) RecordUndecoded() {
+	t.undecoded.Add(1)
 }
 
 // NewCoverageTracker makes one record per check, named and zeroed, in the same order as the
@@ -332,5 +344,5 @@ func (t *CoverageTracker) Snapshot() CoverageReport {
 			Count:  t.skips[s.slot()].Load(),
 		})
 	}
-	return CoverageReport{Checks: checks, Skips: skips}
+	return CoverageReport{Checks: checks, Skips: skips, UndecodedBodies: t.undecoded.Load()}
 }

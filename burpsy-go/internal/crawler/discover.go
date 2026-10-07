@@ -45,6 +45,7 @@ package crawler
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/bits"
 	"net/url"
 	"sort"
@@ -68,6 +69,15 @@ type discoveredLink struct {
 	text string
 	// tag is the element it came from, for reporting.
 	tag string
+	// foundAtRendered marks a link that existed only in the DOM a browser built for the page
+	// (Config.Render) — invisible to the wire markup the static parse reads (nx7b). The frontier
+	// item carries it onto the Fetch edge, so the crawl-paths view can say which edges a
+	// browser-less crawl would not have found at all.
+	foundAtRendered bool
+	// speculative marks a candidate the speculative-hidden-link phase mined from a comment
+	// or script body (burpsy-react-ui-t5m0) rather than a navigational element. It changes
+	// nothing about which gates the link passes — only that the crawl-wide cap counts it.
+	speculative bool
 }
 
 // formField is one name/value pair a submitted form would carry.
@@ -95,17 +105,77 @@ type discoveredForm struct {
 	hasFileInput bool
 }
 
+// signature is the form's identity for the per-form submission cap (burpsy-react-ui-u0k3).
+//
+// Method, the action resolved but untemplated, and the field NAMES sorted. discover.go:282-285 puts
+// the same three parts in the location skeleton, and for the same reason: a search box submitted with
+// a different query is still the SAME form, and a cap that counted those separately would bound nothing
+// on exactly the page that needs a bound.
+//
+// The field's input TYPE is not in the signature. The location skeleton reads it from the DOM
+// attribute; formField carries only name and value, because the values are what a submission sends and
+// this package does not keep the rest. A form whose only difference is text-vs-number input would
+// therefore share a cap — which is the conservative direction, since one cap is tighter than two.
+//
+// Values are excluded. A CSRF token or a session id is a value, and counting on it would make every
+// submission look like a different form.
+func (f discoveredForm) signature(base *url.URL) string {
+	var b strings.Builder
+	b.WriteString(f.method)
+	b.WriteByte(' ')
+	if f.action == "" {
+		// An empty action submits to the document's own URL (admitForm says the same), so two forms
+		// with empty actions on different pages are different forms.
+		if base != nil {
+			b.WriteString(base.String())
+		}
+	} else if u, err := resolveAgainst(base, f.action); err == nil {
+		b.WriteString(u.String())
+	} else {
+		// Unresolvable: admitForm will refuse it as malformed, and a signature that cannot be
+		// computed must not collide with every other unresolvable form's.
+		b.WriteString(f.action)
+	}
+	names := make([]string, 0, len(f.fields))
+	for _, fld := range f.fields {
+		names = append(names, fld.name)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		b.WriteByte('!')
+		b.WriteString(n)
+	}
+	return b.String()
+}
+
 // pageStructure is everything one response contributed.
 type pageStructure struct {
 	links []discoveredLink
 	forms []discoveredForm
 	// fingerprint identifies the location by its structure — see fingerprint.go.
 	fingerprint string
+	// shape is the same four components EXCEPT the link targets, hashed. Two pages that agree on
+	// it differ only in where they point, which is the one axis the tolerance band may tolerate —
+	// see location_band.go. Empty when the body could not be parsed, which is why an empty shape
+	// can never be folded into anything.
+	shape string
+	// linkTargets are the outgoing navigation targets, sorted and RAW — the same slice the
+	// fingerprint is built over, kept so the band can compare it against a known location's
+	// without walking the document a second time.
+	linkTargets []string
 	// dropped counts links and forms discarded at the per-page bound. Counted, never silently
 	// absent.
 	dropped int
 	// truncated records that the body was longer than the parse bound, so its tail was not walked.
 	truncated bool
+	// sourceMap is the //# sourceMappingURL a SCRIPT named, relative to that script, or empty.
+	//
+	// Kept as a reference rather than fetched during the parse, because parsePage is pure: it reads a
+	// body and returns locations, and a parse that sent a request would make every caller of it
+	// responsible for the egress. The fetch happens once per script in the crawl loop, through the
+	// ordinary perform() path, so the map is scope-authorised, rate-limited and captured like any
+	// other request — which is what keeps criterion 3 of jwy5 honest.
+	sourceMap string
 }
 
 // parsePage walks one HTML body for links, forms and the location skeleton.
@@ -117,7 +187,16 @@ type pageStructure struct {
 // html.Parse only fails on a read error, which a bytes.Reader cannot produce, so there is no
 // malformed-document path here: a broken document yields whatever the parsing algorithm's error
 // recovery produces, which is what a browser would have seen.
-func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
+// parsePage walks one response body for navigational links and forms. speculative
+// additionally collects the non-visible text a browser never renders — HTML comments and
+// script bodies — and mines it for URL-shaped candidates: the speculative-hidden-link
+// phase (burpsy-react-ui-t5m0), Burp's "Follow hidden links in comments and JavaScript".
+//
+// The candidates are returned as ordinary discoveredLinks and admitted through the same
+// gates as a navigational link (scope, destructive, query, depth), never as privileged
+// seeds — a comment that says /logout is still a logout. What distinguishes them is only
+// their provenance (the tag) and the crawl-wide cap that bounds how many are admitted.
+func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) pageStructure {
 	out := pageStructure{}
 	if len(body) > limits.MaxParseBytes {
 		body = body[:limits.MaxParseBytes]
@@ -146,6 +225,10 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 	var linkTargets []string
 	textLen := 0
 	admitted := 0
+	// specText collects the non-visible text the speculative phase mines (burpsy-react-ui-t5m0):
+	// HTML comments and script bodies. Only collected when the phase is on — a crawl that
+	// declined it has no business reading the bytes.
+	var specText strings.Builder
 	// admit reports whether one more link or form may be taken, counting the refusals.
 	admit := func() bool {
 		if admitted >= limits.MaxLinksPerPage {
@@ -158,6 +241,14 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 
 	var walk func(n *html.Node, depth int)
 	walk = func(n *html.Node, depth int) {
+		if n.Type == html.CommentNode {
+			// An HTML comment is invisible to a browser and is exactly where a hidden path
+			// leaks: `<!-- /adminpanel -->`. Mined only when the speculative phase is on.
+			if speculative {
+				specText.WriteString(n.Data)
+				specText.WriteByte(' ')
+			}
+		}
 		if n.Type == html.TextNode {
 			// Visible text length only, and only as a coarse bucket later. Text *content* is the most
 			// ephemeral thing on a page, and its length is the least ephemeral thing about it.
@@ -201,6 +292,93 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: n.Data})
 					}
 				}
+			// button/input[formaction] (burpsy-react-ui-u967). A styled button carrying its form
+			// target in formaction is how a modern app submits without a form element, so a page
+			// whose only action is such a button contributed no link at all. `formaction`
+			// OVERRIDES the enclosing form's action for that control, which is why it is read as a
+			// navigation target in its own right rather than folded into the form signature.
+			case "button", "input":
+				if fa, ok := attr(n, "formaction"); ok && fa != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, fa))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: fa, text: linkText(n), tag: n.Data + "[formaction]"})
+					}
+				}
+			// math[href] — MathML's own link element, which the HTML walk never saw.
+			case "math":
+				if href, ok := attr(n, "href"); ok {
+					linkTargets = append(linkTargets, resolvedTarget(effective, href))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: href, text: linkText(n), tag: "math"})
+					}
+				}
+			// object[data] and embed[src] carry embedded documents — a PDF viewer, an SVG, a
+			// Flash-era movie. They are fetches the crawler never made, and the embedded document
+			// has its own locations.
+			case "object":
+				if data, ok := attr(n, "data"); ok && data != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, data))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: data, text: linkText(n), tag: "object"})
+					}
+				}
+			case "embed":
+				if src, ok := attr(n, "src"); ok && src != "" {
+					linkTargets = append(linkTargets, resolvedTarget(effective, src))
+					if admit() {
+						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: "embed"})
+					}
+				}
+			case "script":
+				// An EXTERNAL script is fetched so its contents can be read for locations
+				// (burpsy-react-ui-jwy5): a SPA's routes live in its bundles, and before this a
+				// <script src> was never followed at all, so the JavaScript reader had nothing to read.
+				// It is admitted as a discovered link through the same gates as any other — scope,
+				// dedup, depth — and deliberately NOT added to linkTargets: a page's location
+				// fingerprint is its navigational structure, and folding its asset list into it would
+				// make two identical pages look different whenever a bundle hash changed.
+				if src, ok := attr(n, "src"); ok && strings.TrimSpace(src) != "" && admit() {
+					out.links = append(out.links, discoveredLink{raw: src, tag: "script"})
+				}
+				// A script body is the other place a hidden path lives — a single-page app's
+				// router table is a list of URL strings inside a <script> block. The script's
+				// own text is not rendered, so it is invisible to the wire read and to the
+				// location fingerprint alike. Mined only when the speculative phase is on.
+				if speculative {
+					specText.WriteString(nodeText(n))
+					specText.WriteByte(' ')
+					// A script's own source map — the one artifact in a minified bundle that
+					// recovers the original paths and source.
+					//
+					// The BASE differs by script kind and getting it wrong is a 404 either way:
+					// an INLINE script has no src of its own, so its reference resolves against
+					// the PAGE; an EXTERNAL one resolves against ITS OWN url, so a bundle served
+					// from /static/js/main.js naming "main.js.map" is /static/js/main.js.map and
+					// not /main.js.map.
+					//
+					// An absolute reference is taken AS WRITTEN. It names a host the crawl may not
+					// cover, and rewriting it against the page would invent a same-host URL that does
+					// not exist. Whether that host may be fetched is the scope gate's decision, made
+					// later, on the real URL.
+					if out.sourceMap == "" {
+						// scriptBody, not n.Data: n is the ELEMENT node and its text lives in a
+						// child, so an element with several children needs them all joined rather than
+						// reading one. A script body split across several text nodes — which is what an
+						// HTML parser produces for a minified bundle with an inline map — still yields
+						// its marker.
+						if ref := sourceMapReference(scriptBody(n)); ref != "" {
+							base := effective
+							if src, ok := attr(n, "src"); ok && src != "" {
+								if scriptURL, rerr := resolveAgainst(effective, src); rerr == nil {
+									base = scriptURL
+								}
+							}
+							if resolved, merr := resolveAgainst(base, ref); merr == nil {
+								out.sourceMap = resolved.String()
+							}
+						}
+					}
+				}
 			case "form":
 				f := readForm(n)
 				// A form's signature: method, its action resolved but untemplated, and its field
@@ -223,7 +401,21 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 	}
 	walk(doc, 0)
 
-	out.fingerprint = locationFingerprint(skeleton.String(), linkTargets, textLen)
+	// Sorted ONCE and handed to both the fingerprint and the tolerance band, so neither re-sorts
+	// the crawl's hottest list and the band compares the same order the fingerprint hashed.
+	sort.Strings(linkTargets)
+	out.linkTargets = linkTargets
+	skel := skeleton.String()
+	out.fingerprint = locationFingerprint(skel, linkTargets, textLen)
+	out.shape = shapeDigest(skel, textLen)
+	// The speculative phase (burpsy-react-ui-t5m0): mine the non-visible text for
+	// URL-shaped candidates and admit them as ordinary links — same gates, same
+	// frontier, distinguished only by the tag and bounded by the crawl-wide cap.
+	if speculative {
+		for _, raw := range speculativeURLFields(specText.String()) {
+			out.links = append(out.links, discoveredLink{raw: raw, tag: "speculative", speculative: true})
+		}
+	}
 	return out
 }
 
@@ -235,6 +427,21 @@ func parsePage(body []byte, base *url.URL, limits Limits) pageStructure {
 // `action` is here rather than in the raw target list because a form's action is part of its
 // signature; the raw list covers navigational links.
 var structuralAttrs = [...]string{"name", "type", "method", "action", "rel"}
+
+// What is deliberately NOT read (burpsy-react-ui-u967), and why:
+//
+//   - `onclick` and the other inline handlers. Burp's own handling of an inline handler is not
+//     recoverable from the evidence base, and a guessed JavaScript URL parser would invent
+//     locations: `onclick="doThing()"` is not a URL, `onclick="location='/x'"` is. Reading some
+//     and not others, on a heuristic this project cannot cite, is exactly the fabrication the
+//     refusal-first design exists to prevent. A handler-delivered link is found by the rendered
+//     pass instead (nx7b), which executes the page and reads the DOM a browser produced.
+//   - `<meta http-equiv="refresh">`. Redirect handling here is explicit (`understand_meta_refresh_tag`
+//     is a Burp config key burpsy does not implement), and following it would make the crawl's
+//     fetch list disagree with the redirect policy the rest of the tree enforces.
+//   - `classid`, `archive` and `codebase` on `<object>`. They name plugin binaries and Java
+//     archives, not web locations, and a crawl that fetched them would be requesting files the
+//     application never exposed as URLs.
 
 // sortedFieldSignature is a form's `name:type` pairs, sorted, with no values.
 //
@@ -277,18 +484,21 @@ func resolvedTarget(base *url.URL, raw string) string {
 
 // locationFingerprint combines the four components into one hash.
 //
+// sortedLinkTargets must already be sorted, and the tolerance band needs that same sorted slice to
+// compare against a known location (see location_band.go), so parsePage sorts once and both read
+// it. Sorting again here would be a second pass over the crawl's hottest list for no gain, and two
+// readers disagreeing about the order is the kind of thing that reads as a duplicate-location bug
+// later.
+//
 // The text-length bucket is log2, so a page whose body grew by a paragraph is the same location and a
 // page with ten times the content is not. Coarse on purpose: exact length would make every render
 // with a different user name a new location.
-func locationFingerprint(skeleton string, linkTargets []string, textLen int) string {
-	sorted := make([]string, len(linkTargets))
-	copy(sorted, linkTargets)
-	sort.Strings(sorted)
+func locationFingerprint(skeleton string, sortedLinkTargets []string, textLen int) string {
 	var b strings.Builder
 	b.WriteString(skeleton)
 	b.WriteString("\n>>")
-	b.WriteString(strings.Join(sorted, "\n"))
-	b.WriteString("\n##")
+	b.WriteString(strings.Join(sortedLinkTargets, "\n"))
+	b.WriteString(shapeSeparator)
 	b.WriteString(strconv.Itoa(bits.Len(uint(textLen))))
 	return hashSkeleton(b.String())
 }
@@ -322,6 +532,69 @@ func attr(n *html.Node, name string) (string, bool) {
 
 // linkText is what the destructive check reads: the element's descendant text, plus its title and
 // aria-label. See the package docs for why the accessible names are included.
+// nodeText is an element's descendant text, whitespace-normalised. Used for the
+// speculative phase's script bodies — the element's own text is what a browser would
+// have executed, and what a hidden-path scan reads.
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(m *html.Node) {
+		if m.Type == html.TextNode {
+			b.WriteString(m.Data)
+		}
+		for c := m.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// speculativeURLFields splits non-visible text into URL-shaped candidates: absolute
+// http(s) URLs and root-relative paths. The two shapes are what a comment or a script
+// body actually carries when it leaks a location (`<!-- /adminpanel -->`,
+// `var base = "https://internal.example"`); anything else in a script — a JS string,
+// a number, an identifier — is not a location, and reading it as one would flood the
+// frontier with the application's own vocabulary.
+//
+// Tokens are cut on whitespace and the characters that frame a URL in prose or code,
+// then trailing punctuation is trimmed (a sentence's period is not part of the path).
+// Absolute URLs are matched by scheme; a path is only read when it starts with "/" and
+// is not the scheme-relative "//" — those resolve against the page like any other
+// relative target, which is the same gate a navigational link passes.
+func speculativeURLFields(text string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, tok := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r' ||
+			r == '"' || r == '\'' || r == '<' || r == '>' ||
+			r == '(' || r == ')' || r == ',' || r == '`'
+	}) {
+		// Trailing punctuation is trimmed — a sentence's period is not part of the path — but `}`
+		// must NOT be: it closes the `{id}` segment every SPA router uses, and trimming it turned
+		// `/orders/{id}` into `/orders/{id`, which is a URL that does not exist. A `}` is only stripped
+		// when the token has no unclosed `{` before it, so prose ending in a brace keeps its
+		// punctuation and a route keeps its segment.
+		raw := strings.TrimRight(tok, ".,;:!?]")
+		if strings.HasSuffix(raw, "}") && strings.Count(raw, "{") > strings.Count(raw, "}") {
+			raw = strings.TrimRight(raw, ".,;:!?") + "}"
+		}
+		if raw == "" {
+			continue
+		}
+		isAbs := strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
+		isPath := strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//")
+		if !isAbs && !isPath {
+			continue
+		}
+		if !seen[raw] {
+			seen[raw] = true
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 func linkText(n *html.Node) string {
 	var b strings.Builder
 	collectText(n, &b)
@@ -565,4 +838,90 @@ func fillValue(typ, existing string) string {
 		return ""
 	}
 	return fillerText
+}
+
+// sourceMapReference extracts a //# sourceMappingURL from a script body.
+//
+// The LAST such comment wins, not the first. A build that concatenates several bundles into one file
+// emits one per input, and the last is the one describing the combined output — the file the operator
+// actually has. Taking the first would fetch a map for a component that is not there.
+//
+// An INLINE map (data:application/json;base64,...) is deliberately not returned: it is already in the
+// body the caller holds, so there is nothing to fetch, and handing a multi-kilobyte data URL back as a
+// "URL" would put it through the resolver and the scope gate for no reason.
+func sourceMapReference(script string) string {
+	// Both spellings, because both ship: "//# sourceMappingURL=x.map" is the common one and
+	// "/*# sourceMappingURL=x.map */" appears in builds that wrap the bundle. Looking only for the
+	// first missed every such build, which is what the table test caught.
+	i := strings.LastIndex(script, "//# sourceMappingURL=")
+	tail := "//# sourceMappingURL="
+	if j := strings.LastIndex(script, "/*# sourceMappingURL="); j > i {
+		i, tail = j, "/*# sourceMappingURL="
+	}
+	if i < 0 {
+		return ""
+	}
+	ref := strings.TrimSpace(script[i+len(tail):])
+	// The comment runs to the end of its LINE, not of the file — a bundle with code after the marker
+	// would otherwise hand back everything that follows it as one "path".
+	if nl := strings.IndexAny(ref, "\r\n"); nl >= 0 {
+		ref = strings.TrimSpace(ref[:nl])
+	}
+	// The block-comment form exists in the wild and is the same fact written differently.
+	ref = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(ref, "/*"), "*/"))
+	if ref == "" || strings.HasPrefix(ref, "data:") {
+		return ""
+	}
+	return ref
+}
+
+// scriptBody returns the concatenated TEXT of a script element.
+//
+// Its own walk rather than nodeText, which deliberately EXCLUDES script contents
+// (discover.go:554-556 — a minified bundle inside a <noscript> fallback must not become a link's
+// label). That exclusion is right for a link label and wrong here: the sourceMappingURL marker lives
+// in exactly the text nodeText refuses to read.
+func scriptBody(n *html.Node) string {
+	var b strings.Builder
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.TextNode {
+			b.WriteString(c.Data)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// sourceMapSourcesContent returns one source map's sourcesContent entries joined as one text, or
+// "" when the map carries none.
+//
+// A source map is JSON, and this reader is deliberately minimal: it asks for the `sourcesContent`
+// array only, and each entry contributes its text. Nothing else in the map is read — `sources` is a
+// file list, never a set of URLs (see mineSourceMapBody for why admitting those would flood the
+// frontier), `names` is a symbol table, `mappings` is VLQ soup no string miner should try to
+// interpret.
+//
+// encoding/json rather than a hand parser, because the one thing this reader must not do is invent
+// content a malformed map does not carry. Unmarshal into a struct with the one field that matters: a
+// truncated or non-JSON body yields the zero value, which is the honest empty — the map was fetched,
+// the report counts it, and there was nothing in it to find.
+func sourceMapSourcesContent(body []byte) string {
+	var m struct {
+		SourcesContent []string `json:"sourcesContent"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	if len(m.SourcesContent) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, src := range m.SourcesContent {
+		if src == "" {
+			continue
+		}
+		b.WriteString(src)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

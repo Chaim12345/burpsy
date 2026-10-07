@@ -39,7 +39,10 @@ func (ctx *cliContext) saveState() error {
 	}
 	p := ctx.persist
 	p.SaveScope(ctx.scope.Rules())
-	p.SaveMatchRules(ctx.mr.Rules(), ctx.mr.UpdateContentLength())
+	p.SaveMatchRules(ctx.mr.Rules(), persist.MatchRuleSettings{
+		UpdateContentLength: ctx.mr.UpdateContentLength(),
+		InScopeOnly:         ctx.mr.InScopeOnly(),
+	})
 	p.SaveSessionRules(ctx.sess.AllRules())
 	p.SaveOrganizer(ctx.organizer.List())
 	return nil

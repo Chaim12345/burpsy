@@ -171,11 +171,100 @@ const (
 	// was refused, a recovery was attempted and did not succeed, and the two read very differently in a
 	// report.
 	SkipReloginFailed
+	// SkipRenderUnavailable means the response was HTML and would have had a rendered-DOM second
+	// pass, but the render hook the crawl was given failed for this URL — no browser, a dead browser,
+	// a navigation error. Its own reason rather than silence, because the rendered pass is the only
+	// place a single-page application's routes exist at all: a crawl that wanted the rendered view
+	// and did not get it is narrower than its counts say, and the operator must be able to see by how
+	// much. See Config.Render (burpsy-react-ui-nx7b).
+	SkipRenderUnavailable
+	// SkipSitemapUnparsed means a response that LOOKED like a sitemap — by its content type or by
+	// the element names in its own body — could not be decoded as one. It is a distinct reason
+	// because the alternative is the defect this bead is about: a sitemap fetched, stored, scanned
+	// and reported as a non-HTML body, indistinguishable from a target that published no URL list
+	// at all. The operator's two possible causes (a gzipped sitemap, a truncated fetch) are both
+	// things they can see and act on, so the crawl must be able to tell them apart
+	// (burpsy-react-ui-qjtx).
+	SkipSitemapUnparsed
+	// SkipJSONUnparsed means a response that looked like JSON — by its content type or by its own
+	// opening brace — could not be decoded as one, so the locations it might name were not
+	// followed. Distinct from SkipNotHTML for the same reason SkipSitemapUnparsed is: "this is
+	// not JSON" and "this is JSON I could not read" have different remedies, and folding them
+	// together is the defect mz1n is about (burpsy-react-ui-mz1n).
+	SkipJSONUnparsed
+	// SkipSpeculativeLimit means a speculative-phase candidate (a URL mined from a comment or
+	// script body, burpsy-react-ui-t5m0) was refused because the crawl-wide speculative cap
+	// was spent. It is a phase bound, not a property of the target: the remedy is raising
+	// maximum_speculative_links, which is why it is its own reason rather than a frontier-full
+	// variant — the two have different causes and different fixes.
+	SkipSpeculativeLimit
+	// SkipAPIUnparsed means a response that announced itself as an API DEFINITION — an OpenAPI or
+	// Swagger document, a SOAP WSDL — could not be read, so the endpoints it declares were never
+	// admitted. Its own reason, and not SkipJSONUnparsed, for the same reason that one is distinct
+	// from SkipNotHTML: the three answers have three different remedies.
+	//
+	// "this was not an API document" is the absence of a thing and is not a skip at all.
+	// "this was JSON I could not read" is a truncated or mislabelled fetch.
+	// "this was an API definition I could not read" is a document the operator almost certainly wants
+	// to know about — it is the one case where the target PUBLISHED its API surface and the crawl
+	// still cannot see it. Reporting it as zero endpoints would tell the operator their target has
+	// no API, which is the exact failure burpsy-react-ui-bwwg exists to stop.
+	SkipAPIUnparsed
+	// SkipGraphQLUnparsed means a response that WAS a GraphQL introspection answer could not be read,
+	// so the operations it named were not crawled. Distinct from the absence of a GraphQL endpoint,
+	// which is not a skip at all: almost every URL a crawl touches is not GraphQL, and a refusal per
+	// non-GraphQL URL would bury the one that mattered. This reason fires only where the endpoint
+	// answered with a schema the crawl could not parse (burpsy-react-ui-bwwg).
+	SkipGraphQLUnparsed
+	// SkipGraphQLIntrospection means a GraphQL probe was NOT sent: the crawl-wide request bound was
+	// already spent. Its own reason because the request never went out, and a report that said
+	// "0 GraphQL endpoints found" without it would read as "this target has none" when the crawl
+	// simply ran out of budget first.
+	SkipGraphQLIntrospection
+	// SkipOutOfScopeResource means a URL was refused because it names a HOST OUTSIDE the engagement
+	// scope AND it was found as a SUBRESOURCE — an image, script, stylesheet, font or frame that the
+	// page loads to work at all, rather than a link a person would follow (burpsy-react-ui-hgor).
+	//
+	// Its own reason because "why is my crawl empty" has two very different answers that both look
+	// like a scope refusal in one number. A navigational link to an out-of-scope host is scope doing
+	// its job; a page whose entire content came from a CDN is the case burpsy is STRICTER than Burp
+	// about, because Burp's crawler fetches such resources by default
+	// (crawler.customization.allow_out_of_scope_resources = true, Preferences/CrawlDefaults.json)
+	// while burpsy refuses them. Merged into SkipOutOfScope, the operator cannot tell which happened,
+	// and the second is the one that explains an empty crawl on a modern site.
+	//
+	// Deliberately NOT a relaxation: burpsy's refusal stands. This reason exists so the refusal says
+	// which kind of refusal it was, which is the diagnostic the bead asks for and the only thing it
+	// proposes to change.
+	SkipOutOfScopeResource
+	// SkipFormSubmissionCap means a form was NOT submitted because this form has already been
+	// submitted the number of times the operator allowed (burpsy-react-ui-u0k3).
+	//
+	// Its own reason rather than SkipTemplateQuota, the closest neighbour: that one counts a URL
+	// TEMPLATE (a path with its ids replaced), so a search box posting to the same path with different
+	// values is ONE template there and many submissions here. Merged, a pagination form hitting the
+	// form cap would report as having hit the template quota, naming a limit that never fired.
+	//
+	// Recorded rather than silently dropped: a form refused by a cap is a hole in the crawl's coverage,
+	// and an operator reading "N forms submitted" needs to know why it was not more.
+	SkipFormSubmissionCap
+	// SkipLocationFolded means the response was recognised as a location already seen by the
+	// TOLERANCE BAND rather than by exact fingerprint equality (burpsy-react-ui-9x67,
+	// location_band.go): same structure, same text bucket, same set of link paths and parameter
+	// names, with at most locationToleranceBand of the link VALUES moved. Its links were not queued
+	// again, exactly as for SkipDuplicateLocation.
+	//
+	// Its own reason rather than being counted as SkipDuplicateLocation, because that reason's whole
+	// claim is that the contents were IDENTICAL and this one's is that they were CLOSE. An operator
+	// seeing "duplicate" learns the crawl is exact; an operator seeing this learns the crawl is
+	// within a tolerance, which is a different and weaker thing to rely on, and is the difference
+	// between a coverage claim and a claim about coverage.
+	SkipLocationFolded
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [29]Skip{
+var SkipAll = [39]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -205,6 +294,16 @@ var SkipAll = [29]Skip{
 	SkipRetentionExcluded,
 	SkipSessionExpired,
 	SkipReloginFailed,
+	SkipRenderUnavailable,
+	SkipSitemapUnparsed,
+	SkipJSONUnparsed,
+	SkipSpeculativeLimit,
+	SkipAPIUnparsed,
+	SkipGraphQLUnparsed,
+	SkipGraphQLIntrospection,
+	SkipOutOfScopeResource,
+	SkipFormSubmissionCap,
+	SkipLocationFolded,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -270,6 +369,26 @@ func (s Skip) slot() int {
 		return 27
 	case SkipReloginFailed:
 		return 28
+	case SkipRenderUnavailable:
+		return 29
+	case SkipSitemapUnparsed:
+		return 30
+	case SkipJSONUnparsed:
+		return 31
+	case SkipSpeculativeLimit:
+		return 32
+	case SkipAPIUnparsed:
+		return 33
+	case SkipGraphQLUnparsed:
+		return 34
+	case SkipGraphQLIntrospection:
+		return 35
+	case SkipOutOfScopeResource:
+		return 36
+	case SkipFormSubmissionCap:
+		return 37
+	case SkipLocationFolded:
+		return 38
 	}
 	panic("unknown Skip")
 }
@@ -335,6 +454,26 @@ func (s Skip) String() string {
 		return "session-expired"
 	case SkipReloginFailed:
 		return "relogin-failed"
+	case SkipRenderUnavailable:
+		return "render-unavailable"
+	case SkipSitemapUnparsed:
+		return "sitemap-unparsed"
+	case SkipJSONUnparsed:
+		return "json-unparsed"
+	case SkipSpeculativeLimit:
+		return "speculative-limit"
+	case SkipAPIUnparsed:
+		return "api-unparsed"
+	case SkipGraphQLUnparsed:
+		return "graphql-unparsed"
+	case SkipGraphQLIntrospection:
+		return "graphql-not-probed"
+	case SkipOutOfScopeResource:
+		return "out-of-scope-resource"
+	case SkipFormSubmissionCap:
+		return "form-submission-cap"
+	case SkipLocationFolded:
+		return "location-folded"
 	}
 	return "unknown"
 }
@@ -370,6 +509,9 @@ func (s Skip) Explanation() string {
 		return "a form was found and not submitted, because form submission is off"
 	case SkipFormNotSubmittable:
 		return "the form's enctype or method is one the crawler does not build"
+	case SkipFormSubmissionCap:
+		return "this form was already submitted the maximum number of times the crawl allows, so it was " +
+			"not submitted again: raise max_submissions_per_form to explore it further"
 	case SkipAlreadyQueued:
 		return "an identical request has already been queued or fetched"
 	case SkipTemplateQuota:
@@ -400,6 +542,24 @@ func (s Skip) Explanation() string {
 		return "the response is a login page or a template that flipped from 200, so its links were not followed: the session was gone and its links are not the application"
 	case SkipReloginFailed:
 		return "session expiry was detected and the login macro could not restore the session, so the request was not retried with a fresh cookie"
+	case SkipJSONUnparsed:
+		return "the response looked like JSON — by its content type or its opening brace — and could not be parsed as one, so any locations it names were not followed"
+	case SkipSitemapUnparsed:
+		return "the response looked like a sitemap — by its content type or the element names in its body — and could not be parsed as one, so the URLs it publishes were not followed"
+	case SkipRenderUnavailable:
+		return "the response was HTML but the browser render failed, so links that exist only after the page's script runs were not discovered"
+	case SkipSpeculativeLimit:
+		return "the speculative-link cap is spent: the URL was mined from a comment or script body and the crawl-wide bound on hidden links is reached"
+	case SkipAPIUnparsed:
+		return "the response is an API definition (OpenAPI, Swagger or WSDL) that could not be read, so the endpoints it declares were not crawled: check that the document was fetched whole"
+	case SkipGraphQLUnparsed:
+		return "the endpoint answered a GraphQL introspection query with a schema that could not be read, so its operations were not crawled"
+	case SkipGraphQLIntrospection:
+		return "the crawl-wide request bound was already spent, so the GraphQL endpoint was not probed"
+	case SkipOutOfScopeResource:
+		return "the page loads this from a host outside the engagement scope. Burp's crawler fetches such resources by default (allow_out_of_scope_resources); burpsy refuses them, so a page whose content lives on a CDN or a third-party API contributes no locations"
+	case SkipLocationFolded:
+		return "this page was recognised as one already seen within a tolerance: the same structure and the same set of link paths, with a few link values changed, so its links were not walked again. Counted apart from an exact duplicate because the location count it contributes rests on a tolerance rather than on identical contents"
 	}
 	return "unknown skip"
 }
@@ -467,16 +627,19 @@ func (s Skip) Category() SkipCategory {
 		return CategoryDestructive
 	case SkipUnsupportedScheme, SkipMalformedURL, SkipCredentialsInURL:
 		return CategorySafety
-	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded:
+	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource:
 		return CategoryScope
-	case SkipFormSubmissionDisabled, SkipFormNotSubmittable:
+	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap:
 		return CategoryPolicy
-	case SkipAlreadyQueued, SkipDuplicateLocation:
+	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded:
 		return CategoryDuplicate
-	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget:
+	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
+		SkipSpeculativeLimit, SkipGraphQLIntrospection:
 		return CategoryLimit
-	case SkipNotHTML, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
-		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed:
+	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed,
+		SkipGraphQLUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
+		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
+		SkipRenderUnavailable:
 		return CategoryResponse
 	}
 	panic("unknown Skip")
@@ -611,8 +774,11 @@ func (r SkipReport) Summary() string {
 // goroutine is the whole point of being able to snapshot mid-crawl, and a racy read of the counts
 // would be a data race whether or not it produced a wrong number.
 type skipLedger struct {
-	mu         sync.Mutex
-	counts     [29]uint64
+	mu sync.Mutex
+	// Sized from SkipAll rather than written as a number, because the two were hand-maintained and
+	// drifted: SkipAll's length is checked by the compiler, this one is not, and a Skip value added
+	// to the first and forgotten in the second panics on the first decline rather than at build.
+	counts     [len(SkipAll)]uint64
 	records    []SkipRecord
 	dropped    int
 	maxRecords int

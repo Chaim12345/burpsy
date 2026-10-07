@@ -45,6 +45,8 @@ package extension
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -80,9 +82,15 @@ const (
 	// DefaultMaxRegistrations bounds what one plugin may register. A manifest with
 	// ten thousand menu items is not a feature.
 	DefaultMaxRegistrations = 64
+	// DefaultReloadInterval is how often Config.AutoReload stats each loaded plugin's executable
+	// looking for a rebuild (burpsy-react-ui-1ye7). One second: fast enough that an author who has
+	// just rebuilt sees the reload before they switch windows, slow enough that the watch costs one
+	// stat per allowlisted plugin per second, which is nothing against a watch set that is a
+	// handful of paths by construction.
+	DefaultReloadInterval = time.Second
 )
 
-// Kind is one of the three registration points that have an honest web analogue.
+// Kind is one of the registration points that have an honest web analogue.
 type Kind string
 
 const (
@@ -95,12 +103,186 @@ const (
 	// registerHttpRequestEditorProvider. See the package doc for why the other half
 	// (caret position, live selection) is not represented.
 	KindEditorTab Kind = "editor-tab"
+	// KindSessionAction is the analogue of registerSessionHandlingAction: a rule's
+	// "Invoke an extension" action. Distinct from KindContextMenu because the input
+	// and the output are different: a context-menu item is handed a selected
+	// exchange and may return text, while a session action is handed the request a
+	// session rule has built so far and returns the request that should be sent.
+	//
+	// The return value is why this is a kind rather than a menu item the operator
+	// triggers by hand: without it the rule could ask a plugin a question and then
+	// send its own request unchanged, which is a rule reporting success while doing
+	// nothing — the failure the invoke-extension action refuses rather than hides.
+	KindSessionAction Kind = "session-action"
+	// KindHotKey is the analogue of registerHotKeyHandler: a chord that invokes a
+	// registration without a selection, the way Burp's own hotkeys do. The chord is
+	// declared at the handshake in Burp's Settings spelling ("Ctrl+Shift+P" — see
+	// burp.api.montoya.ui.hotkey.HotKey: "Hotkeys are defined in the same format as
+	// within Burp's Settings"), and the host normalises it to the web console's
+	// vocabulary (mod/alt/shift+key) before installing it, refusing what it cannot
+	// spell rather than installing a chord that would never fire.
+	//
+	// Burp's five HotKeyContexts (HTTP message editor, Proxy history, Intruder
+	// results, Organizer entries, Site map) are not carried: the console's global
+	// dispatch cannot scope a DOM keydown to one table's rows without each surface
+	// opting in, and a hotkey that fires only sometimes — or worse, fires on the
+	// page the operator did not mean — is worse than one that fires everywhere. A
+	// hotkey here is a suite-wide binding, which is also what Burp's context-less
+	// overload means ("it will fire for any supported context").
+	KindHotKey Kind = "hotkey"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
 // and counted rather than accepted as an inert row, because an inert row in the
 // UI is indistinguishable from a working one.
-var validKinds = map[Kind]bool{KindContextMenu: true, KindMenu: true, KindEditorTab: true}
+var validKinds = map[Kind]bool{
+	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
+	KindHotKey: true,
+}
+
+// NormaliseChord spells a Burp-Settings hotkey ("Ctrl+Shift+P") in the console's own
+// vocabulary ("mod+shift+p"), or returns "" for a binding this console cannot install.
+//
+// The console's rule is validateChord's, in Go: a binding must carry mod (Ctrl/Cmd) or alt,
+// because a bare key would fire while the operator types, and it may add shift, and it names
+// exactly one non-modifier key. Burp's spelling is lenient about case, order and the separators
+// (+, -, space, or none — "Ctrl+Shift+P", "ctrl shiftp" and "ctrl-shift p" all name one
+// binding), so this reads modifiers by prefix rather than by splitting: "ctrlp" is ctrl+p and
+// not some key called "ctrlp".
+//
+// What is refused, and why that is the honest answer: Burp's meta key ("Cmd" on macOS) has no
+// web spelling the console can promise cross-platform — mod is already the platform's own
+// primary modifier, so a plugin asking for meta is asking for a chord that would silently
+// never fire. F5 and friends (function keys, media keys) are refused for the same reason the
+// shipped bindings avoid them: the browser or the OS owns them. A refused chord is counted on
+// the wire like every other refused registration, rather than installed as a binding that
+// looks registered and never fires.
+//
+// A second non-modifier token is refused rather than overwriting the first: "Ctrl+K+J" is
+// not a chord this console can install, and silently binding it to "mod+j" would be a
+// binding the operator did not ask for. Key names are checked against the set the keymap
+// can dispatch — "Ctrl+Banana" is refused, not bound to a key that will never fire.
+func NormaliseChord(burp string) string {
+	rest := strings.ToLower(strings.TrimSpace(burp))
+	if rest == "" {
+		return ""
+	}
+	var mods []string
+	var key string
+	for rest != "" {
+		// Modifiers: prefix-matched, longest first so "control" wins over "ctrl".
+		matched := false
+		for _, m := range []struct{ prefix, mod string }{
+			{"control", "mod"}, {"ctrl", "mod"}, {"cmd", "mod"},
+			{"shift", "shift"},
+			{"option", "alt"}, {"alt", "alt"},
+			{"meta", ""}, {"super", ""}, {"windows", ""},
+		} {
+			if strings.HasPrefix(rest, m.prefix) {
+				if m.mod == "" {
+					return "" // meta/super/windows: no web spelling
+				}
+				rest = strings.TrimPrefix(rest, m.prefix)
+				if !slices.Contains(mods, m.mod) {
+					mods = append(mods, m.mod)
+				}
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		// The key: everything up to the next separator, or the whole remainder.
+		sep := strings.IndexAny(rest, "+- ")
+		if sep == 0 {
+			// A leading separator the modifier scan did not consume: skip it, it names nothing.
+			rest = rest[1:]
+			continue
+		}
+		// A second non-modifier token is a refusal, not an overwrite.
+		if key != "" {
+			return ""
+		}
+		if sep < 0 {
+			key, rest = rest, ""
+		} else {
+			key, rest = rest[:sep], rest[sep:]
+		}
+	}
+	if key == "" {
+		return ""
+	}
+	// Exactly one non-modifier key, and it must not itself be a modifier name ("ctrl+shift" is
+	// not a binding).
+	switch key {
+	case "ctrl", "cmd", "control", "shift", "alt", "option", "meta", "super", "windows":
+		return ""
+	}
+	// Function and media keys are the browser's and the OS's; a plugin cannot have them.
+	if len(key) == 2 && key[0] == 'f' && key[1] >= '1' && key[1] <= '9' {
+		return ""
+	}
+	if key == "f10" || key == "f11" || key == "f12" {
+		return ""
+	}
+	// The key must be one the keymap can dispatch.
+	if !dispatchableKeys[key] {
+		return ""
+	}
+	if !slices.Contains(mods, "mod") && !slices.Contains(mods, "alt") {
+		return ""
+	}
+	// Refuse editing keys: clipboard (c/v/x), undo (z), and any chord with both
+	// mod and alt (AltGr combinations like Ctrl+Alt+Q = '@' on German layouts).
+	// These belong to the browser and the editor, not to plugins.
+	if slices.Contains(mods, "mod") && slices.Contains(mods, "alt") {
+		return ""
+	}
+	switch key {
+	case "c", "v", "x", "z":
+		return ""
+	}
+	order := []string{"mod", "alt", "shift"}
+	var out []string
+	for _, m := range order {
+		if slices.Contains(mods, m) {
+			out = append(out, m)
+		}
+	}
+	return strings.Join(append(out, key), "+")
+}
+
+// dispatchableKeys is the set of key names the keymap can actually dispatch. A chord
+// naming a key outside this set would be bound and never fire — the exact defect this
+// normaliser exists to prevent.
+var dispatchableKeys = map[string]bool{
+	// Letters
+	"a": true, "b": true, "c": true, "d": true, "e": true, "f": true, "g": true,
+	"h": true, "i": true, "j": true, "k": true, "l": true, "m": true, "n": true,
+	"o": true, "p": true, "q": true, "r": true, "s": true, "t": true, "u": true,
+	"v": true, "w": true, "x": true, "y": true, "z": true,
+	// Digits
+	"0": true, "1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
+	"7": true, "8": true, "9": true,
+	// Punctuation and symbols (spelled by name, not character)
+	"comma": true, "period": true, "slash": true, "backslash": true,
+	"semicolon": true, "quote": true, "bracketleft": true, "bracketright": true,
+	"minus": true, "equal": true, "backquote": true, "space": true,
+	"enter": true, "tab": true, "backspace": true, "delete": true,
+	"escape": true, "capslock": true,
+	// Arrow keys
+	"arrowup": true, "arrowdown": true, "arrowleft": true, "arrowright": true,
+	"up": true, "down": true, "left": true, "right": true,
+	// Navigation
+	"home": true, "end": true, "pageup": true, "pagedown": true,
+	// Numpad
+	"numpad0": true, "numpad1": true, "numpad2": true, "numpad3": true,
+	"numpad4": true, "numpad5": true, "numpad6": true, "numpad7": true,
+	"numpad8": true, "numpad9": true, "numpadenter": true,
+	"numpadadd": true, "numpadsubtract": true, "numpadmultiply": true,
+	"numpaddivide": true, "numpaddecimal": true,
+}
 
 // Registration is one thing a plugin declared at handshake.
 type Registration struct {
@@ -111,6 +293,16 @@ type Registration struct {
 	// with no name.
 	Label string `json:"label"`
 	Hint  string `json:"hint,omitempty"`
+	// Chord is the keyboard binding a hotkey registration asks for, in Burp's
+	// Settings spelling ("Ctrl+Shift+P"). Only KindHotKey reads it; the host
+	// refuses a hotkey registration whose chord is missing or unspellable, and
+	// ignores the field on the other kinds rather than letting it imply a
+	// binding that was never installed.
+	Chord string `json:"chord,omitempty"`
+	// Binding is the normalised chord in the console's vocabulary, set by the
+	// host at load time. The UI installs this field verbatim — no second
+	// normaliser, no disagreement possible.
+	Binding string `json:"binding,omitempty"`
 }
 
 // Manifest is what a plugin answers `initialize` with.
@@ -150,6 +342,18 @@ type InvokeParams struct {
 	Registration string `json:"registration"`
 	Exchange     *int   `json:"exchange,omitempty"`
 	Message      *int   `json:"message,omitempty"`
+	// Request, Response and Values are sessionAction.invoke's payload: the request the rule has built
+	// so far, the response the rule is reacting to (nil when it has not observed one), and the
+	// {{name}} values a macro action extracted earlier in the same rule.
+	//
+	// Structured fields rather than one raw message, unlike editor.render's `raw`. The reason is the
+	// return value: a plugin answers with a *request*, and a raw round trip would need an HTTP
+	// serialiser and a parser on both sides of a JSON-RPC boundary, each able to disagree with the
+	// sender that actually dials. The fields are the sender's own vocabulary (method, absolute URL,
+	// ordered headers, body), so nothing has to be re-encoded on the way in or out.
+	Request  *SessionRequest   `json:"request,omitempty"`
+	Response *SessionResponse  `json:"response,omitempty"`
+	Values   map[string]string `json:"values,omitempty"`
 	// Raw is the message bytes for editor.render, as text. Carried in the call
 	// rather than fetched by the plugin because a plugin has no route to this
 	// process's traffic store, and giving it one would be a second egress path.
@@ -164,6 +368,33 @@ type InvokeParams struct {
 type InvokeResult struct {
 	Text   string `json:"text,omitempty"`
 	Output string `json:"output,omitempty"`
+	// Request is what a session-action's plugin wants sent — sessionAction.invoke's only functional
+	// answer. Omitted means "send what the rule already built", which is a real and useful answer
+	// (a plugin that only observes, or only rewrote the jar through burpsy's cookies), and is
+	// therefore distinguished from an empty object only by being absent.
+	Request *SessionRequest `json:"request,omitempty"`
+}
+
+// SessionRequest is one request inside a sessionAction.invoke call, in the sender's own vocabulary.
+//
+// Headers are an ordered list of pairs rather than a map: a Go map has no order and a JSON object
+// has none either, so a plugin handed a map could only answer with an order it invented, and header
+// order is part of the request the target receives. The pair-array shape is the one this tree
+// already uses for the same reason (sessionStepDto.Headers, and the console's header editors).
+type SessionRequest struct {
+	Method  string     `json:"method"`
+	URL     string     `json:"url"`
+	Headers [][]string `json:"headers,omitempty"`
+	Body    string     `json:"body,omitempty"`
+}
+
+// SessionResponse is the observed response a session action is shown. Status is carried as the
+// number that was on the wire, including 0 when no response arrived — which is a fact about the
+// request rather than a missing value.
+type SessionResponse struct {
+	Status  int        `json:"status"`
+	Headers [][]string `json:"headers,omitempty"`
+	Body    string     `json:"body,omitempty"`
 }
 
 // LogParams is the one notification a plugin sends the host.
@@ -246,7 +477,7 @@ var MethodSpecs = []MethodSpec{
 		Name: "initialize", Direction: HostToPlugin, Call: "request",
 		Params: `{"protocol": 1, "host": "burpsy", "plugin": "<allowlist name>"}`,
 		Result: `{"name": string, "version": string, "type": string, "protocol": 1, ` +
-			`"registrations": [{"id": string, "kind": "context-menu"|"menu"|"editor-tab", "label": string, "hint"?: string}]}`,
+			`"registrations": [{"id": string, "kind": "context-menu"|"menu"|"editor-tab"|"session-action"|"hotkey", "label": string, "hint"?: string, "chord"?: string}]}`,
 		Why: "The handshake, and the only place registrations are declared. A protocol number " +
 			"that does not match the host's refuses the load rather than half-working.",
 	},
@@ -279,6 +510,27 @@ var MethodSpecs = []MethodSpec{
 			"registerHttpRequestEditorProvider: Burp gives that provider the caret position and the live " +
 			"selection, and a request/response round trip cannot carry either, so the editing half is " +
 			"not offered rather than offered and broken.",
+	},
+	{
+		Name: "sessionAction.invoke", Direction: HostToPlugin, Call: "request", Kind: KindSessionAction,
+		Params: `{"registration": string, "request": {method, url, headers, body}, "response"?: {status, headers, body}, "values"?: {name: value}}`,
+		Result: `{"request"?: {method, url, headers, body}, "output"?: string}`,
+		Why: "The analogue of registerSessionHandlingAction: a session rule's Invoke-an-extension action. " +
+			"The plugin is handed the request the rule has built so far — after its earlier actions ran, " +
+			"including any macro — and answers with the request it wants sent. Request and response are " +
+			"structured rather than raw because the answer is a request: a raw round trip would need a " +
+			"serialiser and a parser on each side of the boundary, each able to disagree with the sender " +
+			"that actually dials.",
+	},
+	{
+		Name: "hotkey.invoke", Direction: HostToPlugin, Call: "request", Kind: KindHotKey,
+		Params: `{"registration": string}`,
+		Result: `{"output"?: string}`,
+		Why: "The analogue of registerHotKeyHandler: the console dispatches the registration's " +
+			"declared chord to this method. No exchange and no message are passed, because a " +
+			"hotkey fires with no selection behind it — the same shape as menu.invoke, reached " +
+			"from the keyboard instead of a menu. The plugin asked for the binding at the " +
+			"handshake; this is the host keeping its end.",
 	},
 	{
 		Name: "log", Direction: PluginToHost, Call: "notification",

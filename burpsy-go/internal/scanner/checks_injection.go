@@ -45,8 +45,16 @@ type injectionResult struct {
 
 // runInjection is the shared driver: build the harness, walk a bounded set of points, collect
 // every probe, and pick the strongest evidence.
-func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
+// checkName names the check this run belongs to, and is part of the effectiveness prior's
+// identity: one check finding nothing at a place is not evidence about another check, so a
+// prior shared across checks would gate away a check that had never looked (y4om).
+func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds []string,
 	perPoint func(*ProbeHarness, bcheck.InsertionPoint) []InjectionProbe) (injectionResult, error) {
+
+	// The check's own row name is part of the effectiveness prior's identity (y4om): one check
+	// finding nothing at a place must not gate another check away from it. Written onto the
+	// check context, because that is what the harness enumerates through.
+	cc.PointEffectiveCheck = checkName
 
 	h, err := NewProbeHarness(ctx, cc, kinds)
 	if err != nil {
@@ -54,14 +62,73 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 	}
 	points := h.Points()
 	tested := len(points)
+	// capped is reported, not hidden: a check that probed 8 of 20 points has not tested the
+	// endpoint, and a coverage line that says otherwise is the silent false negative this
+	// package's Declined type exists to prevent.
+	capped := 0
 	if tested > MaxInjectionPointsPerCheck {
+		capped = tested - MaxInjectionPointsPerCheck
 		points = points[:MaxInjectionPointsPerCheck]
 		tested = MaxInjectionPointsPerCheck
 	}
 
+	// The light-audit tier (burpsy-react-ui-7bkj): a (kind, host) type that has produced
+	// enough CLEAN points this run is skipped for the rest of that type on that host —
+	// Burp's "Skipped due to repetitive behavior". The skip is counted, never hidden: a
+	// check that probed 8 of 30 query points because 20 clean query points on this host
+	// came before has NOT tested 22 points, and the coverage line must say so in its own
+	// field rather than reading as a smaller request.
+	//
+	// The counter consult happens BEFORE the point's probes: a point that is skipped never
+	// sends, which is the whole saving. A point that runs and finds nothing records CLEAN,
+	// which is what raises the type toward the threshold.
+	light := cc.LightAudit
+	var skippedRepetitive int
 	var probes []InjectionProbe
 	for _, point := range points {
+		if light != nil && light.ShouldSkipRepetitive(string(point.Kind), cc.Exchange.Host) {
+			skippedRepetitive++
+			light.RecordSkippedPoint()
+			continue
+		}
+		pointStart := len(probes)
 		probes = append(probes, perPoint(h, point)...)
+		// A point whose probes all came back without evidence is CLEAN for the tier's
+		// purposes — a signal (an error signature, a differential, an OOB hit) means this
+		// type on this host deserves full price again, so the prior must not rise.
+		if light != nil {
+			clean := true
+			for _, pr := range probes[pointStart:] {
+				if pr.Evidence != InjectionEvidenceNone {
+					clean = false
+					break
+				}
+			}
+			if clean {
+				light.RecordCleanPoint(string(point.Kind), cc.Exchange.Host)
+			}
+		}
+		// The per-point effectiveness gate's own record (burpsy-react-ui-y4om). Same clean/not-clean
+		// question the light tier asks, asked of the POINT rather than its type, and asked here for
+		// the same reason: the gate can only judge a place on evidence this run actually gathered,
+		// and the evidence is the probe set this point just produced. A point that has now been
+		// probed MinPointEffectivenessProbes times with nothing found is dropped by the next
+		// dispatch; a point that answered something is never dropped by this gate again.
+		if pe := effectivenessFrom(cc); pe != nil {
+			// The check's own name is part of the prior's identity: one check's silence on a
+			// parameter is not evidence that another check would find nothing there, and
+			// Burp's own gate is a per-MESSAGE-CLASS probe (Zcgg.Zw → point.Zp(new Zc3c())
+			// matches one message class), so a prior shared across checks would block a
+			// check that had never looked.
+			answered := false
+			for _, pr := range probes[pointStart:] {
+				if pr.Evidence != InjectionEvidenceNone {
+					answered = true
+					break
+				}
+			}
+			pe.record(checkName, point, cc.Exchange.Host, answered)
+		}
 		// Stop at the first confirmation: further payloads cost requests and add nothing
 		// to a finding that is already proven.
 		if _, confirmed := BestEvidence(probes); confirmed {
@@ -69,7 +136,26 @@ func runInjection(ctx context.Context, cc *CheckContext, kinds []string,
 		}
 	}
 	best, confirmed := BestEvidence(probes)
-	return injectionResult{best: best, confirmed: confirmed, coverage: h.Coverage(probes, tested)}, nil
+	cov := h.Coverage(probes, tested-skippedRepetitive)
+	cov.PointsCapped = capped
+	cov.PointsSkippedRepetitive = skippedRepetitive
+	if pe := effectivenessFrom(cc); pe != nil {
+		// How many probes the run has spent on points that answered nothing. Reported so a
+		// smaller request count is legible: the same reason PointsSkippedRepetitive exists.
+		cov.PointsJudgedIneffective = pe.Count()
+	}
+	return injectionResult{best: best, confirmed: confirmed, coverage: cov}, nil
+}
+
+// effectivenessFrom returns the run's per-point effectiveness ledger, or nil when there is
+// none. Nil is the honest answer for a context built outside a dispatched audit, and for a run
+// that set skip_ineffective_checks to zero: in both cases there is no gate to record for, and a
+// nil here must not look like "every point answered nothing".
+func effectivenessFrom(cc *CheckContext) *pointEffectiveness {
+	if cc == nil || cc.PointEffectiveness == nil {
+		return nil
+	}
+	return cc.PointEffectiveness
 }
 
 // unresolved reports the inconclusive sentinel when nothing confirmed but some probe was undecided.
@@ -97,6 +183,10 @@ func buildInjectionFinding(cc *CheckContext, name, severity string, res injectio
 		res.best.Detail, res.best.Evidence,
 		res.coverage.PointsTested, res.coverage.PayloadsSent,
 		res.coverage.Inconclusive, res.coverage.PointsDeclined)
+	if res.coverage.PointsCapped > 0 {
+		detail += fmt.Sprintf(" %d further point(s) were NOT probed: the per-check cap of %d was reached.",
+			res.coverage.PointsCapped, MaxInjectionPointsPerCheck)
+	}
 
 	f := buildHeaderFinding(cc, name, severity, confidence, res.best.Payload, detail)
 	if res.best.Detail != "" {
@@ -133,7 +223,7 @@ func xpathProbePayloads() []string {
 }
 
 func checkXPathInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "XPathInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, xpathProbePayloads(), XPathErrorSignatures)
 		})
@@ -147,7 +237,7 @@ func checkXPathInjection(ctx context.Context, cc *CheckContext) ([]*Finding, err
 }
 
 func checkXMLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "XMLInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var payloads []string
 			for _, x := range XMLInjectionPayloads("bsyxml") {
@@ -169,7 +259,7 @@ func checkXMLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error
 // ---------------------------------------------------------------------------
 
 func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "LDAPInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			payloads := LDAPPayloads(p.BaseValue)
 			// payloads[1] closes the filter and opens an always-true one; payloads[2]
@@ -195,7 +285,7 @@ func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 // ---------------------------------------------------------------------------
 
 func checkFilePathManipulation(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "FilePathManipulation", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			// A read is proven by file content, not by the absence of an error, which is
 			// why TraversalFileSignatures rather than an error bank.
@@ -225,7 +315,7 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 	// an error page quoting the last request — this check goes permanently silent on a genuinely
 	// command-injectable target, and silently, because Inconclusive never reaches a report.
 	marker := newProbeCanary("bsycmd")
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "OSCommandInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			for _, payload := range OSCommandPayloads(marker) {
@@ -249,7 +339,7 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 // language's emitters across all three quoting contexts.
 func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+		res, err := runInjection(ctx, cc, "OSCommandInjection", cc.ProbeInsertionKinds(),
 			func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 				var probes []InjectionProbe
 				for _, probe := range CodeInjectionProbeSet(language) {
@@ -299,7 +389,7 @@ func templateArithmeticPayloads() []string {
 }
 
 func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "ServerSideTemplateInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			for _, payload := range templateArithmeticPayloads() {
@@ -318,7 +408,7 @@ func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 
 func checkExpressionLanguageInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
-	res, err := runInjection(ctx, cc, DefaultProbeInsertionKinds,
+	res, err := runInjection(ctx, cc, "ExpressionLanguageInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			// The EL subset of the template delimiters, plus the recovered class-probe

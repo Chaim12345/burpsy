@@ -247,13 +247,23 @@ func sessionLogin(ctx *cliContext, args []string) error {
 	if *url == "" {
 		return fmt.Errorf("usage: burpsy session login -url https://host/...")
 	}
-	host, _, _, _, err := parseTargetURL(*url)
+	host, port, tls, path, err := parseTargetURL(*url)
 	if err != nil {
 		return err
 	}
 	// Resolved before anything is sent: with no rule for this target there is no macro to run with
 	// whatever comes back, so sending the probe would cost the target a request to no purpose.
-	rule := ctx.sess.MatchingRule(host)
+	//
+	// The probe's full identity, not its host (7nh2): a rule scoped to a path, port or scheme must
+	// not be the rule that fires for a probe URL its own editor excludes. A rule configured for
+	// "Use suite scope" is judged against this process's Target scope, read live.
+	// The tool is stated (so3): `burpsy session check` is the Session tool's own probe, the same
+	// attribution the tool log gives it below, so a rule restricted to other tools must not fire
+	// for it — and one restricted to the session tool must.
+	rule := ctx.sess.MatchingRuleForRequest(
+		session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
+		nil,
+		func() bool { return ctx.scope.Contains(host, port, path, tls) })
 	if rule == nil {
 		fmt.Fprintf(ctx.out, "no_rule_applies url=%s rules=%d\n", *url, len(ctx.sess.AllRules()))
 		return nil
@@ -265,7 +275,7 @@ func sessionLogin(ctx *cliContext, args []string) error {
 		fmt.Fprintf(ctx.out, "probe_failed rule=%s error=%s\n", rule.Name, err)
 		return nil
 	}
-	outcome := ctx.sess.HandleRecovery(probe, response, runner)
+	outcome := ctx.sess.HandleRecovery(toollog.ToolSession.String(), probe, response, runner)
 	switch outcome.Kind {
 	case session.RecoveryNoRuleApplies:
 		// Unreachable here, since the rule was resolved above. Printed faithfully anyway rather than
@@ -273,6 +283,11 @@ func sessionLogin(ctx *cliContext, args []string) error {
 		fmt.Fprintf(ctx.out, "no_rule_applies url=%s\n", outcome.URL)
 	case session.RecoveryAlreadyValid:
 		fmt.Fprintf(ctx.out, "already_valid rule=%s\n", rule.Name)
+	case session.RecoveryRuleApplied:
+		// No login was attempted: the rule's actions rewrote the request and it was re-sent. Reported
+		// apart from recovered for the reason the kinds are apart — "a session was established" and
+		// "a header was set" are different things to go and check.
+		fmt.Fprintf(ctx.out, "rule_applied rule=%s actions=%d\n", rule.Name, len(outcome.Actions))
 	case session.RecoveryRecovered:
 		fmt.Fprintf(ctx.out, "recovered rule=%s login_attempts=%d\n", rule.Name, outcome.LoginAttempts)
 	case session.RecoveryStillInvalidAfterRelogin:
@@ -324,7 +339,7 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		// The coordinator attaches the jar's cookie to a step it owns; fill one in only when the step
 		// did not carry one (the operator's own probe).
 		if _, has := req.Headers["Cookie"]; !has {
-			if cookie := ctx.sess.CookieHeader(host, port, tls); cookie != "" {
+			if cookie := ctx.sess.CookieHeader(host, port, tls, sessionPathOf(step.URL)); cookie != "" {
 				req.Headers["Cookie"] = cookie
 			}
 		}
@@ -333,20 +348,25 @@ func (ctx *cliContext) cliMacroRunner(timeoutSec int) session.MacroStepRunner {
 		resp, err := sender.NewAuthorisedSender(ctx.scope, ctx.sender, host, port, tls).SendRequest(c, req)
 		if err != nil {
 			// nil: the step never got a response to measure.
-			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error())
+			ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, 0, nil, 0, err.Error(), nil)
 			return nil, err
 		}
 		hdrs := make(map[string]string, len(resp.Headers))
 		for k, v := range resp.Headers {
 			hdrs[k] = v
 			if strings.EqualFold(k, "Set-Cookie") {
-				ctx.sess.HandleResponse(host, port, tls, resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body)
+				// The step's own path and tool, so a path- or tool-scoped rule judges this response
+				// against the request that produced it rather than against a host alone (7nh2, so3).
+				ctx.sess.HandleResponseFor(
+					session.RequestIdentity{Host: host, Path: path, Port: port, TLS: tls, Tool: toollog.ToolSession.String()},
+					resp.StatusCode, map[string]string{"Set-Cookie": v}, resp.Body,
+					func() bool { return ctx.scope.Contains(host, port, path, tls) })
 			}
 		}
 		// The body's length only — see the same record in internal/web/api_session.go for why a session
 		// step has no raw response to count.
 		ctx.toolLog.Record(toollog.ToolSession, host, port, tls, method, path, resp.StatusCode,
-			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "")
+			toollog.Bytes(len(resp.Body)), uint64(resp.Duration.Milliseconds()), "", nil)
 		return &session.StepResult{Status: resp.StatusCode, Headers: hdrs, Body: resp.Body}, nil
 	}
 }
@@ -363,11 +383,39 @@ func sessionCookies(ctx *cliContext, args []string) error {
 	if *host == "" {
 		return fmt.Errorf("usage: burpsy session cookies -host HOST")
 	}
-	cookie := ctx.sess.CookieHeader(*host, 80, false)
+	// The command's question is "what would the jar send": CookieHeader applies the full §5.4
+	// filter, so the answer is the header the jar would really attach. Port 80 over plaintext
+	// is the CLI's standing denominator (below); "/" asks for every cookie the authority holds
+	// that matches the whole site — a path-scoped cookie the jar would NOT send elsewhere is
+	// still listed here, and one scoped to a deeper path shows with its own line.
+	cookie := ctx.sess.CookieHeader(*host, 80, false, "/")
 	if cookie == "" {
 		fmt.Fprintln(ctx.out, "(no cookies held)")
 		return nil
 	}
 	fmt.Fprintln(ctx.out, cookie)
 	return nil
+}
+
+// sessionPathOf extracts the request path from a step URL for the cookie jar's RFC 6265
+// path-match. Same split as the web layer's targetPathOf: everything after the authority,
+// up to the query. Unreadable shapes answer "/" — the path-match then sends every cookie
+// the jar holds, which is the safe direction (a cookie sent, not one silently dropped).
+func sessionPathOf(rawURL string) string {
+	rest := rawURL
+	if cut := strings.Index(rest, "://"); cut >= 0 {
+		rest = rest[cut+3:]
+	}
+	start := strings.IndexAny(rest, "/?#")
+	if start < 0 {
+		return "/"
+	}
+	rest = rest[start:]
+	if end := strings.IndexAny(rest, "?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "/"
+	}
+	return rest
 }

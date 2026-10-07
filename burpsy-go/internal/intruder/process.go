@@ -1,5 +1,18 @@
 package intruder
 
+import (
+	"bytes"
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/burpsy-go/burpsy/internal/tools"
+)
+
 // The payload-processing rule chain: an ordered list of transformations applied to each
 // payload, ported from burpsy-intruder::process.
 //
@@ -25,16 +38,6 @@ package intruder
 // unchanged. Passing it through would send a payload the operator did not ask for while the
 // report said the rule was applied. Reasons are grouped and counted, one line per distinct
 // reason, never one per payload.
-
-import (
-	"crypto/md5"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"regexp"
-
-	"github.com/burpsy-go/burpsy/internal/tools"
-)
 
 // MaxDropReasons bounds distinct drop reasons for the same reason result buckets are bounded:
 // a chain that drops 199 999 payloads for one reason is one row.
@@ -62,6 +65,9 @@ type RuleSpec struct {
 	Layer string `json:"layer"`
 	// Algorithm is the digest for hash: md5 or sha256.
 	Algorithm string `json:"algorithm"`
+	// Form is the normalization form for normalize: nfc, nfd, nfkc, nfkd, fullwidth or homoglyph
+	// (burpsy-react-ui-d617).
+	Form string `json:"form"`
 }
 
 // RuleErrorKind distinguishes the ways a rule can refuse to build.
@@ -147,6 +153,7 @@ type step struct {
 	hasHash   bool
 	layerName string
 	pattern   string
+	normForm  NormForm
 }
 
 type stepKind int
@@ -161,6 +168,7 @@ const (
 	stepDecode
 	stepHash
 	stepSkipIfMatches
+	stepNormalize
 )
 
 // Chain is an ordered chain of processing rules, ready to run.
@@ -211,6 +219,12 @@ func NewChain(specs []RuleSpec) (*Chain, error) {
 				return nil, err
 			}
 			steps = append(steps, step{kind: stepSkipIfMatches, re: re, pattern: s.Pattern})
+		case "normalize":
+			f, ok := parseNormForm(s.Form)
+			if !ok {
+				return nil, normFormError(s.Form)
+			}
+			steps = append(steps, step{kind: stepNormalize, normForm: f})
 		default:
 			// The Rust tagged enum refuses this at deserialisation; the Go struct cannot,
 			// so the refusal lives here, at construction, where an operator typo is one
@@ -289,6 +303,8 @@ func (c *Chain) Apply(payload []byte) Processed {
 			cur = v
 		case stepHash:
 			cur = []byte(st.hash.hex(cur))
+		case stepNormalize:
+			cur = normalizeVariant(st.normForm, cur)
 		case stepSkipIfMatches:
 			if st.re.Match(cur) {
 				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d: skipped, matches %s", i, st.pattern)}
@@ -367,5 +383,80 @@ func noteDrop(into *[]DropReason, reason string) {
 	}
 	if len(*into) < MaxDropReasons {
 		*into = append(*into, DropReason{Reason: reason, Count: 1})
+	}
+}
+
+// URLEncodeSet applies Burp's "URL-encode these characters" final pass to one payload
+// set: every rune in the named character set is percent-encoded, everything else passes
+// through untouched (burpsy-react-ui-8cbc). Burp runs this as the last step before
+// sending, independent of the payload type — which is where the handler calls it, after
+// the operator's rule chain, so an explicit encode rule still runs first and the safety
+// net encodes what remains.
+//
+// The safe set is always encoded additionally: a space or a control character in a
+// payload would break the request line or the framing headers no matter what the
+// operator asked for, and sending a request the peer cannot parse reports a transport
+// error that reads as a finding. Burp behaves the same way.
+func URLEncodeSet(ps *PayloadSet, chars string) {
+	if chars == "" {
+		// An empty named set is the off state — but the always-encode rule still applies to
+		// any payload that carries an unrepresentable character, because the request it would
+		// produce cannot be delivered. Only a payload with nothing to encode skips the walk.
+		needsWalk := false
+		for _, item := range ps.Items {
+			// Scanned as bytes, not runes: every character in the safe set is a single-byte rune
+			// in UTF-8, so this is the same question asked in the representation the payload
+			// actually is. A payload is a byte string, and ranging it as runes is what broke the
+			// pass below (burpsy-react-ui-8dli).
+			for i := 0; i < len(item); i++ {
+				if item[i] <= 0x20 || item[i] == 0x7f {
+					needsWalk = true
+					break
+				}
+			}
+			if needsWalk {
+				break
+			}
+		}
+		if !needsWalk {
+			return
+		}
+	}
+	// A payload is a byte string, not a Go string, and the difference is not academic here: a
+	// payload set can be a wordlist read straight off disk (payload.go's "file" source uses
+	// os.ReadFile with no UTF-8 validation), so binary and extended-ASCII bytes are ordinary input.
+	//
+	// This ranged `string(b)` by rune, which decodes any invalid byte as utf8.RuneError and then
+	// re-encoded it as U+FFFD's three bytes: 61 ff 62 went out as 61 ef bf bd 62. Silently, with
+	// the box seeded non-empty so the pass is on by default — an operator fuzzing with a binary
+	// corpus was testing bytes they had not chosen, and a negative result meant nothing
+	// (burpsy-react-ui-8dli).
+	//
+	// Decoding is still per-rune, because the named set is a set of CHARACTERS and a multi-byte
+	// one must match as a unit. A byte that is not valid UTF-8 is not a character at all, so it is
+	// in no named set and in no safe set, and the documented rule — everything else passes through
+	// untouched — applies to it exactly as written.
+	encode := func(b []byte) []byte {
+		var out bytes.Buffer
+		for i := 0; i < len(b); {
+			r, size := utf8.DecodeRune(b[i:])
+			if r == utf8.RuneError && size <= 1 {
+				out.WriteByte(b[i])
+				i++
+				continue
+			}
+			if (chars != "" && strings.ContainsRune(chars, r)) || r <= 0x20 || r == 0x7f {
+				for _, bb := range b[i : i+size] {
+					fmt.Fprintf(&out, "%%%02X", bb)
+				}
+			} else {
+				out.Write(b[i : i+size])
+			}
+			i += size
+		}
+		return out.Bytes()
+	}
+	for i, item := range ps.Items {
+		ps.Items[i] = string(encode([]byte(item)))
 	}
 }

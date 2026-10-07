@@ -46,11 +46,6 @@ import (
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 )
 
-// coreInjectionKinds are the places these three rows look. Body and cookie are included because a
-// login form's SQL injection lives in the body, which is exactly the case the query-only
-// predecessor could not reach.
-var coreInjectionKinds = []string{"query", "body", "cookie"}
-
 // checkSQLInjectionCore reports SQL injection confirmed by a database error the baseline did not
 // produce.
 //
@@ -62,7 +57,7 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
 		return offline, err
 	}
-	res, err := runInjection(ctx, cc, coreInjectionKinds,
+	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
 		})
@@ -153,12 +148,17 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if cc != nil && cc.Scanner != nil && cc.Scanner.sender == nil {
 		return nil, nil
 	}
-	h, err := NewProbeHarness(ctx, cc, coreInjectionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", xssReflectedIssue, err)
 	}
 	points := h.Points()
+	// The cap is reported rather than silently applied. A finding that says "Probed 8 insertion
+	// points" for a request carrying 20 is a coverage claim the check did not earn; the extra
+	// points are recorded in the finding's evidence text instead.
+	capped := 0
 	if len(points) > MaxInjectionPointsPerCheck {
+		capped = len(points) - MaxInjectionPointsPerCheck
 		points = points[:MaxInjectionPointsPerCheck]
 	}
 
@@ -241,6 +241,10 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			remediation = definition.Remediation
 		}
 		detail := fmt.Sprintf("%s %q: %s", point.Kind, point.Name, xssEvidenceText(evidence))
+		if capped > 0 {
+			detail += fmt.Sprintf("; %d further insertion point(s) were NOT probed (cap %d reached)",
+				capped, MaxInjectionPointsPerCheck)
+		}
 		return []*Finding{{
 			Name:        xssReflectedIssue,
 			Severity:    severity,
@@ -271,7 +275,7 @@ func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Findi
 	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures); isOffline {
 		return offline, err
 	}
-	res, err := runInjection(ctx, cc, coreInjectionKinds,
+	res, err := runInjection(ctx, cc, "FilePathTraversalCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
 		})

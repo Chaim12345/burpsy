@@ -114,13 +114,21 @@ type intruderAttackView struct {
 	Status string `json:"status"`
 	// StopReason is why it was stopped, empty when it was not.
 	StopReason string `json:"stop_reason,omitempty"`
+	// Sent and Failed are the sends that have settled so far — the live answer to "is it doing
+	// anything", and the same totals the eventual report carries. planned bounds sent+failed only
+	// loosely: a stop lets in-flight sends land, so an ended attack's counts can still move.
+	Sent   int `json:"sent"`
+	Failed int `json:"failed"`
 }
 
 func attackView(a *runningAttack) intruderAttackView {
+	sent, failed := a.control.Progress()
 	return intruderAttackView{
 		TaskID: a.taskID, Kind: a.kind, Target: a.target, Planned: a.planned,
 		Status:     string(a.control.Status()),
 		StopReason: a.control.StopReason(),
+		Sent:       sent,
+		Failed:     failed,
 	}
 }
 

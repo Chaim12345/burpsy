@@ -53,7 +53,7 @@ func TestEngine_UnconditionalListHoldsEverything(t *testing.T) {
 		t.Fatalf("held = %+v", h)
 	}
 	// Resolve it so the map has no dangling entry.
-	if err := e.Forward(h.ID, nil, false); err != nil {
+	if err := e.Forward(h.ID, nil, false, nil); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
 }
@@ -134,11 +134,11 @@ func TestEngine_HeldForwardCarriesEditedBytes(t *testing.T) {
 	edited := "GET /changed HTTP/1.1\r\nHost: a.test\r\n\r\n"
 	go func() {
 		time.Sleep(20 * time.Millisecond)
-		if err := e.Forward(h.ID, ptr(edited), false); err != nil {
+		if err := e.Forward(h.ID, ptr(edited), false, nil); err != nil {
 			t.Errorf("Forward: %v", err)
 		}
 	}()
-	action, raw := h.Wait()
+	action, raw, _, _ := h.Wait()
 	if action != ActionForward {
 		t.Fatalf("action = %v, want forward", action)
 	}
@@ -162,7 +162,7 @@ func TestEngine_DropResolvesToNilBytes(t *testing.T) {
 			t.Errorf("Drop: %v", err)
 		}
 	}()
-	action, raw := h.Wait()
+	action, raw, _, _ := h.Wait()
 	if action != ActionDrop {
 		t.Fatalf("action = %v, want drop", action)
 	}
@@ -187,7 +187,7 @@ func TestEngine_ResolvingHeldMessageRemovesItFromTheMap(t *testing.T) {
 		if h == nil {
 			t.Fatalf("iteration %d: message not held", i)
 		}
-		if err := e.Forward(h.ID, nil, false); err != nil {
+		if err := e.Forward(h.ID, nil, false, nil); err != nil {
 			t.Fatalf("iteration %d: Forward: %v", i, err)
 		}
 	}
@@ -213,10 +213,10 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 	e.SetEnabled(true)
 	e.SetRules(DirectionRequest, true, nil)
 	h := e.Hold(reqMessage("a.test", "GET", "/"))
-	if err := e.Forward(h.ID, nil, false); err != nil {
+	if err := e.Forward(h.ID, nil, false, nil); err != nil {
 		t.Fatalf("first Forward: %v", err)
 	}
-	if err := e.Forward(h.ID, ptr("GET /again HTTP/1.1\r\n\r\n"), false); err == nil {
+	if err := e.Forward(h.ID, ptr("GET /again HTTP/1.1\r\n\r\n"), false, nil); err == nil {
 		t.Fatalf("second Forward succeeded, want error")
 	}
 	if err := e.Drop(h.ID, ""); err == nil {
@@ -226,7 +226,7 @@ func TestEngine_SecondResolveIsIgnored(t *testing.T) {
 
 func TestEngine_ForwardUnknownIDFails(t *testing.T) {
 	e := NewEngine()
-	if err := e.Forward(99, nil, false); err == nil {
+	if err := e.Forward(99, nil, false, nil); err == nil {
 		t.Fatalf("Forward on unknown id succeeded")
 	}
 }
@@ -308,8 +308,16 @@ func TestHeld_StatusField(t *testing.T) {
 		t.Fatalf("request status_code should be empty")
 	}
 	code := 500
-	m.Status = &code
-	if got := m.FieldValue(FieldStatusCode); got != "500" {
+	// A RESPONSE is where a status code comes from, and the field now says so from the DIRECTION
+	// rather than from whether the pointer happens to be set. The old shape read whatever was on the
+	// struct, so a message carrying a status it could not have had answered a rule written against a
+	// request — a rule that matched a field the direction does not supply, which is the dead-weight
+	// case burpsy-react-ui-1cuc says must stay visible (1cuc).
+	if got := m.FieldValue(FieldStatusCode); got != "" {
+		t.Fatalf("a REQUEST carrying a status pointer answered %q; a request has no status code", got)
+	}
+	r := respMessage("a.test", "GET", "/", code, nil)
+	if got := r.FieldValue(FieldStatusCode); got != "500" {
 		t.Fatalf("status_code = %q", got)
 	}
 }
@@ -325,7 +333,7 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 	}
 	// Resolve one out from under DropAll: it must not be counted or re-resolved,
 	// because the proxy side of that message already has its answer.
-	if err := e.Forward(first.ID, nil, false); err != nil {
+	if err := e.Forward(first.ID, nil, false, nil); err != nil {
 		t.Fatalf("Forward: %v", err)
 	}
 	if got := e.DropAll("clear the queue"); got != 1 {
@@ -335,7 +343,7 @@ func TestEngine_DropAllDropsEveryHeldMessageAndCountsOnlyItsOwn(t *testing.T) {
 		t.Fatalf("queue not empty after DropAll: %d left", left)
 	}
 	// The dropped message's proxy side wakes with a drop and no bytes.
-	action, raw := second.Wait()
+	action, raw, _, _ := second.Wait()
 	if action != ActionDrop || raw != nil {
 		t.Fatalf("Wait = (%v, %q), want (drop, nil)", action, raw)
 	}
@@ -374,7 +382,7 @@ func TestEngine_ForwardAllForwardsEveryHeldMessageUnmodifiedAndCountsOnlyItsOwn(
 	// The forwarded message's proxy side wakes with a forward and the exact
 	// bytes the client put on the wire — the rewriteContentLength pass that a
 	// per-id Forward applies on request has no place here.
-	action, raw := second.Wait()
+	action, raw, _, _ := second.Wait()
 	if action != ActionForward {
 		t.Fatalf("Wait action = %v, want forward", action)
 	}

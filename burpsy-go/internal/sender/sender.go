@@ -6,11 +6,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +37,26 @@ type Sender struct {
 	client *http.Client
 	config *SenderConfig
 	net    NetworkSettings
+	// tlsCAs caches the root pool built from each custom CA path the operator has configured, keyed by
+	// the path. Building a CertPool parses every system root, and this is the handshake path for every
+	// TLS send, so a per-dial build would be a real cost. Guarded separately from mu because it is
+	// written on the send path and read by nothing else — the dial builds its own copy of the value.
+	tlsMu  sync.Mutex
+	tlsCAs map[string]*x509.CertPool
+	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
+	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
+	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
+	// (burpsy-react-ui-mr83). See CookieJar for why this is an interface rather than the session
+	// package's own type, which imports this one.
+	//
+	// On the Sender rather than on AuthorisedSender because the choice is a NETWORK SETTING and every
+	// authorised sender shares this one: a setting that a caller had to pass to each of twenty
+	// construction sites is a setting half of them will forget.
+	jar CookieJar
+	// carrier is the global SOCKS layer this sender's egress legs are opened through. Nil means no
+	// carrier, which is the behaviour every send had before it existed. See
+	// internal/upstream.Carrier.
+	carrier *upstream.Carrier
 	// protocols is what this sender has learnt about each authority's ALPN, plus the protocol-coverage
 	// counters. One per Sender rather than one per authority handle, so an intruder run and the scan
 	// that preceded it share what either of them discovered — see protocol.go. Its own state is
@@ -86,6 +108,12 @@ type SenderConfig struct {
 	// credential store. Held here rather than on Sender because both dial paths need it and both read
 	// their knobs from the config.
 	ClientCerts alpn.ClientCertSource
+	// UpstreamCarrier is the global SOCKS layer this sender's egress legs are opened through.
+	// Nil means no carrier, which is the behaviour every send had before the layer existed.
+	//
+	// It is here rather than only on the Sender because the client is built during construction, from
+	// the config, before a Sender exists to hold anything.
+	UpstreamCarrier *upstream.Carrier
 	// PlatformAuth, when set, is consulted for an Authorization header to present on the typed send
 	// path — Burp's Settings → Network → Platform authentication.
 	//
@@ -157,8 +185,9 @@ func NewSender(config *SenderConfig) *Sender {
 	}
 	settings := networkFromConfig(config)
 	policy, policyErr := resolveUpstream(config)
+	carrier := config.UpstreamCarrier
 	return &Sender{
-		client:      buildClient(config, settings),
+		client:      buildClient(config, settings, carrier),
 		config:      config,
 		net:         settings,
 		protocols:   newProtocolCache(),
@@ -203,7 +232,7 @@ func networkFromConfig(config *SenderConfig) NetworkSettings {
 // fields would both race with in-flight sends and leave already-idle connections on the old values. A
 // fresh transport per settings change costs one connection pool, which is the honest price of a
 // timeout change that actually takes effect.
-func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
+func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstream.Carrier) *http.Client {
 	// Resolved here rather than passed in because every caller of buildClient already holds the
 	// config this derives from, and threading it through four call sites would let one of them
 	// forget. A policy that cannot be built is carried, not swallowed: see the Proxy hook below.
@@ -230,8 +259,26 @@ func buildClient(config *SenderConfig, settings NetworkSettings) *http.Client {
 				Policy:  policy,
 				Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 				Base:    settings.dialer(),
+				// The global SOCKS layer, applied beneath whatever the policy resolved. The same
+				// instance the proxy leg and the console hold, so one Settings edit reaches every
+				// surface (burpsy-react-ui-mr83 part 3).
+				Carrier: carrier,
 			}
-			return dialer.DialContext(ctx, network, settings.overrideAddr(addr))
+			// The family preference is applied here too, and on the same rule as the raw path's
+			// dialAddress: an override is an operator naming one address and is never second-guessed, and
+			// the system preference leaves the hostname for the dialer to resolve. Two dial paths that
+			// disagreed here would be a Repeater send that reached an IPv6-only host and a scanner probe
+			// on the same host that did not.
+			target := settings.overrideAddr(addr)
+			if host, _, err := net.SplitHostPort(addr); err == nil {
+				if resolved, rerr := settings.resolveForDial(ctx, host); rerr == nil && resolved != "" {
+					if _, _, perr := net.SplitHostPort(target); perr == nil {
+						_, resolvedPort, _ := net.SplitHostPort(target)
+						target = net.JoinHostPort(resolved, resolvedPort)
+					}
+				}
+			}
+			return dialer.DialContext(ctx, network, target)
 		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -329,7 +376,7 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.net = normalised
-	s.client = buildClient(s.config, normalised)
+	s.client = buildClient(s.config, normalised, s.carrier)
 	return nil
 }
 
@@ -398,11 +445,16 @@ func (s *Sender) dialPlain(ctx context.Context, host string, port uint16) (net.C
 	// meant that configuring a proxy silently stopped honouring the operator's resolver.
 	settings := s.Network()
 	dialer := upstream.Dialer{
-		Policy:  s.upstream,
+		Policy: s.upstream,
+		// The global SOCKS layer. Every dial in this package carries it, not just the transport's:
+		// the raw path — which is the one Repeater sends through, and therefore the one an operator
+		// exercising the setting from the UI actually uses — would otherwise go direct and make the
+		// setting look installed and inert (burpsy-react-ui-mr83 part 3).
+		Carrier: s.carrier,
 		Timeout: time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 		Base:    settings.dialer(),
 	}
-	return dialer.DialContext(ctx, "tcp", settings.dialAddress(host, port))
+	return dialer.DialContext(ctx, "tcp", settings.dialAddressFor(ctx, host, port))
 }
 
 // Protocols reports which protocol carried this sender's sends, why the HTTP/1.1 ones did, and what is
@@ -468,16 +520,35 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 	// presented here too, which covers every raw-bytes TLS path in the package at once:
 	// SendRawOutcome, ProtocolFor's discovery handshake, dialOne's pipelining and desync probes, and
 	// dialForProgram's frame programs all funnel through this function.
+	// Verification follows the network settings, not the construction-time field, so one edit reaches
+	// every leg. SenderConfig.TLSVerify is still read, and is the fallback for a sender built without
+	// network settings applied — which is every test and every embedder that never called ApplyNetwork.
+	// burpsy-react-ui-f365: the setting existed on the sender and was invisible, which is half of why
+	// the proxy's permanent off looked like a design decision rather than a gap.
+	verify, roots, minVersion := s.tlsPolicy(settings)
 	dialer := alpn.Dialer{
-		InsecureSkipVerify: !s.config.TLSVerify,
+		InsecureSkipVerify: !verify,
+		RootCAs:            roots,
+		MinVersion:         minVersion,
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
 		ClientCerts:        s.config.ClientCerts,
 	}
-	if s.upstream != nil && !s.upstream.Empty() {
-		dialer.Carry = upstream.Dialer{Policy: s.upstream, Timeout: connect, Base: settings.dialer()}.DialContext
+	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
+	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
+	// configured — the ordinary case for an operator who only wants a SOCKS hop — the raw path opened
+	// a bare socket, so the layer was configured, reported as configured, and never carried a single
+	// connection. Burp's setting says "every outbound connection", and the gate made it mean "every
+	// connection to an upstream proxy" (burpsy-react-ui-mr83 part 3).
+	if s.upstream != nil && !s.upstream.Empty() || s.carrier != nil {
+		dialer.Carry = upstream.Dialer{
+			Policy:  s.upstream,
+			Carrier: s.carrier,
+			Timeout: connect,
+			Base:    settings.dialer(),
+		}.DialContext
 	}
-	return dialer.Dial(ctx, host, settings.dialAddress(host, port), offer)
+	return dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
 }
 
 // Request represents a raw HTTP request.
@@ -784,7 +855,11 @@ func (s *Sender) observe(target *url.URL, resp *http.Response) SendOutcome {
 	// The exchange completed — observe runs on a response — so this send is counted. No rendering is carried:
 	// the typed path's caller holds a *Request rather than bytes, and Sender.Render is the one place that
 	// turns one into the other.
-	return s.finish(host, port, isTLS, negotiated, downgradeFromResponse(resp, isTLS, negotiated), nil, nil, nil)
+	//
+	// No ServerIP here: the stdlib transport owns its connections and does not hand the dialled
+	// address to this layer. Inventing one by re-resolving would report where the name points now
+	// rather than where this request went, which is exactly the lie the field exists not to tell.
+	return s.finish(host, port, isTLS, negotiated, downgradeFromResponse(resp, isTLS, negotiated), nil, nil, "", nil)
 }
 
 // downgradeFromResponse names why a typed send did not travel over h2, or nil when it did.
@@ -849,8 +924,8 @@ func (s *Sender) SendRawOutcome(
 	if !useTLS {
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
-		resp, err := s.sendHTTP1Plain(ctx, host, port, plan.http1)
-		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, err)
+		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1)
+		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
 		return resp, out, err
 	}
 
@@ -872,7 +947,7 @@ func (s *Sender) SendRawOutcome(
 	if plan.wantH2 && negotiated == alpn.H2 {
 		s.setDeadline(ctx, conn, host)
 		resp, err := sendOverH2(ctx, conn, plan.http2)
-		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), err)
+		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), remoteIP(conn), err)
 		return resp, out, err
 	}
 
@@ -881,9 +956,9 @@ func (s *Sender) SendRawOutcome(
 		// h2 was offered and did not happen: the two ways that can go are different findings, so they
 		// are different reasons.
 		if negotiated == "" {
-			down = &Downgrade{Reason: DowngradeNoALPN}
+			down = &Downgrade{Reason: DowngradeNoALPN, Forced: plan.mustH2}
 		} else {
-			down = &Downgrade{Reason: DowngradeNegotiatedHTTP11}
+			down = &Downgrade{Reason: DowngradeNegotiatedHTTP11, Forced: plan.mustH2}
 			if negotiated != alpn.HTTP11 {
 				// Unreachable against a conformant peer, which must choose from the offer or fail the
 				// handshake. Named rather than collapsed, so a peer that does this is visible instead of
@@ -893,7 +968,7 @@ func (s *Sender) SendRawOutcome(
 		}
 	}
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
-	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, err)
+	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
 	return resp, out, err
 }
 
@@ -914,13 +989,37 @@ func (s *Sender) finish(
 	down *Downgrade,
 	rewrites []Rewrite,
 	rendered []byte,
+	serverIP string,
 	err error,
 ) SendOutcome {
 	out := newOutcome(negotiated, s.protocols.Lookup(host, port, useTLS), down, rewrites, rendered)
+	// Stamp even on a failed send when the connection existed: "where did these bytes go" is
+	// answerable by anything that reached a socket, and a dial that connected but then failed
+	// still went somewhere real. A failure before any dial leaves it empty.
+	out.ServerIP = serverIP
 	if err == nil {
 		s.protocols.record(out)
 	}
 	return out
+}
+
+// remoteIP is the host half of a connection's remote address, read off the live socket — the
+// same fact proxy.serverIPOf records for its leg, so both producers of an exchange row answer
+// "which address did this name resolve to *for this request*" the same way. Empty for a nil
+// connection or an unparseable address, which a caller reports as absence rather than guessing.
+func remoteIP(conn net.Conn) string {
+	if conn == nil {
+		return ""
+	}
+	addr := conn.RemoteAddr()
+	if addr == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return ""
+	}
+	return host
 }
 
 // sendPlan is what protocol selection decided from the request bytes alone, before any connection
@@ -928,6 +1027,18 @@ func (s *Sender) finish(
 type sendPlan struct {
 	// wantH2 says whether the dial offers h2. False means block says why not.
 	wantH2 bool
+	// mustH2 says whether the caller pinned ProtocolPreferenceForceH2 for this send, and is valid only
+	// when wantH2: it is the field sendPlan used to be missing entirely (burpsy-react-ui-57yk).
+	// planSend switched on only !useTLS and ProtocolPreferenceHTTP1, so Auto and ForceH2 fell through
+	// to the same branch and produced byte-identical plans — the preference was parsed at the web
+	// layer and then had nowhere to go. wantH2 alone cannot carry "the operator specifically asked for
+	// h2" versus "h2 happens to be on offer": both read as true. mustH2 is that missing bit, read back
+	// at SendRawOutcome's negotiated-http/1.1 branch to mark the resulting Downgrade as one a Force
+	// pin, not Auto, produced — see Downgrade.Forced. It does not change what gets dialled: Force
+	// still offers h2 and still falls back on the same terms Auto does (planSend's own comment below,
+	// and force_h2_test.go, both predate this field and already fix that half — an h2-only offer would
+	// abort the handshake at exactly the target an operator pinning Force is trying to observe).
+	mustH2 bool
 	// http2 is the request to send if ALPN chooses h2; valid only when wantH2.
 	http2 h2Request
 	// http1 is the bytes to write if it does not. For HTTP/1.1 input these are the caller's own bytes,
@@ -952,13 +1063,15 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 		}
 		// Bytes that already say HTTP/2 have an HTTP/1.1 rendering available, so a target that will not
 		// take h2 still gets the request rather than a failed handshake — see renderHTTP1.
-		plan := sendPlan{wantH2: true, http2: req, http1: renderHTTP1(req)}
+		plan := sendPlan{wantH2: true, mustH2: pref == ProtocolPreferenceForceH2, http2: req, http1: renderHTTP1(req)}
 		switch {
 		case !useTLS:
 			plan.wantH2 = false
+			plan.mustH2 = false
 			plan.block = &Downgrade{Reason: DowngradePlaintextTarget}
 		case pref == ProtocolPreferenceHTTP1:
 			plan.wantH2 = false
+			plan.mustH2 = false
 			plan.block = &Downgrade{Reason: DowngradePinnedByCaller}
 		}
 		return plan, nil
@@ -975,10 +1088,16 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 	}
 	h2, block := planH2(raw)
 	if block != nil {
+		// Force-h2 cannot change what h2 can carry: the construct that blocks Auto blocks this
+		// too. The plan is not marked wantH2, so the dial offers http/1.1 and the bytes go out
+		// verbatim with the reason naming the construct — the honest answer to "use h2" when h2
+		// has nowhere to put the request. Nor is it marked mustH2: h2 was never offered, so there is
+		// nothing a Force pin can be said to have required and then not gotten.
 		plan.block = block
 		return plan, nil
 	}
 	plan.wantH2 = true
+	plan.mustH2 = pref == ProtocolPreferenceForceH2
 	plan.http2 = h2Request{
 		Method:    h2.Method,
 		Path:      h2.Path,
@@ -990,16 +1109,20 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 	return plan, nil
 }
 
-// sendHTTP1Plain dials cleartext and writes one request.
-func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, error) {
+// sendHTTP1Plain dials cleartext and writes one request. The dialled address is returned
+// alongside the response, because a caller recording the exchange wants where the socket went
+// — the same fact the TLS path reads off its own connection (burpsy-react-ui-gj4f).
+func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, string, error) {
 	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
-		return nil, fmt.Errorf("connection failed: %w", err)
+		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
 	defer conn.Close()
 	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
 	defer watchCancel(ctx, conn)()
-	return s.writeHTTP1(ctx, conn, host, raw)
+	ip := remoteIP(conn)
+	resp, err := s.writeHTTP1(ctx, conn, host, raw)
+	return resp, ip, err
 }
 
 // writeHTTP1 writes one request on an open connection and reads exactly one response back.
@@ -1019,6 +1142,7 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
+		eventStreamPromoter(ctx, conn, settings),
 	)
 	if err != nil {
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a
@@ -1084,7 +1208,7 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 	if total := s.net.Timeouts.TotalMS; total > 0 && s.net.Timeouts.ConnectMS > total {
 		s.net.Timeouts.ConnectMS = total
 	}
-	s.client = buildClient(s.config, s.net)
+	s.client = buildClient(s.config, s.net, s.carrier)
 	return s
 }
 
@@ -1095,6 +1219,112 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	s.config.TLSVerify = verify
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
-	s.client = buildClient(s.config, s.net)
+	s.client = buildClient(s.config, s.net, s.carrier)
 	return s
+}
+
+// tlsPolicy resolves the verification decision, root pool and protocol floor for one dial.
+//
+// The root pool is built once per distinct CA path and cached, because it is expensive to construct
+// and it is on the handshake path for every TLS send. A path that fails to load resolves to no pool and
+// the system one — a send that cannot read the operator's CA still reaches the target, and says so by
+// failing verification if the target's issuer is not in the system pool, which is a clearer outcome
+// than refusing to dial at all.
+//
+// The cache is a mutex-guarded map rather than a sync.Once because the path can change while the sender
+// runs, which is the whole point of the setting being live.
+func (s *Sender) tlsPolicy(settings NetworkSettings) (verify bool, roots *x509.CertPool, minVersion uint16) {
+	verify = s.config.TLSVerify
+	minVersion = settings.TLS.MinVersion
+	path := strings.TrimSpace(settings.TLS.RootCAPath)
+	if path == "" {
+		return verify, nil, minVersion
+	}
+
+	s.tlsMu.Lock()
+	defer s.tlsMu.Unlock()
+	if s.tlsCAs == nil {
+		s.tlsCAs = make(map[string]*x509.CertPool)
+	}
+	if pool, seen := s.tlsCAs[path]; seen {
+		return verify, pool, minVersion
+	}
+	pool := loadCABundle(path)
+	s.tlsCAs[path] = pool
+	return verify, pool, minVersion
+}
+
+// loadCABundle reads a PEM file into a pool that also holds the system roots, reporting nil when the
+// file cannot be read or contains no certificates.
+//
+// Nil rather than an error because a dial has no way to report "your CA file is missing" that is more
+// useful than the handshake failure it causes, and because refusing the dial would mean one missing
+// file silently disables every TLS send rather than only the targets it was meant to cover.
+func loadCABundle(path string) *x509.CertPool {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil
+	}
+	return pool
+}
+
+// WithCookieJar attaches the cookie store a followed redirect chain replays from, and returns the
+// sender so it can be chained onto construction.
+//
+// Nil is a no-op rather than a clear, matching every other With* here: a sender that never opted in
+// has no jar, and Redirects.ReplayCookies with no jar simply sends nothing, which is the honest
+// reading of a setting whose store is not there.
+func (s *Sender) WithCookieJar(jar CookieJar) *Sender {
+	if s != nil {
+		s.jar = jar
+	}
+	return s
+}
+
+// CookieJar returns the attached cookie store, or nil.
+func (s *Sender) CookieJar() CookieJar {
+	if s == nil {
+		return nil
+	}
+	return s.jar
+}
+
+// WithUpstreamCarrier attaches the global SOCKS layer to this sender's egress legs.
+//
+// The SAME instance must be handed to the proxy and the web server, for the reason the upstream
+// policy's own wiring says: two carriers would let the panel describe a layer only one surface
+// honours.
+func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
+	if s == nil {
+		return s
+	}
+	s.carrier = carrier
+	// The config too, because the next client rebuild reads from there rather than from the Sender —
+	// a WithTLSVerify or a settings change would otherwise drop the carrier silently.
+	if s.config != nil {
+		s.config.UpstreamCarrier = carrier
+	}
+	// And the CLIENT is rebuilt now, not on the next edit. The client captured the carrier at
+	// construction, so setting the field afterwards would leave the transport dialling through a nil
+	// layer while the field reported one — the live pass caught exactly that: the console reported the
+	// carrier configured, every dial site read the field, and the connection still went out direct.
+	s.mu.Lock()
+	s.client = buildClient(s.config, s.net, carrier)
+	s.mu.Unlock()
+	return s
+}
+
+// UpstreamCarrier returns the attached global SOCKS layer, or nil.
+func (s *Sender) UpstreamCarrier() *upstream.Carrier {
+	if s == nil {
+		return nil
+	}
+	return s.carrier
 }

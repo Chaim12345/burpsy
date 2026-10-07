@@ -321,10 +321,11 @@ func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding
 	}
 	points, declined := Enumerate(ctx.Request, check.InsertionKinds)
 	// A request can have somewhere to inject that the enumerator refuses to
-	// splice into — a multipart or non-UTF-8 body, say. When that is the *only*
-	// place the check asked for, the enumeration comes back empty but not
-	// clean: surfacing the decline as Unsupported makes the caller count it as
-	// skipped rather than "tested, found nothing".
+	// splice into — a plain-text or non-UTF-8 body, or a multipart body whose
+	// framing cannot be read. When that is the *only* place the check asked for,
+	// the enumeration comes back empty but not clean: surfacing the decline as
+	// Unsupported makes the caller count it as skipped rather than "tested,
+	// found nothing".
 	if len(points) == 0 && len(declined) > 0 {
 		descs := make([]string, len(declined))
 		for i, d := range declined {

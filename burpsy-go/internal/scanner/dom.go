@@ -663,7 +663,7 @@ func (s *PassiveScanner) ScanDOM(exchange *core.Exchange) DOMAnalysis {
 	if err != nil {
 		return domSkipped(DOMSkipResponseNotFound)
 	}
-	a := AnalyzeDOMDocument(msg.Body(), string(msg.Header("Content-Type")), DOMBudget{})
+	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), DOMBudget{})
 	a.ExchangeID = exchange.ID
 	a.Method = exchange.Method
 	a.URL = domURL(exchange)

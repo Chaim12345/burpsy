@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play, Power, PowerOff } from "lucide-react";
+import { ArrowDown, ArrowUp, Play, Power, PowerOff } from "lucide-react";
 import { toast } from "sonner";
 import { formatCount, formatDuration } from "../lib/api";
 import {
@@ -8,12 +8,13 @@ import {
   useExtensions,
   useInvokeExtension,
   useLoadExtension,
+  useMoveExtension,
   useUnloadExtension,
 } from "../lib/data.extensions";
 import { cn } from "../lib/cn";
 import type { ConsoleLine, ExtensionView, Registration } from "../lib/types.extensions";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Metric, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Metric, Tooltip } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import type { Tone } from "../ui/primitives";
 
@@ -50,11 +51,15 @@ function stateBadge(row: ExtensionView): JSX.Element {
   return <Badge tone={STATE_TONE[row.state]}>{STATE_LABEL[row.state]}</Badge>;
 }
 
-/** The plugin's own words for a registration kind. */
+/** The plugin's own words for a registration kind. Same five the wire carries; a
+ * Record over the union so a sixth kind on the wire fails this build rather than
+ * rendering a blank cell. */
 const KIND_LABEL: Record<Registration["kind"], string> = {
   "context-menu": "Context-menu item",
   menu: "Menu action",
   "editor-tab": "Message-editor tab",
+  "session-action": "Session-handling action",
+  hotkey: "Hotkey",
 };
 
 function timeOf(atMs: number): string {
@@ -161,7 +166,16 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
       <SimpleTable headers={["Kind", "Label", "Id", "Hint", ""]}>
         {plugin.registrations.map((registration) => (
           <tr key={registration.id}>
-            <td>{KIND_LABEL[registration.kind]}</td>
+            <td>
+              {KIND_LABEL[registration.kind]}
+              {/* The chord the plugin asked for, so a hotkey row says what fires it. Burp's
+                  spelling, exactly as declared: the console normalises it at install time, and
+                  showing a different spelling here than the one the plugin declared would be a
+                  second opinion the operator cannot reconcile with the plugin's own docs. */}
+              {registration.kind === "hotkey" && registration.chord ? (
+                <> <code>{registration.chord}</code></>
+              ) : null}
+            </td>
             <td>{registration.label}</td>
             <td>
               <code>{registration.id}</code>
@@ -170,7 +184,10 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
               <span className="cell-dim">{registration.hint ?? "—"}</span>
             </td>
             <td>
-              {registration.kind === "menu" ? (
+              {registration.kind === "menu" || registration.kind === "hotkey" ? (
+                // A hotkey is runnable from here for the same reason a menu action is: no
+                // exchange and no message stand behind it. The chord does the same thing
+                // without the click; this is the click.
                 <Button
                   variant="outline"
                   size="small"
@@ -184,7 +201,7 @@ function RegistrationTable({ plugin }: { plugin: ExtensionView }): JSX.Element {
                 // Not offered rather than offered and broken: both other kinds are invoked with a
                 // message, and this tab selects none. They are reachable from POST
                 // /api/extensions/invoke with an exchange or a message id.
-                <Tooltip content="This kind is invoked with a message, which this tab does not select. Use POST /api/extensions/invoke with an exchange or message id.">
+                <Tooltip content="This kind is invoked with a message, which this tab does not select. Use POST /api/extensions/invoke with an exchange or a message id.">
                   <span className="cell-dim">needs a message</span>
                 </Tooltip>
               )}
@@ -296,11 +313,31 @@ export function ExtensionsPage(): JSX.Element {
   const { data, error, isFetching, isLoading, refetch } = useExtensions();
   const load = useLoadExtension();
   const unload = useUnloadExtension();
+  const move = useMoveExtension();
   const [selected, setSelected] = useState<string | null>(null);
 
   const rows = data?.extensions ?? [];
   const active = rows.find((row) => row.name === selected) ?? rows[0] ?? null;
   const busy = load.isPending || unload.isPending;
+
+  // The order is the sequence the console offers a plugin's registrations in — the palette group,
+  // the exchange context menu, the editor's plugin tabs — so this is not a table preference. The
+  // server owns it: the answer is the whole reordered list, and the query cache is refreshed from it
+  // rather than the row order being guessed at here while the request is in flight.
+  const moveRow = (name: string, direction: "up" | "down") => {
+    setSelected(name);
+    move.mutate(
+      { name, direction },
+      {
+        onSuccess: () => toast.success(`Moved ${name} ${direction}`),
+        // The server's own refusal, verbatim: "already first" and "not on the allowlist" are
+        // different problems, and the edges are refused rather than clamped precisely so a caller
+        // that asked anyway is told which.
+        onError: (failure: unknown) =>
+          toast.error(failure instanceof Error ? failure.message : `Could not move ${name} ${direction}`),
+      },
+    );
+  };
 
   const toggle = (row: ExtensionView, wanted: boolean) => {
     setSelected(row.name);
@@ -351,8 +388,8 @@ export function ExtensionsPage(): JSX.Element {
               detail={`${data.detail} Loading a plugin runs operator-supplied code in this process, so nothing can be admitted from the browser.`}
             />
           ) : (
-            <SimpleTable headers={["Loaded", "Name", "Type", "Version", "State", "Registrations", "Console", ""]}>
-              {rows.map((row) => (
+            <SimpleTable headers={["Order", "Loaded", "Name", "Type", "Version", "State", "Registrations", "Console", ""]}>
+              {rows.map((row, index) => (
                 <tr
                   key={row.name}
                   onClick={() => setSelected(row.name)}
@@ -361,6 +398,39 @@ export function ExtensionsPage(): JSX.Element {
                   // a grid, and the attribute is not allowed on a row outside one.
                   className={cn("data-row", "clickable", active?.name === row.name && "selected-row")}
                 >
+                  {/* Burp's Extender list is an ordered list and its Up/Down buttons move a plugin
+                      within it. This column is that control. The edges are disabled with a hint
+                      rather than left live: the route refuses them with 409, and a button that can
+                      only fail is worse than one that says why it cannot act. */}
+                  <td onClick={(event) => event.stopPropagation()}>
+                    <div className="toolbar">
+                      <span className="cell-num">{index + 1}</span>
+                      <IconButton
+                        label={
+                          index === 0
+                            ? `${row.name} is already first`
+                            : `Move ${row.name} before ${rows[index - 1]?.name ?? "the plugin above"}`
+                        }
+                        size="small"
+                        disabled={index === 0 || move.isPending}
+                        onClick={() => moveRow(row.name, "up")}
+                      >
+                        <ArrowUp size={13} />
+                      </IconButton>
+                      <IconButton
+                        label={
+                          index === rows.length - 1
+                            ? `${row.name} is already last`
+                            : `Move ${row.name} after ${rows[index + 1]?.name ?? "the plugin below"}`
+                        }
+                        size="small"
+                        disabled={index === rows.length - 1 || move.isPending}
+                        onClick={() => moveRow(row.name, "down")}
+                      >
+                        <ArrowDown size={13} />
+                      </IconButton>
+                    </div>
+                  </td>
                   <td>
                     <Checkbox
                       checked={row.state === "loaded"}

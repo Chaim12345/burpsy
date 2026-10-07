@@ -118,7 +118,7 @@ func TestAHeldMessageReportsTheDirectionItWasHeldIn(t *testing.T) {
 			t.Errorf("held in %s but the queue entry says %s", d, held.Direction)
 		}
 		// Release it so the queue does not carry state into the next iteration.
-		held.resolve(ActionForward, held.Raw, "")
+		held.resolve(ActionForward, held.Raw, nil, false, "")
 	}
 }
 

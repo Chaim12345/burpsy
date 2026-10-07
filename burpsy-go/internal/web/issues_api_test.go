@@ -135,7 +135,7 @@ func TestIssuesSurfacesMergedParams(t *testing.T) {
 			Target:     target,
 			Occurrences: []core.Occurrence{{
 				ExchangeID: core.ExchangeID(i),
-				Request:    core.MsgId(i * 2),
+				Request:    core.MsgPtr(core.MsgId(i * 2)),
 			}},
 		})
 	}

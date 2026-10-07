@@ -1423,5 +1423,5 @@ func jsAssetOf(store *core.TrafficStore, exchange *core.Exchange) (path, content
 	if err != nil {
 		return "", "", nil, false
 	}
-	return exchange.Path, string(msg.Header("Content-Type")), msg.Body(), true
+	return exchange.Path, string(msg.Header("Content-Type")), readableBody(msg), true
 }

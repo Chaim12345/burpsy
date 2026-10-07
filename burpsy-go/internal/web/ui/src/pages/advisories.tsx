@@ -3,8 +3,9 @@ import { useAdvisories, useAdvisory } from "../lib/data.advisory";
 import { useDebounced } from "../lib/data";
 import type { AdvisoryIndexRow } from "../lib/types.advisory";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
-import { Badge, Empty, ErrorNotice, Input, Select, Toolbar, type Tone } from "../ui/primitives";
+import { Badge, Empty, ErrorNotice, Input, Select, Toolbar } from "../ui/primitives";
 import { AdvisoryReader } from "../ui/advisory";
+import { severityTone } from "../lib/severity";
 
 /**
  * Target › Issue definitions: the issue-definition catalogue, browsable on its own.
@@ -41,19 +42,6 @@ const SEVERITY_LABEL: Record<string, string> = {
   LOW: "Low",
   INFO: "Info",
 };
-
-function severityTone(severity: string): Tone {
-  switch (severity) {
-    case "HIGH":
-      return "bad";
-    case "MEDIUM":
-      return "warn";
-    case "LOW":
-      return "info";
-    default:
-      return "neutral";
-  }
-}
 
 function DefinitionRow({
   row,

@@ -18,6 +18,11 @@ package session
 //     name an operator can act on.
 //   - A scope that was stated and is empty. It matches nothing, so the rule would never fire — see
 //     ValidateRuleStatedScope for why only the *stated* case can be caught here.
+//   - A tools scope naming an empty tool. No request is ever attributed to a tool with no name, so
+//     such an entry is a restriction that can never match — the same dead arm as a host pattern of
+//     "", which is why this check exists here and not only at the wire. Whether a *non-empty* name
+//     is one burpsy has is not this package's question: the vocabulary belongs to internal/toollog
+//     and the wire refuses an unrecognised name against it.
 //   - max_attempts below 1. The macro could never run at all.
 //   - A macro with no steps. There is nothing to run.
 //   - A step with no method, or a URL with no readable host. A hostless URL cannot be keyed in the
@@ -107,16 +112,36 @@ func validateRule(rule *SessionRule, scopeStated bool) error {
 	if strings.TrimSpace(rule.Name) == "" {
 		return refuse("a rule needs a name: every outcome and error this package reports names its rule")
 	}
-	if scopeStated && len(rule.ScopeHosts) == 0 {
-		return refuse("the scope has no hosts, so it matches nothing and this rule would never fire; " +
-			"omit the scope (or set allow_all) to apply everywhere")
+	if scopeStated && len(rule.ScopeHosts) == 0 && rule.ScopeMode != "suite" && !rule.StatesURLArms() {
+		// Stated-and-empty in every axis the rule can be scoped by (7nh2): no hosts, no path, no
+		// port, no scheme, and not delegated to the suite scope. This is the reading Rust's
+		// Option<Scope> cannot express and the web layer hands in as scopeStated, so it keeps its
+		// refusal — but the wording now names the axes, because "the scope has no hosts" stopped
+		// being the only way to state a scope without stating nothing.
+		return refuse("the scope states no hosts, no path, no port and no protocol, so it can only be read as one that matches nothing; " +
+			"omit the scope (or set allow_all) to apply everywhere, or state a host, a path prefix, a port or a scheme")
 	}
-	if rule.MaxAttempts < 1 {
+	// The tools scope is checked for the one fault this package can see without knowing the tool
+	// vocabulary: an empty name, which no request can ever carry. A near-miss against a real tool
+	// name cannot be caught here and is caught at the wire instead (see MatchTools' doc for why
+	// the comparison is exact rather than fuzzy).
+	for _, tool := range rule.ScopeTools {
+		if strings.TrimSpace(tool) == "" {
+			return refuse("the tools scope names an empty tool, which no request can be attributed to; " +
+				"remove the entry or name a tool")
+		}
+	}
+	// Refused only when the rule actually runs a macro. `max_attempts` and the macro itself are
+	// meaningless for a rule whose actions are "set a header" or "add the jar's cookies", and
+	// demanding them anyway would make the two actions that need nothing else impossible to install
+	// — the shape of refusal that teaches an operator to fill a login flow in to satisfy a form.
+	runsMacro := rule.effectiveActionsRunMacro()
+	if runsMacro && rule.MaxAttempts < 1 {
 		return refuse("max_attempts must be at least 1, or the macro can never run; %d is the default",
 			DefaultMaxAttempts)
 	}
-	if len(rule.Steps) == 0 {
-		return refuse("the login macro has no steps, so there is nothing to run")
+	if runsMacro && len(rule.Steps) == 0 {
+		return refuse("an action runs a macro, but the rule's macro has no steps, so there is nothing to run")
 	}
 	// Checked before the per-step walk so an extraction pointing past the end of the macro is named
 	// as such, rather than being skipped by extractionsFor and never mentioned again.
@@ -221,7 +246,107 @@ func validateRule(rule *SessionRule, scopeStated bool) error {
 			definedBy[ex.Name] = index
 		}
 	}
+	// The action list last, so a fault in the macro is reported as a macro fault rather than as an
+	// action that happens to run one.
+	return rule.validateActions(refuse)
+}
+
+// validateActions checks the rule's ordered action list, including the two faults only an action
+// list can have: a value naming a {{placeholder}} no action in the rule produces, and an action
+// whose kind cannot be executed because nothing is attached to execute it with.
+//
+// The placeholder check is deliberately coarser than the per-step one above, and says so rather than
+// pretending otherwise: a step walk can name *which* earlier step extracts a value, while an action
+// graph with a conditional branch cannot say that a name is defined on every path without
+// evaluating the rule. What it can say — and what catches the real mistake, a typo — is that nothing
+// anywhere in the rule extracts the name at all. When that is true the placeholder reaches the wire
+// verbatim, which is the failure the operator sees as "the target rejected a real attempt".
+func (r *SessionRule) validateActions(refuse func(format string, args ...interface{}) error) error {
+	actions := r.EffectiveActions()
+	if err := ValidateActions(actions); err != nil {
+		return refuse("%v", err)
+	}
+	produced := make(map[string]bool)
+	for _, ex := range r.Extractions {
+		if ex != nil {
+			produced[ex.Name] = true
+		}
+	}
+	collectActionMacroExtractions(r, actions, produced)
+	for i, name := range actionPlaceholdersIn(actions) {
+		if !produced[name] {
+			return refuse("action %d's value refers to {{%s}}, which no action in this rule extracts: "+
+				"the placeholder would go out on the wire verbatim", i+1, name)
+		}
+	}
 	return nil
+}
+
+// collectActionMacroExtractions records every extraction name a macro in the list can produce.
+//
+// Names come from the rule's own extraction list, which is also what a macro *action* holding its
+// own Macro falls back to for extractions (see runMacroOnce): an action that names its own steps
+// still reads the rule's extractions, because Extraction carries the step index it belongs to and a
+// per-action extraction list would need a second index space.
+func collectActionMacroExtractions(rule *SessionRule, actions []*Action, into map[string]bool) {
+	for _, ex := range rule.Extractions {
+		if ex != nil {
+			into[ex.Name] = true
+		}
+	}
+	for _, a := range actions {
+		if a == nil {
+			continue
+		}
+		if a.Kind == ActionCheckValidity {
+			collectActionMacroExtractions(rule, a.Then, into)
+			collectActionMacroExtractions(rule, a.Else, into)
+		}
+	}
+}
+
+// actionPlaceholdersIn flattens every placeholder an action list refers to, keeping the position of
+// the action that named it so a refusal can point at it.
+func actionPlaceholdersIn(actions []*Action) []string {
+	var out []string
+	var walk func(list []*Action)
+	walk = func(list []*Action) {
+		for _, a := range list {
+			out = append(out, actionPlaceholders(a)...)
+			if a != nil && a.Kind == ActionCheckValidity {
+				walk(a.Then)
+				walk(a.Else)
+			}
+		}
+	}
+	walk(actions)
+	return out
+}
+
+// effectiveActionsRunMacro reports whether any enabled action in this rule runs a macro, at any depth.
+//
+// Disabled actions do not count: an operator who turned "run a macro" off has said the rule no longer
+// logs in, and refusing to save that rule for want of a macro it would not run is the opposite of
+// what they asked for.
+func (r *SessionRule) effectiveActionsRunMacro() bool {
+	var walk func(list []*Action) bool
+	walk = func(list []*Action) bool {
+		for _, a := range list {
+			if a == nil || !a.Enabled {
+				continue
+			}
+			switch a.Kind {
+			case ActionRunMacro, ActionRunPostRequestMacro:
+				return true
+			case ActionCheckValidity:
+				if walk(a.Then) || walk(a.Else) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(r.EffectiveActions())
 }
 
 // placeholderToken matches one {{name}} reference. Braces are excluded from the name so `{{{a}}}`

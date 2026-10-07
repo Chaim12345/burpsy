@@ -126,6 +126,15 @@ const (
 	// this host over HTTP/1.1 only" stays visible in the report rather than being knowable only by
 	// whoever set the flag.
 	ProtocolPreferenceHTTP1
+	// ProtocolPreferenceForceH2 requires the send to go out over h2 when the request can be
+	// carried over it at all — the opposite pin to HTTP1, for a target whose h2 behaviour
+	// differs from its h1 behaviour (burpsy-react-ui-745). "Can be carried at all" is the same
+	// bar Auto applies (planH2's construct-by-construct check): a request h2 has nowhere to put
+	// — a smuggled Transfer-Encoding, say — is sent as HTTP/1.1 with its own DowngradeReason
+	// rather than mangled onto h2, because re-encoding it would send something the operator did
+	// not write. When the request IS carriable and the target declines h2 at ALPN, the send goes
+	// out as HTTP/1.1 and is reported as a downgrade like every other "h2 did not happen".
+	ProtocolPreferenceForceH2
 )
 
 // DowngradeReason names why a send went out as HTTP/1.1 rather than HTTP/2.
@@ -286,6 +295,16 @@ type Downgrade struct {
 	// Detail names the construct for the Kinds whose Explanation refers to one: the field name, the
 	// unreadable line, the target. Empty for the rest.
 	Detail string
+	// Forced is true when this DowngradeNegotiatedHTTP11 (or DowngradeNoALPN) came from a send pinned
+	// to ProtocolPreferenceForceH2 rather than the default Auto (burpsy-react-ui-57yk). The Reason is
+	// deliberately the same either way — Force does not invent a bespoke finding for an ordinary ALPN
+	// choice, and force_h2_test.go already pins that a Force send that gets downgraded must still
+	// succeed as an unremarkable HTTP/1.1 exchange, not fail or report differently. What Forced adds is
+	// the one bit Auto has no use for and Force does: whether *this* target declined a requirement the
+	// operator stated, versus one Auto never stated in the first place. Always false for every other
+	// Reason — a plaintext target or an unrepresentable construct blocks the same way regardless of
+	// preference, so there is nothing for a Force pin to have specifically required and lost.
+	Forced bool
 }
 
 // String renders the downgrade as a sentence, naming the detail only when this Reason has one.
@@ -391,6 +410,13 @@ type SendOutcome struct {
 	// probe could not use it" — the reading an operator needs — and answers
 	// ProtocolSupportUnknown rather than guessing when no h2-offering handshake has happened yet.
 	Support ProtocolSupport
+	// ServerIP is the address the socket this send used actually reached — read off the live
+	// connection, not resolved by name, for the same reason the proxy records it that way: the
+	// row is a record of one exchange, and re-resolving later answers where the name points now,
+	// not where it pointed when this request went out. Empty for a send that failed before any
+	// connection existed. Under an upstream proxy it is the hop's address, which is the honest
+	// answer to "where did these bytes go" (burpsy-react-ui-gj4f).
+	ServerIP string
 }
 
 // Downgraded reports whether this send went out as HTTP/1.1.

@@ -10,11 +10,12 @@
  * and what it gates, never an empty interaction table that would read as
  * "nothing called back".
  */
-import { useState } from "react";
-import { Copy, Plus, RefreshCw } from "lucide-react";
-import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Metric } from "../ui/primitives";
+import { useMemo, useState, type CSSProperties } from "react";
+import { Check, Copy, Plus, RefreshCw, X } from "lucide-react";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Input, Metric, Select, Toolbar } from "../ui/primitives";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
+import { HIGHLIGHTS } from "../lib/types";
 import {
   useBlindXSS,
   useCollaboratorInteraction,
@@ -27,10 +28,24 @@ import {
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
 import { copyToClipboard } from "../lib/api";
+import { useApp } from "../lib/store";
 import { toast } from "sonner";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
+}
+
+/**
+ * The annotated row's accent border. `--highlight-<name>` is the shared token vocabulary
+ * History and Organizer paint rows with (styles.css's row-highlight-* rules), each one bound
+ * to a distinct hex value. `--accent-<name>` was never defined per colour — only the plain
+ * `--accent`/`--accent-bright`/`--accent-strong`/`--accent-contrast` tokens exist — so every
+ * named highlight fell through to the same fallback and rendered as one colour. Exported as a
+ * pure function so the token choice is unit-testable without a DOM.
+ */
+export function highlightBorderStyle(highlight: string | undefined): CSSProperties | undefined {
+  if (!highlight || highlight === "none") return undefined;
+  return { borderLeft: `3px solid var(--highlight-${highlight}, var(--accent))` };
 }
 
 export function CollaboratorPage(): JSX.Element {
@@ -38,6 +53,7 @@ export function CollaboratorPage(): JSX.Element {
   const interactions = useCollaboratorInteractions();
   const blindxss = useBlindXSS();
   const mint = useMintPayload();
+  const [batchCount, setBatchCount] = useState(1);
   const poll = usePollNow();
   const mintBX = useMintBlindXSSPayload();
   const setServer = useSetCollaboratorServer();
@@ -141,20 +157,39 @@ export function CollaboratorPage(): JSX.Element {
           detail={s.configured ? (s.default_pool ? "Using the interactsh public pool." : s.server ?? undefined) : s.hint}
           actions={
             <>
+              <label
+                className="field-label"
+                style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}
+                title="Payloads to generate (burpsy-react-ui-v8q): one per injection point when a request needs the same probe in many places. Bounded at 100 by the server."
+              >
+                count
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={batchCount}
+                  onChange={(e) => setBatchCount(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
+                  style={{ width: 56 }}
+                />
+              </label>
               <Button
                 size="small"
                 disabled={!s.configured || mint.isPending}
                 onClick={() =>
-                  mint.mutate(undefined, {
+                  mint.mutate({ count: batchCount }, {
                     onSuccess: (payload) => {
-                      void copyToClipboard(payload.address);
-                      toast.success(`Payload ${payload.address} copied`);
+                      void copyToClipboard(payload.address + (payload.addresses.length > 1 ? `\n${payload.addresses.slice(1).join("\n")}` : ""));
+                      toast.success(
+                        payload.addresses.length > 1
+                          ? `${payload.addresses.length} payloads copied`
+                          : `Payload ${payload.address} copied`,
+                      );
                     },
                     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Minting a payload failed"),
                   })
                 }
               >
-                <Plus size={13} /> Copy payload
+                <Plus size={13} /> Copy payload{batchCount > 1 ? "s" : ""}
               </Button>
               <Button
                 variant="outline"
@@ -193,7 +228,14 @@ export function CollaboratorPage(): JSX.Element {
         )}
       </Card>
 
-      {s.configured ? <InteractionsTable rows={interactions.data ?? []} loading={interactions.isLoading} selected={selected} onSelect={setSelected} /> : null}
+      {s.configured ? (
+        <InteractionsTable
+          rows={interactions.data ?? []}
+          loading={interactions.isLoading}
+          selected={selected}
+          onSelect={setSelected}
+        />
+      ) : null}
       {selected !== null ? <InteractionDetail id={selected} onClose={() => setSelected(null)} /> : null}
 
       <Card>
@@ -255,6 +297,15 @@ export function CollaboratorPage(): JSX.Element {
   );
 }
 
+/**
+ * The interaction table's triage controls (burpsy-react-ui-8o6): protocol filter covering
+ * every protocol the OOB client models — dns, http, smtp and ldap, one more than Burp's
+ * three buttons — a search box over the row's own text, mark-as-read, and a per-interaction
+ * comment/highlight pair. Read state and annotations live in the workspace store (this
+ * browser's view of the operator's review progress, like the Inspector dock), because the
+ * channel is a subprocess-appended log nothing in this process owns; the unread count on
+ * the tool tab itself rides the tab-attention work (burpsy-react-ui-xvo).
+ */
 function InteractionsTable({
   rows,
   loading,
@@ -266,6 +317,34 @@ function InteractionsTable({
   selected: number | null;
   onSelect: (id: number) => void;
 }): JSX.Element {
+  const read = useApp((state) => state.collaboratorRead);
+  const markRead = useApp((state) => state.markCollaboratorRead);
+  const annotations = useApp((state) => state.collaboratorAnnotations);
+  const setAnnotation = useApp((state) => state.setCollaboratorAnnotation);
+
+  const [protocol, setProtocol] = useState("all");
+  const [term, setTerm] = useState("");
+  const [hideRead, setHideRead] = useState(false);
+  const [annotating, setAnnotating] = useState<number | null>(null);
+
+  const protocols = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of rows) seen.add(row.type);
+    return [...seen].sort();
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    const needle = term.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (protocol !== "all" && row.type !== protocol) return false;
+      if (hideRead && read.includes(row.id)) return false;
+      if (!needle) return true;
+      const annotation = annotations[row.id];
+      const haystack = `${row.interaction_id} ${row.type} ${row.q_type ?? ""} ${row.client_ip} ${row.payload ?? ""} ${annotation?.comment ?? ""}`.toLowerCase();
+      return haystack.includes(needle);
+    });
+  }, [rows, protocol, term, hideRead, read, annotations]);
+
   if (loading) return <LoadingPanel label="Loading interactions" />;
   if (!rows.length)
     return (
@@ -278,28 +357,137 @@ function InteractionsTable({
       </Card>
     );
 
+  const unread = rows.filter((row) => !read.includes(row.id)).length;
+
   return (
     <Card>
-      <SectionHeading title="Interactions" detail="A DNS interaction means the payload address was resolved; HTTP means something rendered or fetched it." />
-      <SimpleTable headers={["#", "Type", "Client IP", "Payload", "Time", ""]}>
-        {rows.map((row) => (
-          <tr key={row.id} className={row.id === selected ? "selected-row" : undefined}>
-            <td className="cell-num">{row.id}</td>
-            <td>
-              <Badge tone={row.type === "dns" ? undefined : "bad"}>{row.type.toUpperCase()}</Badge>
-              {row.q_type ? <span className="cell-dim"> {row.q_type}</span> : null}
-            </td>
-            <td className="mono">{row.client_ip}</td>
-            <td className="mono cell-dim">{row.payload ?? "—"}</td>
-            <td className="cell-dim">{formatTime(row.at_ms)}</td>
-            <td>
-              <Button variant="outline" size="small" onClick={() => onSelect(row.id)}>
-                Open
-              </Button>
-            </td>
-          </tr>
-        ))}
+      <SectionHeading
+        title="Interactions"
+        detail="A DNS interaction means the payload address was resolved; HTTP means something rendered or fetched it."
+        actions={
+          <Badge tone={unread > 0 ? "warn" : undefined}>
+            {unread > 0 ? `${unread} unread` : "all read"}
+          </Badge>
+        }
+      />
+      <Toolbar>
+        <Select
+          aria-label="Filter by protocol"
+          value={protocol}
+          onChange={(event) => setProtocol(event.target.value)}
+          style={{ maxWidth: "var(--w-xs)" }}
+        >
+          <option value="all">All protocols</option>
+          {protocols.map((p) => (
+            <option key={p} value={p}>
+              {p.toUpperCase()}
+            </option>
+          ))}
+        </Select>
+        <Input
+          aria-label="Search interactions"
+          value={term}
+          onChange={(event) => setTerm(event.target.value)}
+          placeholder="Search id, type, IP, payload, comment…"
+          style={{ maxWidth: "var(--w-lg)" }}
+        />
+        <Checkbox label="Hide read" checked={hideRead} onCheckedChange={setHideRead} />
+        <Button
+          variant="outline"
+          size="small"
+          disabled={unread === 0}
+          onClick={() => rows.forEach((row) => markRead(row.id))}
+        >
+          <Check size={13} />
+          Mark all read
+        </Button>
+      </Toolbar>
+      <SimpleTable headers={["#", "Type", "Client IP", "Payload", "Time", "Read", "Note", ""]}>
+        {filtered.map((row) => {
+          const isRead = read.includes(row.id);
+          const annotation = annotations[row.id];
+          return (
+            <tr
+              key={row.id}
+              className={`${row.id === selected ? "selected-row" : ""} ${isRead ? "cell-dim" : ""}`}
+              style={highlightBorderStyle(annotation?.highlight)}
+            >
+              <td className="cell-num">{row.id}</td>
+              <td>
+                <Badge tone={row.type === "dns" ? undefined : "bad"}>{row.type.toUpperCase()}</Badge>
+                {row.q_type ? <span className="cell-dim"> {row.q_type}</span> : null}
+              </td>
+              <td className="mono">{row.client_ip}</td>
+              <td className="mono cell-dim">{row.payload ?? "—"}</td>
+              <td className="cell-dim">{formatTime(row.at_ms)}</td>
+              <td>
+                {isRead ? (
+                  <span className="cell-dim">read</span>
+                ) : (
+                  <IconButton label={`Mark interaction ${row.id} as read`} size="small" onClick={() => markRead(row.id)}>
+                    <Check size={12} />
+                  </IconButton>
+                )}
+              </td>
+              <td>
+                {annotating === row.id ? (
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <Input
+                      aria-label={`Annotation comment for interaction ${row.id}`}
+                      defaultValue={annotation?.comment ?? ""}
+                      style={{ maxWidth: 180 }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        const input = event.target as HTMLInputElement;
+                        setAnnotation(row.id, { comment: input.value, highlight: annotation?.highlight ?? "none" });
+                        setAnnotating(null);
+                        toast.success(input.value ? "Annotation saved" : "Annotation cleared");
+                      }}
+                    />
+                    <Select
+                      aria-label={`Highlight colour for interaction ${row.id}`}
+                      defaultValue={annotation?.highlight ?? "none"}
+                      style={{ maxWidth: 90 }}
+                      onChange={(event) => {
+                        const colour = event.target.value;
+                        setAnnotation(row.id, { comment: annotation?.comment ?? "", highlight: colour });
+                      }}
+                    >
+                      {HIGHLIGHTS.map((colour) => (
+                        <option key={colour} value={colour}>
+                          {colour}
+                        </option>
+                      ))}
+                    </Select>
+                    <IconButton label={`Finish annotating interaction ${row.id}`} size="small" onClick={() => setAnnotating(null)}>
+                      <X size={12} />
+                    </IconButton>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="small"
+                    onClick={() => {
+                      markRead(row.id);
+                      setAnnotating(row.id);
+                    }}
+                  >
+                    {annotation?.comment ? `✎ ${annotation.comment.slice(0, 18)}` : "Annotate"}
+                  </Button>
+                )}
+              </td>
+              <td>
+                <Button variant="outline" size="small" onClick={() => onSelect(row.id)}>
+                  Open
+                </Button>
+              </td>
+            </tr>
+          );
+        })}
       </SimpleTable>
+      {filtered.length === 0 ? (
+        <p className="field-hint">No interaction matches this filter — clear the protocol or search to see all {rows.length}.</p>
+      ) : null}
     </Card>
   );
 }

@@ -33,6 +33,8 @@ package sequencer
 //     generator.
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"sort"
@@ -88,9 +90,11 @@ type CharCount struct {
 // have it.
 type PositionStats struct {
 	Index int `json:"index"`
-	// Samples is the tokens that actually had a character here. Shorter tokens
-	// are excluded rather than padded — padding would invent a character and
-	// shift the distribution towards it.
+	// Samples is the tokens that actually had a character here. Unless padding
+	// was requested (Options.Pad), a shorter token is excluded rather than
+	// padded — padding invents a character and shifts the distribution towards
+	// it, so it is opt-in; when it is on, every token reaches every position and
+	// Samples equals the token count.
 	Samples  int `json:"samples"`
 	Distinct int `json:"distinct"`
 	// EntropyBits is the Shannon entropy of this position's distribution.
@@ -142,11 +146,49 @@ type SequencerReport struct {
 	Encoding Encoding `json:"encoding"`
 	// EncodingDetected is true when the encoding was chosen by DetectEncoding
 	// rather than supplied.
-	EncodingDetected bool              `json:"encoding_detected"`
-	Characters       CharacterAnalysis `json:"characters"`
-	Bits             BitStats          `json:"bits"`
-	Fips             FipsReport        `json:"fips"`
-	Grade            Grade             `json:"grade"`
+	EncodingDetected bool `json:"encoding_detected"`
+	// Base64Decoded is true when the operator asked for the tokens to be
+	// base64-decoded to their underlying bytes before any analysis — Burp's
+	// "Base64-decode before analyzing" (settings/tools/sequencer.html). When
+	// true, every figure below — character positions, the bit stream, the extra
+	// and advanced statistics, the effective-entropy curve — describes the
+	// decoded bytes, not the base64 text. This is a different operation from the
+	// `encoding` field above: `encoding` chooses how the FIPS bit view reads a
+	// token's own characters (e.g. 6 bits per base64 character); this setting
+	// replaces the tokens with their decoded bytes before either the character
+	// or the bit analysis ever runs.
+	Base64Decoded bool `json:"base64_decoded"`
+	// Padding records the token-handling padding that was applied — Burp's "Pad
+	// short tokens at start/end". Mode "none" is burpsy's own default handling
+	// of variable-length tokens (a short token excluded from positions it does
+	// not reach, per PositionStats.Samples); "start"/"end" reproduce Burp's.
+	Padding    Padding           `json:"padding"`
+	Characters CharacterAnalysis `json:"characters"`
+	// ExtraStats carries the character-uniformity and duplicate-detection
+	// statistics the CLI has always reported from the same package but the web
+	// report never reached (burpsy-react-ui-3sq). They ride a sub-object rather
+	// than flattening into the report so an operator reading the JSON sees the
+	// two surfaces named as one group, and each field is labelled for what it
+	// measures — chi-square is "larger = less uniform", not a p-value.
+	ExtraStats ExtraAnalysis `json:"extra_stats"`
+	Bits       BitStats      `json:"bits"`
+	Fips       FipsReport    `json:"fips"`
+	// Advanced is the extended battery of advanced.go: Burp's four further
+	// randomness tests, each of which either reports a statistic or says why
+	// the sample could not support it. It is additive and does not feed `Grade`
+	// — the grade and verdict below are the FIPS battery's, byte-for-byte the
+	// Rust reference's, and `Advanced.AffectsGrade` says so on the wire rather
+	// than leaving it to be inferred.
+	Advanced AdvancedReport `json:"advanced"`
+	// EffectiveEntropy is Burp's headline Sequencer output: the number of bit
+	// positions that survive the frequency test at each of a range of
+	// significance levels, so an operator can see whether a verdict is robust to
+	// the level they picked (burpsy-react-ui-boq). Like Advanced it is additive —
+	// `effective_entropy.affects_grade` is false and `Grade` below is still the
+	// FIPS battery's, byte-for-byte the Rust reference's. effective.go states in
+	// full what the number is and, at more length, what it is not.
+	EffectiveEntropy EffectiveEntropyReport `json:"effective_entropy"`
+	Grade            Grade                  `json:"grade"`
 	// Verdict is one sentence an operator can act on, with the numbers in it.
 	Verdict string `json:"verdict"`
 	// Warnings is everything that limits how far the verdict can be trusted.
@@ -154,28 +196,310 @@ type SequencerReport struct {
 	Warnings []string `json:"warnings"`
 }
 
-// AnalyseReport analyses a token sample, detecting the encoding.
+// ExtraAnalysis is the uniformity and duplicate group of the report: the
+// statistics the CLI has always computed over the same sample (Analysis in
+// sequencer.go) that the web report never carried (burpsy-react-ui-3sq).
+//
+// # What each number is, and what it is not
+//
+// ChiSquare is the raw chi-square statistic for character uniformity pooled
+// across every character of every token: larger means the alphabet is used
+// less uniformly. It is NOT a p-value and carries no degrees-of-freedom
+// verdict — reading it as one would be inventing a test this package does
+// not run.
+//
+// SerialCorrelation correlates successive character codes within the
+// flattened stream, -1..1, random data near 0. It is NOT Burp's
+// correlation test, which looks for relationships between values at
+// different bit positions across tokens; the label says so, because the
+// two must not be conflated (the issue records the caveat explicitly).
+//
+// RepeatedTokens is the count of distinct tokens that appear more than
+// once, and RepeatedList names them: an exact duplicate in a session-token
+// sample is a finding on its own, and this is the number that says so.
+type ExtraAnalysis struct {
+	ChiSquare float64 `json:"chi_square"`
+	// SerialCorrelationLabel exists so the JSON can never be read as Burp's
+	// bit-position correlation test without the caveat travelling with it.
+	SerialCorrelation      float64  `json:"serial_correlation"`
+	SerialCorrelationLabel string   `json:"serial_correlation_label"`
+	MonteCarloPi           float64  `json:"monte_carlo_pi"`
+	MonteCarloDeviation    float64  `json:"monte_carlo_deviation"`
+	RepeatedTokens         int      `json:"repeated_tokens"`
+	RepeatedList           []string `json:"repeated_list,omitempty"`
+}
+
+// extraFor computes the group from the raw tokens, sharing the engine's own
+// functions so the two front-ends cannot disagree about what the numbers are.
+func extraFor(tokens []string) ExtraAnalysis {
+	cs := AnalyseCharacters(tokens)
+	var codes []int
+	for _, tok := range tokens {
+		for _, c := range tok {
+			codes = append(codes, int(c))
+		}
+	}
+	var piValues []float64
+	for _, c := range codes {
+		piValues = append(piValues, float64(c)/256.0)
+	}
+	pi, dev := MonteCarloPi(piValues)
+	pats := DetectPatterns(tokens)
+	return ExtraAnalysis{
+		ChiSquare:              ChiSquare(cs),
+		SerialCorrelation:      SerialCorrelation(codes),
+		SerialCorrelationLabel: "serial correlation of successive character codes within the stream — not Burp's bit-position correlation test",
+		MonteCarloPi:           pi,
+		MonteCarloDeviation:    dev,
+		RepeatedTokens:         pats.Repeated,
+		RepeatedList:           pats.RepeatedList,
+	}
+}
+
+// PadMode is where padding is added to a token shorter than the longest in the
+// sample. Serialised snake_case to match the UI's `padding.mode: "none" |
+// "start" | "end"`.
+type PadMode string
+
+const (
+	// PadNone leaves tokens at their own length: burpsy's own default handling
+	// of a variable-length sample. A shorter token is excluded from the
+	// positions it does not reach (PositionStats.Samples) rather than padded, so
+	// no invented character shifts a position's distribution.
+	PadNone PadMode = "none"
+	// PadStart pads a short token at its start — Burp's own default, and the
+	// right choice for a right-aligned counter or timestamp tail.
+	PadStart PadMode = "start"
+	// PadEnd pads a short token at its end.
+	PadEnd PadMode = "end"
+)
+
+// Padding is what token-handling padding did to the sample. Reported as sample
+// metadata because Burp's Sequencer Summary reports it as exactly that: "The
+// number of tokens that were padded."
+type Padding struct {
+	Mode PadMode `json:"mode"`
+	// PadByte is the byte used for padding. Meaningful only when Mode != none.
+	PadByte byte `json:"pad_byte"`
+	// PadByteLabel is the printable form of PadByte for display.
+	PadByteLabel string `json:"pad_byte_label"`
+	// TokensPadded is how many tokens were shorter than the longest (after any
+	// base64-decode) and so were padded. Zero when Mode is none, or when every
+	// token was already the same length.
+	TokensPadded int `json:"tokens_padded"`
+	// PadBytesAdded is the total pad bytes inserted across the whole sample.
+	PadBytesAdded int `json:"pad_bytes_added"`
+	// OrigMinLen and OrigMaxLen are the token lengths before padding (after any
+	// base64-decode). Tokens were padded up to OrigMaxLen.
+	OrigMinLen int `json:"orig_min_len"`
+	OrigMaxLen int `json:"orig_max_len"`
+}
+
+// Options is the full token-handling and bit-view configuration for one
+// analysis. The zero value is burpsy's own default: detect the encoding, no
+// padding, no base64-decode, the default significance level.
+type Options struct {
+	// Encoding forces the bit-level view when non-nil; nil means detect it.
+	Encoding *Encoding
+	// SignificancePercent and SignificanceDefaulted are AnalyseWith's inputs;
+	// see its doc comment. Zero-value SignificancePercent with
+	// SignificanceDefaulted false is invalid — callers building Options from
+	// scratch should set both, or use AnalyseReport/AnalyseAs/AnalyseWith for
+	// the default.
+	SignificancePercent   float64
+	SignificanceDefaulted bool
+	// DisabledTests names the extended tests the operator switched off, by their AdvancedTest.ID
+	// ("transition", "spectral", "correlation", "compression") — Burp's Analysis settings tab lets a
+	// test be turned off individually and the analysis redone (burpsy-react-ui-3iao).
+	//
+	// A DISABLE list rather than an enable list on purpose. An enable list reads as though the
+	// operator had to restate the battery every time they wanted one test off, and a client that
+	// adds a fifth test would silently stop running it until every existing caller learned the new
+	// name. With a disable list, a test this build does not know about cannot be disabled by
+	// accident, and adding one is a no-op for every existing caller.
+	//
+	// An UNKNOWN id is ignored rather than an error for the same reason the significance level is
+	// refused at the HTTP boundary but not here: this is a filter, and a filter that refuses its
+	// input turns a stale bookmark in a saved configuration into a failed analysis. The panel
+	// validates what it offers; the filter does not.
+	DisabledTests []string
+	// Pad is where short tokens are padded — Burp's "Pad short tokens at start /
+	// end". Empty or PadNone means no padding, burpsy's own default.
+	Pad PadMode
+	// PadByte is the byte to pad with when Pad != none. Burp's own default is
+	// '0'; callers that want it should pass that explicitly rather than relying
+	// on the zero value, which is the NUL byte.
+	PadByte byte
+	// Base64Decode decodes every token from base64 to its underlying bytes
+	// before any analysis — Burp's "Base64-decode before analyzing". Order is
+	// decode, then pad, then analyse.
+	Base64Decode bool
+}
+
+// AnalyseReport analyses a token sample, detecting the encoding, with no
+// padding and no base64-decode.
 func AnalyseReport(tokens []string) SequencerReport {
 	return AnalyseAs(tokens, nil)
 }
 
-// AnalyseAs analyses a token sample, optionally forcing the bit-level encoding.
-// Forcing it is the operator's escape hatch for the case detection cannot see:
-// tokens that happen to be all hex characters but are really opaque bytes
-// carried in hex, or the reverse. Detection is a heuristic over the alphabet
-// and says so in the report.
+// AnalyseAs analyses a token sample, optionally forcing the bit-level encoding,
+// at the default significance level, with no padding and no base64-decode.
+// Forcing the encoding is the operator's escape hatch for the case detection
+// cannot see: tokens that happen to be all hex characters but are really opaque
+// bytes carried in hex, or the reverse. Detection is a heuristic over the
+// alphabet and says so in the report.
 func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
-	detected := encoding == nil
+	report, _ := analyse(tokens, Options{
+		Encoding:              encoding,
+		SignificancePercent:   DefaultSignificancePercent,
+		SignificanceDefaulted: true,
+	})
+	return report
+}
+
+// AnalyseWith is AnalyseAs plus the operator's significance level, the input
+// Burp's Sequencer takes for the whole analysis (burpsy-react-ui-boq). No
+// padding and no base64-decode; use AnalyseOpts for those.
+//
+// The level reaches exactly one part of the report — EffectiveEntropy — and
+// nothing else. `Fips`, `Grade` and `Verdict` are identical for every level a
+// caller can pass, because every FIPS 140-2 threshold is a fixed constant of the
+// standard and not a function of a chosen confidence; pretending otherwise would
+// be inventing a FIPS variant nobody specified. effective_test.go pins that
+// orthogonality rather than leaving it to be assumed.
+//
+// An out-of-range level is a caller error and is refused at the HTTP boundary
+// (ValidSignificancePercent); this function does not clamp, because a silently
+// clamped level answers a question the operator did not ask.
+
+func AnalyseWith(tokens []string, encoding *Encoding, significancePercent float64) SequencerReport {
+	report, _ := analyse(tokens, Options{Encoding: encoding, SignificancePercent: significancePercent})
+	return report
+}
+
+// AnalyseOpts is the full entry point: encoding, significance level, padding
+// and base64-decode all in one call (burpsy-react-ui-i4u's token-handling
+// settings, layered on AnalyseWith's significance level).
+//
+// It returns an error only when Base64Decode is set and a token is not valid
+// base64. Turning that setting on is the operator asserting the whole sample is
+// base64; one token that is not falsifies the assertion, and the alternative —
+// analysing the decodable subset and quietly shrinking `tokens` below what was
+// supplied — is exactly the "partial result dressed up as complete" this
+// codebase refuses elsewhere. The whole run is refused, naming the offending
+// token, rather than silently analysing a smaller sample than was pasted.
+func AnalyseOpts(tokens []string, opts Options) (SequencerReport, error) {
+	return analyse(tokens, opts)
+}
+
+// decodeBase64Token decodes one token from base64 to its bytes. It accepts
+// exactly what fips.go's base64Value accepts for the bit view — standard and
+// URL alphabets, '+' '/' or '-' '_' — so the character-level and bit-level
+// halves of a decoded report agree on what "base64" means. Real session tokens
+// are commonly unpadded URL-safe base64, which base64.StdEncoding rejects, so
+// trailing '=' is stripped and a raw (unpadded) decoder is used; the alphabet is
+// chosen per token from which of its characters, if any, disambiguate it.
+// Returns false when the token is not valid base64 in either alphabet.
+func decodeBase64Token(tok string) ([]byte, bool) {
+	trimmed := strings.TrimRight(tok, "=")
+	enc := base64.RawStdEncoding
+	if strings.ContainsAny(trimmed, "-_") {
+		enc = base64.RawURLEncoding
+	}
+	b, err := enc.DecodeString(trimmed)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// tokenPreview trims a token for an error message so a paste of a whole cookie
+// does not fill the response.
+func tokenPreview(tok string) string {
+	const max = 32
+	if len(tok) > max {
+		return tok[:max] + "…"
+	}
+	return tok
+}
+
+// padTokens pads every token shorter than the sample's longest up to that
+// length, at mode's end, with padByte. Returns the padded tokens and the
+// Padding metadata; when mode is PadNone or the sample is empty, it returns the
+// tokens unchanged and a Padding{Mode: PadNone}.
+func padTokens(tokens []string, mode PadMode, padByte byte) ([]string, Padding) {
+	if mode == "" || mode == PadNone || len(tokens) == 0 {
+		return tokens, Padding{Mode: PadNone}
+	}
+	maxLen, minLen := 0, len(tokens[0])
+	for _, t := range tokens {
+		if len(t) > maxLen {
+			maxLen = len(t)
+		}
+		if len(t) < minLen {
+			minLen = len(t)
+		}
+	}
+	padded := make([]string, len(tokens))
+	tokensPadded, bytesAdded := 0, 0
+	for i, t := range tokens {
+		short := maxLen - len(t)
+		if short <= 0 {
+			padded[i] = t
+			continue
+		}
+		// bytes.Repeat on the raw byte, never string(padByte): the rune
+		// conversion would UTF-8-encode a byte >= 0x80 into two bytes and invent
+		// a character the operator never chose.
+		fill := string(bytes.Repeat([]byte{padByte}, short))
+		if mode == PadStart {
+			padded[i] = fill + t
+		} else {
+			padded[i] = t + fill
+		}
+		tokensPadded++
+		bytesAdded += short
+	}
+	return padded, Padding{
+		Mode:          mode,
+		PadByte:       padByte,
+		PadByteLabel:  label(padByte),
+		TokensPadded:  tokensPadded,
+		PadBytesAdded: bytesAdded,
+		OrigMinLen:    minLen,
+		OrigMaxLen:    maxLen,
+	}
+}
+
+func analyse(tokens []string, opts Options) (SequencerReport, error) {
+	base64Decoded := false
+	if opts.Base64Decode {
+		decoded := make([]string, 0, len(tokens))
+		for i, t := range tokens {
+			b, ok := decodeBase64Token(t)
+			if !ok {
+				return SequencerReport{}, fmt.Errorf(
+					"base64_decode is on but token %d is not valid base64 (%q): untick base64-decode, or remove the token, so the report is not run over a different sample than was supplied",
+					i, tokenPreview(t))
+			}
+			decoded = append(decoded, string(b))
+		}
+		tokens = decoded
+		base64Decoded = true
+	}
+	tokens, padding := padTokens(tokens, opts.Pad, opts.PadByte)
+
+	detected := opts.Encoding == nil
 	enc := EncodingRaw
 	if detected {
 		enc = DetectEncoding(tokens)
 	} else {
-		enc = *encoding
+		enc = *opts.Encoding
 	}
 	characters := AnalyseChars(tokens)
 	bitStream := BitsOf(tokens, enc)
 	bits := BitStatsOf(bitStream)
-	fips := AnalyseFipsBits(bitStream)
+	fips := AnalyseFipsBits(bitStream, opts.DisabledTests)
 
 	warnings := make([]string, 0, 6)
 	if len(tokens) == 0 {
@@ -190,6 +514,16 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 		warnings = append(warnings, fmt.Sprintf(
 			"token lengths vary (%d to %d): positions past %d have fewer samples than the rest, and a variable-length token is itself worth explaining",
 			characters.MinLen, characters.MaxLen, characters.MinLen,
+		))
+	}
+	if padding.TokensPadded > 0 {
+		where := "start"
+		if padding.Mode == PadEnd {
+			where = "end"
+		}
+		warnings = append(warnings, fmt.Sprintf(
+			"padding was applied: %d of %d token(s), shorter than %d byte(s), were padded with %q at the %s (%d pad byte(s) total). Positions that fall entirely within the pad carry a fixed character, and their measured entropy describes the padding, not the generator",
+			padding.TokensPadded, len(tokens), padding.OrigMaxLen, padding.PadByteLabel, where, padding.PadBytesAdded,
 		))
 	}
 	if characters.PositionsTruncated {
@@ -212,17 +546,33 @@ func AnalyseAs(tokens []string, encoding *Encoding) SequencerReport {
 	}
 
 	grade, verdict := verdictFor(len(tokens), &characters, &fips)
+	effective := AnalyseEffectiveEntropy(tokens, enc, opts.SignificancePercent, opts.SignificanceDefaulted, &fips)
+	// The sample cannot answer at the level the operator chose. That is a limit
+	// on the verdict they are about to quote, so it belongs beside the other
+	// caveats and not only inside the curve — an operator who reads the headline
+	// number and nothing else must still be told there is no headline number.
+	if !effective.Chosen.Computed {
+		warnings = append(warnings, fmt.Sprintf(
+			"no effective-entropy figure at the %g%% significance level you chose: %s",
+			effective.SignificancePercent, effective.Chosen.Reason,
+		))
+	}
 	return SequencerReport{
 		Tokens:           len(tokens),
 		Encoding:         enc,
 		EncodingDetected: detected,
+		Base64Decoded:    base64Decoded,
+		Padding:          padding,
 		Characters:       characters,
+		ExtraStats:       extraFor(tokens),
 		Bits:             bits,
 		Fips:             fips,
+		Advanced:         advancedFor(tokens, enc, bitStream, opts.DisabledTests),
+		EffectiveEntropy: effective,
 		Grade:            grade,
 		Verdict:          verdict,
 		Warnings:         warnings,
-	}
+	}, nil
 }
 
 // verdictFor maps a sample and its statistics to a grade and the sentence an
@@ -285,8 +635,10 @@ func TokensFromText(text string) []string {
 
 // AnalyseChars computes the character-level structure of a token sample. This
 // is a byte-level analysis, not a rune-level one: a token generator's positions
-// are byte positions, and padding shorter tokens to a common length would invent
-// a character and pull that position's entropy towards it.
+// are byte positions. It takes the tokens exactly as given: padding shorter
+// tokens to a common length invents a character and pulls that position's
+// entropy towards it, so padding is the caller's choice (Options.Pad, applied
+// by padTokens before this runs) and is never applied here.
 func AnalyseChars(tokens []string) CharacterAnalysis {
 	maxLen, minLen := 0, 0
 	if len(tokens) > 0 {

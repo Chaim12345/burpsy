@@ -116,8 +116,10 @@ call sites for `--muted` and at least two independent components for
 `--accent` (`.brand-symbol`, `.button-primary`) — so a token's exact shade is a
 design decision the MCP plugin should not make unattended. Applied as scoped,
 `token-exempt` CSS stopgaps for now; apply both values in Penpot, re-fetch,
-then delete the two stopgaps in `styles.css` and confirm `e2e-ui.sh`'s axe
-checks still pass on the token values alone.
+then delete the two stopgaps in `styles.css` and confirm the axe check still
+passes on the token values alone — it runs in the live browser pass
+(`./ui-live.sh`; see `burpsy-go/docs/UI-VERIFICATION.md`), not only in the
+playwright suite.
 
 The `--accent` finding is a correction of an earlier, wrong fix: it was first
 found on `.brand-symbol` alone and patched there on the reasoning that

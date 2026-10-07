@@ -1,8 +1,15 @@
 import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
-import type { RepeaterResult, RepeaterSendOptions } from "./types";
-import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView } from "./types.tools";
+import type { WsRepeaterSendResult } from "./types";
+import type {
+  RepeaterGroupSendItem,
+  RepeaterGroupSendMode,
+  RepeaterGroupSendResult,
+  RepeaterResult,
+  RepeaterSendOptions,
+} from "./types";
+import type { IntruderAttack, IntruderAttacksResp, PayloadRuleSpec, PayloadSource, PointView , WordlistsResponse } from "./types.tools";
 
 export interface IntruderRunRequest {
   msg_id: number;
@@ -10,9 +17,37 @@ export interface IntruderRunRequest {
   all: boolean;
   mode: string;
   points: number[];
+  /**
+   * Hand-marked payload positions (Burp's Add §): raw byte ranges of the base request, spliced
+   * wire-faithfully alongside the selected discovered points. The server refuses a span outside
+   * the request or overlapping another position.
+   */
+  manual_points?: { start: number; end: number }[];
   payload_sets?: string[][];
   payload_sources?: PayloadSource[];
   payload_rules?: PayloadRuleSpec[];
+  /**
+   * Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the characters
+   * percent-encoded in every generated payload as the final pass, after the rule
+   * chain. Omitted means none — spaces and control characters are always encoded
+   * additionally server-side, since a request containing them cannot be delivered.
+   */
+  url_encode_characters?: string;
+  /**
+   * Burp's auto-pause (burpsy-react-ui-2cvk). Omitted entirely when the operator has not turned it
+   * on, which is the point: an absent field and a present-but-empty expression list must not be two
+   * wire shapes for "I did not choose", so the console sends neither. Expressions are compiled by
+   * RE2 on the server and an uncompilable one is a 400, which surfaces next to the field.
+   */
+  auto_pause?: {
+    expressions: string[];
+    /** Pause when none of them appears, rather than when one does. */
+    missing: boolean;
+    /** Simple strings are matched literally and case-folded; false means RE2. */
+    simple: boolean;
+    /** Only meaningful with `simple`: regex entries carry their own case flags. */
+    case_sensitive?: boolean;
+  };
   /** Regular expressions, compiled by RE2 on the server — never literal strings. */
   grep_match?: string;
   grep_extract?: string;
@@ -29,6 +64,29 @@ export interface IntruderRunRequest {
   pool?: string;
   max_in_flight?: number;
   rps?: number;
+  /**
+   * Burp's resource-pool "With random variations" (burpsy-react-ui-nn0n), as a percentage of the
+   * interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of it. Part
+   * of the same exclusion as `rps` — a named pool states how its own delay behaves.
+   *
+   * The server refuses 100 or more (a downward variation would be a zero gap) rather than clamping,
+   * and the engine's schedule is seeded, so the delays a run takes can be replayed. See
+   * intruder.DelayVariation in internal/intruder/limit.go.
+   */
+  delay_jitter_percent?: number;
+  /** Burp's throttleIncrementMillis: every gap is this many milliseconds longer than the one
+   *  before it. 0..600000, Burp's own bound on a delay; a negative one is refused, not clamped. */
+  delay_increment_ms?: number;
+  /** Seeds the jitter. Omitted is 0, which is a seed like any other — the schedule is replayable
+   *  either way, and a different number is a differently-shaped run. */
+  delay_seed?: number;
+  /**
+   * Burp's Intruder "Follow redirections" (tirx): "never" | "on_site" | "in_scope" | "always",
+   * or omitted for the standing network-settings policy (never, by default). Each hop is
+   * re-authorised through the same scope gate the first request went through — see
+   * internal/web/api_tools.go's intruderRedirectPolicy.
+   */
+  follow_redirects?: string;
 }
 
 /**
@@ -46,6 +104,9 @@ export class SendCancelled extends Error {
 export interface RepeaterSendBody {
   target: string;
   request: string;
+  /** The request's exact bytes, base64, when the body is binary (burpsy-react-ui-ytkk). Takes
+   *  precedence over `request` server-side; a JSON string cannot carry a non-UTF-8 body. */
+  request_base64?: string;
   protocol: string;
   from_exchange?: number;
   options?: RepeaterSendOptions;
@@ -73,6 +134,48 @@ export interface RepeaterSendBody {
  * No exchange row is written for a cancelled send: the sender returns an error, so the handler logs
  * it to the tool log and never reaches the Put. The cancellation is recorded as what it was.
  */
+export interface RepeaterWsSendBody {
+ /** The wshistory frame id being resent, 0 for a frame authored from scratch. */
+ message?: number;
+ /** "host:port"; the scheme rides `tls`. Optional when `message` names a frame. */
+ target?: string;
+ tls?: boolean;
+ path?: string;
+ /** "text" | "binary". */
+ opcode: string;
+ payload: string;
+ /** Burp's other direction. Refused by the wire with its reason — see the store's wsDirection. */
+ to_client?: boolean;
+}
+
+/**
+ * The Repeater WebSocket send (burpsy-react-ui-6ex) — one dial per send, the wire half
+ * `/api/repeater/ws-send`. The server refuses a to-client direction with the reason in the
+ * body (a fresh dial has no client to send to), and records the handshake exchange so the
+ * result can offer "view in WebSockets history".
+ */
+export function useRepeaterWsSend() {
+ const inFlight = useRef<AbortController | null>(null);
+ const mutation = useMutation({
+  mutationFn: async (body: RepeaterWsSendBody) => {
+   const controller = new AbortController();
+   inFlight.current = controller;
+   try {
+    return await api<WsRepeaterSendResult>("/api/repeater/ws-send", {
+     ...json("POST", body),
+     signal: controller.signal,
+    });
+   } catch (failure) {
+    if (controller.signal.aborted) throw new SendCancelled();
+    throw failure;
+   } finally {
+    if (inFlight.current === controller) inFlight.current = null;
+   }
+  },
+ });
+ return mutation;
+}
+
 export function useRepeaterSend() {
   // One controller per hook instance, so the Cancel button can only ever abort this tab's send.
   const inFlight = useRef<AbortController | null>(null);
@@ -104,6 +207,90 @@ export function useRepeaterSend() {
     /** Abort the send in flight. A no-op when nothing is in flight, so it is safe to bind blindly. */
     cancel: () => inFlight.current?.abort(),
   };
+}
+
+export interface RepeaterGroupSendBody {
+  mode: RepeaterGroupSendMode;
+  /** The group's tabs in tab order. Order is the test in a smuggling or desync send, so it is not sorted. */
+  items: RepeaterGroupSendItem[];
+}
+
+/**
+ * Send a whole Repeater tab group (burpsy-react-ui-03z), in one of the three modes Burp's dropdown
+ * beside Send offers.
+ *
+ * Cancellation works the same way useRepeaterSend's does and for the same reason — see that hook's
+ * comment on why aborting the fetch is not the whole story. It matters more here, not less: a group
+ * send is N requests, and in `sequence_single_conn` they share a socket, so an operator who wants to
+ * stop needs the server to stop too. POST /api/repeater/send-group threads r.Context() into the
+ * sender exactly as the single send does, and internal/sender/cancel.go unblocks the in-flight read.
+ *
+ * What Cancel here cannot promise, and does not claim: the requests already written. A group send is
+ * partly-sent traffic by construction, and the toast says so.
+ */
+export function useSendRepeaterGroup() {
+  const inFlight = useRef<AbortController | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: async (body: RepeaterGroupSendBody) => {
+      const controller = new AbortController();
+      inFlight.current = controller;
+      try {
+        return await api<RepeaterGroupSendResult>("/api/repeater/send-group", {
+          ...json("POST", body),
+          signal: controller.signal,
+        });
+      } catch (failure) {
+        if (controller.signal.aborted) throw new SendCancelled();
+        throw failure;
+      } finally {
+        if (inFlight.current === controller) inFlight.current = null;
+      }
+    },
+  });
+
+  return {
+    mutate: mutation.mutate,
+    isPending: mutation.isPending,
+    error: mutation.error,
+    cancel: () => inFlight.current?.abort(),
+  };
+}
+
+/**
+ * Burp's two newline corrections for an EDITED interception (settings/tools/proxy.html:273-292,
+ * burpsy-react-ui-80tg): add a missing blank line after the headers, and strip trailing newlines
+ * from a urlencoded body.
+ *
+ * Its own route rather than two fields on the forward body, because they are not properties of a
+ * forward: they are how the interception tool behaves, an operator sets them once, and a caller that
+ * forgot them on a forward would silently rewrite nothing.
+ *
+ * The read is not optional decoration. Both default OFF, and a plugin or a previous session may have
+ * set one — so a checkbox that showed the defaults rather than the in-force values would be a control
+ * lying about what it is doing, which is the same defect as a missing panel.
+ */
+export interface InterceptNewlineCorrection {
+  add_missing_blank_line: boolean;
+  trim_trailing_newlines_urlencoded_body: boolean;
+}
+
+export function useInterceptNewlineCorrection() {
+  return useQuery({
+    queryKey: ["intercept", "newline-correction"],
+    queryFn: ({ signal }) => api<InterceptNewlineCorrection>("/api/intercept/newline-correction", { signal }),
+    // The settings do not change on their own, and the page already polls the queue; refetching this
+    // on the same cadence would be a second request per poll for a value that only changes when the
+    // operator changes it.
+    staleTime: 30_000,
+  });
+}
+
+export function useSetInterceptNewlineCorrection() {
+  return useMutation({
+    mutationFn: (next: InterceptNewlineCorrection) =>
+      api<InterceptNewlineCorrection>("/api/intercept/newline-correction", json("PUT", next)),
+  });
 }
 
 export function useIntruderPoints() {
@@ -186,4 +373,14 @@ export function useIntruderAttackAction() {
       }
     },
   });
+}
+
+/** GET /api/wordlists (kal): the payload-corpus inventory, bundled and uploaded. No poll —
+ * the bundled set is fixed at build time and an upload invalidates through its own mutation. */
+export function useWordlists() {
+ return useQuery({
+  queryKey: ["wordlists"],
+  queryFn: ({ signal }) => api<WordlistsResponse>("/api/wordlists", { signal }),
+  staleTime: 30_000,
+ });
 }

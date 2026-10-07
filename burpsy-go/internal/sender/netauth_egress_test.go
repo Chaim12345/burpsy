@@ -1,8 +1,13 @@
 package sender
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/md5"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +16,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
+
+	"golang.org/x/crypto/md4"
 
 	"github.com/burpsy-go/burpsy/internal/netauth"
 )
@@ -247,6 +255,158 @@ func Test_a_rejected_digest_credential_is_not_retried_forever(t *testing.T) {
 		t.Errorf("a rejected credential produced %d requests; the retry is bounded at exactly one and "+
 			"a repeated nonce must stop it", got)
 	}
+}
+
+// ---- NTLMv2 ------------------------------------------------------------------------
+
+// The end-to-end claim for NTLMv2: configure a rule, send, and the exchange is the three
+// NTLMSSP legs - NEGOTIATE preemptively, CHALLENGE in the 401, AUTHENTICATE on the bounded
+// retry - with the AUTHENTICATE carrying an NTLMv2 response the server can verify against
+// its own challenge. This is the test the codec's known-answer vectors cannot be: they pin
+// the arithmetic, this pins that the selection path drives the arithmetic at a real server.
+//
+// The server-side verifier is an independent recomputation of MS-NLMP 3.3.2, written from
+// the spec rather than calling netauth: a check that reused the client's own code would
+// agree with it by construction, including about a bug.
+func Test_a_configured_ntlmv2_credential_completes_the_three_leg_exchange(t *testing.T) {
+	const (
+		serverChallenge = "\x01\x02\x03\x04\x05\x06\x07\x08"
+		username        = "operator"
+		password        = "s3cret"
+		domain          = "CORP"
+	)
+
+	var mu sync.Mutex
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+
+		header := r.Header.Get("Authorization")
+		if n == 1 {
+			// The first request must carry the NEGOTIATE (type 1) message preemptively.
+			if !strings.HasPrefix(header, "NTLM ") {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "NTLM "))
+			if err != nil || len(blob) < 12 || string(blob[0:8]) != "NTLMSSP\x00" ||
+				binary.LittleEndian.Uint32(blob[8:12]) != 1 {
+				t.Errorf("the first request carried %q; want an NTLMSSP NEGOTIATE (type 1) message preemptively", header)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			// CHALLENGE_MESSAGE (type 2) with an AV_PAIR list naming the domain and
+			// asking for a MIC. Built by hand so the verifier below recomputes against
+			// exactly these bytes.
+			targetInfo := []byte{
+				0x02, 0x00, 0x08, 0x00, // MsvAvNbDomain, len 8
+				0x43, 0x00, 0x4f, 0x00, 0x52, 0x00, 0x50, 0x00, // "CORP", UTF-16LE
+				0x06, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00, // MsvAvFlags, MIC bit set
+				0x00, 0x00, // MsvAvEOL
+			}
+			msg := make([]byte, 48+len(targetInfo))
+			copy(msg[0:8], "NTLMSSP\x00")
+			binary.LittleEndian.PutUint32(msg[8:12], 2)
+			binary.LittleEndian.PutUint32(msg[20:24], 0x00000205) // flags: NTLM + target info
+			copy(msg[24:32], serverChallenge)
+			binary.LittleEndian.PutUint16(msg[40:42], uint16(len(targetInfo)))
+			binary.LittleEndian.PutUint32(msg[44:48], 48)
+			copy(msg[48:], targetInfo)
+			w.Header().Set("WWW-Authenticate", "NTLM "+base64.StdEncoding.EncodeToString(msg))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// The second request must carry the AUTHENTICATE (type 3) message.
+		blob, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "NTLM "))
+		if err != nil || len(blob) < 88 || string(blob[0:8]) != "NTLMSSP\x00" ||
+			binary.LittleEndian.Uint32(blob[8:12]) != 3 {
+			t.Errorf("the second request carried %q; want an NTLMSSP AUTHENTICATE (type 3) message", header)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// Independent MS-NLMP 3.3.2 verification, straight from the spec:
+		// NTOWFv2 = HMAC-MD5(NT Hash, upper(user) + domain);
+		// NTProofStr = HMAC-MD5(NTOWFv2, serverChallenge + temp) where temp is the v2
+		// blob the client computed over the server challenge and the target info the
+		// server sent, and the proof rides the front of the AUTHENTICATE's NT response.
+		ntHash := ntHashOf(password)
+		mac := hmac.New(md5.New, ntHash)
+		mac.Write(utf16leOf(strings.ToUpper(username) + domain))
+		ntowf := mac.Sum(nil)
+
+		ntLen := int(binary.LittleEndian.Uint16(blob[20:22]))
+		ntOff := int(binary.LittleEndian.Uint32(blob[24:28]))
+		if ntOff+ntLen > len(blob) || ntLen < 16 {
+			t.Errorf("the AUTHENTICATE's NT response field points past the message: len=%d off=%d of %d bytes", ntLen, ntOff, len(blob))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		ntResponse := blob[ntOff : ntOff+ntLen]
+		proof := ntResponse[:16]
+
+		// The NTProofStr is HMAC-MD5(NTOWFv2, serverChallenge + temp). temp carries the
+		// client's own timestamp and client challenge, which the verifier cannot predict
+		// and does not need to: the temp as sent is the suffix of the AUTHENTICATE's own
+		// NT response field, so the verification hashes exactly what the server will.
+		wantProof := hmacMD5(ntowf, append(append([]byte(nil), []byte(serverChallenge)...), ntResponse[16:]...))
+		if !bytes.Equal(proof, wantProof) {
+			t.Errorf("the NTProofStr does not verify against the challenge this server sent; the header was " +
+				"present but wrong, which a presence check would have called a pass")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	config := DefaultSenderConfig()
+	config.PlatformAuth = mustCredentials(t, "127.0.0.1", netauth.SchemeNTLMv2, username, password, "")
+	sender := NewSender(config)
+
+	response, err := sender.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/protected"))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("the server answered %d after the challenge; the NTLMv2 authenticate leg did not verify", response.StatusCode)
+	}
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 2 {
+		t.Errorf("NTLMv2 took %d requests; the exchange is exactly three legs over two requests - negotiate, "+
+			"challenge, authenticate - and more would mean the retry is looping the operator's credentials", got)
+	}
+}
+
+// ntHashOf derives the NT Hash: MD4 over the UTF-16LE password (MS-NLMP 2.2.2.4). Written
+// independently of netauth so the verifier cannot agree with it by construction.
+func ntHashOf(password string) []byte {
+	h := md4.New()
+	h.Write(utf16leOf(password))
+	return h.Sum(nil)
+}
+
+// hmacMD5 is a named wrapper so the verifier reads as the spec's formula.
+func hmacMD5(key, data []byte) []byte {
+	mac := hmac.New(md5.New, key)
+	mac.Write(data)
+	return mac.Sum(nil)
+}
+
+// utf16leOf encodes a string as UTF-16LE.
+func utf16leOf(s string) []byte {
+	encoded := utf16.Encode([]rune(s))
+	buf := make([]byte, 0, len(encoded)*2)
+	for _, u := range encoded {
+		buf = append(buf, byte(u), byte(u>>8))
+	}
+	return buf
 }
 
 // ---- client certificates ------------------------------------------------------------

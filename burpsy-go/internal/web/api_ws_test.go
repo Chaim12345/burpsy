@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -145,6 +146,144 @@ func TestWsConnectionsGroupsMessagesByHandshakeAndCountsEachDirection(t *testing
 	}
 	if alpha.LastMs != 1800 {
 		t.Errorf("last_ms = %d, want the newest message's timestamp 1800", alpha.LastMs)
+	}
+}
+
+// The "Edited" fact reaches the JSON wshistory.ts reads (burpsy-react-ui-d7bu). A frame the operator
+// edited in the hold must come back as "edited":true, and one nobody touched as "edited":false — a
+// stated fact, not an absent key, so the column can render blank rather than unknown. Asserted on the
+// marshalled body, because a struct field set correctly under the wrong JSON key would leave the tab
+// showing every row as unedited.
+func TestWsHistoryReportsWhetherTheOperatorEditedEachFrame(t *testing.T) {
+	s, store := wsTestServer()
+	ex := addWsHandshake(store, "chat.test", 80, "/socket")
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 5, Fragments: 1, AtMs: 1000,
+	}, []byte("plain"))
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 5, Fragments: 1, AtMs: 2000, UserEdited: true,
+	}, []byte("edited"))
+
+	rec := get(t, s, "/api/ws/history")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/ws/history = %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	// Both facts must be present in the wire bytes, spelled with the key the UI reads.
+	if !strings.Contains(body, `"edited":true`) {
+		t.Errorf("the edited frame is not reported as edited in the JSON: %s", body)
+	}
+	if !strings.Contains(body, `"edited":false`) {
+		t.Errorf("the untouched frame lost its stated \"edited\":false (absent key reads as unknown): %s", body)
+	}
+
+	var resp wsHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	if len(resp.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(resp.Rows))
+	}
+	// Newest first: the edited (at_ms 2000) row is row 0.
+	if !resp.Rows[0].Edited {
+		t.Error("the newest row was the edited frame but came back Edited=false")
+	}
+	if resp.Rows[1].Edited {
+		t.Error("the untouched frame came back Edited=true")
+	}
+}
+
+// The handshake-derived columns (burpsy-react-ui-sf8o): a frame row names the URL, TLS and
+// listener port of the connection it was captured on, and the "WebSocket ID" Burp's history
+// shows — burpsy's handshake exchange id, which is that exact fact: one value per connection,
+// shared by every frame on it, different between two connections to the same URL.
+func TestWsHistoryCarriesTheHandshakeDerivedColumnsForEachFrame(t *testing.T) {
+	s, store := wsTestServer()
+	ex := addWsHandshake(store, "chat.test", 80, "/socket")
+
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 3, Fragments: 1, AtMs: 1000,
+	}, []byte("one"))
+
+	rec := get(t, s, "/api/ws/history")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/ws/history = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp wsHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.URL != "http://chat.test/socket" {
+		t.Errorf("url = %q, want http://chat.test/socket — Burp's history has one URL column, and a frame "+
+			"table that made the operator reassemble an address from host and path made the data available "+
+			"without making it readable", row.URL)
+	}
+	if row.TLS {
+		t.Error("tls = true on a plaintext handshake at port 80")
+	}
+	if row.SocketID != ex {
+		t.Errorf("socket_id = %d, want the handshake exchange id %d — every frame of one connection "+
+			"carries the same id and two connections to the same URL carry different ones", row.SocketID, ex)
+	}
+}
+
+// The listener port is the port the proxy was bound to when the connection came in — a fact
+// two listeners on one machine distinguish, and the reason it is a column of the frame table
+// rather than an exchange detail: an operator running two listeners needs to see, per frame,
+// which one captured it.
+func TestWsHistoryReportsTheListenerPortTheHandshakeCameInOn(t *testing.T) {
+	s, store := wsTestServer()
+	ex := addWsHandshake(store, "chat.test", 80, "/socket")
+	if hand, _ := store.GetExchange(ex); hand != nil {
+		hand.ListenerPort = 8080
+	}
+
+	store.AddWsMessage(&core.WsMessage{Exchange: ex, FromClient: true, Opcode: core.WsOpcodeText, Len: 3, AtMs: 1}, []byte("hi"))
+
+	rec := get(t, s, "/api/ws/history")
+	var resp wsHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Rows) != 1 || resp.Rows[0].ListenerPort != 8080 {
+		t.Errorf("listener_port = %d on %d row(s), want 8080 on one", resp.Rows[0].ListenerPort, len(resp.Rows))
+	}
+}
+
+// A frame whose handshake exchange is gone gets empty derived columns, not invented ones —
+// the frame is real, the connection row is not, and a guessed address would be worse than a
+// blank.
+func TestAWsFrameWithoutItsHandshakeLeavesTheDerivedColumnsEmpty(t *testing.T) {
+	s, store := wsTestServer()
+	store.AddWsMessage(&core.WsMessage{
+		Exchange: core.ExchangeID(4242), FromClient: true, Opcode: core.WsOpcodeText,
+		Len: 2, AtMs: 1,
+	}, []byte("orphan"))
+
+	rec := get(t, s, "/api/ws/history")
+	var resp wsHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Rows) != 1 {
+		t.Fatalf("rows = %d, want the orphan frame to still be listed", len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.URL != "" || row.ListenerPort != 0 {
+		t.Errorf("derived columns = url %q listener_port %d, want both empty: an orphan frame is real and "+
+			"its handshake is not, and a guessed address would be worse than a blank", row.URL, row.ListenerPort)
+	}
+	// The socket_id still names the exchange the frame itself claims, even though it does not
+	// resolve: the id is the frame's own fact, not the handshake's.
+	if row.SocketID != core.ExchangeID(4242) {
+		t.Errorf("socket_id = %d, want 4242 from the frame itself", row.SocketID)
 	}
 }
 

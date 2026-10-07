@@ -39,7 +39,7 @@ type wireSessionRule struct {
 	Enabled     bool              `json:"enabled"`
 	Scope       json.RawMessage   `json:"scope"`
 	Steps       []wireSessionStep `json:"steps"`
-	Validity    json.RawMessage   `json:"validity"`
+	ScopeParams []string          `json:"scope_params"`
 	MaxAttempts *int              `json:"max_attempts"`
 }
 

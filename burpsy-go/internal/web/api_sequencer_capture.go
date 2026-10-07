@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/dash"
@@ -56,7 +57,7 @@ import (
 // tokenLocation says where in a response the token lives. The operator declares it; nothing here
 // infers it.
 type tokenLocation struct {
-	// Kind is "cookie", "header" or "body_regex".
+	// Kind is "cookie", "header", "form_field" or "body_regex".
 	Kind string `json:"kind"`
 	// Name is the cookie or header name, for those two kinds. Matched case-insensitively, because
 	// header names are case-insensitive on the wire and Set-Cookie names in practice are not typed
@@ -69,6 +70,12 @@ type tokenLocation struct {
 	re *regexp.Regexp
 }
 
+// formFieldRe matches the value-bearing form controls a token travels in: input, select and
+// textarea, self-closing or not. The value attribute is captured when quoted — the only shape
+// that survives HTML's quoting rules — and the attribute run before '>' is captured so the
+// name can be matched case-insensitively without rebuilding the tag.
+var formFieldRe = regexp.MustCompile(`(?i)<(?:input|select|textarea)((?:[^>"']|"[^"]*"|'[^']*')*)value\s*=\s*("([^"]*)"|'([^']*)')`)
+
 // Describe is the location as one operator-facing line, for the task target and the capture note.
 func (loc tokenLocation) Describe() string {
 	switch strings.ToLower(loc.Kind) {
@@ -76,6 +83,8 @@ func (loc tokenLocation) Describe() string {
 		return "cookie " + loc.Name
 	case "header":
 		return "header " + loc.Name
+	case "form_field":
+		return "form field " + loc.Name
 	case "body_regex":
 		return "body /" + loc.Pattern + "/"
 	}
@@ -88,7 +97,7 @@ func (loc *tokenLocation) compile() error {
 	loc.Kind = strings.ToLower(strings.TrimSpace(loc.Kind))
 	loc.Name = strings.TrimSpace(loc.Name)
 	switch loc.Kind {
-	case "cookie", "header":
+	case "cookie", "header", "form_field":
 		if loc.Name == "" {
 			return fmt.Errorf("a %s location needs the %s name to read the token from", loc.Kind, loc.Kind)
 		}
@@ -105,9 +114,10 @@ func (loc *tokenLocation) compile() error {
 		return nil
 	case "":
 		return fmt.Errorf(`no token location given: pass {"kind":"cookie","name":"SESSIONID"}, ` +
-			`{"kind":"header","name":"X-Token"} or {"kind":"body_regex","pattern":"..."}`)
+			`{"kind":"header","name":"X-Token"}, {"kind":"form_field","name":"csrf_token"} ` +
+			`or {"kind":"body_regex","pattern":"..."}`)
 	default:
-		return fmt.Errorf("unknown token location kind %q: want cookie, header or body_regex", loc.Kind)
+		return fmt.Errorf("unknown token location kind %q: want cookie, header, form_field or body_regex", loc.Kind)
 	}
 }
 
@@ -138,6 +148,32 @@ func (loc tokenLocation) extract(response []byte) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("no %s header in this response", loc.Name)
+	case "form_field":
+		// Burp's "Form field" location (6t8): the value of an input/select/textarea by name —
+		// the shape anti-CSRF and per-page tokens travel in. Parsed, not regexed, so the
+		// operator picks a name off a list instead of writing HTML-aware patterns; matched
+		// case-insensitively because HTML attribute names are case-insensitive and authors are
+		// not consistent about it.
+		name := strings.ToLower(loc.Name)
+		for _, m := range formFieldRe.FindAllSubmatch(body, -1) {
+			// m[1] = attributes between the tag name and '>'; the value landed in group 3
+			// (double-quoted) or group 4 (single-quoted), whichever matched. Name matching is
+			// case-insensitive over the attribute run because HTML attribute names are
+			// case-insensitive and authors are not consistent about quoting either.
+			attrs := strings.ToLower(string(m[1]))
+			if !strings.Contains(attrs, `name="`+name+`"`) && !strings.Contains(attrs, "name='"+name+"'") {
+				continue
+			}
+			value := strings.TrimSpace(string(m[3]))
+			if value == "" {
+				value = strings.TrimSpace(string(m[4]))
+			}
+			if value == "" {
+				return "", fmt.Errorf("form field %s has an empty value in this response", loc.Name)
+			}
+			return value, nil
+		}
+		return "", fmt.Errorf("no form field named %s in this response", loc.Name)
 	case "body_regex":
 		m := loc.re.FindSubmatch(body)
 		if m == nil {
@@ -201,13 +237,36 @@ type sequencerCapture struct {
 	location tokenLocation
 
 	requested int
-	attempts  int
-	tokens    *sequencer.TokenList
+	// lengthDeviates is Burp's length-deviation filter: 0 disables it, N drops tokens whose
+	// length differs from the running average by more than N. The average is over tokens this
+	// capture already accepted, which is exactly the reference the operator means — the normal
+	// token this location produces.
+	lengthDeviates int
+	// tokenCount/tokenLenSum maintain the running average the filter compares against, both
+	// written on the worker that accepted the token under c.mu.
+	tokenCount  int
+	tokenLenSum int
+	attempts    int
+	tokens      *sequencer.TokenList
 	// misses is bounded: a capture of 5000 requests against a misspelled cookie name would otherwise
 	// accumulate 5000 identical strings. The count is exact; the examples are a sample, and say so.
-	misses     []captureMiss
-	missCount  int
-	running    bool
+	misses    []captureMiss
+	missCount int
+	running   bool
+	// pauseRequested is what the API writes; pausedAtGate is what the loop reports once it has
+	// actually stopped between sends. The split is the honest part of the feature: a pause lands
+	// between sends, so the one send already on the wire when the request arrives still records —
+	// and until the loop reaches the gate, the capture is NOT paused, whatever the request said.
+	// Reporting the request flag would let the view claim a state the loop is not in, and a
+	// sample that grows "while paused" is exactly the lie this project does not ship.
+	// (burpsy-react-ui-5kx)
+	pauseRequested bool
+	pausedAtGate   bool
+	// claimed is the send-claim counter for the worker pool (burpsy-react-ui-9t1): a promise
+	// to send, distinct from attempts (a settled send). CAS-advanced so two workers cannot
+	// hold the same ordinal; the sequential loop's `attempt() < requested` check was safe
+	// only because one goroutine ran it.
+	claimed    atomic.Int64
 	startedMs  int64
 	endedMs    int64
 	stopReason string
@@ -216,17 +275,25 @@ type sequencerCapture struct {
 // maxRecordedMisses bounds the miss examples kept per capture. The count is never truncated.
 const maxRecordedMisses = 20
 
+// maxConsecutiveMisses is the give-up threshold shared by every capture worker: per worker the
+// streak is local, and a location that never matches drives each of them to it at the same rate,
+// so the guard's stop lands in the same order of magnitude of requests the sequential loop's did.
+const maxConsecutiveMisses = 25
+
 // captureView is the wire shape of a capture.
 //
 // Every field exists because its absence made two different situations look the same. `Requested`
 // against `Total` is what turns "40 tokens" into "40 of the 200 asked for". `Running` distinguishes a
 // capture still filling from one that finished. `StopReason` names why a short capture is short.
 type captureView struct {
-	ID        uint64   `json:"id"`
-	TaskID    uint64   `json:"task_id"`
-	Target    string   `json:"target"`
-	Location  string   `json:"location"`
-	Capturing bool     `json:"capturing"`
+	ID        uint64 `json:"id"`
+	TaskID    uint64 `json:"task_id"`
+	Target    string `json:"target"`
+	Location  string `json:"location"`
+	Capturing bool   `json:"capturing"`
+	// Paused is only meaningful while Capturing is true: a finished capture is not paused,
+	// whatever the field's historical value, and the UI must not offer Resume on one.
+	Paused    bool     `json:"paused"`
 	Requested int      `json:"requested"`
 	Attempts  int      `json:"attempts"`
 	Total     int      `json:"total"`
@@ -252,6 +319,7 @@ func (c *sequencerCapture) view() captureView {
 		Target:          c.target,
 		Location:        c.location.Describe(),
 		Capturing:       c.running,
+		Paused:          c.running && c.pausedAtGate,
 		Requested:       c.requested,
 		Attempts:        c.attempts,
 		Total:           len(tokens),
@@ -356,16 +424,42 @@ type sequencerCaptureReq struct {
 	// DelayMs paces the loop. Sequencer captures are the one tool that deliberately hammers a single
 	// endpoint, and an operator who needs to stay under a rate limit has no other way to ask.
 	DelayMs int `json:"delay_ms"`
+	// LengthDeviates is Burp's "Ignore token whose length deviates by X characters"
+	// (settings/tools/sequencer.html): when set with Enable, tokens whose length differs from
+	// the running average by more than X are dropped from the sample and counted as gated.
+	// Useful when the application occasionally returns a different item where the token lives —
+	// an error page where the session id was.
+	LengthDeviates struct {
+		Enable bool `json:"enable"`
+		Chars  int  `json:"chars"`
+	} `json:"length_deviates"`
+	// Threads is Burp's "Number of threads" (settings/tools/sequencer.html): the maximum number of
+	// concurrent requests the capture makes. 1 (or absent) is the historical sequential capture —
+	// the honest default, because concurrency changes what the capture measures: a token that
+	// arrives per request is unaffected, but per-request wall-clock pacing (delay) becomes a lower
+	// bound shared across the pool, and an endpoint that serialises logins server-side will show a
+	// capture that looks slower without producing worse tokens. The operator opts into that.
+	Threads int `json:"threads"`
 }
 
-// maxCaptureCount bounds one capture. Burp's own default sample is 100 and its statistical tests
-// stop gaining much past a few thousand; the bound exists so a typo in the count field cannot
-// commit the tool to a million requests against an engagement target.
-const maxCaptureCount = 5000
+// maxCaptureCount bounds one capture at Burp's own maximum: 20,000 is what the FIPS 140-2
+// statistical battery takes a formally compliant sample of, and the page presents FIPS
+// results — a live capture that could not reach the compliant size would make that claim
+// unreachable no matter how long the operator let it run. The default stays far below at
+// 100; the bound is a ceiling on what can be ASKED for, so a typo in the count field still
+// cannot commit the tool to a million requests against an engagement target
+// (burpsy-react-ui-vhs0).
+const maxCaptureCount = 20000
 
 // defaultCaptureCount is what an unspecified count means. 100 matches Burp's default sample size and
 // is enough for FIPS bit-level tests to report at all.
 const defaultCaptureCount = 100
+
+// maxCaptureThreads bounds the concurrency pool. Burp's own default is a handful; a pool wider than
+// the bound would out-race the view's polling and the miss-streak guard's meaning (25 misses is a
+// wrong location at 1 thread and a rounding error at 500). 32 keeps a capture from opening more
+// sockets than the store can absorb.
+const maxCaptureThreads = 32
 
 // handleSequencerCaptureStart serves POST /api/sequencer/capture, beginning a real capture.
 func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +490,14 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	threads := req.Threads
+	if threads <= 0 {
+		threads = 1
+	}
+	if threads > maxCaptureThreads {
+		http.Error(w, fmt.Sprintf("threads is capped at %d; a pool that wide out-races the miss-streak guard's meaning", maxCaptureThreads), http.StatusBadRequest)
+		return
+	}
 	count := req.Count
 	if count <= 0 {
 		count = defaultCaptureCount
@@ -408,6 +510,16 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 	if req.DelayMs < 0 {
 		http.Error(w, "delay_ms cannot be negative", http.StatusBadRequest)
 		return
+	}
+	lengthDeviates := 0
+	if req.LengthDeviates.Enable {
+		// 0 enabled would drop nothing but still cost the average check per token; requiring a
+		// real bound keeps the setting meaning what it says.
+		if req.LengthDeviates.Chars < 1 || req.LengthDeviates.Chars > 1000 {
+			http.Error(w, "length_deviates.chars must be between 1 and 1000 when enabled", http.StatusBadRequest)
+			return
+		}
+		lengthDeviates = req.LengthDeviates.Chars
 	}
 	// Same host-level gate as Repeater and Intruder, and for the same reason: a capture is the most
 	// request-hungry thing in the tool, so a scope the operator set to constrain outbound traffic
@@ -423,12 +535,13 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 	}
 
 	capture := &sequencerCapture{
-		target:    req.Target,
-		location:  req.Location,
-		requested: count,
-		tokens:    sequencer.NewTokenList(),
-		running:   true,
-		startedMs: time.Now().UnixMilli(),
+		target:         req.Target,
+		location:       req.Location,
+		requested:      count,
+		lengthDeviates: lengthDeviates,
+		tokens:         sequencer.NewTokenList(),
+		running:        true,
+		startedMs:      time.Now().UnixMilli(),
 	}
 	s.captureSet().add(capture)
 
@@ -449,7 +562,7 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 	go func() {
 		defer cancel()
 		s.runCapture(ctx, capture, task, auth, host, port, tls, []byte(req.Request),
-			time.Duration(req.DelayMs)*time.Millisecond)
+			time.Duration(req.DelayMs)*time.Millisecond, threads)
 	}()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -460,78 +573,205 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 // runCapture is the loop. It sends the same request `requested` times, extracting one token per
 // response, and stops early on cancellation.
 func (s *Server) runCapture(ctx context.Context, capture *sequencerCapture, task *dash.Handle,
-	auth *sender.AuthorisedSender, host string, port uint16, tls bool, request []byte, delay time.Duration) {
+	auth *sender.AuthorisedSender, host string, port uint16, tls bool, request []byte, delay time.Duration, threads int) {
 
 	// consecutiveMisses gives up on a location that is never going to match rather than sending the
 	// operator's full count into a wall. The threshold is generous, because an application that sets
 	// its cookie only on some responses is a real and interesting case — the point is to stop a
 	// misspelled cookie name from costing 5000 requests, not to second-guess a sparse token.
-	const maxConsecutiveMisses = 25
-	consecutive := 0
+	// maxConsecutiveMisses is a package const (below) so the pool's noteMiss shares it.
 
-	for capture.attempt() < capture.requested {
-		select {
-		case <-ctx.Done():
-			capture.finish("stopped by the operator after " + strconv.Itoa(capture.attempt()) + " of " +
-				strconv.Itoa(capture.requested) + " requests")
-			task.Stop(capture.breakdown(), capture.reason())
-			return
-		default:
-		}
-
-		sent, err := auth.Send(ctx, request)
-		response, elapsed := sent.Raw, sent.Duration
-		attempt := capture.recordAttempt()
-		if err != nil {
-			// A transport failure is a miss with a reason, not a token. Logged through the tool log so
-			// the request appears in Logger like every other egress this process performs.
-			// nil rather than len(sent.Raw): on a transport failure there is no response, and the zero
-			// bytes sitting in Raw are the absence of one, not a measurement of one.
-			s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", 0, nil,
-				uint64(elapsed.Milliseconds()), err.Error())
-			capture.miss(attempt, "send failed: "+err.Error())
-			consecutive++
-			if consecutive >= maxConsecutiveMisses {
-				capture.finish(fmt.Sprintf("gave up after %d consecutive failures; last: %s", consecutive, err.Error()))
-				task.Stop(capture.breakdown(), capture.reason())
-				return
+	// claimIssues hands out the next attempt ordinal, or false when the capture has sent enough.
+	// Atomic claim rather than a channel of ordinals: the pool size is bounded (maxCaptureThreads)
+	// and the claim is the loop's only shared decision.
+	claim := func() (int, bool) {
+		for {
+			n := capture.sentCount()
+			if n >= capture.requested {
+				return 0, false
 			}
-			continue
-		}
-		statusCode := 0
-		if sent.Status != nil {
-			statusCode = *sent.Status
-		}
-		s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", statusCode,
-			toollog.Bytes(len(response)), uint64(elapsed.Milliseconds()), "")
-
-		token, err := capture.location.extract(response)
-		if err != nil {
-			capture.miss(attempt, err.Error())
-			consecutive++
-			if consecutive >= maxConsecutiveMisses {
-				capture.finish(fmt.Sprintf("gave up after %d consecutive responses with no token at %s: %s",
-					consecutive, capture.location.Describe(), err.Error()))
-				task.Stop(capture.breakdown(), capture.reason())
-				return
-			}
-			continue
-		}
-		consecutive = 0
-		capture.tokens.Collect(token)
-		task.Advance(1)
-
-		if delay > 0 {
-			select {
-			case <-ctx.Done():
-				// Checked here too, so a paced capture answers a stop within one delay rather than
-				// sleeping through it.
-			case <-time.After(delay):
+			if capture.claimNext(n) {
+				return n + 1, true
 			}
 		}
 	}
+
+	var wg sync.WaitGroup
+	giveUp := make(chan string, 1) // first worker to hit the miss ceiling reports it; capacity 1, rest dropped
+	for w := 0; w < threads; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			consecutive := int32(0)
+			for {
+				// An issuance from another worker's give-up ends this worker cleanly: the capture
+				// is finished already, and its finish() is idempotent.
+				select {
+				case <-ctx.Done():
+					// The closer classifies cancellation after the pool drains: several workers
+					// see it at once, and exactly one Stop must land.
+					return
+				case reason := <-giveUp:
+					capture.finish(reason)
+					task.Stop(capture.breakdown(), capture.reason())
+					return
+				default:
+				}
+
+				if _, ok := claim(); !ok {
+					return // the count is satisfied; the closer below finishes the capture
+				}
+
+				// Both pauses gate between sends, never inside one: the response in flight is
+				// always recorded whole. Same placement as the single-threaded loop this pool
+				// replaced — one gate for the capture's own switch and the dashboard's.
+				capture.waitWhilePaused(ctx)
+				s.tasks.GateCheck(ctx)
+
+				sent, err := auth.Send(ctx, request)
+				response, elapsed := sent.Raw, sent.Duration
+				attempt := capture.recordAttempt()
+				if err != nil {
+					// A transport failure is a miss with a reason, not a token. Logged through the tool log
+					// so the request appears in Logger like every other egress this process performs.
+					// nil rather than len(sent.Raw): on a transport failure there is no response, and the zero
+					// bytes sitting in Raw are the absence of one, not a measurement of one.
+					s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", 0, nil,
+						uint64(elapsed.Milliseconds()), err.Error(), nil)
+					capture.miss(attempt, "send failed: "+err.Error())
+					if capture.noteMiss(&consecutive) {
+						// This worker made the give-up decision, so it stops claiming work now: continuing
+						// would send on, since the reason may sit in the channel until another worker's
+						// select reaches it — and that overshoot was scheduling-dependent, not bounded
+						// (burpsy-react-ui-zqrm, finding 3). The reason is handed on through the channel;
+						// the worker that receives it (or the closer, below) does the one finish+Stop.
+						select {
+						case giveUp <- fmt.Sprintf("gave up after %d consecutive failures; last: %s", maxConsecutiveMisses, err.Error()):
+						default:
+						}
+						return
+					}
+					continue
+				}
+				statusCode := 0
+				if sent.Status != nil {
+					statusCode = *sent.Status
+				}
+				s.toolLog.Record(toollog.ToolSequencer, host, port, tls, "CAPTURE", "", statusCode,
+					toollog.Bytes(len(response)), uint64(elapsed.Milliseconds()), "", nil)
+
+				token, err := capture.location.extract(response)
+				if err != nil {
+					capture.miss(attempt, err.Error())
+					if capture.noteMiss(&consecutive) {
+						// Same give-up discipline as the send-failure branch: post the reason, stop here.
+						select {
+						case giveUp <- fmt.Sprintf("gave up after %d consecutive responses with no token at %s: %s",
+							maxConsecutiveMisses, capture.location.Describe(), err.Error()):
+						default:
+						}
+						return
+					}
+					continue
+				}
+				// A hit resets the worker's own streak; the global guard reads the workers' last
+				// states through noteMiss's accounting, so one lucky hit per worker is honoured.
+				atomic.StoreInt32(&consecutive, 0)
+				// Burp's length-deviation filter (burpsy-react-ui-rcs): a token whose length is
+				// far from the average is the application occasionally returning a different item
+				// where the token normally lives. Dropped from the sample and counted as gated —
+				// it happened, it just is not a token — and the streak resets like a hit, because
+				// for the location it IS a hit: the location worked, the value is the outlier.
+				if limit := capture.lengthDeviates; limit > 0 {
+					if avg := capture.tokenAverage(); avg >= 0 && absDiff(len(token), avg) > limit {
+						capture.miss(attempt, fmt.Sprintf(
+							"token dropped: length %d deviates from the %d-token average of %d by more than %d",
+							len(token), capture.tokenCount, avg, limit))
+						task.Advance(1)
+						continue
+					}
+				}
+				capture.acceptToken(token)
+				task.Advance(1)
+
+				if delay > 0 {
+					select {
+					case <-ctx.Done():
+						// Checked here too, so a paced capture answers a stop within one delay rather than
+						// sleeping through it.
+					case <-time.After(delay):
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	// The end-of-capture bookkeeping must distinguish three endings: the count satisfied
+	// (done), a give-up (already Stopped by the reporting worker), and cancellation (stopped
+	// — a cancelled capture is not a completed one, and the dashboard must not read it as
+	// such). The old sequential loop called task.Stop inline on cancellation; with a pool,
+	// several workers see ctx.Done at once, so the closer owns the classification.
+	// A give-up reason may still be buffered: the tripper posts and returns without finishing,
+	// so the closer — not a racing worker's select — owns the finish+Stop. Drained before the
+	// cancellation branch, so an operator stop and a give-up landing together report the give-up:
+	// it says what the capture actually died of, and the miss streak that tripped it predates the
+	// operator's button.
+	select {
+	case reason := <-giveUp:
+		capture.finish(reason)
+		task.Stop(capture.breakdown(), capture.reason())
+		return
+	default:
+	}
+	if ctx.Err() != nil {
+		capture.finish("stopped by the operator after " + strconv.Itoa(capture.attempt()) + " of " +
+			strconv.Itoa(capture.requested) + " requests")
+		task.Stop(capture.breakdown(), capture.reason())
+		return
+	}
 	capture.finish("")
 	task.FinishWithNote(capture.breakdown(), capture.reason())
+}
+
+// sentCount reads the claim counter. Claims and attempts are deliberately separate: a claim is a
+// promise to send, an attempt is a settled send. The pool claims under an atomic CAS so two workers
+// cannot hold the same ordinal — the sequential loop's `attempt() < requested` check was safe only
+// because one goroutine ran it.
+func (c *sequencerCapture) sentCount() int {
+	return int(c.claimed.Load())
+}
+
+// claimNext CAS-advances the claim counter from n. Returns false when another worker won the race,
+// and the caller re-reads — the loser spins back into claim, which re-checks the bound itself.
+func (c *sequencerCapture) claimNext(n int) bool {
+	return c.claimed.CompareAndSwap(int64(n), int64(n+1))
+}
+
+// noteMiss advances a worker's miss streak against the global guard. The streak is per-worker
+// (each worker's own consecutive failures in a row) and the ceiling trips when ANY worker's local
+// run reaches it — under a pool, a location that never matches drives every worker to the ceiling
+// at the same rate, so the guard's stop arrives in the same order of magnitude of requests as the
+// sequential loop's did. Returns true when this call tripped it; the caller reports the give-up.
+func (c *sequencerCapture) noteMiss(consecutive *int32) bool {
+	return atomic.AddInt32(consecutive, 1) >= maxConsecutiveMisses
+}
+
+// waitWhilePaused blocks while the capture's own pause is set, answering cancellation each tick.
+// Extracted from the loop body: with a pool, every worker runs it, and a helper beats six copies
+// of one select.
+func (c *sequencerCapture) waitWhilePaused(ctx context.Context) {
+	if !c.isPaused() {
+		return
+	}
+	c.gatePause(true)
+	defer c.gatePause(false)
+	for c.isPaused() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // attempt and recordAttempt keep the loop's counter behind the same mutex the view reads it through.
@@ -548,6 +788,36 @@ func (c *sequencerCapture) recordAttempt() int {
 	return c.attempts
 }
 
+// tokenAverage is the mean token length over the sample accepted so far, or -1 when nothing
+// has been accepted: the first token has nothing to deviate from, so it can never be filtered.
+// The sum is maintained on the capture loop's own thread (single writer per token accept),
+// read here under the same mutex the view uses.
+func (c *sequencerCapture) tokenAverage() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tokenCount == 0 {
+		return -1
+	}
+	return c.tokenLenSum / c.tokenCount
+}
+
+func absDiff(a, b int) int {
+	if a > b {
+		return a - b
+	}
+	return b - a
+}
+
+// acceptToken records one token into the sample and advances the running length average the
+// deviation filter compares against. Under c.mu because tokenAverage reads it from any worker.
+func (c *sequencerCapture) acceptToken(token string) {
+	c.mu.Lock()
+	c.tokens.Collect(token)
+	c.tokenCount++
+	c.tokenLenSum += len(token)
+	c.mu.Unlock()
+}
+
 func (c *sequencerCapture) miss(attempt int, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -555,6 +825,35 @@ func (c *sequencerCapture) miss(attempt int, reason string) {
 	if len(c.misses) < maxRecordedMisses {
 		c.misses = append(c.misses, captureMiss{Attempt: attempt, Reason: reason})
 	}
+}
+
+// setPaused flips the pause gate. Reports whether the capture was in a state where the request
+// could apply: pausing a finished capture is a 409, not a silent success, because the UI offering
+// Resume on a dead capture is worse than the error.
+func (c *sequencerCapture) setPaused(paused bool) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.running {
+		return false
+	}
+	c.pauseRequested = paused
+	return true
+}
+
+// isPaused reports whether the loop should hold at the gate: the request flag, read under the
+// same mutex everything else uses.
+func (c *sequencerCapture) isPaused() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pauseRequested
+}
+
+// gatePause records that the loop has reached the gate and is holding (or has resumed and is
+// going again). Called by the loop, so the wire's paused flag tracks the loop, not the handler.
+func (c *sequencerCapture) gatePause(held bool) {
+	c.mu.Lock()
+	c.pausedAtGate = held
+	c.mu.Unlock()
 }
 
 func (c *sequencerCapture) finish(reason string) {
@@ -601,7 +900,8 @@ func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) 
 	// is POST; reading a token list does not, so it is GET. Unguarded, `GET .../stop` answered
 	// {"stopped":true} — a state change reported for a request that could not have caused one.
 	switch {
-	case path == "stop" && r.Method != http.MethodPost, path != "stop" && r.Method != http.MethodGet:
+	case (path == "stop" || path == "pause" || path == "resume") && r.Method != http.MethodPost,
+		path != "stop" && path != "pause" && path != "resume" && r.Method != http.MethodGet:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -609,6 +909,31 @@ func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) 
 
 	if path == "stop" {
 		s.stopCaptures(w)
+		return
+	}
+	if path == "pause" || path == "resume" {
+		// The most recent live capture is the one the UI is looking at; pausing by explicit id
+		// would need a picker this page does not have, and Burp's pause button operates on the
+		// capture in front of the operator too.
+		live := s.captureSet().running()
+		if len(live) == 0 {
+			http.Error(w, "no capture is running, so nothing to "+path, http.StatusConflict)
+			return
+		}
+		target := live[len(live)-1]
+		want := path == "pause"
+		if !target.setPaused(want) {
+			http.Error(w, "the capture finished before the request landed", http.StatusConflict)
+			return
+		}
+		views := make([]captureView, 0, len(live))
+		for _, c := range live {
+			views = append(views, c.view())
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"captured": views,
+			"note":     "capture " + strconv.FormatUint(target.id, 10) + " " + path + "d",
+		})
 		return
 	}
 	if path == "" {

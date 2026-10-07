@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +35,32 @@ type wsRowView struct {
 	Fragments uint32          `json:"fragments"`
 	AtMs      uint64          `json:"at_ms"`
 	Note      string          `json:"note,omitempty"`
+	// Edited is Burp's "Edited" column for a WebSocket message: the operator's own hold changed this
+	// message before it was relayed. No omitempty — "edited":false is a stated fact the console renders
+	// as an empty column, and an absent key would make "not edited" indistinguishable from an older row
+	// that predates the field.
+	Edited bool `json:"edited"`
+
+	// The handshake-derived columns (burpsy-react-ui-sf8o). A frame's own row in the store names
+	// only its handshake exchange, so these are read from that exchange — the same rows
+	// WebSockets history has always had and the frame table never showed.
+	//
+	// URL, not host and path as separate columns: Burp's WebSockets history has one URL column,
+	// and a frame table where the operator has to reassemble an address from two fields is a
+	// table that made the data available without making it readable.
+	URL string `json:"url,omitempty"`
+	// TLS and ListenerPort come from the exchange because a WebSocket's authority is the
+	// handshake's: the frames carry no address of their own, and a frame row claiming a scheme
+	// the handshake did not use would misdescribe the connection.
+	TLS          bool   `json:"tls"`
+	ListenerPort uint16 `json:"listener_port,omitempty"`
+	// SocketID is Burp's "WebSocket ID": its internal id for the connection, not for the frame.
+	// burpsy's handshake exchange id is exactly that fact — every frame from one connection
+	// carries the same value, and two connections to the same URL carry different ones — so it
+	// is reported under the name an operator migrating from Burp will look for. `exchange`
+	// above carries the same number for the API's own callers; this one exists so the column
+	// has a name that says what it means on screen.
+	SocketID core.ExchangeID `json:"socket_id"`
 }
 
 // wsHistoryResp mirrors wshistory.ts's HistoryResp.
@@ -73,14 +100,15 @@ type wsConnectionView struct {
 // wsMaxLimit caps a history page. Matches /api/history's cap: the browser is what falls over first.
 const wsMaxLimit = 2000
 
-func wsRowFromMessage(m *core.WsMessage) wsRowView {
+func wsRowFromMessage(m *core.WsMessage, handshake *core.Exchange) wsRowView {
 	direction := "server_to_client"
 	if m.FromClient {
 		direction = "client_to_server"
 	}
-	return wsRowView{
+	row := wsRowView{
 		ID:        uint64(m.ID),
 		Exchange:  m.Exchange,
+		SocketID:  m.Exchange,
 		Payload:   uint64(m.Payload),
 		Direction: direction,
 		Opcode:    m.Opcode.Name(),
@@ -90,7 +118,40 @@ func wsRowFromMessage(m *core.WsMessage) wsRowView {
 		Fragments: m.Fragments,
 		AtMs:      m.AtMs,
 		Note:      m.Note,
+		Edited:    m.UserEdited,
 	}
+	// A handshake the store cannot resolve leaves the derived columns empty rather than
+	// inventing them: the frame is real, its connection row is not there, and a row that
+	// guessed an address would be worse than a row that says nothing.
+	if handshake != nil {
+		row.TLS = handshake.TLS
+		row.ListenerPort = handshake.ListenerPort
+		row.URL = exchangeURL(handshake)
+	}
+	return row
+}
+
+// exchangeURL renders an exchange's absolute URL, or "" when it has no host to render.
+//
+// The scheme comes from the exchange's own TLS flag rather than from the port: a listener on a
+// non-standard TLS port is still https, and inferring from 443 would call it http.
+func exchangeURL(ex *core.Exchange) string {
+	if ex == nil || ex.Host == "" {
+		return ""
+	}
+	scheme := "http"
+	if ex.TLS {
+		scheme = "https"
+	}
+	authority := ex.Host
+	if ex.Port != 0 && !(ex.TLS && ex.Port == 443) && !(!ex.TLS && ex.Port == 80) {
+		authority = net.JoinHostPort(ex.Host, strconv.Itoa(int(ex.Port)))
+	}
+	path := ex.Path
+	if path == "" {
+		path = "/"
+	}
+	return scheme + "://" + authority + path
 }
 
 // handleWSConnections serves GET /api/ws/connections -> ConnectionView[], newest activity first.
@@ -120,9 +181,20 @@ func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
-// handleWSHistory serves GET /api/ws/history[?offset=N&limit=N[&exchange=N]] -> HistoryResp.
+// handleWSHistory serves GET /api/ws/history[?offset=N&limit=N[&exchange=N][&direction=…]
+// [&opcode=…][&payload=…]] -> HistoryResp.
 // Newest-first page. `total` is the whole index's size, not the page's, so the UI can page without
 // asking separately; filtering by connection narrows the rows but not the total.
+//
+// # Why direction/opcode/payload filter on the server while the UI filter box feels client-side
+//
+// A frame's payload bytes are not on the row — by design, so listing a socket that has carried a
+// hundred thousand messages touches no payload bytes (see the WsMessage comment in core). A
+// client-side payload filter would run over rows that do not carry the payload, so it could only
+// match against whatever the UI happened to have fetched — the selected frame — and would hide
+// everything else for a reason the data cannot support. Filtering here reads each candidate's
+// payload exactly once through the same WsPayload handle the detail view uses, and the rows the
+// operator sees are the rows that actually matched.
 func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -169,10 +241,54 @@ func (s *Server) handleWSHistory(w http.ResponseWriter, r *http.Request) {
 		messages = s.store.WsMessages(offset, limit)
 	}
 
+	// The frame filter (burpsy-react-ui-5k4). direction and opcode are exact matches over the
+	// row's own fields; payload is a case-insensitive substring over the stored bytes, the same
+	// comparison the detail view renders as text. An unknown direction/opcode value is refused
+	// rather than ignored: a filter parameter that silently does not filter would answer with
+	// every frame while the operator believes they are looking at a narrowed list — the same
+	// refusal rule the `exchange` parameter above already follows.
+	dirFilter := r.URL.Query().Get("direction")
+	if dirFilter != "" && dirFilter != "client_to_server" && dirFilter != "server_to_client" {
+		http.Error(w, fmt.Sprintf("direction must be client_to_server or server_to_client, got %q", dirFilter), http.StatusBadRequest)
+		return
+	}
+	opcodeFilter := r.URL.Query().Get("opcode")
+	if opcodeFilter != "" && opcodeFilter != "text" && opcodeFilter != "binary" && opcodeFilter != "ping" && opcodeFilter != "pong" && opcodeFilter != "close" {
+		http.Error(w, fmt.Sprintf("opcode must be one of text, binary, ping, pong, close, got %q", opcodeFilter), http.StatusBadRequest)
+		return
+	}
+	payloadFilter := strings.ToLower(r.URL.Query().Get("payload"))
+
 	rows := make([]wsRowView, 0, len(messages))
 	for _, m := range messages {
-		rows = append(rows, wsRowFromMessage(m))
+		if dirFilter != "" {
+			want := dirFilter == "client_to_server"
+			if m.FromClient != want {
+				continue
+			}
+		}
+		if opcodeFilter != "" && m.Opcode.Name() != opcodeFilter {
+			continue
+		}
+		if payloadFilter != "" {
+			payload, err := s.store.WsPayload(m.Payload)
+			if err != nil {
+				// A payload that cannot be read cannot be shown to have matched. The row is
+				// skipped rather than passed: passing it would claim the substring matched bytes
+				// nobody read.
+				continue
+			}
+			if !strings.Contains(strings.ToLower(string(payload)), payloadFilter) {
+				continue
+			}
+		}
+		// The handshake lookup is per row and O(1) (the store indexes exchanges by id), so a
+		// 300-row page costs 300 map reads rather than a scan. A frame whose handshake is gone
+		// gets its derived columns empty; see wsRowFromMessage.
+		handshake, _ := s.store.GetExchange(m.Exchange)
+		rows = append(rows, wsRowFromMessage(m, handshake))
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(wsHistoryResp{Total: s.store.WsCount(), Rows: rows})
 }
@@ -210,9 +326,10 @@ func (s *Server) handleWSMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	handshake, _ := s.store.GetExchange(m.Exchange)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(wsMessageResp{
-		wsRowView: wsRowFromMessage(m),
+		wsRowView: wsRowFromMessage(m, handshake),
 		Text:      string(payload),
 		Hex:       hexString(payload),
 		Close:     closeView,

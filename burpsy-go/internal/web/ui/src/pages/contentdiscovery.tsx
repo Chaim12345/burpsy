@@ -1,7 +1,9 @@
 import { AlertTriangle, Copy, ExternalLink, FolderTree, Globe, Link2, Play, Repeat2, Terminal } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { openUrlInBrowser } from "../lib/data.browser";
 import { copyToClipboard, formatBytes, formatCount, templateRequest } from "../lib/api";
+import { takeSeed } from "../lib/page-seed";
 import { useApp } from "../lib/store";
 import {
   useDiscoveryRuns,
@@ -10,6 +12,7 @@ import {
   type DiscoveryRun,
   type DiscoveryToolState,
 } from "../lib/data.discovery";
+import { useWordlists } from "../lib/data.tools";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { MenuRow, SimpleTable } from "../ui/table";
 import type { MenuGroup } from "../ui/menu";
@@ -24,6 +27,7 @@ import {
   Metric,
   Toolbar,
   type Tone,
+  Select,
 } from "../ui/primitives";
 
 /**
@@ -128,8 +132,16 @@ function ToolUnavailable({ tool }: { tool: DiscoveryToolState }): JSX.Element {
 /** The launch form. Only target and wordlist are required; the rest fall through to ffuf's defaults. */
 function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
   const start = useStartDiscovery();
-  const [target, setTarget] = useState("");
+  // Seeded when this page was opened from the site map's Engagement tools › Discover content
+  // (burpsy-react-ui-gupj), blank otherwise. Read once at mount and cleared, so the seed cannot
+  // overwrite a target the operator has since typed — see lib/page-seed.ts.
+  const [target, setTarget] = useState(() => takeSeed("discovery-target") ?? "");
   const [wordlist, setWordlist] = useState("");
+  // The wordlist inventory (kal): the bundled corpus plus uploads, so the operator picks a
+  // list once here too — ffuf reads the stored path, and the builtin entries are extractable
+  // to a real path via the extraction route rather than the builtin: shorthand ffuf cannot
+  // read. The select fills the path field; the path stays editable for any local list.
+  const wordlistsQuery = useWordlists();
   const [extensions, setExtensions] = useState("");
   const [matchCodes, setMatchCodes] = useState("");
   const [rate, setRate] = useState("");
@@ -178,12 +190,34 @@ function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
         </Field>
         <Field label="Wordlist path" hint="A path on the burpsy host. Required: ffuf with no wordlist is no sweep.">
           {(id) => (
-            <Input
-              id={id}
-              value={wordlist}
-              placeholder="/usr/share/wordlists/dirb/common.txt"
-              onChange={(event) => setWordlist(event.target.value)}
-            />
+            <div className="stack">
+              <Input
+                id={id}
+                value={wordlist}
+                placeholder="/usr/share/wordlists/dirb/common.txt"
+                onChange={(event) => setWordlist(event.target.value)}
+              />
+              <Select
+                aria-label="Available wordlists"
+                value=""
+                onChange={(event) => {
+                  if (!event.target.value) return;
+                  // Uploads are real paths ffuf can read; bundled lists need the extraction
+                  // route, so only upload entries fill the field directly.
+                  const picked = (wordlistsQuery.data?.wordlists ?? []).find((w) => w.ref === event.target.value);
+                  if (picked && picked.kind === "upload") setWordlist(picked.ref);
+                }}
+              >
+                <option value="">Choose an uploaded list…</option>
+                {(wordlistsQuery.data?.wordlists ?? [])
+                  .filter((w) => w.kind === "upload")
+                  .map((w) => (
+                    <option key={w.ref} value={w.ref}>
+                      {w.name} ({w.lines} lines)
+                    </option>
+                  ))}
+              </Select>
+            </div>
           )}
         </Field>
         <Field label="Extensions" hint="Optional. Extends every word, e.g. php,bak">
@@ -282,10 +316,8 @@ function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
           id: "browser",
           label: "Open URL in browser",
           icon: Globe,
-          onSelect: () => {
-            window.open(row.url, "_blank", "noopener");
-            toast.info("Opened in your browser — it is captured only if that browser uses burpsy's proxy");
-          },
+          // The burpsy browser, proxied (bufa); a refusal is shown and offers this browser instead.
+          onSelect: () => void openUrlInBrowser(row.url),
         },
       ],
     },

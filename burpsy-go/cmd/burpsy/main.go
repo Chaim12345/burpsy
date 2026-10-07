@@ -29,9 +29,11 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
+	"time"
 )
 
 func main() {
@@ -71,7 +73,7 @@ func main() {
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
-	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them)`)
+	scanConfig := flag.String("scan-config", "", `run audits under a built-in scan configuration by name ("list" prints them, "list-unapplied" prints the keys this engine cannot apply)`)
 	// DOM execution is operator policy for the same reason -tools is: "chrome" launches a browser
 	// process, and a ws:// endpoint hands page control to a server this process did not start.
 	// Empty is the behaviour this binary had unconditionally until now — every DOM-based check
@@ -274,14 +276,18 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to open database %s: %v", *dbFile, err)
 		}
-		defer persistStore.Close()
+		// Closed by webServer.CloseProject (deferred below, once the server exists), not here: an
+		// in-console project switch (burpsy-react-ui-dlw2) closes this store and opens another, so a
+		// deferred Close of this pointer would close the wrong file twice and the live one never.
 		// Tool log and coordinator are owned by the web server below, so restore
 		// them after it exists; history/scope/findings restore here.
 		if err := persistStore.Restore(store, findingStore, scope, nil, nil, nil, nil); err != nil {
 			log.Fatalf("Failed to restore from database: %v", err)
 		}
-		store.SetPersistenceSinks(persistStore.SaveMessage, persistStore.SaveExchange)
-		findingStore.SetPersistenceSink(persistStore.SaveFinding)
+		// Message, exchange and finding sinks — including the triage delete sink, without which a
+		// finding deleted in the UI is restored on the next start. Installed through the web
+		// package so every durable write takes the project-switch lock from the first capture on.
+		web.InstallCaptureSinks(store, findingStore, persistStore)
 	}
 
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
@@ -293,12 +299,24 @@ func main() {
 	// already in the database replaces it in place rather than becoming a second, unreachable copy.
 	// Doing this the other way round would have Restore wipe the flags entirely.
 	upstreamPolicy := upstream.NewPolicy()
+	// The global SOCKS layer, one instance shared by every egress surface — the sender, the proxy
+	// listener and the console. One instance rather than a copy per surface because the setting is
+	// global: a carrier the sender honours and the proxy does not is a panel that looks right and a
+	// browser that goes out the wrong way (burpsy-react-ui-mr83 part 3).
+	upstreamCarrier := upstream.NewCarrier()
 	if persistStore != nil {
 		// Fatal, not a warning. Starting under a proxy policy we could not read means starting with
 		// traffic going somewhere the operator did not choose — including straight to the target — and
 		// that is not a decision to make behind their back.
 		if err := persistStore.LoadUpstreamProxy(upstreamPolicy); err != nil {
 			log.Fatalf("Failed to restore the upstream proxy policy: %v", err)
+		}
+		// The carrier is restored in the same block and for the same reason, and FATAL on a refusal
+		// for the same reason: starting with a layer the operator configured but this process could
+		// not read means traffic going out a way they did not choose, and the failure mode is
+		// indistinguishable from "the SOCKS proxy is down".
+		if _, cerr := persistStore.LoadUpstreamCarrier(upstreamCarrier); cerr != nil {
+			log.Fatalf("Could not read the saved SOCKS carrier: %v", cerr)
 		}
 	}
 	applyUpstreamFlags(upstreamPolicy, upstreamFlags)
@@ -425,13 +443,47 @@ func main() {
 	// The proxy's live option set — Burp's response-modification switches. One set handed to both
 	// the relay and the web API, the same single-pointer rule as the TLS policy and the Match &
 	// Replace rules: a panel that described a different set than the relay applies is the drift
-	// this project keeps closing.
-	proxyOptions := proxy.NewOptions()
+	// this project keeps closing. proxyOptions aliases the config's own set (picked up below,
+	// after the builder chain) rather than a second NewOptions, because NewProxyConfig seeds
+	// engine defaults into its set — the WebSocket handshake strip starts on — and a fresh
+	// all-off set attached over it would silently have turned that default off.
+	// The unified traffic log (burpsy-react-ui-6dt): one instance for the listener and for the
+	// console, so a proxied request and a Repeater send land in the same ordered log, are
+	// gated by the same capture axis, and are persisted by the same sink. Built here rather
+	// than inside the web server because the listener's relay goroutines read it from the
+	// moment the proxy starts, and the web server is constructed after that.
+	toolLog := toollog.New()
+
+	// One streaming policy, shared by the proxy's response path and the console that edits it. Built
+	// here because the restore below and the builder chain both need it: the persisted document has
+	// to reach the proxy leg on the same pass that reaches the sender, or an event stream would be
+	// honoured in Repeater and buffered through the proxy — the split burpsy-react-ui-wet3 records.
+	streamingPolicy := proxy.NewStreamingPolicy()
+	// The upstream-TLS policy, declared beside the streaming one and BEFORE the restore that replaces
+	// it, because the builder chain further down reads this variable. Attaching it in the chain would
+	// capture the pre-restore value and leave the proxy verifying against the default while the
+	// operator believed their restored setting applied -- the panel and the leg disagreeing, which is
+	// the state burpsy-react-ui-f365 found with the setting absent entirely.
+	restoredTLSPolicy := proxy.NewTLSPolicy()
+
+	// The listener's live resolution/100-continue holder. Declared here, before the builder chain,
+	// for the same reason restoredTLSPolicy is: the chain would otherwise capture a value built
+	// later, and the restore below would write into a holder the server never reads
+	// (burpsy-react-ui-o1eu).
+	proxyNetwork := proxy.NewNetworkSettings()
+
 	proxyConfig := proxy.NewProxyConfig(store).
+		WithNetworkSettings(proxyNetwork).
+		// The SAME credential store the sender holds, restored above. One store for both legs: two
+		// would let the Settings panel describe rules that Repeater honours and the proxy does not,
+		// and the symptom would be an authenticated tool beside an unauthenticated browser
+		// (burpsy-react-ui-trcy). The NTLMv2 codec landed in 3fb2ce1 and was unreachable for the
+		// traffic that needed it until this line existed.
+		WithPlatformAuth(platformAuth).
+		WithStreaming(streamingPolicy).
 		WithScope(scope).
 		WithTlsPolicy(tlsPolicy).
 		WithMatchReplace(matchReplaceRules).
-		WithOptions(proxyOptions).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
@@ -447,15 +499,27 @@ func main() {
 		// it an operator sets a corporate proxy, watches the scanner's traffic take it, and never
 		// learns that everything their browser drove through the listener went out direct.
 		WithUpstreamProxy(upstreamPolicy).
+		WithUpstreamCarrier(upstreamCarrier).
 		// The upstream leg of an intercepted TLS connection. Without this, an app requiring
 		// a client certificate could only be reached by putting its host on the TLS
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
-		WithClientCerts(clientCerts)
+		WithClientCerts(clientCerts).
+		// What the listener relayed for the operator's browser is logged beside what burpsy's
+		// own tools sent — Logger's coverage, not just the tools' (burpsy-react-ui-6dt).
+		WithToolLog(toolLog)
+	proxyOptions := proxyConfig.Options()
 
 	// Start proxy server
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Attached HERE rather than in the builder chain above, because the restore that replaces this
+	// policy runs between the two. A builder-chain attachment captures the pre-restore value and leaves
+	// the proxy verifying against the default while the operator believes their restored setting
+	// applied -- the panel and the leg disagreeing, which is the state burpsy-react-ui-f365 found with
+	// the setting absent entirely.
+	proxyConfig.WithUpstreamTLS(restoredTLSPolicy)
 
 	proxyServer := proxy.NewServer(proxyConfig)
 	go func() {
@@ -474,7 +538,14 @@ func main() {
 	// sender.go's own comment on the protocol cache asks for: "an intruder run and the scan that
 	// preceded it share what either of them discovered". Sharing is safe because Sender guards its
 	// config and client behind a mutex and its protocol cache is atomic.
-	httpSender := sender.NewSender(egressSenderConfig(upstreamPolicy, platformAuth, clientCerts))
+	// The carrier goes ON THE CONFIG, not just on the sender afterwards. The transport's client is
+	// built during construction and captures the carrier then, so a WithUpstreamCarrier that only
+	// set the field would leave the client holding a nil layer — and the live pass found exactly
+	// that: the console reported the carrier configured, every dial site read the field, and the
+	// connection still went out direct.
+	senderConfig := egressSenderConfig(upstreamPolicy, platformAuth, clientCerts)
+	senderConfig.UpstreamCarrier = upstreamCarrier
+	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
 	// as the scan-config restore below: what the operator set through the API in a previous run is a
@@ -489,6 +560,47 @@ func main() {
 			if err := httpSender.ApplyNetwork(*saved); err != nil {
 				logger.Warn("Saved network settings were refused; using defaults", zap.Error(err))
 			} else {
+				// The proxy leg reads the same streaming settings, and the sender's copy is the
+				// confirmed one — Normalise has already run, so this is what the operator's document
+				// actually became. Pushed here rather than at the API so a restart honours the setting
+				// for browser traffic too; without it, an event stream would be honoured in Repeater
+				// and buffered through the proxy, which is the split burpsy-react-ui-wet3 records.
+				applied := httpSender.Network()
+				if err := streamingPolicy.Set(applied.Streaming.Hosts, time.Duration(applied.Streaming.TimeoutMS)*time.Millisecond); err != nil {
+					logger.Warn("Proxy streaming policy refused the restored window", zap.Error(err))
+				}
+				// The three response-handling switches, restored on the same pass: a restart must honour
+				// "store", "strip chunked metadata" and "treat text/event-stream as streaming" for browser
+				// traffic too, or they would apply in Repeater and silently not through the proxy.
+				streamingPolicy.SetResponseHandling(
+					applied.Streaming.StoreStreamed(),
+					applied.Streaming.StripChunkedMetadata,
+					applied.Streaming.UseTextEventStreamHeader,
+				)
+				// The resolution overrides and 100-continue handling, restored onto the listener for
+				// the same reason: a restart must honour what the operator saved, or their
+				// split-horizon override works in Repeater and not in the browser they browse
+				// through the proxy with (burpsy-react-ui-o1eu).
+				proxyNetwork.Set(applied.Resolution, applied.Continue)
+				// The TLS policy is restored on the same pass and for the same reason: a verification
+				// setting that only reached the sender would leave every intercepted connection
+				// verifying while the operator believed they had turned it off for a self-signed lab
+				// target — the panel's promise and the proxy's behaviour disagreeing, which is the state
+				// burpsy-react-ui-f365 found with the setting absent entirely.
+				// Mutating the policy the proxy already holds rather than replacing the variable. The
+				// builder chain attached this instance before the restore ran, so assigning a new one
+				// here would leave the proxy on the pre-restore default while the console reported the
+				// restored value -- the panel and the leg disagreeing, which is the state
+				// burpsy-react-ui-f365 found with the setting absent entirely.
+				restoredTLSPolicy.WithVerify(applied.TLS.Verify)
+				if minErr := restoredTLSPolicy.WithMinVersion(applied.TLS.MinVersion); minErr != nil {
+					logger.Warn("Proxy TLS policy refused the restored minimum version", zap.Error(minErr))
+				}
+				if caPath := applied.TLS.RootCAPath; caPath != "" {
+					if caErr := restoredTLSPolicy.WithRootCAFile(caPath); caErr != nil {
+						logger.Warn("Proxy TLS policy could not load the restored custom CA", zap.String("path", caPath), zap.Error(caErr))
+					}
+				}
 				logger.Info("Applied persisted network settings")
 			}
 		}
@@ -519,19 +631,10 @@ func main() {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
 
-	// Persisted scan-config overrides apply last, after the flag chain: what the operator set
-	// through /api/scanner/config in a previous run is a later decision than what this process was
-	// launched with, and it must win. A database that never saved overrides leaves the flag-built
-	// defaults untouched.
-	if persistStore != nil {
-		saved, err := persistStore.LoadScanConfig()
-		if err != nil {
-			logger.Warn("Failed to load saved scan configuration; using launch defaults", zap.Error(err))
-		} else if saved != nil {
-			activeScanner.UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *saved })
-			logger.Info("Applied persisted scan-configuration overrides")
-		}
-	}
+	// Persisted scan-config overrides still apply last, after the flag chain — but through
+	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level
+	// and must be reloaded when the console switches project, and the restore there first captures
+	// these flag-built defaults as the baseline a project with no overrides gets (burpsy-react-ui-z4ml).
 
 	// The blind-XSS callback channel, bound before the web server so the API can report either the live
 	// listener or the reason there is none. A bind failure is deliberately not fatal: everything else
@@ -549,6 +652,9 @@ func main() {
 	// every active-audit probe, and a settings panel that covered the proxy listener but not these
 	// would be the same half-covered defect from the other side.
 	webServer := web.NewServer(store, scope).
+		// First in the chain, so everything downstream — including WithPersist's restore and
+		// its save sink — is wired to the log the proxy is already recording into.
+		WithToolLog(toolLog).
 		WithLogger(logger).
 		WithSender(httpSender).
 		// WithScope is not optional here even though ActiveScanner treats it as such: without it this
@@ -586,6 +692,10 @@ func main() {
 		// The same option set the relay holds, so the Proxy settings panel's switches and the
 		// response path's rules are one state.
 		WithProxyOptions(proxyOptions).
+		// The relay itself, so the console can read where its listener is bound and move it
+		// at runtime (burpsy-react-ui-77m): a bind change that used to need a process restart
+		// is now a PUT, and the panel reports the address the accept loop actually serves.
+		WithProxyServer(proxyServer).
 		// The raw -tools map, for the surfaces that delegate a whole phase to an external binary rather
 		// than one tool per insertion point: POST /api/discovery runs ffuf. Without -tools that route
 		// refuses and names the missing tool, which is the difference between "not configured" and "this
@@ -612,6 +722,11 @@ func main() {
 		// The same object the proxy and the senders hold, so /api/network/proxy edits what is actually
 		// consulted rather than a copy — and so its `attached` field can report both surfaces truthfully.
 		WithUpstreamProxy(upstreamPolicy).
+		// The same carrier the proxy and the senders hold, so /api/network/proxy's carrier edit
+		// reaches the dial path rather than a copy — and so its `attached` field can report every
+		// surface truthfully. Without it the panel would accept a carrier edit, report the layer as
+		// configured, and nothing would be carried (burpsy-react-ui-mr83 part 3).
+		WithUpstreamCarrier(upstreamCarrier).
 		// The same pointers the proxy and every sender above hold, so the panel edits what
 		// the wire presents. The notes carry the bindings that could not be rebuilt, so a
 		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a
@@ -622,6 +737,12 @@ func main() {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
 		webServer.WithPersist(persistStore)
+		// Close whichever project file is open at exit — after an in-console switch that is no
+		// longer persistStore (burpsy-react-ui-dlw2).
+		defer webServer.CloseProject()
+		// The live sweep's cross-run seen ledger (apfh) survives restarts: WithPersist above loads it
+		// (restoreProjectScanState) before StartLiveAuditSweep runs its first tick, and reloads it on
+		// an in-console project switch so one engagement's audit history does not suppress another's.
 		// Runtime edits to the TLS passthrough list survive restarts. The persisted
 		// patterns apply on top of whatever the flags configured — a flag rule and a
 		// UI-added rule are both real rules, and dedupe keeps a pattern that arrived
@@ -639,6 +760,10 @@ func main() {
 				}
 			}
 		}
+		// The two coupling switches survive restarts too (burpsy-react-ui-n1fi).
+		applyOOS, autoAdd := persistStore.LoadTlsPassthroughMode()
+		tlsPolicy.SetApplyOutOfScope(applyOOS)
+		tlsPolicy.SetAutoAddOnFailure(autoAdd)
 		// Runtime edits to the proxy's response-modification switches survive restarts.
 		// Without this, every switch the operator turned on in Proxy → Options came back
 		// off after a restart while the panel still rendered a working panel — the
@@ -704,12 +829,6 @@ func main() {
 	}
 }
 
-// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
-//
-// Three answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
-// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
-// to read the source to find one; anything else must resolve, and a name that does not is fatal rather
-// than a warning that starts the process under a configuration the operator did not ask for.
 // domEngineOptions turns the -dom flag into domexec options, or nil for "no DOM engine".
 //
 // The form is inferred from the value rather than declared by a second mode flag, because a mode
@@ -739,35 +858,85 @@ func domEngineOptions(flagValue string) (*domexec.Options, error) {
 	}
 }
 
+// resolveScanConfig turns -scan-config into the AuditConfig every audit this process runs defaults to.
+//
+// Five answers, kept apart: an empty flag is the shipped default; "list" prints the available names and
+// exits 0, because a name containing spaces and hyphens is not guessable and an operator should not have
+// to read the source to find one; "list-unapplied" prints every key this engine accepts but does not
+// apply, with the reason, which is the other half of what a scan configuration can say; a path ending in
+// .json (or containing a path separator) is one of Burp's own configuration files, parsed with
+// ParseBurpConfig so the engine honours its insertion-point, relocation and check-class keys and reports
+// what it cannot apply; anything else must resolve as a built-in name, and a name that does not is fatal
+// rather than a warning that starts the process under a configuration the operator did not ask for.
 func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 	base := scanner.DefaultAuditConfig()
 	switch name {
 	case "":
 		return base, nil
 	case "list":
-		fmt.Println("built-in scan configurations (-scan-config NAME):")
+		fmt.Println("built-in scan configurations (-scan-config NAME, or -scan-config /path/to/burp-config.json):")
 		for _, c := range scanner.BuiltInConfigs {
 			fmt.Printf("  %s\n", c.Name)
+			unsetHonoured := 0
 			for _, k := range c.Keys() {
-				if k.Set {
+				switch {
+				case k.Set && k.Applies:
 					fmt.Printf("      %-42s = %-5d  %s\n", k.Name, k.Value, k.What)
-				} else {
-					fmt.Printf("      %-42s   unset  (inherits the default)\n", k.Name)
+				case k.Set && !k.Applies:
+					// A key this engine cannot apply is reported, never printed as if it had a
+					// value that means something here.
+					fmt.Printf("      %-42s  set, but not applied here: %s\n", k.Name, k.What)
+				case !k.Set && k.Applies:
+					unsetHonoured++
 				}
 			}
+			fmt.Printf("      (%d further key(s) this engine honours are left unset by this configuration)\n", unsetHonoured)
 		}
-		fmt.Printf("\n%d of the %d configurations Burp ships set a key this engine implements; the rest\n"+
-			"configure crawling, insertion points, parameter relocation and JavaScript analysis, which\n"+
-			"this engine does not have, and are omitted rather than offered as knobs that do nothing.\n",
-			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount)
+		fmt.Printf("\n%d of the %d configurations Burp ships are transcribed above; %d of them set at\n"+
+			"least one key this engine honours, so loading one of those files takes effect. The others\n"+
+			"set crawl tuning, per-issue selection or DOM analysis this engine has no equivalent of:\n"+
+			"every such key is attributed rather than dropped, listed by `-scan-config list-unapplied`.\n"+
+			"A Burp configuration file can be loaded directly by passing its path instead of a name.\n",
+			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount,
+			scanner.BurpShippedConfigsSettingAnHonouredKey)
 		os.Exit(0)
+	case "list-unapplied":
+		// The other half of the accounting, in the form an operator comparing against Burp's own
+		// settings UI can use: every key the engine cannot apply, with the reason, rather than a
+		// count nobody can act on.
+		fmt.Println("keys under scanner/* that this engine accepts but does not apply:")
+		for _, k := range scanner.BuiltInConfigKeys() {
+			if !k.Applies {
+				fmt.Printf("  %-72s  %s\n", k.BurpKey, k.What)
+			}
+		}
+		os.Exit(0)
+	}
+	if strings.HasSuffix(name, ".json") || strings.ContainsRune(name, '/') || strings.ContainsRune(name, os.PathSeparator) {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
+		}
+		parsed, perr := scanner.ParseBurpConfig(data)
+		if perr != nil {
+			return base, fmt.Errorf("-scan-config: %w", perr)
+		}
+		applied, unapplied := parsed.ApplyWithReport(base)
+		if len(unapplied) > 0 {
+			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+		}
+		return applied, nil
 	}
 	preset, ok := scanner.BuiltInConfigByName(name)
 	if !ok {
 		return base, fmt.Errorf("no built-in scan configuration is named %q; run -scan-config list to see the %d available",
 			name, len(scanner.BuiltInConfigs))
 	}
-	return preset.Apply(base), nil
+	applied, unapplied := preset.ApplyWithReport(base)
+	if len(unapplied) > 0 {
+		fmt.Printf("scan configuration %q: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
+	}
+	return applied, nil
 }
 
 // startBlindXSS binds the blind-XSS callback listener, or explains why it could not.

@@ -33,7 +33,7 @@ func seedAuditExchange(t *testing.T, store *core.TrafficStore, host string, port
 		t.Fatalf("put response: %v", err)
 	}
 	ex := &core.Exchange{
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     host,
 		Port:     port,
@@ -821,7 +821,7 @@ func Test_an_exchange_with_no_response_is_unauditable_rather_than_clean(t *testi
 	if err != nil {
 		t.Fatalf("put request: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Host: "h.test", Port: 80, Method: "GET", Path: "/"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Host: "h.test", Port: 80, Method: "GET", Path: "/"}
 	store.AddExchange(ex)
 	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(probeChecksOnly())
 

@@ -77,7 +77,7 @@ func TestPassiveScannerRunsBCheckOnExchange(t *testing.T) {
 	status := uint16(200)
 	ex := &core.Exchange{
 		ID:       0,
-		Request:  reqID,
+		Request:  core.MsgPtr(reqID),
 		Response: &respID,
 		Host:     "x.test",
 		Port:     80,
@@ -113,7 +113,7 @@ func TestPassiveScannerSkipsWhenMarkerAbsent(t *testing.T) {
 
 	reqID, _ := store.Put([]byte("GET / HTTP/1.1\r\nHost: x.test\r\n\r\n"), core.DirectionRequest)
 	respID, _ := store.Put([]byte("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nclean"), core.DirectionResponse)
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: "x.test", Port: 80, Path: "/"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "x.test", Port: 80, Path: "/"}
 	store.AddExchange(ex)
 
 	if findings := ps.Scan(ex); len(findings) != 0 {

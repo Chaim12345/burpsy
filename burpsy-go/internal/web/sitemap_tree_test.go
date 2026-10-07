@@ -157,6 +157,55 @@ func TestSiteMapNodesCarryTheirFindingsAndRollThemUp(t *testing.T) {
 	}
 }
 
+// The operator's triage decisions must reach the tree. A finding dismissed as a false positive
+// stays in the store but the severity counts exclude it (core.Finding's own contract) — the
+// Issues page honours that, and the site map is the same severity counts by another door, so a
+// node that kept counting what the operator dismissed would disagree with the page the triage
+// happened on (burpsy-react-ui-2o33). A severity override is likewise the operator's call, and
+// the node's dot paints the override, not the engine's original rank.
+func TestSiteMapCountsHonourFalsePositiveDismissalAndSeverityOverride(t *testing.T) {
+	s := newTestServer()
+	fp := addTraffic(t, s.store, "shop.test", "GET", "/dismissed")
+	overridden := addTraffic(t, s.store, "shop.test", "GET", "/downgraded")
+
+	fpID := s.findings.Add(core.NewFinding{
+		Name: "false positive here", Severity: core.SeverityCritical,
+		Occurrences: []core.Occurrence{{ExchangeID: fp.ID, Request: fp.Request, Response: fp.Response}},
+	})
+	overID := s.findings.Add(core.NewFinding{
+		Name: "was critical", Severity: core.SeverityCritical,
+		Occurrences: []core.Occurrence{{ExchangeID: overridden.ID, Request: overridden.Request, Response: overridden.Response}},
+	})
+
+	// Dismiss one, downgrade the other — the two triage writes the operator actually makes.
+	s.findings.Triage(fpID, func(f *core.Finding) { f.FalsePositive = true })
+	low := core.SeverityLow
+	s.findings.Triage(overID, func(f *core.Finding) { f.SeverityOverride = &low })
+
+	host := sitemapGetFull(t, s).Tree[0]
+
+	// The dismissed finding is out of both the counts and the severity roll-up.
+	if dismissed := findNodeFull(host.Children, "/dismissed"); dismissed == nil {
+		t.Fatal("no /dismissed node")
+	} else if dismissed.SubtreeIssues != 0 || dismissed.WorstSeverity != "" {
+		t.Errorf("/dismissed: subtree=%d worst=%q, want 0 and clean — a false positive is not an issue",
+			dismissed.SubtreeIssues, dismissed.WorstSeverity)
+	}
+
+	// The override is what the node reports, not the engine's original Critical.
+	if node := findNodeFull(host.Children, "/downgraded"); node == nil {
+		t.Fatal("no /downgraded node")
+	} else if node.SubtreeIssues != 1 || node.WorstSeverity != "Low" {
+		t.Errorf("/downgraded: subtree=%d worst=%q, want 1 / Low — the operator's override reads",
+			node.SubtreeIssues, node.WorstSeverity)
+	}
+
+	// The host roll-up agrees with its subtree: 1 counted finding, worst Low.
+	if host.SubtreeIssues != 1 || host.WorstSeverity != "Low" {
+		t.Errorf("host: subtree=%d worst=%q, want 1 / Low", host.SubtreeIssues, host.WorstSeverity)
+	}
+}
+
 // A finding whose path carries a query string belongs to the path node, not to a node that does not
 // exist — the tree keys on the path alone, and the issue index must normalise the same way.
 func TestAFindingOnAQueryStringLandsOnItsPathNode(t *testing.T) {

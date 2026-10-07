@@ -27,7 +27,8 @@
 // events with three different causes, and this file keeps them apart on purpose:
 //
 //   - A **skipped insertion point** is a place in the request the enumerator would not build a point
-//     for — a multipart body it does not model, or a point past the per-request ceiling. Nothing was
+//     for — a plain-text body it models no container in, the parts of a multipart body whose framing
+//     it cannot read, or a point past the per-request ceiling. Nothing was
 //     dispatched there and nothing failed; the request simply has attack surface this tool declines
 //     to reach. Carried as AuditItemPoint rows with a skipped status and the enumerator's own reason.
 //   - An **abandoned dispatch unit** is a unit the check-failure breaker gave up on after
@@ -83,6 +84,11 @@ func (s ItemState) BurpStatus() string {
 		return "LIMIT_EXCEEDED"
 	case ItemStateFailed:
 		return "FAILED_TO_SCAN"
+	case ItemStateCancelled:
+		// Burp's own constant, and the reason ItemStateCancelled is its own state: this is a
+		// decision, not a bound. Folding it into LIMIT_EXCEEDED would tell an operator the target was
+		// too expensive to audit when in fact a person stopped it, which is the opposite remedy.
+		return "CANCELLED"
 	}
 	return ""
 }
@@ -109,6 +115,12 @@ func (s ItemState) StatusLabel() string {
 		return "Paused by the failure breaker"
 	case ItemStateOutOfScope:
 		return "Skipped as out of scope"
+	case ItemStateCancelled:
+		// Burp's own string for CANCELLED, and the reason this state exists as its own: "we stopped
+		// this" and "this hit a bound" are different facts about coverage, and an operator reading a
+		// cancelled item as a bounded one concludes the target was too hard rather than that they
+		// stopped it.
+		return "Cancelled"
 	case ItemStateUnauditable:
 		return "Skipped as nothing to audit"
 	}
@@ -135,18 +147,36 @@ const BurpAuditItemStatusCount = 15
 
 // BurpStatusesNotModelled is every `burp.Zq5` constant with no ItemState behind it.
 //
-// Nine of fifteen, which is the point of writing them down: a status vocabulary that listed only its
-// six matches would let a reader conclude the state machines agree. Four of the nine are absent
-// because this engine has no light-active pass and no per-issue selection; three because it has no
-// per-parameter-type or nesting-depth gate; one — NO_INSERTION_POINT_CHECKS — is not absent at all
-// but lives at point granularity instead, where it belongs (see AuditItemPointNoChecks).
+// Eight of fifteen, which is the point of writing them down: a status vocabulary that listed only its
+// seven matches would let a reader conclude the state machines agree. Two of the eight are the
+// light-audit ROWS, and they are absent for a reason that changed under this table's feet: the light
+// tier exists (burpsy-react-ui-7bkj) as a skip decision inside a running item, not as a separate
+// pass, so it has no item state of its own to finish in. Two more because this engine has no
+// per-issue selection; three because it has no per-parameter-type or nesting-depth gate; one —
+// NO_INSERTION_POINT_CHECKS — is not absent at all but lives at point granularity instead, where it
+// belongs (see AuditItemPointNoChecks).
+//
+// What the engine does with the repetitive-behaviour rule, since that row is no longer here and a
+// reader who came for it would find nothing: the light tier counts CLEAN same-(kind, host) points
+// across a run and, from the Nth, declines the rest of that type on that host. The decline lands
+// in the item's skipped total — the same place every other skip does — rather than as a state of
+// its own, because a skipped point is not a different kind of item. Burp's content-similarity half
+// is declined rather than half-built; see auditRun.lightAudit for why.
+//
+// The light rows are the reason this list was wrong once. It said "there is no light-active pass"
+// three times while audit_engine.go implemented one, and a disclosure that denies a capability the
+// engine has is worse than no disclosure at all: a reader who has just been wrong about light
+// auditing has no reason to believe the rows about selection or parameter types either
+// (burpsy-react-ui-xdtx). Every row here is now checked against the engine by a test — see
+// TestTheNotModelledTableAgreesWithWhatTheEngineCanReach — so the next stale row is a failing test
+// rather than a comment somebody has to remember to re-read.
 var BurpStatusesNotModelled = []BurpStatusGap{
 	{Status: "LIGHT_AUDITING", Label: "Light-auditing",
-		Why: "there is no light-active pass: every admitted check runs its full probe set or is refused"},
+		Why: "the light tier is not a pass an item is dispatched into; it is a skip decision taken while the item runs, so there is no window in which an item is light-auditing rather than auditing"},
 	{Status: "LIGHT_AUDITED", Label: "Light-audited",
-		Why: "there is no light-active pass, so no item can finish having had only one"},
+		Why: "for the same reason: a point the light tier declines is counted in the item's skipped total with SKIPPED_DUE_TO_REPETITIVE_BEHAVIOUR, and the item still finishes in the ordinary audited state"},
 	{Status: "NOT_LIGHT_AUDITED", Label: "",
-		Why: "there is no light-active pass to have been eligible for and skipped"},
+		Why: "a point is never 'eligible for the light pass and skipped by it' — it either runs, or the tier declines it for repetition, and both are visible on the item that raised it"},
 	{Status: "SKIPPED_PARAMETER_TYPE", Label: "Skipped",
 		Why: "insertion points are not gated by parameter type; the enumerator either builds a point or declines the place and says why"},
 	{Status: "SKIPPED_INSERTION_POINT_TYPE", Label: "Skipped",
@@ -157,8 +187,6 @@ var BurpStatusesNotModelled = []BurpStatusGap{
 		Why: "parameter relocation exists as six insertion-point kinds, but it is not a separately gated pass that can report having found no movement"},
 	{Status: "NO_NESTING_ALLOWED", Label: "",
 		Why: "nested insertion points are expanded unconditionally; there is no depth limit that could stop and be reported"},
-	{Status: "SKIPPED_DUE_TO_REPETITIVE_BEHAVIOUR", Label: "Skipped due to repetitive behavior",
-		Why: "there is no repetitive-response detector; identical work is refused by the admission ledger as already covered, which is reported as work that ran rather than as a skip"},
 }
 
 // AuditItemPointStatus is what became of one insertion point of one audit item.
@@ -202,7 +230,86 @@ const (
 	// nothing failed: this is attack surface the tool declines to reach, and it is the one status
 	// here that is a property of the place rather than of the audit.
 	AuditItemPointSkippedDeclined
+	// AuditItemPointSkippedNested is Burp's "Skipped as nested insertion points not enabled": the
+	// place is inside an already-decoded parameter value and the run turned nested expansion off.
+	//
+	// Distinct from SkippedDeclined, which is attack surface the enumerator *cannot* reach. This is
+	// surface it deliberately did not reach because the operator configured it that way, and the
+	// two must not read alike: one is a tool limitation to file, the other is a setting to change.
+	AuditItemPointSkippedNested
+	// AuditItemPointSkippedOperator is Burp's operator skip list: the parameter was exempted
+	// from testing by name — scanner.ignored_insertion_points.skip_all_tests_for_parameters.
+	// A third "deliberate" status beside SkippedNested because the operator's exemption and a
+	// run-config toggle answer different questions: one names THIS parameter on THIS
+	// engagement, the other is a global audit configuration, and the operator reading the
+	// queue needs to know which setting to change.
+	AuditItemPointSkippedOperator
+	// AuditItemPointSkippedIneffective is Burp's skip_ineffective_checks gate
+	// (burpsy-react-ui-y4om): the engine judged this place does not respond to anything, so no
+	// payload was sent here.
+	//
+	// A fourth "deliberate" status beside SkippedNested and SkippedOperator because the
+	// question the operator has to answer to change it is a different one in each case: a
+	// setting (this key), a run-config toggle (nesting), a named parameter (the skip list), or
+	// the engine's own reading of the target (this one — which no setting turns off except
+	// the key itself).
+	AuditItemPointSkippedIneffective
 )
+
+// LabelFor is Label with the insertion-point KIND named (burpsy-react-ui-75jm).
+//
+// "Skipped" with no kind is unactionable: an operator cannot tell a skip they chose from a point
+// the enumerator refused, and cannot tell WHICH of a request's places was passed over. Burp's own
+// status vocabulary names the kind a status refers to (Zq5.java:48-85, a 16-row status/kind table),
+// and this is that, for the one status whose bare label says nothing — AuditItemPointSkippedDeclined.
+//
+// Only that status is elaborated, deliberately. The others already name their own cause ("Skipped as
+// nested insertion points not enabled" says what to change), and appending a kind to every one of
+// them would make a queue column longer without making it say more.
+func (s AuditItemPointStatus) LabelFor(kind string) string {
+	if s != AuditItemPointSkippedDeclined || kind == "" {
+		return s.Label()
+	}
+	label, _ := insertionKindLabel(kind)
+	return s.Label() + " (" + label + ")"
+}
+
+// insertionKindLabel renders a bcheck.IpKind as the operator reads it. Unknown kinds pass through
+// verbatim rather than becoming "unknown": a kind this table has not learned yet is still more
+// information than nothing, and silently relabelling it would hide a kind that was added without
+// being listed here.
+// The second return says whether the kind was RECOGNISED, which a caller cannot infer from the
+// string: two kinds legitimately label as themselves ("cookie", "header"), so comparing the label
+// to the identifier would report them as unlisted.
+func insertionKindLabel(kind string) (string, bool) {
+	switch bcheck.IpKind(kind) {
+	case bcheck.IpQuery:
+		return "URL parameter", true
+	case bcheck.IpBody:
+		return "body parameter", true
+	case bcheck.IpCookie:
+		return "cookie", true
+	case bcheck.IpHeader:
+		return "header", true
+	case bcheck.IpParamNameURL:
+		return "URL parameter name", true
+	case bcheck.IpParamNameBody:
+		return "body parameter name", true
+	case bcheck.IpEntireBody:
+		return "entire body", true
+	case bcheck.IpURLPathFilename:
+		return "URL path filename", true
+	case bcheck.IpURLPathFolder:
+		return "URL path folder", true
+	case bcheck.IpSyntheticHeader:
+		return "added header", true
+	case bcheck.IpXML:
+		return "XML parameter", true
+	case bcheck.IpMultipartAttr:
+		return "multipart attribute", true
+	}
+	return kind, false
+}
 
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
 func (s AuditItemPointStatus) Label() string {
@@ -225,6 +332,12 @@ func (s AuditItemPointStatus) Label() string {
 		return "Skipped as limit exceeded"
 	case AuditItemPointSkippedDeclined:
 		return "Skipped"
+	case AuditItemPointSkippedNested:
+		return "Skipped as nested insertion points not enabled"
+	case AuditItemPointSkippedOperator:
+		return "Skipped by the operator's parameter skip list"
+	case AuditItemPointSkippedIneffective:
+		return "Skipped as ineffective (the target did not respond here)"
 	}
 	return "Unknown"
 }
@@ -232,7 +345,9 @@ func (s AuditItemPointStatus) Label() string {
 // IsSkip reports whether this status means no work was dispatched at this point. The two skip
 // statuses are properties of the place; the rest describe what the audit did with it.
 func (s AuditItemPointStatus) IsSkip() bool {
-	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined
+	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined ||
+		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator ||
+		s == AuditItemPointSkippedIneffective
 }
 
 // MarshalJSON writes the label rather than the ordinal, matching DispatchScope and Disposition — the
@@ -261,6 +376,22 @@ type AuditItemPoint struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// MarshalJSON writes the row with its status label NAMING THE KIND (burpsy-react-ui-75jm).
+//
+// The status marshals itself as a label everywhere else, which is right for a status read on its
+// own. A point row is the one place the kind is also in hand, and "Skipped" on a row is the
+// unactionable string this bead was filed about: it cannot tell the operator which of a request's
+// places was passed over. Composing them here rather than changing AuditItemPointStatus.MarshalJSON
+// keeps the bare status honest for callers that hold no kind.
+func (p AuditItemPoint) MarshalJSON() ([]byte, error) {
+	// An alias so the embedded marshal does not recurse into this method.
+	type row AuditItemPoint
+	return json.Marshal(struct {
+		row
+		Status string `json:"status"`
+	}{row: row(p), Status: p.Status.LabelFor(p.Kind)})
+}
+
 // AuditItemBreakers is the budget and breaker configuration this item was audited under.
 //
 // Stored on the row rather than fetched alongside it, because the question an operator asks about a
@@ -278,8 +409,13 @@ type AuditItemBreakers struct {
 	PauseSessionAfterFailedItems          uint32  `json:"pause_session_after_failed_items"`
 	PauseSessionAtFailedItemPercentage    uint8   `json:"pause_session_at_failed_item_percentage"`
 	// MaxInsertionPointsPerRequest is the enumerator's per-request ceiling — the threshold behind
-	// every AuditItemPointSkippedLimit row.
+	// every AuditItemPointSkippedLimit row. The run's own value, not the engine default: an
+	// operator who lowered the ceiling and read 30 here would be reading about a run that never
+	// happened.
 	MaxInsertionPointsPerRequest int `json:"max_insertion_points_per_request"`
+	// NestedInsertionPoints reports whether this run expanded the JSON/base64/XML structure inside
+	// parameter values. False is the explanation for every AuditItemPointSkippedNested row.
+	NestedInsertionPoints bool `json:"nested_insertion_points"`
 }
 
 func newAuditItemBreakers(cfg AuditConfig) AuditItemBreakers {
@@ -289,7 +425,8 @@ func newAuditItemBreakers(cfg AuditConfig) AuditItemBreakers {
 		ConsecutiveUnitFailuresToFailItem:     cfg.ConsecutiveUnitFailuresToFailItem,
 		PauseSessionAfterFailedItems:          cfg.PauseSessionAfterFailedItems,
 		PauseSessionAtFailedItemPercentage:    cfg.PauseSessionAtFailedItemPercentage,
-		MaxInsertionPointsPerRequest:          bcheck.DefaultMaxInsertionPoints,
+		MaxInsertionPointsPerRequest:          cfg.MaxInsertionPointsPerBaseRequest(),
+		NestedInsertionPoints:                 cfg.NestedInsertionPointsEnabled(),
 	}
 	if cfg.MaxRequests.Set {
 		n := cfg.MaxRequests.Value
@@ -318,6 +455,13 @@ type AuditItem struct {
 	Path   string `json:"path"`
 
 	State ItemState `json:"state"`
+	// URLDisposition is the URL-level verdict Burp's queue carries (burpsy-react-ui-87fq), distinct
+	// from the nine CHECK-level dispositions on Outcome: AUDITABLE when the request reached the target
+	// and at least one check ran, NETWORK_ERROR when its probes failed below HTTP and none ran, "" for
+	// an item refused before dispatch (the State and Note already say why) or not yet resolved. It is
+	// the field that lets a row say "never reachable" apart from "audited and clean". LOW_VALUE is
+	// deliberately absent — its prerequisite is crawler action metadata burpsy does not carry yet.
+	URLDisposition string `json:"url_disposition,omitempty"`
 	// StatusLabel is State's operator-facing label, and BurpStatus the burp.Zq5 constant it
 	// corresponds to ("" when Burp has none). Both on the row rather than derived by the reader,
 	// because the Cancelled flag overrides them: a bounded item whose context ended is Burp's
@@ -488,7 +632,13 @@ func (l *AuditItemLedger) Begin(id core.ExchangeID, ex *core.Exchange, cfg Audit
 		switch {
 		case p.Status == AuditItemPointSkippedLimit:
 			row.PointsSkipped++
-		case p.Status == AuditItemPointSkippedDeclined:
+		case p.Status == AuditItemPointSkippedDeclined, p.Status == AuditItemPointSkippedIneffective:
+			// Both are places the enumerator declined to build a point for, so both belong in
+			// the same bucket: the row's "places" total, which is the honest denominator for
+			// "how much of this request could not be tested at all". The effectiveness gate
+			// (y4om) joins the unbuildable set because from the queue's point of view the two
+			// are the same fact — no point was made for this place — while the two statuses
+			// keep the two reasons apart for an operator who has to change one of them.
 			row.PointsPlaces++
 		default:
 			row.PointsEnumerated++
@@ -535,12 +685,67 @@ func (l *AuditItemLedger) Resolve(id core.ExchangeID, ex *core.Exchange, o Audit
 	}
 	identifyLocked(row, ex)
 	row.Outcome = o
+	row.URLDisposition = urlDispositionFor(o)
 	// Written on every resolve, not only when Begin ran: an item the session refused was still
 	// refused *by* a threshold, and that threshold is the one thing the row has to be able to name.
 	row.Breakers = newAuditItemBreakers(cfg)
 	l.setStateLocked(row, o.State, o.Cancelled, note)
 	resolvePoints(row, o)
 	row.UpdatedUnixMs = time.Now().UnixMilli()
+}
+
+// Cancel stops one queued item and nothing else (burpsy-react-ui-exiu).
+//
+// Burp's audit-item context menu has offered Cancel since running-scans/results/audit-items/
+// index.html:102-115, and without it the only way to stop one unwanted item is to disable the
+// enclosing live task, which stops everything including the items that are fine. A crawler that
+// reached a slow or heavily-guarded URL holds a slot and a thread until its own bounds expire, and
+// the queue offers no way to reclaim just that one.
+//
+// It only moves a PENDING item. Work already dispatched belongs to a probe in flight and the engine
+// has no per-item context to abandon it with; cancelling there would mean a half-sent request
+// counted as complete. So the cancel is recorded and the item's gate reads it before dispatch —
+// which is where a queued item is anyway, and which is why the state is reachable at all.
+//
+// An item that is not pending is refused rather than relabelled, because moving a finished row to
+// Cancelled would erase the outcome it recorded. "You cannot cancel this" is the honest answer for
+// an item that already finished, and it is different from "no such item".
+func (l *AuditItemLedger) Cancel(id core.ExchangeID) (bool, string) {
+	if l == nil {
+		return false, "no audit queue is being recorded"
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	row, ok := l.rows[id]
+	if !ok {
+		return false, "no queued item for that exchange"
+	}
+	if row.State != ItemStatePending {
+		// Not refused as an error — the operator asked for a state and the item already has one. The
+		// reason says which, so the console can say "this item already finished" rather than a bare
+		// failure the operator cannot act on.
+		return false, "this item is already " + row.State.StatusLabel() + ", so it cannot be cancelled"
+	}
+	l.setStateLocked(row, ItemStateCancelled, false,
+		"Cancelled by the operator before this item was dispatched.")
+	row.UpdatedUnixMs = time.Now().UnixMilli()
+	return true, "cancelled"
+}
+
+// Cancelled reports whether an operator cancelled this item, which is the flag auditItem's gate reads
+// before it dispatches.
+//
+// A map on the ledger rather than a field on the row, because the state alone is not enough: the
+// engine sets the terminal state itself, and a cancelled item that has not been reached yet is
+// still Pending on the row while the gate must already say no.
+func (l *AuditItemLedger) Cancelled(id core.ExchangeID) bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	row, ok := l.rows[id]
+	return ok && row.State == ItemStateCancelled
 }
 
 // identifyLocked fills in the request identity, when there is one to fill in.
@@ -570,7 +775,7 @@ func (l *AuditItemLedger) setStateLocked(row *AuditItem, state ItemState, cancel
 // resolvePoints attributes the item's outcome to each enumerated point.
 //
 // The two skip statuses are left alone: they are the enumerator's answer about a place, decided
-// before any dispatch, and an audit's outcome cannot change whether a multipart body was modelled.
+// before any dispatch, and an audit's outcome cannot change whether a body's container was modelled.
 func resolvePoints(row *AuditItem, o AuditOutcome) {
 	status := pointStatusFor(row, o)
 	detail := ""
@@ -742,7 +947,7 @@ func (l *AuditItemLedger) StateCounts() []ItemStateCount {
 // trusting a position, and it is protected the same way: Test_a_capped_enumeration_is_labelled_as_the
 // _limit_being_exceeded fails if bcheck's wording moves, rather than the label silently degrading to
 // a generic skip.
-const declinedPastLimitPrefix = "insertion points past the per-request limit"
+const declinedPastLimitPrefix = bcheck.DeclinedPastLimitWhat
 
 // auditItemPoints enumerates one request's insertion points and the places the enumerator declined,
 // as queue rows in Pending status.
@@ -750,11 +955,11 @@ const declinedPastLimitPrefix = "insertion points past the per-request limit"
 // kinds is returned alongside because the count is meaningless without it — see
 // AuditItem.PointKinds. Enumeration happens only when an item ledger is attached, so a CLI audit and
 // a unit test pay nothing: it is one request parse per item, cheap beside a probe but not free.
-func auditItemPoints(raw []byte, kinds []string) ([]AuditItemPoint, []string) {
+func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) ([]AuditItemPoint, []string) {
 	if len(raw) == 0 {
 		return nil, kinds
 	}
-	points, declined := bcheck.Enumerate(raw, kinds)
+	points, declined := bcheck.EnumerateWith(raw, kinds, opts)
 	out := make([]AuditItemPoint, 0, len(points)+len(declined))
 	for _, p := range points {
 		out = append(out, AuditItemPoint{
@@ -765,8 +970,15 @@ func auditItemPoints(raw []byte, kinds []string) ([]AuditItemPoint, []string) {
 	}
 	for _, d := range declined {
 		status := AuditItemPointSkippedDeclined
-		if strings.HasPrefix(d.What, declinedPastLimitPrefix) {
+		switch {
+		case strings.HasPrefix(d.What, declinedPastLimitPrefix):
 			status = AuditItemPointSkippedLimit
+		case strings.HasPrefix(d.What, bcheck.DeclinedNestedDisabledWhat):
+			status = AuditItemPointSkippedNested
+		case strings.HasPrefix(d.What, bcheck.DeclinedSkippedParamWhat):
+			status = AuditItemPointSkippedOperator
+		case strings.HasPrefix(d.What, bcheck.DeclinedIneffectiveWhat):
+			status = AuditItemPointSkippedIneffective
 		}
 		out = append(out, AuditItemPoint{Name: d.What, Status: status, Detail: d.Reason})
 	}
@@ -804,6 +1016,20 @@ func auditItemNote(o AuditOutcome, cfg AuditConfig) string {
 		}
 		return fmt.Sprintf("the run's wall-clock budget of %s was spent before %d step(s) of this item's plan were started",
 			cfg.TimeBudget, o.NotRun)
+	}
+	return ""
+}
+
+// urlDispositionFor derives the URL-level verdict from a terminal outcome (burpsy-react-ui-87fq).
+// A check that ran reached the target, so the URL is AUDITABLE whatever else was skipped; a URL
+// whose probes only ever failed below HTTP is NETWORK_ERROR; anything else — refused by a budget,
+// paused, cancelled, or nothing attempted — has no URL verdict, because the State already names why.
+func urlDispositionFor(o AuditOutcome) string {
+	if o.Ran > 0 {
+		return "AUDITABLE"
+	}
+	if o.SendFailures > 0 {
+		return "NETWORK_ERROR"
 	}
 	return ""
 }

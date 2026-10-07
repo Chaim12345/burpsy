@@ -1,8 +1,13 @@
 // Playwright configuration for the burpsy console suite.
 //
-// Run it through ../../../../../e2e-ui.sh (repo root), not directly: that wrapper is what verify.sh
-// calls, and it is where "no browser installed" turns into a SKIP with a reason rather than a wall of
-// Playwright output. Running `npx playwright test` here works fine for iterating.
+// Run it through ../../../../../e2e-ui.sh (repo root), not directly: that wrapper is where "no browser
+// installed" turns into a SKIP with a reason rather than a wall of Playwright output. Running
+// `npx playwright test` here works fine for iterating.
+//
+// This suite is no longer the UI gate — the live browser pass is (`ui-live.sh` plus
+// burpsy-go/docs/UI-VERIFICATION.md). What it still is, and why it is kept: the screenshot artifacts,
+// and a second, differently-shaped opinion on the console. verify.sh skips it deliberately; run it
+// when you want either of those.
 //
 // The suite drives a real burpsy-go — built, started and seeded with real proxy traffic by
 // harness/global-setup.ts. There is no mock server and no fixture JSON: a console asserted against

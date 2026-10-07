@@ -103,6 +103,17 @@ var exchangeFieldRules = map[string]fieldRule{
 	// claimed, so the test claims it by name — and it stays true on a fast machine, with no sleep anywhere
 	// to clear a threshold.
 	"Duration": ruleMayDiffer,
+	// TTFB is ruleMayDiffer, and the disagreement is the design rather than a gap to close later
+	// (burpsy-react-ui-jcdm). Time-to-first-byte is taken at the wire, inside the response reader, so
+	// only a producer that owns that read can state it: the proxy relays do, and the crawler — which
+	// fetches through a client that hands back a finished response — does not. It therefore records
+	// TTFB Unmeasured, which is a true statement about what it knows, not a zero standing in for one.
+	//
+	// Making this ruleIdentical would force one of two lies: the crawler inventing a first-byte
+	// instant it never observed, or the proxy discarding one it did. rulePopulated would be the same
+	// lie in weaker form. The pair (Measured, Us) is what keeps "nobody timed this" separable from
+	// "this was instant", and the wire preserves that by sending null rather than 0.
+	"TTFB": ruleMayDiffer,
 	// Source is the one field that must differ: it names which surface produced the row, and that is
 	// the point of it. Everything else being equal is what makes it useful.
 	"Source": ruleMayDiffer,
@@ -123,11 +134,72 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Lineage. A proxied request and a crawled fetch both have no antecedent exchange; only a Repeater
 	// resend, an Intruder payload or a followed redirect does.
 	"ParentID": ruleAbsent,
+	// RequestFP is the request-content fingerprint the audit ledger keys changed-content re-audits
+	// on (burpsy-react-ui-6n4d), computed in scanner.Capture.Record — the same seam both legs go
+	// through — from the request bytes that leg recorded. That last clause is why it is not
+	// ruleIdentical: each producer fingerprints its OWN request. The proxied leg relays a client's
+	// request after stripping Proxy-* headers and correcting framing (see the UserEdited note below);
+	// the crawler's sender authors its own request from the seed URL. A fingerprint of each
+	// producer's own bytes is not a claim the two must agree, and asserting ruleIdentical here would
+	// be a claim that holds only for as long as a fixture's two requests happen to coincide — it
+	// would break the first time a client sent a header the crawler does not, which is not a
+	// regression in either producer.
+	//
+	// Not ruleAbsent either: zero means "not computed", and both legs do compute it at this seam, so
+	// an absent claim would be false. The field being populated is checked per leg below.
+	"RequestFP": ruleMayDiffer,
+	// The same shape, for the same reason (burpsy-react-ui-7py5): the count is derived from the raw
+	// REQUEST bytes, and the proxy relays them verbatim while the crawler's sender re-renders what it
+	// parsed. For the parity body above neither carries a body, so the two counts agree at 0 and this
+	// rule is not exercised by that fixture — which is exactly why asserting ruleIdentical here would
+	// be a claim that holds only while a fixture's two requests happen to coincide.
+	//
+	// Not ruleAbsent: both legs go through Capture.Record, which computes it, so an absent claim
+	// would be false. The field being populated is checked per leg below.
+	"RequestParams": ruleMayDiffer,
 	// Identical: both legs record through scanner.Capture.Record, which derives these from
 	// the response bytes in hand. The origin above serves a title and a cookie so the
 	// comparison is over real values, not two empty cells agreeing vacuously.
 	"Cookies": ruleIdentical,
 	"Title":   ruleIdentical,
+	// The two socket facts.
+	//
+	// ServerIP: now ruleIdentical (burpsy-react-ui-gj4f). The proxy reads it off the upstream
+	// socket it holds; the crawler's fetches read it off SendOutcome.ServerIP, which sender
+	// stamps from its own live connection the same way. Both are the address the bytes actually
+	// went to, read off the socket rather than re-resolved, so the two legs must agree — and
+	// this rule is what keeps them agreeing.
+	//
+	// ListenerPort: genuinely asymmetric and always will be. A crawl is not traffic
+	// that arrived on a listener, so 0 is the correct answer for it, and any value at all would be
+	// an invented one.
+	"ServerIP":     ruleIdentical,
+	"ListenerPort": ruleMayDiffer,
+	// The retained earlier stages of each message (burpsy-react-ui-c05). All four are ruleAbsent for
+	// ordinary traffic, and that is a claim rather than a placeholder: the exchange this test
+	// compares is modified by nothing — no Match & Replace rule is enabled and no intercept hold
+	// edits it — so stage 0, stage 1 and the recorded bytes are all the same bytes, and the storage
+	// seam drops every stage that equals the one after it (scanner.Capture.storeStages).
+	//
+	// Which makes this the assertion that guards the memory cost. The whole reason the stages are
+	// stored "only where they differ" instead of unconditionally is that this store's resident set
+	// must not scale with traffic; a producer that started retaining a copy of every untouched
+	// message would still pass every functional test in this repository while multiplying the
+	// resident set by three, and this rule is what would catch it. The crawler is the second half of
+	// the claim: it records through the same seam and passes no stages at all, so an unmodified crawl
+	// fetch and an unmodified proxied relay must both come back with nil in all four fields.
+	"RequestOriginal":  ruleAbsent,
+	"RequestAuto":      ruleAbsent,
+	"ResponseOriginal": ruleAbsent,
+	"ResponseAuto":     ruleAbsent,
+	// Absent for the same reason the four stages above are, and it is the sharper half of the claim
+	// (burpsy-react-ui-sd0d). The exchange this test compares is edited by nobody — no intercept hold
+	// touches it, and the crawler has no hold at all — so both legs must record it as not edited by
+	// the operator. A proxy that derived the flag from the recorded bytes differing from the client's
+	// would fail here on its own rewrites: the proxied leg is the one that strips Proxy-* headers and
+	// corrects framing, so it is exactly the leg that used to report "Edited" for traffic nobody
+	// touched. The flag now comes from the hold, so both sides answer false and this is what says so.
+	"UserEdited": ruleAbsent,
 }
 
 func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
@@ -240,7 +312,7 @@ func TestTheProxyAndTheCrawlerRecordTheSameShapeOfExchange(t *testing.T) {
 		}
 		// Both must have stored the request they sent, too: an exchange is a pair, and half of one is
 		// exactly what this refactor removed the ability to record.
-		if _, err := leg.store.Get(leg.ex.Request); err != nil {
+		if _, err := leg.store.Get(core.MsgOrZero(leg.ex.Request)); err != nil {
 			t.Errorf("%s: the request id does not resolve: %v", leg.name, err)
 		}
 	}

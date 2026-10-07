@@ -28,11 +28,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"go.uber.org/zap"
 )
@@ -43,9 +45,37 @@ import (
 // run is nil for a check that is configurable but not implemented. Such a check is still counted —
 // see the file header for why that is the point rather than an oversight.
 type activeCheck struct {
-	name    string
-	scope   DispatchScope
-	enabled func(*ScanConfig) bool
+	name string
+	// speed is the minimum run speed this check participates at (burpsy-react-ui-ev7y). Zero —
+	// SpeedFast — is every run, so an unranked check is admitted everywhere.
+	speed CheckSpeed
+	// typeIndex is the catalogue's issue type, which is what an operator's SELECTED ISSUES list
+	// names. Check names are the labels Burp's own UI shows and are stable enough to select by, but
+	// the type index is the identity the catalogue and its coverage accounting use, so a selection
+	// made against the catalogue and one made against the UI are the same selection rather than two
+	// vocabularies that have to be kept in step (burpsy-react-ui-kvmx).
+	//
+	// Zero for a check the catalogue does not describe — a synthesized corpus entry with no type
+	// index of its own. Such a check is NOT selectable and NOT excludable by a list, and the doc on
+	// SelectedIssueTypes says so, because "a list that silently did not apply to half the check set"
+	// is the failure this exists to remove.
+	typeIndex uint32
+	scope     DispatchScope
+	enabled   func(*ScanConfig) bool
+	// invasiveness is the tier the `scan_type_*_active` keys select this check under. It is
+	// snapshotted with the set rather than looked up per dispatch, so a check cannot change tier
+	// between two items of one session.
+	invasiveness CheckInvasiveness
+	// phase is the descriptor's evidence-producing stage, carried here so the outcome can record
+	// which stage each disposition happened in (burpsy-react-ui-0qhf). Until this field existed the
+	// descriptor's Phase was read nowhere in the engine, so an item's outcome could say that four
+	// checks were skipped but not whether the stored phase ever ran at all.
+	phase CheckPhase
+	// passive marks a check that reads the request and its response without sending a probe of its
+	// own. Those hang from `scan_type_passive`, not from the three active tiers, so a preset that
+	// turns every active tier off still runs them — a passive check cannot change server state,
+	// which is the property the intrusive tier exists to protect.
+	passive bool
 	// run executes the check. The error is the evaluator's refusal, not a transport detail: a
 	// check the evaluator cannot run at all returns errCheckUnsupported so the audit engine
 	// counts it DispositionUnsupported (Skipped) rather than a clean miss, and any other error
@@ -83,7 +113,42 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 		}
 	}
 	if cfg.CheckCorpus {
-		out = append(out, s.corpusActiveChecks(corpus)...)
+		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
+	}
+	// The per-issue selection, applied LAST and to BOTH sources. Burp's dispatch is a two-stage
+	// filter (Zwy6.java:36-75, with the per-check predicate at :170-184), so the type filter sits
+	// after the family switches rather than inside them: a run restricted to SQLi and path traversal
+	// still has to be able to turn the SQLi FAMILY off and select nothing of it, and the reverse.
+	//
+	// Applied here rather than in each source so a corpus check is subject to the same selection as a
+	// native one. A list that filtered the built-in table and not the corpus would be a selection
+	// with a hole in it exactly where the operator least expects one.
+	return filterByIssueTypes(out, cfg.IssueTypes)
+}
+
+// filterByIssueTypes narrows a check set to the issue types an operator selected.
+//
+// An empty or unset selection means "no restriction" — the same reading every optional field on
+// this configuration uses, and the one that keeps a preset that does not mention selection behaving
+// exactly as before.
+//
+// A check with NO type index is EXCLUDED whenever a selection is in force, because it is not
+// selectable and a selection that cannot name something must not silently keep it. That is the
+// conservative direction: the operator asked for a set, and a check they could not have chosen
+// either way is better reported as unselected than as selected.
+func filterByIssueTypes(checks []activeCheck, selected []uint32) []activeCheck {
+	if len(selected) == 0 {
+		return checks
+	}
+	allow := make(map[uint32]bool, len(selected))
+	for _, t := range selected {
+		allow[t] = true
+	}
+	out := make([]activeCheck, 0, len(checks))
+	for _, c := range checks {
+		if c.typeIndex != 0 && allow[c.typeIndex] {
+			out = append(out, c)
+		}
 	}
 	return out
 }
@@ -91,6 +156,224 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 // ActiveCheckCount reports how many checks are in the set this scanner would dispatch — the figure
 // AuditOutcome.Considered must equal for a dispatched item.
 func (s *ActiveScanner) ActiveCheckCount() int { return len(s.enabledChecks()) }
+
+// auditLevelPassiveFamilies are the ScanConfig switches the passive check families hang from. They
+// are what `scanner/issues_reported/scan_type_passive` gates: a shipped configuration that turns
+// passive checking off zeroes exactly these, and a check survives only if its own family switch
+// still admits it — so a family added without a row here would simply ignore the gate, which is
+// why the test walks the ScanConfig switch list against these maps.
+var auditLevelPassiveFamilies = []string{
+	"CheckPassiveAnalysis",
+	"CheckPassivePosture",
+	"CheckHostDiscovery",
+	"CheckHeaders",
+}
+
+// auditLevelJavaScriptFamilies is the DOM family.
+var auditLevelJavaScriptFamilies = []string{"CheckDOM"}
+
+// auditLevelNotesText is the honest statement of where the issues_reported overlay bends, reported
+// beside the resolved configuration so an operator comparing burpsy against Burp's own preview of
+// the same preset sees the difference explained rather than discovered.
+//
+// The light/medium/intrusive tiers are no longer part of it: each check carries a rank and each key
+// selects its own set. What remains is the per-issue selection trio, which has no representation in
+// this engine.
+const auditLevelNotesText = tieredEngineNote
+
+// auditLevelNotes reports the approximation text when the configuration narrows the check set, and
+// nothing when it does not — a run under the base switches has nothing to disclaim.
+func auditLevelNotes(cfg AuditConfig) string {
+	if cfg.hasAuditLevelGate() {
+		return auditLevelNotesText
+	}
+	return ""
+}
+
+// enabledChecksUnder is the check set one run dispatches under an audit-level overlay: the base
+// switch set from ScanConfig, narrowed by the `scanner/issues_reported/*` keys the run's
+// configuration carries. Unset keys leave the base alone, so a run without an overlay is exactly
+// enabledChecks.
+func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
+	if !cfg.hasAuditLevelGate() {
+		return s.enabledChecks()
+	}
+	base := s.ConfigSnapshot()
+	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
+		zeroFamilies(&base, auditLevelPassiveFamilies)
+	}
+	if cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0 {
+		zeroFamilies(&base, auditLevelJavaScriptFamilies)
+	}
+	// activeTiers returns nil when no tier key was set, which leaves the base switches alone; a
+	// non-nil set is three independent selections rather than one collapsed gate.
+	//
+	// The per-issue filter is applied here as well as on the no-gate path, and must be LAST: it is
+	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
+	// or neither.
+	checks := s.enabledChecksInTiers(base, activeTiers(cfg), cfg.ScanSpeed)
+	return filterByIssueTypes(checks, cfg.IssueTypes)
+}
+
+// hasAuditLevelGate reports whether the configuration narrows the check set at all.
+func (cfg AuditConfig) hasAuditLevelGate() bool {
+	if cfg.PassiveChecks.Set && cfg.PassiveChecks.Value == 0 {
+		return true
+	}
+	if activeTiers(cfg) != nil {
+		return true
+	}
+	// The per-issue selection is itself a narrowing of the check set, so a configuration that
+	// ONLY selects issue types has a gate. Leaving it out of this predicate is the difference
+	// between a selection that applies and one that is computed and discarded, and it is invisible
+	// from every other test: a preset with no family switch and a selection would quietly audit
+	// everything (burpsy-react-ui-kvmx).
+	if len(cfg.IssueTypes) > 0 {
+		return true
+	}
+	if cfg.ScanSpeed.Set {
+		// A speed selector narrows the check set on its own axis, so a configuration that sets ONLY
+		// scan_speed still needs the gated path (burpsy-react-ui-ev7y). Without this the ungated
+		// shortcut returns before the speed filter is ever consulted, and the key reaches the queue
+		// row while every check still runs — a preset that reads as applied and changes nothing.
+		return true
+	}
+	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0
+}
+
+// activeTiers is the tier selection a preset's three `scan_type_*_active` keys express. A tier set
+// to 0 is absent from the result; a tier never named is absent too, and its checks are excluded
+// because a key that was not written is an operator who said nothing about that tier, not one who
+// asked for it to be off.
+//
+// A nil result means no tier key was set at all, and the base switches stand unchanged — the
+// distinction matters because nil is the "inherit" signal enabledChecksInTiers reads, while an empty
+// non-nil map would be "every tier off".
+//
+// The old gate returned one bool, "are all three off?", which made a preset that disabled only the
+// light tier indistinguishable from one that disabled all three, and a preset that enabled light
+// while disabling intrusive indistinguishable from one that enabled everything. Each key now
+// selects its own set.
+func activeTiers(cfg AuditConfig) map[CheckInvasiveness]bool {
+	var light, medium, intrusive OptUint32
+	light, medium, intrusive = cfg.LightActiveChecks, cfg.MediumActiveChecks, cfg.IntrusiveActiveChecks
+	if !light.Set && !medium.Set && !intrusive.Set {
+		return nil
+	}
+	out := make(map[CheckInvasiveness]bool, 3)
+	if light.Set && light.Value != 0 {
+		out[TierLight] = true
+	}
+	if medium.Set && medium.Value != 0 {
+		out[TierMedium] = true
+	}
+	if intrusive.Set && intrusive.Value != 0 {
+		out[TierIntrusive] = true
+	}
+	return out
+}
+
+// zeroFamilies flips the named ScanConfig switches off in place.
+func zeroFamilies(cfg *ScanConfig, families []string) {
+	for _, f := range families {
+		switch f {
+		case "CheckSqli":
+			cfg.CheckSqli = false
+		case "CheckXss":
+			cfg.CheckXss = false
+		case "CheckPathTraversal":
+			cfg.CheckPathTraversal = false
+		case "CheckSSRF":
+			cfg.CheckSSRF = false
+		case "CheckXXE":
+			cfg.CheckXXE = false
+		case "CheckJwtWeak":
+			cfg.CheckJwtWeak = false
+		case "CheckJSVulns":
+			cfg.CheckJSVulns = false
+		case "CheckCachePoisoning":
+			cfg.CheckCachePoisoning = false
+		case "CheckHeaders":
+			cfg.CheckHeaders = false
+		case "CheckCorpus":
+			cfg.CheckCorpus = false
+		case "CheckExtendedCoverage":
+			cfg.CheckExtendedCoverage = false
+		case "CheckReflectionProbes":
+			cfg.CheckReflectionProbes = false
+		case "CheckHostDiscovery":
+			cfg.CheckHostDiscovery = false
+		case "CheckResponseDependence":
+			cfg.CheckResponseDependence = false
+		case "CheckPassivePosture":
+			cfg.CheckPassivePosture = false
+		case "CheckPassiveAnalysis":
+			cfg.CheckPassiveAnalysis = false
+		case "CheckActiveInjection":
+			cfg.CheckActiveInjection = false
+		case "CheckDOM":
+			cfg.CheckDOM = false
+		case "CheckExtendedActive":
+			cfg.CheckExtendedActive = false
+		case "CheckOutOfBand":
+			cfg.CheckOutOfBand = false
+		case "CheckStored":
+			cfg.CheckStored = false
+		}
+	}
+}
+
+// enabledChecksIn is enabledChecks against an explicit configuration snapshot instead of the
+// scanner's own — the mechanism the audit-level gate overlays with. The ledger bit-stability rule
+// is unchanged: the set is snapshotted once per run, before any item is admitted.
+func (s *ActiveScanner) enabledChecksIn(cfg ScanConfig) []activeCheck {
+	return s.enabledChecksInTiers(cfg, nil, OptUint32{})
+}
+
+// enabledChecksInTiers is enabledChecksIn under a tier selection. A nil tiers map admits every
+// check the base switches do, which is what a run with no `scan_type_*_active` key set means. A
+// non-nil map admits a check only when its OWN tier is in the set — so light and medium are
+// independent selections, and a preset that enables one does not inherit the others.
+func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInvasiveness]bool, speed OptUint32) []activeCheck {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	corpus := s.corpus
+	s.mu.RUnlock()
+	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
+	for _, c := range activeCheckSet {
+		if !c.enabled(&cfg) {
+			continue
+		}
+		// A passive check is not under the three active-tier keys at all: it hangs from
+		// `scan_type_passive`, and it sends no request, so "intrusive" has nothing to say about it.
+		// Excluding it because every active tier was off would be the collapsed gate's old mistake in
+		// a new place.
+		if tiers != nil && !c.passive && !tiers[c.invasiveness] {
+			continue
+		}
+		// The speed axis (burpsy-react-ui-ev7y), independent of the tier gate above and applied
+		// after it: a check must satisfy BOTH, because they answer different questions — what this
+		// check does to the target, and what it costs to run.
+		//
+		// Passive checks are exempt for the same reason they are exempt from the tiers: they send
+		// nothing, so there is no cost for a speed selector to trade away. An unset ScanSpeed admits
+		// everything, which is what a configuration that never mentioned speed means.
+		if speed.Set && !c.passive && !c.speed.RunsAt(CheckSpeed(speed.Value)) {
+			continue
+		}
+		out = append(out, c)
+	}
+	if cfg.CheckCorpus {
+		// Corpus checks are loaded by the operator rather than declared in the registry, so they
+		// carry no rank. They join every tier: a preset that narrows the built-in checks has not
+		// said anything about an operator's own corpus, and dropping it would silently change what
+		// the corpus switch means.
+		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
+	}
+	return out
+}
 
 // UnimplementedCheckCount reports how many of those checks have no implementation behind them and
 // can therefore only ever come back DispositionUnsupported.
@@ -126,6 +409,15 @@ type probeMeter struct {
 	sent      atomic.Uint32
 	failed    atomic.Uint32
 	refused   atomic.Uint32
+	// rateLimitedCount counts probes the target answered 429/503 (fkl8) — the honest half of
+	// auto-backoff: the outcome reports how many times the target asked the audit to slow
+	// down, because a sweep that ignored N rate-limit responses is a sweep an operator must
+	// be able to distinguish from one the target never throttled.
+	rateLimitedCount atomic.Uint32
+	// limitedStatus is the most recent rate-limit status seen (0 = none), read by the
+	// dispatch loop to decide the backoff wait. Only the LAST status matters: a mixed 429
+	// then 503 sequence backs off the same either way.
+	limitedStatus atomic.Uint32
 }
 
 // The methods are nil-safe: a check invoked outside an audit (a direct unit test, say) has no meter
@@ -145,6 +437,14 @@ func (m *probeMeter) succeeded() {
 func (m *probeMeter) failure() {
 	if m != nil {
 		m.failed.Add(1)
+	}
+}
+
+// rateLimited records one 429/503 probe response (fkl8). Nil-safe like its siblings.
+func (m *probeMeter) rateLimited(status int) {
+	if m != nil {
+		m.rateLimitedCount.Add(1)
+		m.limitedStatus.Store(uint32(status))
 	}
 }
 
@@ -204,6 +504,38 @@ func meterFrom(ctx context.Context) *probeMeter {
 	return m
 }
 
+// runCfgKey is the context key the *run's* audit configuration rides on.
+//
+// It exists because AuditWithin and AuditSession take a configuration per call — that is how
+// /api/audit/{id} honours `{"config": "<name>"}` — while NewCheckContext could only read
+// ActiveScanner.AuditConfig(), the server-wide default set once at startup by -scan-config. So a
+// named configuration reached the run's budgets, breakers and queue row and reached no check: an
+// audit launched under a configuration that selects different insertion points enumerated the
+// server default's points and reported the operator's name over them. The queue row said one thing
+// and the wire did another.
+//
+// The same argument the meter makes applies here and is why this is a context value rather than a
+// parameter: the dispatch closure wrapDescriptor builds has a fixed signature shared by every
+// check, and widening it would put the configuration in the signature of every future check — which
+// could then forget it. There is exactly one place a check context is built for a dispatched check,
+// and it is the only place that reads this.
+type runCfgKey struct{}
+
+func withRunConfig(ctx context.Context, cfg AuditConfig) context.Context {
+	return context.WithValue(ctx, runCfgKey{}, cfg)
+}
+
+// runConfigFrom returns the audit configuration this dispatch is running under, and whether ctx
+// carried one. False means the caller reached a check outside a dispatched audit — a direct
+// evaluator test, say — and the scanner's own configuration is the honest fallback.
+func runConfigFrom(ctx context.Context) (AuditConfig, bool) {
+	if ctx == nil {
+		return AuditConfig{}, false
+	}
+	cfg, ok := ctx.Value(runCfgKey{}).(AuditConfig)
+	return cfg, ok
+}
+
 // auditRun is the shared state for one audit run: the clock, the budgets, and the ledger.
 //
 // Mutex-guarded because Go's AuditSession dispatches items concurrently where the Rust original
@@ -214,10 +546,51 @@ type auditRun struct {
 	deadline time.Time
 	ledger   *AuditLedger
 
+	// lightAudit is the light-audit tier's per-run state (burpsy-react-ui-7bkj): how many
+	// CLEAN same-(kind, host) points each type has produced this run. Burp's Zq5 bank calls
+	// the outcome "Skipped due to repetitive behavior" — a cheap probe on the Nth occurrence
+	// of an insertion-point TYPE, then skip the rest of that type on the same host. This is
+	// the type-occurrence half only: Burp's content-similarity half needs response-diff
+	// infrastructure this engine does not have, so it is declined rather than half-built —
+	// a similarity rule that could not say what it compared would skip work it never
+	// justified. Type-keyed, not content-keyed, exactly as Burp's own sentence is.
+	//
+	// On the run, not the scanner: one audit's repetition prior must not bound a different
+	// audit against the same host — the same discipline the request meter and breakers hold.
+	lightAudit map[lightAuditKey]uint32
+
+	// perHostLastProbe is the last time a probe was sent to each host (m0sv).
+	perHostLastProbe map[string]time.Time
+	// inFlightPerHost is the current in-flight probe count per host (m0sv).
+	inFlightPerHost map[string]int
+	// perHostThrottleMs is the resolved per-host throttle interval in ms (m0sv).
+	perHostThrottleMs uint32
+	// perHostMaxInFlight is the resolved per-host in-flight cap (m0sv).
+	perHostMaxInFlight uint32
+
+	// pointEffectiveness is the per-insertion-point effectiveness prior (y4om) and
+	// pointEffective is the oracle handed to the enumerator — nil when the gate is off,
+	// which is what makes "the operator turned it off" and "no run" indistinguishable
+	// to a check, and correctly so.
+	//
+	// On the run for the reason lightAudit is: a place is only worth judging once
+	// something has already probed it, so the evidence spans items. Per item it
+	// could never fire.
+	pointEffectiveness pointEffectiveness
+	// gateEnabled is the resolved SkipIneffectiveChecks state, kept so the item that builds
+	// the oracle does not have to re-read the unset-means-default rule.
+	gateEnabled bool
+
 	mu sync.Mutex
 	// requestsSent counts probes from items that have already finished. The current item's probes
 	// are counted separately, because its meter is still live.
 	requestsSent uint32
+
+	// admission is the MaxItemsInProgress gate (burpsy-react-ui-3ymo): a buffered channel used as a
+	// counting semaphore, sized to the run's resolved cap. Acquiring blocks the caller rather than
+	// refusing the item — an item over the cap is waiting to be admitted, not declined — and it is
+	// sized once at run construction because the cap is a property of this run, same as the deadline.
+	admission chan struct{}
 }
 
 // newAuditRun starts a run. A zero or negative TimeBudget means "no time budget", not "no time":
@@ -232,11 +605,89 @@ func newAuditRun(cfg AuditConfig) *auditRun {
 	if ledger == nil {
 		ledger = NewAuditLedger()
 	}
-	r := &auditRun{cfg: cfg, ledger: ledger}
+	r := &auditRun{cfg: cfg, ledger: ledger, admission: make(chan struct{}, cfg.resolvedMaxItemsInProgress())}
 	if cfg.TimeBudget > 0 {
 		r.deadline = time.Now().Add(cfg.TimeBudget)
 	}
+	if cfg.PerHostThrottleMs.Set && cfg.PerHostThrottleMs.Value > 0 {
+		r.perHostThrottleMs = cfg.PerHostThrottleMs.Value
+	}
+	if cfg.PerHostMaxInFlight.Set && cfg.PerHostMaxInFlight.Value > 0 {
+		r.perHostMaxInFlight = cfg.PerHostMaxInFlight.Value
+	}
+	// The effectiveness gate is resolved once, here, for the same reason MaxItemsInProgress is:
+	// the unset-means-default rule has one home, and a per-item re-read would let two items of one
+	// run disagree about whether the gate is on.
+	r.gateEnabled = true
+	if cfg.SkipIneffectiveChecks.Set {
+		r.gateEnabled = cfg.SkipIneffectiveChecks.Value != 0
+	}
 	return r
+}
+
+// acquireAdmission blocks until a slot under MaxItemsInProgress is free, or ctx ends first. False
+// means the wait was cancelled: no slot was taken, no state changed, and the caller must treat the
+// item as never claimed rather than as a failed check.
+//
+// The non-blocking send is tried FIRST, as a separate select, and that is the whole reason this
+// function is not the obvious one-liner. A single select over both cases makes the outcome
+// UNDETERMINED when both are ready — a pre-cancelled context and a free slot — and Go picks
+// between ready cases at random. So the same audit reported ItemStateCancelled on some runs and
+// ItemStateBounded on others, which is the flakiness a caller sees as "the cancel sometimes works".
+//
+// An already-cancelled context still takes the slot when one is free. That is deliberate: the
+// dispatch loop checks ctx.Err() as its own first hard stop, so a cancelled audit is bounded and
+// reported as bounded with Cancelled set, rather than refused before it is ever admitted. The
+// contract is "cancelled while WAITING for a slot", and with a free slot there is no wait.
+func (r *auditRun) acquireAdmission(ctx context.Context) bool {
+	select {
+	case r.admission <- struct{}{}:
+		return true
+	default:
+	}
+	select {
+	case r.admission <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// releaseAdmission frees the slot acquireAdmission took. Called exactly once per successful
+// acquireAdmission, via defer, so a panic mid-check still returns the slot.
+func (r *auditRun) releaseAdmission() {
+	<-r.admission
+}
+
+// lightAuditKey identifies one insertion-point type on one host: the light-audit tier's
+// repetition unit. The host is the full authority (host:port_tls), because the same
+// parameter type on two hosts is two applications' handling and no prior of each other's.
+type lightAuditKey struct {
+	kind string
+	host string
+}
+
+// lightAuditShouldSkip reports whether this point's type on this host has produced enough
+// clean occurrences this run that the rest can be skipped as repetitive. First call for a
+// point answers false (the point runs); the caller then records the point's outcome so the
+// counter reaches the threshold over the run's own evidence.
+func (r *auditRun) lightAuditShouldSkip(kind, host string, threshold uint32) bool {
+	if threshold == 0 {
+		return false // tier off: set-and-zero or unset-below-one both mean "never skip"
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lightAudit[lightAuditKey{kind: kind, host: host}] >= threshold
+}
+
+// lightAuditRecordClean notes one more clean same-(kind, host) point.
+func (r *auditRun) lightAuditRecordClean(kind, host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lightAudit == nil {
+		r.lightAudit = make(map[lightAuditKey]uint32)
+	}
+	r.lightAudit[lightAuditKey{kind: kind, host: host}]++
 }
 
 // outOfTime reports whether the wall-clock budget is spent.
@@ -278,6 +729,93 @@ func (r *auditRun) sent() uint32 {
 	return r.requestsSent
 }
 
+// perHostThrottle enforces the minimum interval between probes to the same host (m0sv).
+// If PerHostThrottleRandom is set, the interval is jittered by up to 50%.
+//
+// Reads the RESOLVED r.perHostThrottleMs, for the same reason perHostInFlight reads its resolved
+// cap: the raw config field is unset on a run that was never built by newAuditRun, and a throttle
+// read from it silently became "no throttle" — a bound that reports itself in force and does not.
+//
+// The map is created under r.mu, not before it. AuditSession dispatches items concurrently and
+// every worker calls this, so a check-then-create outside the lock is a concurrent map write: the
+// race the Go gate is there to catch, reachable from a slow host with two workers.
+func (r *auditRun) perHostThrottle(ctx context.Context, host string) {
+	interval := time.Duration(r.perHostThrottleMs) * time.Millisecond
+	if r.cfg.PerHostThrottleRandom {
+		// Jitter by up to 50% so a fixed cadence is not fingerprintable. The bound is on the
+		// jitter, never the interval: Int63n(0) panics, and a one-millisecond interval has a
+		// zero-width jitter band.
+		if half := int64(interval) / 2; half > 0 {
+			interval += time.Duration(rand.Int63n(half))
+		}
+	}
+	r.mu.Lock()
+	if r.perHostLastProbe == nil {
+		r.perHostLastProbe = make(map[string]time.Time)
+	}
+	last := r.perHostLastProbe[host]
+	// Stamped BEFORE the wait, not after. Two workers pacing the same host would otherwise both
+	// read the same pre-wait timestamp, both sleep the full interval, and then both fire together
+	// — the exact burst the throttle exists to prevent.
+	r.perHostLastProbe[host] = time.Now()
+	r.mu.Unlock()
+
+	// First probe to this host has no predecessor, so there is nothing to wait out.
+	if last.IsZero() {
+		return
+	}
+	if wait := interval - time.Since(last); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+		}
+	}
+}
+
+// perHostInFlight enforces the per-host in-flight cap (m0sv). Blocks until a slot
+// is free or the context is cancelled.
+//
+// Reads the RESOLVED r.perHostMaxInFlight, not r.cfg.PerHostMaxInFlight.Value. The two are the same
+// number only after newAuditRun has run, and reading the raw config here made a cap of zero compare
+// as "current < 0" — never true — so a run configured with a cap spun here forever instead of
+// admitting work. A cap that cannot deadlock is resolved once, at construction, which is what the
+// MaxItemsInProgress admission gate already does for the same reason.
+func (r *auditRun) perHostInFlight(ctx context.Context, host string) {
+	cap := int(r.perHostMaxInFlight)
+	if cap <= 0 {
+		// No cap configured. Admitting without counting is correct: the count exists only to
+		// enforce the cap, and an absent cap is a supported state, not a cap of zero.
+		return
+	}
+	for {
+		r.mu.Lock()
+		if r.inFlightPerHost == nil {
+			r.inFlightPerHost = make(map[string]int)
+		}
+		current := r.inFlightPerHost[host]
+		if current < cap {
+			r.inFlightPerHost[host] = current + 1
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Unlock()
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// releasePerHostInFlight decrements the in-flight count for a host after a probe completes.
+func (r *auditRun) releasePerHostInFlight(host string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.inFlightPerHost[host] > 0 {
+		r.inFlightPerHost[host]--
+	}
+}
+
 // AuditOutcome is what one audit pass did. Reported rather than summed into a single number so a run
 // where every send failed is distinguishable from a run that genuinely found nothing.
 //
@@ -301,6 +839,31 @@ type AuditOutcome struct {
 	// AlreadyCovered counts checks not admitted because an identical (dispatch unit, check) already
 	// ran this session.
 	AlreadyCovered int `json:"already_covered"`
+	// ByPhase is the same dispositions attributed to the phase that produced them
+	// (burpsy-react-ui-0qhf). Burp tracks per-phase state per item because "this stage produced
+	// nothing" and "this stage never ran" are different facts, and the totals above cannot tell
+	// them apart: four skipped checks read the same whether they were all in the stored phase or
+	// spread across three. Keyed by phase name so the JSON is readable without the enum table.
+	ByPhase map[string]PhaseOutcome `json:"by_phase,omitempty"`
+	// RateLimited counts steps the dispatch loop delayed because the target answered a probe
+	// 429 or 503 (fkl8). The work still ran — this is not a disposition — but an audit that
+	// was slowed by the target N times says so in its outcome, because a sweep that ignored
+	// N rate-limit responses is a sweep an operator must be able to distinguish from one the
+	// target never throttled.
+	RateLimited int `json:"rate_limited"`
+	// PointsSkippedRepetitive counts insertion points the light-audit tier skipped because
+	// their (kind, host) had produced enough clean points this run (7bkj). Not a
+	// check-level disposition — the check ran, on fewer points — so it sits beside
+	// RateLimited rather than in the Considered() partition: a check that probed 8 of 30
+	// points because 20 clean ones came before has still been considered, run, and
+	// answered; what it has not done is TEST the 22, and that is what this number says.
+	PointsSkippedRepetitive int `json:"points_skipped_repetitive"`
+	// PointsJudgedIneffective counts the probes the per-point effectiveness gate spent on places
+	// that answered nothing (burpsy-react-ui-y4om). Beside PointsSkippedRepetitive and not in
+	// Considered(): the gate drops places on the NEXT dispatch, so the probes this run already
+	// paid are neither a check disposition nor a skip — they are the run's own evidence, and a
+	// request count that fell without this number says nothing about why.
+	PointsJudgedIneffective int `json:"points_judged_ineffective"`
 	// RequestBudgetSpent counts checks not admitted because the outbound-request budget was spent.
 	RequestBudgetSpent int `json:"request_budget_spent"`
 	// UnitAbandoned counts checks not admitted because consecutive failures abandoned their dispatch
@@ -351,6 +914,10 @@ type AuditOutcome struct {
 	// threshold that failed it.
 	UnitsPlanned   int `json:"units_planned"`
 	UnitsAbandoned int `json:"units_abandoned"`
+	// FollowUpPasses is how many extra passes a failed item was re-dispatched. Zero is the common
+	// case and means the item failed and stopped, which is a coverage loss an operator has to be able
+	// to see rather than infer from a request count.
+	FollowUpPasses int `json:"follow_up_passes"`
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
@@ -436,6 +1003,12 @@ func (o AuditOutcome) Summary() string {
 	}
 	if o.RequestsRefused > 0 {
 		fmt.Fprintf(&b, "; %d probe(s) refused by scope", o.RequestsRefused)
+	}
+	if o.RateLimited > 0 {
+		fmt.Fprintf(&b, "; %d step(s) delayed for rate limiting", o.RateLimited)
+	}
+	if o.PointsSkippedRepetitive > 0 {
+		fmt.Fprintf(&b, "; %d point(s) skipped as repetitive (light audit)", o.PointsSkippedRepetitive)
 	}
 	if o.Unmeasurable > 0 {
 		fmt.Fprintf(&b, "; %d check(s) undecided, not clean", o.Unmeasurable)
@@ -565,6 +1138,13 @@ func (s *ActiveScanner) WithAuditConfig(cfg AuditConfig) *ActiveScanner {
 	return s
 }
 
+// WithSuiteGate attaches the dashboard's suite-wide pause. The audit calls it between checks; nil,
+// the default, is an audit nothing can pause but its own context.
+func (s *ActiveScanner) WithSuiteGate(gate func(context.Context)) *ActiveScanner {
+	s.suiteGate = gate
+	return s
+}
+
 // WithScope gives the scanner the engagement scope.
 //
 // Optional, and nil means "no scope was supplied" rather than "nothing is in scope": ActiveScanner
@@ -585,7 +1165,7 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
-	checks := s.enabledChecks()
+	checks := s.enabledChecksUnder(cfg)
 	// Queued before dispatch, not after it answers. An audit of a slow host holds this goroutine for
 	// up to the whole time budget, and a queue that only showed items once they finished would be
 	// empty for exactly as long as the operator most wanted to look at it.
@@ -623,7 +1203,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 // whichever worker reaches the admission gate first. The totals are identical either way; only the
 // attribution moves. Items come back in the order requested regardless.
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
-	checks := s.enabledChecks()
+	checks := s.enabledChecksUnder(cfg)
 	run := newAuditRun(cfg)
 	breaker := newSessionBreaker(cfg)
 	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
@@ -663,19 +1243,19 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 				// item is never an item that came back clean.
 				switch {
 				case paused.Load():
-					o := s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused })
+					o := s.refuseWholeItem(ItemStatePaused, len(checks), func(o *AuditOutcome) *int { return &o.SessionPaused }, func(po *PhaseOutcome) { po.SessionPaused++ })
 					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
 					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
 				case run.outOfTime() || ctx.Err() != nil:
-					o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.NotRun })
+					o := refuseWholeItemByPhase(ItemStateBounded, checks, func(o *AuditOutcome) *int { return &o.NotRun }, func(po *PhaseOutcome) { po.NotRun++ })
 					o.TimedOut = true
 					o.Cancelled = ctx.Err() != nil
 					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
 					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
 				case run.overRequestBudget(0):
-					o := s.refuseWholeItem(ItemStateBounded, len(checks), func(o *AuditOutcome) *int { return &o.RequestBudgetSpent })
+					o := refuseWholeItemByPhase(ItemStateBounded, checks, func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }, func(po *PhaseOutcome) { po.RequestBudgetSpent++ })
 					out.Items[slot] = ItemOutcome{ExchangeID: exchangeID, Outcome: o}
 					cfg.Items.Resolve(exchangeID, nil, o, cfg, auditItemNote(o, cfg))
 					continue
@@ -713,10 +1293,51 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 
 // refuseWholeItem builds an outcome for an item the session refused outright, with every check
 // attributed to the reason it was refused. Nothing here is dispatched, so RequestsSent stays zero.
-func (s *ActiveScanner) refuseWholeItem(state ItemState, checks int, counter func(*AuditOutcome) *int) AuditOutcome {
+//
+// The counter function determines which flat counter is bumped; the phaseBump determines which
+// per-phase counter is bumped. Both are always called together so the two cannot drift.
+func (s *ActiveScanner) refuseWholeItem(state ItemState, checks int, counter func(*AuditOutcome) *int, phaseBump func(*PhaseOutcome)) AuditOutcome {
 	o := AuditOutcome{State: state}
 	*counter(&o) = checks
 	return o
+}
+
+// refuseWholeItemByPhase is refuseWholeItem for a caller that HAS the check set: it attributes the
+// refusal to each check's phase as well as to the flat counter, so an item refused by the budget
+// still says which stages went unrun. Without this the flat counters move and the phase table stays
+// empty, which reads exactly like a phase that was never planned — the distinction this whole change
+// exists to make (burpsy-react-ui-0qhf).
+func refuseWholeItemByPhase(state ItemState, set []activeCheck, counter func(*AuditOutcome) *int, phaseBump func(*PhaseOutcome)) AuditOutcome {
+	o := AuditOutcome{State: state}
+	*counter(&o) = len(set)
+	for i := range set {
+		recordPhase(&o, set[i].phase, phaseBump)
+	}
+	return o
+}
+
+// recordPhase attributes one disposition to its check's phase, in both the flat counters and the
+// per-phase table.
+//
+// ONE helper rather than a write at each site, because the two must not drift: a counter that moved
+// without its phase attribution would make the per-phase table disagree with the totals, and a table
+// that disagrees with the totals is worse than no table — an operator summing the phases and getting
+// a different number than the run reports has been told two things at once.
+func recordPhase(o *AuditOutcome, phase CheckPhase, bump func(*PhaseOutcome)) {
+	if o.ByPhase == nil {
+		o.ByPhase = make(map[string]PhaseOutcome, len(AllCheckPhases))
+	}
+	name := phase.String()
+	po := o.ByPhase[name]
+	bump(&po)
+	o.ByPhase[name] = po
+}
+
+// bumpPhase is the ONE helper that bumps a flat counter and its per-phase counterpart together.
+// Every disposition site routes through this so the two cannot drift.
+func bumpPhase(o *AuditOutcome, phase CheckPhase, flat func(*AuditOutcome) *int, phaseBump func(*PhaseOutcome)) {
+	*flat(o)++
+	recordPhase(o, phase, phaseBump)
 }
 
 // dispatchUnit is one addressable unit of work: a scope and the key identifying one instance of it.
@@ -799,6 +1420,16 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	if err != nil || ex == nil {
 		return refuse(nil, ItemStateUnauditable, "no such exchange")
 	}
+	// An operator's cancel, read here rather than in the session loop so every dispatch path gets it
+	// (AuditWithin and AuditMultiple both land in this function). Checked AFTER the exchange resolves
+	// and BEFORE scope, because a cancelled item is still a real item about a real request: the row
+	// must carry its host and path so the queue can show which URL the operator reclaimed, and a
+	// cancel that arrived before the engine got here must not lose the identity to save one lookup.
+	if run.cfg.Items.Cancelled(exchangeID) {
+		// The row already holds ItemStateCancelled from Cancel, so this returns the state the
+		// operator asked for rather than a second, differently-worded one.
+		return refuse(ex, ItemStateCancelled, "cancelled by the operator")
+	}
 	// Scope first, before a single byte is built. Sending unsolicited requests to a host outside the
 	// engagement is the one bug in this package that would matter outside the tool.
 	if s.scope != nil && !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {
@@ -830,15 +1461,87 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// see a canary that surfaced in it.
 	s.ObserveStoredCanaries(ex)
 
+	// The MaxItemsInProgress gate (burpsy-react-ui-3ymo), claimed here rather than at the queue's
+	// own scheduling point: everything above this line is a cheap refusal check that allocates
+	// nothing, so an item that was going to be refused anyway (out of scope, no response, cancelled)
+	// never counts against the cap. A cap applied after this line would already have flipped the
+	// item to Auditing and started its meter, i.e. already have allocated the resources the cap
+	// exists to bound — so it must gate the claim itself, not something claimed a moment earlier.
+	if !run.acquireAdmission(ctx) {
+		return refuse(ex, ItemStateCancelled, "cancelled while waiting for an admission slot")
+	}
+	defer run.releaseAdmission()
+
 	o.State = ItemStateAuditing
 	meter := &probeMeter{}
-	ictx := withMeter(ctx, meter)
+	// The run's configuration travels with the dispatch context so every check enumerates under the
+	// configuration this audit was launched with, not the server-wide default. See runCfgKey.
+	// The light-audit tier's check-facing handle (7bkj): one per item, closed over the
+	// run's shared counter so the repetition prior accumulates across the run's items —
+	// Burp's tier is cross-request by construction ("the Nth occurrence of the type on
+	// this host"). The threshold resolves here so the check side has no knob of its own.
+	lightThreshold := run.cfg.LightAuditSamplePerKind.Value
+	if !run.cfg.LightAuditSamplePerKind.Set {
+		lightThreshold = DefaultLightAuditSamplePerKind
+	}
+	var lightSkipped int32
+	lightHandle := &RunLightAudit{
+		shouldSkip: func(kind, host string) bool {
+			// The per-kind opt-in, checked BEFORE the repetition threshold (burpsy-react-ui-02qi). A kind
+			// the operator did not tick gets the FULL pass for every point of that kind -- which is the
+			// whole control these eight keys are, and it is a different decision from
+			// insertion_point_types: that one chooses WHICH points to enumerate, this one chooses which of
+			// the enumerated ones get the cheap pass.
+			//
+			// A light run therefore narrows to the ticked kinds rather than being all-or-nothing, and an
+			// operator who wants a light audit of URL parameters and a full audit of body parameters can
+			// finally say so. Before this, the key table declined all eight as "redundant with
+			// insertion_point_types", which is factually wrong -- they gate a different stage.
+			if !run.cfg.LightAuditKinds.LightApplies(kind) {
+				return false
+			}
+			return run.lightAuditShouldSkip(kind, host, lightThreshold)
+		},
+		recordClean: run.lightAuditRecordClean,
+		recordSkip:  func() {},
+		skipped:     &lightSkipped,
+	}
+	// The effectiveness gate's oracle, built from the item's OWN host so the same parameter on two
+	// hosts is two applications' handling and neither judges the other. Nil when the gate is off,
+	// which the checks read as "no gate" — the same nil-safe reading the light-audit tier uses.
+	//
+	// The item's configuration carries the oracle, because the enumerator reads it off
+	// EnumerateOptions rather than off the context: it is enumeration-time advice, and a check that
+	// builds a context by hand gets the engine default rather than a nil that would read as "drop
+	// every point".
+	itemCfg := run.cfg
+	if run.gateEnabled {
+		host := ex.Host
+		prior := &run.pointEffectiveness
+		itemCfg.PointEffective = func(check string, pt bcheck.InsertionPoint) bool {
+			return prior.effective(check, pt, host)
+		}
+	}
+
+	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg)
+	// The effectiveness ledger rides the context ONLY when the gate is on. A run with
+	// skip_ineffective_checks set to zero must not even BUILD a prior: recording evidence
+	// nobody will act on is not free, and the count it produced would then be reported
+	// alongside a request count the gate never shaped.
+	if run.gateEnabled {
+		ictx = withPointEffectiveness(ictx, &run.pointEffectiveness)
+	}
 	breaker := newItemBreaker(run.cfg)
 
 	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
 	// every point rather than reconstructed afterwards.
 	units, steps, undispatchable := plan(ex, checks)
 	o.Skipped += undispatchable
+	for _, c := range checks {
+		if c.run == nil {
+			bumpPhase(&o, c.phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+		}
+	}
 	o.UnitsPlanned = len(units)
 
 	// The queue's row for this item, filled in at the one moment every fact it needs is in hand: the
@@ -846,142 +1549,314 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// skipped entirely when nothing is reading the queue — it is one request parse, cheap beside a
 	// probe but not free, and a CLI audit should not pay for a table it has no way to show.
 	if run.cfg.Items != nil {
-		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), DefaultProbeInsertionKinds)
+		points, kinds := auditItemPoints([]byte(requestRaw(s, ex)), run.cfg.insertionKinds(), run.cfg.enumerateOptions())
 		run.cfg.Items.Begin(exchangeID, ex, run.cfg, len(units), len(steps), points, kinds)
 	}
 
 	var found []*Finding
 	var stop Disposition
 	stopped := false
+
+	// Follow-up passes (burpsy-react-ui-5efx). Burp re-dispatches a FAILED item, bounded by
+	// number_of_follow_up_passes (Zxdx.java:27,36; default 1 at Zp0d.java:120-121) through a
+	// re-pass driver (Zeeu.java:119,239-241, Zfkz.java:57,69-81). Without it a transient failure — a
+	// timeout, a 502 from a backend mid-restart, a dropped connection — permanently loses that item's
+	// coverage and is indistinguishable from a check that found nothing.
+	//
+	// The narrowing is the part that makes the loop safe, and it is why this lands after the
+	// breaker's failure memory rather than with it: a pass REPEATS the dispatch, and without asking
+	// the breaker which checks already failed, a re-pass would re-send every check the first pass
+	// sent — including the ones whose failure the response cannot change — and multiply the traffic
+	// against a broken target by the number of passes. Burp's own predicate is
+	// `failedForEntireInsertionPoint < 1L` (Zwy6.java's Zz), which is the same question asked
+	// per insertion point rather than per dispatch unit.
+	//
+	// So a pass resumes at the first step whose check has NOT already failed in this unit, and a
+	// check that failed once is not tried again. What a pass buys is the retry of a check that was
+	// blocked behind a FAILED one, which is the transient case the feature exists for.
+	passes := run.cfg.followUpPasses()
+	pass := 0
 	pos := 0
-	for pos < len(steps) {
-		unitIx := steps[pos].unit
-		abandoned := false
-		for pos < len(steps) && steps[pos].unit == unitIx {
-			// Hard stops. Each is monotone — once spent it stays spent — so the rest of the plan is
-			// attributed in one go rather than re-tested per step.
-			if run.outOfTime() || ctx.Err() != nil {
-				o.TimedOut = true
-				o.Cancelled = ctx.Err() != nil
-				stop, stopped = DispositionTimeBudgetSpent, true
-				break
-			}
-			if run.overRequestBudget(meter.snapshot().sent) {
-				stop, stopped = DispositionRequestBudgetSpent, true
-				break
-			}
+	// counted[i] records whether steps[i] has already been given a disposition in SOME pass.
+	//
+	// A follow-up pass re-walks the plan from the start, so a step pass 0 abandoned or already
+	// covered comes up again — and would be counted a second time, making Considered() exceed the
+	// check set. That breaks the one identity the whole counter scheme exists to provide: an
+	// operator adding up the buckets must get the enabled check set, not a multiple of it.
+	//
+	// Per-step rather than per-pass bookkeeping, and it is the only thing that makes the partition
+	// hold across passes without threading a "which pass am I in" flag through nine dispositions.
+	counted := make([]bool, len(steps))
 
-			check := steps[pos].check
-			pos++
-			// One call per step consumed, whatever disposition it lands in — placed here, at the single
-			// point pos advances, rather than beside each of the nine outcomes below. A progress counter
-			// maintained at nine sites is one that eventually disagrees with the plan it is a fraction of.
-			run.cfg.Items.Step(exchangeID)
-			if abandoned {
-				o.UnitAbandoned++
-				continue
-			}
-			if !run.ledger.Admit(units[unitIx].key, check) {
-				o.AlreadyCovered++
-				continue
-			}
-
-			before := meter.snapshot()
-			verdict, runErr := checks[check].run(s, ictx, ex)
-			d := meter.since(before)
-
-			// A check the evaluator declined is in the same position as one with no implementation:
-			// nothing ran and nothing proved. Counted as Skipped (DispositionUnsupported) so the
-			// check set still partitions and a clean outcome cannot be read as a clean bill of
-			// health for this check.
-			if errors.Is(runErr, errCheckUnsupported) {
-				o.Skipped++
-				if s.logger != nil {
-					s.logger.Warn("active check could not run",
-						zap.String("check", checks[check].name),
-						zap.Uint64("exchange_id", uint64(exchangeID)),
-						zap.Error(runErr))
-				}
-				continue
-			}
-			// Ran, but undecided. Before the error branch: not a failure, so the breaker must not trip.
-			if errors.Is(runErr, errCheckInconclusive) {
-				o.Ran++
-				o.Unmeasurable++
-				if s.logger != nil {
-					s.logger.Info("active check ran but could not reach a verdict",
-						zap.String("check", checks[check].name),
-						zap.Uint64("exchange_id", uint64(exchangeID)),
-						zap.Error(runErr))
-				}
-				continue
-			}
-			// A check that failed mid-way — a send failed, or payload placement was impossible —
-			// produced no verdict. Whatever probes went out are already metered; the check itself
-			// is a send failure, and findings it may have produced before the failure are dropped:
-			// a finding about a probe that never completed is not evidence.
-			if runErr != nil {
-				o.SendFailures++
-				o.FindingsDropped += len(verdict)
-				if s.logger != nil {
-					s.logger.Warn("active check failed before a verdict",
-						zap.String("check", checks[check].name),
-						zap.Uint64("exchange_id", uint64(exchangeID)),
-						zap.Error(runErr))
-				}
-				abandoned = breaker.checkFailed()
-				continue
-			}
-
-			// A check that attempted probes and had every one of them fail or be refused saw no
-			// evidence of its own. Its verdict came from the stored response instead, which says
-			// nothing about the payload it meant to send, so the findings go and the reason is
-			// recorded.
-			if d.attempted > 0 && d.sent == 0 {
-				o.SendFailures++
-				o.FindingsDropped += len(verdict)
-				if len(verdict) > 0 && s.logger != nil {
-					s.logger.Warn("dropping findings from a check whose probes never went out",
-						zap.String("check", checks[check].name),
-						zap.Uint64("exchange_id", uint64(exchangeID)),
-						zap.Int("dropped", len(verdict)))
-				}
-				abandoned = breaker.checkFailed()
-				continue
-			}
-			o.Ran++
-			breaker.checkSucceeded()
-			o.Findings += len(verdict)
-			found = append(found, verdict...)
+	// countOnce gives a step its disposition at most once, across every pass. Every counting
+	// site in the dispatch loop goes through it, because nine hand-maintained guards is eight
+	// chances to miss one and one missed guard is one step counted twice — Considered() then
+	// exceeds the check set, which is the identity every counter in this type exists to keep.
+	countOnce := func(i int, phase CheckPhase, flat func(*AuditOutcome) *int, bump func(*PhaseOutcome)) {
+		if counted[i] {
+			return
 		}
-		// Counted before the stop test, not after it: a unit the check-failure breaker gave up on was
-		// abandoned whether or not the budget then ended the item, and attributing it only in the
-		// no-stop case would make the count that explains a failed item disappear in exactly the runs
-		// where an operator is asking why.
-		if abandoned {
-			o.UnitsAbandoned++
-		}
-		if stopped {
-			break
-		}
-		if breaker.unitFinished(abandoned) {
-			break
-		}
+		counted[i] = true
+		bumpPhase(&o, phase, flat, bump)
 	}
+	// The OUTER loop is the pass (burpsy-react-ui-krf5). It used to be a `goto dispatch` that
+	// jumped to a label BELOW this loop, which meant a re-dispatched pass fell straight past the
+	// loop that does the dispatching and into the tail that attributes what was left — so
+	// FollowUpPasses was reported as 1 while no second pass ran, and the tail double-counted every
+	// step as ItemFailed. An outer loop says the same thing structurally: a retry is another turn
+	// of this loop, and falling out of it is what ends the item.
+	for {
+		// The plan is exhausted, not merely re-entered: the condition is the INNER loop's, and
+		// without it a pass that ran out of steps would index past the end — a failed item whose
+		// last step is the failure is the common case, not a rare one.
+		for pos < len(steps) {
+			unitIx := steps[pos].unit
+			abandoned := false
+			for pos < len(steps) && steps[pos].unit == unitIx {
+				// Hard stops. Each is monotone — once spent it stays spent — so the rest of the plan is
+				// attributed in one go rather than re-tested per step.
+				if run.outOfTime() || ctx.Err() != nil {
+					o.TimedOut = true
+					o.Cancelled = ctx.Err() != nil
+					stop, stopped = DispositionTimeBudgetSpent, true
+					break
+				}
+				if run.overRequestBudget(meter.snapshot().sent) {
+					stop, stopped = DispositionRequestBudgetSpent, true
+					break
+				}
+				// The dashboard's "Pause all tasks", between checks (burpsy-react-ui-cijs). Below the
+				// hard stops on purpose: a time budget that has already expired must not be waited out
+				// while paused, and the loop must not resume into an audit that should have stopped.
+				if s.suiteGate != nil {
+					s.suiteGate(ctx)
+				}
+
+				// Per-host throttle (m0sv): the minimum interval between probes to one host, enforced
+				// before the step dispatches. The in-flight cap is NOT taken here — see the send
+				// region below for why it has to bracket the check rather than the loop iteration.
+				run.perHostThrottle(ctx, ex.Host)
+
+				// Auto-backoff (fkl8): the target answered a probe 429/503, so the next step
+				// waits a configured beat before it sends. One wait per rate-limited status,
+				// re-checked every step, so a target that keeps 429ing keeps being waited on and
+				// a target that recovers stops paying. The wait is bounded by the time budget's
+				// own expiry — a backoff that outlived the budget would be a wait with no audit
+				// on the other side of it.
+				// Unset inherits the default; set-and-zero is the real off. Resolving the wait here,
+				// at the read, keeps the field's wire shape one value with no second "enabled" flag
+				// to fall out of sync.
+				ms := DefaultAutoBackoffMs
+				if run.cfg.AutoBackoffMs.Set {
+					ms = run.cfg.AutoBackoffMs.Value
+				}
+				if ms > 0 && meter != nil && meter.limitedStatus.Load() != 0 {
+					select {
+					case <-time.After(time.Duration(ms) * time.Millisecond):
+					case <-ctx.Done():
+					}
+					bumpPhase(&o, checks[steps[pos].check].phase, func(o *AuditOutcome) *int { return &o.RateLimited }, func(po *PhaseOutcome) { po.RateLimited++ })
+				}
+
+				check := steps[pos].check
+				pos++
+				// One call per step consumed, whatever disposition it lands in — placed here, at the single
+				// point pos advances, rather than beside each of the nine outcomes below. A progress counter
+				// maintained at nine sites is one that eventually disagrees with the plan it is a fraction of.
+				run.cfg.Items.Step(exchangeID)
+				if abandoned {
+					// `check`, not steps[pos]: pos was already advanced above, so steps[pos] is the
+					// NEXT step and attributed this disposition to a phase that never reached it.
+					//
+					// countOnce guards the repeat: a follow-up pass re-walks the plan from the start,
+					// so a step pass 0 abandoned comes up again and is abandoned again. Counting it
+					// twice is how Considered() came to exceed the check set on a re-dispatched item.
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.UnitAbandoned }, func(po *PhaseOutcome) { po.UnitAbandoned++ })
+					continue
+				}
+				if !run.ledger.Admit(units[unitIx].key, check) {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.AlreadyCovered }, func(po *PhaseOutcome) { po.AlreadyCovered++ })
+					continue
+				}
+				// The narrowing that makes a follow-up pass bounded work rather than more of the same: a
+				// check that already failed in this unit is not tried again (burpsy-react-ui-5efx). Burp asks
+				// the same question per insertion point (Zwy6.java's Zz); this asks it per (unit, check),
+				// which is the granularity the dispatch plan has.
+				//
+				// No `pos++` here: pos was already advanced when this step was consumed, and
+				// advancing it again silently ate the NEXT step's disposition (krf5). The narrowing
+				// skips this check; the loop's own condition moves on.
+				if pass > 0 && breaker.AlreadyFailed(units[unitIx].key, checks[check].name) {
+					// Marked disposed though nothing is counted: pass 0 already gave this step its
+					// disposition (a send failure, or the unit abandonment behind it). The mark is
+					// what stops the TAIL below counting it a second time as ItemFailed.
+					counted[pos-1] = true
+					continue
+				}
+
+				// The per-host in-flight cap brackets the CHECK, not the loop iteration. Bracketing the
+				// iteration with a defer would hold the slot until the whole auditItem returned —
+				// AuditSession dispatches items concurrently, so every worker would hold one slot per
+				// host for the item's entire duration and a cap of N would admit N items rather than N
+				// probes. This region is deliberately linear, with no `continue` between the acquire and
+				// the release, which is what makes the pairing safe here rather than only apparently safe.
+				run.perHostInFlight(ctx, ex.Host)
+				before := meter.snapshot()
+				verdict, runErr := checks[check].run(s, ictx, ex)
+				d := meter.since(before)
+				run.releasePerHostInFlight(ex.Host)
+
+				// A check the evaluator declined is in the same position as one with no implementation:
+				// nothing ran and nothing proved. Counted as Skipped (DispositionUnsupported) so the
+				// check set still partitions and a clean outcome cannot be read as a clean bill of
+				// health for this check.
+				if errors.Is(runErr, errCheckUnsupported) {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+					if s.logger != nil {
+						s.logger.Warn("active check could not run",
+							zap.String("check", checks[check].name),
+							zap.Uint64("exchange_id", uint64(exchangeID)),
+							zap.Error(runErr))
+					}
+					continue
+				}
+				// Ran, but undecided. Before the error branch: not a failure, so the breaker must not trip.
+				if errors.Is(runErr, errCheckInconclusive) {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Ran }, func(po *PhaseOutcome) { po.Ran++ })
+					o.Unmeasurable++
+					if s.logger != nil {
+						s.logger.Info("active check ran but could not reach a verdict",
+							zap.String("check", checks[check].name),
+							zap.Uint64("exchange_id", uint64(exchangeID)),
+							zap.Error(runErr))
+					}
+					continue
+				}
+				// A check that failed mid-way — a send failed, or payload placement was impossible —
+				// produced no verdict. Whatever probes went out are already metered; the check itself
+				// is a send failure, and findings it may have produced before the failure are dropped:
+				// a finding about a probe that never completed is not evidence.
+				if runErr != nil {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.SendFailures }, func(po *PhaseOutcome) { po.SendFailures++ })
+					o.FindingsDropped += len(verdict)
+					if s.logger != nil {
+						s.logger.Warn("active check failed before a verdict",
+							zap.String("check", checks[check].name),
+							zap.Uint64("exchange_id", uint64(exchangeID)),
+							zap.Error(runErr))
+					}
+					// The unit and check names go in so a follow-up pass can tell a check that
+					// already failed here from one that has not been tried (burpsy-react-ui-5efx).
+					abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
+					continue
+				}
+
+				// A check that attempted probes and had every one of them fail or be refused saw no
+				// evidence of its own. Its verdict came from the stored response instead, which says
+				// nothing about the payload it meant to send, so the findings go and the reason is
+				// recorded.
+				if d.attempted > 0 && d.sent == 0 {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.SendFailures }, func(po *PhaseOutcome) { po.SendFailures++ })
+					o.FindingsDropped += len(verdict)
+					if len(verdict) > 0 && s.logger != nil {
+						s.logger.Warn("dropping findings from a check whose probes never went out",
+							zap.String("check", checks[check].name),
+							zap.Uint64("exchange_id", uint64(exchangeID)),
+							zap.Int("dropped", len(verdict)))
+					}
+					// The same failure as above by a different cause: the check ran and every
+					// probe it placed was refused. Recorded against the unit so a re-pass does not
+					// re-send it blind.
+					breaker.checkFailed(units[unitIx].key, checks[check].name)
+					continue
+				}
+				countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Ran }, func(po *PhaseOutcome) { po.Ran++ })
+				breaker.checkSucceeded()
+				recordPhase(&o, checks[check].phase, func(po *PhaseOutcome) { po.Findings += len(verdict) })
+				o.Findings += len(verdict)
+				found = append(found, verdict...)
+			}
+			// Counted before the stop test, not after it: a unit the check-failure breaker gave up on was
+			// abandoned whether or not the budget then ended the item, and attributing it only in the
+			// no-stop case would make the count that explains a failed item disappear in exactly the runs
+			// where an operator is asking why.
+			if abandoned {
+				o.UnitsAbandoned++
+			}
+			if stopped {
+				break
+			}
+			if breaker.unitFinished(abandoned) {
+				break
+			}
+		}
+
+		// The retry decision. A pass is worth spending only when the item FAILED and some step is
+		// still retryable — which, after the narrowing above, means some check in this item has never
+		// been tried.
+		//
+		// A budget-spent item is NOT retried: the second pass would run out of the same budget, and
+		// "retried once" would teach an operator nothing the run's own bounds had not already said.
+		if breaker.failed() && pass < passes && pos < len(steps) {
+			retryable := false
+			for i := pos; i < len(steps); i++ {
+				if !breaker.AlreadyFailed(units[steps[i].unit].key, checks[steps[i].check].name) {
+					retryable = true
+					break
+				}
+			}
+			if retryable {
+				pass++
+				pos = 0
+				// The breaker's CONSECUTIVE counters start clean so a pass is measured against the same
+				// thresholds, while its failure MEMORY is kept -- that memory is what narrows the pass.
+				breaker.beginPass()
+				// Another turn of the OUTER pass loop, which is the dispatch loop. Not a jump to a
+				// label below the loop: that is the defect krf5 removed, and it is why a re-dispatched
+				// pass used to report itself while dispatching nothing.
+				continue
+			}
+		}
+		// No pass was worth spending. Break the outer loop, which is the only way out of it now that
+		// the retry above continues it — the loop runs until a pass declines to retry.
+		break
+	}
+	o.FollowUpPasses = pass
 
 	// Everything left in the plan is work this engine chose not to admit. Attributing it is what
 	// turns a bound into something a caller can see. The breaker owns whether the item failed; stop
 	// owns why dispatch ended.
-	remaining := len(steps) - pos
+	// Kept for the log line below; the tail iterates the plan rather than a count.
 	switch {
 	case breaker.failed():
-		o.ItemFailed += remaining
+		// Only steps with no disposition yet. A follow-up pass re-walks the plan, so steps[pos:]
+		// can include steps an earlier pass already counted; counting those again here is what
+		// made Considered() exceed the check set on a re-dispatched item.
+		for i := pos; i < len(steps); i++ {
+			if counted[i] {
+				continue
+			}
+			counted[i] = true
+			bumpPhase(&o, checks[steps[i].check].phase, func(o *AuditOutcome) *int { return &o.ItemFailed }, func(po *PhaseOutcome) { po.ItemFailed++ })
+		}
 		o.State = ItemStateFailed
 	case stopped && stop == DispositionTimeBudgetSpent:
-		o.NotRun += remaining
+		for i := pos; i < len(steps); i++ {
+			if counted[i] {
+				continue
+			}
+			counted[i] = true
+			bumpPhase(&o, checks[steps[i].check].phase, func(o *AuditOutcome) *int { return &o.NotRun }, func(po *PhaseOutcome) { po.NotRun++ })
+		}
 		o.State = ItemStateBounded
 	case stopped && stop == DispositionRequestBudgetSpent:
-		o.RequestBudgetSpent += remaining
+		for i := pos; i < len(steps); i++ {
+			if counted[i] {
+				continue
+			}
+			counted[i] = true
+			bumpPhase(&o, checks[steps[i].check].phase, func(o *AuditOutcome) *int { return &o.RequestBudgetSpent }, func(po *PhaseOutcome) { po.RequestBudgetSpent++ })
+		}
 		o.State = ItemStateBounded
 	default:
 		o.State = ItemStateAudited
@@ -1002,6 +1877,30 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			zap.Int("checks", len(checks)))
 	}
 
+	// Phase 12: the DOM dynamic confirmation tier (burpsy-react-ui-m97j), the half dom.go's
+	// header promised and never had. It re-runs the STATIC DOM analysis on this exchange's own
+	// response — the same free-standing pass Capture.ScanExchange runs — so the confirm sees the
+	// same flows the passive path reported, then plants a canary in each URL-kind flow's source
+	// and loads the page in the scan's browser. Promoted/retired verdicts ride the finding;
+	// without a browser attached (or on an unsupported source kind) the finding stays tentative
+	// AND SAYS SO in its evidence, because a caveat only in the operator's memory is the failure
+	// DOM-03 exists to prevent. Only when the DOM families are enabled: the tier confirms THIS
+	// pass's candidates, and running it with the families off would observe pages no static
+	// finding came from.
+	if s.DOMCapabilityConfigured() && s.config != nil && s.config.CheckDOM {
+		if confirmed := s.confirmDOMFindingsFor(ex); len(confirmed) > 0 {
+			found = append(found, confirmed...)
+		}
+	}
+
+	// The tier's per-item skip count, folded once (7bkj): the checks ran and answered;
+	// this number says how many points they did not test, and rides the outcome beside the
+	// rate-limiting count.
+	o.PointsSkippedRepetitive = int(lightHandle.SkippedPoints())
+	// The effectiveness gate's own accounting (y4om), folded the same way. Counted per ITEM
+	// and summed into the run's outcome, because the gate's evidence is spread across the
+	// items that probed and the items whose places it then dropped.
+	o.PointsJudgedIneffective += run.pointEffectiveness.Count()
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

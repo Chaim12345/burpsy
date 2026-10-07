@@ -325,7 +325,7 @@ func TestInjectionPointCapIsReportedNotHidden(t *testing.T) {
 		t.Fatalf("enumerated %d points from %d query parameters, want more than the cap %d; the cap cannot be exercised and enumeration is losing points",
 			len(h.Points()), MaxInjectionPointsPerCheck+4, MaxInjectionPointsPerCheck)
 	}
-	res, err := runInjection(context.Background(), cc, []string{"query"},
+	res, err := runInjection(context.Background(), cc, "test", []string{"query"},
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			return h.ProbeErrorSignatures(context.Background(), p, []string{"'"}, SQLErrorSignatures)
 		})

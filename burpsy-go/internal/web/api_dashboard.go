@@ -83,6 +83,10 @@ type dashboardResp struct {
 	// source is a key even at zero, including "unattributed", so a pane cannot lose a source by it
 	// happening not to have appeared yet.
 	Sources map[string]int `json:"sources"`
+	// Paused is the suite-wide task gate (burpsy-react-ui-8gw): the dashboard's pause button
+	// reads the state it toggles from the same poll as everything else, so a flip is visible on
+	// the next refresh without a second endpoint.
+	Paused bool `json:"paused"`
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +121,28 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Messages:        messages,
 		StoredBytes:     s.store.Bytes(),
 		Sources:         s.sourceCounts(),
+		Paused:          s.tasks.Paused(),
 	})
+}
+
+// handleDashboardEvents serves DELETE /api/dashboard/events: the "Clear event log" action (Burp's
+// burp.Zbuz). It clears the EventLog the dashboard reads — the source, not a client-side view — so
+// the feed is genuinely empty afterwards and the next thing the tool does is its first row again.
+//
+// A separate route from /api/dashboard (which stays GET-only) rather than a DELETE verb on it: the
+// dashboard aggregates tasks, activity, coverage and the event log, and a DELETE there would name
+// the whole aggregate when only one list is being discarded. It is not filed under /api/events
+// either — that prefix is the SSE change stream, a different resource — so this names the EventLog
+// the dashboard reads and nothing else. DELETE only; anything else is a 405 the route manifest's
+// verb test checks for.
+func (s *Server) handleDashboardEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.events.Clear()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"cleared": true})
 }
 
 // dashboardSummaries builds every count the dashboard shows, each through dash.NewSummary so a
@@ -310,7 +335,7 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		st := e.Status
 		status = &st
 	}
-	return toolLogEntry{
+	view := toolLogEntry{
 		ID:   e.ID,
 		Tool: e.Tool.String(),
 		Host: e.Host,
@@ -328,7 +353,14 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		StartedMs:   e.StartedMs,
 		DurationMs:  e.DurationMs,
 		Error:       strPtrIf(e.Note != "", e.Note),
+		Comment:     e.Comment,
+		Highlight:   e.Highlight,
 	}
+	if e.Exchange != nil {
+		id := uint64(*e.Exchange)
+		view.Exchange = &id
+	}
+	return view
 }
 
 // toolLogMatches is the log's filter, shared for the same reason as the projection.

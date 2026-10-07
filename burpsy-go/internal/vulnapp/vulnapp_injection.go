@@ -4,9 +4,11 @@ package vulnapp
 // manipulation, XML injection, and the five interpreted-language code-injection rows (PHP,
 // Perl, Ruby, Python, server-side JavaScript). All eight ride internal/scanner's ProbeHarness
 // over the query/body/cookie/header insertion points, and every endpoint here takes its input
-// through a query parameter only: bcheck's body-point enumerator declines XML and plain-text
-// bodies outright (internal/bcheck/insertion.go's bodyPoints), so an XML row reached only
-// through a POST body would never get a point to probe at all.
+// through a query parameter. That was forced when bcheck's body-point enumerator modelled no
+// container for an XML or plain-text body — an XML row reached only through a POST body had no
+// point to probe at all. XML bodies are modelled now (burpsy-react-ui-63jg), and these endpoints
+// stay query-only on purpose: one reachable route per row keeps the demonstration about the
+// check, not about which of two routes the payload took.
 //
 // Corresponding scanner descriptors: InjectionCheckDescriptors in
 // internal/scanner/checks_injection.go.

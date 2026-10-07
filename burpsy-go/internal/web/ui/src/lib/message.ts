@@ -289,11 +289,73 @@ export function prettyMessage(raw: string): string {
     }
   } else if (type.includes("xml") || type.includes("html") || /^\s*<[a-z!?]/i.test(body)) {
     pretty = prettyMarkup(body);
+  } else if (type.includes("css") || looksLikeCss(body)) {
+    pretty = prettyCss(body);
+  } else if (type.includes("javascript") || type.includes("ecmascript") || looksLikeJs(body)) {
+    pretty = prettyJs(body);
   }
 
   if (pretty === null) return raw;
   void startLine;
   return raw.slice(0, bodyOffset) + pretty;
+}
+
+/** A CSS body: the text IS one when it looks like rules, so a text/css label is not required. */
+function looksLikeCss(body: string): boolean {
+  return /[{]\s*[-a-zA-Z]+\s*:/.test(body) || /[}][^{}]*[{]/.test(body);
+}
+
+/** A JavaScript body: sniffed from statements, since a label is often missing on responses. */
+function looksLikeJs(body: string): boolean {
+  const trimmed = body.trim();
+  return /\b(function|var|let|const|if|for|while|return|=>)\b/.test(trimmed) && !trimmed.startsWith("<");
+}
+
+/**
+ * CSS: one declaration per line, two-space indented inside its block. Selectors are kept
+ * verbatim — reformatting one would change what the document says.
+ */
+function prettyCss(body: string): string {
+  return body
+    .replace(/\s*{\s*/g, " {\n  ")
+    .replace(/;\s*(?=[^\s}])/g, ";\n  ")
+    .replace(/\s*}\s*/g, "\n}\n")
+    .replace(/\n\s*\n/g, "\n")
+    .trim() + "\n";
+}
+
+/**
+ * JavaScript: one statement per line where the break is safe — after `;` and `{`/`}` that
+ * are not inside a string literal. Statements are never re-indented (a guess that changes
+ * indentation changes nothing the bytes say, and can break a template literal's meaning).
+ */
+function prettyJs(body: string): string {
+  let out = "";
+  let i = 0;
+  const n = body.length;
+  while (i < n) {
+    const ch = body[i]!;
+    if (ch === '"' || ch === "'" || ch === "`") {
+      let j = i + 1;
+      while (j < n && body[j] !== ch) {
+        if (body[j] === "\\") j += 1;
+        j += 1;
+      }
+      out += body.slice(i, Math.min(j + 1, n));
+      i = Math.min(j + 1, n);
+      continue;
+    }
+    if (ch === "/" && body[i + 1] === "/") {
+      const end = body.indexOf("\n", i);
+      out += body.slice(i, end < 0 ? n : end);
+      i = end < 0 ? n : end;
+      continue;
+    }
+    out += ch;
+    if ((ch === ";" || ch === "{" || ch === "}") && body[i + 1] !== "\n") out += "\n";
+    i += 1;
+  }
+  return out;
 }
 
 function looksLikeJson(body: string): boolean {
@@ -348,24 +410,152 @@ function prettyMarkup(input: string): string {
     .join("\n");
 }
 
+/* ==== the message editor's hide-headers lists (burpsy-react-ui-whr) ========
+ *
+ * Burp keeps two editable lists under Settings > User interface > Message editor and an
+ * eye button above each message that hides whatever they name, in the Pretty tab only.
+ * The Burp-side keys are recoverable and were used as the shape here:
+ * `user_options.misc.uninteresting_headers` (request),
+ * `user_options.misc.uninteresting_response_headers` (response), and
+ * `user_options.misc.uninteresting_headers.hide_uninteresting_headers_by_default`
+ * (the master toggle) — burp.Zf4w / burp.Zhs4 / burp.Zblz in map_root.tsv. The default
+ * *contents* of those lists are not recoverable from the evidence base (no literal in the
+ * extracted strings, and the docs do not publish them), so the lists below are burpsy's
+ * own starting sets, chosen from protocol-level noise, and the settings section is where
+ * an operator replaces them. Claiming they were Burp's would be a fabricated citation.
+ *
+ * Deliberately NOT the Comparer's lists (Settings > Comparer: uninteresting headers).
+ * Those name headers whose *differences* are dimmed in a diff and nothing is ever hidden
+ * there. Two lists rather than one because the two answer different questions — "what do I
+ * not want to read right now?" versus "what should not count as a difference?" — and one
+ * list serving both would make the eye's behaviour change whenever someone tuned a diff.
+ */
+
+/** Request headers the eye hides out of the box: what the client's own stack adds to every
+ *  request and no application behaviour lives in. */
+export const DEFAULT_HIDE_REQUEST_HEADERS: string[] = [
+ "accept",
+ "accept-encoding",
+ "accept-language",
+ "connection",
+];
+
+/** Response headers the eye hides out of the box: connection and framing bookkeeping, cache
+ *  validators, and server metadata. Deliberately excludes `set-cookie` (a rotated session
+ *  token can be the finding), `content-type`/`content-length` (a reader checking truncation
+ *  or a mislabelled body needs them) and the security headers, which are findings-relevant. */
+export const DEFAULT_HIDE_RESPONSE_HEADERS: string[] = [
+ "cache-control",
+ "connection",
+ "content-security-policy-report-only",
+ "date",
+ "etag",
+ "expires",
+ "keep-alive",
+ "last-modified",
+ "pragma",
+ "server",
+ "transfer-encoding",
+ "vary",
+];
+
+/**
+ * Turn one textarea's contents into a list of header names.
+ *
+ * One name per line. A pasted whole header line (`Cache-Control: no-store`) is tolerated by
+ * taking what precedes the colon, which is also what the server-side Comparer list does — an
+ * operator who pastes a line and gets a silent no-match would conclude the setting is broken.
+ * Names fold, so they are stored lower-cased (RFC 9110 §5.1); a duplicate is dropped rather
+ * than hiding the same line twice.
+ */
+export function parseHeaderNames(text: string): string[] {
+ const seen = new Set<string>();
+ for (const line of text.split(/\r?\n/)) {
+  const colon = line.indexOf(":");
+  const name = (colon >= 0 ? line.slice(0, colon) : line).trim().toLowerCase();
+  if (name !== "") seen.add(name);
+ }
+ return [...seen];
+}
+
+/**
+ * Remove the named header lines from a message's head, for display.
+ *
+ * Pure, and it splices rather than rebuilding: every byte outside a dropped line is the byte
+ * the server captured, so the start line, the surviving headers, their spacing and the body
+ * come through untouched — the same discipline the editor's writers follow, for the same
+ * reason (the Pretty view is the message, minus some lines).
+ *
+ * A dropped header takes any folded continuation lines with it: leaving an orphan
+ * continuation behind would fold it onto the *previous* surviving header and change that
+ * header's value, which is a silent corruption rather than a display filter.
+ *
+ * The message's own line ending is whatever the bytes say — this walks lines with the same
+ * helpers `headerSpans` uses rather than splitting on `\r\n`, so an LF-only message filters
+ * too.
+ */
+export function hideHeadersIn(raw: string, names: readonly string[]): string {
+ const hidden = new Set(names.map((name) => name.trim().toLowerCase()).filter((name) => name !== ""));
+ if (hidden.size === 0) return raw;
+ const { headEnd, bodyOffset } = headBounds(raw);
+ const drops: Span[] = [];
+ for (const span of headerSpans(raw)) {
+  if (!hidden.has(span.name.toLowerCase())) continue;
+  // The line plus its terminator, then every folded continuation line after it: a
+  // continuation belongs to the header above it, so leaving one behind would fold it onto
+  // the previous surviving header and change that header's value.
+  //
+  // The advance is clamped at `bodyOffset`, not `headEnd`: the last header line's terminator
+  // is the first CRLF of the blank-line separator, so stopping at `headEnd` would remove the
+  // line's text and leave its terminator behind as an extra blank line. Clamping at
+  // `bodyOffset` takes exactly that one terminator and leaves the separator's second CRLF —
+  // the blank line that ends the head — intact.
+  let stop = span.end;
+  for (;;) {
+   const next = Math.min(skipEol(raw, lineEnd(raw, stop, headEnd)), bodyOffset);
+   if (next <= stop) break;
+   stop = next;
+   if (stop >= headEnd) break;
+   const first = raw[stop];
+   if (first !== " " && first !== "\t") break;
+  }
+  drops.push({ start: span.start, end: stop });
+ }
+ if (drops.length === 0) return raw;
+ let out = "";
+ let cursor = 0;
+ for (const drop of drops) {
+  out += raw.slice(cursor, drop.start);
+  cursor = drop.end;
+ }
+ return out + raw.slice(cursor);
+}
+
 /** Classic 16-byte-per-line dump with an ASCII gutter, like Burp's Hex view. */
 export function hexDump(input: string): string {
-  const bytes = new TextEncoder().encode(input);
-  const lines: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 16) {
-    const slice = bytes.subarray(offset, offset + 16);
-    const hex: string[] = [];
-    let ascii = "";
-    for (let i = 0; i < 16; i++) {
-      const byte = slice[i];
-      hex.push(byte === undefined ? "  " : byte.toString(16).padStart(2, "0"));
-      if (byte !== undefined) ascii += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
-    }
-    const left = hex.slice(0, 8).join(" ");
-    const right = hex.slice(8).join(" ");
-    lines.push(`${offset.toString(16).padStart(8, "0")}  ${left}  ${right}  |${ascii}|`);
+ return hexDumpBytes(new TextEncoder().encode(input));
+}
+
+/** hexDump over bytes the caller already holds. The charset work (burpsy-react-ui-p836) needs
+ *  this: for a non-UTF-8 body `input` has already been through a UTF-8 round trip that replaced
+ *  every byte >= 0x80 with U+FFFD, and re-encoding that string dumps EF BF BD triplets where the
+ *  wire bytes belong — a hex view that lies about the bytes is worse than no hex view. */
+export function hexDumpBytes(bytes: Uint8Array): string {
+ const lines: string[] = [];
+ for (let offset = 0; offset < bytes.length; offset += 16) {
+  const slice = bytes.subarray(offset, offset + 16);
+  const hex: string[] = [];
+  let ascii = "";
+  for (let i = 0; i < 16; i++) {
+   const byte = slice[i];
+   hex.push(byte === undefined ? "  " : byte.toString(16).padStart(2, "0"));
+   if (byte !== undefined) ascii += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : ".";
   }
-  return lines.length ? lines.join("\n") : "(empty)";
+  const left = hex.slice(0, 8).join(" ");
+  const right = hex.slice(8).join(" ");
+  lines.push(`${offset.toString(16).padStart(8, "0")}  ${left}  ${right}  |${ascii}|`);
+ }
+ return lines.length ? lines.join("\n") : "(empty)";
 }
 
 /** The body alone, for the Render view's sandboxed iframe. */
@@ -797,4 +987,117 @@ export function addBodyParam(raw: string, name: string, value: string): string {
   if (brace < 0) return setBody(raw, `{${text}}`);
   const at = bodyOffset + brace + 1;
   return fixContentLength(`${raw.slice(0, at)}${text}${raw.slice(at)}`);
+}
+
+/**
+ * Return `head` (a message's headers plus the blank-line separator) with its Content-Length set to
+ * `bodyLength`, when it carries a Content-Length at all (burpsy-react-ui-3x2g). A head with none is
+ * returned unchanged — a gRPC-over-HTTP/2 body does not use Content-Length, and inventing one would
+ * be a header the operator did not have; Repeater's "update Content-Length" send option covers the
+ * HTTP/1 case where the server does want it recomputed.
+ */
+export function withContentLength(head: string, bodyLength: number): string {
+  const re = /^(content-length:)[^\r\n]*/im;
+  if (re.test(head)) return head.replace(re, `$1 ${bodyLength}`);
+  return head;
+}
+
+/**
+ * Build the faithful base64 of a request whose body is binary (burpsy-react-ui-ytkk): its ASCII head
+ * (headers up to the blank-line separator) concatenated with the exact body bytes from `bodyBase64`.
+ *
+ * A JSON string cannot carry a binary body — a non-UTF-8 byte becomes U+FFFD — so a protobuf/gRPC
+ * body edited in Repeater must go to the server base64-encoded, not as the request text. The head is
+ * ASCII and the body bytes (atob → one char per byte) are ≤ 0xFF, so btoa over head+body yields the
+ * exact request octets. The caller is responsible for the head's Content-Length matching the body.
+ */
+export function faithfulRequestBase64(requestText: string, bodyBase64: string): string {
+  const offset = parseMessage(requestText).bodyOffset;
+  const head = requestText.slice(0, offset);
+  return btoa(head + atob(bodyBase64));
+}
+
+/**
+ * Whether two request texts differ in their *body* — the bytes after the header separator — ignoring
+ * any change confined to the head (burpsy-react-ui-ytkk). Compares the body slices rather than the
+ * byte offsets, because a header edit shifts the offset without touching the body and must count as
+ * unchanged.
+ *
+ * This decides when a tab's stored faithful binary body (requestBodyBase64) has gone stale: a body
+ * edit in the raw editor — or a body-encoding transform, or loading a different request — rewrites
+ * the body text and must drop the base64 so the operator's edit is what resends; a header-only edit
+ * keeps it, so editing headers around a binary body still works.
+ */
+export function requestBodyChanged(prev: string, next: string): boolean {
+  return prev.slice(parseMessage(prev).bodyOffset) !== next.slice(parseMessage(next).bodyOffset);
+}
+
+/**
+ * The path of a request's target — "/pkg.Service/Method" for a gRPC call — from its request line, or
+ * undefined for anything that is not a request (burpsy-react-ui-3pco). An absolute-form target (a
+ * proxied request line, "POST https://h/p HTTP/1.1") keeps only its path. The query is kept; the gRPC
+ * resolver ignores it.
+ */
+export function requestTargetPath(raw: string): string | undefined {
+  const target = /^[A-Z]+ (\S+)/.exec(raw)?.[1];
+  if (!target) return undefined;
+  if (target.startsWith("/")) return target;
+  try {
+    return new URL(target).pathname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The body_base64 an *editable* surface may hold as the faithful body (burpsy-react-ui-3pco): a
+ * MessageView's body_base64 is the body with Content-Encoding and chunking undone, so rebuilding the
+ * message as head + those bytes is only exact when the head describes no encoding. Otherwise the
+ * rebuilt message would send a decoded body under a head that still claims gzip or chunked. Returns
+ * undefined then, and the surface falls back to the text — no Protobuf editing, rather than a corrupt
+ * resend. Read-only views can use body_base64 directly.
+ */
+export function editableBodyBase64(view: { text?: string; body_base64?: string; content_encoding?: string }): string | undefined {
+  if (!view.body_base64) return undefined;
+  const encoding = view.content_encoding?.trim().toLowerCase();
+  if (encoding && encoding !== "identity") return undefined;
+  const head = (view.text ?? "").slice(0, parseMessage(view.text ?? "").bodyOffset);
+  if (/^transfer-encoding:[^\r\n]*chunked/im.test(head)) return undefined;
+  return view.body_base64;
+}
+
+/**
+ * The cookie name/value spans of one Cookie or Set-Cookie header line, line-relative, for the editor's
+ * cookie colouring (burpsy-react-ui-axm9 — Burp colours cookies in the message editor, cookieName /
+ * cookieValue). A Cookie line yields every `name=value` pair; a Set-Cookie line only its first pair,
+ * because what follows the first `;` are attributes (Path, Secure, …), not cookies. Any other line
+ * yields nothing.
+ */
+export function cookieHeaderTokens(line: string): { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] {
+  const colon = line.indexOf(":");
+  if (colon <= 0) return [];
+  const header = line.slice(0, colon).trim().toLowerCase();
+  if (header !== "cookie" && header !== "set-cookie") return [];
+  const out: { cls: "cookie-name" | "cookie-value"; start: number; end: number }[] = [];
+  let cursor = colon + 1;
+  while (cursor < line.length) {
+    const semi = line.indexOf(";", cursor);
+    const stop = semi < 0 ? line.length : semi;
+    const chunk = line.slice(cursor, stop);
+    const lead = chunk.length - chunk.trimStart().length;
+    const pair = chunk.trim();
+    if (pair !== "") {
+      const start = cursor + lead;
+      const eq = pair.indexOf("=");
+      if (eq < 0) {
+        out.push({ cls: "cookie-name", start, end: start + pair.length });
+      } else {
+        if (eq > 0) out.push({ cls: "cookie-name", start, end: start + eq });
+        if (eq + 1 < pair.length) out.push({ cls: "cookie-value", start: start + eq + 1, end: start + pair.length });
+      }
+    }
+    if (header === "set-cookie") break;
+    cursor = stop + 1;
+  }
+  return out;
 }

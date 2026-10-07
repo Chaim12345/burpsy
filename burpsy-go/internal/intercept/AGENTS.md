@@ -36,6 +36,14 @@ its own package.
   proxy cannot act on a stale decision. `Forward`/`Drop` return an error if the message was already
   resolved, and both `delete` the entry from the hold map afterward so a long-running proxy does not leak
   one full raw message per intercepted exchange.
+- **`Wait` returns a fourth value, `userEdited`, and it is decided here because nowhere else can.** The
+  console sends the editor's current contents on *every* forward (`intercept.tsx` forwards `row.raw`), so
+  "a buffer arrived" is not an edit; and a downstream caller has only the bytes, not the bytes the operator
+  was shown. This package holds both (`Held.Raw` against the operator's buffer — see `user_edited_test.go`
+  for the cases), and it sets the flag for a retarget too, since a destination the client did not
+  ask for is not the client's item even when the bytes are identical. It must **not** be derived from the
+  wire bytes differing from `Held.Raw`: `fixContentLength` and the proxy's own post-hold rewrites land in
+  that gap, which is the false "Edited" badge (burpsy-react-ui-sd0d).
 - **A rule whose field the direction cannot supply never matches — it is not an error.** A request has no
   status code or content type; `FieldValue` returns `""` for those and `Match` bails on an empty value. A
   response rule left in the request list is dead weight, read honestly.

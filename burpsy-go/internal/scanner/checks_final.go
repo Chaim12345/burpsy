@@ -30,7 +30,7 @@ import (
 // context matchers keeps the two families deciding "which row" the same way.
 func reflectedContextCheck(row, severity string, inContext func(body, token string) (string, bool)) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+		h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 		if err != nil {
 			return nil, err
 		}
@@ -109,7 +109,7 @@ func checkBrokenAccessControl(ctx context.Context, cc *CheckContext) ([]*Finding
 	if cc.Exchange == nil {
 		return nil, nil
 	}
-	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS)
+	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS, cc.Exchange.Path)
 
 	h, err := NewProbeHarness(ctx, cc, []string{"header"})
 	if err != nil {
@@ -168,7 +168,7 @@ func checkCSRF(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if strings.EqualFold(cc.Exchange.Method, "GET") || strings.EqualFold(cc.Exchange.Method, "HEAD") {
 		return nil, nil
 	}
-	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS)
+	authed, _ := AuthContextsFrom(coord, cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS, cc.Exchange.Path)
 	if !authed.HasCredentials {
 		// Without a session there is nothing to ride, and comparing two anonymous
 		// requests would report every endpoint as vulnerable.
@@ -555,8 +555,8 @@ func FinalCheckDescriptors() []CheckDescriptor {
 
 		nativeDescriptor("Hidden HTTP 2", DispatchScopePerHost, finalChecksEnabled, checkHiddenHTTP2),
 
-		nativeDescriptor("External service interaction (SMTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("External service interaction (SMTP)", "smtp")),
+		descriptorWithTier("External service interaction (SMTP)", DispatchScopePerUrl, oobChecksEnabled,
+			oobCheck("External service interaction (SMTP)", "smtp"), TierIntrusive, ""),
 
 		nativeDescriptor("JWT arbitrary jku header supported", DispatchScopePerRequest, finalChecksEnabled,
 			jwtHostedCheck("JWT arbitrary jku header supported", true)),

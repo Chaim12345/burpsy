@@ -3,13 +3,17 @@ package web
 import (
 	"context"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"github.com/burpsy-go/burpsy/internal/extension"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -21,6 +25,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -37,15 +42,41 @@ type Server struct {
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
 	webBind   string
+	// reissue is the one-shot token table behind "request in browser"
+	// (burpsy-react-ui-7rk0): minted by the API the operator's right-click reaches, spent by
+	// the fetch their browser makes, swept by expiry. See api_browser_reissue.go for why the
+	// tokens are random, one-shot, and five minutes long.
+	reissue browserReissueTokens
 	// domEngine is the -dom flag value, reported by /api/stats. Empty means no engine was named.
 	domEngine string
 	// tlsInterception reports whether the server is configured for TLS
 	// interception (determined by whether a CA cert PEM exists).
 	tlsInterception bool
 	mux             *http.ServeMux
-	sender          *sender.Sender
-	scanner         *scanner.ActiveScanner
-	passiveScanner  *scanner.PassiveScanner
+	// allowedHosts are the Host header values this console answers to for MUTATING requests
+	// (burpsy-react-ui-s19k). Empty means loopback only, which is the setting that stops a DNS
+	// rebinding attack; a non-empty set is an operator who deliberately bound the console to
+	// something reachable and has named what they reachable it as.
+	//
+	// Absent from the default on purpose: the safe reading must be the one a caller gets by doing
+	// nothing, because a flag nobody sets cannot be the thing standing between a hostile page and an
+	// attack.
+	allowedHosts map[string]bool
+	// guarded is mux behind the cross-site gate, and it is what ListenAndServe serves. A separate
+	// field rather than reassigning mux, because every test in this package drives s.mux directly and
+	// must keep doing so: those tests are about handler behaviour, and the gate has its own.
+	guarded http.Handler
+	// confirms holds the live one-time confirmations the unattended-caller gate spends
+	// (burpsy-react-ui-ejp5). On the Server because the gate is a per-process authorisation
+	// primitive: a token minted in one process says nothing about another, which is the right
+	// reading for a console an operator runs rather than a service with many users.
+	confirms *confirmStore
+	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
+	// /confirm suffix and so the patterns do not enter the route manifest's remit.
+	confirmMux     http.Handler
+	sender         *sender.Sender
+	scanner        *scanner.ActiveScanner
+	passiveScanner *scanner.PassiveScanner
 	// toolRunner is the allowlist runner `run tool` statements dispatch through
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
@@ -57,12 +88,51 @@ type Server struct {
 	advisories         *advisory.Catalogue
 	sitemap            *sitemap.SiteMap
 	sessionCoordinator *session.Coordinator
-	matchReplace       *matchreplace.RuleSet
-	toolLog            *toollog.ToolLog
-	organizer          *organizer.Store
-	loginRuns          *sessionLoginRuns
-	intercept          *intercept.Engine
-	persist            *persist.Store
+	// prompts is the pending browser-recovery prompt registry behind the session rule action of
+	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
+	// seam, and the answer arrives here from the console's modal. Constructed in NewServer like
+	// the other registries; nil only in a Server built by direct struct literal in a test that
+	// never touches the prompt routes.
+	prompts      *sessionPrompts
+	matchReplace *matchreplace.RuleSet
+	toolLog      *toollog.ToolLog
+	organizer    *organizer.Store
+	loginRuns    *sessionLoginRuns
+	intercept    *intercept.Engine
+	persist      *persist.Store
+	// seqSettings is Burp's sequencer.* analysis configuration (burpsy-react-ui-nm81), project-level:
+	// restored by WithPersist, so a project switch brings the incoming project's settings. A nil map
+	// means "never set" and reads as sequencer.DefaultSettings. Guarded by seqMu.
+	seqMu       sync.Mutex
+	seqSettings sequencer.Settings
+	// browser is the operator's pre-wired Chromium launcher (burpsy-react-ui-bufa), created on first
+	// use; see api_browser.go.
+	browserOnce sync.Once
+	browser     *browser.Launcher
+	// domInvader is the operator-side DOM auditor's state (burpsy-react-ui-wl94): the canary, the
+	// switch and the reported source/sink hits. The browser bakes its config from this on launch and
+	// the report endpoint feeds it.
+	domInvader *dominvader.Store
+	// authz holds the project's access-control test identities (burpsy-react-ui-cr37).
+	authz authzState
+	// domExtDir is the last materialised DOM-auditor extension directory, removed before the next
+	// launch rewrites it so the temp area does not accumulate one per launch.
+	domExtDir string
+	// webAddr is the address ListenAndServe bound, so the DOM auditor can tell its extension where to
+	// report. Empty in tests, which never serve.
+	webAddr string
+	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
+	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
+	scanBaseline *scanner.ScanConfig
+	// Custom history/Intruder extractor columns (burpsy-react-ui-28n8), project-level; see
+	// api_history_extractors.go.
+	// consolidation is the operator's issue-consolidation policy, remembered so a finding store
+	// swapped in by WithFindings gets it too (burpsy-react-ui-oorl). Nil until one is set or restored.
+	consolidationMu sync.Mutex
+	consolidation   *core.ConsolidationPolicy
+	histExtractMu   sync.Mutex
+	histExtractDefs []sessionExtractDto
+	histExtractRun  []*session.Extraction
 	// tlsPolicy is the proxy's live TLS interception policy, shared so the web API can list and
 	// edit passthrough rules while the proxy keeps matching against the same list. Nil is a
 	// supported state (direct construction in tests); the passthrough endpoint says so rather
@@ -74,7 +144,11 @@ type Server struct {
 	// sets produce. Nil is supported; the endpoint reports it rather than serving a panel
 	// that could not change anything.
 	proxyOptions *proxy.Options
-	liveAudit    *LiveAuditState
+	// proxyServer is the relay itself, for the listener surface: the console reads
+	// where it is bound and moves it at runtime (burpsy-react-ui-77m, scope (1)).
+	// Nil is supported; the endpoint reports it rather than inventing an address.
+	proxyServer *proxy.Server
+	liveAudit   *LiveAuditState
 	// auditItems is the audit queue: what the engine decided about each item it was handed, retained
 	// so /api/scanner/audit-items can serve it. Built in NewServer rather than lazily, unlike
 	// `captures`: every audit path in this package attaches it to the AuditConfig it runs under, so a
@@ -156,6 +230,12 @@ type Server struct {
 	// built without one, and the handler reports that rather than pretending an edit would take
 	// effect — see handleNetworkProxy.
 	upstreamProxy *upstream.Policy
+	// upstreamCarrier is the global SOCKS layer, shared with the sender and the proxy so one
+	// Settings edit reaches every egress surface. Distinct from upstreamProxy because it answers a
+	// different question — "which proxy carries this host" versus "what opens the socket to reach
+	// that proxy" — and because a surface can hold one without the other (burpsy-react-ui-mr83
+	// part 3).
+	upstreamCarrier *upstream.Carrier
 	// platformAuth and clientCerts are the Settings → Network stores: per-host HTTP
 	// credentials and per-host TLS client identities. Built lazily by platformAuthStore()
 	// and clientCertStore() so a directly-constructed Server never serves a nil one, and
@@ -187,6 +267,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		scope:              scope,
 		logger:             zap.NewNop(),
 		mux:                http.NewServeMux(),
+		confirms:           newConfirmStore(),
 		sender:             sender.NewSender(sender.DefaultSenderConfig()),
 		findings:           core.NewFindingStore(),
 		advisories:         loadAdvisories(),
@@ -197,6 +278,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		toolLog:            toollog.New(),
 		organizer:          organizer.New(),
 		loginRuns:          newSessionLoginRuns(),
+		prompts:            newSessionPrompts(),
 		intercept:          intercept.NewEngine(),
 		auditItems:         scanner.NewAuditItemLedger(scanner.DefaultAuditItemCap),
 		tasks:              dash.NewRegistry(),
@@ -207,6 +289,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		discoveries:        newDiscoveryRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
+		domInvader:         dominvader.NewStore(),
 	}
 	// One wiring call gives every task in the process — including a crawl registered from outside this
 	// package — a started and a finished event, without either side knowing about the other.
@@ -214,6 +297,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 	// The site map subscribes to the store here rather than rebuilding itself when
 	// the tab is opened — see the sitemap package docs (CRAWL-05). Constructed
 	// before any traffic can arrive, which is the ordering ObserveExchanges needs.
+	s.installSuiteScopePredicate()
 	s.sitemap.Follow(store)
 	// The traffic store's two live signals are installed once, here, because the
 	// store is never replaced after construction — there is no WithStore. The
@@ -250,7 +334,9 @@ func (s *Server) followLive() {
 	// tells the finding store which catalog rows dedup per host rather than per path, knowledge that
 	// only the scanner's check registry has — see scanner.DedupPolicy.
 	s.findings.SetDedupPolicy(scanner.DedupPolicy())
+	s.reapplyConsolidation()
 	s.toolLog.OnChange(func() { s.live.notify(changeToolLog) })
+	s.domInvader.OnChange(func() { s.live.notify(changeDomInvader) })
 	s.events.OnChange(func() { s.live.notify(changeDashboard) })
 	s.intercept.OnChange(func() { s.live.notify(changeIntercept) })
 }
@@ -326,7 +412,10 @@ func (s *Server) WithExtensions(host *extension.Host) *Server {
 // api_scanner_audit.go's auditContext.
 func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 	if scan != nil {
-		scan = scan.WithPace(pool.ContextPacer{})
+		// Pace and the suite-wide pause together: both are things the server owns and the engine
+		// cannot know about (burpsy-react-ui-cijs). GateCheck is nil-receiver safe, so a server
+		// with no task registry attaches a gate that never holds.
+		scan = scan.WithPace(pool.ContextPacer{}).WithSuiteGate(s.tasks.GateCheck)
 	}
 	s.scanner = scan
 	return s
@@ -360,6 +449,14 @@ func (s *Server) WithTlsPolicy(policy *proxy.TlsPolicy) *Server {
 // would do nothing — the same honesty WithTlsPolicy's nil state holds.
 func (s *Server) WithProxyOptions(options *proxy.Options) *Server {
 	s.proxyOptions = options
+	return s
+}
+
+// WithProxyServer attaches the relay itself, so the console can inspect and re-bind its
+// listener. Nil (the default in tests) leaves /api/proxy/listener reporting that no
+// listener is attached rather than an address nothing serves.
+func (s *Server) WithProxyServer(server *proxy.Server) *Server {
+	s.proxyServer = server
 	return s
 }
 
@@ -439,8 +536,38 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		if err := p.Restore(nil, nil, nil, s.matchReplace, s.sessionCoordinator, s.organizer, s.toolLog); err != nil {
 			s.logger.Warn("failed to restore web-owned state", zap.Error(err))
 		}
+		// Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): what the intercept
+		// switch reads at start. "restore" reuses the last live state; the default is off, the
+		// seed every existing session used — a preference nobody wrote must not turn
+		// interception on by surprise.
+		if s.intercept != nil {
+			switch p.LoadInterceptStartup() {
+			case "on":
+				s.intercept.SetEnabled(true)
+			case "restore":
+				s.intercept.SetEnabled(p.LoadInterceptLive())
+			}
+		}
 		s.toolLog.SetPersistenceSink(p.SaveToolLog)
 		s.restorePools(p)
+		// Sequencer analysis settings are project-level, so they are (re)loaded here — on startup and
+		// on every in-console project switch, which re-runs WithPersist. A project that never saved any
+		// reads as Burp's defaults rather than keeping the outgoing project's switches.
+		s.restoreSequencerSettings(p)
+		// The browser's settings and its default profile directory follow the project too — two
+		// engagements' browsers must not share cookies (burpsy-react-ui-bufa).
+		s.restoreBrowserSettings()
+		// Project-level scan state — the scan overrides and the live sweep's seen ledger — follows the
+		// project too (burpsy-react-ui-z4ml).
+		s.restoreProjectScanState(p)
+		// Custom extractor columns are project-level too (burpsy-react-ui-28n8).
+		s.restoreHistoryExtractors(p)
+		// So is the issue consolidation policy (burpsy-react-ui-oorl).
+		s.restoreFindingConsolidation(p)
+		// And the access-control test identities (burpsy-react-ui-cr37).
+		s.restoreAuthzIdentities(p)
+		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
+		s.restoreSecretDetection(p)
 	}
 	return s
 }
@@ -488,6 +615,22 @@ func (s *Server) restorePools(p *persist.Store) {
 	s.schedules.OnChange(func() { p.SaveSchedules(s.schedules.List()) })
 }
 
+// WithUpstreamCarrier attaches the global SOCKS layer.
+//
+// The SAME instance must be handed to the sender and the proxy, for the reason WithUpstreamProxy
+// says: two carriers would let the panel describe a layer that only one surface honours.
+func (s *Server) WithUpstreamCarrier(carrier *upstream.Carrier) *Server {
+	if carrier != nil {
+		s.upstreamCarrier = carrier
+		// Attached here, the way WithUpstreamProxy does, so the panel's `attached` field reports the
+		// surfaces that actually carry the layer. A carrier reported as configured with no surface
+		// listed is the state an operator cannot act on: they cannot tell which dial paths the setting
+		// reaches (burpsy-react-ui-mr83 part 3).
+		carrier.Attach("web")
+	}
+	return s
+}
+
 // WithUpstreamProxy attaches the upstream proxy policy /api/network/proxy edits.
 //
 // The same object the proxy listener and every sender hold, so an edit made in the console applies to
@@ -516,7 +659,10 @@ func (s *Server) persistScope() {
 
 func (s *Server) persistMatchReplace() {
 	if s.persist != nil {
-		s.persist.SaveMatchRules(s.matchReplace.Rules(), s.matchReplace.UpdateContentLength())
+		s.persist.SaveMatchRules(s.matchReplace.Rules(), persist.MatchRuleSettings{
+			UpdateContentLength: s.matchReplace.UpdateContentLength(),
+			InScopeOnly:         s.matchReplace.InScopeOnly(),
+		})
 	}
 }
 
@@ -535,6 +681,9 @@ func (s *Server) persistUpstreamProxy() {
 func (s *Server) persistOrganizer() {
 	if s.persist != nil {
 		s.persist.SaveOrganizer(s.organizer.List())
+		// Mirrored alongside the items on purpose: an item names its collection by id, so saving one
+		// table without the other would restore items into a group no longer defined.
+		s.persist.SaveOrganizerCollections(s.organizer.Collections())
 	}
 }
 
@@ -693,7 +842,65 @@ func (s *Server) Tasks() *dash.Registry { return s.tasks }
 // WithSessionCoordinator sets the session coordinator.
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	s.sessionCoordinator = sc
+	// The same jar, handed to the sender as the store a followed redirect chain replays from
+	// (burpsy-react-ui-mr83). Without this a login performed by following a redirect lands in a jar
+	// nothing else reads, so the Session page would not show the session the chain just established and
+	// a later tool send would start from scratch.
+	// The sender is mutated in place rather than replaced: the same *sender.Sender is already held by
+	// every surface that was wired before this call, and handing one of them a copy would give the
+	// jar to some sends and not others.
+	if s.sender != nil {
+		withSessionCookieJar(s.sender, sc)
+	}
+	// The jar's monitored-tool set (burpsy-react-ui-sn3j): the web layer's own absorbing
+	// surfaces register here, the same wiring-time rule the proxy holds (it attaches itself in
+	// WithCookieJar). The Repeater's sends, the Intruder's stored exemplars and the audit's
+	// probe responses all reach this one coordinator, and Observation can then say which
+	// surfaces are attached independent of which are switched on to absorb.
+	sc.AttachAbsorptionSource(session.SourceRepeater)
+	sc.AttachAbsorptionSource(session.SourceIntruder)
+	sc.AttachAbsorptionSource(session.SourceScanner)
+	s.installSuiteScopePredicate()
+	// A rule's "Invoke an extension" action is wired here, beside the scope predicate and for the
+	// same reason: the seam has match sites inside internal/session where no host is in reach, and a
+	// rule that named an extension must not be reachable from one call path and refused from
+	// another. The adapter resolves the host per call — see extension_session_action.go — so a plugin
+	// loaded after this line is still found.
+	s.sessionCoordinator.SetSessionActionInvoker(sessionActionInvoker{s: s})
+	// The "Prompt the user for in-browser recovery" action is wired here for the same reason: a rule
+	// that names the prompt must be reachable from every call path, and the console is the only
+	// surface that can ask. See session_prompts.go.
+	s.sessionCoordinator.SetSessionPrompter(sessionPrompter{s: s})
 	return s
+}
+
+// installSuiteScopePredicate gives the session coordinator this console's live suite-scope verdict
+// (7nh2), so a rule configured for "Use suite scope [defined in Target tab]" is matched against the
+// Target scope as it stands at match time.
+//
+// Installed here rather than passed in at each call site because the session package has match
+// sites of its own — HandleRecovery above all — where no scope handle is in reach, and a suite-mode
+// rule must not be unreachable from any one of them. A caller that owns a scope (the proxy's, the
+// crawler's, the CLI's) still passes its own predicate to MatchingRuleForRequest and that one wins.
+//
+// The closure reads s.scope and s.store's live scope state per request instead of capturing a copy:
+// the Target tab rewrites the scope while rules exist, and a captured verdict is the divergence
+// between what session handling matched and what the Scope tab shows.
+func (s *Server) installSuiteScopePredicate() {
+	if s.sessionCoordinator == nil {
+		return
+	}
+	s.sessionCoordinator.SetSuiteScopePredicate(func(req session.RequestIdentity) bool {
+		if s.scope == nil {
+			// No Target scope handle at all, so there is no suite verdict to give. Refusing keeps
+			// suite mode from collapsing into "everything" in a process that has no scope to
+			// consult — the one reading that would fire a login macro at an arbitrary host.
+			// (An empty *scope*, by contrast, is this codebase's documented default-allow and
+			// answers true through Contains below, exactly as every other scope gate reads it.)
+			return false
+		}
+		return s.scope.Contains(req.Host, req.Port, req.Path, req.TLS)
+	})
 }
 
 // WithMatchReplace sets the match/replace rule set.
@@ -705,6 +912,13 @@ func (s *Server) WithMatchReplace(mr *matchreplace.RuleSet) *Server {
 // WithToolLog sets the tool log.
 func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 	s.toolLog = tl
+	// The capture filter's ScopeOnly axis is answered by the engagement scope, so the log needs a
+	// reference to it. Without this the switch was accepted and stored and then filtered nothing
+	// (burpsy-react-ui-72k9). Guarded: tests build servers with a nil scope, and a nil scope must
+	// leave the switch inert rather than panic the constructor.
+	if s.scope != nil {
+		tl.SetScope(s.scope)
+	}
 	s.followLive()
 	return s
 }
@@ -712,7 +926,16 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 func (s *Server) setupRoutes() {
 	// Capture + stats
 	s.mux.HandleFunc("/api/history", s.handleHistory)
+	// Import HAR (eyi1): bring traffic captured elsewhere into history without re-proxying it live.
+	s.mux.HandleFunc("/api/history/import/har", s.handleHistoryImportHar)
+	// Custom extractor columns (burpsy-react-ui-28n8): the saved definitions, and their values for a
+	// page of rows.
+	s.mux.HandleFunc("/api/history/extractors", s.handleHistoryExtractors)
+	s.mux.HandleFunc("/api/history/extract", s.handleHistoryExtract)
 	s.mux.HandleFunc("/api/message/", s.handleMessage)
+	// Burp's suite-wide Search dialog (vs9k): the one search that crosses tools, run over the
+	// store because the history rows the console holds carry no bytes to search. See api_search.go.
+	s.mux.HandleFunc("/api/search", s.handleSearch)
 	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
 	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
 	s.mux.HandleFunc("/api/stats", s.handleStats)
@@ -722,27 +945,92 @@ func (s *Server) setupRoutes() {
 	// The operator's own CA — W6 #10. GET reports which CA signs; the import replaces it and empties
 	// the leaf cache. See api_ca.go.
 	s.mux.HandleFunc("/api/backup", s.handleBackup)
+	// The automatic-backup setting — interval schedule and delete-on-clean-shutdown (jkvb). See
+	// api_backup_config.go.
+	s.mux.HandleFunc("/api/backup/config", s.handleBackupConfig)
 	s.mux.HandleFunc("/api/headers/uninteresting", s.handleUninterestingHeaders)
 	s.mux.HandleFunc("/api/proxy/ca", s.handleCAStatus)
 	s.mux.HandleFunc("/api/proxy/ca/import", s.handleCAImport)
+	s.mux.HandleFunc("/api/proxy/ca/regenerate", s.handleCARegenerate)
+	// Burp's "Open browser" (burpsy-react-ui-bufa): a Chromium pre-wired to a live listener and pinned
+	// to burpsy's CA, its settings, and Burp's "Clear all browser data". See api_browser.go.
+	s.mux.HandleFunc("/api/browser/launch", s.handleBrowserLaunch)
+	s.mux.HandleFunc("/api/browser/settings", s.handleBrowserSettings)
+	s.mux.HandleFunc("/api/browser/clear", s.handleBrowserClear)
+	// Export the CA certificate, private key or a PKCS#12 pair (burpsy-react-ui-j92x) so another tool
+	// can intercept with the same CA. Behind the confirmation gate: see api_ca_export.go.
+	s.mux.HandleFunc("/api/proxy/ca/export", s.handleCAExport)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
 	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)
 	s.mux.HandleFunc("/api/issues", s.handleIssues)
+	// Record an issue (burpsy-react-ui-4qqz): the operator's hand-recorded finding, attached to
+	// one exchange. ServeMux resolves the subtree /api/issues/{id} longest-prefix, so 'record'
+	// would be swallowed by the id path if it matched an id shape — it does not (it is not
+	// numeric), but registering it explicitly keeps handleIssueByID's numeric-only guard honest.
+	s.mux.HandleFunc("/api/issues/record", s.handleIssueRecord)
+	s.mux.HandleFunc("/api/issues/consolidation", s.handleIssueConsolidation)
+	s.mux.HandleFunc("/api/scanner/secrets", s.handleScannerSecrets)
+	s.mux.HandleFunc("/api/dominvader", s.handleDomInvader)
+	s.mux.HandleFunc("/api/dominvader/hit", s.handleDomInvaderHit)
+	s.mux.HandleFunc("/api/dominvader/hits", s.handleDomInvaderHits)
+	s.mux.HandleFunc("/api/protobuf/decode", s.handleProtobufDecode)
+	s.mux.HandleFunc("/api/protobuf/encode", s.handleProtobufEncode)
+	s.mux.HandleFunc("/api/authz/identities", s.handleAuthzIdentities)
+	s.mux.HandleFunc("/api/authz/test", s.handleAuthzTest)
+	// The write path for the same resource: operator triage and delete, per finding. Registered as a
+	// subtree because "/api/issues" above takes the exact match; ServeMux resolves /api/issues/{id}
+	// here without ambiguity.
+	s.mux.HandleFunc("/api/issues/", s.handleIssueByID)
+	// The LLM second look (ei0v): the pass over gated findings, and its settings door. The
+	// /api/issues/triage exact pattern outranks the {id} subtree above it, so "triage" is
+	// never mistaken for an issue id.
+	s.mux.HandleFunc("/api/issues/triage", s.handleIssueTriageRun)
+	s.mux.HandleFunc("/api/settings/triage", s.handleTriageSettings)
 	s.mux.HandleFunc("/api/findings", s.handleFindings) // legacy alias for /api/issues
 	// The issue-definition catalogue, independent of whether anything was found. Two patterns because
 	// they are two operations on two shapes: the exact path lists index rows, the subtree serves one
 	// definition in full. ServeMux picks the longest match regardless of registration order.
 	s.mux.HandleFunc("/api/advisories", s.handleAdvisories)
 	s.mux.HandleFunc("/api/advisories/", s.handleAdvisoryDetail)
+	// Engagement tools over the site map (burpsy-react-ui-1s07): Find comments, Find scripts
+	// and Find references, Burp's three site-map searches, computed over stored responses.
+	// One subtree pattern because the kind IS the path's last segment.
+	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
+	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
+	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
+	s.mux.HandleFunc("/api/exchange/in-browser/", s.handleExchangeInBrowserByID)
 
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
+	s.mux.HandleFunc("/api/repeater/ws-send", s.handleRepeaterWsSend)
+	s.mux.HandleFunc("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
+	// The re-issue fetch is served outside /api on purpose: it is the URL the operator's
+	// browser opens, and a URL the operator types should not look like a console API route.
+	// It is registered last so it cannot shadow an /api path, and its handler spends a token
+	// before anything else, so nothing here is reachable without one (burpsy-react-ui-7rk0).
+	s.mux.HandleFunc("/reissue/", s.handleBrowserReissueFetch)
+	// Send a whole tab group: in tab order on one shared socket, in tab order on separate
+	// connections, or all at once. See api_repeater_group.go — the shared-socket mode is the first
+	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a
+	// smuggling or desync test performable from Repeater at all.
+	s.mux.HandleFunc("/api/repeater/send-group", s.handleRepeaterSendGroup)
 	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
 	s.mux.HandleFunc("/api/protocols", s.handleProtocols)
+	// The Project menu's two reads (burpsy-react-ui-je3y): which project this instance is —
+	// name, -db path, whether anything is durable at all — and the name's write. Burp has a
+	// whole Project container; burpsy's project IS the database file, so the readout names the
+	// file and the menu's other items hang off what it reports.
+	s.mux.HandleFunc("/api/project", s.handleProject)
+	s.mux.HandleFunc("/api/project/name", s.handleProjectName)
+	// In-console open/switch (burpsy-react-ui-dlw2): the front half je3y had to decline. The switch
+	// re-runs the one-time restore against the new file and re-points every sink — see
+	// api_project_open.go for why it is not a pointer swap.
+	s.mux.HandleFunc("/api/project/open", s.handleProjectOpen)
+	s.mux.HandleFunc("/api/projects", s.handleProjectList)
 	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
@@ -753,6 +1041,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
+	// The Custom scan checks leaf (burpsy-react-ui-kdqj): the corpus as rows, and the per-row switch
+	// the audit engine reads.
+	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
+	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two
@@ -762,8 +1054,15 @@ func (s *Server) setupRoutes() {
 	// unrelated routes despite the shared prefix.
 	s.mux.HandleFunc("/api/scanner/audit-items", s.handleScannerAuditItems)
 	s.mux.HandleFunc("/api/scanner/audit-items/", s.handleScannerAuditItemAction)
+	// Registered as a literal pattern as well as living under the /api/audit/ subtree: net/http's mux
+	// prefers the more specific pattern, so this wins over the subtree and does not have to be special
+	// cased inside handleAuditByPath — where a bare ParseUint failure on "selected" would answer 400
+	// "Invalid exchange id" for a request that names no id at all.
+	s.mux.HandleFunc("/api/audit/selected", s.handleAuditSelected)
 	s.mux.HandleFunc("/api/audit/", s.handleAuditByPath)
 	s.mux.HandleFunc("/api/sequencer/analyse", s.handleSequencerAnalyse)
+	// Burp's Sequencer Analysis Settings — the ten sequencer.* keys (burpsy-react-ui-nm81).
+	s.mux.HandleFunc("/api/sequencer/settings", s.handleSequencerSettings)
 	// Two patterns, because they are two operations: the exact path starts a capture, the subtree
 	// reads one and stops one. Registered exact-first for readability only — ServeMux picks the
 	// longest matching pattern regardless of registration order.
@@ -776,6 +1075,13 @@ func (s *Server) setupRoutes() {
 	// is only whether the operator asked for the read now, and a caller should not have to reconcile
 	// two views of one channel. See api_collaborator.go on why none of the GETs can register a channel.
 	s.mux.HandleFunc("/api/collaborator/interaction/", s.handleCollaboratorInteraction)
+	// The intruder payload upload (016): an operator's wordlist arrives as the body and lands
+	// in burpsy's upload directory; the response names the path the ordinary file payload
+	// source resolves. A POST because it stores state.
+	s.mux.HandleFunc("/api/intruder/payload-files", s.handleIntruderPayloadUpload)
+	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
+	// uploaded — so Intruder's file source and content discovery both point once.
+	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)
@@ -788,7 +1094,21 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
 	s.mux.HandleFunc("/api/session/rules/", s.handleSessionRuleDetail)
 	s.mux.HandleFunc("/api/session/cookies", s.handleSessionCookies)
+	// The session-handling tracer (burpsy-react-ui-n29): one subtree serving the entries and
+	// the enable toggle, the same one-door shape the jar's reads and writes hold.
+	s.mux.HandleFunc("/api/session/trace", s.handleSessionTrace)
+	s.mux.HandleFunc("/api/session/trace/enable", s.handleSessionTrace)
 	s.mux.HandleFunc("/api/session/login", s.handleSessionLogin)
+	// The macro recorder: turns selected Proxy-history rows into macro steps (burpsy-react-ui-escl).
+	// Bare POST, under /api/session/ but deliberately not under /api/session/rules/: it neither reads
+	// nor writes a rule, it converts messages, and parking it under the rules subtree would make it
+	// inherit the credential risk class it does not deserve.
+	s.mux.HandleFunc("/api/session/macro-steps", s.handleSessionMacroSteps)
+	// The browser-recovery prompt registry (burpsy-react-ui-dq1g): the exact pattern reads the
+	// pending list, the subtree resolves one. A task blocked on the prompt waits on the seam until
+	// the operator answers here — see session_prompts.go.
+	s.mux.HandleFunc("/api/session/prompts", s.handleSessionPrompts)
+	s.mux.HandleFunc("/api/session/prompts/", s.handleSessionPromptResolve)
 
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
@@ -799,6 +1119,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/intercept", s.handleIntercept)
 	s.mux.HandleFunc("/api/proxy/passthrough", s.handleTlsPassthrough)
 	s.mux.HandleFunc("/api/proxy/options", s.handleProxyOptions)
+	s.mux.HandleFunc("/api/proxy/listener", s.handleProxyListener)
 
 	// Network settings — resolution, timeouts, redirects, 100-continue, open-ended responses. Not
 	// under /api/proxy/: these bind the sender every request-originating surface sends through, so a
@@ -816,10 +1137,24 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/schedules/", s.handleScheduleDetail)
 	s.mux.HandleFunc("/api/intercept/enable", s.handleInterceptEnable)
 	s.mux.HandleFunc("/api/intercept/in-scope-only", s.handleInterceptInScopeOnly)
+
+	// Burp's two newline corrections for an EDITED interception (80tg). riskLocal: they rewrite the
+	// bytes the operator is about to send, and the whole point of the feature is that the operator
+	// chose to. The wire route above is the same shape, so this one is classified the same way.
+	s.mux.HandleFunc("/api/intercept/newline-correction", s.handleInterceptNewlineCorrection)
 	s.mux.HandleFunc("/api/scanner/passive-branch", s.handlePassiveBranch)
 	s.mux.HandleFunc("/api/intercept/forward-all", s.handleInterceptForwardAll)
 	s.mux.HandleFunc("/api/intercept/drop-all", s.handleInterceptDropAll)
 	s.mux.HandleFunc("/api/intercept/rules/", s.handleInterceptRules)
+	// The held queue's annotate write: /api/intercept/annotate/{id}, its own exact-subtree
+	// handler. "annotate" is not an id shape, so it cannot collide with the held queue's
+	// /api/intercept/{id} resolution paths below.
+	s.mux.HandleFunc("/api/intercept/annotate/", s.handleInterceptAnnotate)
+	// The startup preference (burpsy-react-ui-7vy): what the intercept switch reads at server
+	// start. GET answers it; POST writes it. Its own route rather than a field on /enable for
+	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
+	// startup preference would let a caller set one and silently send the other.
+	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).
@@ -829,6 +1164,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is
+	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
+	// api_apiscan.go's package comment for why there is one read door and not two.
+	s.mux.HandleFunc("/api/apiscan", s.handleAPIScan)
 	// Content discovery: Burp's "Discover content" engagement tool, delegated to ffuf. Registered
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.
@@ -843,6 +1182,9 @@ func (s *Server) setupRoutes() {
 	// Dashboard: running tasks, the activity log, and every summary count with its
 	// found/skipped/errored/gated breakdown.
 	s.mux.HandleFunc("/api/dashboard", s.handleDashboard)
+	// DELETE clears the event log the dashboard reads (Burp's "Clear event log"). Its own route, not
+	// a verb on /api/dashboard, so a DELETE names the one list it discards rather than the aggregate.
+	s.mux.HandleFunc("/api/dashboard/events", s.handleDashboardEvents)
 
 	// Live change events: the stream that replaced the UI's polling, plus its own honest counters.
 	s.mux.HandleFunc("/api/events", s.handleEvents)
@@ -856,7 +1198,21 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/tools/encode", s.handleToolsEncode)
 	s.mux.HandleFunc("/api/tools/hash", s.handleToolsHash)
 	s.mux.HandleFunc("/api/tools/compare", s.handleToolsCompare)
+	// Compare site maps (burpsy-react-ui-k3a7): the path-set diff between two runs. Registered
+	// beside the byte Comparer because it is the same engagement decision — "what changed between
+	// these two things I captured" — at site-map granularity.
+	s.mux.HandleFunc("/api/tools/compare-sitemaps", s.handleToolsCompareSitemaps)
+	// PATCH /api/tools/log/{id} — the log comment/highlight write path. Registered as a subtree
+	// because "/api/tools/log" above takes the exact match; without this line toolLogSetComment was
+	// defined, declared in the manifest and reachable by nothing (burpsy-react-ui-5da).
+	s.mux.HandleFunc("/api/tools/log/", s.toolLogSetComment)
 	s.mux.HandleFunc("/api/tools/organizer", s.handleOrganizer)
+	// Collections before the item subtree: ServeMux prefers the longer pattern, so /collections and
+	// /collections/{id}/... reach handleOrganizerCollections while /{id} still reaches the item
+	// handler. Registering only the item subtree is what made every collections call answer
+	// "Invalid item id" (burpsy-react-ui-dcr).
+	s.mux.HandleFunc("/api/tools/organizer/collections", s.handleOrganizerCollections)
+	s.mux.HandleFunc("/api/tools/organizer/collections/", s.handleOrganizerCollections)
 	s.mux.HandleFunc("/api/tools/organizer/", s.handleOrganizerItem)
 
 	// WebSocket capture surface. The parenthetical here used to read "empty while the Go proxy has no
@@ -878,6 +1234,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/extensions/console", s.handleExtensionConsole)
 	s.mux.HandleFunc("/api/extensions/invoke", s.handleExtensionInvoke)
 	s.mux.HandleFunc("/api/extensions/load", s.handleExtensionLoad)
+	s.mux.HandleFunc("/api/extensions/order", s.handleExtensionOrder)
 	s.mux.HandleFunc("/api/extensions/unload", s.handleExtensionUnload)
 
 	// Scanner report export: /api/report/{json|sarif|html}
@@ -885,16 +1242,99 @@ func (s *Server) setupRoutes() {
 
 	// UI route
 	s.mux.HandleFunc("/", s.handleUI)
+
+	// The cross-site gate, installed over the finished mux (burpsy-react-ui-s19k). LAST, so it wraps
+	// every route above and a route added after this line cannot be registered outside it — which is
+	// the failure mode a per-handler check would have, and the reason a new handler's author has to
+	// remember nothing.
+	//
+	// Here rather than in ListenAndServe because every test in this package drives s.mux.ServeHTTP
+	// directly: a gate in the listener would be exercised by nothing and verified by nothing, and a
+	// security control the suite cannot see is a comment rather than a control.
+	// The unattended-caller gate (burpsy-react-ui-ejp5), inside the cross-site gate. Order matters:
+	// sameOrigin first because a cross-site request should be refused for being cross-site whatever
+	// it was trying to do, and the confirmation gate is a different question about a different kind
+	// of caller.
+	// The confirmation gate, and the cross-site gate it sits inside. Order is the whole argument:
+	// sameOrigin is the OUTER one, so a cross-site request is refused for being cross-site and never
+	// reaches the authorisation check at all. In the other order a cross-site caller got a 428
+	// naming the route and the header to try — which tells an attacker probing the control exactly
+	// what to send next, and means a request from a hostile page got as far as asking for
+	// permission.
+	//
+	// s.registerConfirmationRoutes is called from here but lives in confirm_gate.go, because the
+	// mint patterns are DERIVED from the manifest and the route-manifest test refuses a
+	// non-literal HandleFunc argument in this file. The test is right to refuse it: a variable
+	// pattern is invisible to the manifest. The mint endpoints are not manifest routes — they are
+	// served by a separate mux and deliberately outside the manifest's remit — so the honest fix is
+	// to keep them out of this file rather than to weaken the test.
+	s.confirmMux = s.registerConfirmationRoutes()
+	s.guarded = s.sameOriginOnly(s.confirmationGate(s.mux, s.confirmMux))
+}
+
+// gatedRoutePatterns is every manifest pattern whose risk class needs confirmation.
+//
+// Derived from the manifest rather than listed, because a list is a second statement of the policy
+// and this file already exists to make the gate one derivation. The `/` root is excluded because it
+// is an asset route and a subtree confirm endpoint under it would shadow every other pattern.
+func gatedRoutePatterns() []string {
+	var out []string
+	for pattern, r := range manifest {
+		if pattern == "/" || !needsConfirmation(r.risk) {
+			continue
+		}
+		// A subtree pattern (trailing slash) already matches, so its own path is reachable through
+		// it. An exact pattern is not, and the gate resolves it as written.
+		out = append(out, pattern)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameOriginOnly wraps h so a mutating request that did not come from this console is refused.
+//
+// The name says what it does and the body says why: the console has no authentication, it is a tool
+// that sends attacks, and it binds to loopback — which stops other hosts and not the operator's own
+// browser, which visits hostile targets all day. See api_sameorigin.go for the three checks, the
+// rebinding case each one covers, and the token that is deliberately not implemented here.
+func (s *Server) sameOriginOnly(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireSameOrigin(w, r) {
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// WithAllowedHosts names the Host header values this console answers to for mutating requests.
+//
+// Required for a non-loopback bind: `-web 0.0.0.0:8081` puts the console on the network, and a
+// cross-site gate that only accepts loopback would refuse the operator's own browser along with
+// everything else. Naming the address is the deliberate step; not naming it keeps the default, which
+// is the safe one.
+func (s *Server) WithAllowedHosts(hosts ...string) *Server {
+	if s.allowedHosts == nil {
+		s.allowedHosts = make(map[string]bool, len(hosts))
+	}
+	for _, h := range hosts {
+		if h = strings.TrimSpace(h); h != "" {
+			s.allowedHosts[h] = true
+		}
+	}
+	return s
 }
 
 // ListenAndServe starts the web server.
 func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
+	// Remember the bound address so the DOM auditor can tell its extension where to report
+	// (burpsy-react-ui-wl94). A wildcard or empty host is normalised to loopback by domInvaderReportURL.
+	s.webAddr = addr
 	// Cap every request body so a single oversized POST cannot exhaust memory.
 	// The API is operator-facing and loopback-bound, but a body limit is cheap
 	// insurance and the right default for any server that reads JSON into structs.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-		s.mux.ServeHTTP(w, r)
+		s.guarded.ServeHTTP(w, r)
 	})
 	server := &http.Server{
 		Addr:    addr,

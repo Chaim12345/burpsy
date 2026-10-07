@@ -36,7 +36,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 )
@@ -199,10 +198,23 @@ type auditItemCaveatsView struct {
 	// about that point specifically, because this engine keys one unit per request for both
 	// insertion-point scopes.
 	PointGranularity string `json:"point_granularity"`
-	// MaxInsertionPointsPerRequest is the enumerator's ceiling — the threshold behind every point
-	// counted in insertion_points_skipped_at_limit.
-	MaxInsertionPointsPerRequest int `json:"max_insertion_points_per_request"`
+	// MaxInsertionPointsPerRequest and NestedInsertionPoints are the two
+	// `scanner/misc_insertion_point_options/*` settings the server's DEFAULT configuration carries.
+	//
+	// Queue-wide, so they are the default and not any one run's answer: an audit launched under a
+	// named configuration can use different ones, and each item's own `breakers` block records what
+	// that item was actually audited under. PerRunNote says so rather than leaving a reader to
+	// assume the number here applied to every row.
+	MaxInsertionPointsPerRequest int  `json:"max_insertion_points_per_request"`
+	NestedInsertionPoints        bool `json:"nested_insertion_points"`
+	// PerRunNote points at the per-item record, because these two values used to be reported here as
+	// engine constants while a run could not change them. Now it can.
+	PerRunNote string `json:"per_run_note"`
 }
+
+const auditItemPerRunNote = "these two values are the server's default configuration; an audit " +
+	"launched under a named scan configuration may use different ones, and each item's own breakers " +
+	"block records the ceiling and the nested-points setting that item was audited under"
 
 const auditItemPointGranularity = "This engine keys one dispatch unit per request for both " +
 	"insertion-point scopes, because a check's own run walks every point of that request internally. " +
@@ -234,6 +246,9 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 		}
 		limit = n
 	}
+	// The server's own default, so the caveats block reports what an unnamed audit would run under
+	// rather than three engine constants that a configuration can now move.
+	base := s.auditBaseConfig()
 	items := s.auditItems.Items(limit)
 	stats := s.auditItems.Stats()
 	view := auditItemsView{
@@ -249,9 +264,11 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 			NotModelled:          scanner.BurpStatusesNotModelled,
 		},
 		Caveats: auditItemCaveatsView{
-			InsertionPointKinds:          scanner.DefaultProbeInsertionKinds,
+			InsertionPointKinds:          base.InsertionKindsOrDefault(),
 			PointGranularity:             auditItemPointGranularity,
-			MaxInsertionPointsPerRequest: bcheck.DefaultMaxInsertionPoints,
+			MaxInsertionPointsPerRequest: base.MaxInsertionPointsPerBaseRequest(),
+			NestedInsertionPoints:        base.NestedInsertionPointsEnabled(),
+			PerRunNote:                   auditItemPerRunNote,
 		},
 	}
 	// An empty array is a real answer and gets a reason, so "nothing has been audited" is
@@ -267,6 +284,48 @@ func (s *Server) handleScannerAuditItems(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(view)
+}
+
+// cancelAuditItem serves POST /api/scanner/audit-items/{id}/cancel — Burp's
+// `auditItemContextMenuCancel` (running-scans/results/audit-items/index.html:102-115).
+//
+// It stops ONE item and nothing else, which is the whole reason it exists: the alternatives are
+// waiting for a slow or heavily-guarded URL to exhaust its own bounds, or disabling the enclosing
+// live task, which stops every item including the ones that were fine. A crawler that reached one
+// bad URL holds a slot and a thread until its budget runs out, and the queue had no way to reclaim
+// just that one (burpsy-react-ui-exiu).
+//
+// Not an attack, so it is not routed through runAudit and needs no config: it sends nothing. The
+// method check comes after the id parse for the same reason the sibling action's does — a URL that
+// names nothing should say so rather than answer "wrong verb".
+//
+// A refusal is a 409 with the reason, not a 400: the request was well-formed and the item simply is
+// not in a state that can be cancelled. Collapsing "no such item" and "this item already finished"
+// into one answer would leave the operator unable to tell a stale row from a live one.
+func (s *Server) cancelAuditItem(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// err != nil only, for the reason handleScannerAuditItemAction states: ids count from zero, so
+	// refusing 0 would make the very first capture the one row that cannot be cancelled.
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid exchange id", http.StatusBadRequest)
+		return
+	}
+	ok, reason := s.auditItems.Cancel(core.ExchangeID(id))
+	if !ok {
+		// 409, not 404 and not 400: the request was well-formed and the item exists, it is simply not
+		// in a state that can be cancelled. The reason distinguishes "no such item" from "this one
+		// already finished", which an operator needs to tell a stale row from a live one.
+		http.Error(w, reason, http.StatusConflict)
+		return
+	}
+	// The refreshed row, so a client does not have to re-list to see the cancel it just caused — the
+	// same contract the sibling action keeps.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"status": "ok", "reason": reason, "item": s.auditItemRow(core.ExchangeID(id))})
 }
 
 // handleScannerAuditItemAction serves POST /api/scanner/audit-items/{id}/again — Burp's
@@ -287,9 +346,14 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 	// The path is resolved before the method is checked, so a bogus segment answers 404 "no such
 	// action" whatever the verb — a truer answer than "wrong verb" for a URL that names nothing. The
 	// route manifest marks this pathValidatedFirst so its 405 test sends a valid segment.
-	if !ok || action != "again" {
-		http.Error(w, "no such audit-item action; the only one is POST /api/scanner/audit-items/{id}/again",
+	if !ok || (action != "again" && action != "cancel") {
+		http.Error(w, "no such audit-item action; the two are POST /api/scanner/audit-items/{id}/again "+
+			"and POST /api/scanner/audit-items/{id}/cancel",
 			http.StatusNotFound)
+		return
+	}
+	if action == "cancel" {
+		s.cancelAuditItem(w, r, idStr)
 		return
 	}
 	// `err != nil` only. Exchange ids are a dense counter from zero, so 0 names the first capture of
@@ -311,12 +375,12 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	cfg, named, cerr := s.resolveAuditConfig(req.Config)
+	cfg, named, unapplied, cerr := s.resolveAuditConfig(req.Config)
 	if cerr != nil {
 		http.Error(w, cerr.Error(), http.StatusBadRequest)
 		return
 	}
-	body := s.runAudit(r.Context(), core.ExchangeID(id), cfg, named)
+	body := s.runAudit(r.Context(), core.ExchangeID(id), cfg, named, unapplied)
 	// The refreshed queue row, so a client does not have to re-list to see the attempt it just caused.
 	// Nil rather than an invented row when the ledger has already evicted it — which a cap of 500 and
 	// a busy sweep make possible in principle — because a fabricated row would misreport the state of
@@ -350,7 +414,15 @@ func (s *Server) auditItemRow(id core.ExchangeID) *scanner.AuditItem {
 // forgot the field would run correctly and simply never appear in the queue, and a queue missing the
 // audits from one entry point is worse than no queue at all — it reads as "nothing audited that
 // exchange".
+//
+// The exception is the configuration that asks not to be queued — Burp's
+// `scanner/issues_reported/store_issues_within_queue_items` set to false. The engine never builds
+// the queue itself, so "the caller may attach it" is the only enforcement point the key has; a
+// configuration that set it false skips the attachment without any other behaviour changing.
 func (s *Server) withAuditItems(cfg scanner.AuditConfig) scanner.AuditConfig {
+	if cfg.StoreQueueItems.Set && cfg.StoreQueueItems.Value == 0 {
+		return cfg
+	}
 	cfg.Items = s.auditItems
 	return cfg
 }

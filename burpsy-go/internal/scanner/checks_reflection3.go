@@ -242,10 +242,10 @@ func checkASPTracingEnabled(ctx context.Context, cc *CheckContext) ([]*Finding, 
 // ResponseDependenceCheckDescriptors returns the five native checks this file owns.
 func ResponseDependenceCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
-		nativeDescriptor(backupFileIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkBackupFile),
-		nativeDescriptor(userAgentDependentIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkUserAgentDependentResponse),
-		nativeDescriptor(refererDependentIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkRefererDependentResponse),
-		nativeDescriptor(aspDebuggingIssue, DispatchScopePerHost, responseDependenceChecksEnabled, checkASPDebuggingEnabled),
-		nativeDescriptor(aspTracingIssue, DispatchScopePerHost, responseDependenceChecksEnabled, checkASPTracingEnabled),
+		mediumDescriptor(backupFileIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkBackupFile),
+		mediumDescriptor(userAgentDependentIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkUserAgentDependentResponse),
+		mediumDescriptor(refererDependentIssue, DispatchScopePerUrl, responseDependenceChecksEnabled, checkRefererDependentResponse),
+		mediumDescriptor(aspDebuggingIssue, DispatchScopePerHost, responseDependenceChecksEnabled, checkASPDebuggingEnabled),
+		mediumDescriptor(aspTracingIssue, DispatchScopePerHost, responseDependenceChecksEnabled, checkASPTracingEnabled),
 	}
 }

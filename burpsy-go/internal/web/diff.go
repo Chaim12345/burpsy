@@ -197,12 +197,16 @@ const (
 // myers computes a shortest edit script between a and b, or ok=false when the edit distance exceeds
 // maxD.
 //
+// Generic in the element type so the same alignment serves bytes and words (burpsy-react-ui byte
+// granularity vs Burp's "Word compare"): the algorithm only ever asks whether two elements are
+// equal, so a []string of token texts runs through it unchanged.
+//
 // This is Myers' 1986 algorithm in its standard forward form: for each edit distance d, track the
 // furthest-reaching path on each diagonal k, and keep every generation of that array (the "trace")
 // so the script can be walked back once the end is reached.
 //
 // The trace is the memory cost — O(D²) ints — which is the other reason maxD exists.
-func myers(a, b []byte, maxD int) ([]diffStep, bool) {
+func myers[T comparable](a, b []T, maxD int) ([]diffStep, bool) {
 	n, m := len(a), len(b)
 	if total := n + m; maxD > total {
 		maxD = total
@@ -250,7 +254,7 @@ func myers(a, b []byte, maxD int) ([]diffStep, bool) {
 }
 
 // backtrack walks the trace from the end back to the origin, producing the edit script forwards.
-func backtrack(a, b []byte, trace [][]int, offset int) []diffStep {
+func backtrack[T comparable](a, b []T, trace [][]int, offset int) []diffStep {
 	var reversed []diffStep
 	x, y := len(a), len(b)
 
@@ -297,4 +301,185 @@ func backtrack(a, b []byte, trace [][]int, offset int) []diffStep {
 		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
 	return reversed
+}
+
+// diffWord is one comparable unit of a word-level comparison: its text, and where it sits in its own
+// input so the resulting ops can still address bytes.
+type diffWord struct {
+	text       string
+	start, end int
+}
+
+// diffWords aligns a and b on words and returns ops whose offsets are still byte offsets into the
+// two inputs, so the console's highlighter needs no notion of granularity.
+//
+// Burp's Comparer offers "Word compare" beside its byte compare, and the difference is not cosmetic:
+// two responses that differ by one word share almost no bytes after the edit, so a byte diff reports
+// a long replace where a word diff reports one word. On HTML the effect is stark — a changed
+// attribute value turns into a replace of everything after it.
+//
+// Tokenising is deliberately simple and stated rather than clever: a run of word characters
+// (letters, digits, underscore, and any byte above ASCII so UTF-8 stays inside one token), a run of
+// whitespace, or a single other character. Punctuation therefore aligns one character at a time,
+// which is what makes `="a"` against `="b"` report the `a` and the `b` rather than the whole
+// attribute. Nothing is normalised: case, encoding and whitespace differences are differences.
+func diffWords(a, b []byte) diffResult {
+	wa := tokeniseWords(a)
+	wb := tokeniseWords(b)
+
+	textA := make([]string, len(wa))
+	for i, w := range wa {
+		textA[i] = w.text
+	}
+	textB := make([]string, len(wb))
+	for i, w := range wb {
+		textB[i] = w.text
+	}
+
+	// Shared prefix and suffix, on tokens rather than bytes.
+	prefix := 0
+	for prefix < len(textA) && prefix < len(textB) && textA[prefix] == textB[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(textA)-prefix && suffix < len(textB)-prefix &&
+		textA[len(textA)-1-suffix] == textB[len(textB)-1-suffix] {
+		suffix++
+	}
+
+	var ops []compareOp
+	emit := func(op compareOp) {
+		if n := len(ops); n > 0 && ops[n-1].Kind == op.Kind {
+			last := &ops[n-1]
+			if last.AOffset+last.ALen == op.AOffset && last.BOffset+last.BLen == op.BOffset {
+				last.ALen += op.ALen
+				last.BLen += op.BLen
+				return
+			}
+		}
+		ops = append(ops, op)
+	}
+	// equalRun emits the byte range covering a run of whole tokens on each side. The two ranges are
+	// given separately because the sides stop having the same token count as soon as they diverge:
+	// a shared *prefix* has equal counts by construction, but the shared tail sits at different
+	// indices in each input (a = `{"user":"alpha"}` and b = `{"user":""}` share eight leading tokens
+	// and two trailing ones, at indices 8..10 and 7..9).
+	equalRun := func(aFrom, aTo, bFrom, bTo int) {
+		if aTo <= aFrom || bTo <= bFrom {
+			return
+		}
+		emit(compareOp{
+			Kind:    "equal",
+			AOffset: wa[aFrom].start, ALen: wa[aTo-1].end - wa[aFrom].start,
+			BOffset: wb[bFrom].start, BLen: wb[bTo-1].end - wb[bFrom].start,
+		})
+	}
+
+	equalRun(0, prefix, 0, prefix)
+
+	truncated := false
+	switch {
+	case prefix == len(textA) && prefix == len(textB):
+		// Identical.
+	case prefix == len(textA):
+		emit(compareOp{Kind: "insert", AOffset: wa[len(wa)-1].end, ALen: 0,
+			BOffset: wb[prefix].start, BLen: wb[len(textB)-suffix-1].end - wb[prefix].start})
+	case prefix == len(textB):
+		emit(compareOp{Kind: "delete", AOffset: wa[prefix].start,
+			ALen:    wa[len(textA)-suffix-1].end - wa[prefix].start,
+			BOffset: wb[len(wb)-1].end, BLen: 0})
+	default:
+		midA := textA[prefix : len(textA)-suffix]
+		midB := textB[prefix : len(textB)-suffix]
+		script, ok := myers(midA, midB, diffMaxEditDistance)
+		if !ok {
+			truncated = true
+			emit(compareOp{
+				Kind:    "replace",
+				AOffset: wa[prefix].start, ALen: wa[len(textA)-suffix-1].end - wa[prefix].start,
+				BOffset: wb[prefix].start, BLen: wb[len(textB)-suffix-1].end - wb[prefix].start,
+			})
+			break
+		}
+		ai, bi := prefix, prefix
+		// The empty side of a delete or insert carries the *current* position on the other side,
+		// which is what diffBytes does; using the previous element's end panicked whenever the
+		// difference started at the first token (index -1), and no fixture before this one began
+		// with the change.
+		atA := func() int {
+			if ai < len(wa) {
+				return wa[ai].start
+			}
+			return wa[len(wa)-1].end
+		}
+		atB := func() int {
+			if bi < len(wb) {
+				return wb[bi].start
+			}
+			return wb[len(wb)-1].end
+		}
+		for _, step := range script {
+			switch step {
+			case diffEqual:
+				emit(compareOp{Kind: "equal",
+					AOffset: wa[ai].start, ALen: wa[ai].end - wa[ai].start,
+					BOffset: wb[bi].start, BLen: wb[bi].end - wb[bi].start})
+				ai++
+				bi++
+			case diffDelete:
+				emit(compareOp{Kind: "delete",
+					AOffset: wa[ai].start, ALen: wa[ai].end - wa[ai].start,
+					BOffset: atB(), BLen: 0})
+				ai++
+			case diffInsert:
+				emit(compareOp{Kind: "insert",
+					AOffset: atA(), ALen: 0,
+					BOffset: wb[bi].start, BLen: wb[bi].end - wb[bi].start})
+				bi++
+			}
+		}
+	}
+
+	if suffix > 0 {
+		// The shared tail is byte-for-byte identical, so its byte ranges are the tokens' — taken
+		// from each side's own end, which is why the two index pairs differ.
+		equalRun(len(textA)-suffix, len(textA), len(textB)-suffix, len(textB))
+	}
+
+	ops = foldReplacements(ops)
+	if len(ops) == 0 {
+		ops = []compareOp{{Kind: "equal"}}
+	}
+	return diffResult{Ops: ops, Truncated: truncated}
+}
+
+// tokeniseWords splits s into words, whitespace runs and single punctuation/other characters. Every
+// byte of s belongs to exactly one token, in order, so the tokens tile the input and an op built
+// from their ranges addresses the same bytes the console highlights.
+func tokeniseWords(s []byte) []diffWord {
+	var out []diffWord
+	for i := 0; i < len(s); {
+		start := i
+		switch {
+		case s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n':
+			for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n') {
+				i++
+			}
+		case isWordByte(s[i]):
+			for i < len(s) && isWordByte(s[i]) {
+				i++
+			}
+		default:
+			i++
+		}
+		out = append(out, diffWord{text: string(s[start:i]), start: start, end: i})
+	}
+	return out
+}
+
+// isWordByte reports whether c can be part of a word. Bytes above ASCII are included so a UTF-8
+// character never splits across tokens; the alternative (splitting on 0x80) would make every
+// non-ASCII letter a punctuation-sized diff.
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c >= 0x80
 }

@@ -54,7 +54,7 @@ func TestRunMacroThreadsCookiesAndExtractions(t *testing.T) {
 		t.Fatalf("second step URL = %q, want extraction applied", got)
 	}
 	// The first step's Set-Cookie must have been absorbed into the jar.
-	if cookie := c.CookieHeader("example.com", 443, true); cookie == "" {
+	if cookie := c.CookieHeader("example.com", 443, true, "/"); cookie == "" {
 		t.Fatal("expected jar to hold the absorbed session cookie")
 	}
 }

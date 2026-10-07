@@ -13,6 +13,10 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/sender"
+
+	"net/http/httptest"
+	"strings"
+	"sync"
 )
 
 // tokenServer answers every request with a Set-Cookie carrying a distinct token, and counts how many
@@ -54,6 +58,37 @@ func tokenServer(t *testing.T, setCookie func(n int) string) (host string, port 
 	}
 	p, _ := strconv.Atoi(portStr)
 	return h, uint16(p), &count
+}
+
+// The capture bound is Burp's own FIPS 140-2 sample maximum (burpsy-react-ui-vhs0): 20000
+// is the size a formally compliant live capture must be able to reach, so it is accepted;
+// past it is a typo's commitment to a million requests and is refused. Pinning both sides
+// keeps the ceiling from drifting back down — the page presents FIPS results, and a capture
+// that could not reach the compliant size would make that presentation unreachable.
+func TestTheCaptureCountBoundIsBurpsFIPSMaximum(t *testing.T) {
+	s := newTestServer()
+	target := "http://127.0.0.1:1" // never dialed: the bound is checked before any send
+	request := "GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+
+	rec := postJSON(t, s, "/api/sequencer/capture", map[string]any{
+		"target":   target,
+		"request":  request,
+		"count":    20000,
+		"location": map[string]string{"kind": "header", "name": "X-Token"},
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("count 20000 (FIPS-compliant maximum) = %d (%s), want accepted", rec.Code, rec.Body.String())
+	}
+
+	rec = postJSON(t, s, "/api/sequencer/capture", map[string]any{
+		"target":   target,
+		"request":  request,
+		"count":    20001,
+		"location": map[string]string{"kind": "header", "name": "X-Token"},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("count 20001 = %d, want 400 — past the maximum is a typo, not an ambition", rec.Code)
+	}
 }
 
 // captureServer builds a Server wired for capture: in-scope, with a real sender and a task registry.
@@ -326,10 +361,9 @@ func Test_an_unknown_capture_id_is_a_404_rather_than_an_empty_capture_HONEST_02(
 // one.
 //
 // An *excluded* host, specifically. Scope.MayContainHost is documented as a deliberately permissive
-// pre-filter (default-allow, and only a whole-host exclude flips it), so an include naming some other
-// host does not make this one impossible and the pre-filter correctly lets the capture start. That is
-// the layer this test exercises; the per-send AuthoriseRaw gate on the bytes is the other one, and it
-// is the reason the capture binds an AuthorisedSender rather than sending through s.sender directly.
+// pre-filter: a whole-host exclude is what puts a host beyond its reach — the layer this test
+// exercises — while the per-send AuthoriseRaw gate on the bytes is the other one, and it is the reason
+// the capture binds an AuthorisedSender rather than sending through s.sender directly.
 func Test_a_capture_against_an_excluded_host_is_refused(t *testing.T) {
 	host, port, hits := tokenServer(t, func(int) string { return "Set-Cookie: SESSIONID=x\r\n" })
 	scope := core.NewScope()
@@ -351,5 +385,110 @@ func Test_a_capture_against_an_excluded_host_is_refused(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if got := atomic.LoadInt64(hits); got != 0 {
 		t.Errorf("the excluded target received %d requests", got)
+	}
+}
+
+// Burp's "Ignore token whose length deviates by X characters"
+// (burpsy-react-ui-rcs): the origin alternates a 10-char token with a 40-char blob, and the
+// filter drops the blobs from the sample — counted as gated (misses) with their reason,
+// while the accepted sample stays clean.
+func TestLengthDeviationFilterDropsOutliersAndCountsThem(t *testing.T) {
+	var mu sync.Mutex
+	serial := 0
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n := serial
+		serial++
+		mu.Unlock()
+		token := strings.Repeat("a", 10)
+		if n%2 == 1 {
+			// Every second response: the application returned something else entirely.
+			token = strings.Repeat("z", 40)
+		}
+		w.Header().Set("X-Token", token)
+		w.WriteHeader(200)
+	}))
+	defer origin.Close()
+	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	port, _ := strconv.Atoi(portStr)
+
+	s := captureServer(t, host, uint16(port))
+	view := startCapture(t, s, map[string]any{
+		"target":          fmt.Sprintf("http://%s:%d", host, port),
+		"request":         fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s:%d\r\nConnection: close\r\n\r\n", host, port),
+		"count":           6,
+		"location":        map[string]string{"kind": "header", "name": "X-Token"},
+		"length_deviates": map[string]any{"enable": true, "chars": 2},
+	})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		cap := getCapture(t, s, view.ID)
+		if !cap.Capturing {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	final := getCapture(t, s, view.ID)
+	if final.Requested != 6 {
+		t.Fatalf("requested = %d, want 6", final.Requested)
+	}
+	// The 40-char blobs deviate from the 10-char average by 30 > 2, so none may survive.
+	tokens := final.Tokens
+	if tokens == nil {
+		t.Fatal("no token list on the capture view")
+	}
+	for _, tok := range tokens {
+		if len(tok) != 10 {
+			t.Errorf("token %q (len %d) survived the length-deviation filter", tok, len(tok))
+		}
+	}
+	if final.Misses == 0 {
+		t.Error("misses = 0; the dropped blobs must be counted, not silently vanished")
+	}
+}
+
+// The form-field token location (6t8): Burp's "Form field — Select an HTML form field value
+// from the drop-down list. You can use this method to transmit anti-CSRF tokens and other
+// per-page tokens to clients." The extractor parses, it does not regex — the operator picks a
+// name, and the surrounding HTML is this code's problem, not theirs.
+func TestTheFormFieldTokenLocationExtractsQuotedValues(t *testing.T) {
+	response := []byte("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n" +
+		"<html><body><form method=\"post\">" +
+		"<input type=\"hidden\" NAME=\"csrf_token\" value=\"a1b2c3d4\">" +
+		"<input type='text' name='user' value='ignored'>" +
+		"<input type=\"hidden\" name=\"empty\" value=\"\">" +
+		"</form></body></html>")
+
+	cases := []struct {
+		name    string
+		loc     tokenLocation
+		want    string
+		wantErr string
+	}{
+		{name: "double quoted, case-insensitive name", loc: tokenLocation{Kind: "form_field", Name: "CSRF_TOKEN"}, want: "a1b2c3d4"},
+		{name: "single quoted", loc: tokenLocation{Kind: "form_field", Name: "user"}, want: "ignored"},
+		{name: "absent field names itself", loc: tokenLocation{Kind: "form_field", Name: "nonce"}, wantErr: "no form field named nonce"},
+		{name: "empty value is an error, not a token", loc: tokenLocation{Kind: "form_field", Name: "empty"}, wantErr: "empty value"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.loc.compile(); err != nil {
+				t.Fatalf("compile: %v", err)
+			}
+			got, err := tc.loc.extract(response)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("extract error = %v, want it to name %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("extracted %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

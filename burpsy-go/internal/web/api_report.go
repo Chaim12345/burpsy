@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
@@ -22,49 +24,230 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	format := strings.TrimPrefix(r.URL.Path, "/api/report/")
 	format = strings.TrimSuffix(format, "/")
+
+	// finding/{id} is Burp's "Report selected issues" (issues.html:195-228) made honest: the
+	// scan-wide exports below describe findings, and a description of a finding is not evidence
+	// for it. This one carries the bytes — the request that produced the issue and the response
+	// that came back — so a single finding becomes a self-contained handoff rather than something
+	// an assessor has to reassemble by hand. The ids are already on each occurrence, so this reads
+	// messages the store holds rather than storing anything new (burpsy-react-ui-exiu).
+	if rest, ok := strings.CutPrefix(format, "finding/"); ok {
+		s.reportOneFinding(w, r, rest)
+		return
+	}
+
+	// The report honours a filter (burpsy-react-ui-8r6): severity as a comma list, host as a
+	// substring, and false positives excluded on request — the axes the Issues page already
+	// filters by, so "the High and Critical findings on this host" is the query string rather
+	// than a manual pass over the whole-store export. An unknown severity value is refused
+	// rather than ignored: a filter parameter that silently does not filter would produce a
+	// report claiming to be the filtered set while carrying everything.
+	query := r.URL.Query()
+	var filter reportFilter
+	if raw := query.Get("severity"); raw != "" {
+		// ParseSeverity coerces an unknown value to informational rather than failing, which is
+		// right for captured data and wrong for a filter: a typo would silently produce a report
+		// of only-informational findings while claiming to be the filtered set. Matched here,
+		// case-insensitively, against the values the engine can actually hold.
+		valid := map[string]core.Severity{
+			"critical": core.SeverityCritical, "high": core.SeverityHigh, "medium": core.SeverityMedium,
+			"low": core.SeverityLow, "informational": core.SeverityInformational,
+		}
+		for _, name := range strings.Split(raw, ",") {
+			sev, ok := valid[strings.ToLower(strings.TrimSpace(name))]
+			if !ok {
+				http.Error(w, "unknown severity "+strconv.Quote(name)+"; the accepted values are critical, high, medium, low, informational", http.StatusBadRequest)
+				return
+			}
+			filter.severities = append(filter.severities, sev)
+		}
+	}
+	filter.host = strings.TrimSpace(query.Get("host"))
+	filter.hideFalsePositives = query.Get("exclude_false_positives") == "true"
+
 	switch format {
 	case "json":
-		s.reportJSON(w)
+		s.reportJSON(w, filter)
 	case "sarif":
-		s.reportSARIF(w)
+		s.reportSARIF(w, filter)
 	case "html":
-		s.reportHTML(w)
+		s.reportHTML(w, filter)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
+// reportOneFinding writes one finding as a self-contained report: the same row the scan-wide export
+// would produce, plus the request and response behind each of its evidence entries.
+//
+// Only JSON. An HTML rendering would need a second renderer for a document that is one finding,
+// and a SARIF rendering of a single result is a shape no tool consumes — a file that exists because
+// the other two formats exist is not evidence, it is decoration. JSON is what an assessor scripts
+// against and what a reader can open.
+func (s *Server) reportOneFinding(w http.ResponseWriter, r *http.Request, id string) {
+	n, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		http.Error(w, "finding id must be a number", http.StatusBadRequest)
+		return
+	}
+	f, err := s.findings.Get(n)
+	if err != nil {
+		// 404 and not an empty report: "this finding produced nothing" and "this finding does not
+		// exist" are different answers, and returning an empty document for a deleted id would let
+		// a stale link read as a clean result.
+		http.Error(w, "no finding with id "+id, http.StatusNotFound)
+		return
+	}
+	row := s.reportRow(f)
+
+	out := report.FindingReport{Row: row}
+	for _, ev := range row.Evidence {
+		if !ev.HasRequest && !ev.HasResponse {
+			// An evidence entry with no message ids is a location the store could not resolve to
+			// bytes, and saying so beats emitting a message list that looks complete.
+			out.MessagesOmitted++
+			continue
+		}
+		if ev.HasRequest {
+			out.Messages = appendOrOmit(out.Messages, &out.MessagesOmitted, report.Message{
+				ID: ev.RequestMsgID, Raw: s.messageText(ev.RequestMsgID),
+			})
+		}
+		if ev.HasResponse {
+			out.Messages = appendOrOmit(out.Messages, &out.MessagesOmitted, report.Message{
+				ID: ev.ResponseMsgID, Raw: s.messageText(ev.ResponseMsgID),
+			})
+		}
+	}
+	body, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-finding-`+id+`.json"`)
+	w.Write(body)
+}
+
+// messageText is one stored message's bytes as text, or "" when the store cannot produce it.
+//
+// The same accessor /api/message/{id} uses, deliberately: two ways to read a message is how a
+// single-finding report ends up carrying something the console's own viewer would not show. A
+// message whose bytes cannot be read — evicted from the capture, or an id the store does not
+// hold — comes back empty here and is counted by the caller rather than being emitted as an
+// empty message, which would read as "the request had no content".
+func (s *Server) messageText(id uint64) string {
+	msg, err := s.message(id)
+	if err != nil {
+		return ""
+	}
+	return string(msg.Raw())
+}
+
+// appendOrOmit adds a message when it has bytes, and counts it as omitted when it does not.
+//
+// The split is the point: a report that silently drops unreadable evidence reads as "there was no
+// request", which is a claim about the target rather than about the capture, and the two lead an
+// assessor to opposite conclusions.
+func appendOrOmit(messages []report.Message, omitted *int, m report.Message) []report.Message {
+	if m.Raw == "" {
+		*omitted++
+		return messages
+	}
+	return append(messages, m)
+}
+
+// reportFilter is the subset the export carries, decoded from the query string. Zero value
+// means no constraint — the whole store, exactly what the unparameterised URL always meant.
+type reportFilter struct {
+	severities         []core.Severity
+	host               string
+	hideFalsePositives bool
+}
+
+// applies says whether one finding survives the filter. Every axis is a keep-if-match; an
+// empty axis never constrains.
+func (f reportFilter) applies(finding *core.Finding, hosts []string) bool {
+	if len(f.severities) > 0 {
+		kept := false
+		for _, sev := range f.severities {
+			// EffectiveSeverity, not Severity: the operator's override is the severity this
+			// finding HAS. Filtering on the engine's original dropped a finding they had just
+			// raised to Critical from a ?severity=critical export, and included it in a
+			// ?severity=low one as though the triage never happened (burpsy-react-ui-5qfr).
+			if finding.EffectiveSeverity() == sev {
+				kept = true
+				break
+			}
+		}
+		if !kept {
+			return false
+		}
+	}
+	if f.host != "" {
+		kept := false
+		for _, h := range hosts {
+			if strings.Contains(strings.ToLower(h), strings.ToLower(f.host)) {
+				kept = true
+				break
+			}
+		}
+		if !kept {
+			return false
+		}
+	}
+	if f.hideFalsePositives && finding.FalsePositive {
+		return false
+	}
+	return true
+}
+
 // reportRows turns the finding store into report rows, resolving each finding's hosts from the
-// store's exchanges (left empty rather than guessed when the store cannot resolve them).
-func (s *Server) reportRows() []report.Row {
+// store's exchanges (left empty rather than guessed when the store cannot resolve them). The
+// filter decides which findings are carried; zero value carries everything.
+func (s *Server) reportRows(filter reportFilter) []report.Row {
 	findings := s.findings.All()
 	rows := make([]report.Row, 0, len(findings))
 	for _, f := range findings {
-		row := report.Row{
-			ID:          f.ID,
-			Name:        f.Name,
-			Severity:    f.Severity.String(),
-			Confidence:  f.Confidence.String(),
-			Description: f.Description,
-			Remediation: f.Remediation,
-			Hosts:       s.findingHosts(f),
-			Occurrences: len(f.Occurrences),
-			Params:      f.Params,
-			Evidence:    s.findingEvidence(f),
+		if !filter.applies(f, s.findingHosts(f)) {
+			continue
 		}
-		// The catalogue was already resolved for /api/issues and then thrown away at the report
-		// boundary, so the exported artefact — the thing that actually leaves the tool and gets read
-		// by someone who was not driving it — carried the least context of any surface. Same resolver
-		// as the API so a finding cannot describe itself one way on screen and another in the file.
-		def, note := s.advisories.Resolve(f.Name)
-		if def != nil {
-			row.Advisory = advisoryForReport(def)
-		} else {
-			row.AdvisoryNote = note
-		}
-		rows = append(rows, row)
+		rows = append(rows, s.reportRow(f))
 	}
 	return rows
+}
+
+// reportRow builds one report row. Extracted from reportRows so the single-finding export cannot
+// drift from the scan-wide one: two builders for the same document is how "the same finding
+// describes itself differently in two exports" happens, and the advisory comment below records
+// that this already went wrong once.
+func (s *Server) reportRow(f *core.Finding) report.Row {
+	row := report.Row{
+		ID:   f.ID,
+		Name: f.Name,
+		// The same values the Issues page shows (api_capture.go's findingToIssueView), for the
+		// same reason: a report is the document the triage exists to produce, so it cannot be
+		// the one surface that ignores it.
+		Severity:    f.EffectiveSeverity().String(),
+		Confidence:  f.EffectiveConfidence().String(),
+		Description: f.Description,
+		Remediation: f.Remediation,
+		Hosts:       s.findingHosts(f),
+		Occurrences: len(f.Occurrences),
+		Params:      f.Params,
+		Evidence:    s.findingEvidence(f),
+	}
+	// The catalogue was already resolved for /api/issues and then thrown away at the report
+	// boundary, so the exported artefact — the thing that actually leaves the tool and gets read
+	// by someone who was not driving it — carried the least context of any surface. Same resolver
+	// as the API so a finding cannot describe itself one way on screen and another in the file.
+	def, note := s.advisories.Resolve(f.Name)
+	if def != nil {
+		row.Advisory = advisoryForReport(def)
+	} else {
+		row.AdvisoryNote = note
+	}
+	return row
 }
 
 // advisoryForReport converts a catalogue entry into the renderer's shape, sanitising the two HTML
@@ -97,8 +280,28 @@ func (s *Server) findingEvidence(f *core.Finding) []report.Evidence {
 	seen := map[string]bool{}
 	var out []report.Evidence
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		// The message ids come off the occurrence, NOT off the resolved exchange, and are read
+		// before the lookup. The exchange is a convenience — it supplies the human-readable method,
+		// host and path — and a convenience that is missing must not take the evidence with it: the
+		// previous shape skipped the whole entry when ExchangeByRequest failed, so a capture whose
+		// exchange had been evicted produced a report that said the finding had been seen nowhere.
+		e := report.Evidence{}
+		// Message ids, not exchange ids, and dereferenced only when present: Occurrence.Request is
+		// a *MsgId precisely because a bare zero would name the first message the project ever
+		// captured, and a finding attributed to that would point somewhere real and wrong.
+		if occ.Request != nil {
+			e.RequestMsgID, e.HasRequest = uint64(*occ.Request), true
+		}
+		if occ.Response != nil {
+			e.ResponseMsgID, e.HasResponse = uint64(*occ.Response), true
+		}
+
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err != nil {
+			// Keep the entry with its ids and no location. The bytes are still behind them, which is
+			// the part that makes this evidence rather than a claim, and the report's
+			// messages_omitted covers the unreadable case on the other side.
+			out = append(out, e)
 			continue
 		}
 		key := ex.Method + " " + ex.Host + ex.Path
@@ -106,7 +309,9 @@ func (s *Server) findingEvidence(f *core.Finding) []report.Evidence {
 			continue
 		}
 		seen[key] = true
-		e := report.Evidence{Host: ex.Host, Path: ex.Path, Method: ex.Method}
+		e.Host = ex.Host
+		e.Path = ex.Path
+		e.Method = ex.Method
 		if ex.Status != nil {
 			e.Status = int(*ex.Status)
 		}
@@ -124,7 +329,7 @@ func (s *Server) findingHosts(f *core.Finding) []string {
 	seen := map[string]bool{}
 	var hosts []string
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err != nil {
 			continue
 		}
@@ -136,8 +341,8 @@ func (s *Server) findingHosts(f *core.Finding) []string {
 	return hosts
 }
 
-func (s *Server) reportJSON(w http.ResponseWriter) {
-	doc, err := report.JSON(s.reportRows())
+func (s *Server) reportJSON(w http.ResponseWriter, filter reportFilter) {
+	doc, err := report.JSON(s.reportRows(filter))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -147,8 +352,8 @@ func (s *Server) reportJSON(w http.ResponseWriter) {
 	w.Write(doc)
 }
 
-func (s *Server) reportSARIF(w http.ResponseWriter) {
-	doc, err := report.SARIF(s.reportRows())
+func (s *Server) reportSARIF(w http.ResponseWriter, filter reportFilter) {
+	doc, err := report.SARIF(s.reportRows(filter))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -158,8 +363,8 @@ func (s *Server) reportSARIF(w http.ResponseWriter) {
 	w.Write(doc)
 }
 
-func (s *Server) reportHTML(w http.ResponseWriter) {
+func (s *Server) reportHTML(w http.ResponseWriter, filter reportFilter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-report.html"`)
-	w.Write(report.HTML(s.reportRows()))
+	w.Write(report.HTML(s.reportRows(filter)))
 }

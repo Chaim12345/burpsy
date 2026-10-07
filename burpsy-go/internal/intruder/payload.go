@@ -1,15 +1,21 @@
 package intruder
 
 import (
+	"bufio"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/burpsy-go/burpsy/internal/apidoc"
 )
 
 // Hard ceiling on a resolved payload set, whatever maxCount a caller passes.
@@ -44,6 +50,10 @@ const (
 	PayloadErrItemTooLong
 	// PayloadErrBadDate: a date that is not YYYY-MM-DD.
 	PayloadErrBadDate
+	// PayloadErrBadGrammar: a grammar_fuzz source whose grammar does not compile (parse error,
+	// undefined rule, a cycle with no terminating alternative, a capture used before it is
+	// set) or whose budget bounds are outside their allowed range. The detail is in What.
+	PayloadErrBadGrammar
 )
 
 // PayloadError carries the kind plus the fields needed to render a specific refusal.
@@ -77,6 +87,8 @@ func (e *PayloadError) Error() string {
 		return fmt.Sprintf("one payload would be %d bytes, over the %d-byte limit; refused rather than shortened", e.Len, e.Limit)
 	case PayloadErrBadDate:
 		return fmt.Sprintf("not a YYYY-MM-DD date: %q", e.Date)
+	case PayloadErrBadGrammar:
+		return fmt.Sprintf("grammar error: %s", e.What)
 	default:
 		return "unknown payload error"
 	}
@@ -186,13 +198,135 @@ type CustomIterator struct {
 type PayloadSource struct {
 	Type string `json:"type"`
 
-	List           *ListSource
-	Numbers        *Numbers
-	Dates          *Dates
-	BruteForce     *BruteForce
-	CustomIterator *CustomIterator
-	Null           *NullSource
-	File           *FileSource
+	List             *ListSource
+	Numbers          *Numbers
+	Dates            *Dates
+	BruteForce       *BruteForce
+	CustomIterator   *CustomIterator
+	Null             *NullSource
+	File             *FileSource
+	CharSubstitution *CharSubstitution
+	CaseModification *CaseModification
+	IllegalUnicode   *IllegalUnicode
+	CharacterBlocks  *CharacterBlocks
+	// CharacterFrobber is Burp's Character frobber, which walks each character position of an input
+	// value through an alphabet. It is NOT the same generator as CharacterBlocks, which cycles an
+	// alphabet to fill repeated blocks of a chosen length and has no input value to vary — a
+	// distinction an earlier close reason papered over by naming them together (burpsy-react-ui-cd00).
+	CharacterFrobber *CharacterFrobber
+	BitFlipper       *BitFlipper
+	Username         *UsernameGenerator
+	ECBShuffler      *ECBShuffler
+	// CopyOther has no fields of its own to resolve: it names another selected position by
+	// index and is handled before Resolve is ever called (see intruderSources in
+	// internal/web/api_tools.go), by copying that position's already-resolved PayloadSet
+	// verbatim. It is a PayloadSource variant, not a payload_rules step, because Burp offers
+	// it as a payload *type* an operator picks per position, the same menu Numbers and
+	// Custom iterator live in — not a transform applied after some other type generated
+	// something.
+	CopyOther *CopyOtherSource
+	// Collaborator (hi8) is Burp's Intruder Collaborator payload type (Zg3a.COLLABORATOR_
+	// INTERACTION_IDS): each payload is a fresh out-of-band address, so an OOB probe can be
+	// swept across a parameter list. Like copy_other it has no generator of its own — the web
+	// layer mints the addresses at launch (it holds the interaction channel) and hands Resolve
+	// an ordinary list — because minting needs the channel and the engine package must not hold
+	// one. Burp mints per request at generation time (Zcc_.buildNextPayload); minting at launch
+	// differs only in when the address exists, and it moves the no-channel refusal BEFORE any
+	// request goes out, which is strictly more honest than Burp's set-ends-early-on-null.
+	Collaborator *CollaboratorSource
+	// RecursiveGrep (ztuu) is Burp's Recursive grep: the payload for request N+1 is extracted
+	// from the response to request N, so a chain follows dependent values (CSRF tokens,
+	// sequential DB enumeration) without a pre-resolved list. It is a PayloadSource variant
+	// because Burp offers it in the same per-position payload-type menu — but unlike every
+	// other variant, Resolve cannot produce the set: the payloads do not exist until the
+	// responses do. Resolve returns the one-payload set holding Initial, and the engine's
+	// recursive driver (Run's recursive branch, engine.go) owns the chain from there. The
+	// obvious alternative — resolving at launch by pre-sending the whole chain — is refused
+	// because it would replay the target out of order and record nothing the operator could
+	// pause or stop mid-chain.
+	RecursiveGrep *RecursiveGrepSource
+	// CharacterSubstitution (burpsy-react-ui-ij2t) is leet-speak style substitution: unlike
+	// CharSubstitution (an operator-named single-replacement map, one substitute per
+	// character), this generator carries MULTIPLE alternative substitutes per character
+	// (e.g. "e" -> ['3'], "a" -> ['4','@']) and emits every permutation across all
+	// substitutable positions, not just the 2^k "substitute or don't" subsets. "peter" with
+	// e->3 and t->7 produces all 8 combinations: peter, p3ter, pe7er, p37er, pet3r, p3t3r,
+	// pe73r, p373r.
+	CharacterSubstitution *CharacterSubstitution
+	// RuntimeFile (burpsy-react-ui-ij2t) reads payloads from a file path at resolve time,
+	// one per line, the same contract FileSource uses — kept as its own generator (rather
+	// than folded into FileSource) because the wire's "type" tag is what an operator's saved
+	// attack config names, and a saved config naming "runtime_file" must keep meaning that
+	// after this generator ships alongside FileSource's existing behaviour.
+	RuntimeFile *RuntimeFileSource
+	// OpenAPIPayloads (burpsy-react-ui-ghpy) generates type-appropriate payloads straight from an
+	// OpenAPI/Swagger definition's own declared parameters, building on apidoc.Parse — the
+	// reading half already exists; this is the payload-generation half.
+	OpenAPIPayloads *OpenAPIPayloads
+	// GrammarFuzz (burpsy-react-ui-manp) is barkus-style structured fuzzing: payloads are
+	// sentences of a grammar (built-in sql/json/xml, or operator-supplied text), and the
+	// decision tape recording the derivation's choices is the mutation surface — every
+	// mutation yields another valid sentence rather than a byte-flip that usually breaks
+	// parsing outright.
+	GrammarFuzz *GrammarFuzz
+}
+
+// OpenAPIPayloads is the configuration for {"type":"openapi_payloads"}: parses the parameters an
+// OpenAPI 3.x / Swagger 2.0 definition declares (via internal/apidoc) and produces one payload
+// family per parameter, shaped by that parameter's own declared type: a string parameter draws
+// from the bundled fuzzing corpus, an integer/number parameter gets boundary values, an
+// "email"-formatted parameter gets format violations, an enumerated parameter gets values outside
+// its enum, and an array parameter gets empty/oversized/nested shapes.
+type OpenAPIPayloads struct {
+	// Spec is the definition's own bytes (JSON or YAML), inline. Takes priority over Path when
+	// both are set, so a caller that already holds the document in memory need not round-trip it
+	// through the filesystem first.
+	Spec string `json:"spec,omitempty"`
+	// Path is a definition file to read from the server's filesystem, for a document too large
+	// to want inline on the wire — the same choice FileSource and RuntimeFileSource offer.
+	Path string `json:"path,omitempty"`
+	// ParamName restricts generation to the parameters with this exact name; empty means every
+	// parameter the definition declares, across every operation.
+	ParamName string `json:"param_name,omitempty"`
+}
+
+// CollaboratorSource is the configuration for {"type":"collaborator"}.
+//
+// Count is Burp's "Number of payloads to generate" (Zrvn's payloadCollaboratorNumberOfPayloads,
+// persisted via ZNP). IncludeLocation is Burp's "Include Collaborator server location" checkbox:
+// off yields the bare interaction id without the server domain (Zcc_ passes the flag straight
+// through to the address builder).
+type CollaboratorSource struct {
+	// Count is how many distinct payloads to mint. 1..maxCollaboratorMint; the web layer
+	// validates against the same ceiling the Collaborator page's batch mint uses.
+	Count int `json:"count"`
+	// IncludeLocation controls whether the server domain follows the id: true produces
+	// `<marker>.<domain>`, false the bare `<marker>`. A POINTER with nil = true, because
+	// Burp's checkbox is CHECKED by default (Zrvn's constructor: ZE.setSelected(true)) and a
+	// plain bool would make the wire's absent field mean "off" — the opposite of the default
+	// an operator who never touched the box gets in Burp. An id without a domain cannot
+	// receive a callback by itself, so the address form is what an operator almost always
+	// wants spliced into a request.
+	IncludeLocation *bool `json:"include_location"`
+}
+
+// RecursiveGrepSource is the configuration for {"type":"recursive_grep"}.
+//
+// Field names follow Burp's own three settings (payload-types.html): Initial payload for first
+// request, Extract grep item, Stop if duplicate payload found. The extract item here is a single
+// regex with the same convention Grep.extract already holds — first capture group, or the whole
+// match when the pattern has no group — capped at MAX_EXTRACT, which is Burp's own default
+// maximum capture length (100) made one byte-budget across both features.
+type RecursiveGrepSource struct {
+	// Initial is the payload for the first request. The chain starts here because the first
+	// extraction needs a response to read.
+	Initial string `json:"initial"`
+	// ExtractRe is the regex whose match in the previous response becomes the next payload.
+	ExtractRe string `json:"extract_re"`
+	// StopDuplicate is Burp's "Stop if duplicate payload found": stop when the extracted payload
+	// equals the one just sent — "the same payload is derived twice in succession. This
+	// normally indicates that the exercise is complete."
+	StopDuplicate bool `json:"stop_duplicate"`
 }
 
 // ListSource is the items for {"type":"list"}.
@@ -208,6 +342,190 @@ type NullSource struct {
 // FileSource is the filename for {"type":"file"} — payloads from server file, one per line.
 type FileSource struct {
 	Filename string `json:"filename"`
+}
+
+// CharSubstitution is Burp's Character substitution: a base word list, with configured
+// single-character substitutions (e.g. "e"->"3", "a"->"4") applied in every combination, not
+// just all-or-nothing. "password" with e->3 and a->4 produces password, p4ssword, passw0rd
+// (if o->0 were configured), p4ssw0rd, and so on — one payload per subset of the word's
+// substitutable positions.
+type CharSubstitution struct {
+	// Words is the base word list, one payload family per word.
+	Words []string `json:"words"`
+	// Subs maps a single character (as it appears in a word) to its replacement. Keyed by
+	// exact character, case-sensitive — an operator wanting "E" and "e" both substituted
+	// lists both.
+	Subs map[string]string `json:"subs"`
+	// MaxPerWord bounds combinations generated per word, so one word with many
+	// substitutable positions cannot alone exhaust the payload cap before later words are
+	// ever reached. 0 means unbounded (subject to the overall Resolve cap).
+	MaxPerWord int `json:"max_per_word"`
+}
+
+// CaseModification is Burp's Case modification: case variants of a base word list.
+type CaseModification struct {
+	Words []string `json:"words"`
+	// Lower, Upper and Capitalize select which variants to generate; at least one must be
+	// set, or nothing would be produced from a configured generator, which is a
+	// configuration error rather than a silent empty set.
+	Lower      bool `json:"lower"`
+	Upper      bool `json:"upper"`
+	Capitalize bool `json:"capitalize"`
+}
+
+// IllegalUnicode is Burp's Illegal Unicode: overlong UTF-8 encodings of ASCII characters, used
+// to probe whether an application canonicalises or validates its input before a security
+// check runs on it — the class of bug behind the historic overlong-encoded "%c0%af" (an
+// overlong '/') IIS directory-traversal bypass.
+type IllegalUnicode struct {
+	// Chars are the base characters to re-encode illegally; each must be ASCII (0x00-0x7F),
+	// since only a 7-bit value fits the bit budget these forms leave for it.
+	Chars string `json:"chars"`
+	// Forms selects which overlong widths to emit: "overlong2", "overlong3", "overlong4"
+	// (a legal UTF-8 encoder would use one byte for any of these characters).
+	Forms []string `json:"forms"`
+	// PercentEncode renders each illegal byte as %XX, for splicing into a URL or query
+	// value; false emits the raw bytes, for a context (a body, say) that can carry them
+	// unencoded.
+	PercentEncode bool `json:"percent_encode"`
+}
+
+// CharacterBlocks is Burp's Character blocks: one payload per length in a
+// range, each consisting of Chars repeated (cycled) to fill exactly that length. Used to find
+// the block size that trips a buffer limit or a fixed-size field, by walking the length
+// upward until something breaks.
+//
+// This is NOT Burp's Character frobber, which is a different generator with a different input —
+// see CharacterFrobber below. An earlier version of this comment claimed they were "the same
+// generator, renamed", and that claim is what let a QA pass close the frobber as delivered
+// (burpsy-react-ui-cd00). If you are here to find the frobber, it is the next type down.
+type CharacterBlocks struct {
+	// Chars is the block alphabet, cycled to fill each block. A single character ("A") is
+	// Burp's ordinary use; a short repeating sequence is accepted too.
+	Chars string `json:"chars"`
+	// MinLen and MaxLen bound the lengths generated, inclusive.
+	MinLen int `json:"min_len"`
+	MaxLen int `json:"max_len"`
+	// Step is the length increment between successive blocks.
+	Step int `json:"step"`
+}
+
+// CharacterFrobber is Burp's Character frobber
+// (tools/intruder/configure-attack/payload-types.html:590-595), which "modifies the value of each
+// character position of an input" and increments one character at a time.
+//
+// # Why this is not CharacterBlocks
+//
+// They are different generators and the earlier close that named them together ("character
+// blocks/frobber") is what made this look delivered. CharacterBlocks cycles an alphabet to fill
+// repeated blocks of a chosen LENGTH: it has an alphabet and MinLen/MaxLen/Step, and no input value
+// to vary. This one has the operator's CURRENT value as its defining input — a session token
+// captured from the target — and walks each position through an alphabet with the rest held fixed.
+//
+// That is the whole technique. Incrementing one character of a token at a time is how an operator
+// finds which position an authorization check, a signature or a parser actually depends on: a token
+// that validates at every position except one tells you exactly where the check reads. A
+// repeated-block generator cannot express it, because there is no value in it to increment.
+//
+// Base is held in RUNES rather than bytes, so a multi-byte character is one position rather than
+// several, and an alphabet is likewise walked per rune. Counting bytes would make "character
+// position 3" mean something different for a non-ASCII token than it does in the target's own
+// parameter, and the operator reading a payload list would have no way to map one to the other.
+type CharacterFrobber struct {
+	// Base is the operator's current value, and the input every payload is derived from.
+	Base string `json:"base"`
+	// Chars is the alphabet each position is walked through, in order. Empty means the printable
+	// ASCII range Burp sweeps by default, which is the case that matters for a token.
+	Chars string `json:"chars"`
+}
+
+// BitFlipper is Burp's Bit flipper: one payload per bit of Base, with exactly that bit
+// inverted — a coverage sweep for a parser that only misbehaves on one specific corrupted
+// bit (a checksum routine, a length field, a sign bit).
+//
+// Base is taken as its raw UTF-8 bytes; a flipped bit can and often does produce a byte
+// sequence that is not valid UTF-8. That is not an error here — ApplyAll splices raw bytes,
+// never re-validating them as text — but it does mean a payload from this generator can
+// render lossily (as U+FFFD) if it is ever round-tripped through JSON, which is why
+// PayloadSet.Items is tagged `json:"-"`: these strings are engine-internal byte carriers,
+// never sent to the browser directly.
+type BitFlipper struct {
+	Base string `json:"base"`
+}
+
+// UsernameGenerator is Burp's Username generator: candidate usernames derived from a list of
+// full names, in the formats real-world account-naming conventions actually use.
+type UsernameGenerator struct {
+	// Names is "First Last" per line (a middle name, if present, is ignored: only the first
+	// and last whitespace-separated tokens are used).
+	Names []string `json:"names"`
+	// Formats selects which shapes to generate: "first", "last", "first.last", "firstlast",
+	// "flast" (first initial + last), "firstl" (first + last initial). Empty means all six —
+	// an operator who configured a name list almost always wants the full sweep, and an
+	// empty list reading as "generate nothing" would be a silently useless attack.
+	Formats []string `json:"formats"`
+}
+
+// usernameFormats is the full set, and CaseModification-style default when none is named.
+var usernameFormats = []string{"first", "last", "first.last", "firstlast", "flast", "firstl"}
+
+// ECBShuffler is Burp's ECB block shuffler: reorders the cipher blocks of a sample value to
+// test whether an application is using unauthenticated ECB-mode encryption, where each block
+// decrypts independently of its position — swapping two blocks in an ECB ciphertext produces
+// a ciphertext that still decrypts block-by-block, just with those two blocks' plaintext
+// transposed, which is the tell.
+type ECBShuffler struct {
+	// Sample is the value to permute, as it appears in the request (already encoded).
+	Sample string `json:"sample"`
+	// Encoding is how Sample is decoded before splitting into blocks, and how each
+	// permutation is re-encoded afterwards: "base64" or "hex".
+	Encoding string `json:"encoding"`
+	// BlockSize is the cipher's block size in bytes (16 for AES, 8 for DES/3DES/Blowfish).
+	BlockSize int `json:"block_size"`
+}
+
+// CopyOtherSource is Burp's Copy other payload: this position's payload, for every request,
+// is whichever payload the named other position received for that same request. Useful for a
+// password-confirmation field, a duplicated CSRF token position, or any pair of positions
+// that must carry matching values for the request to be worth sending at all.
+//
+// It carries no generator of its own — see PayloadSource.CopyOther's doc for where it is
+// actually resolved (before Resolve is called, by aliasing the referenced position's already-
+// resolved set), and why that placement is the only one Burp's own semantics for it permit:
+// it only means the same thing as another position's payload when the two are stepped
+// together, which pitchfork and cluster bomb do (one set per position) and sniper/battering
+// ram do not (one set shared or replayed across all positions, not one per position).
+type CopyOtherSource struct {
+	// Position is the OTHER selected position index (0-based, in request order) to mirror.
+	// It must name a position earlier in the same request's position list — see
+	// intruderSources for why a forward or self reference is refused rather than guessed at.
+	Position int `json:"position"`
+}
+
+// CharacterSubstitution is leet-speak style substitution: each configured character maps to
+// one or more alternative runes, and every permutation across a word's substitutable positions
+// is emitted — not just "substitute or don't" (that is CharSubstitution). "peter" with e->['3']
+// and t->['7'] has 3 substitutable positions (two e's, one t), producing all 8 combinations:
+// peter, p3ter, pe7er, p37er, pet3r, p3t3r, pe73r, p373r.
+type CharacterSubstitution struct {
+	// Words is the base word list, one payload family per word.
+	Words []string `json:"words"`
+	// Subs maps a character (as it appears in a word) to its alternative substitutes. A
+	// character can have more than one alternative (e.g. "a" -> ["4", "@"]), unlike
+	// CharSubstitution's single replacement per character.
+	Subs map[string][]string `json:"subs"`
+	// MaxPerWord bounds combinations generated per word, so one word with many substitutable
+	// positions cannot alone exhaust the payload cap before later words are ever reached. 0
+	// means unbounded (subject to the overall Resolve cap).
+	MaxPerWord int `json:"max_per_word"`
+}
+
+// RuntimeFileSource is the filename for {"type":"runtime_file"}: payloads read from a file
+// path at resolve time, one per line, for a list too large to hold in memory as a JSON array
+// on the wire. It shares FileSource's read semantics (trim, skip blanks, one per line) rather
+// than duplicating a second reader with subtly different edge-case handling.
+type RuntimeFileSource struct {
+	Path string `json:"path"`
 }
 
 // UnmarshalJSON decodes the tagged shape, dispatching on "type".
@@ -262,6 +580,96 @@ func (s *PayloadSource) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		s.File = &f
+	case "char_substitution":
+		var c CharSubstitution
+		if err := json.Unmarshal(b, &c); err != nil {
+			return err
+		}
+		s.CharSubstitution = &c
+	case "case_modification":
+		var c CaseModification
+		if err := json.Unmarshal(b, &c); err != nil {
+			return err
+		}
+		s.CaseModification = &c
+	case "illegal_unicode":
+		var iu IllegalUnicode
+		if err := json.Unmarshal(b, &iu); err != nil {
+			return err
+		}
+		s.IllegalUnicode = &iu
+	case "character_blocks":
+		var cb CharacterBlocks
+		if err := json.Unmarshal(b, &cb); err != nil {
+			return err
+		}
+		s.CharacterBlocks = &cb
+	case "character_frobber":
+		var cf CharacterFrobber
+		if err := json.Unmarshal(b, &cf); err != nil {
+			return err
+		}
+		s.CharacterFrobber = &cf
+	case "bit_flipper":
+		var bf BitFlipper
+		if err := json.Unmarshal(b, &bf); err != nil {
+			return err
+		}
+		s.BitFlipper = &bf
+	case "username":
+		var u UsernameGenerator
+		if err := json.Unmarshal(b, &u); err != nil {
+			return err
+		}
+		s.Username = &u
+	case "ecb_shuffler":
+		var e ECBShuffler
+		if err := json.Unmarshal(b, &e); err != nil {
+			return err
+		}
+		s.ECBShuffler = &e
+	case "copy_other":
+		var c CopyOtherSource
+		if err := json.Unmarshal(b, &c); err != nil {
+			return err
+		}
+		s.CopyOther = &c
+	case "recursive_grep":
+		var rg RecursiveGrepSource
+		if err := json.Unmarshal(b, &rg); err != nil {
+			return err
+		}
+		s.RecursiveGrep = &rg
+	case "collaborator":
+		var c CollaboratorSource
+		if err := json.Unmarshal(b, &c); err != nil {
+			return err
+		}
+		s.Collaborator = &c
+	case "character_substitution":
+		var cs CharacterSubstitution
+		if err := json.Unmarshal(b, &cs); err != nil {
+			return err
+		}
+		s.CharacterSubstitution = &cs
+	case "runtime_file":
+		var rf RuntimeFileSource
+		if err := json.Unmarshal(b, &rf); err != nil {
+			return err
+		}
+		s.RuntimeFile = &rf
+	case "openapi_payloads":
+		var o OpenAPIPayloads
+		if err := json.Unmarshal(b, &o); err != nil {
+			return err
+		}
+		s.OpenAPIPayloads = &o
+	case "grammar_fuzz":
+		var gf GrammarFuzz
+		if err := json.Unmarshal(b, &gf); err != nil {
+			return err
+		}
+		s.GrammarFuzz = &gf
 	default:
 		return fmt.Errorf("unknown payload source type %q", probe.Type)
 	}
@@ -364,6 +772,24 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		if s.File == nil || strings.TrimSpace(s.File.Filename) == "" {
 			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "file"}
 		}
+		// The bundled-corpus shorthand (kal): "builtin:<name>" resolves from the embedded
+		// wordlists rather than the server's filesystem — the same reader contract, one
+		// extra address space. Checked BEFORE the os.ReadFile so a builtin name never
+		// becomes a filesystem probe.
+		if IsBuiltinWordlist(s.File.Filename) {
+			lines, err := resolveBuiltinWordlist(s.File.Filename, checkLen)
+			if err != nil {
+				return nil, err
+			}
+			total = uint64(len(lines))
+			exact = true
+			if uint64(len(lines)) > uint64(cap) {
+				lines = lines[:cap]
+				trunc = true
+			}
+			items = lines
+			break
+		}
 		data, err := os.ReadFile(s.File.Filename)
 		if err != nil {
 			return nil, err
@@ -385,6 +811,145 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 			trunc = true
 		}
 		items = payloads
+	case "char_substitution":
+		if s.CharSubstitution == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "char_substitution"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharSubstitution(s.CharSubstitution, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "case_modification":
+		if s.CaseModification == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "case_modification"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCaseModification(s.CaseModification, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "illegal_unicode":
+		if s.IllegalUnicode == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "illegal_unicode"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveIllegalUnicode(s.IllegalUnicode, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "character_blocks":
+		if s.CharacterBlocks == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "character_blocks"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharacterBlocks(s.CharacterBlocks, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "character_frobber":
+		// The frobber, not the blocks: one payload per (character position × alphabet) of the
+		// operator's CURRENT value, with the rest of the value held fixed. Distinct from
+		// character_blocks, which has no input value to vary at all (burpsy-react-ui-cd00).
+		if s.CharacterFrobber == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "character_frobber"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharacterFrobber(s.CharacterFrobber, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "bit_flipper":
+		if s.BitFlipper == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "bit_flipper"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveBitFlipper(s.BitFlipper, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "username":
+		if s.Username == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "username"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveUsername(s.Username, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "ecb_shuffler":
+		if s.ECBShuffler == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "ecb_shuffler"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveECBShuffler(s.ECBShuffler, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "copy_other":
+		// Never reached through the ordinary edge: intruderSources (internal/web/api_tools.go)
+		// resolves copy_other by aliasing another position's already-resolved PayloadSet before
+		// Resolve is ever called on this one — see CopyOtherSource's own doc for why. A caller
+		// that reaches here anyway gets a named refusal, not a payload set that pretends to mean
+		// something on its own.
+		return nil, fmt.Errorf("copy_other has no generator of its own; it must be resolved by the caller against the position it names")
+	case "collaborator":
+		// Same shape as copy_other's refusal: the web layer resolves this one, because minting
+		// needs the interaction channel the engine package must not hold. A caller that reaches
+		// here anyway gets a named refusal, not a payload set that pretends to mean something.
+		return nil, fmt.Errorf("collaborator has no generator of its own; the web layer mints the addresses at launch and hands over an ordinary list")
+	case "recursive_grep":
+		if s.RecursiveGrep == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "recursive_grep"}
+		}
+		if s.RecursiveGrep.ExtractRe == "" {
+			return nil, fmt.Errorf("recursive_grep: extract_re is empty — there is no way to derive the second payload, so the chain would stop after the first request")
+		}
+		if _, err := regexp.Compile(s.RecursiveGrep.ExtractRe); err != nil {
+			return nil, fmt.Errorf("recursive_grep: extract pattern does not compile: %w", err)
+		}
+		// The set holds the initial payload only; the chain is the engine's. Total is inexact
+		// because the chain length is unknown until the responses arrive — an exact-looking 1
+		// would make the report claim the attack had one payload when the plan's bound (the
+		// operator's max_requests) is the real ceiling.
+		items = []string{s.RecursiveGrep.Initial}
+		total, exact = 0, false
+	case "character_substitution":
+		if s.CharacterSubstitution == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "character_substitution"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveCharacterSubstitution(s.CharacterSubstitution, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "runtime_file":
+		if s.RuntimeFile == nil || strings.TrimSpace(s.RuntimeFile.Path) == "" {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "runtime_file"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveRuntimeFile(s.RuntimeFile, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "openapi_payloads":
+		if s.OpenAPIPayloads == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "openapi_payloads"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveOpenAPIPayloads(s.OpenAPIPayloads, cap)
+		if err != nil {
+			return nil, err
+		}
+	case "grammar_fuzz":
+		if s.GrammarFuzz == nil {
+			return nil, &PayloadError{Kind: PayloadErrEmpty, What: "grammar_fuzz"}
+		}
+		var err error
+		items, total, exact, trunc, err = resolveGrammarFuzz(s.GrammarFuzz, cap)
+		if err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("unknown payload source type %q", s.Type)
 	}
@@ -397,7 +962,12 @@ func (s *PayloadSource) Resolve(maxCount int) (*PayloadSet, error) {
 		Truncated:  trunc,
 		MaxCount:   cap,
 		Skipped:    0,
-		Dropped:    nil,
+		// Empty, not nil. types.tools.ts declares PayloadSetReport.dropped as `DropReason[]`, and a
+		// nil slice marshals to JSON `null` — which is what made the payload-sets table read
+		// `null.length` and take the whole Results tab down with the ErrorBoundary
+		// (burpsy-react-ui-9pxd). This is the one place a PayloadSet is constructed, so it is the
+		// one place the wire form can be guaranteed.
+		Dropped: []DropReason{},
 	}, nil
 }
 
@@ -867,6 +1437,533 @@ func resolveCustomIterator(c *CustomIterator, cap int) ([]string, uint64, bool, 
 	return out, total, exact, trunc, nil
 }
 
+// resolveCharSubstitution enumerates, for each word, every subset of its substitutable
+// character positions (2^k combinations for k substitutable positions), the all-original
+// combination included — that is the base word itself, so a word with no configured
+// substitution in it still contributes one payload rather than none.
+func resolveCharSubstitution(c *CharSubstitution, cap int) ([]string, uint64, bool, bool, error) {
+	if len(c.Words) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "words"}
+	}
+	if len(c.Subs) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "subs"}
+	}
+	perWord := c.MaxPerWord
+	if perWord <= 0 {
+		perWord = math.MaxInt
+	}
+
+	var total uint64
+	saturated := false
+	// wordPositions names, per word, which rune indices have a configured substitute — computed
+	// once so the generation pass below does not re-scan the word for every combination.
+	wordPositions := make([][]int, len(c.Words))
+	wordRunes := make([][]rune, len(c.Words))
+	for wi, word := range c.Words {
+		runes := []rune(word)
+		wordRunes[wi] = runes
+		var positions []int
+		for ri, r := range runes {
+			if _, ok := c.Subs[string(r)]; ok {
+				positions = append(positions, ri)
+			}
+		}
+		wordPositions[wi] = positions
+		k := len(positions)
+		// Capped well short of any real word length so 1<<k never approaches overflow; a word
+		// with more than 32 substitutable characters is not a config anyone typed by hand.
+		if k > 32 {
+			k = 32
+		}
+		combos := uint64(1) << uint(k)
+		if total > math.MaxUint64-combos {
+			total = math.MaxUint64
+			saturated = true
+		} else {
+			total += combos
+		}
+	}
+	exact := !saturated
+
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for wi := range c.Words {
+		if len(out) >= take {
+			break
+		}
+		positions := wordPositions[wi]
+		k := len(positions)
+		if k > 32 {
+			k = 32
+		}
+		combos := uint64(1) << uint(k)
+		limit := combos
+		if uint64(perWord) < limit {
+			limit = uint64(perWord)
+		}
+		for mask := uint64(0); mask < limit && len(out) < take; mask++ {
+			runes := append([]rune(nil), wordRunes[wi]...)
+			for bit := 0; bit < k; bit++ {
+				if mask&(1<<uint(bit)) != 0 {
+					pos := positions[bit]
+					sub := c.Subs[string(runes[pos])]
+					if sub != "" {
+						runes[pos] = []rune(sub)[0]
+					}
+				}
+			}
+			item := string(runes)
+			if err := checkLen(len(item)); err != nil {
+				return nil, 0, false, false, err
+			}
+			out = append(out, item)
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, exact, trunc, nil
+}
+
+// resolveCaseModification generates the selected case variants of each word, in the fixed
+// order lower, upper, capitalize — an operator who enabled all three always gets them in the
+// same order, which is what makes a truncated (capped) result predictable rather than
+// depending on map iteration or similar.
+func resolveCaseModification(c *CaseModification, cap int) ([]string, uint64, bool, bool, error) {
+	if len(c.Words) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "words"}
+	}
+	if !c.Lower && !c.Upper && !c.Capitalize {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "at least one case mode"}
+	}
+	perWord := 0
+	if c.Lower {
+		perWord++
+	}
+	if c.Upper {
+		perWord++
+	}
+	if c.Capitalize {
+		perWord++
+	}
+	total := uint64(len(c.Words)) * uint64(perWord)
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for _, word := range c.Words {
+		if len(out) >= take {
+			break
+		}
+		if c.Lower {
+			out = append(out, strings.ToLower(word))
+		}
+		if len(out) < take && c.Upper {
+			out = append(out, strings.ToUpper(word))
+		}
+		if len(out) < take && c.Capitalize {
+			out = append(out, capitalizeFirst(word))
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// capitalizeFirst upper-cases the first rune and lower-cases the rest — Burp's "Capitalize"
+// mode, so "jSMITH" becomes "Jsmith" rather than "JSMITH" with one letter changed.
+func capitalizeFirst(s string) string {
+	runes := []rune(strings.ToLower(s))
+	if len(runes) == 0 {
+		return s
+	}
+	runes[0] = []rune(strings.ToUpper(string(runes[0])))[0]
+	return string(runes)
+}
+
+// illegalOverlong2/3/4 render c (which must be ASCII, 0x00-0x7F) as a 2/3/4-byte overlong
+// UTF-8 sequence: a legal encoder would use one byte for any of these values, so any of these
+// forms is malformed by construction and exists only to probe an input path that decodes
+// UTF-8 without rejecting non-shortest-form sequences — the class of bug behind the historic
+// overlong-encoded "%c0%af" IIS directory-traversal bypass.
+func illegalOverlong2(c byte) []byte { return []byte{0xC0 | (c >> 6), 0x80 | (c & 0x3F)} }
+func illegalOverlong3(c byte) []byte { return []byte{0xE0, 0x80 | (c >> 6), 0x80 | (c & 0x3F)} }
+func illegalOverlong4(c byte) []byte { return []byte{0xF0, 0x80, 0x80 | (c >> 6), 0x80 | (c & 0x3F)} }
+
+// resolveIllegalUnicode generates one payload per (character, form) pair.
+func resolveIllegalUnicode(iu *IllegalUnicode, cap int) ([]string, uint64, bool, bool, error) {
+	if iu.Chars == "" {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "chars"}
+	}
+	if len(iu.Forms) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "forms"}
+	}
+	for _, r := range iu.Chars {
+		if r > 0x7F {
+			return nil, 0, false, false, fmt.Errorf(
+				"illegal_unicode: %q is not ASCII; only a 7-bit value fits an overlong encoding's spare bits", r)
+		}
+	}
+	for _, f := range iu.Forms {
+		switch f {
+		case "overlong2", "overlong3", "overlong4":
+		default:
+			return nil, 0, false, false, fmt.Errorf(
+				"illegal_unicode: unknown form %q (want overlong2, overlong3 or overlong4)", f)
+		}
+	}
+	chars := []rune(iu.Chars)
+	total := uint64(len(chars)) * uint64(len(iu.Forms))
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for _, r := range chars {
+		if len(out) >= take {
+			break
+		}
+		for _, f := range iu.Forms {
+			if len(out) >= take {
+				break
+			}
+			var raw []byte
+			switch f {
+			case "overlong2":
+				raw = illegalOverlong2(byte(r))
+			case "overlong3":
+				raw = illegalOverlong3(byte(r))
+			case "overlong4":
+				raw = illegalOverlong4(byte(r))
+			}
+			if iu.PercentEncode {
+				var b strings.Builder
+				for _, by := range raw {
+					fmt.Fprintf(&b, "%%%02X", by)
+				}
+				out = append(out, b.String())
+			} else {
+				out = append(out, string(raw))
+			}
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// resolveCharacterBlocks generates one payload per length in [MinLen, MaxLen] stepping by
+// Step, each Chars cycled to fill exactly that length.
+func resolveCharacterBlocks(cbk *CharacterBlocks, cap int) ([]string, uint64, bool, bool, error) {
+	alphabet := runesOf(cbk.Chars)
+	if len(alphabet) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "chars"}
+	}
+	if cbk.Step == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrZeroStep}
+	}
+	if cbk.Step < 0 || cbk.MaxLen < cbk.MinLen {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrBadLengthRange, Min: cbk.MinLen, Max: cbk.MaxLen}
+	}
+	if cbk.MinLen < 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrBadLengthRange, Min: cbk.MinLen, Max: cbk.MaxLen}
+	}
+	if err := checkLen(cbk.MaxLen); err != nil {
+		return nil, 0, false, false, err
+	}
+	total := uint64((cbk.MaxLen-cbk.MinLen)/cbk.Step) + 1
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for length := cbk.MinLen; len(out) < take && length <= cbk.MaxLen; length += cbk.Step {
+		var b strings.Builder
+		b.Grow(length * 4)
+		for i := 0; i < length; i++ {
+			b.WriteString(alphabet[i%len(alphabet)])
+		}
+		out = append(out, b.String())
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// resolveCharacterFrobber generates, for each character position of Base, one payload per
+// character of the alphabet at that position, with every other position held fixed.
+//
+// # The order, and why it is a position-major walk
+//
+// Position 0 across the whole alphabet, then position 1, and so on. A token's positions are not
+// independent — the first divergence from the valid token is the interesting one, and walking one
+// position to exhaustion before moving on is what surfaces it in the first few payloads rather than
+// after len(alphabet) × len(base) of them.
+//
+// Each position also emits the BASE's own character first, so the unmodified value is payload zero
+// of every position. That is deliberate: the operator can tell at a glance whether a position matters
+// by whether the request that changes nothing else still fails, and a generator whose every payload
+// differs from the base cannot answer that.
+func resolveCharacterFrobber(cf *CharacterFrobber, cap int) ([]string, uint64, bool, bool, error) {
+	alphabet := runesOf(cf.Chars)
+	if len(alphabet) == 0 {
+		alphabet = defaultFrobberAlphabet()
+	}
+	base := runesOf(cf.Base)
+	if len(base) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "base"}
+	}
+	if err := checkLen(len(base) * len(alphabet)); err != nil {
+		return nil, 0, false, false, err
+	}
+	// One payload per (position, character): positions × alphabet, INCLUDING the base's own
+	// character at each, which is why this is not positions × (alphabet − 1).
+	total := uint64(len(base)) * uint64(len(alphabet))
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for pos := range base {
+		var b strings.Builder
+		b.Grow(len(base) * 4)
+		for _, c := range alphabet {
+			// Rebuild the whole string for each character: the payload is a value, not a patch, and a
+			// generator that handed back an offset would make every consumer re-implement this loop.
+			b.Reset()
+			for i, r := range base {
+				if i == pos {
+					b.WriteString(c)
+				} else {
+					b.WriteString(r)
+				}
+			}
+			out = append(out, b.String())
+			if len(out) >= take {
+				// Every remaining position would produce the same count of payloads against a
+				// truncated budget, so stop here rather than iterate a twenty-position base for
+				// payloads the cap will drop.
+				break
+			}
+		}
+		if len(out) >= take {
+			break
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// defaultFrobberAlphabet is the printable ASCII range, which is what a token's characters come from
+// in the case this generator exists for. It is a function rather than a constant slice so the value is
+// built once and shared, rather than a package-level slice an accidental append could mutate.
+func defaultFrobberAlphabet() []string {
+	const first, last = 0x20, 0x7e
+	out := make([]string, 0, last-first+1)
+	for r := rune(first); r <= last; r++ {
+		out = append(out, string(r))
+	}
+	return out
+}
+
+// resolveBitFlipper generates len(Base)*8 payloads, each Base's bytes with exactly one bit
+// inverted. Bit 0 of a byte is its most significant bit, walked byte 0 first — an arbitrary
+// but fixed and documented order, since nothing downstream depends on which bit is "first".
+func resolveBitFlipper(bf *BitFlipper, cap int) ([]string, uint64, bool, bool, error) {
+	base := []byte(bf.Base)
+	if len(base) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "base"}
+	}
+	total := uint64(len(base)) * 8
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for i := 0; i < take; i++ {
+		byteIdx := i / 8
+		bitIdx := i % 8
+		flipped := append([]byte(nil), base...)
+		flipped[byteIdx] ^= 0x80 >> uint(bitIdx)
+		out = append(out, string(flipped))
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// resolveUsername generates, for each name, one username per requested format. A name with
+// no second (surname) token skips any format that needs one, rather than fabricating a
+// surname from nothing.
+func resolveUsername(u *UsernameGenerator, cap int) ([]string, uint64, bool, bool, error) {
+	if len(u.Names) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "names"}
+	}
+	formats := u.Formats
+	if len(formats) == 0 {
+		formats = usernameFormats
+	}
+	for _, f := range formats {
+		switch f {
+		case "first", "last", "first.last", "firstlast", "flast", "firstl":
+		default:
+			return nil, 0, false, false, fmt.Errorf(
+				"username: unknown format %q (want first, last, first.last, firstlast, flast or firstl)", f)
+		}
+	}
+	// usernamesFor is computed once per name up front so the total can be counted exactly
+	// before generating anything, the same shape every other generator here uses.
+	perName := make([][]string, len(u.Names))
+	var total uint64
+	for ni, name := range u.Names {
+		parts := strings.Fields(name)
+		first := ""
+		last := ""
+		if len(parts) > 0 {
+			first = strings.ToLower(parts[0])
+		}
+		if len(parts) > 1 {
+			last = strings.ToLower(parts[len(parts)-1])
+		}
+		var names []string
+		for _, f := range formats {
+			switch f {
+			case "first":
+				if first != "" {
+					names = append(names, first)
+				}
+			case "last":
+				if last != "" {
+					names = append(names, last)
+				}
+			case "first.last":
+				if first != "" && last != "" {
+					names = append(names, first+"."+last)
+				}
+			case "firstlast":
+				if first != "" && last != "" {
+					names = append(names, first+last)
+				}
+			case "flast":
+				if first != "" && last != "" {
+					names = append(names, first[:1]+last)
+				}
+			case "firstl":
+				if first != "" && last != "" {
+					names = append(names, first+last[:1])
+				}
+			}
+		}
+		perName[ni] = names
+		total += uint64(len(names))
+	}
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for _, names := range perName {
+		if len(out) >= take {
+			break
+		}
+		for _, n := range names {
+			if len(out) >= take {
+				break
+			}
+			out = append(out, n)
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
+}
+
+// factorialSaturating returns n!, saturating at MaxUint64 — ECBShuffler's unbounded total,
+// the same saturating-arithmetic contract every combinatorial generator in this file honours
+// (rangeCount, powU64, resolveCustomIterator's product).
+func factorialSaturating(n int) (uint64, bool) {
+	result := uint64(1)
+	for i := 2; i <= n; i++ {
+		next := result * uint64(i)
+		if next/uint64(i) != result {
+			return math.MaxUint64, true
+		}
+		result = next
+	}
+	return result, false
+}
+
+// resolveECBShuffler decodes Sample, splits it into BlockSize-byte blocks and generates
+// permutations of the block order, re-encoding each. Permutations are enumerated in
+// lexicographic order over the block indices (the standard next-permutation algorithm)
+// starting from the identity order, which both bounds memory (no permutation list is ever
+// materialised) and makes a capped result deterministic rather than however a map or a
+// recursive generator happened to visit them.
+func resolveECBShuffler(e *ECBShuffler, cap int) ([]string, uint64, bool, bool, error) {
+	if strings.TrimSpace(e.Sample) == "" {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "sample"}
+	}
+	if e.BlockSize <= 0 {
+		return nil, 0, false, false, fmt.Errorf("ecb_shuffler: block_size must be positive, got %d", e.BlockSize)
+	}
+	var decoded []byte
+	var err error
+	switch e.Encoding {
+	case "base64":
+		decoded, err = base64.StdEncoding.DecodeString(e.Sample)
+	case "hex":
+		decoded, err = hex.DecodeString(e.Sample)
+	default:
+		return nil, 0, false, false, fmt.Errorf("ecb_shuffler: unknown encoding %q (want base64 or hex)", e.Encoding)
+	}
+	if err != nil {
+		return nil, 0, false, false, fmt.Errorf("ecb_shuffler: sample does not decode as %s: %w", e.Encoding, err)
+	}
+	if len(decoded)%e.BlockSize != 0 {
+		return nil, 0, false, false, fmt.Errorf(
+			"ecb_shuffler: sample is %d bytes, not a whole number of %d-byte blocks", len(decoded), e.BlockSize)
+	}
+	blockCount := len(decoded) / e.BlockSize
+	if blockCount < 2 {
+		return nil, 0, false, false, fmt.Errorf(
+			"ecb_shuffler: sample decodes to %d block(s); at least 2 are needed for a reordering to mean anything", blockCount)
+	}
+	blocks := make([][]byte, blockCount)
+	for i := range blocks {
+		blocks[i] = decoded[i*e.BlockSize : (i+1)*e.BlockSize]
+	}
+
+	total, saturated := factorialSaturating(blockCount)
+	exact := !saturated
+	take := takeOf(total, cap)
+
+	order := make([]int, blockCount)
+	for i := range order {
+		order[i] = i
+	}
+	out := make([]string, 0, take)
+	for len(out) < take {
+		buf := make([]byte, 0, len(decoded))
+		for _, idx := range order {
+			buf = append(buf, blocks[idx]...)
+		}
+		var item string
+		if e.Encoding == "hex" {
+			item = hex.EncodeToString(buf)
+		} else {
+			item = base64.StdEncoding.EncodeToString(buf)
+		}
+		if err := checkLen(len(item)); err != nil {
+			return nil, 0, false, false, err
+		}
+		out = append(out, item)
+		if !nextPermutation(order) {
+			break
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, exact, trunc, nil
+}
+
+// nextPermutation rearranges order into the next lexicographically greater permutation,
+// in place, and reports whether one existed (false when order was already the last, i.e.
+// strictly descending).
+func nextPermutation(order []int) bool {
+	n := len(order)
+	i := n - 2
+	for i >= 0 && order[i] >= order[i+1] {
+		i--
+	}
+	if i < 0 {
+		return false
+	}
+	j := n - 1
+	for order[j] <= order[i] {
+		j--
+	}
+	order[i], order[j] = order[j], order[i]
+	for l, r := i+1, n-1; l < r; l, r = l+1, r-1 {
+		order[l], order[r] = order[r], order[l]
+	}
+	return true
+}
+
 // SplitMix64 is a well-known constant PRNG; payload selection is not a security decision.
 type splitMix64 struct {
 	state uint64
@@ -891,4 +1988,295 @@ func (r *splitMix64) next() uint64 {
 	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
 	z = (z ^ (z >> 27)) * 0x94D049BB133111EB
 	return z ^ (z >> 31)
+}
+
+// Intn returns a non-negative pseudo-random number in [0, n).
+// It implements gfRand so splitMix64 can be used directly by the grammar engine.
+func (r *splitMix64) Intn(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return int(r.next() % uint64(n))
+}
+
+// charSubWordInfo is the per-word plan for resolveCharacterSubstitution, computed once so
+// generation never re-scans a word for every combination.
+type charSubWordInfo struct {
+	runes     []rune
+	positions []int      // rune indices that carry a configured substitution
+	radices   []int      // 1+len(alts) per substitutable position (digit 0 = keep original)
+	alts      [][]string // alternatives per substitutable position, aligned with positions
+	combos    uint64     // product of radices, saturating at MaxUint64
+}
+
+// resolveCharacterSubstitution enumerates every permutation across a word's substitutable
+// positions, where each position may carry more than one alternative substitute (unlike
+// CharSubstitution's single replacement per character). Digit 0 at a position means "keep the
+// original character", so the all-zero combination is always the base word itself.
+func resolveCharacterSubstitution(c *CharacterSubstitution, cap int) ([]string, uint64, bool, bool, error) {
+	if len(c.Words) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "words"}
+	}
+	if len(c.Subs) == 0 {
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "subs"}
+	}
+	perWord := uint64(c.MaxPerWord)
+	if c.MaxPerWord <= 0 {
+		perWord = math.MaxUint64
+	}
+
+	infos := make([]charSubWordInfo, len(c.Words))
+	var total uint64
+	saturated := false
+	for wi, word := range c.Words {
+		runes := []rune(word)
+		var positions []int
+		var radices []int
+		var alts [][]string
+		for ri, r := range runes {
+			if a, ok := c.Subs[string(r)]; ok && len(a) > 0 {
+				positions = append(positions, ri)
+				radices = append(radices, 1+len(a))
+				alts = append(alts, a)
+			}
+		}
+		combos := uint64(1)
+		for _, r := range radices {
+			if combos > math.MaxUint64/uint64(r) {
+				combos = math.MaxUint64
+				saturated = true
+				break
+			}
+			combos *= uint64(r)
+		}
+		infos[wi] = charSubWordInfo{runes: runes, positions: positions, radices: radices, alts: alts, combos: combos}
+		if total > math.MaxUint64-combos {
+			total = math.MaxUint64
+			saturated = true
+		} else {
+			total += combos
+		}
+	}
+	exact := !saturated
+
+	take := takeOf(total, cap)
+	out := make([]string, 0, take)
+	for wi := range c.Words {
+		if len(out) >= take {
+			break
+		}
+		info := infos[wi]
+		k := len(info.positions)
+		limit := info.combos
+		if perWord < limit {
+			limit = perWord
+		}
+		idx := make([]int, k)
+		for produced := uint64(0); produced < limit && len(out) < take; produced++ {
+			var b strings.Builder
+			b.Grow(len(info.runes) + k)
+			pj := 0
+			for ri, r := range info.runes {
+				if pj < k && info.positions[pj] == ri {
+					if d := idx[pj]; d == 0 {
+						b.WriteRune(r)
+					} else {
+						b.WriteString(info.alts[pj][d-1])
+					}
+					pj++
+				} else {
+					b.WriteRune(r)
+				}
+			}
+			item := b.String()
+			if err := checkLen(len(item)); err != nil {
+				return nil, 0, false, false, err
+			}
+			out = append(out, item)
+			// Odometer, last position fastest, matching resolveCustomIterator's convention.
+			p := k
+			for {
+				if p == 0 {
+					break
+				}
+				p--
+				idx[p]++
+				if idx[p] < info.radices[p] {
+					break
+				}
+				idx[p] = 0
+			}
+		}
+	}
+	trunc := uint64(len(out)) < total
+	return out, total, exact, trunc, nil
+}
+
+// resolveRuntimeFile streams the file line by line rather than reading it whole into memory
+// (FileSource's approach), for a wordlist too large to hold as a single in-memory buffer.
+// Lines beyond cap are counted towards Total but never retained, so resident memory is bounded
+// by cap regardless of file size.
+func resolveRuntimeFile(rf *RuntimeFileSource, cap int) ([]string, uint64, bool, bool, error) {
+	f, err := os.Open(rf.Path)
+	if err != nil {
+		return nil, 0, false, false, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxItemLen+1)
+	var total uint64
+	items := make([]string, 0, minI(cap, 1024))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if err := checkLen(len(line)); err != nil {
+			return nil, 0, false, false, err
+		}
+		total++
+		if len(items) < cap {
+			items = append(items, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, false, false, err
+	}
+	trunc := uint64(len(items)) < total
+	return items, total, true, trunc, nil
+}
+
+// maxInt64Str/maxInt64Plus1Str are literal rather than computed, because MaxInt64+1 cannot be
+// held in an int64 to begin with — the value only exists as text, which is exactly what a
+// boundary-value payload needs to be.
+const (
+	maxInt64Str      = "9223372036854775807"
+	maxInt64Plus1Str = "9223372036854775808"
+)
+
+func openAPIIntegerBoundaryPayloads() []string {
+	return []string{"0", "-1", maxInt64Str, maxInt64Plus1Str}
+}
+
+func openAPIEmailViolationPayloads() []string {
+	return []string{
+		"not-an-email",
+		"@example.com",
+		"user@",
+		"user@@example.com",
+		"user@.com",
+		"user name@example.com",
+	}
+}
+
+// openAPIArrayPayloads covers the three shapes the task calls out: empty, oversized (well
+// short of MaxItemLen, so it is refused for being interesting, not for tripping the unrelated
+// byte ceiling), and nested.
+func openAPIArrayPayloads() []string {
+	elements := make([]string, 2000)
+	for i := range elements {
+		elements[i] = "1"
+	}
+	return []string{
+		"[]",
+		"[" + strings.Join(elements, ",") + "]",
+		"[[[[[1]]]]]",
+	}
+}
+
+// openAPIOutOfEnumPayloads returns candidate values guaranteed absent from enum: fixed
+// candidates first, filtered against the declared set, and a value built from the set itself
+// (so it cannot collide) if every fixed candidate happened to be a declared member.
+func openAPIOutOfEnumPayloads(enum []string) []string {
+	inEnum := make(map[string]bool, len(enum))
+	for _, v := range enum {
+		inEnum[v] = true
+	}
+	candidates := []string{"__not_in_enum__", "0", "-1", "", "null"}
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if !inEnum[c] {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, strings.Join(enum, "")+"_out_of_enum")
+	}
+	return out
+}
+
+// openAPIPayloadsForParam picks the generator by specificity: an enum is the strongest signal
+// (any declared type still has one specific invalid space), then a declared string format,
+// then the declared type, then the fuzzing corpus as the type-agnostic fallback.
+func openAPIPayloadsForParam(p apidoc.Parameter) ([]string, error) {
+	switch {
+	case len(p.Enum) > 0:
+		return openAPIOutOfEnumPayloads(p.Enum), nil
+	case strings.EqualFold(p.Format, "email"):
+		return openAPIEmailViolationPayloads(), nil
+	case strings.EqualFold(p.Type, "integer") || strings.EqualFold(p.Type, "number"):
+		return openAPIIntegerBoundaryPayloads(), nil
+	case strings.EqualFold(p.Type, "array"):
+		return openAPIArrayPayloads(), nil
+	default:
+		return builtinWordlistLines("burp-fuzzing-full")
+	}
+}
+
+// resolveOpenAPIPayloads parses o's definition via apidoc.Parse and generates one payload
+// family per declared parameter (or just the one named by ParamName), each shaped by that
+// parameter's own type/format/enum. The set is fully enumerated before capping — unlike the
+// combinatorial generators above, its size is bounded by the definition's own parameter count,
+// not by an operator-tunable range, so there is no unbounded total to guard against.
+func resolveOpenAPIPayloads(o *OpenAPIPayloads, cap int) ([]string, uint64, bool, bool, error) {
+	var data []byte
+	switch {
+	case strings.TrimSpace(o.Spec) != "":
+		data = []byte(o.Spec)
+	case strings.TrimSpace(o.Path) != "":
+		raw, err := os.ReadFile(o.Path)
+		if err != nil {
+			return nil, 0, false, false, err
+		}
+		data = raw
+	default:
+		return nil, 0, false, false, &PayloadError{Kind: PayloadErrEmpty, What: "openapi spec or path"}
+	}
+
+	doc, err := apidoc.Parse(data)
+	if err != nil {
+		return nil, 0, false, false, fmt.Errorf("openapi_payloads: %w", err)
+	}
+
+	var all []string
+	for _, op := range doc.Operations {
+		for _, p := range op.Parameters {
+			if o.ParamName != "" && p.Name != o.ParamName {
+				continue
+			}
+			payloads, err := openAPIPayloadsForParam(p)
+			if err != nil {
+				return nil, 0, false, false, err
+			}
+			for _, item := range payloads {
+				if err := checkLen(len(item)); err != nil {
+					return nil, 0, false, false, err
+				}
+				all = append(all, item)
+			}
+		}
+	}
+	if len(all) == 0 {
+		if o.ParamName != "" {
+			return nil, 0, false, false, fmt.Errorf(
+				"openapi_payloads: the definition declared no parameter named %q, so there is nothing to generate payloads for", o.ParamName)
+		}
+		return nil, 0, false, false, fmt.Errorf(
+			"openapi_payloads: the definition declared no parameters, so there is nothing to generate payloads for")
+	}
+	total := uint64(len(all))
+	take := takeOf(total, cap)
+	out := all[:take]
+	trunc := uint64(len(out)) < total
+	return out, total, true, trunc, nil
 }

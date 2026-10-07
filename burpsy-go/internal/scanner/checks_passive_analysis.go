@@ -429,28 +429,28 @@ func checkCSPMalformedSyntax(ctx context.Context, cc *CheckContext) ([]*Finding,
 // PassiveAnalysisCheckDescriptors returns the twenty-eight network-free analyser checks.
 func PassiveAnalysisCheckDescriptors() []CheckDescriptor {
 	out := []CheckDescriptor{
-		nativeDescriptor("TLS cookie without secure flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkTLSCookieWithoutSecure),
-		nativeDescriptor("Cookie scoped to parent domain", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieScopedToParentDomain),
-		nativeDescriptor("Cookie without HttpOnly flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieWithoutHttpOnly),
-		nativeDescriptor("Session token in URL", DispatchScopePerUrl, passiveAnalysisEnabled, checkSessionTokenInURL),
+		passiveDescriptor("TLS cookie without secure flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkTLSCookieWithoutSecure),
+		passiveDescriptor("Cookie scoped to parent domain", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieScopedToParentDomain),
+		passiveDescriptor("Cookie without HttpOnly flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieWithoutHttpOnly),
+		passiveDescriptor("Session token in URL", DispatchScopePerUrl, passiveAnalysisEnabled, checkSessionTokenInURL),
 
-		nativeDescriptor("Frameable response (potential Clickjacking)", DispatchScopePerUrl, passiveAnalysisEnabled, checkFrameableResponse),
-		nativeDescriptor("Browser cross-site scripting filter disabled", DispatchScopePerUrl, passiveAnalysisEnabled, checkXSSFilterDisabled),
-		nativeDescriptor("HTML does not specify charset", DispatchScopePerUrl, passiveAnalysisEnabled, checkHTMLDoesNotSpecifyCharset),
-		nativeDescriptor("HTML uses unrecognized charset", DispatchScopePerUrl, passiveAnalysisEnabled, checkHTMLUsesUnrecognizedCharset),
-		nativeDescriptor("Content type incorrectly stated", DispatchScopePerUrl, passiveAnalysisEnabled, checkContentTypeIncorrectlyStated),
-		nativeDescriptor("Cross-domain script include", DispatchScopePerUrl, passiveAnalysisEnabled, checkCrossDomainScriptInclude),
-		nativeDescriptor("Spoofable client IP address", DispatchScopePerRequest, passiveAnalysisEnabled, checkSpoofableClientIP),
-		nativeDescriptor("Base64-encoded data in parameter", DispatchScopePerUrl, passiveAnalysisEnabled, checkBase64EncodedDataInParameter),
+		passiveDescriptor("Frameable response (potential Clickjacking)", DispatchScopePerUrl, passiveAnalysisEnabled, checkFrameableResponse),
+		passiveDescriptor("Browser cross-site scripting filter disabled", DispatchScopePerUrl, passiveAnalysisEnabled, checkXSSFilterDisabled),
+		passiveDescriptor("HTML does not specify charset", DispatchScopePerUrl, passiveAnalysisEnabled, checkHTMLDoesNotSpecifyCharset),
+		passiveDescriptor("HTML uses unrecognized charset", DispatchScopePerUrl, passiveAnalysisEnabled, checkHTMLUsesUnrecognizedCharset),
+		passiveDescriptor("Content type incorrectly stated", DispatchScopePerUrl, passiveAnalysisEnabled, checkContentTypeIncorrectlyStated),
+		passiveDescriptor("Cross-domain script include", DispatchScopePerUrl, passiveAnalysisEnabled, checkCrossDomainScriptInclude),
+		passiveDescriptor("Spoofable client IP address", DispatchScopePerRequest, passiveAnalysisEnabled, checkSpoofableClientIP),
+		passiveDescriptor("Base64-encoded data in parameter", DispatchScopePerUrl, passiveAnalysisEnabled, checkBase64EncodedDataInParameter),
 
-		nativeDescriptor("ASP.NET ViewState without MAC enabled", DispatchScopePerUrl, passiveAnalysisEnabled, checkViewStateWithoutMAC),
-		nativeDescriptor("Serialized object in HTTP message", DispatchScopePerRequest, passiveAnalysisEnabled, checkSerializedObjectInMessage),
+		passiveDescriptor("ASP.NET ViewState without MAC enabled", DispatchScopePerUrl, passiveAnalysisEnabled, checkViewStateWithoutMAC),
+		passiveDescriptor("Serialized object in HTTP message", DispatchScopePerRequest, passiveAnalysisEnabled, checkSerializedObjectInMessage),
 
-		nativeDescriptor("Content security policy: allowlisted script resources", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowlistedScriptResources),
-		nativeDescriptor("Content security policy: allows untrusted script execution", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsUntrustedScript),
-		nativeDescriptor("Content security policy: allows untrusted style execution", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsUntrustedStyle),
-		nativeDescriptor("Content security policy: allows form hijacking", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsFormHijacking),
-		nativeDescriptor("Content security policy: malformed syntax", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPMalformedSyntax),
+		passiveDescriptor("Content security policy: allowlisted script resources", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowlistedScriptResources),
+		passiveDescriptor("Content security policy: allows untrusted script execution", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsUntrustedScript),
+		passiveDescriptor("Content security policy: allows untrusted style execution", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsUntrustedStyle),
+		passiveDescriptor("Content security policy: allows form hijacking", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPAllowsFormHijacking),
+		passiveDescriptor("Content security policy: malformed syntax", DispatchScopePerUrl, passiveAnalysisEnabled, checkCSPMalformedSyntax),
 	}
 	// The nine disclosure families share one runner shape and one bank.
 	for _, kind := range []DisclosureKind{
@@ -458,7 +458,7 @@ func PassiveAnalysisCheckDescriptors() []CheckDescriptor {
 		DisclosureEmailAddress, DisclosurePrivateIPAddress, DisclosureSocialSecurityNumber,
 		DisclosureCreditCardNumber, DisclosurePrivateKey, DisclosureJSONWebKeySet,
 	} {
-		out = append(out, nativeDescriptor(disclosureRows[kind].name, DispatchScopePerUrl,
+		out = append(out, passiveDescriptor(disclosureRows[kind].name, DispatchScopePerUrl,
 			passiveAnalysisEnabled, checkDisclosureFamily(kind)))
 	}
 	return out

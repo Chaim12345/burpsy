@@ -2,6 +2,8 @@ package intruder
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -650,5 +652,406 @@ func TestDetailRowsAreCappedButBucketCountsAreNot(t *testing.T) {
 	}
 	if total != 200 {
 		t.Fatalf("counts are not bounded: %d", total)
+	}
+}
+
+// A result row that cannot name its request is a dead end: it can be read but not sent anywhere
+// (burpsy-react-ui-79u). RequestFn is how the caller stores the exact spliced bytes, and the two
+// bounds on it are the point — recording follows the rows an operator can act on, not the 100k
+// sends the report exists to summarise.
+func TestRecordedRequestsAreTheSplicedBytesAndAreBoundedByTheDetailLimit(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(40, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{40}, 1_000)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	// Requests are handed out ids from a counter and kept, so the test can assert the id an
+	// attempt names resolves back to that attempt's own bytes.
+	var storeMu sync.Mutex
+	stored := map[uint64][]byte{}
+	var next uint64
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(8))
+	a.DetailLimit = 5
+	a.RecordRequest = true
+	a.RequestFn = func(raw []byte) uint64 {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+		next++
+		stored[next] = append([]byte(nil), raw...)
+		return next
+	}
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if r.Sent != 40 {
+		t.Fatalf("sent = %d, want 40", r.Sent)
+	}
+	if len(r.Attempts) != 5 {
+		t.Fatalf("detail rows = %d, want 5", len(r.Attempts))
+	}
+	// Every detail row names a request, and the bytes behind that name are the ones the payload
+	// for that ordinal produced. Anything else and "Send to Repeater" resends someone else's
+	// request while claiming to resend this row's.
+	for _, x := range r.Attempts {
+		if x.RequestID == nil {
+			t.Fatalf("attempt %d has no request id, so it cannot be sent anywhere", x.Ordinal)
+		}
+		storeMu.Lock()
+		raw, ok := stored[*x.RequestID]
+		storeMu.Unlock()
+		if !ok {
+			t.Fatalf("attempt %d names request %d, which was never stored", x.Ordinal, *x.RequestID)
+		}
+		want := fmt.Sprintf("p%d", x.Ordinal)
+		if !bytes.Contains(raw, []byte("a="+want)) {
+			t.Fatalf("attempt %d's stored request is not its own splice: %q", x.Ordinal, raw)
+		}
+	}
+	// One bucket here, every response being identical. Its exemplar is FirstOrdinal's send, and
+	// FirstOrdinal is whichever outcome landed first under 8-way concurrency — not necessarily 0,
+	// and not necessarily inside the detail window. Either way the bytes behind the exemplar id
+	// must be that ordinal's own splice.
+	if len(r.Buckets) != 1 {
+		t.Fatalf("buckets = %d, want 1", len(r.Buckets))
+	}
+	b := r.Buckets[0]
+	if b.ExampleRequestID == nil {
+		t.Fatal("the bucket exemplar has no request, so a bucket row is still a dead end")
+	}
+	storeMu.Lock()
+	exemplar, ok := stored[*b.ExampleRequestID]
+	total := len(stored)
+	storeMu.Unlock()
+	if !ok {
+		t.Fatalf("the bucket names request %d, which was never stored", *b.ExampleRequestID)
+	}
+	if want := fmt.Sprintf("a=p%d", b.FirstOrdinal); !bytes.Contains(exemplar, []byte(want)) {
+		t.Fatalf("the bucket exemplar is not ordinal %d's splice: %q", b.FirstOrdinal, exemplar)
+	}
+	// When the bucket opened inside the detail window, that ordinal's row and the bucket name the
+	// same id — one store, two references. Two ids for one send would show the operator the same
+	// request twice with no way to tell.
+	if b.FirstOrdinal < a.DetailLimit {
+		row := r.Attempts[b.FirstOrdinal]
+		if row.Ordinal != b.FirstOrdinal {
+			t.Fatalf("detail rows are meant to be in plan order: row %d at index %d", row.Ordinal, b.FirstOrdinal)
+		}
+		if *row.RequestID != *b.ExampleRequestID {
+			t.Fatalf("bucket exemplar %d and its own detail row %d stored the same send twice",
+				*b.ExampleRequestID, *row.RequestID)
+		}
+		if total != a.DetailLimit {
+			t.Fatalf("stored %d requests for %d detail rows sharing the exemplar", total, a.DetailLimit)
+		}
+	} else if total != a.DetailLimit+1 {
+		// The opener sits past the detail window, so it is the one send stored that no row names.
+		t.Fatalf("stored %d requests: %d detail rows plus the out-of-window exemplar", total, a.DetailLimit)
+	}
+}
+
+// The default is to store nothing. Every caller that predates the results context menu — the MCP
+// surface, the CLI, the tests above — must keep its no-storage memory profile.
+func TestRequestsAreNotRecordedUnlessTheCallerOptsIn(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	calls := 0
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(1))
+	// A RequestFn without RecordRequest is not an opt-in: the flag is what says "store these".
+	a.RequestFn = func([]byte) uint64 {
+		calls++
+		return 1
+	}
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if calls != 0 {
+		t.Fatalf("RequestFn was called %d times without RecordRequest set", calls)
+	}
+	for _, x := range r.Attempts {
+		if x.RequestID != nil {
+			t.Fatalf("attempt %d names request %d that was never stored", x.Ordinal, *x.RequestID)
+		}
+	}
+	for _, b := range r.Buckets {
+		if b.ExampleRequestID != nil {
+			t.Fatalf("bucket at ordinal %d names request %d that was never stored", b.FirstOrdinal, *b.ExampleRequestID)
+		}
+	}
+}
+
+// The report's row slices must reach the browser as arrays, even when empty (burpsy-react-ui-9pxd).
+//
+// This is asserted on the marshalled JSON rather than on the struct because Go cannot tell the two
+// apart: a nil slice and an empty slice have the same len, range the same way, and every existing
+// test in this file passes against either. The difference only appears on the wire, where nil
+// becomes `null` — and types.tools.ts declares these fields as non-nullable arrays, so a clean
+// attack was handing the Results tab a `null` it then called `.length` on.
+func TestAZeroFailureReportMarshalsItsRowsAsArraysNotNull(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).WithLimits(Unthrottled(2))
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	if r.Failed != 0 {
+		t.Fatalf("this fixture is meant to have nothing fail: %d", r.Failed)
+	}
+	if len(r.Errors) != 0 {
+		t.Fatalf("and therefore no error groups: %d", len(r.Errors))
+	}
+
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, field := range []string{"buckets", "errors", "attempts"} {
+		raw, ok := wire[field]
+		if !ok {
+			t.Fatalf("the report dropped %q entirely", field)
+		}
+		if string(raw) == "null" {
+			t.Fatalf("%q went out as null; the browser declares it an array and reads .length on it", field)
+		}
+		if len(raw) == 0 || raw[0] != '[' {
+			t.Fatalf("%q is not a JSON array: %s", field, raw)
+		}
+	}
+}
+
+// The same guarantee for an attack that sent nothing at all, where buckets and attempts are the
+// empty ones. A guard that refuses every request is the reachable way to get there.
+func TestAReportWithNoSendsAtAllStillMarshalsArrays(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := numItems(3, "p%d")
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{3}, 100)
+
+	a := NewAttack(base, sel, []PayloadSet{payloads}, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func([]byte) error { return fmt.Errorf("out of scope") })
+	r := Run(a, func([]byte) (Sent, error) {
+		t.Fatal("a refused request must never reach the sender")
+		return Sent{}, nil
+	}, nil)
+
+	if r.Sent != 0 || len(r.Buckets) != 0 || len(r.Attempts) == 0 {
+		t.Fatalf("fixture: sent=%d buckets=%d attempts=%d", r.Sent, len(r.Buckets), len(r.Attempts))
+	}
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"buckets":null`)) {
+		t.Fatalf("buckets went out as null: %s", encoded)
+	}
+}
+
+// ---- Time-of-day, Cookies, Timeout (burpsy-react-ui-c7w6) ---------------------------------------
+//
+// Burp's results table (tools/intruder/results/viewing-results.html) carries four columns burpsy's
+// Attempt never had: Time of day, Cookies, Comment and a Timeout distinct from Error. Comment has no
+// server-side row to live on (an attack report is generated once per run and never persisted; it is
+// a browser-only annotation — see intruder.tsx and intruder-export.ts), so only the other three are
+// engine fields, and these tests are what proves them wired rather than merely declared.
+
+// fakeTimeoutErr is a minimal net.Error whose Timeout() is the only thing isTimeout may consult for
+// a send that never went through a context deadline — the pipeline/h2 path's own signal.
+type fakeTimeoutErr struct{}
+
+func (fakeTimeoutErr) Error() string   { return "i/o timeout" }
+func (fakeTimeoutErr) Timeout() bool   { return true }
+func (fakeTimeoutErr) Temporary() bool { return true }
+
+func TestEveryAttemptCarriesATimeOfDayEvenWhenRefused(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"ok", "blocked"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{2}, 100)
+
+	before := time.Now()
+	a := NewAttack(base, sel, payloads, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func(raw []byte) error {
+			if bytes.Contains(raw, []byte("a=blocked")) {
+				return fmt.Errorf("refused: out of scope")
+			}
+			return nil
+		})
+	r := Run(a, recordingSender(&[][]byte{}, &sync.Mutex{}, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+	after := time.Now()
+
+	if len(r.Attempts) != 2 {
+		t.Fatalf("want a row for both the sent and the refused attempt, got %d", len(r.Attempts))
+	}
+	for _, x := range r.Attempts {
+		if x.TimeOfDay.Before(before) || x.TimeOfDay.After(after) {
+			t.Fatalf("attempt %d's time_of_day %v is outside the run window [%v, %v] — a refusal must "+
+				"be timestamped too, not left at the zero time", x.Ordinal, x.TimeOfDay, before, after)
+		}
+	}
+}
+
+func TestAttemptCookiesNamesTheSetCookiesAndIsNeverNil(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"with-cookie", "without"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{2}, 100)
+
+	sender := func(raw []byte) (Sent, error) {
+		if bytes.Contains(raw, []byte("a=with-cookie")) {
+			return Sent{
+				Raw: []byte("HTTP/1.1 200 OK\r\nSet-Cookie: sessid=abc123; Path=/\r\n" +
+					"Set-Cookie: csrf=xyz; HttpOnly\r\nContent-Length: 2\r\n\r\nok"),
+				Duration: time.Millisecond, Status: ptr(200),
+			}, nil
+		}
+		return Sent{Raw: []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Duration: time.Millisecond, Status: ptr(200)}, nil
+	}
+
+	a := NewAttack(base, sel, payloads, plan).WithLimits(Unthrottled(1))
+	r := Run(a, sender, nil)
+
+	if len(r.Attempts) != 2 {
+		t.Fatalf("want both rows, got %d", len(r.Attempts))
+	}
+	byOrdinal := map[int]Attempt{}
+	for _, x := range r.Attempts {
+		byOrdinal[x.Ordinal] = x
+	}
+	if got := byOrdinal[0].Cookies; fmt.Sprint(got) != "[sessid csrf]" {
+		t.Fatalf("cookies = %v, want [sessid csrf] in header order", got)
+	}
+	if got := byOrdinal[1].Cookies; got == nil || len(got) != 0 {
+		t.Fatalf("cookies = %#v, want a non-nil empty slice for a response with no Set-Cookie", got)
+	}
+
+	encoded, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(`"cookies":null`)) {
+		t.Fatalf("an attempt's cookies went out as null; types.tools.ts declares Attempt.cookies "+
+			"non-nullable: %s", encoded)
+	}
+}
+
+func TestTimeoutIsTrueOnlyForTheDeadlineNotForAnyOtherFailure(t *testing.T) {
+	base, pts := basePoints(t, "GET /?a=1 HTTP/1.1\r\nHost: t.test\r\n\r\n")
+	sel := pts[:1]
+	payloads := sets([]string{"deadline", "netTimeout", "refused", "guarded"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{4}, 100)
+
+	sender := func(raw []byte) (Sent, error) {
+		switch {
+		case bytes.Contains(raw, []byte("a=deadline")):
+			// The exact wrapping internal/sender/cancel.go's explainCancellation produces for the
+			// intruder's own per-request context.WithTimeout expiring.
+			return Sent{}, fmt.Errorf("the send exceeded its deadline: %w", context.DeadlineExceeded)
+		case bytes.Contains(raw, []byte("a=netTimeout")):
+			return Sent{}, fakeTimeoutErr{}
+		default:
+			return Sent{}, fmt.Errorf("connection failed: connection refused")
+		}
+	}
+
+	a := NewAttack(base, sel, payloads, plan).
+		WithLimits(Unthrottled(1)).
+		WithGuard(func(raw []byte) error {
+			if bytes.Contains(raw, []byte("a=guarded")) {
+				return fmt.Errorf("refused: out of scope")
+			}
+			return nil
+		})
+	r := Run(a, sender, nil)
+
+	if r.Failed != 4 {
+		t.Fatalf("failed = %d, want all four", r.Failed)
+	}
+	byOrdinal := map[int]Attempt{}
+	for _, x := range r.Attempts {
+		byOrdinal[x.Ordinal] = x
+	}
+	if !byOrdinal[0].Timeout {
+		t.Fatalf("ordinal 0 wrapped context.DeadlineExceeded and must read as a timeout: %+v", byOrdinal[0])
+	}
+	if !byOrdinal[1].Timeout {
+		t.Fatalf("ordinal 1 is a net.Error with Timeout()==true and must read as a timeout: %+v", byOrdinal[1])
+	}
+	if byOrdinal[2].Timeout {
+		t.Fatalf("ordinal 2 is a connection refusal, not a timeout: %+v", byOrdinal[2])
+	}
+	if byOrdinal[3].Timeout {
+		t.Fatalf("ordinal 3 is a guard refusal, not a timeout: %+v", byOrdinal[3])
+	}
+}
+
+// A payload its container cannot hold must be reported, never sent as the base request.
+//
+// ApplyAll drops a position whose payload escapePayload refuses and builds the request from what
+// remains. For a single-position attack "what remains" is the BASE request — so the attempt went
+// out unmodified and landed in the report among the real sends, indistinguishable from a payload
+// that was actually tried. An operator reading that report would conclude the payload had been
+// delivered and the target was unmoved by it, when in fact it was never delivered at all. That is
+// the worst kind of wrong answer this tool can give: a negative result that was never tested.
+func TestAPayloadItsContainerRefusesIsReportedAndTheBaseRequestIsNeverSentInstead(t *testing.T) {
+	raw, _ := multipartFixture()
+	m := storeReq(t, raw)
+	pts := FindPoints(m, DefaultPointConfig())
+	user := findPoint(t, pts, PointBodyMultipartValue, "user")
+	sel := []InsertionPoint{*user}
+
+	// A CRLF followed by this body's boundary delimiter cannot live inside a part's content: those
+	// bytes ARE the end of the part, so splicing them would terminate the container the payload is
+	// spliced into and send a corrupt request rather than a mutated one. (A bare `--X` with no CRLF
+	// in front of it is legal and IS spliced verbatim — see the sibling test — so this payload is
+	// specifically the refused shape, not merely a suspicious-looking one.)
+	payloads := sets([]string{"before\r\n--X after"})
+	plan := NewAttackPlan(AttackKindSniper, 1, []int{1}, 10)
+	var seen [][]byte
+	var mu sync.Mutex
+
+	a := NewAttack(m.Raw(), sel, payloads, plan).WithLimits(Unthrottled(2))
+	r := Run(a, recordingSender(&seen, &mu, "HTTP/1.1 200 OK\r\n\r\nok"), nil)
+
+	mu.Lock()
+	sent := append([][]byte(nil), seen...)
+	mu.Unlock()
+
+	if len(sent) != 0 {
+		t.Fatalf("a request was sent for a payload the container refused; the bytes on the wire were the unmodified base request, which the report would have counted as a real send: %q", string(sent[0]))
+	}
+	if r.Sent != 0 {
+		t.Fatalf("sent = %d, want 0 — nothing could be delivered, so nothing may be counted as delivered", r.Sent)
+	}
+	if r.Failed != 1 {
+		t.Fatalf("failed = %d, want the refused attempt counted rather than dropped silently", r.Failed)
+	}
+	// The reason must be the enumerator's own, so Intruder and the scanner describe the same
+	// refusal of the same payload at the same point identically.
+	var reasons []string
+	for _, at := range r.Attempts {
+		if at.Error != nil {
+			reasons = append(reasons, *at.Error)
+		}
+	}
+	if len(reasons) != 1 {
+		t.Fatalf("attempts carrying an error = %d, want 1 naming the refusal; a refusal the operator cannot read is indistinguishable from a target that said nothing", len(reasons))
+	}
+	if !strings.Contains(reasons[0], "could not be placed") {
+		t.Errorf("the reported reason %q does not name the container's own refusal, so the report cannot say WHY the payload was undeliverable", reasons[0])
 	}
 }

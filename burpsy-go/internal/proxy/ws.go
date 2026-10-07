@@ -137,7 +137,10 @@ type wsPeer struct {
 // not stripping: the operator would read "extensions removed" on a handshake
 // that still offers them, and then trust a compressed capture.
 func (s *Server) stripWsHandshake(requestData []byte) ([]byte, []string) {
-	if !s.config.stripWsExtensions {
+	// Read live: the same option set the Proxy settings panel writes, so the
+	// next handshake obeys the operator's switch without a restart. Get is
+	// nil-safe (reads as off), matching the nil option set's all-off contract.
+	if !s.config.options.Get(OptStripWsExtensions) {
 		return requestData, nil
 	}
 	out, removed, err := core.StripWsExtensionsHeader(requestData)
@@ -175,8 +178,15 @@ func wsStripNote(removed []string) *string {
 // instead, so a refused upgrade is handled exactly like any other response.
 // strippedExtensions carries whatever stripWsHandshake removed from the request,
 // so the exchange can say the handshake was rewritten.
-func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, requestData []byte, startTime time.Time, strippedExtensions []string) {
-	upstream, err := s.dialUpstream(context.Background(), host, port)
+// requestEdited is whether the operator's own hold edited the handshake request, threaded in for the
+// same reason handleTLSResponse threads it: the hold resolved before this function was called, and
+// the row below is the only record of it.
+// tls is the destination's scheme — see forwardOnly for why it is threaded rather than
+// assumed plaintext: a listener with "Force use of TLS" set has to reach the origin over TLS
+// for a WebSocket handshake too, or the setting would be a no-op for exactly the traffic
+// that stays open longest.
+func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio.Reader, method string, host string, port uint16, path string, tls bool, requestData []byte, reqStages messageStages, startTime time.Time, strippedExtensions []string, requestEdited bool) {
+	upstream, err := s.dialUpstreamFor(context.Background(), host, port, tls)
 	if err != nil {
 		return
 	}
@@ -187,7 +197,9 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	}
 	upstreamBR := bufio.NewReader(upstream)
 
-	head, err := httputil.ReadResponseHead(upstreamBR)
+	// Timed for the same reason the ordinary path is (burpsy-react-ui-jcdm): an origin that
+	// REFUSES the upgrade answers with an ordinary response, and it is measured like one below.
+	head, firstByte, err := httputil.ReadResponseHeadTimed(upstreamBR)
 	if err != nil {
 		return
 	}
@@ -201,7 +213,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 			return
 		}
 		responseData := append(head, body...)
-		s.completeResponse(clientConn, method, host, port, false, path, requestData, responseData, startTime)
+		s.completeResponse(clientConn, method, host, port, false, path, requestData, reqStages, responseData, startTime, firstByte, time.Now(), "", "", serverIPOf(upstream), requestEdited, "", false)
 		return
 	}
 
@@ -218,9 +230,12 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 	// stored it and never scanned it. A 101's headers are headers, and "the same
 	// path as proxied traffic" is the requirement.
 	handshake := s.record(scanner.CapturedExchange{
-		Host:     host,
-		Port:     port,
-		TLS:      false,
+		Host: host,
+		Port: port,
+		// The destination's scheme, not the literal false this used to be: a listener with
+		// "Force use of TLS" reached the origin over TLS, and history has to say so or the
+		// row would describe a handshake nobody performed.
+		TLS:      tls,
 		Method:   method,
 		Path:     path,
 		Request:  requestData,
@@ -228,6 +243,22 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 		Started:  startTime,
 		Duration: time.Since(startTime),
 		Protocol: core.ProtocolHTTP1,
+
+		// The handshake's request stages, so an operator can see what a Match & Replace rule or
+		// their own intercept edit did to the handshake (burpsy-react-ui-c05). No response stages:
+		// the 101 head is recorded as the origin sent it, because the response rules deliberately
+		// do not run against an upgrade — see the note above on why rewriting a handshake would
+		// break it, and there is therefore no earlier version of it to retain.
+		RequestOriginal: reqStages.original,
+		RequestAuto:     reqStages.auto,
+
+		ServerIP:     serverIPOf(upstream),
+		ListenerPort: listenerPortOf(clientConn),
+
+		// A handshake the operator edited in the hold is "Edited" in history, by the same rule as
+		// every other row (burpsy-react-ui-sd0d).
+		UserEdited: requestEdited,
+
 		// A handshake this proxy rewrote must not look pristine.
 		Notes: wsStripNote(strippedExtensions),
 	})
@@ -350,7 +381,7 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 			// A buffered fragment counts too: mid-message, the accumulator holds bytes that have not
 			// been relayed, so switching to the chunk path would emit the rest of the message ahead
 			// of its own beginning.
-			if !degraded && (s.wsNeedsFrames(fromClient) || len(pending) > 0 || frag.active) {
+			if !degraded && (s.wsNeedsFrames(fromClient, peer) || len(pending) > 0 || frag.active) {
 				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats, &frag)
 				if gone {
 					return ""
@@ -426,17 +457,19 @@ func (s *Server) wsInterceptDirection(fromClient bool) (intercept.Direction, boo
 	return dir, s.config.intercept.Rules(dir).Active
 }
 
-// wsMatchReplaceDirection is the match/replace direction for this side of the relay, and whether any
-// enabled rule targets it.
-func (s *Server) wsMatchReplaceDirection(fromClient bool) (matchreplace.Direction, bool) {
+// wsMatchReplaceDirection is the match/replace direction for this side of the relay, and whether a
+// message on this connection will actually be rewritten.
+//
+// The second answer is matchReplaceApplies, not Affects, and the difference is the in-scope
+// restriction: with it on and this connection's target out of scope, the rules exist and will not
+// run. Asking Affects here would put every frame of an out-of-scope connection through reassembly
+// to feed rules that are then refused.
+func (s *Server) wsMatchReplaceDirection(fromClient bool, peer wsPeer) (matchreplace.Direction, bool) {
 	dir := matchreplace.DirWebSocketToClient
 	if fromClient {
 		dir = matchreplace.DirWebSocketToServer
 	}
-	if s.config.matchReplace == nil {
-		return dir, false
-	}
-	return dir, s.config.matchReplace.Affects(dir)
+	return dir, s.matchReplaceApplies(dir, peer.host, peer.port, peer.path, peer.tls)
 }
 
 // wsNeedsFrames reports whether this direction must be parsed into frames rather than relayed as
@@ -447,11 +480,11 @@ func (s *Server) wsMatchReplaceDirection(fromClient bool) (matchreplace.Directio
 // real bug for a moment during this work — WebSocket match/replace rules would have installed,
 // reported success, and rewritten nothing whenever interception happened to be off, which is the
 // decorative-control failure this project keeps finding.
-func (s *Server) wsNeedsFrames(fromClient bool) bool {
+func (s *Server) wsNeedsFrames(fromClient bool, peer wsPeer) bool {
 	if _, holding := s.wsInterceptDirection(fromClient); holding {
 		return true
 	}
-	_, rewriting := s.wsMatchReplaceDirection(fromClient)
+	_, rewriting := s.wsMatchReplaceDirection(fromClient, peer)
 	return rewriting
 }
 
@@ -516,7 +549,7 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 
 		// Zero or more frames out: a mid-message fragment relays nothing until the message is
 		// complete, and the final fragment may relay several at once. See wsFragments.
-		outs, drop := s.wsDecideFrames(dir, hdr, frame, fromClient, peer, frag)
+		outs, drop, edited := s.wsDecideFrames(dir, hdr, frame, fromClient, peer, frag)
 		if drop {
 			stats.dropped.Add(1)
 			continue
@@ -530,6 +563,13 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 				// the relay-first path.
 				return fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr), false
 			}
+		}
+		// An operator edit is Burp's "Edited" fact and must reach the recorded row. The edited message
+		// is one re-encoded frame that has just completed in the reassembler above, so stamp the event
+		// it produced — after the Feed, so which flush fired (the FIN flush or an interrupt flush of a
+		// stale partial) cannot misattribute it. drainWs carries the stamp on to the WsMessage.
+		if edited {
+			rs.MarkLastMessageUserEdited()
 		}
 	}
 }
@@ -599,13 +639,18 @@ func wsFramePayload(hdr *core.WsFrameHeader, frame []byte) []byte {
 // A slice rather than a single frame, because of fragmentation: a mid-message fragment relays
 // nothing, and a final fragment may relay several frames at once when the operator forwarded the
 // message unchanged. drop=true means the operator dropped it and nothing goes on the wire.
-func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer, frag *wsFragments) ([][]byte, bool) {
+//
+// edited is Burp's "Edited" fact for the message these frames carry: the operator's own hold changed
+// it. It comes straight from wsOfferMessage's hold and is false for everything this function relays
+// without offering (control, compressed, orphaned or over-cap frames), because none of those was ever
+// put in front of the operator to edit.
+func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader, frame []byte, fromClient bool, peer wsPeer, frag *wsFragments) ([][]byte, bool, bool) {
 	// Control frames may be interleaved inside a fragmented message (RFC 6455 §5.4), so they are
 	// handled first and must never disturb the accumulator. Holding a ping stalls the peer's
 	// keepalive; holding a close leaves a socket that cannot be ended. Burp does not offer them
 	// either.
 	if hdr.Opcode.IsControl() {
-		return [][]byte{frame}, false
+		return [][]byte{frame}, false, false
 	}
 
 	// Compressed frames stay untouched: the payload is a DEFLATE block, so concatenating fragments
@@ -619,11 +664,11 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 			frag.reset()
 			s.config.logger.Debug("websocket reassembly abandoned: compressed frame mid-message",
 				zap.String("direction", wsWhich(fromClient)))
-			return out, false
+			return out, false, false
 		}
 		s.config.logger.Debug("websocket frame relayed without offering it for interception",
 			zap.String("direction", wsWhich(fromClient)), zap.String("reason", "compressed frame"))
-		return [][]byte{frame}, false
+		return [][]byte{frame}, false, false
 	}
 
 	continuation := hdr.Opcode == core.WsOpcodeContinuation
@@ -634,7 +679,7 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 		if continuation && !frag.active {
 			// A continuation with nothing to continue is a protocol error. Relay it and let the peers
 			// deal with it — inventing a message here would be worse than passing the fault along.
-			return [][]byte{frame}, false
+			return [][]byte{frame}, false, false
 		}
 		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
 			// Over the cap: flush and give up on this message rather than buffering without bound.
@@ -644,19 +689,19 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 			s.config.logger.Debug("websocket message too large to reassemble for interception",
 				zap.String("direction", wsWhich(fromClient)),
 				zap.Int("cap", core.DefaultMaxWsMessageBytes))
-			return out, false
+			return out, false, false
 		}
 		// Incomplete, so there is nothing to offer and nothing to relay yet.
-		return nil, false
+		return nil, false, false
 
 	case continuation && hdr.FIN:
 		if !frag.active {
-			return [][]byte{frame}, false
+			return [][]byte{frame}, false, false
 		}
 		if !frag.add(hdr, frame, wsFramePayload(hdr, frame)) {
 			out := append(frag.frames, frame)
 			frag.reset()
-			return out, false
+			return out, false, false
 		}
 		opcode, payload, originals := frag.opcode, frag.payload, frag.frames
 		frag.reset()
@@ -674,21 +719,24 @@ func (s *Server) wsDecideFrames(dir intercept.Direction, hdr *core.WsFrameHeader
 // reassembled one — and they are relayed verbatim when the operator forwards without editing, so a
 // message that went through interception untouched is byte-identical to one that never entered it.
 // An edit is re-encoded as a single unfragmented frame, which is legal and is what Burp sends.
-func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool) {
+//
+// The third return is Burp's "Edited" fact: the operator's own hold changed this message. It is the
+// flag intercept.Held.Wait already decides (burpsy-react-ui-sd0d), carried out rather than recomputed
+// from the bytes — a message forwarded untouched is byte-identical whether or not a Match & Replace
+// rule rewrote it, so deriving the fact from a byte comparison would report the tool's rewrites as the
+// operator's. It is false whenever nothing was held: a message no rule matched was never offered.
+func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, payload []byte, originals [][]byte, fromClient bool, peer wsPeer) ([][]byte, bool, bool) {
 	// Match & replace runs before interception, exactly as it does on the HTTP path in proxy.go: the
 	// operator's standing rewrite rules are part of what the peer is deemed to have sent, so the
 	// message offered for interception is the rewritten one. The other order would show the operator
 	// a message, then silently alter it after they approved it.
-	rewritten := payload
-	if s.config.matchReplace != nil {
-		mrDir := matchreplace.DirWebSocketToClient
-		if fromClient {
-			mrDir = matchreplace.DirWebSocketToServer
-		}
-		if s.config.matchReplace.Affects(mrDir) {
-			rewritten = s.config.matchReplace.Apply(mrDir, payload)
-		}
+	mrDir := matchreplace.DirWebSocketToClient
+	if fromClient {
+		mrDir = matchreplace.DirWebSocketToServer
 	}
+	// A WebSocket's host, port, scheme and path are fixed for the connection's whole life — see
+	// wsPeer — so the scope verdict for a message is the connection's verdict.
+	rewritten := s.applyMatchReplace(mrDir, payload, peer.host, peer.port, peer.path, peer.tls)
 	// A rewrite means the original frames are no longer what should go out, so the untouched-relay
 	// shortcut below must not fire on them.
 	rewrote := !bytes.Equal(rewritten, payload)
@@ -711,28 +759,38 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 	if held == nil {
 		// No interception rule matched, so this was never offered. Relay exactly as it arrived —
 		// unless match & replace changed it, in which case the rewritten message is what goes out.
+		// Not edited either way: a rule the tool applied is not the operator's hand edit.
 		if rewrote {
-			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false, false
 		}
-		return originals, false
+		return originals, false, false
 	}
 
-	action, edited := held.Wait()
+	// The destination is ignored: a WebSocket frame has no addressing of its own, and the engine
+	// refuses a retarget on one (see intercept.Engine.Forward). The value is still discarded here
+	// rather than defaulted so the compiler makes any future Wait caller state what it does with it.
+	//
+	// The fourth value, userEdited, is Burp's "Edited" fact and is now carried out (third return)
+	// rather than discarded: the relay stamps it onto the recorded message via
+	// MarkLastMessageUserEdited (burpsy-react-ui-d7bu). It is the hold's own decision, not the byte
+	// comparison below — the operator may retype identical bytes, which is still an edit, and a
+	// Match & Replace rewrite changes the bytes without being one.
+	action, edited, _, userEdited := held.Wait()
 	if action == intercept.ActionDrop {
-		return nil, true
+		return nil, true, false
 	}
 	if bytes.Equal(edited, payload) {
 		// Forwarded without further editing. If match & replace had rewritten it, that rewrite still
 		// has to reach the wire; only an entirely unmodified message relays its original frames.
 		if rewrote {
-			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false
+			return [][]byte{s.wsEncode(opcode, payload, fromClient, originals)}, false, userEdited
 		}
-		return originals, false
+		return originals, false, userEdited
 	}
 
 	// A client-to-server frame must be masked and a server-to-client frame must not be
 	// (RFC 6455 §5.1). The direction decides, not what happened to arrive.
-	return [][]byte{s.wsEncode(opcode, edited, fromClient, originals)}, false
+	return [][]byte{s.wsEncode(opcode, edited, fromClient, originals)}, false, userEdited
 }
 
 // wsEncode frames a payload for the wire.
@@ -792,6 +850,10 @@ func (s *Server) drainWs(rs *core.WsReassembler, exchangeID core.ExchangeID, fro
 			Fragments:  ev.Fragments,
 			AtMs:       uint64(time.Now().UnixMilli()),
 			Note:       note,
+			// The operator's "Edited" fact, stamped on the event by the relay when a hold changed this
+			// message (burpsy-react-ui-d7bu). A message the reassembler produced on the plain relay path
+			// never carries it, so this is false for everything the operator did not touch.
+			UserEdited: ev.UserEdited,
 		}
 		s.config.store.AddWsMessage(m, payload)
 		stats.messages.Add(1)

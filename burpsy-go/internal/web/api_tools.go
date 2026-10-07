@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"math"
 	"net/http"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -32,6 +35,12 @@ type repeaterSendReq struct {
 	Target   string `json:"target"`   // e.g. "http://host:port" or "host:port"
 	Protocol string `json:"protocol"` // optional "http" / "https"
 	Request  string `json:"request"`  // raw request text
+	// RequestBase64, when set, is the request's exact bytes base64-encoded, and takes precedence over
+	// Request (burpsy-react-ui-ytkk). A JSON string cannot carry a binary body: a non-UTF-8 byte is
+	// replaced with U+FFFD on the way through, so a protobuf/gRPC body edited in Repeater and sent as
+	// `request` would go out corrupted. Base64 round-trips the exact octets, and Go's
+	// string([]byte)/[]byte(string) is byte-exact, so the decoded bytes reach the sender unchanged.
+	RequestBase64 string `json:"request_base64,omitempty"`
 	// FromExchange is the exchange this send was built from, when the operator reached Repeater via
 	// send-to rather than by typing a request. Recorded as the new exchange's parent so a resend can
 	// be traced back to the capture it came from. A pointer because exchange 0 is a real exchange and
@@ -51,6 +60,10 @@ type repeaterSendResp struct {
 	RequestMsgID  uint64          `json:"request_msg_id"`
 	ResponseMsgID uint64          `json:"response_msg_id"`
 	ExchangeID    core.ExchangeID `json:"exchange_id"`
+	// ResponseBodyBase64 is the response body's exact octets when they are not UTF-8 — the same rule and
+	// the same decoding as a MessageView's body_base64 — so the response pane can show a binary body
+	// (a gRPC reply in the Protobuf tab, burpsy-react-ui-3pco) that `response` cannot carry.
+	ResponseBodyBase64 string `json:"response_body_base64,omitempty"`
 	// Redirects is the chain this send produced, and it is present only when the response was a 30x.
 	//
 	// `response` above stays the response to the request the operator wrote — that is the contract
@@ -96,81 +109,90 @@ type repeaterHop struct {
 	Response string `json:"response,omitempty"`
 }
 
-func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req repeaterSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	host, port, tls, err := targetParts(req.Target)
+// repeaterSendSpec is one Repeater send resolved to everything the wire half needs: the authority to
+// dial, the exact bytes to write, and the bookkeeping the exchange row records.
+//
+// It exists so /api/repeater/send and /api/repeater/send-group cannot drift. A group send is N sends,
+// and the moment "N sends" meant a second copy of the target parsing, the options validation, the
+// transform order and the scope gate, one of the two copies would be the one that stops matching —
+// and the one that stops matching is always the one whose scope decision nobody re-read.
+type repeaterSendSpec struct {
+	Host string
+	Port uint16
+	TLS  bool
+	// Raw is what goes on the wire: the operator's request with this send's transforms applied.
+	Raw []byte
+	// AsWritten is the request text *before* the transforms, which is what the exchange row's Method
+	// and Path are read from — the same source the single send has always used, so a transform cannot
+	// silently re-label a history row.
+	AsWritten string
+	Options   repeaterSendOptions
+	From      *core.ExchangeID
+}
+
+// prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
+// runs the host-level scope gate, in that order. It returns the HTTP status a refusal should carry,
+// so the two handlers report an identical refusal for identical input; code is 0 on success.
+//
+// The order is load-bearing and is the single send's original order: options are validated before
+// anything they could affect, because a send that half-applied an options object would put bytes on
+// the wire shaped by an option the caller believes was something else.
+func (s *Server) prepareRepeaterSend(
+	target, protocol, request string, options *repeaterSendOptions, from *core.ExchangeID,
+) (spec repeaterSendSpec, code int, err error) {
+	host, port, tls, err := targetParts(target)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return repeaterSendSpec{}, http.StatusBadRequest, err
 	}
-	if strings.EqualFold(req.Protocol, "https") {
+	if strings.EqualFold(protocol, "https") {
 		tls = true
-	} else if strings.EqualFold(req.Protocol, "http") {
+	} else if strings.EqualFold(protocol, "http") {
 		tls = false
 	}
-	if strings.TrimSpace(req.Request) == "" {
-		http.Error(w, "Empty request", http.StatusBadRequest)
-		return
+	if strings.TrimSpace(request) == "" {
+		return repeaterSendSpec{}, http.StatusBadRequest, errors.New("Empty request")
 	}
-	// Options are validated before anything else they could affect: a send that half-applied an
-	// options object would put bytes on the wire shaped by an option the caller believes was
-	// something else. The error names the refused key, per the proxy-options contract.
 	var opts repeaterSendOptions
-	if req.Options != nil {
-		opts = *req.Options
-		if err := opts.validate(); err != nil {
-			http.Error(w, "refused: "+err.Error(), http.StatusBadRequest)
-			return
+	if options != nil {
+		opts = *options
+		if verr := opts.validate(); verr != nil {
+			return repeaterSendSpec{}, http.StatusBadRequest, fmt.Errorf("refused: %w", verr)
 		}
 	}
 	// The transforms run before the scope gate on the transformed bytes — though the gate is
 	// host-level and no transform changes the authority, so this ordering is about the stored
 	// exchange recording what actually went out, not about which bytes the gate saw.
-	rawRequest := opts.applyToRequest([]byte(req.Request), s.cookieHeaderFor(host, port, tls))
+	raw := opts.applyToRequest([]byte(request), s.cookieHeaderFor(host, port, tls, targetPathOf(target)))
 	// The repeater sends to whatever target the operator types, so it is gated
 	// by scope for the same reason the intruder is: a scope the operator set to
 	// constrain outbound traffic must not be bypassable by sending raw bytes
 	// here. The request line is not parsed (the operator owns it), so this is a
 	// host-level check, the same first layer the intruder applies.
 	if !s.scope.MayContainHost(host, port, tls) {
-		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
-		return
+		return repeaterSendSpec{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "/", tls))
 	}
+	return repeaterSendSpec{
+		Host: host, Port: port, TLS: tls, Raw: raw, AsWritten: request, Options: opts, From: from,
+	}, 0, nil
+}
 
-	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
-	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
-	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
-	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
-	//
-	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
-	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
-	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
-	ctx := r.Context()
-	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, host, port, tls, rawRequest, opts.protocolPreference())
-	elapsed := time.Since(sendStarted)
-	if err != nil {
-		// Surface the dial/parse error to the UI so Repeater is not silently empty.
-		// nil, not zero: the send never reached a response, which is a different fact from a response
-		// that arrived with no bytes in it.
-		s.toolLog.Record(toollog.ToolRepeater, host, port, tls, "SEND", "", 0, nil, 0, err.Error())
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
+// recordRepeaterExchange persists both halves of one completed send, writes its exchange row and its
+// tool-log line, and returns the response the panel reads. The redirect chain is not evaluated here —
+// see sendOneRepeaterRequest, which adds it, and the group send's single-connection mode, which
+// deliberately does not.
+//
+// duration is passed in rather than measured here because not every caller can measure one: a send
+// that rode a shared socket inside sender.SendKeepAlive has no per-exchange timing to report, and
+// core.UnmeasuredDuration is how that is said out loud instead of being written as a zero that reads
+// as an instantaneous send.
+func (s *Server) recordRepeaterExchange(
+	spec repeaterSendSpec, rawResp []byte, protocol core.Protocol, duration core.ExchangeDuration, started time.Time,
+) (resp repeaterSendResp, ex *core.Exchange) {
 	// Persist both halves so history/decoder can reference them. A failed Put
 	// must not be silently swallowed: an exchange referencing a non-existent
 	// message ID would 404 in history lookups. Log and degrade rather than
 	// advertise a bad id.
-	reqMsgID, err := s.store.Put(rawRequest, core.DirectionRequest)
+	reqMsgID, err := s.store.Put(spec.Raw, core.DirectionRequest)
 	if err != nil {
 		s.logger.Error("repeater: failed to store request", zap.Error(err))
 	}
@@ -181,28 +203,28 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 
 	status := parseResponseStatus(rawResp)
 
-	ex := &core.Exchange{
-		Host:        host,
-		Port:        port,
-		TLS:         tls,
-		Method:      firstLineMethod(req.Request),
-		Path:        firstLinePath(req.Request),
+	ex = &core.Exchange{
+		Host:        spec.Host,
+		Port:        spec.Port,
+		TLS:         spec.TLS,
+		Method:      firstLineMethod(spec.AsWritten),
+		Path:        firstLinePath(spec.AsWritten),
 		Status:      status,
 		ResponseLen: len(rawResp),
 		// From the bytes that just came back, for the same reason ResponseLen is taken here: history
 		// serves index rows and must not reopen a response to type it. See core.Exchange.Mime.
 		Mime:      core.MimeEssence(rawResp),
-		StartedMs: uint64(sendStarted.UnixMilli()),
-		Duration:  core.MeasuredDuration(elapsed),
-		Request:   reqMsgID,
+		StartedMs: uint64(started.UnixMilli()),
+		Duration:  duration,
+		Request:   core.MsgPtr(reqMsgID),
 		Response:  &respMsgID,
 		// What actually carried the send, not what the request bytes asked for. outcome.Downgrade says why
 		// it was HTTP/1.1 when it was, and Sender.Protocols counts it across every surface.
-		Protocol: outcome.Protocol,
+		Protocol: protocol,
 		// Lineage, when the caller named one. Validated rather than trusted: a parent id pointing at
 		// nothing would be a link that resolves to the wrong row or to no row, which is the failure
 		// mode the whole exchange-id typing exercise exists to stop.
-		ParentID: s.validParent(req.FromExchange),
+		ParentID: s.validParent(spec.From),
 		// SourceRepeater, not the unattributed zero value: this was not traffic the operator's
 		// client proxied, and HTTP history must not claim it was. It is recorded in the tool log
 		// below, which is the view whose subject is requests burpsy itself made — the same way
@@ -211,21 +233,96 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.AddExchange(ex)
 
+	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
+	// response the operator drove by hand, and Burp's jar can be configured to monitor the
+	// Repeater for exactly this. Absorbed from the raw bytes at the capture point — the same
+	// discipline the proxy path holds — and after the store write so a jar error can never lose
+	// the exchange. Source-attributed so the toggle can tell this surface's responses from the
+	// proxy's in Observation.
+	if s.sessionCoordinator != nil {
+		s.sessionCoordinator.AbsorbResponseCookies(session.SourceRepeater, spec.Host, spec.Port, spec.TLS, rawResp)
+	}
+
 	// The same count the exchange row carries, taken from the same bytes, so Logger and HTTP history
 	// cannot disagree about the size of one send.
-	s.toolLog.Record(toollog.ToolRepeater, host, port, tls, ex.Method, ex.Path, intOrZero(status),
-		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "")
+	// Linked to the exchange just written, so Logger's message viewer can resolve this row's bytes
+	// (burpsy-react-ui-5bl). &ex.ID, never a zero: the traffic store counts from zero, so exchange 0
+	// is a real row and a nil-less zero would point the viewer at the wrong message pair.
+	s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, ex.Method, ex.Path, intOrZero(status),
+		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
+	return repeaterSendResp{
+		Status:             intOrZero(status),
+		DurationMs:         ex.Duration.Millis(),
+		Response:           string(rawResp),
+		RequestMsgID:       uint64(reqMsgID),
+		ResponseMsgID:      uint64(respMsgID),
+		ExchangeID:         ex.ID,
+		ResponseBodyBase64: displayBodyBase64(rawResp),
+	}, ex
+}
+
+// sendOneRepeaterRequest is one send on its own fresh connection, end to end: the wire, the stored
+// exchange, the tool log and the redirect chain. It is the whole of /api/repeater/send's wire half,
+// and it is what the group send's two separate-connection modes fan out over — sequentially or
+// concurrently — so those modes reinvent no scope-checking and no result-shaping.
+func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSpec) (repeaterSendResp, error) {
+	// SendRaw handles a raw HTTP request (possibly HTTP/1.0-style with Host line) over the wire.
+	// Timed here because SendRaw does not report a duration and the exchange row used to be written with a
+	// hardcoded zero — which, before core.ExchangeDuration existed, was indistinguishable from a
+	// sub-millisecond send, so the repeater's own "duration_ms: 0" reply looked like a measurement.
+	//
+	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
+	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
+	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	sendStarted := time.Now()
+	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
+	elapsed := time.Since(sendStarted)
+	if err != nil {
+		// Surface the dial/parse error to the UI so Repeater is not silently empty.
+		// nil, not zero: the send never reached a response, which is a different fact from a response
+		// that arrived with no bytes in it.
+		// nil exchange as well as nil length: the send never reached a response, so nothing was
+		// stored and there are no bytes for Logger's viewer to resolve.
+		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
+		return repeaterSendResp{}, err
+	}
+	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
+	resp.Redirects = s.followRepeaterRedirects(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options)
+	return resp, nil
+}
+
+func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req repeaterSendReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	request := req.Request
+	if req.RequestBase64 != "" {
+		b, derr := base64.StdEncoding.DecodeString(req.RequestBase64)
+		if derr != nil {
+			http.Error(w, "request_base64 is not valid base64", http.StatusBadRequest)
+			return
+		}
+		request = string(b)
+	}
+	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, request, req.Options, req.FromExchange)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(repeaterSendResp{
-		Status:        intOrZero(status),
-		DurationMs:    ex.Duration.Millis(),
-		Response:      string(rawResp),
-		RequestMsgID:  uint64(reqMsgID),
-		ResponseMsgID: uint64(respMsgID),
-		ExchangeID:    ex.ID,
-		Redirects:     s.followRepeaterRedirects(ctx, host, port, tls, rawRequest, rawResp, opts),
-	})
+	json.NewEncoder(w).Encode(resp)
 }
 
 // followRepeaterRedirects applies this send's redirect policy to a send that already happened — the
@@ -283,14 +380,37 @@ func (s *Server) followRepeaterRedirects(
 	}
 }
 
+// targetPathOf extracts the request path from a wire target for the cookie jar's §5.4
+// path-match ("http://host:port/api/x" -> "/api/x"). The cookie jar decides per request which
+// cookies the request carries, and the path is the component of the target that decides it —
+// the same split targetParts performs for the authority, for the other half of the rule.
+func targetPathOf(target string) string {
+	rest := target
+	if cut := strings.Index(rest, "://"); cut >= 0 {
+		rest = rest[cut+3:]
+	}
+	start := strings.IndexAny(rest, "/?#")
+	if start < 0 {
+		return "/"
+	}
+	rest = rest[start:]
+	if end := strings.IndexAny(rest, "?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	if rest == "" {
+		return "/"
+	}
+	return rest
+}
+
 // cookieHeaderFor returns the session coordinator's cookie header for the target, or empty when
 // there is no coordinator — a nil check, not a hope: the coordinator is an optional capability and
 // a nil dereference here would take the whole send down for an option that is off by default.
-func (s *Server) cookieHeaderFor(host string, port uint16, tls bool) string {
+func (s *Server) cookieHeaderFor(host string, port uint16, tls bool, path string) string {
 	if s.sessionCoordinator == nil {
 		return ""
 	}
-	return s.sessionCoordinator.CookieHeader(host, port, tls)
+	return s.sessionCoordinator.CookieHeader(host, port, tls, path)
 }
 
 // ---- Intruder ----------------------------------------------------------------------------------
@@ -301,9 +421,13 @@ func (s *Server) cookieHeaderFor(host string, port uint16, tls bool) string {
 // there is one execution path, one rate limiter, and one place scope is enforced.
 
 const (
-	intruderDefaultRPS          = 20.0
-	intruderMinRPS              = 0.01
-	intruderMaxInFlightCeiling  = 999
+	intruderDefaultRPS         = 20.0
+	intruderMinRPS             = 0.01
+	intruderMaxInFlightCeiling = 999
+	// intruderMaxDelayIncrementMS is Burp's own validation bound on a delay in milliseconds
+	// (Zb33, the same 600000 that bounds "Pause before retry"). An increment is applied once per
+	// request, so beyond this a two-request attack is already an hour long.
+	intruderMaxDelayIncrementMS = 600000
 	intruderDefaultMaxPayloads  = 10_000
 	intruderMaxThrottleStatuses = 32
 	// The legacy form keeps its original 500-request cap so a fat paste cannot become an
@@ -377,26 +501,114 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 
 // intruderRunReq mirrors the Rust RunReq. Pointers distinguish "absent" from "zero", which the
 // request semantics depend on (a named empty mode list is a 400, an absent one is sniper).
+// autoPauseReq is the wire form of Burp's auto-pause settings: the expression list, the
+// appears/missing mode, simple-string vs regex matching, and case sensitivity.
+type autoPauseReq struct {
+	Expressions   []string `json:"expressions"`
+	Missing       bool     `json:"missing"`
+	Simple        bool     `json:"simple"`
+	CaseSensitive bool     `json:"case_sensitive"`
+}
+
 type intruderRunReq struct {
 	MsgID          uint64                    `json:"msg_id"`
 	Target         string                    `json:"target"`
 	All            bool                      `json:"all"`
 	PointIndex     *int                      `json:"point_index"`
+	ManualPoints   *[]intruder.ManualSpan    `json:"manual_points"`
 	Payloads       *[]string                 `json:"payloads"`
 	Mode           *string                   `json:"mode"`
 	Points         *[]int                    `json:"points"`
 	PayloadSets    *[][]string               `json:"payload_sets"`
 	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
 	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
-	MaxPayloads    *int                      `json:"max_payloads"`
-	GrepMatch      *string                   `json:"grep_match"`
-	GrepExtract    *string                   `json:"grep_extract"`
-	Pool           *string                   `json:"pool"`
-	AutoThrottle   *intruder.AutoThrottle    `json:"auto_throttle"`
-	RPS            *float64                  `json:"rps"`
-	MaxInFlight    *int                      `json:"max_in_flight"`
-	MaxRequests    *int                      `json:"max_requests"`
-	TimeoutMS      *uint64                   `json:"timeout_ms"`
+	// AutoPause is Burp's auto-pause (burpsy-react-ui-8f2): pause the attack when any listed
+	// expression appears in a response (or, with missing=true, when none does). Nil is
+	// unconfigured. Simple strings are case-folded unless case_sensitive; regex entries
+	// carry their own case flags, the way Go's regexp works.
+	AutoPause *autoPauseReq `json:"auto_pause"`
+	// RecursiveGrep is Burp's Recursive grep payload type (ztuu). Non-nil switches the engine to
+	// the serial chain driver: send the initial payload, extract the next from each response.
+	// The struct is the wire form of the per-position payload source {"type":"recursive_grep"}
+	// — carried as its own request field rather than only inside payload_sources because the
+	// chain has attack-level consequences (forced serial execution, unbounded-at-launch set)
+	// that belong to the run, not to one position's generator.
+	RecursiveGrep *intruder.RecursiveGrepSource `json:"recursive_grep"`
+	// URLEncode is Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the
+	// characters percent-encoded in every generated payload as the final pass, after the
+	// rule chain. Empty (or absent) means no extra encoding — matching the off state, not
+	// an empty set that would encode nothing anyway. Spaces and control characters are
+	// always encoded additionally, because a request containing them cannot be delivered.
+	URLEncode   *string `json:"url_encode_characters"`
+	MaxPayloads *int    `json:"max_payloads"`
+	GrepMatch   *string `json:"grep_match"`
+	GrepExtract *string `json:"grep_extract"`
+	// GrepMatchList is Burp's full Grep - Match form (irt): a LIST of expressions, one results
+	// column per expression counting occurrences. The single-string grep_match above is kept
+	// unchanged — the bundled UI and the wire contract both send it, and both shapes mean the
+	// same thing when the list holds one item.
+	GrepMatchList *[]string `json:"grep_match_list"`
+	// GrepMatchSimple is Burp's Match type radio: simple strings (quoted, case-folded) vs
+	// regexes compiled as-is. Nil and true mean simple, which is how the single grep_match has
+	// always behaved (quoteRegex on the UI side, tpy).
+	GrepMatchSimple *bool `json:"grep_match_simple"`
+	// GrepMatchCaseSensitive turns off the case-folding a simple-string match applies.
+	GrepMatchCaseSensitive *bool `json:"grep_match_case_sensitive"`
+	// GrepMatchExcludeHeaders searches the response body only — Burp's "Exclude HTTP headers".
+	GrepMatchExcludeHeaders *bool `json:"grep_match_exclude_headers"`
+	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
+	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
+	// never thought about error handling is exactly the person Burp's default protects, and a
+	// zero-default would make the flaky-target case the loud one. Explicit 0 disables.
+	Retries *int `json:"retries"`
+	// Baseline is Burp's "Make unmodified baseline request" (v34): issue the template with all
+	// positions at their base values as item 0, so every attack response has a base response to
+	// compare against. False unless asked.
+	Baseline *bool `json:"baseline"`
+	// RetryDelayMS is Burp's "Pause before retry" in milliseconds. Nil means Burp's 2000
+	// (Zrur: "2000" beside pausebeforeretry); the accepted range is Burp's own validation
+	// bound (Zb33): 0..600000.
+	RetryDelayMS *int                   `json:"retry_delay_ms"`
+	Pool         *string                `json:"pool"`
+	AutoThrottle *intruder.AutoThrottle `json:"auto_throttle"`
+	RPS          *float64               `json:"rps"`
+	MaxInFlight  *int                   `json:"max_in_flight"`
+	// DelayJitterPercent is Burp's resource-pool "With random variations" (nn0n), as a percentage
+	// of the interval `rps` states: 25 makes every gap between requests land somewhere in ±25% of
+	// it. Percent rather than the engine's fraction because that is the number on the screen and
+	// the conversion belongs on one side of the wire, not in the browser. Omitted or 0 is the flat
+	// spacing every attack has always had.
+	DelayJitterPercent *float64 `json:"delay_jitter_percent"`
+	// DelayIncrementMS is Burp's throttleIncrementMillis: each gap is this many milliseconds
+	// longer than the one before it, so an attack that starts inside a rate-limit window stays
+	// inside it as the window fills. Bounded at both ends — see intruderMaxDelayIncrementMS.
+	DelayIncrementMS *int `json:"delay_increment_ms"`
+	// DelaySeed seeds the jitter. Omitted is 0, which is a seed like any other: the schedule is
+	// replayable either way, and an operator who wants a different shape of traffic per run sends
+	// a different number. See intruder.DelayVariation.
+	DelaySeed   *uint64 `json:"delay_seed"`
+	MaxRequests *int    `json:"max_requests"`
+	TimeoutMS   *uint64 `json:"timeout_ms"`
+	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
+	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
+	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
+	// per-send override — so an attack that never mentions it behaves exactly as one always did
+	// (RedirectNever by default). "process cookies in redirections" is deliberately not offered
+	// here, for the same reason repeater_options.go's doc comment gives: hops are built by
+	// sender.FollowRedirectsAfterPolicy, which does not replay cookies, and a checkbox for a
+	// feature that does not exist would lie.
+	FollowRedirects *string `json:"follow_redirects"`
+	// SetConnectionClose and StorePayloads are Burp's other two attack settings
+	// (burpsy-react-ui-fmxv): "Set Connection header" (add or update Connection: close) and
+	// "Store full payloads" (retain the full payload values for each result). Both are the engine's
+	// Attack.SetConnectionClose / Attack.StorePayloads, reached here for the first time — the engine
+	// half landed in 29a7ee3 with no way to set either.
+	//
+	// Pointers so an absent field means "not asked for", which is what every attack sent before
+	// this means. A plain bool cannot tell that from an explicit false, and the difference is
+	// whether a client's saved attack resumes with the setting on or off.
+	SetConnectionClose *bool `json:"set_connection_close,omitempty"`
+	StorePayloads      *bool `json:"store_full_payloads,omitempty"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -419,10 +631,12 @@ type intruderRunReq struct {
 func (s *Server) intruderLimits(req intruderRunReq) (intruder.RateLimit, error) {
 	named := req.Pool != nil && strings.TrimSpace(*req.Pool) != ""
 	if named {
-		if req.RPS != nil || req.MaxInFlight != nil || req.AutoThrottle != nil {
+		if req.RPS != nil || req.MaxInFlight != nil || req.AutoThrottle != nil ||
+			req.DelayJitterPercent != nil || req.DelayIncrementMS != nil || req.DelaySeed != nil {
 			return intruder.RateLimit{}, fmt.Errorf(
 				"this attack names the pool %q and also sets its own limits; the pool already states "+
-					"rps, max_in_flight and automatic throttling, so send one or the other",
+					"rps, max_in_flight, automatic throttling and how its delay varies, so send one or "+
+					"the other",
 				strings.TrimSpace(*req.Pool))
 		}
 		limit, err := s.pools.Limit(strings.TrimSpace(*req.Pool))
@@ -461,6 +675,38 @@ func (s *Server) intruderLimits(req intruderRunReq) (intruder.RateLimit, error) 
 		}
 		limits = limits.WithAutoThrottle(at)
 	}
+	// Burp's resource-pool variations (nn0n). Sent only when the operator asked for one, so an
+	// attack that never mentions them takes the flat spacing through a code path the engine
+	// short-circuits before any schedule exists. The engine refuses the combinations it cannot
+	// honour — a jitter that would schedule a zero gap, an increment that shortens one — and the
+	// refusal is handed straight back rather than clamped, so the operator learns which of their
+	// two numbers was the impossible one.
+	if req.DelayJitterPercent != nil || req.DelayIncrementMS != nil || req.DelaySeed != nil {
+		variation := intruder.DelayVariation{}
+		if p := req.DelayJitterPercent; p != nil {
+			if *p < 0 || *p >= 100 {
+				return intruder.RateLimit{}, fmt.Errorf(
+					"delay_jitter_percent must be at least 0 and below 100 (at 100%% a downward "+
+						"variation is a zero gap, and beyond it a negative one), got %v", *p)
+			}
+			variation.Jitter = *p / 100
+		}
+		if inc := req.DelayIncrementMS; inc != nil {
+			if *inc < 0 || *inc > intruderMaxDelayIncrementMS {
+				return intruder.RateLimit{}, fmt.Errorf(
+					"delay_increment_ms must be between 0 and %d, got %d", intruderMaxDelayIncrementMS, *inc)
+			}
+			variation.IncrementMS = *inc
+		}
+		if seed := req.DelaySeed; seed != nil {
+			variation.Seed = *seed
+		}
+		varied, err := limits.WithVariation(&variation)
+		if err != nil {
+			return intruder.RateLimit{}, err
+		}
+		limits = varied
+	}
 	return limits, nil
 }
 
@@ -473,6 +719,26 @@ func intruderLimitStatus(err error) int {
 	return http.StatusBadRequest
 }
 
+// intruderRedirectPolicy resolves one attack's "Follow redirections" setting to the sender's
+// redirect policy: the request's override when it named one, otherwise the network settings'
+// standing policy — repeaterSendOptions.redirectPolicy's rule, reused rather than reinvented so
+// the two tools cannot drift on what "the standing policy" means. The hop budget always comes
+// from the standing settings: MaxHops is an anti-loop bound, not a policy choice an attack gets
+// to relax, because the same chain-following code a single Repeater send uses now runs once per
+// attempt, and a bigger budget here is a bigger budget for every one of a 200,000-request attack.
+func intruderRedirectPolicy(mode *string, standing sender.RedirectSettings) (sender.RedirectSettings, error) {
+	if mode == nil || *mode == "" {
+		return standing, nil
+	}
+	switch sender.RedirectMode(*mode) {
+	case sender.RedirectNever, sender.RedirectOnSite, sender.RedirectInScope, sender.RedirectAlways:
+		return sender.RedirectSettings{Mode: sender.RedirectMode(*mode), MaxHops: standing.MaxHops}, nil
+	default:
+		return sender.RedirectSettings{}, fmt.Errorf(
+			"follow_redirects: unknown mode %q (want never, on_site, in_scope, always, or empty for the standing policy)", *mode)
+	}
+}
+
 // AttemptView is the legacy one-position form's row.
 type AttemptView struct {
 	Payload     string  `json:"payload"`
@@ -482,6 +748,9 @@ type AttemptView struct {
 	Error       *string `json:"error"`
 	GrepMatched *bool   `json:"grep_matched"`
 	GrepExtract *string `json:"grep_extract"`
+	// GrepMatchCounts is the expression list's per-item occurrence count (irt). Empty when no
+	// list was configured.
+	GrepMatchCounts []int `json:"grep_match_counts"`
 }
 
 // BucketExample resolves one ordinal — a bucket's first ordinal, or any other attempt ordinal the
@@ -505,6 +774,11 @@ type RunView struct {
 	// "the jar was empty" and "the jar was never consulted" are not the same JSON — the reading that
 	// makes a whole unauthenticated attack look like a finding about the endpoint.
 	SessionCookies intruderSessionCookies `json:"session_cookies"`
+	// RedirectsFollowed is how many additional requests this attack sent chasing a 3xx, summed
+	// across every attempt (tirx). Zero whenever follow_redirects names RedirectNever (the default)
+	// or every hop was refused by policy or scope — the same "prove the setting did something"
+	// discipline AutoThrottleEngaged already holds the rate limiter to.
+	RedirectsFollowed int `json:"redirects_followed"`
 }
 
 // intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
@@ -598,20 +872,43 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	discovered := intruder.FindPoints(msg, cfg)
 	wanted, err := selectPoints(req.Points, req.PointIndex, len(discovered))
+	if err != nil && req.ManualPoints == nil {
+		// A refusal is only final when no manual markers back it up: a manual-only attack selects no
+		// discovered point, and that is the whole point of marking one by hand.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Manual markers are byte ranges the operator marked by hand (Burp's Add §). They join the
+	// attack alongside the selected discovered points — never filtered through selectPoints,
+	// which indexes the discovered list — and they count toward the same position bounds.
+	manual, err := intruder.ManualPoints(msg.Raw(), derefManual(req.ManualPoints))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Burp's rule, and a sound one: one position makes the multi-set modes meaningless, and twenty
-	// is where a cluster bomb stops being an attack and becomes an outage.
-	if (kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb) &&
-		(len(wanted) < 2 || len(wanted) > 20) {
-		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(wanted)), http.StatusBadRequest)
-		return
-	}
-	selected := make([]intruder.InsertionPoint, 0, len(wanted))
+	selected := make([]intruder.InsertionPoint, 0, len(wanted)+len(manual))
 	for _, i := range wanted {
 		selected = append(selected, discovered[i])
+	}
+	// Manual-vs-discovered overlap is refused here, naming the marking, rather than left to the
+	// splice's earliest-span-wins rule, which would silently drop one of the two payloads.
+	for _, m := range manual {
+		for _, d := range selected {
+			if m.Span.Offset < d.Span.Offset+d.Span.Len && d.Span.Offset < m.Span.Offset+m.Span.Len {
+				http.Error(w, fmt.Sprintf("manual point %q overlaps discovered point %q", m.Label, d.Label), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	selected = append(selected, manual...)
+	// Burp's rule, and a sound one: one position makes the multi-set modes meaningless, and twenty
+	// is where a cluster bomb stops being an attack and becomes an outage. Manual markers count
+	// toward it: an operator who marks three byte ranges has three payload positions, whatever
+	// the discoverer found.
+	if (kind == intruder.AttackKindPitchfork || kind == intruder.AttackKindClusterBomb) &&
+		(len(selected) < 2 || len(selected) > 20) {
+		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(selected)), http.StatusBadRequest)
+		return
 	}
 
 	// A literal list is a PayloadSource variant, so the three request shapes collapse to one type
@@ -640,7 +937,137 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// Generate, then process, then done — all of it before the plan is built, so plan.Len() is
 	// the number of requests and a payload a rule dropped never occupies an ordinal.
 	resolved := make([]intruder.PayloadSet, 0, len(sources))
+	// copyFrom records, per position, the earlier position it mirrors. Handed to the plan below so
+	// the copied position is filled from its source's ordinal rather than its own
+	// (burpsy-react-ui-kwe0).
+	copyFrom := make(map[int]int)
 	for i, src := range sources {
+		// copy_other (2g13) is resolved here, against the sources already in `resolved`, rather
+		// than inside PayloadSource.Resolve: it has no generator of its own, and what it copies
+		// is the *processed* items of another position — the same bytes that position's own
+		// splice uses, after its own rule chain and URL-encoding already ran. Copying earlier in
+		// the pipeline (or re-running the chain/encoding on the copy) would let the two positions
+		// diverge, defeating the one thing this payload type exists to guarantee.
+		//
+		// Pitchfork only. It works there because pitchfork's Fill (plan.go) advances every
+		// position's set at the *same* index i — two positions given identical Items therefore
+		// receive identical payloads on every request. Cluster bomb's mixed-radix Fill advances
+		// each position's set at a rate that depends on its own position in the radix system, so
+		// two identical Items lists would coincide on some ordinals and diverge on most of the
+		// rest — a copy that is right most of the time is a correctness bug with a very good
+		// disguise, and refusing it is more honest than shipping that. Making it exact for cluster
+		// bomb needs the engine to read another position's *resolved slot* at splice time
+		// (engine.go's per-ordinal loop), not a static payload list — a larger change than this
+		// bead's evidence asks for, and it is refused by name here rather than silently.
+		// The Collaborator payload type (hi8): mint Count fresh addresses at launch and hand
+		// Resolve an ordinary list, so the engine sees exactly the payloads that will reach the
+		// wire. The mint is the Collaborator page's own primitive (collaboratorMarker + the
+		// channel's domain), so an attack's payloads land in the hub the Collaborator page
+		// polls — the operator sees the interaction attributed to the address the attack used.
+		// Refusal before any request goes out when no channel is configured: Burp's own
+		// behaviour (Zcc_ ends the payload set on a missing channel) would silently shorten the
+		// attack instead, and a shortened OOB sweep reads as a clean one.
+		if src.Type == "collaborator" {
+			cfg := src.Collaborator
+			if cfg == nil {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): missing configuration", i), http.StatusBadRequest)
+				return
+			}
+			count := cfg.Count
+			if count < 1 {
+				count = 1 // Burp's panel treats a non-number as 0 and stops; one payload is what a click means
+			}
+			if count > maxCollaboratorBatch {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): count %d exceeds the batch bound of %d; a batch that large is a script's job, not a click's",
+					i, count, maxCollaboratorBatch), http.StatusBadRequest)
+				return
+			}
+			channel, err := s.scanner.OOBChannel(r.Context())
+			if err != nil {
+				http.Error(w, fmt.Sprintf("payload set %d (collaborator): no out-of-band interaction channel is configured, so no payload can be minted — an address for a channel nothing polls would report every OOB check as clean when none of them ran: %v",
+					i, err), http.StatusConflict)
+				return
+			}
+			// Nil = Burp's checked default (see CollaboratorSource.IncludeLocation).
+			includeLocation := cfg.IncludeLocation == nil || *cfg.IncludeLocation
+			items := make([]string, 0, count)
+			for j := 0; j < count; j++ {
+				marker, err := collaboratorMarker()
+				if err != nil {
+					http.Error(w, fmt.Sprintf("payload set %d (collaborator): minting failed: %v", i, err), http.StatusInternalServerError)
+					return
+				}
+				addr := marker
+				if includeLocation {
+					addr = marker + "." + channel.Domain()
+				}
+				items = append(items, addr)
+			}
+			// Record the mint in the hub the Collaborator page reads, so the payloads an attack
+			// used are visible and attributable there — the same accounting the page's own
+			// mint button gets.
+			hub := s.collab()
+			now := time.Now()
+			hubRows := make([]mintedPayload, 0, len(items))
+			for _, addr := range items {
+				marker := strings.TrimSuffix(addr, "."+channel.Domain())
+				hubRows = append(hubRows, mintedPayload{Address: addr, Marker: marker, MintedAt: now})
+			}
+			hub.mu.Lock()
+			hub.minted = append(hub.minted, hubRows...)
+			hub.mu.Unlock()
+
+			resolved = append(resolved, intruder.PayloadSet{
+				Kind:       "collaborator",
+				Items:      items,
+				Count:      len(items),
+				Total:      uint64(len(items)),
+				TotalExact: true,
+				MaxCount:   payloadCap,
+				Skipped:    0,
+				Dropped:    []intruder.DropReason{},
+			})
+			continue
+		}
+		if src.Type == "copy_other" {
+			// Cluster bomb is supported now, and the reason it was not is worth keeping: its mixed-radix
+			// Fill advances each position's set at a rate that depends on that position's place in the
+			// radix system, so aliasing the source's PAYLOADS and stepping the copy by its own ordinal
+			// made the two coincide on some requests and diverge on the rest — a copy that is right most
+			// of the time, which is the worst possible disguise for a correctness bug. The plan now
+			// decodes the SOURCE's digit for the copied position (plan.go's Fill), which is exact by
+			// construction, and that is what this payload type exists to guarantee
+			// (burpsy-react-ui-kwe0).
+			//
+			// Sniper and battering ram stay refused, and for a different reason than cluster bomb did:
+			// they advance ONE set across every position, so "another position's payload" has no
+			// per-position meaning to copy from.
+			if kind == intruder.AttackKindSniper || kind == intruder.AttackKindBatteringRam {
+				http.Error(w, fmt.Sprintf(
+					"payload set %d (copy_other): %s advances one payload set across every position, so there is no per-position payload to copy; use pitchfork or cluster bomb",
+					i, kind), http.StatusBadRequest)
+				return
+			}
+			target := -1
+			if src.CopyOther != nil {
+				target = src.CopyOther.Position
+			}
+			if target < 0 || target >= i {
+				http.Error(w, fmt.Sprintf(
+					"payload set %d (copy_other): position %d must name an earlier position in this attack (0..%d)",
+					i, target, i-1), http.StatusBadRequest)
+				return
+			}
+			copied := resolved[target]
+			copied.Kind = "copy_other"
+			// Recorded for the plan, which fills the copied position from its SOURCE's ordinal. The
+			// aliasing below is still what the request bytes are read from; the mapping is what makes
+			// the two positions receive the SAME payload on every request under a radix that advances
+			// each position at its own rate.
+			copyFrom[i] = target
+			resolved = append(resolved, copied)
+			continue
+		}
 		ps, err := src.Resolve(payloadCap)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("payload set %d (%s): %s", i, src.AsStr(), err), http.StatusBadRequest)
@@ -648,10 +1075,17 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		}
 		ps.Kind = src.AsStr()
 		chain.Run(ps)
+		// The safety net, after the operator's chain (burpsy-react-ui-8cbc): Burp runs this
+		// final pass regardless of payload type, so an explicit encode rule and this compose
+		// rather than compete.
+		if req.URLEncode != nil {
+			intruder.URLEncodeSet(ps, *req.URLEncode)
+		}
 		resolved = append(resolved, *ps)
 	}
 
-	grep, err := buildGrep(req.GrepMatch, req.GrepExtract)
+	grep, err := buildGrep(req.GrepMatch, req.GrepExtract, req.GrepMatchList,
+		req.GrepMatchSimple, req.GrepMatchCaseSensitive, req.GrepMatchExcludeHeaders)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -676,11 +1110,19 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	for _, set := range resolved {
 		setLens = append(setLens, len(set.Items))
 	}
-	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound)
+	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound).WithCopies(copyFrom)
 
 	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
 	if req.TimeoutMS != nil {
 		timeout = time.Duration(*req.TimeoutMS) * time.Millisecond
+	}
+
+	// Burp's "Follow redirections" (tirx): resolved once, before the send closure, so a bad mode
+	// is refused before any request goes out rather than discovered on the first 30x.
+	redirectPolicy, rerr := intruderRedirectPolicy(req.FollowRedirects, s.sender.Network().Redirects)
+	if rerr != nil {
+		http.Error(w, rerr.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// One authorising sender for the whole attack. The scope decision still happens once per
@@ -700,10 +1142,16 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// makes a request that manipulates a cookie […] the session handling action is not applied to
 	// that request." Refreshing the position being fuzzed from the jar would send the same request
 	// every time and produce one meaningless bucket. See internal/web/intruder_cookies.go.
-	jarHeader := s.cookieHeaderFor(host, port, tls)
+	jarHeader := s.cookieHeaderFor(host, port, tls, targetPathOf(req.Target))
 	exemptCookies := exemptCookieNames(selected)
 
+	// redirectsFollowed counts every hop this attack actually sent, across every attempt — the
+	// report's own proof that the setting did something, the same discipline AutoThrottleEngaged
+	// already holds to. Atomic because every attempt's send runs on its own goroutine (engine.go's
+	// driver loop), all writing through this one closure.
+	var redirectsFollowed atomic.Int64
 	send := func(raw []byte) (intruder.Sent, error) {
+		sendStarted := time.Now()
 		sctx := ctx
 		var cancel context.CancelFunc
 		if timeout > 0 {
@@ -717,10 +1165,46 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return intruder.Sent{}, err
 		}
-		return intruder.Sent{Raw: res.Raw, Duration: res.Duration, Status: res.Status}, nil
+		respRaw, status := res.Raw, res.Status
+		if redirectPolicy.Mode != sender.RedirectNever {
+			// Every hop re-authorised on its own rendered bytes through the same AuthorisedSender the
+			// first send used — the intruder.go file header's whole point: "if an attack ever needs to
+			// follow a redirect it must do so per hop, re-authorising the new authority through the
+			// scope chokepoint, because a 30x is exactly how a target steers an attack somewhere nobody
+			// authorised." A chain FollowRedirectsAfterPolicy could not evaluate, or that the policy or
+			// scope refused past the first hop, leaves respRaw as the 30x itself — result.Final is
+			// always that response in that case, never a fabrication (see FollowRedirectsAfterPolicy's
+			// own doc), which is exactly what an operator who asked to follow and got refused should see.
+			if result, ferr := auth.FollowRedirectsAfterPolicy(sctx, raw, res.Raw, redirectPolicy); ferr == nil && result.Final != nil {
+				// Final.Raw is always set on this entry point (FollowRedirectsAfterPolicy builds Final
+				// from responseFromRaw or a followed hop's own wire bytes, never the typed transport
+				// path that has none — see FollowResult.Final's own doc), so this is the response the
+				// engine's grep, reflection and bucketing will actually see.
+				respRaw = result.Final.Raw
+				status = &result.Final.StatusCode
+				if result.Sent > 1 {
+					redirectsFollowed.Add(int64(result.Sent - 1))
+				}
+			}
+		}
+		// Timed across the whole closure, not just the first hop's res.Duration: once redirects are
+		// being followed, "how long this attempt took" means the whole chain, the same way Burp's own
+		// timing describes what an operator waited for, not the first response of several.
+		return intruder.Sent{Raw: respRaw, Duration: time.Since(sendStarted), Status: status}, nil
 	}
+	// The response recorder remains the engine's one-per-bucket exemplar rule. The exact-request
+	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
 		id, _ := s.store.Put(raw, core.DirectionResponse)
+		// The jar's monitored-tool set (burpsy-react-ui-sn3j): the exemplar is one stored
+		// response per result bucket, so this offers the jar the Set-Cookie lines of each
+		// distinct behaviour the attack actually saw — not one per request, which would multiply
+		// the same lines by the bucket's count and is the same restraint the engine's memory
+		// contract already holds. Absorbing here, beside the store write, keeps the capture
+		// point the one place a response becomes observable.
+		if s.sessionCoordinator != nil {
+			s.sessionCoordinator.AbsorbResponseCookies(session.SourceIntruder, host, port, tls, raw)
+		}
 		return uint64(id)
 	}
 
@@ -728,7 +1212,99 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
 		WithGrep(grep).
-		WithControl(control)
+		WithControl(control).
+		// Burp's other two attack settings (fmxv), attached only when the request names them, so
+		// an attack sent before this field set is byte-for-byte what it always was. A nil here is
+		// "off" at the engine, which is the same thing — the fields exist so the UI can ask.
+		WithSetConnectionClose(req.SetConnectionClose != nil && *req.SetConnectionClose).
+		WithStorePayloads(req.StorePayloads != nil && *req.StorePayloads)
+	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
+	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
+	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
+	// shape — the payload type is chosen per position). The source form wins when both name one,
+	// because the source is what the operator saw in the payload-type menu.
+	var recursiveSource *intruder.RecursiveGrepSource
+	for _, src := range sources {
+		if src.RecursiveGrep != nil {
+			recursiveSource = src.RecursiveGrep
+			break
+		}
+	}
+	if recursiveSource != nil && req.RecursiveGrep != nil {
+		http.Error(w, "recursive_grep appears both as a payload source and as the request's recursive_grep field; send one — the two forms would compete for which chain runs",
+			http.StatusBadRequest)
+		return
+	}
+	if recursiveSource != nil {
+		req.RecursiveGrep = recursiveSource
+	}
+	if req.RecursiveGrep != nil {
+		re, err := regexp.Compile(req.RecursiveGrep.ExtractRe)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("recursive_grep: extract pattern does not compile: %v", err), http.StatusBadRequest)
+			return
+		}
+		attack.WithRecursive(&intruder.RecursiveGrep{Re: re, StopDuplicate: req.RecursiveGrep.StopDuplicate})
+		// Burp forces the resource pool to max concurrent 1 for these attacks (Zsvp.Zx: the pool
+		// builder answers 1 whenever the attack uses a recursive-grep source), rather than
+		// refusing the operator's pool. Same here: the serial driver ignores concurrency by
+		// construction, so clamping is the honest action — the report then names the pool that
+		// ran at 1, and an operator who wonders why a fast pool ran serially can read this
+		// comment in the code rather than a refusal in the UI. Refusing instead would make
+		// the payload type unusable from the bundled UI, whose default max_in_flight is 10.
+		limits.MaxInFlight = 1
+		limits.Burst = 1
+	}
+	// Error handling (n39): Burp's defaults — 3 retries, 2000ms pause — applied when the
+	// request does not name its own, because "intermittent network failures are common when
+	// testing" (Burp's own settings prose) and the operator who omitted the field is the
+	// person those defaults exist for. The pause bound is Burp's own: 0..600000ms (Zb33:
+	// "Pause before retry must be between 0 and 600000").
+	retries := 3
+	if req.Retries != nil {
+		retries = *req.Retries
+	}
+	if retries < 0 {
+		http.Error(w, fmt.Sprintf("retries must be 0 (disable) or more, got %d", retries), http.StatusBadRequest)
+		return
+	}
+	retryDelay := 2000 * time.Millisecond
+	if req.RetryDelayMS != nil {
+		if *req.RetryDelayMS < 0 || *req.RetryDelayMS > 600_000 {
+			http.Error(w, fmt.Sprintf("retry_delay_ms must be between 0 and 600000, got %d", *req.RetryDelayMS), http.StatusBadRequest)
+			return
+		}
+		retryDelay = time.Duration(*req.RetryDelayMS) * time.Millisecond
+	}
+	attack.WithRetries(retries, retryDelay)
+	if req.Baseline != nil {
+		attack.WithBaseline(*req.Baseline)
+	}
+	// Auto-pause (burpsy-react-ui-8f2): compiled once, refused here if an expression does
+	// not compile — an auto-pause that silently never fires is a control that lies by
+	// omission, the same rule the grep patterns follow.
+	if req.AutoPause != nil && len(req.AutoPause.Expressions) > 0 {
+		ap, err := intruder.NewAutoPause(req.AutoPause.Expressions, req.AutoPause.Simple,
+			req.AutoPause.Missing, req.AutoPause.CaseSensitive)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		attack.WithAutoPause(ap)
+	}
+	// The dashboard's Pause all tasks reaches the attack driver, alongside the attack's own
+	// pause/resume controls (burpsy-react-ui-cijs). Two gates because they answer different
+	// questions, and an operator who pressed "pause everything" should not have to find this
+	// attack's own button as well.
+	attack.SuiteGate = s.tasks.GateCheck
+	attack.RecordRequest = true
+	attack.RequestFn = func(raw []byte) uint64 {
+		id, err := s.store.Put(raw, core.DirectionRequest)
+		if err != nil {
+			return 0
+		}
+		return uint64(id)
+	}
 	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
 	// what will actually be sent — not the combination count, which is what the plan's bound already
 	// refused; the refusal shows up as the gated bucket on the result instead.
@@ -772,17 +1348,24 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		rows := make([]AttemptView, 0, len(report.Attempts))
 		for _, a := range report.Attempts {
 			payload := ""
-			if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+			if len(report.ChainPayloads) > 0 {
+				// The recursive chain (ztuu): plan arithmetic cannot name a response-derived
+				// payload, so the driver recorded it — read the record instead of the plan.
+				if a.Ordinal < len(report.ChainPayloads) {
+					payload = report.ChainPayloads[a.Ordinal]
+				}
+			} else if pl := payloadsAt(plan, resolved, payloadOrdinal(report, a.Ordinal)); len(pl) > 0 {
 				payload = pl[0]
 			}
 			rows = append(rows, AttemptView{
-				Payload:     payload,
-				Status:      a.Status,
-				Len:         a.ResponseLen,
-				DurationMS:  uint64(a.DurationMS),
-				Error:       a.Error,
-				GrepMatched: a.GrepMatched,
-				GrepExtract: a.GrepExtract,
+				Payload:         payload,
+				Status:          a.Status,
+				Len:             a.ResponseLen,
+				DurationMS:      uint64(a.DurationMS),
+				Error:           a.Error,
+				GrepMatched:     a.GrepMatched,
+				GrepExtract:     a.GrepExtract,
+				GrepMatchCounts: a.GrepMatchCounts,
 			})
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -799,10 +1382,27 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// (internal/intruder/engine.go), so this does not unbound the response (burpsy-react-ui-fvx).
 	seenOrdinal := make(map[int]bool, len(report.Buckets)+len(report.Attempts))
 	examples := make([]BucketExample, 0, len(report.Buckets)+len(report.Attempts))
+	// For the recursive chain (ztuu), the plan cannot name the payloads — the driver recorded
+	// them per ordinal (report.ChainPayloads), and every example reads that record instead.
+	examplePayloads := func(ordinal int) []string {
+		if report.Baseline && ordinal == 0 {
+			// Item 0 is the baseline request (v34): no payloads at all. Falling through to plan
+			// arithmetic would label the baseline row with the FIRST attack payload — exactly
+			// the mislabel the ordinal shift exists to prevent.
+			return []string{}
+		}
+		if len(report.ChainPayloads) > 0 {
+			if ordinal < len(report.ChainPayloads) {
+				return []string{report.ChainPayloads[ordinal]}
+			}
+			return []string{}
+		}
+		return payloadsAt(plan, resolved, payloadOrdinal(report, ordinal))
+	}
 	for _, b := range report.Buckets {
 		examples = append(examples, BucketExample{
 			FirstOrdinal: b.FirstOrdinal,
-			Payloads:     payloadsAt(plan, resolved, b.FirstOrdinal),
+			Payloads:     examplePayloads(b.FirstOrdinal),
 		})
 		seenOrdinal[b.FirstOrdinal] = true
 	}
@@ -811,16 +1411,17 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		seenOrdinal[a.Ordinal] = true
-		if pl := payloadsAt(plan, resolved, a.Ordinal); len(pl) > 0 {
+		if pl := examplePayloads(a.Ordinal); len(pl) > 0 {
 			examples = append(examples, BucketExample{FirstOrdinal: a.Ordinal, Payloads: pl})
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
-		Report:         *report,
-		Examples:       examples,
-		PayloadSets:    resolved,
-		SessionCookies: intruderSessionCookieView(jarHeader, exemptCookies),
+		Report:            *report,
+		Examples:          examples,
+		PayloadSets:       resolved,
+		SessionCookies:    intruderSessionCookieView(jarHeader, exemptCookies),
+		RedirectsFollowed: int(redirectsFollowed.Load()),
 	})
 }
 
@@ -849,6 +1450,14 @@ func selectPoints(points *[]int, pointIndex *int, found int) ([]int, error) {
 	default:
 		return nil, errors.New("no insertion point selected: pass point_index or points")
 	}
+}
+
+// derefManual normalises the optional manual-points field: an absent field marks nothing.
+func derefManual(spans *[]intruder.ManualSpan) []intruder.ManualSpan {
+	if spans == nil {
+		return nil
+	}
+	return *spans
 }
 
 // intruderSources collapses the three payload request shapes into one PayloadSource list and
@@ -880,7 +1489,13 @@ func intruderSources(sources *[]intruder.PayloadSource, sets *[][]string, payloa
 // buildGrep compiles the operator's grep patterns, if any. Go's regexp is RE2, which bounds
 // matching memory by construction (lazy DFA), so the Rust GREP_SIZE_LIMIT has no knob to turn:
 // the safety property it guarded holds without one.
-func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
+//
+// matchList is the irt form: a list of expressions plus Burp's three flags (Match type, Case
+// sensitive, Exclude HTTP headers). The single grep_match and the list are the same feature at
+// two sizes, so sending both is refused — the operator would have typed two expression sets and
+// had one silently dropped, the exact silent-compete trap the recursive_grep two-form refusal
+// already refuses.
+func buildGrep(matchRe, extractRe *string, matchList *[]string, simple, caseSensitive, excludeHeaders *bool) (intruder.Grep, error) {
 	var g intruder.Grep
 	var err error
 	if matchRe != nil && *matchRe != "" {
@@ -895,17 +1510,54 @@ func buildGrep(matchRe, extractRe *string) (intruder.Grep, error) {
 			return g, fmt.Errorf("bad grep_extract pattern: %v", err)
 		}
 	}
+	if matchList != nil {
+		hasSingle := matchRe != nil && *matchRe != ""
+		if hasSingle {
+			return g, fmt.Errorf("grep_match and grep_match_list are the same feature at two sizes; send one — a request carrying both would silently drop one of the two expression sets")
+		}
+		// Nil simple means simple: the single-string grep_match has always behaved as a literal
+		// (quoteRegex folds the decision into the pattern client-side), so the list's default
+		// keeps that behaviour rather than inventing a regex-by-default break.
+		isSimple := simple == nil || *simple
+		caseSensitive := caseSensitive != nil && *caseSensitive
+		exclude := excludeHeaders != nil && *excludeHeaders
+		nonEmpty := make([]string, 0, len(*matchList))
+		for _, e := range *matchList {
+			if strings.TrimSpace(e) != "" {
+				nonEmpty = append(nonEmpty, e)
+			}
+		}
+		if len(nonEmpty) == 0 {
+			return g, fmt.Errorf("grep_match_list carries no expression; send at least one, or omit the list")
+		}
+		g.MatchList, err = intruder.NewMatchList(nonEmpty, isSimple, caseSensitive, exclude)
+		if err != nil {
+			return g, err
+		}
+	}
 	return g, nil
+}
+
+// payloadOrdinal maps a report ordinal to the plan ordinal payloadsAt needs: with Burp's
+// baseline request enabled (v34) the baseline is item 0 and the plan's ordinals shift by one.
+func payloadOrdinal(report *intruder.AttackReport, ordinal int) int {
+	if report.Baseline && ordinal > 0 {
+		return ordinal - 1
+	}
+	return ordinal
 }
 
 // payloadsAt recovers the payload combination behind a plan ordinal. This is why results can hold
 // an ordinal and nothing else: the plan is a pure function of the index.
+// Never nil: BucketExample.Payloads goes out as `payloads` and types.tools.ts declares it
+// `string[]`, so an ordinal the plan cannot place must be an empty array rather than a `null` the
+// browser was told could not happen (burpsy-react-ui-9pxd).
 func payloadsAt(plan *intruder.AttackPlan, sets []intruder.PayloadSet, ordinal int) []string {
+	out := []string{}
 	var asg intruder.Assignment
 	if !plan.Fill(ordinal, &asg) {
-		return nil
+		return out
 	}
-	var out []string
 	for _, slot := range asg.Slots {
 		if slot.Set < 0 || slot.Set >= len(sets) {
 			continue
@@ -950,6 +1602,17 @@ type scannerFinding struct {
 type liveAuditEnableReq struct {
 	Enabled bool    `json:"enabled"`
 	Query   *string `json:"query"`
+	// TrafficSource is the per-source gate choice (zk35): "proxy" (the default — only the
+	// operator's own proxied captures) or "everything" (any tool's in-scope captures, so a
+	// crawl with the sweep on gets its discoveries audited as they land). Pointer so an
+	// absent field never changes the choice; an unknown value is refused by the state.
+	TrafficSource *string `json:"traffic_source"`
+	// RetryStalled asks for the iyqg operator action: rewind the cursor to the stalled
+	// exchange so the next tick waits on it with the stall budget carried, not restarted.
+	// Distinguished from absent by pointer so a plain {enabled} toggle from an older client
+	// never means "retry" — but a plain {enabled} POST already carries the current switch,
+	// so the two compose without a second route.
+	RetryStalled *bool `json:"retry_stalled"`
 }
 
 // handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
@@ -966,6 +1629,27 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			if req.TrafficSource != nil {
+				if err := s.liveAudit.SetTrafficSource(LiveAuditTrafficSource(*req.TrafficSource)); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo, fmt.Sprintf(
+					"the live audit now admits %q-captured traffic", *req.TrafficSource))
+			}
+			// The retry action runs before the switch handling: a stalled sweep being retried is
+			// enabled by definition (it is running ticks), and ordering keeps "enable" the
+			// body's last word. A retry requested while nothing is stalled is refused with a
+			// 409 rather than a silent 200 — an operator pressing the button wants to know the
+			// stall already cleared, not a no-op they must infer from stalled_at disappearing.
+			if req.RetryStalled != nil && *req.RetryStalled {
+				if !s.liveAudit.RetryStalled() {
+					http.Error(w, "not stalled: the sweep is not waiting on any exchange right now", http.StatusConflict)
+					return
+				}
+				s.events.Record(dash.EventLiveAuditStalled, dash.SeverityInfo,
+					"the operator re-queued the stalled exchange; the sweep will wait on it again with its stall budget carried")
+			}
 			// The query is installed before the switch is flipped. If it will not parse the request is
 			// refused and nothing changes — a filter the operator believed they had set, followed by a
 			// sweep running against the whole scope because the parse failed quietly, is the one
@@ -1011,6 +1695,54 @@ type sequencerAnalyseReq struct {
 	Text     *string   `json:"text"`
 	Tokens   *[]string `json:"tokens"`
 	Encoding *string   `json:"encoding"`
+	// SignificancePercent is the operator's significance level, as a percentage:
+	// 0.03 means 0.03%, not 3%. Burp makes this the input to the whole analysis
+	// ("you can choose the probability you use to interpret the randomness of
+	// your findings"), and it reaches exactly one part of the report — the
+	// effective-entropy curve. A pointer so an absent level is answered with the
+	// default and marked as defaulted, rather than being indistinguishable from
+	// an operator who typed the default.
+	SignificancePercent *float64 `json:"significance_percent"`
+	// Burp's "Token handling" (burpsy-react-ui-i4u). PadMode is "none" | "start" | "end"; the
+	// statistical tests can only run over tokens of one length, so a variable-length sample is
+	// padded up to the longest and WHERE decides which byte positions the analysis reads.
+	//
+	// Absent means none, which is what every existing caller means and what the analysis did before
+	// this existed. An unknown value is refused by name rather than falling back to none — a
+	// silently ignored pad mode would leave the operator reading an unpadded analysis believing it
+	// was padded.
+	PadMode *string `json:"pad_mode"`
+	// PadByte is the single character to pad with. Burp's own default is '0'. A string rather than a
+	// number so the wire carries what the operator typed; anything that is not exactly one byte is
+	// refused, because a two-character "pad byte" cannot mean anything.
+	PadByte *string `json:"pad_byte"`
+	// Base64Decode is Burp's "Base64-decode before analyzing": a base64 token's randomness is in the
+	// bytes it encodes, not the alphabet it is written in. A token that is not valid base64 is
+	// refused by the engine naming which one, rather than analysed as a different sample.
+	Base64Decode *bool `json:"base64_decode"`
+	// DisabledTests is Burp's per-test switch for this one analysis (burpsy-react-ui-3iao): the
+	// AnalysisTest ids to leave out, e.g. ["compression"]. A pointer so "absent" — run what the saved
+	// sequencer settings leave on — is distinct from an explicit empty list, which runs every test
+	// whatever the settings say. An unknown id is refused naming the accepted set: an id silently
+	// ignored would leave the operator reading a verdict that still counted the test they removed.
+	// "Redo analysis" is this request sent again with a different list; the report marks each
+	// disabled test as not run, by name.
+	DisabledTests *[]string `json:"disabled_tests"`
+}
+
+// parsePadMode maps the wire's "none" | "start" | "end" onto the engine's PadMode. Unknown values
+// are refused naming the value, the same rule the encoding field follows: a pad mode that was
+// silently dropped would produce an unpadded report under a padded label.
+func parsePadMode(raw string) (sequencer.PadMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none":
+		return sequencer.PadNone, nil
+	case "start":
+		return sequencer.PadStart, nil
+	case "end":
+		return sequencer.PadEnd, nil
+	}
+	return sequencer.PadNone, fmt.Errorf("pad_mode %s is not one of none, start or end", strconv.Quote(raw))
 }
 
 // parseEncoding maps the UI's "hex" | "base64" | "raw" onto the engine's
@@ -1068,8 +1800,75 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 	// An empty paste is answered rather than refused: the report says "no tokens
 	// were supplied", and that is more useful to whoever pasted the wrong buffer
 	// than a 400 with no analysis in it.
+	// Token handling, decided before the significance branch because it changes the SAMPLE rather
+	// than how the sample is interpreted.
+	opts := sequencer.Options{Encoding: encoding, PadByte: '0'}
+	if req.PadMode != nil {
+		mode, err := parsePadMode(*req.PadMode)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		opts.Pad = mode
+	}
+	if req.PadByte != nil {
+		if len([]byte(*req.PadByte)) != 1 {
+			http.Error(w, fmt.Sprintf(
+				"pad_byte %s is not a single byte; padding inserts one byte per position, so a pad character must be exactly one",
+				strconv.Quote(*req.PadByte)), http.StatusBadRequest)
+			return
+		}
+		opts.PadByte = (*req.PadByte)[0]
+	}
+	// The saved analysis settings (burpsy-react-ui-nm81) govern whatever this request does not say for
+	// itself: which tests run, and whether tokens are base64-decoded first.
+	saved := s.sequencerSettings()
+	opts.Base64Decode = saved.TokenHandling.Base64DecodeBeforeAnalyzing
+	if req.Base64Decode != nil {
+		opts.Base64Decode = *req.Base64Decode
+	}
+	opts.DisabledTests = saved.DisabledTests()
+	if req.DisabledTests != nil {
+		for _, id := range *req.DisabledTests {
+			if !sequencer.KnownAnalysisTest(id) {
+				http.Error(w, fmt.Sprintf("disabled_tests names %s, which is not a test this analysis runs; the tests are %s",
+					strconv.Quote(id), strings.Join(sequencerTestIDs(), ", ")), http.StatusBadRequest)
+				return
+			}
+		}
+		opts.DisabledTests = append([]string(nil), *req.DisabledTests...)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sequencer.AnalyseAs(tokens, encoding))
+	if req.SignificancePercent == nil {
+		opts.SignificancePercent = sequencer.DefaultSignificancePercent
+		opts.SignificanceDefaulted = true
+		rep, err := sequencer.AnalyseOpts(tokens, opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(rep)
+		return
+	}
+	// Refused, not clamped. A level above 10% or below 0.001% is outside the
+	// range Burp's analysis is defined over, and silently moving it to the edge
+	// would answer a different question under the operator's number — the same
+	// refusal the encoding field makes for an unknown alphabet.
+	if !sequencer.ValidSignificancePercent(*req.SignificancePercent) {
+		http.Error(w, fmt.Sprintf(
+			"significance_percent %g is outside the range this analysis is defined over: %g to %g, as a percentage (0.03 means 0.03%%, not 3%%). Burp's own guidance puts FIPS work at 0.002%%-0.03%% and scientific work at 1%%-5%%.",
+			*req.SignificancePercent, sequencer.MinSignificancePercent, sequencer.MaxSignificancePercent),
+			http.StatusBadRequest)
+		return
+	}
+	opts.SignificancePercent = *req.SignificancePercent
+	rep, err := sequencer.AnalyseOpts(tokens, opts)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	json.NewEncoder(w).Encode(rep)
 }
 
 // helpers ----------------------------------------------------------------------------------------

@@ -53,7 +53,7 @@ func storedTarget(t *testing.T) (*ActiveScanner, *core.TrafficStore, map[string]
 			t.Fatalf("put response: %v", err)
 		}
 		ex := &core.Exchange{
-			Request: reqID, Response: &respID,
+			Request: core.MsgPtr(reqID), Response: &respID,
 			Host: host, Port: uint16(port), TLS: false, Method: "GET", Path: path,
 		}
 		store.AddExchange(ex)

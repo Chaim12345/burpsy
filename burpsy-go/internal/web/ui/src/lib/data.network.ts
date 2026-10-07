@@ -20,6 +20,8 @@ import { keys, useInvalidate, useResource } from "./data";
 import type { NetworkProxyUpdate, NetworkProxyView } from "./types.policy";
 
 export type ResolutionPolicy = "system" | "resolver";
+/** Which address family a resolved host is filtered to. `system` is the resolver's own order. */
+export type AddressFamily = "system" | "ipv4" | "ipv6";
 export type RedirectMode = "never" | "on_site" | "in_scope" | "always";
 
 export interface HostOverride {
@@ -34,6 +36,14 @@ export interface NetworkSettings {
     policy: ResolutionPolicy;
     resolver: string;
     timeout_ms: number;
+    /**
+     * Which address family a hostname's answer is filtered to. `system` leaves the resolver's order
+     * alone, which is the default: that order encodes the machine's own routing preferences.
+     *
+     * `null` on a document written before the field existed — a panel must not read `ipv4` off a
+     * missing key, nor infer a preference the operator never set.
+     */
+    family: AddressFamily | null;
   };
   timeouts: {
     connect_ms: number;
@@ -43,6 +53,13 @@ export interface NetworkSettings {
   redirects: {
     mode: RedirectMode;
     max_hops: number;
+    /**
+     * Whether a followed chain resubmits the cookies each hop's response set (Burp's "Follow
+     * redirections and resubmit cookies"). Off by default: a cookie the target set mid-chain is not
+     * something the operator asked to send. `null` on a document written before the field existed,
+     * so a panel must not read `false` off a missing key and claim the operator declined it.
+     */
+    replay_cookies?: boolean | null;
   };
   continue: {
     understand_100_continue: boolean;
@@ -52,12 +69,33 @@ export interface NetworkSettings {
   streaming: {
     hosts: string[] | null;
     timeout_ms: number;
+    /**
+     * Burp's streaming_responses switches (burpsy-react-ui-609d / -v52t). `store` is optional on the wire:
+     * absent means ON (a document saved before the switch existed), so a panel must read a missing key as
+     * on — never as the operator having turned storage off.
+     */
+    store?: boolean | null;
+    strip_chunked_encoding_metadata?: boolean;
+    use_text_event_stream_header?: boolean;
+  };
+  /**
+   * How the certificate the TARGET presents is treated. `verify` defaults to true and was false on
+   * every intercepted connection before burpsy-react-ui-f365, with nothing anywhere able to change it.
+   */
+  tls: {
+    verify: boolean;
+    /** PEM bundle added to the system pool, so a private issuer is reachable without turning verification off. */
+    root_ca_path: string;
+    /** The lowest TLS version accepted, as a version number. 0 means Go's default. */
+    min_version: number;
   };
 }
 
 /** What the server will accept, travelling with the state so the panel does not hardcode the arms. */
 export interface NetworkAccepted {
   resolution_policies: ResolutionPolicy[];
+  /** Read from the engine, so the selector can only offer a family the server accepts. */
+  resolution_families: AddressFamily[];
   redirect_modes: RedirectMode[];
   max_timeout_ms: number;
   max_redirect_hops: number;

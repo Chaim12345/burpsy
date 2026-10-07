@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -10,19 +12,66 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/advisory"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/query"
 	"go.uber.org/zap"
 )
 
-// handleHistory serves GET /api/history?limit=N[&q=query]. The UI expects a bare array of
-// exchanges, newest first, capped at `limit` (default 300). `q`, when present, is a burpsy-query
-// filter compiled against each exchange's host/path/method/status.
+// handleHistory serves GET /api/history and DELETE /api/history (burpsy-react-ui-r6li). GET is
+// the listing the UI has always read; DELETE is Burp's "Delete items" / "Clear (tool)".
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.historyGet(w, r)
+	case http.MethodDelete:
+		s.historyDelete(w, r)
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
+}
 
+// historyDelete removes exchanges from the operator's view. With a JSON body {"ids":[..]} the
+// named exchanges go; with no body (or an empty ids array) the whole capture clears — Burp's
+// "Clear (tool)". The response reports removed and requested separately, so a caller that named
+// a row already gone (or never present) can say so rather than reading a bare 200 as success.
+// Deletion is a view-level tombstone (core.TrafficStore.DeleteExchanges): positional ids stay
+// stable, so nothing else on the wire is renumbered by a cleanup.
+func (s *Server) historyDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []core.ExchangeID `json:"ids"`
+	}
+	if r.Body != nil {
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+		if err := dec.Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {\"ids\":[..]} or empty", http.StatusBadRequest)
+			return
+		}
+	}
+	var removed int
+	if len(req.IDs) == 0 {
+		removed = s.store.ClearExchanges()
+	} else {
+		removed = s.store.DeleteExchanges(req.IDs)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"removed": removed, "requested": len(req.IDs)})
+}
+
+// historyGet serves GET /api/history?limit=N[&q=query][&search=term&search_case&search_regex&search_negate].
+// The UI expects a bare array of exchanges, newest first, capped at `limit` (default 300). `q`, when
+// present, is a burpsy-query filter compiled against each exchange's host/path/method/status.
+//
+// `search` is Burp's Search box (burpsy-react-ui-ngcj), and it is deliberately NOT the DSL: the
+// Search box's three modifiers (case-sensitive, regex, negative — Burp's proxyHttpSearch*
+// checkboxes) have no spelling in the query grammar, and the grammar's `body` field searches the
+// REQUEST's bytes only, so a page title in a response body would stay unfindable no matter how the
+// box was routed. Burp's doc states the load-bearing promise: "The search applies to the underlying
+// data, regardless of any filters you have applied" — the capture, not the page of rows a browser
+// happens to hold. So the scan runs here, over the store, before the cap: every row column the
+// table can show (including notes and the page title the Proxy recorded), plus both messages'
+// bytes, headers and body. The bytes half reuses the suite-search matcher (vs9k) verbatim; the
+// only thing this endpoint adds to it is the row-column haystack, which no bytes scan can see.
+func (s *Server) historyGet(w http.ResponseWriter, r *http.Request) {
 	limit := 300
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -45,6 +94,28 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The Search box, compiled the same way /api/search compiles its own (same error text, same
+	// linear-time regex, same folded-literal fast path) so two searches that look identical to
+	// the operator cannot behave differently because they were typed in different boxes.
+	var search *historySearch
+	if raw := r.URL.Query().Get("search"); strings.TrimSpace(raw) != "" {
+		opts := suiteSearchOptions{
+			term:          raw,
+			caseSensitive: truthy(r.URL.Query().Get("search_case")),
+			regex:         truthy(r.URL.Query().Get("search_regex")),
+		}
+		if len(opts.term) > suiteSearchMaxTermLen {
+			http.Error(w, fmt.Sprintf("The search term is longer than the %d bytes this search accepts.", suiteSearchMaxTermLen), http.StatusBadRequest)
+			return
+		}
+		matcher, err := newSuiteSearchMatcher(opts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		search = &historySearch{matcher: matcher, negate: truthy(r.URL.Query().Get("search_negate"))}
+	}
+
 	// Proxy history is proxy traffic — plus crawled traffic, which travels the identical
 	// capture path (CRAWL-02), and anything no producer claimed, which hiding would make
 	// invisible rather than absent. Tool-originated sends — Repeater resends, Intruder
@@ -62,6 +133,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if filter != nil && !filter.match(ex) {
+			continue
+		}
+		if search != nil && !s.historySearchMatch(search, ex) {
 			continue
 		}
 		views = append(views, exchangeView(ex))
@@ -222,9 +296,16 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 
 // ScopeRequest represents a scope modification request.
 type ScopeRequest struct {
-	Action  string `json:"action"` // "include", "exclude", "remove" or "clear"
-	Kind    string `json:"kind"`   // optional rule kind for "remove": "include" or "exclude"
+	// Action is "include", "exclude", "remove", "edit", "clear", "toggle", "drop_out_of_scope", or one
+	// of the three library actions — "library_save", "library_load", "library_delete" — which operate
+	// on a named copy of the whole rule set rather than on one rule. See updateScopeLibrary for why
+	// they are actions here rather than a route of their own.
+	Action  string `json:"action"`
+	Kind    string `json:"kind"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
 	Pattern string `json:"pattern"`
+	// Name is the library a library_* action names. Unused by every other action, and deliberately
+	// separate from Pattern: a library is named after an engagement, not after a host.
+	Name string `json:"name,omitempty"`
 	// Path limits the rule to requests whose path starts with it, and Port to one port. Both optional;
 	// omitted means the rule covers the whole host, which is what every rule meant before these
 	// existed. core.Scope has supported both since it was written — NewScopeRuleWithPath and
@@ -235,6 +316,18 @@ type ScopeRequest struct {
 	Port *uint16 `json:"port,omitempty"`
 	// Protocol limits the rule to one scheme: "http" or "https". Empty means either.
 	Protocol string `json:"protocol,omitempty"`
+	// Old* names the rule an "edit" replaces: the tuple as the table showed it. Separate from
+	// the replacement fields because the usual edit changes the pattern itself.
+	OldPattern string  `json:"old_pattern,omitempty"`
+	OldKind    string  `json:"old_kind,omitempty"`
+	OldPath    string  `json:"old_path,omitempty"`
+	OldPort    *uint16 `json:"old_port,omitempty"`
+	// OldProtocol is the scheme the rule being edited was limited to; empty means either.
+	OldProtocol string `json:"old_protocol,omitempty"`
+	// Enabled is required on "toggle" (the switch's target state); a nil there is a client
+	// that did not send the field, refused rather than guessed. On "include"/"exclude" a nil
+	// reads as the default (true): a rule is created active unless a caller says otherwise.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -242,13 +335,23 @@ type ScopeRequest struct {
 // A prefix must start with "/", because it is matched with strings.HasPrefix against a request path
 // that always does: accepting "admin" would build a rule that silently matches nothing, which is the
 // worst outcome for a scope rule — the operator believes a restriction is in force and it is not.
+//
+// A path arm tagged core.ScopeRegexArm is a regular expression over the whole path instead
+// (burpsy-react-ui-c09), and is exempt from the leading "/" rule because an expression may legally
+// begin with a group or a character class. The expression itself is checked by core, not here: the
+// same string is the rule's identity on remove, toggle and edit, so this function normalises it and
+// core.NewScopeRuleFrom decides whether it compiles. Both halves matter — add and remove have to
+// normalise identically or a rule becomes unremovable.
 func normaliseScopePath(raw string) (*string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return nil, nil
 	}
+	if strings.HasPrefix(trimmed, core.ScopeRegexArm) {
+		return &trimmed, nil
+	}
 	if !strings.HasPrefix(trimmed, "/") {
-		return nil, fmt.Errorf("A scope path must start with /, so it can match a request path; got %q", trimmed)
+		return nil, fmt.Errorf("A scope path must start with /, so it can match a request path; got %q. To match the path with a regular expression instead, prefix it with %q.", trimmed, core.ScopeRegexArm)
 	}
 	return &trimmed, nil
 }
@@ -270,6 +373,16 @@ func normaliseScopeProtocol(raw string) (*string, error) {
 }
 
 // buildScopeRule turns a request into the narrowest rule it describes.
+//
+// The arm tags — a `regex:` host pattern or path, a `range:` IP block — are compiled by
+// core.NewScopeRuleFrom rather than checked here, deliberately: this endpoint and the config
+// importer both build rules, and a second copy of "does this regular expression compile" is a second
+// answer waiting to disagree with the engine that actually matches. What this layer still owns is
+// its own vocabulary — a path starts with "/", a protocol is http or https.
+//
+// The error is a 400 at both callers. A scope rule whose arm cannot be read is an operator typo, and
+// the only moment it can be fixed cheaply is before it is stored: once stored, the engine refuses
+// every request rather than applying a document it cannot read.
 func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule, error) {
 	path, err := normaliseScopePath(req.Path)
 	if err != nil {
@@ -279,15 +392,27 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	if err != nil {
 		return nil, err
 	}
-	rule := core.NewScopeRule(kind, req.Pattern)
-	if path != nil {
-		rule.PathPrefix = path
+	rule, err := core.NewScopeRuleFrom(kind, req.Pattern, path, req.Port, protocol)
+	if err != nil {
+		return nil, err
 	}
-	if req.Port != nil {
-		rule.Port = req.Port
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
 	}
-	rule.Protocol = protocol
 	return rule, nil
+}
+
+// scopeKindFromString maps the wire's kind to the engine's. Kept beside the handler so both
+// "remove" (optional kind) and "toggle" (required kind) agree on the vocabulary.
+func scopeKindFromString(kind string) (core.ScopeRuleKind, bool) {
+	switch kind {
+	case "include":
+		return core.ScopeInclude, true
+	case "exclude":
+		return core.ScopeExclude, true
+	default:
+		return core.ScopeInclude, false
+	}
 }
 
 func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +431,9 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 type scopeRuleView struct {
 	Kind string  `json:"kind"`
 	Host *string `json:"host"`
+	// Enabled is always reported: the UI's per-row switch has to read the current state, and
+	// a field present only when false would make "active" indistinguishable from "absent".
+	Enabled bool `json:"enabled"`
 	// Path and Port are omitted for a host-wide rule. Reported so the UI can show what a rule actually
 	// covers, and so it can hand the exact tuple back on remove — two rules on one host differing only
 	// in path are the ordinary case, and removing by host alone would delete the wrong one.
@@ -324,14 +452,31 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 			kind = "Exclude"
 		}
 		pattern := rule.Pattern
-		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol})
+		views = append(views, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix, Port: rule.Port, Protocol: rule.Protocol, Enabled: rule.Enabled})
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// The saved rule sets ride this response rather than a second route: they are state of the same
+	// resource, and a page that had to read two URLs to draw one scope could draw a scope that never
+	// existed at either of them. Cheap, too — names and counts, no rule bodies.
+	libraries, librariesErr := s.scopeLibraries()
+	body := map[string]interface{}{
 		"allow_all": s.scope.AllowAll(),
 		"rules":     views,
 		"empty":     s.scope.Empty(),
-	})
+		// Burp's "Out-of-scope request handling: Drop all out-of-scope requests". Reported
+		// unconditionally, like enabled: the UI's switch has to read the state it toggles.
+		"drop_out_of_scope": s.scope.DropOutOfScope(),
+		// Always an array, never null: the console reads .length on it, and a nil slice marshals to
+		// null, which would take the page down instead of showing an empty picker.
+		"libraries": libraries,
+	}
+	if librariesErr != nil {
+		// Reported rather than swallowed. An empty list from a failed read says "nothing is saved",
+		// and an operator who believes that re-creates a rule set that is already on disk — or, worse,
+		// stops trusting the one they saved.
+		body["libraries_error"] = librariesErr.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
 }
 
 func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
@@ -341,7 +486,30 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The library actions answer for themselves — a count, and whether a save replaced something —
+	// so they return before the shared "status: ok" tail below, and before persistScope: a save or a
+	// delete does not touch the live rule list, and a load persists it itself.
 	switch req.Action {
+	case "library_save", "library_load", "library_delete":
+		s.updateScopeLibrary(w, req)
+		return
+	}
+
+	switch req.Action {
+	case "drop_out_of_scope":
+		// One round trip for the switch, like "toggle" for a rule row. When on, every scope
+		// refusal becomes an egress refusal — the proxy stops issuing requests to hosts the
+		// scope excludes — which is the safety control 5j4i asks for. The switch itself is
+		// not persisted here; persistence rides the same save the scope rows ride (see
+		// persistScope), so the durable document is never a half-state.
+		if req.Enabled == nil {
+			http.Error(w, "Enabled is required for drop_out_of_scope", http.StatusBadRequest)
+			return
+		}
+		s.scope.SetDropOutOfScope(*req.Enabled)
+		if s.persist != nil {
+			s.persist.SaveScopeDropOutOfScope(*req.Enabled)
+		}
 	case "include", "exclude":
 		kind := core.ScopeInclude
 		if req.Action == "exclude" {
@@ -384,16 +552,249 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "No matching rule found", http.StatusNotFound)
 			return
 		}
+	case "edit":
+		// Burp's "Edit the selected item" (k5l): the tuple names the rule being replaced
+		// (old_* — the row as the table showed it), the remaining fields are the replacement.
+		// Split naming matters because the common edit narrows a host (example.com →
+		// api.example.com): the replacement's pattern is the NEW one, so the old tuple cannot
+		// ride on it. Refusal when nothing matches is a 404, not a silent append — an edit that
+		// reports ok while the table refetches to show two rules is a lie about what happened.
+		if req.OldPattern == "" {
+			http.Error(w, "old_pattern is required for edit: it names the rule being replaced", http.StatusBadRequest)
+			return
+		}
+		if req.Pattern == "" {
+			http.Error(w, "pattern is required for edit: it is the replacement rule's host", http.StatusBadRequest)
+			return
+		}
+		oldPath, err := normaliseScopePath(req.OldPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		oldKind := core.ScopeInclude
+		if strings.EqualFold(req.OldKind, "exclude") {
+			oldKind = core.ScopeExclude
+		}
+		newKind := core.ScopeInclude
+		if strings.EqualFold(req.Kind, "exclude") {
+			newKind = core.ScopeExclude
+		}
+		replacement, err := buildScopeRule(newKind, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var oldProtocol *string
+		if req.OldProtocol != "" {
+			p := req.OldProtocol
+			oldProtocol = &p
+		}
+		replaced := s.scope.ReplaceScoped(oldKind, req.OldPattern, oldPath, req.OldPort, oldProtocol, replacement)
+		if !replaced {
+			http.Error(w, "No matching rule found: the rule may have been removed or changed by another request — refetch and retry", http.StatusNotFound)
+			return
+		}
+	case "toggle":
+		// One round trip for the switch, so a slow double-click cannot land two edits — and
+		// because the server, not the client, owns the truth: the client sends what it saw,
+		// the server refuses when the row has moved on, and the refetch shows the real state.
+		if req.Pattern == "" {
+			http.Error(w, "Pattern is required", http.StatusBadRequest)
+			return
+		}
+		path, err := normaliseScopePath(req.Path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		kind, ok := scopeKindFromString(req.Kind)
+		if !ok {
+			http.Error(w, "Kind must be include or exclude for toggle", http.StatusBadRequest)
+			return
+		}
+		if !s.scope.SetRuleEnabled(kind, req.Pattern, path, req.Port, req.Enabled == nil || *req.Enabled) {
+			http.Error(w, "No matching rule found", http.StatusNotFound)
+			return
+		}
 	case "clear":
 		s.scope.Clear()
 	default:
-		http.Error(w, "Unknown scope action", http.StatusBadRequest)
+		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, library_save, library_load or library_delete", http.StatusBadRequest)
 		return
 	}
 	s.persistScope()
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// ---- scope libraries (burpsy-react-ui-e365) ------------------------------------------------------
+//
+// Burp's scope panel carries "Save to library": a rule set is named, stored, and loaded back later —
+// across projects, and across the "clear it and try something else" step that otherwise costs an
+// operator the scope they spent an afternoon getting right. burpsy had only the live rule list.
+//
+// # Why this is the same resource rather than /api/scope/library
+//
+// A library is a saved copy of this endpoint's own state, so it lives on this endpoint: the actions
+// ride the switch POST /api/scope already multiplexes (include, exclude, remove, edit, toggle,
+// clear, drop_out_of_scope), and the listing rides the GET that already reports the rule list. The
+// rejected alternative was a second route, /api/scope/library, which reads tidier — until you notice
+// it would give the console two URLs that can disagree about what the scope is, and a client would
+// have to read both to draw one page. One resource, one round trip, one answer.
+
+// scopeLibraryName trims the operator's name and refuses an empty one.
+//
+// Whitespace-only is refused rather than trimmed to "" and accepted, because an unnamed library
+// cannot be found again by the person who saved it — it would sit in the picker as a blank row, and
+// the next save under the same blank name would replace it without anyone being able to tell the two
+// apart. Trimming happens here *and* in persist, deliberately: the two must agree on identity or a
+// library becomes unloadable by the name the picker shows.
+func scopeLibraryName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", errors.New("A scope library needs a name, so it can be found again")
+	}
+	return name, nil
+}
+
+// scopeLibraryNamesInStore lists what exists, for a 404 body. A refusal that only says "not found"
+// leaves an operator guessing at their own typo; one that names the libraries that do exist is a
+// refusal they can act on in one step.
+func (s *Server) scopeLibraryNamesInStore() string {
+	libs, err := s.persist.LoadScopeLibraries()
+	if err != nil || len(libs) == 0 {
+		return "no scope libraries are saved"
+	}
+	names := make([]string, 0, len(libs))
+	for _, lib := range libs {
+		names = append(names, strconv.Quote(lib.Name))
+	}
+	return "saved libraries: " + strings.Join(names, ", ")
+}
+
+// scopeLibraries is what GET /api/scope reports beside the rules: every saved rule set as name, rule
+// count and write time. The rule bodies are not included — the list feeds a picker, and a library's
+// rules are only ever wanted by the one load that installs them.
+//
+// The error is returned rather than swallowed so the GET can carry it as a field. An empty list on a
+// failed read would tell the operator "nothing is saved", which is the same shape of lie as loading a
+// corrupt library as an empty scope: they would go and re-create a rule set that is already there.
+func (s *Server) scopeLibraries() ([]persist.ScopeLibrary, error) {
+	if s.persist == nil {
+		// No project database: libraries are a durable thing and this console has nowhere durable.
+		// Not an error — the console runs like this on purpose — so the list is simply empty.
+		return []persist.ScopeLibrary{}, nil
+	}
+	libs, err := s.persist.LoadScopeLibraries()
+	if err != nil {
+		return []persist.ScopeLibrary{}, err
+	}
+	return libs, nil
+}
+
+// updateScopeLibrary serves the three library actions of POST /api/scope. It writes its own response
+// — a count and whether a save replaced something — because "status: ok" cannot say how many rules
+// are now in force, which is the one number the operator needs after a load.
+func (s *Server) updateScopeLibrary(w http.ResponseWriter, req ScopeRequest) {
+	// A library only exists on disk, so a console running without a project database has nowhere to
+	// put one. 503, not 500: the request is well formed and this configuration simply cannot serve
+	// it — the same reading /api/backup takes of the same condition.
+	if s.persist == nil {
+		http.Error(w, "No project database is open, so scope libraries cannot be saved or loaded", http.StatusServiceUnavailable)
+		return
+	}
+	name, err := scopeLibraryName(req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	switch req.Action {
+	case "library_save":
+		// The live rule list as it stands, which is what the operator can see on the page. Disabled
+		// rules go in as disabled: a library is a photograph of the scope, not an edit of it.
+		rules := s.scope.Rules()
+		replaced, err := s.persist.SaveScopeLibrary(name, rules)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"saved": true, "replaced": replaced, "rules": len(rules), "name": name})
+	case "library_load":
+		// # Why the live scope is not touched until every rule has been built
+		//
+		// Loading replaces the rule list. The obvious shape — clear, then add each stored rule — leaves
+		// the scope empty if any rule fails to build, and an empty core.Scope is default-allow: a
+		// library with one uncompilable regular expression would take an engagement from "these six
+		// hosts" to "everything" and report an error while it did. So every rule is constructed first,
+		// through core.NewScopeRuleFrom (which compiles the `regex:` and `range:` arms and refuses what
+		// does not compile — see core/scope.go), and the live scope is only cleared once all of them
+		// exist. A refused load leaves the operator with exactly the scope they already had.
+		stored, found, err := s.persist.LoadScopeLibrary(name)
+		if err != nil {
+			// The library exists and cannot be read. Refused by name rather than loaded as the empty
+			// list json.Unmarshal would otherwise leave behind.
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !found {
+			http.Error(w, fmt.Sprintf("No scope library called %q; %s", name, s.scopeLibraryNamesInStore()), http.StatusNotFound)
+			return
+		}
+		built := make([]*core.ScopeRule, 0, len(stored))
+		for i, row := range stored {
+			// The kind is read strictly rather than defaulted. A stored "excluded" — a typo, an older
+			// vocabulary, a hand-edited document — falling through to include would turn an exclusion
+			// into an authorisation, which is the widening this whole endpoint refuses by name
+			// elsewhere; it must not arrive through a default branch here.
+			var kind core.ScopeRuleKind
+			switch {
+			case strings.EqualFold(row.Kind, "include"):
+				kind = core.ScopeInclude
+			case strings.EqualFold(row.Kind, "exclude"):
+				kind = core.ScopeExclude
+			default:
+				http.Error(w, fmt.Sprintf("Scope library %q cannot be loaded: rule %d (%s) states a kind that is neither include nor exclude — the current scope is unchanged",
+					name, i+1, row.Kind), http.StatusInternalServerError)
+				return
+			}
+			rule, err := core.NewScopeRuleFrom(kind, row.Pattern, row.PathPrefix, row.Port, row.Protocol)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Scope library %q cannot be loaded: rule %d (%s %s) does not compile: %v — the current scope is unchanged",
+					name, i+1, row.Kind, row.Pattern, err), http.StatusInternalServerError)
+				return
+			}
+			rule.Enabled = row.Enabled
+			built = append(built, rule)
+		}
+		// Replace, not merge. Merging would make loading a library twice a different result from
+		// loading it once, and would leave an operator unable to *narrow* a scope with a library at
+		// all — the rules they wanted gone would still be there, which is the failure direction that
+		// matters. The page says so before it calls this; see pages/scope.tsx.
+		s.scope.Clear()
+		for _, rule := range built {
+			s.scope.Add(rule)
+		}
+		// The live rule list has changed, so the durable one has to follow — the same write every
+		// other arm of this endpoint ends with.
+		s.persistScope()
+		writeJSON(w, http.StatusOK, map[string]any{"loaded": true, "rules": len(built), "name": name})
+	case "library_delete":
+		deleted, err := s.persist.DeleteScopeLibrary(name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !deleted {
+			// 404 rather than a silent ok: an operator told "deleted" about a name they mistyped
+			// believes a rule set is gone while it is still on disk, and stops looking for it.
+			http.Error(w, fmt.Sprintf("No scope library called %q; %s", name, s.scopeLibraryNamesInStore()), http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "name": name})
+	}
 }
 
 // ---- issues / findings -------------------------------------------------------------------------
@@ -463,6 +864,24 @@ type issueFindingView struct {
 	Params      []string              `json:"params,omitempty"`
 	Occurrences []issueOccurrenceView `json:"occurrences"`
 	TimesSeen   int                   `json:"times_seen"`
+	// MergedCount is how many later observations a keep_existing merge folded into this finding
+	// (burpsy-react-ui-oorl) — distinct from times_seen, which counts occurrences and so also counts
+	// several filed at once by one producer.
+	MergedCount int `json:"merged_count"`
+	// Evidence is the excerpt the check quoted — for a leaked secret, the redacted key that says WHICH
+	// one leaked (burpsy-react-ui-cx31/8j0d). Omitted when the check quoted nothing.
+	Evidence string `json:"evidence,omitempty"`
+	// Triage state (burpsy-react-ui-pwd). Severity/Confidence are the *effective* values — the
+	// operator's override when one stands, the engine's report otherwise — so every consumer that
+	// just displays or counts by severity keeps working without learning about overrides. The
+	// original engine values ride alongside as original_severity/original_confidence, present only
+	// when an override stands, so the UI can show what was overruled.
+	SeverityOverride   *string `json:"severity_override,omitempty"`
+	OriginalSeverity   string  `json:"original_severity,omitempty"`
+	ConfidenceOverride *string `json:"confidence_override,omitempty"`
+	OriginalConfidence string  `json:"original_confidence,omitempty"`
+	FalsePositive      bool    `json:"false_positive"`
+	Comment            string  `json:"comment"`
 	// Advisory is the catalogue entry for this issue class, when one resolves. Omitted rather than
 	// emptied, so the UI can tell "no catalogue advisory" from "an advisory with blank fields".
 	Advisory *issueAdvisoryView `json:"advisory,omitempty"`
@@ -473,6 +892,52 @@ type issueFindingView struct {
 	// TaskID is the run that produced this finding, omitted when nothing tracked it. It is what ties
 	// a coverage summary to the findings that came out of the same run.
 	TaskID uint64 `json:"task_id,omitempty"`
+	// TimestampUnixMs is when the finding was first raised, set by FindingStore.Add. Projected here
+	// for the first time in burpsy-react-ui-exiu: the store has kept it since the beginning, and
+	// without it the Issues list is an unordered set of rows from every producer in the project, so
+	// an operator cannot tell a finding from ten minutes ago from one from last month.
+	//
+	// It is the FIRST observation's time and is never rewritten by a merge — a later sighting of the
+	// same issue is evidence about the issue, not a new time of day, and moving the timestamp would
+	// make an old finding look continuously re-discovered.
+	TimestampUnixMs int64 `json:"timestamp_unix_ms"`
+	// Source is this finding's provenance, derived rather than stored. There is no provenance field
+	// on core.Finding, and inventing one would be a schema change to answer a display question; what
+	// the finding actually knows is enough for the two states an operator needs to tell apart.
+	//
+	// "scan" means a run raised it (TaskID names which), and "manual" means nothing tracked it — a
+	// recording an operator added, or a collaborator result imported from elsewhere. Those two are
+	// the distinction that matters, because "the scanner found this" and "a person found this" are
+	// different claims with different follow-ups. It deliberately does NOT distinguish BCheck from a
+	// native check: the finding does not record which, and guessing from the check name would put an
+	// unverifiable claim in a column an operator would filter on.
+	Source string `json:"source"`
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): "promoted", "retired", "unavailable" or "unsupported-source",
+	// omitted for every finding the tier never saw. Carried so the issues list can show which
+	// tentative DOM candidates a browser confirmed — a verdict visible only in the log is a
+	// verdict nobody receives.
+	Confirm string `json:"confirm,omitempty"`
+	// Triage is the LLM second look's note (ei0v), carried verbatim: verdict + reasoning +
+	// the model that produced it. ADVICE never promotion — a triage line never moves
+	// Severity or Confidence, and the view holds them beside each other so an operator can
+	// weigh both. Omitted = not investigated (the feature off, the finding outside the
+	// gate, or the pass not yet run — the reasons the route states).
+	Triage *core.TriageNote `json:"triage,omitempty"`
+}
+
+// issueSource classifies a finding by what raised it, from what the finding knows.
+//
+// Two states, and only two, because only two are knowable without inventing a provenance field the
+// store does not have: a TaskID names a run, and its absence means nothing tracked it. Burp splits
+// this further into BCheck / Scan check / Extension / manually generated, and this does not pretend
+// to — see the field's own doc on why a guess from the check name would be worse than the
+// admission.
+func issueSource(f *core.Finding) string {
+	if f.TaskID > 0 {
+		return "scan"
+	}
+	return "manual"
 }
 
 // findingToIssueView converts a stored finding into the UI shape. Host is derived from the first
@@ -487,18 +952,36 @@ type issueFindingView struct {
 // whole value of a finding, so the lookup that cannot silently mismatch is the only one used here.
 func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	v := issueFindingView{
-		ID:          f.ID,
-		CheckName:   f.Name,
-		IssueName:   nil,
-		Severity:    f.Severity.String(),
-		Confidence:  f.Confidence.String(),
-		Detail:      strPtr(f.Description),
-		Remediation: strPtr(f.Remediation),
-		Param:       f.Param,
-		Params:      f.Params,
-		TimesSeen:   len(f.Occurrences),
-		TaskID:      f.TaskID,
+		ID:              f.ID,
+		CheckName:       f.Name,
+		IssueName:       nil,
+		Severity:        f.EffectiveSeverity().String(),
+		Confidence:      f.EffectiveConfidence().String(),
+		Detail:          strPtr(f.Description),
+		Remediation:     strPtr(f.Remediation),
+		Param:           f.Param,
+		Params:          f.Params,
+		TimesSeen:       len(f.Occurrences),
+		MergedCount:     f.MergedCount,
+		Evidence:        f.Evidence,
+		TaskID:          f.TaskID,
+		TimestampUnixMs: int64(f.Timestamp),
+		Source:          issueSource(f),
+		Confirm:         f.Confirm,
+		Triage:          f.Triage,
 	}
+	if f.SeverityOverride != nil {
+		over := f.SeverityOverride.String()
+		v.SeverityOverride = &over
+		v.OriginalSeverity = f.Severity.String()
+	}
+	if f.ConfidenceOverride != nil {
+		over := f.ConfidenceOverride.String()
+		v.ConfidenceOverride = &over
+		v.OriginalConfidence = f.Confidence.String()
+	}
+	v.FalsePositive = f.FalsePositive
+	v.Comment = f.Comment
 	if def, note := s.advisories.Resolve(f.Name); def != nil {
 		// Built by the same function GET /api/advisories/{typeIndex} uses, so the browsable catalogue
 		// and a finding's attached advisory cannot come to disagree about the shape they share.
@@ -507,8 +990,18 @@ func (s *Server) findingToIssueView(f *core.Finding) issueFindingView {
 	} else {
 		v.AdvisoryNote = note
 	}
+	// Empty, not nil. A finding can legitimately have no occurrences — activeFinding leaves them
+	// off when the exchange has rolled out of the store, on the documented principle that no
+	// location is honest and a partial one is not — and a nil slice marshals to JSON `null`.
+	// types.attack.ts declares `occurrences: Occurrence[]`, so scanner.tsx reads `.length` on it
+	// without a guard, inside groupFindings, which runs over the WHOLE list on every render: one
+	// such finding blanked the entire Issues tab, not just its own row (burpsy-react-ui-qmlk).
+	//
+	// Newly reachable rather than theoretical: GetExchange could not fail for a live id until
+	// history gained Delete items and Clear.
+	v.Occurrences = []issueOccurrenceView{}
 	for _, occ := range f.Occurrences {
-		ex, err := s.store.ExchangeByRequest(occ.Request)
+		ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 		if err == nil {
 			if v.Host == "" {
 				v.Host = ex.Host
@@ -600,7 +1093,16 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		// key; dropping it would trade a wrong number for a missing one.
 		counts := map[string]int{"critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0, "info": 0}
 		unknown := map[string]int{}
+		// A finding marked a false positive sits outside the operator's working set, so it counts
+		// towards none of the severity buckets — that is the point of marking one. The number that
+		// were excluded is reported rather than dropped on the floor, so the headline can never
+		// silently disagree with the list it is drawn from.
+		falsePositives := 0
 		for _, v := range views {
+			if v.FalsePositive {
+				falsePositives++
+				continue
+			}
 			key := strings.ToLower(v.Severity)
 			if _, ok := counts[key]; ok {
 				counts[key]++
@@ -623,12 +1125,245 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 			body["unrecognised_severities"] = unknown
 		}
 		body["counts"] = counts
+		// A finding marked a false positive is out of the operator's working set, so it counts
+		// towards none of the severity buckets — that is the point of marking one. It is not
+		// hidden: false_positives below says how many were excluded, so the headline can never
+		// silently disagree with the list it is drawn from. counted is the included number.
+		body["false_positives"] = falsePositives
 		// The invariant the old code broke, now stated on the wire: the buckets account for every
 		// finding in `findings`. "info" is a duplicate of "informational" and is excluded from the sum.
-		body["counted"] = len(views)
+		body["counted"] = len(views) - falsePositives
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(body)
+}
+
+// handleIssueByID routes /api/issues/{id} to the triage and delete paths. It exists as its own
+// tiny handler so the subtree registration cannot silently swallow paths meant for another
+// feature: anything that is not exactly an id is a 404, not a fall-through.
+func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/issues/")
+	// The LLM second look's one-finding arm (ei0v): POST /api/issues/{id}/triage runs the
+	// operator's hand on one finding, outside the sweep gate. Routed here rather than as its
+	// own top-level pattern because the id owns the subtree and the triage pass is one of
+	// its verbs.
+	if strings.HasSuffix(id, "/triage") && r.Method == http.MethodPost {
+		s.handleIssueTriageOne(w, r, strings.TrimSuffix(id, "/triage"))
+		return
+	}
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	s.handleIssueTriage(w, r, id)
+}
+
+// handleIssueTriage serves PUT /api/issues/{id} (operator triage: severity, confidence,
+// false-positive, comment) and DELETE /api/issues/{id} (remove the finding). These are the write
+// paths the read-only /api/issues never had; the store applies every decision under one lock and
+// mirrors it to SQLite, so an override outlives both a re-audit (which merges into the same
+// finding rather than replacing it) and a restart.
+//
+// PUT is used rather than PATCH because the body is total: absent fields clear their override, so
+// "severity gone" means "engine severity stands again", never "leave it as it was". A partial
+// protocol here is how a cleared override comes back as a ghost on the next restart.
+func (s *Server) handleIssueTriage(w http.ResponseWriter, r *http.Request, idStr string) {
+	id, err := strconv.ParseUint(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid issue ID", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodDelete:
+		if !s.findings.Delete(id) {
+			http.Error(w, "Issue not found", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case http.MethodPut, http.MethodPatch:
+		// fall through to the body below
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		// Severity/Confidence use the same lower-case vocabulary the views emit
+		// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
+		Severity      *string `json:"severity"`
+		Confidence    *string `json:"confidence"`
+		FalsePositive *bool   `json:"false_positive"`
+		Comment       *string `json:"comment"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Severity != nil && *req.Severity != "" {
+		// Validated before the store is touched: ParseSeverity maps an unrecognised word to
+		// Informational, so without this a typo would silently reclassify rather than be rejected.
+		over := core.ParseSeverity(*req.Severity)
+		if over == core.SeverityInformational && !strings.EqualFold(*req.Severity, "informational") && !strings.EqualFold(*req.Severity, "info") {
+			http.Error(w, "Invalid severity; want informational, low, medium, high or critical", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Confidence != nil && *req.Confidence != "" {
+		// Same contract as severity: ParseConfidence's fallback is Tentative, which must not be
+		// reachable by misspelling "certain".
+		over := core.ParseConfidence(*req.Confidence)
+		if over == core.ConfidenceTentative && !strings.EqualFold(*req.Confidence, "tentative") {
+			http.Error(w, "Invalid confidence; want certain, firm or tentative", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Comment != nil && len(*req.Comment) > 8192 {
+		http.Error(w, "Comment too long (max 8192 bytes)", http.StatusBadRequest)
+		return
+	}
+
+	ok := s.findings.Triage(id, func(f *core.Finding) {
+		if req.Severity != nil {
+			if *req.Severity == "" {
+				f.SeverityOverride = nil
+			} else {
+				over := core.ParseSeverity(*req.Severity)
+				f.SeverityOverride = &over
+			}
+		}
+		if req.Confidence != nil {
+			if *req.Confidence == "" {
+				f.ConfidenceOverride = nil
+			} else {
+				over := core.ParseConfidence(*req.Confidence)
+				f.ConfidenceOverride = &over
+			}
+		}
+		if req.FalsePositive != nil {
+			f.FalsePositive = *req.FalsePositive
+		}
+		if req.Comment != nil {
+			f.Comment = *req.Comment
+		}
+	})
+	if !ok {
+		http.Error(w, "Issue not found", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// ---- Record an issue (burpsy-react-ui-4qqz) -----------------------------------------------------
+
+// manualIssueReq is the body POST /api/issues/record takes: the operator's description of an
+// issue they found by hand, attached to one exchange they name.
+type manualIssueReq struct {
+	Name        string `json:"name"`
+	Severity    string `json:"severity"`
+	Confidence  string `json:"confidence"`
+	Description string `json:"description"`
+	Remediation string `json:"remediation"`
+	// ExchangeID is a pointer so "absent" is distinguishable from exchange 0: the stores are
+	// dense counters from zero, and the first exchange ever captured IS exchange 0 — a flat
+	// uint64 would reject the very first pair with the required-field error.
+	ExchangeID *uint64 `json:"exchange_id"`
+	// Comment rides the finding's operator-note field rather than being folded into the
+	// description: the description is what the operator says about the *vulnerability*, the
+	// comment is what they say about *this record* — how they found it, what to re-check.
+	Comment string `json:"comment"`
+}
+
+// handleIssueRecord serves POST /api/issues/record — Burp's "Record an issue" context-menu
+// action. A finding created this way is a first-class finding: it rides the same store, the
+// same triage endpoints, the same persistence as a scanner-produced one, because the operator
+// authored it with more certainty about the vulnerability than any scanner has.
+//
+// The exchange is mandatory and must exist. An issue pointing at nothing cannot be jumped to
+// from the UI and cannot be verified later, which is the failure mode this feature exists to
+// avoid: Burp attaches the selected request/response pair, and so does this.
+//
+// Dedup is deliberately bypassed by naming the issue uniquely per record (the caller's name is
+// used as-is; two records with the same name on one host merge into one finding with two
+// occurrences, which is the ordinary semantics — "add to a previously created issue", which is
+// Burp's other documented mode for this action).
+func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req manualIssueReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "Name is required: name the issue the way it should read in the report", http.StatusBadRequest)
+		return
+	}
+	if req.ExchangeID == nil {
+		http.Error(w, "exchange_id is required: an issue must point at the request/response pair it describes", http.StatusBadRequest)
+		return
+	}
+	exchange, err := s.store.GetExchange(core.ExchangeID(*req.ExchangeID))
+	if err != nil || exchange == nil {
+		http.Error(w, fmt.Sprintf("no exchange %d: the pair this issue describes was not found", *req.ExchangeID), http.StatusNotFound)
+		return
+	}
+
+	host, port := exchange.Host, exchange.Port
+	if host == "" {
+		http.Error(w, "the exchange carries no host, so no issue target can be derived from it", http.StatusBadRequest)
+		return
+	}
+	// Severity defaults to Low (Burp's "Medium" default for hand-recorded issues differs by
+	// installation; Low is the conservative choice here because a hand-recorded issue the
+	// operator forgot to grade should not inflate a High count), confidence to Certain — the
+	// operator saw it themselves, which is stronger evidence than any scanner produces.
+	severity := core.ParseSeverity(req.Severity)
+	if strings.TrimSpace(req.Severity) == "" {
+		severity = core.SeverityLow
+	}
+	confidence := core.ParseConfidence(req.Confidence)
+	if strings.TrimSpace(req.Confidence) == "" {
+		confidence = core.ConfidenceCertain
+	}
+
+	description := strings.TrimSpace(req.Description)
+	if description == "" {
+		description = "Manually recorded by the operator from exchange #" + strconv.FormatUint(*req.ExchangeID, 10) + "."
+	}
+
+	id := s.findings.Add(core.NewFinding{
+		Name:        strings.TrimSpace(req.Name),
+		Severity:    severity,
+		Confidence:  confidence,
+		Description: description,
+		Remediation: strings.TrimSpace(req.Remediation),
+		Occurrences: []core.Occurrence{{
+			ExchangeID: core.ExchangeID(*req.ExchangeID),
+			Request:    exchange.Request,
+			Response:   exchange.Response,
+		}},
+		Target: core.FindingTarget{Host: host, Port: port, TLS: exchange.TLS},
+	})
+	// Comment lives on Finding (it is operator state, not engine state), so it rides the same
+	// Triage path the edit-comment UI action uses — one write path for operator-authored text.
+	if comment := strings.TrimSpace(req.Comment); comment != "" {
+		s.findings.Triage(id, func(f *core.Finding) { f.Comment = comment })
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "recorded": true})
 }
 
 // handleFindings is the legacy /api/findings endpoint, kept for tools that predate /api/issues.
@@ -659,6 +1394,84 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 func strPtr(s string) *string { return &s }
 
 // ---- query filter ------------------------------------------------------------------------------
+
+// ---- the Search box (burpsy-react-ui-ngcj) -------------------------------------------------------
+
+// historySearch is the Search box's compiled form: the vs9k byte matcher plus the negative flag.
+// The matcher itself lives in api_search.go with the suite dialog that owns it; what lives here is
+// the half /api/history adds — the row-column haystack no bytes scan can see — and the wiring that
+// runs both halves for every row before the cap.
+type historySearch struct {
+	matcher *suiteSearchMatcher
+	negate  bool
+}
+
+// historyRowColumns is the non-bytes half of the Search box's haystack: the fields a history row
+// renders as columns. The five the old client-side filter could see (method, host, path, MIME,
+// comment) are joined by the ones it structurally could not: the recorded page Title (which lives
+// on the row, not in any message), the highlight annotation, the server IP, and the listener port
+// (Burp's own filter dialog calls that one out as "useful when testing access controls", and an
+// operator's search for the port they remember is a search over exactly this field). Every field
+// the bytes half already covers is absent on purpose: matching a header twice would make a
+// negative search answer a question it was never asked.
+func historyRowColumns(ex *core.Exchange) string {
+	var b strings.Builder
+	b.WriteString(ex.Method)
+	b.WriteByte(' ')
+	b.WriteString(ex.Host)
+	b.WriteByte(' ')
+	b.WriteString(ex.Path)
+	if ex.Mime != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Mime)
+	}
+	// Notes is a pointer because absent is not empty here: a row nobody annotated must not
+	// contribute a lone space to the haystack, and dereferencing nil to find out would be the
+	// whole crash.
+	if ex.Notes != nil && *ex.Notes != "" {
+		b.WriteByte(' ')
+		b.WriteString(*ex.Notes)
+	}
+	if ex.Title != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Title)
+	}
+	if ex.Highlight != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.Highlight)
+	}
+	if ex.ServerIP != "" {
+		b.WriteByte(' ')
+		b.WriteString(ex.ServerIP)
+	}
+	if ex.ListenerPort != 0 {
+		b.WriteString(fmt.Sprintf(" :%d", ex.ListenerPort))
+	}
+	return b.String()
+}
+
+// match answers whether one exchange passes the Search box. The row-column half goes through the
+// SAME matcher as the bytes, so a regex is one regex everywhere; the bytes half scans both
+// directions, headers and body, with the vs9k region logic — including its no-request guard, which
+// searches a request-less row for what it does have rather than scanning message 0 and reporting
+// another exchange's matches (the wtov defect, reached through search; the guard is borrowed, not
+// re-implemented).
+func (s *Server) historySearchMatch(h *historySearch, ex *core.Exchange) bool {
+	if h == nil {
+		return true
+	}
+	hit := len(h.matcher.allIn([]byte(historyRowColumns(ex)))) > 0
+	if !hit {
+		// Both directions, whole messages: headers and body, the way Burp's "across all columns"
+		// reads when the column is the bytes a message carried.
+		_, total := s.searchExchange(ex, suiteSearchOptions{area: suiteSearchAreaBoth}, h.matcher)
+		hit = total > 0
+	}
+	if hit == h.negate {
+		return false
+	}
+	return true
+}
 
 // queryFilter is a compiled burpsy-query expression evaluated against exchanges. Reuses the query
 // package's parser and evaluator; this type adapts a stored exchange to its Queryable interface.
@@ -694,6 +1507,11 @@ type filteredExchangeQuery struct {
 	ex    *core.Exchange
 }
 
+// TaskID answers from the exchange's own attribution — the whole point of the field existing.
+// (ex.TaskID, true): the history row knows what run produced it, and 0 is the real answer for
+// operator-proxied traffic, exactly the row `task != 0` is how you exclude.
+func (f filteredExchangeQuery) TaskID() (uint64, bool) { return f.ex.TaskID, true }
+
 func (f filteredExchangeQuery) Host() string   { return f.ex.Host }
 func (f filteredExchangeQuery) Method() string { return f.ex.Method }
 func (f filteredExchangeQuery) Path() string   { return f.ex.Path }
@@ -709,7 +1527,7 @@ func (f filteredExchangeQuery) Status() int {
 // matching every untyped row — which is the right reading for both of those cases.
 func (f filteredExchangeQuery) Mime() string { return f.ex.Mime }
 func (f filteredExchangeQuery) Body() []byte {
-	msg, err := f.store.Get(f.ex.Request)
+	msg, err := f.store.Get(core.MsgOrZero(f.ex.Request))
 	if err != nil {
 		return nil
 	}

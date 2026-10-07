@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // Target names match Burp's rule_type config values.
@@ -99,11 +100,20 @@ func (d Direction) IsWebSocket() bool {
 	return d == DirWebSocketToServer || d == DirWebSocketToClient
 }
 
-// RuleSet is an ordered set of compiled rules.
+// RuleSet is an ordered set of compiled rules, plus the two set-wide switches that sit
+// beside them: whether a body rewrite fixes Content-Length, and Burp's "Only apply to
+// in-scope items".
 type RuleSet struct {
 	mu                  sync.RWMutex
 	rules               []*Rule
 	updateContentLength bool
+	inScopeOnly         bool
+
+	// scopeSkipped is the count of messages that reached the rules for a direction and were
+	// left alone because inScopeOnly is on and their target is not in scope. An atomic
+	// because it is written from the proxy's per-message path and read only when someone
+	// opens the panel.
+	scopeSkipped atomic.Uint64
 }
 
 func NewRuleSet() *RuleSet { return &RuleSet{} }
@@ -128,6 +138,65 @@ func (rs *RuleSet) UpdateContentLength() bool {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	return rs.updateContentLength
+}
+
+// SetInScopeOnly turns Burp's "Only apply to in-scope items" restriction on or off.
+//
+// # Why the name is the checkbox and not the config key
+//
+// Burp persists this as `proxy.match_replace_disable_out_of_scope`, which reads as the
+// opposite of the control an operator actually ticks: the checkbox is the *disablement of
+// out-of-scope application*, so ticked means "in scope only". Carrying the key's name into
+// this field would put a boolean in the code whose true means no, and the next person to
+// read `if inScopeOnly` would have to go and check. The field is named after the checkbox
+// and the config key is written down here, once, so the divergence is findable.
+func (rs *RuleSet) SetInScopeOnly(on bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.inScopeOnly = on
+}
+
+// InScopeOnly reports whether the set is restricted to in-scope items.
+func (rs *RuleSet) InScopeOnly() bool {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.inScopeOnly
+}
+
+// NoteScopeSkipped records that one message reached the rules for a direction and was left
+// alone because the set is restricted to in-scope items and its target is not in scope.
+//
+// # Why this counter exists
+//
+// The same reason proxy.Options distinguishes SkippedCompressed from Unchanged: "the rule
+// ran and found nothing" and "the rule was never allowed to look" are different facts, and
+// an operator watching a rule do nothing has to be able to tell which one they are in. With
+// the restriction off, the second state is impossible; with it on it becomes routine, and a
+// rule that has stopped matching because scope was narrowed at lunchtime looks exactly like
+// a rule that has stopped matching because the site changed.
+//
+// # Why the proxy calls this and not Apply
+//
+// The verdict is a scope decision, and this package does not own the scope. Internal/matchreplace
+// sits below core in this tree's dependency direction and imports neither the scope matcher
+// nor the store; an in-scope question in here would drag both into a package whose job is
+// turning bytes into other bytes. So the engine carries the flag — it must, because an
+// operator edits it through the same endpoint that edits the rules and one object cannot be
+// half-persisted — and the caller, which already knows the target and already holds the
+// scope, carries the decision and reports it here.
+func (rs *RuleSet) NoteScopeSkipped() {
+	if rs == nil {
+		return
+	}
+	rs.scopeSkipped.Add(1)
+}
+
+// ScopeSkipped returns how many messages the in-scope restriction has turned away.
+func (rs *RuleSet) ScopeSkipped() uint64 {
+	if rs == nil {
+		return 0
+	}
+	return rs.scopeSkipped.Load()
 }
 
 // AddRule appends a rule.
@@ -169,6 +238,11 @@ func (rs *RuleSet) Affects(dir Direction) bool {
 // returning the rewritten bytes. If no rule fires, raw is returned
 // unchanged (no copy). When UpdateContentLength is enabled, the
 // Content-Length header is recomputed after a body rewrite.
+//
+// This is the byte-level primitive, not the whole call-site contract. It does not consult
+// InScopeOnly, because the in-scope verdict belongs to whoever holds the scope — see
+// NoteScopeSkipped. The proxy's only door onto this set is its own applyMatchReplace, which
+// asks Affects, then the scope question, then calls this.
 func (rs *RuleSet) Apply(dir Direction, raw []byte) []byte {
 	rs.mu.RLock()
 	rules := rs.rules
@@ -318,6 +392,10 @@ func applyOne(r *Rule, raw []byte) []byte {
 		return applyHeaders(r, raw)
 	case TargetRequestFirstLine:
 		return applyFirstLine(r, raw)
+	case TargetRequestParamName:
+		return applyParamName(r, raw)
+	case TargetRequestParamValue:
+		return applyParamValue(r, raw)
 	case TargetWebSocketToServer, TargetWebSocketToClient:
 		return applyWholePayload(r, raw)
 	default:
@@ -411,6 +489,115 @@ func applyHeaders(r *Rule, raw []byte) []byte {
 		out.Write(body)
 	}
 	return out.Bytes()
+}
+
+// The two param appliers exist because a whole-body rewrite cannot see a field boundary:
+// that is the documented defect (see applyOne's default case) that refused these targets for
+// months. What they rewrite is the request's query string — the parameters the request line
+// actually carries. The body is deliberately out of scope: a form body's parameter encoding
+// is content-type-dependent and a query-string applier that silently also rewrote form fields
+// would repeat the original mistake one level down. Burp's rule_type applies these to query
+// parameters, which is what the name says.
+//
+// Both split the query string on `&` and rewrite only the addressed half of each pair,
+// rejoining with the same separators — so a rule can no longer rename `nonsecret` while
+// aiming at `secret`, and a value rule cannot spill into the next pair.
+func applyParamInQuery(r *Rule, raw []byte, matchName bool) []byte {
+	idx := bytes.Index(raw, []byte("\r\n"))
+	if idx < 0 {
+		return nil
+	}
+	line := raw[:idx]
+	// The query string starts at the first `?` in the request line and runs to the first
+	// space (HTTP/1.x request lines are METHOD SP TARGET SP VERSION) — or the line end.
+	q := bytes.Index(line, []byte("?"))
+	if q < 0 {
+		return nil
+	}
+	end := bytes.IndexByte(line[q:], ' ')
+	if end < 0 {
+		end = len(line[q:])
+	}
+	query := line[q+1 : q+end]
+	prefix, suffix := line[:q+1], line[q+end:]
+
+	rewritten, hit := rewriteParams(query, r, matchName)
+	if !hit {
+		return nil
+	}
+	out := make([]byte, 0, len(prefix)+len(rewritten)+len(suffix))
+	out = append(out, prefix...)
+	out = append(out, rewritten...)
+	out = append(out, suffix...)
+	out = append(out, raw[idx:]...)
+	return out
+}
+
+func applyParamName(r *Rule, raw []byte) []byte {
+	return applyParamInQuery(r, raw, true)
+}
+
+func applyParamValue(r *Rule, raw []byte) []byte {
+	return applyParamInQuery(r, raw, false)
+}
+
+// rewriteParams walks one query string pair by pair. A pair with no `=` is a bare name —
+// a name rule may rewrite it, a value rule has nothing to address. The `hit` return is
+// separate from the bytes so "matched but replaced with the same text" still reads as a
+// change the caller can count.
+func rewriteParams(query []byte, r *Rule, matchName bool) ([]byte, bool) {
+	hit := false
+	var out []byte
+	pairs := bytes.Split(query, []byte("&"))
+	for i, pair := range pairs {
+		var name, value []byte
+		var hasValue bool
+		if eq := bytes.IndexByte(pair, '='); eq >= 0 {
+			name, value, hasValue = pair[:eq], pair[eq+1:], true
+		} else {
+			name = pair
+		}
+		field := value
+		if matchName {
+			field = name
+		}
+		var repl []byte
+		matched := false
+		if r.Category == CategoryLiteral {
+			// A parameter name is matched whole, never as a substring: the boundary is
+			// the pair separator, and a literal rule against `secret` must not fire inside
+			// `nonsecret`. The old whole-body rewrite renamed `nonsecret` because it saw
+			// `secret` in the middle; a field-aware rewrite that still used Contains would
+			// repeat the same defect one level down. Values keep substring matching — a
+			// value has no finer boundary, and Burp's value rules are substring rules.
+			matched = matchName && bytes.Equal(field, []byte(r.StringMatch)) || !matchName && bytes.Contains(field, []byte(r.StringMatch))
+			if matched {
+				repl = bytes.ReplaceAll(field, []byte(r.StringMatch), []byte(r.StringReplace))
+			}
+		} else if r.re != nil && r.re.Match(field) {
+			matched = true
+			repl = r.re.ReplaceAll(field, []byte(r.StringReplace))
+		}
+		if matched {
+			hit = true
+			if matchName {
+				name = repl
+			} else if hasValue {
+				value = repl
+			}
+		}
+		var rebuilt []byte
+		if hasValue {
+			rebuilt = append(append(append(make([]byte, 0, len(name)+1+len(value)), name...), '='), value...)
+		} else {
+			rebuilt = append(make([]byte, 0, len(name)), name...)
+		}
+		if i > 0 {
+			out = append(out, '&')
+		}
+		out = append(out, rebuilt...)
+	}
+	return out, hit
 }
 
 func applyFirstLine(r *Rule, raw []byte) []byte {

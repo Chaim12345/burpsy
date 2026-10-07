@@ -40,7 +40,7 @@ func TestPassiveScanHookRunsStaticDomAnalysis(t *testing.T) {
 	}
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: "dom.test", Port: 80, Method: "GET", Path: "/p", Status: &status,
 	}
 	store.AddExchange(ex)
@@ -86,7 +86,7 @@ func TestPassiveScanHookAddsNoDomFindingForANonScriptResponse(t *testing.T) {
 		`{"u":"location.hash"}`), core.DirectionResponse)
 	status := uint16(200)
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: "dom.test", Port: 80, Method: "GET", Path: "/a.json", Status: &status,
 	}
 	store.AddExchange(ex)

@@ -74,11 +74,12 @@ func (t *scannerTransport) Do(ctx context.Context, req graphqlmap.Request) (*gra
 	}
 	meter.succeeded()
 
-	out := &graphqlmap.Response{Body: []byte(responseBody(string(res.Raw))), Duration: res.Duration}
+	readable, _ := readableResponse(res.Raw)
+	out := &graphqlmap.Response{Body: []byte(responseBody(string(readable))), Duration: res.Duration}
 	if res.Status != nil {
 		out.Status = *res.Status
 	} else {
-		out.Status = responseStatus(string(res.Raw))
+		out.Status = responseStatus(string(readable))
 	}
 	return out, nil
 }

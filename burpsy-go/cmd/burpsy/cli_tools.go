@@ -49,7 +49,7 @@ func init() {
 		},
 		&cliCommand{
 			name:  "matchreplace",
-			usage: "manage match & replace rules: burpsy matchreplace (set|test|list|content-length)",
+			usage: "manage match & replace rules: burpsy matchreplace (set|test|list|content-length|in-scope-only)",
 			run:   cmdMatchReplace,
 		},
 		&cliCommand{
@@ -105,13 +105,13 @@ func cmdRepeater(ctx *cliContext, args []string) error {
 	resp := sent.Raw
 	if err != nil {
 		// nil, not zero: nothing came back, which is not the same as an empty response.
-		ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", 0, nil, 0, err.Error())
+		ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", 0, nil, 0, err.Error(), nil)
 		return err
 	}
 	dur := uint64(time.Since(start).Milliseconds())
 	status := parseStatus(resp)
 	// The same len(resp) the summary line below prints, so the log and the terminal agree.
-	ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", status, toollog.Bytes(len(resp)), dur, "")
+	ctx.toolLog.Record(toollog.ToolRepeater, host, port, *tls, "RAW", "/", status, toollog.Bytes(len(resp)), dur, "", nil)
 	_, werr := ctx.out.Write(resp)
 	if werr != nil {
 		return werr
@@ -189,7 +189,7 @@ func cmdIntruder(ctx *cliContext, args []string) error {
 	// nil: one row for the whole attack, which sends many requests and gets many responses back, so no
 	// single response length belongs to it. The per-request lengths are in the result rows printed below.
 	ctx.toolLog.Record(toollog.ToolIntruder, host, port, *tls, "ATTACK", "/", 0, nil, 0,
-		fmt.Sprintf("%d payloads", len(payloadList)))
+		fmt.Sprintf("%d payloads", len(payloadList)), nil)
 	count := 0
 	for res := range results {
 		count++
@@ -292,7 +292,7 @@ func scanAudit(ctx *cliContext, args []string) error {
 		return fmt.Errorf("exchange %d not audited: %s", id, outcome.Error)
 	}
 	// nil: one row for the whole audit, not for a single request/response pair.
-	ctx.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit")
+	ctx.toolLog.Record(toollog.ToolScanner, ex.Host, ex.Port, ex.TLS, ex.Method, ex.Path, 0, nil, 0, "audit", &ex.ID)
 	for _, f := range findings {
 		nf := core.NewFinding{
 			Name:        f.Name,
@@ -561,8 +561,10 @@ func cmdMatchReplace(ctx *cliContext, args []string) error {
 		return mrList(ctx, args)
 	case "content-length":
 		return mrContentLength(ctx, args)
+	case "in-scope-only":
+		return mrInScopeOnly(ctx, args)
 	default:
-		return fmt.Errorf("usage: burpsy matchreplace (set|test|list|content-length)")
+		return fmt.Errorf("usage: burpsy matchreplace (set|test|list|content-length|in-scope-only)")
 	}
 }
 
@@ -681,6 +683,38 @@ func mrContentLength(ctx *cliContext, args []string) error {
 		ctx.saveState()
 	case "get", "":
 		if ctx.mr.UpdateContentLength() {
+			fmt.Fprintln(ctx.out, "on")
+		} else {
+			fmt.Fprintln(ctx.out, "off")
+		}
+		return nil
+	default:
+		return fmt.Errorf("state must be on, off, or get")
+	}
+	return nil
+}
+
+// mrInScopeOnly sets or reads Burp's "Only apply to in-scope items" switch.
+//
+// A sibling of content-length rather than a flag on `set`, because it is not a property of the
+// rule being set: it applies to the whole ordered list, the same way Burp's checkbox sits above
+// the table rather than in the rule dialog. Two subcommands whose names are the wire names keeps
+// the CLI and /api/tools/rules describing the same object.
+func mrInScopeOnly(ctx *cliContext, args []string) error {
+	fs := newFlagSet("matchreplace in-scope-only")
+	state := fs.String("state", "", "on | off | get")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	switch strings.ToLower(*state) {
+	case "on":
+		ctx.mr.SetInScopeOnly(true)
+		ctx.saveState()
+	case "off":
+		ctx.mr.SetInScopeOnly(false)
+		ctx.saveState()
+	case "get", "":
+		if ctx.mr.InScopeOnly() {
 			fmt.Fprintln(ctx.out, "on")
 		} else {
 			fmt.Fprintln(ctx.out, "off")

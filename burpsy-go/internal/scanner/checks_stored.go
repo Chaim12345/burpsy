@@ -62,7 +62,7 @@ func PlantStoredCanaries(ctx context.Context, cc *CheckContext) ([]StoredCanary,
 	if err != nil {
 		return nil, err
 	}
-	h, err := NewProbeHarness(ctx, cc, DefaultProbeInsertionKinds)
+	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, err
 	}
@@ -232,6 +232,37 @@ func contextAnywhere(body, token string) (string, bool) {
 	return excerpt(body, i, len(token)), true
 }
 
+// contextScriptBreakout matches a canary that reached executable position inside a <script>,
+// rather than merely appearing between <script> and </script>.
+//
+// # The defect this replaces
+//
+// This row used contextInsideTag("script"), which is a substring test over the raw bytes between
+// the opening and closing tag. That is wrong in both directions and the second one is the reason
+// the row was filed:
+//
+//   - A canary inside a correctly-escaped JavaScript string literal - `var q = "CANARY";` - is
+//     exactly what safe output looks like, and the substring test reported it as stored XSS.
+//   - A canary that DID break out was indistinguishable from one that merely landed in a comment
+//     or a string, because nothing lexed the script body. There was no confirmation step at all.
+//
+// The script body is JavaScript, so the decision belongs to a JS lexer, not a byte search:
+// jsBreakoutConfirmed reports whether the token sits in code position. That is the same predicate
+// the reflected row uses via confirmScriptBreakout, so a stored and a reflected sighting of the
+// same breakout are now confirmed by one rule rather than two that could disagree.
+//
+// This is deliberately stricter: a body with no <script> element, or a canary inside one that the
+// lexer keeps inside a literal, no longer reports.
+func contextScriptBreakout(body, token string) (string, bool) {
+	for _, sb := range scriptBodies(body) {
+		if !jsBreakoutConfirmed(sb.Source, token) {
+			continue
+		}
+		return excerpt(body, sb.Offset, len(sb.Source)), true
+	}
+	return "", false
+}
+
 // contextInsideTag matches a canary appearing between an opening and closing tag.
 func contextInsideTag(tag string) func(string, string) (string, bool) {
 	open, close := "<"+tag, "</"+tag
@@ -315,7 +346,7 @@ func StoredCheckDescriptors() []CheckDescriptor {
 		{"Input returned in response (stored)", "info", contextAnywhere},
 		{"Password returned in later response", "high", contextAnywhere},
 		{"Suspicious input transformation (stored)", "info", contextAnywhere},
-		{"Cross-site scripting (stored)", "high", contextInsideTag("script")},
+		{"Cross-site scripting (stored)", "high", contextScriptBreakout},
 		{"CSS injection (stored)", "medium", contextInsideTag("style")},
 		{"Open redirection (stored)", "low", contextInAttribute("href")},
 		{"Link manipulation (stored)", "low", contextInAttribute("href")},
@@ -323,10 +354,15 @@ func StoredCheckDescriptors() []CheckDescriptor {
 		{"Client-side HTTP parameter pollution (stored)", "low", contextInAttribute("src")},
 		{"SQL injection (second order)", "high", contextAnywhere},
 	}
+	// Every row here is intrusive, and not because of what it reads. A stored check only produces a
+	// finding after something was PLANTED: these evaluators are fed by canaries this engine put into
+	// the target, and one stays there after the scan. That is a lasting change to someone else's
+	// system, which is the distinction Burp's intrusive tier exists to draw, so the whole family is
+	// ranked there rather than split by severity.
 	out := make([]CheckDescriptor, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, nativeDescriptor(r.row, DispatchScopeStoredPerInsertionPoint,
-			storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx)))
+		out = append(out, descriptorWithTier(r.row, DispatchScopeStoredPerInsertionPoint,
+			storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx), TierIntrusive, ""))
 	}
 	return out
 }

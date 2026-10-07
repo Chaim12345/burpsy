@@ -6,6 +6,7 @@ import {
   customIteratorSlots,
   dateSetSize,
   estimateRequests,
+  parseCharSubstitutions,
   planSetLengths,
   quoteRegex,
   resolvePayloads,
@@ -297,5 +298,31 @@ describe("quoteRegex", () => {
     const literal = "a+b(c)";
     expect(new RegExp(quoteRegex(literal)).test(literal)).toBe(true);
     expect(new RegExp(quoteRegex(literal)).test("aab c")).toBe(false);
+  });
+});
+
+describe("parseCharSubstitutions", () => {
+  test("parses one char=replacement pair per line", () => {
+    expect(parseCharSubstitutions("e=3\na=4\no=0")).toEqual({ e: "3", a: "4", o: "0" });
+  });
+
+  test("skips a blank line and a line with no '='", () => {
+    expect(parseCharSubstitutions("e=3\n\nnotasubstitution\na=4")).toEqual({ e: "3", a: "4" });
+  });
+
+  test("allows an empty replacement (substitute to nothing)", () => {
+    expect(parseCharSubstitutions("e=")).toEqual({ e: "" });
+  });
+
+  test("splits on the first '=' only, so a replacement can itself contain one", () => {
+    expect(parseCharSubstitutions("e=1=1")).toEqual({ e: "1=1" });
+  });
+
+  test("trims whitespace around both sides", () => {
+    expect(parseCharSubstitutions(" e = 3 ")).toEqual({ e: "3" });
+  });
+
+  test("an empty textarea produces an empty table, not an error", () => {
+    expect(parseCharSubstitutions("")).toEqual({});
   });
 });

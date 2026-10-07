@@ -46,11 +46,19 @@ func NativeCheckRegistry() []CheckDescriptor {
 }
 
 func nativeDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner) CheckDescriptor {
+	return descriptorWithTier(name, scope, enabled, run, TierLight, "")
+}
+
+// descriptorWithTier is the constructor for a check whose intrusiveness is not the default. A check
+// that actively changes server state belongs in a higher tier; one that only sends a probe and
+// reads the answer stays light. The rank is a claim about the request the check makes, so it is
+// written where the request is wired, not inferred later from the family name.
+func descriptorWithTier(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner, tier CheckInvasiveness, declineReason string) CheckDescriptor {
 	issue, ok := ByName(name)
 	if !ok {
 		panic(fmt.Sprintf("native scanner issue %q is absent from catalog", name))
 	}
-	return CheckDescriptor{
+	d := CheckDescriptor{
 		TypeIndex:      issue.TypeIndex,
 		Name:           issue.Name,
 		Implementation: ImplementationNative,
@@ -58,23 +66,72 @@ func nativeDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig
 		Scope:          scope,
 		Enabled:        enabled,
 		Run:            run,
+		Invasiveness:   tier,
 	}
+	if declineReason != "" {
+		d.Implementation = ImplementationDeclined
+		d.Run = nil
+		d.DeclineReason = declineReason
+	}
+	return d
 }
 
-func declinedDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, reason string) CheckDescriptor {
+// corpusDescriptor builds a CheckDescriptor for a BCheck corpus entry. The phase is
+// derived from the check's properties: NeedsCollaborator → PhaseCollaborator, otherwise
+// PhaseActive. This replaces the old hard-coded PhaseActive for every corpus BCheck.
+func corpusDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner, needsCollaborator bool) CheckDescriptor {
 	issue, ok := ByName(name)
 	if !ok {
-		panic(fmt.Sprintf("declined scanner issue %q is absent from catalog", name))
+		panic(fmt.Sprintf("native scanner issue %q is absent from catalog", name))
+	}
+	phase := PhaseActive
+	if needsCollaborator {
+		phase = PhaseCollaborator
 	}
 	return CheckDescriptor{
 		TypeIndex:      issue.TypeIndex,
 		Name:           issue.Name,
-		Implementation: ImplementationDeclined,
-		Phase:          PhaseActive,
+		Implementation: ImplementationNative,
+		Phase:          phase,
 		Scope:          scope,
 		Enabled:        enabled,
-		DeclineReason:  reason,
+		Run:            run,
+		Invasiveness:   TierLight,
 	}
+}
+
+// intrusiveDescriptor is nativeDescriptor for a check that changes state someone else will have to
+// undo: a canary planted in the target, an outbound connection to a collaborator, an entity expansion
+// that consumes server memory. These are the checks an operator turns off when the target is not
+// theirs to modify, which is the reason the tier exists.
+func intrusiveDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner) CheckDescriptor {
+	return descriptorWithTier(name, scope, enabled, run, TierIntrusive, "")
+}
+
+// mediumDescriptor is nativeDescriptor for a check whose effect reaches beyond the response it reads
+// back: a poisoned cache entry that outlives the request, a second request that depends on the first,
+// a header that changes how the server routes. None of them plants durable state the way a stored
+// canary does, so they sit one tier above the read-only checks rather than beside them.
+func mediumDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner) CheckDescriptor {
+	return descriptorWithTier(name, scope, enabled, run, TierMedium, "")
+}
+
+// passiveDescriptor is nativeDescriptor for a check that only reads a captured exchange. It carries
+// the same light rank — a passive check sends nothing, so intrusiveness does not apply to it — and
+// the Passive mark, which is what keeps the three active-tier keys from excluding it.
+func passiveDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, run CheckRunner) CheckDescriptor {
+	d := descriptorWithTier(name, scope, enabled, run, TierLight, "")
+	d.Passive = true
+	d.Phase = PhasePassive
+	return d
+}
+
+// declinedDescriptor is nativeDescriptor's honest twin: a catalog issue the engine names and refuses.
+// The rank still has to be declared, because a declined check is still a row the tier keys select
+// over — a run that excluded it by tier and one that excluded it because it is unimplemented are
+// different facts, and the accounting must be able to tell them apart.
+func declinedDescriptor(name string, scope DispatchScope, enabled func(*ScanConfig) bool, reason string) CheckDescriptor {
+	return descriptorWithTier(name, scope, enabled, nil, TierLight, reason)
 }
 
 // nativeActiveCheckSet adapts the typed registry to the existing audit ledger.
@@ -90,10 +147,15 @@ func nativeActiveCheckSet() []activeCheck {
 			run = wrapDescriptor(d)
 		}
 		out = append(out, activeCheck{
-			name:    d.Name,
-			scope:   d.Scope,
-			enabled: d.Enabled,
-			run:     run,
+			name:         d.Name,
+			typeIndex:    d.TypeIndex,
+			scope:        d.Scope,
+			enabled:      d.Enabled,
+			invasiveness: d.Invasiveness,
+			speed:        d.Speed,
+			phase:        d.Phase,
+			passive:      d.Passive,
+			run:          run,
 		})
 	}
 	return out
@@ -111,7 +173,7 @@ func wrapDescriptor(d CheckDescriptor) func(*ActiveScanner, context.Context, *co
 		if d.Scope == DispatchScopeStoredPerInsertionPoint && s != nil && s.store != nil && exchange != nil {
 			stored, _ = s.store.PriorExchange(exchange.Host, exchange.Port, exchange.TLS, exchange.Path, exchange.ID)
 		}
-		return d.Run(ctx, NewCheckContext(s, exchange, stored))
+		return d.Run(ctx, newCheckContextForRun(ctx, s, exchange, stored))
 	}
 }
 

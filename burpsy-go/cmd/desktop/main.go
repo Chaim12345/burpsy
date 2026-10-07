@@ -34,6 +34,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
 )
@@ -77,13 +78,19 @@ func (a *App) startup(ctx context.Context) {
 	interceptEngine := intercept.NewEngine()
 	passiveScanner := scanner.NewPassiveScanner(a.store, logger)
 
+	// One log for the listener and the console, created before either is built: the relay
+	// goroutines read it as soon as the proxy serves (burpsy-react-ui-6dt).
+	toolLog := toollog.New()
+
 	proxyConfig := proxy.NewProxyConfig(a.store).
 		WithScope(a.scope).
 		WithTlsPolicy(proxy.NewTlsPolicy()).
 		WithLogger(logger).
 		WithScanner(passiveScanner).
 		WithFindings(findingStore).
-		WithIntercept(interceptEngine)
+		WithIntercept(interceptEngine).
+		// Proxied browser traffic joins the same unified log the other tools write to.
+		WithToolLog(toolLog)
 	proxyServer := proxy.NewServer(proxyConfig)
 	go func() {
 		if err := proxyServer.ListenAndServe(runCtx, a.proxyBind); err != nil && err != context.Canceled {
@@ -92,6 +99,9 @@ func (a *App) startup(ctx context.Context) {
 	}()
 
 	webServer := web.NewServer(a.store, a.scope).
+		// First in the chain, so a later WithPersist restores into and mirrors the same
+		// instance the proxy records into.
+		WithToolLog(toolLog).
 		WithLogger(logger).
 		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 		WithScanner(scanner.NewActiveScanner(a.store, logger).

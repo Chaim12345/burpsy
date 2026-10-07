@@ -33,6 +33,8 @@ here; do not assume it.
 | `api_extensions.go` | The EXTENDER surface (`/api/extensions/*`): list, load, unload, the two consoles, the protocol contract, and one invocation. Six exact patterns rather than a subtree, and deliberately no BApp Store route — see the file's own comment |
 | `api_ws.go` | The WebSocket capture surface (`/api/ws/*`): index rows only, mirroring `wshistory.ts` |
 | `api_sequencer_capture.go`, `api_dashboard.go`, `api_capture.go`, `liveaudit.go` | Sequencer capture runs, dashboard summary counts, history/message/stats, and live-audit state |
+| `api_crawl.go` | The crawl surface (`/api/crawl`): the retained run reports, and the two crawl-backed scan kinds — `crawl`, and `crawl-audit` which audits the exchanges that crawl itself fetched (a second `audit-session` task, not a phase of the crawl's own row). An unknown kind is a 400 that names the accepted pair; the kind is echoed in the 202 and on the retained run, so a launch that audits nothing cannot look like one that ran. Also holds the run registry both scan *trees* share, and `resolveRunRate`, the one place a named pool and an inline rate are turned into a limit |
+| `api_apiscan.go` | The third scan family (`POST /api/apiscan`): Burp's API-only scan. Parses an uploaded/pasted definition through `internal/apidoc`, resolves it against the document's first server or a supplied `base_url`, refuses a host no scope rule can reach, and runs the endpoints through the crawl engine in seeds-only mode. `dry_run: true` answers with what a run *would* send and starts nothing — the New scan dialog's preview. There is no GET: the run lives in the same registry as the crawls, so `GET /api/crawl?task=N` reads it back |
 | `ui/` | The React UI: TypeScript source in `ui/src/`, bun-bundled to `ui/dist/app.js`. Owned elsewhere (see `../DESIGN.md`); do not add wire fields no consumer reads |
 
 ## For AI Agents
@@ -104,7 +106,13 @@ The package is test-heavy (roughly one `*_test.go` per feature area — see `rou
 `dashboard_api_test.go`, `session_api_test.go`, `liveaudit_coverage_test.go`, etc.). Tests construct
 `Server` directly rather than through the full binary wiring, which is why nil-tolerant subsystems and
 lazy construction (`captureOnce`) matter. As part of the whole-tree gate: `go build ./...`,
-`go vet ./...`, `gofmt -l .`, then `../e2e-go.sh` and `../e2e-ui.sh`.
+`go vet ./...`, `gofmt -l .`, then `../e2e-go.sh`.
+
+A change to the React console (anything under `ui/`) additionally takes the live browser pass —
+`../ui-live.sh` (paths here are relative to the module root) boots the real console on seeded traffic
+and prints it; the pass itself is `docs/UI-VERIFICATION.md`. That pass, not the playwright suite, is
+the UI gate: the suite is still runnable (`../e2e-ui.sh`) and still generates the screenshots, but a
+green spec run is no longer what a UI claim has to survive.
 
 ## Dependencies
 

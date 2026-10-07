@@ -31,7 +31,7 @@ func TestVerifyIndexCleanDiskBacked(t *testing.T) {
 	req := putVerifyMessage(t, ts, verifyReqMsg)
 	resp := putVerifyMessage(t, ts, verifyRespMsg)
 	putVerifyMessage(t, ts, []byte("GET /b HTTP/1.1\r\nHost: b.test\r\n\r\nbody"))
-	ts.AddExchange(&Exchange{Request: req, Response: &resp, Host: "a.test"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(req), Response: &resp, Host: "a.test"})
 	// First exchange, so position-is-the-id gives it id 0.
 	ts.AddWsMessage(&WsMessage{Exchange: 0, FromClient: true, AtMs: 1}, []byte("ping"))
 
@@ -119,7 +119,7 @@ func TestVerifyIndexDetectsTruncatedSegment(t *testing.T) {
 func TestVerifyIndexNamesDesyncedExchangeID(t *testing.T) {
 	ts := NewTrafficStore()
 	putVerifyMessage(t, ts, verifyReqMsg)
-	ts.AddExchange(&Exchange{Request: 0, Host: "a.test"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(MsgId(0)), Host: "a.test"})
 
 	ts.exchanges[0].ID = 5
 
@@ -136,7 +136,7 @@ func TestVerifyIndexNamesMissingChildReference(t *testing.T) {
 	ts := NewTrafficStore()
 	putVerifyMessage(t, ts, verifyReqMsg)
 	ts.AddExchange(&Exchange{
-		Request: 0,
+		Request: MsgPtr(MsgId(0)),
 		Host:    "a.test",
 		Related: []ChildRef{{Type: ChildWsFrame, ID: MsgId(99)}},
 	})
@@ -154,7 +154,7 @@ func TestVerifyIndexNamesOutOfRangeResponse(t *testing.T) {
 	ts := NewTrafficStore()
 	putVerifyMessage(t, ts, verifyReqMsg)
 	resp := MsgId(99)
-	ts.AddExchange(&Exchange{Request: 0, Response: &resp, Host: "a.test"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(MsgId(0)), Response: &resp, Host: "a.test"})
 
 	err := ts.VerifyIndex()
 	if err == nil {
@@ -167,7 +167,7 @@ func TestVerifyIndexNamesOutOfRangeResponse(t *testing.T) {
 
 func TestVerifyIndexNamesDesyncedWsID(t *testing.T) {
 	ts := NewTrafficStore()
-	ts.AddExchange(&Exchange{Request: 0, Host: "a.test"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(MsgId(0)), Host: "a.test"})
 	ts.AddWsMessage(&WsMessage{Exchange: 0, AtMs: 1}, []byte("hi"))
 
 	ts.wsMessages[0].ID = MsgId(3)
@@ -183,7 +183,7 @@ func TestVerifyIndexNamesDesyncedWsID(t *testing.T) {
 
 func TestVerifyIndexNamesOutOfRangeWsPayload(t *testing.T) {
 	ts := NewTrafficStore()
-	ts.AddExchange(&Exchange{Request: 0, Host: "a.test"})
+	ts.AddExchange(&Exchange{Request: MsgPtr(MsgId(0)), Host: "a.test"})
 	ts.AddWsMessage(&WsMessage{Exchange: 0, AtMs: 1}, []byte("hi"))
 
 	ts.wsMessages[0].Payload = MsgId(50)

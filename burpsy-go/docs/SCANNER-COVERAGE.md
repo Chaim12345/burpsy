@@ -38,6 +38,30 @@ Sum check: 5 + 6 + 2 + 6 + 5 + 5 + 15 + 28 + 12 + 48 + 3 + 10 + 22 + 16 = 183. E
 (`ValidateRegistry` rejects a duplicate, and `TestDeclinedCatalogDescriptors` fails if the
 per-family partition stops summing to 183).
 
+## Outside the catalog: DOM Invader's detections
+
+The 183-row catalog above is the **scanner's** issue set — the rows Burp's own audit engine can
+report. Two DOM Invader detections sit outside it, and burpsy's disposition of each is stated
+here rather than left silent, because "not in the catalog" and "nobody thought about it" read
+the same from outside:
+
+- **DOM clobbering** (Burp: `tools/dom-invader/dom-clobbering.html` — "DOM Invader can
+  automatically test for DOM clobbering vulnerabilities on your behalf"). Burp ships this in
+  the DOM Invader **browser extension**, not the scanner: zero `clobber` strings anywhere in the
+  recovered binary, no issue-descriptions page, no catalog row — so burpsy's catalog genuinely
+  has no row to decline. A clobbering detection at burpsy's browser tier would require
+  instrumenting *named property reads* (`window.someId` resolving to an injected element) in
+  domexec: the harness observes sources flowing into a fixed sink list, and a clobbered read is
+  neither — it is identifier resolution the ES engine (goja) cannot model because named access
+  is a DOM behaviour, not an ES one. That instrumentation is a domexec subsystem, out of scope
+  until a bead asks for it by name. Until then: **not detected, stated** — the runtime coverage
+  numbers on this page must not be read as covering it.
+
+- **Prototype-pollution gadget discovery**: `checks_dom_extra.go` reports the SOURCE (a
+  URL-controlled property written onto `Object.prototype`) and deliberately defers gadget
+  discovery to a browser tier, the same scope cut Burp's own check makes before deferring to
+  DOM Invader.
+
 ## Runtime demonstration
 
 Registration answers "is a detector wired to this catalog row?". It cannot answer "when

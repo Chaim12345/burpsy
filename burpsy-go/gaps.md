@@ -163,6 +163,23 @@
 > Evidence convention: Rust paths are crate-relative (`crates/scanner/...`);
 > Go paths are repo-relative (`internal/scanner/...`).
 
+> **Dated divergence — 2026-09-14: XML and multipart bodies are modelled, and the
+> oracle is not.** Rust `crates/bcheck/src/insertion.rs`'s `body_points` refuses
+> an XML or multipart body outright (`"body matches no modelled container
+> (multipart, XML or plain text)"`), so a `given body insertion point` check
+> against one is skipped in full and Intruder falls back to a single
+> entire-body position (the Rust tree is frozen; this is not a
+> "fix the oracle" note). Go now models both — `internal/bcheck/insertion.go`'s
+> `multipartBodyPoints` (one point per part's content, plus its `name` and
+> `filename` attributes) and `xmlPoints` (one point per text node and attribute
+> value, named by element path) — and `internal/intruder/points_bcheck.go`
+> adopts them, so the two consumers of the enumerator keep one container model.
+> This is deliberate: a blunt entire-body position makes XML and multipart
+> attacks noisier than Burp's, and the single-parser rule only holds if the
+> containers live in `internal/bcheck`. Declines remain for a non-UTF-8 body, a
+> plain-text body, and a multipart body whose framing cannot be read
+> (burpsy-react-ui-63jg).
+>
 > **Dated divergence — 2026-08-19: HTTP history is proxy traffic, by attribution.**
 > Rust leaks tool traffic into Proxy history: `repeater_send`
 > (`crates/web/src/lib.rs:679`) calls `store.add_exchange` and `history`
@@ -499,6 +516,25 @@ package.
 
 **Decline path:** none; closed.
 
+**Finding identity (landed 2026-09-27, burpsy-react-ui-7tc1).** A JWT weak-HMAC
+finding now states its own identity via `core.NewFinding.MergeKey`, set to the
+secret that was recovered. Burp's merger compares a fingerprint for exactly this
+row (`Zbvp.java:53-56`, `Zu / Zxi().ZZ()`); keying on the target instead filed one
+proven weakness as a separate High for every endpoint issuing tokens under it,
+which is the shape a long crawl produces. The key replaces the target rather than
+adding to it, and is still scoped by host: two hosts can each ship a JWT signed
+with the string `secret`, and that is two findings, because the weakness is only
+actionable on the application that issued the token.
+
+Empty is every other row's behaviour, so path-scoped and host-scoped keying are
+untouched. `core.NewFinding.MergeKey` is available to any future row whose identity
+is not a location.
+
+**Still not recovered:** Burp's merger has a *third* exemption clause — a
+fingerprint compared against a string constant at `Zbvp.java:62` that the
+obfuscator stripped. What it named is unrecoverable, and `dedup_policy.go` says so
+rather than guessing at it.
+
 ### 6. Intruder payload sets absent — COMPLETE
 
 **Rust:** `crates/intruder/src/payload.rs` — `PayloadSet:115`, `Numbers:179`,
@@ -592,8 +628,15 @@ before dial on a closed port, in-scope send, spliced-path refusal while the host
 stays in scope, race-checked concurrent counters), and
 `internal/web/intruder_scope_test.go` (an attack whose payload rewrites the path
 out of scope sends nothing to the target and counts the refusal honestly).
-Named divergence (unchanged): the Go scope is excludes-first with default-allow,
-the Rust scope is last-match-wins with default-deny.
+Named divergences: the Go scope is excludes-first with default-allow, the Rust
+scope is last-match-wins with default-deny. Since 2026-09-08 the *host-level
+pre-filter* no longer amplifies that divergence: a host that matches no include
+rule is refused by `MayContainHost` exactly as `Contains` and Rust's
+`may_contain_host` refuse it (a path-scoped include still keeps the whole host
+possible, because the pre-filter must stay open so an attack on an authorised
+path can start). The residual difference is the empty-scope case only: Go keeps
+default-allow — an empty scope contains everything — where Rust's
+`may_contain_host` defaults false.
 
 **Decline path:** none; the engine half is ported and tested, and the web half
 (handlers + `RunReport` wire contract) is now ported with Slice F.
@@ -636,6 +679,23 @@ encoding reported as chosen, whole-block pass).
 request" pane cannot drive it. That is a separate nameable difference, not part
 of the FIPS/report contract this gap existed to close, and it is not claimed
 complete here.
+
+**Go-only addition with no Rust counterpart: the extended battery**
+(`internal/sequencer/advanced.go` + `chi.go`, burpsy-react-ui-d2g). Burp's
+Sequencer runs four further tests beside the FIPS four — character transition
+analysis, the spectral test, the correlation test and the compression test — and
+the Rust crate has none of them, so there is no oracle to port against and this
+is Burp parity rather than Rust parity. It rides the report as
+`SequencerReport.Advanced` (`advanced.tests[]`, `advanced.summary`,
+`advanced.affects_grade: false`) and **cannot** move `Grade`, which stays the
+Rust verdict byte-for-byte: `AffectsGrade` is on the wire so no reader has to
+infer that from a comment. Each member either reports its statistic or refuses
+with the reason the sample could not support it, mirroring the FIPS suite's
+behaviour below one whole block, and the chi-square upper tail the significance
+verdicts need is written out in `chi.go` rather than assumed. The p-values are
+therefore **not** comparable with any Rust number — Rust prints none — and this
+paragraph exists so a future parity audit does not read the extra field as
+drift.
 
 ### 8. `RequestEdit` absent as a type — COMPLETE
 
@@ -1132,6 +1192,89 @@ evaluator, `ToolRunner` interface), `internal/scanner/{toolrunner,passive,
 bcheck_runner,scanner}.go` (runner, load bucket, dispatch gate), `internal/web`
 (`WithToolRunner`), `cmd/burpsy` (`-tools` flag).
 
+## Go extension: MCP server transport (stdio) — `burpsy-react-ui-q31t`
+
+Landed 2026-10-01. Beyond parity: the Rust oracle has no MCP server, and neither
+does Burp itself (Burp AT's approval layer is architecturally separate from the
+model, which is the shape this reuses). ZAP and Caido shipped MCP surfaces in
+2026; burpsy already had the expensive half — a per-route risk class and a
+server-side confirmation gate — and no transport to reach it.
+
+**What ships.** A separate binary, `cmd/burpsy-mcp` (`burpsy-mcp -web
+http://127.0.0.1:8081`), speaking newline-delimited JSON-RPC 2.0 on stdio. It is
+a binary rather than a `burpsy mcp` subcommand because every `cmd/burpsy`
+subcommand is built through `newCLIContext`, which opens the traffic store, loads
+the bcheck corpus and builds the scanners before the command runs — a second
+engine wired against the same database, built only to make HTTP calls to the
+first. The console's own API is unchanged: no route is added to the manifest.
+
+**tools/list** is derived from the manifest, one tool per route, through
+`internal/web/mcp_export.go` (a wrapper file that adds names and changes no
+existing line). Each tool carries the route's risk class in its description and
+its annotations, plus MCP's four standard hints (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`) taken from
+`agent_tools.go`'s derivation — shared with the console's own agent-tool
+registry rather than re-judged, because a descriptor that called an attack route
+idempotent is exactly the drift the taxonomy exists to prevent. Names normalise
+the pattern (`/api/crawl/start` → `api_crawl_start`); the manifest legitimately
+holds both `/api/pools` and `/api/pools/`, so the subtree half of a collision is
+named `_subtree` and a third collision is numbered.
+
+**tools/call does not decide anything.** It forwards the call over HTTP to the
+running console and returns what the server answers. The transport therefore has
+no copy of the gate to drift from it: a gated mutating call with no confirmation
+comes back as the server's own HTTP 428, surfaced as an `isError` tool result
+with the gate's body verbatim; the confirmation travels as the
+`X-Burpsy-Confirm` header, relayed from the caller and never minted by the
+transport. Recovery is an explicit separate tool, `burpsy_confirm`, which POSTs
+the console's own mint endpoint — separate precisely so the escalation is one
+visible, approvable call in the host's transcript rather than a field the model
+fills in. The gate's own comment states the limit honestly and the tool
+description repeats it: an agent that can supply the confirm itself has learned
+nothing from being asked, so the enforcement point is the host and the operator.
+
+The one thing the transport refuses locally is a call whose path resolves to a
+different route than the tool names — `/api/audit/` must not be able to reach
+`/api/audit/selected` through the tool that names the subtree. It decides this
+with `MCPRouteForPath`, which is the gate's own `routeRiskFor` longest-prefix
+resolver, so the binding and the gate cannot disagree about which route a path
+names.
+
+**Verification.** `go build ./...`, `go vet`, `gofmt`, and 19 tests in
+`internal/mcp` pass. The tests mount a real `web.NewServer`'s gated chain on an
+`httptest` server, so the real `confirmStore` mints and spends the tokens — the
+acceptance criterion forbids a second gate, and a fake store would pass whether
+or not the production path exists. Four mutations were killed to prove the tests
+bite: dropping the token relay, dropping the tool/route binding, reporting the
+428 as success, and removing name-collision disambiguation each fail a named
+test. A live stdio session against a running console was driven end to end:
+`initialize` → `tools/list` (123 tools) → a `riskRead` call returning the real
+catalogue (183 advisories) → a `riskAttack` call refused with 428 → `burpsy_confirm`
+minting a token → the same call returning 200 → the same token replayed and
+refused with 428 again.
+
+**Known limits, stated rather than papered over.**
+
+- Stdio only. No SSE/HTTP transport, which the bead allowed as optional.
+- The gate's refusal text prints the manifest pattern, so for a subtree route the
+  console's own message reads `POST /api/audit//confirm` — one slash too many.
+  The transport prints the path it will actually POST to and says why the two
+  differ; the message itself lives in `internal/web/confirm_gate.go`, which this
+  change does not own and does not edit.
+- A streaming route (`text/event-stream`) is refused with a reason rather than
+  left to hang until the client timeout, and a response over 1 MiB is truncated
+  with the cut reported in the result.
+- `internal/web/mcp_export.go` also carries the export surface a second,
+  concurrent implementation of this bead had written (its `MCPRouteInfo`,
+  `MCPRoutes`, `MCPRouteRisk`, `MCPNeedsConfirm`, `MCPConfirmEndpoint`,
+  `MCPGuarded` are preserved as written). This transport added only what it
+  needed to those: `Tier`/`Hints` on the struct, `MCPRouteForPath`,
+  `MCPMethodMutates`, `MCPConfirmTTLSeconds`.
+
+**Files:** `internal/mcp/{mcp,tools}.go` (protocol, descriptors, call path),
+`internal/mcp/mcp_test.go`, `internal/web/mcp_export.go`,
+`cmd/burpsy-mcp/main.go`.
+
 ## Honest-counting guarantees
 
 - Parse success ≠ run success: files whose `given` family is not producible are
@@ -1184,3 +1327,263 @@ removes only its scheme; armless rules match both), `scope_restore_test.go`
 (protocol survives save/load; a v2-era database still restores), and
 `server_test.go` (arm survives the wire and gates through `AuthoriseRaw`;
 "gopher" is refused). Landed as de93912.
+
+## Scanner-logic research declines (2026-09-17)
+
+The Burp scanner-decision-layer research (2026-09-17 pass; the original
+`/tmp/smartscan-report.md` is gone — the findings were re-derived from the Burp tree on
+2026-09-27 and the load-bearing citations are now `Zfhb.java:81-83` (skip_ineffective),
+`Zeze.java:17` (queue dedup), `Zm58.java:88-98` (admission cap), the
+`project_options.resource_pools.*` keys (`map_root.tsv:17469-17504,23192-23213`) and
+`Zrwf.java:74-84` (audit bus)) ported
+the gaps that were worth porting and, per the honest-counting rule, records what it
+deliberately did **not** port and why. Each entry names the Burp evidence, so a
+future reader can re-open the decision rather than re-derive it.
+
+### Decline 1 — ML in the engine core
+
+**Burp has none.** The "statistical battery" in `burp.Zr8b`
+(`map_root.tsv:5899-6035`) is classical FIPS monobit/long-run/runs tests,
+chi-square, ZLIB-ratio, spectral and correlation tests — each computes a
+significance level; `Zr8b:3999` itself says the tests "provide only an indicative
+guide". That battery is **already ported** as the sequencer. The `"training"`
+literals (`Zepn:8713-8719`) are the licence trial, not model training. Burp's
+actual AI is **Burp AI**, an LLM post-scan issue investigator gated by
+severity+confidence (Standard = High + Medium-tentative), which explicitly "does
+not affect the crawl or audit phases"
+(portswigger.net DAST, "Configuring AI-enhanced scanning", updated 2026-09-09).
+
+**Why declined:** an in-engine model would add a nondeterministic verdict to a
+scanner whose whole value is honest counting, needs a training corpus burpsy does
+not have, and would not fix the current misses — the xsschallenge corpus is 23
+vulnerable / 9 safe at **zero** false positives, so the misses (`hvez`, `2p9u`,
+`1a3z`) are capability gaps, not precision gaps. The LLM half is tracked
+separately (bead `ei0v`, "LLM post-scan second look") and needs an
+operator-supplied endpoint before it can be built.
+
+### Decline 2 — Session handling rules during audit
+
+**Burp:** `scanner.session_handling_rules` (`map_root.tsv:2894, 5850-5851,
+20198`) lets an audit invoke a named rule set to re-authenticate mid-scan.
+
+**Why declined:** burpsy's session recovery lives in the crawler
+(`internal/crawler/session_gate.go`); the audit engine does not own the macro /
+session infrastructure, so adding the config key without the invocation path
+would be a config row that decides nothing. Re-open when the session epic lands
+the audit-side wiring — the breaker model itself is already richer than assumed
+(both levels plus the session count/percentage breaker, with Burp's exact key
+names, `audit_items.go:301-304`).
+
+### Decline 3 — `LOW_VALUE` audit disposition
+
+**Burp:** `Zwee.java:125-129` assigns `LOW_VALUE` to requests whose crawl action
+was, e.g., a speculative navigation or a floating form. **Why declined:** the
+disposition keys on crawler *action types* that burpsy's crawler does not record.
+Porting the constant alone would be a label over nothing; port the metadata
+first, then the disposition.
+
+### Decline 4 — The full `crawl_optimization` tolerance-key family
+
+**Burp:** `map_root.tsv:243-267` (`scanner.crawl_optimization.*` tolerance keys).
+**Why declined:** the family decides whether two renders are "the same" by
+comparing DOMs; burpsy's crawler captures wire bytes and has no rendered-DOM
+comparator. A single tolerance number without the comparator is unenforceable.
+(Related: bead `xuim` covers the rendered-DOM audit row, which is the
+prerequisite for most of this family.)
+
+### Decline 5 — HTTP/2 pseudo-header awareness
+
+**Burp:** `Zee2.java:12-63` classifies `:scheme` / `:method` / `:path` /
+`:authority` as a distinct header class (literals `map_root.tsv:10712-10715`),
+used by `Ze0j.findInvalidHeaderNames` (`Ze0j.java:170-171`) to keep them out of
+the ordinary-header insertion-point path.
+
+**Why declined:** the sender is HTTP/1.1 `writeHTTP1` (`sender.go:597`) and
+nothing in burpsy reads pseudo-headers, so there is no insertion-point class for
+the rule to protect. Re-open if an HTTP/2 sender lands.
+
+### Decline 6 — Name+value relocation matching
+
+**Burp:** `InsertionPointBuilder.java:1035-1045` moves the matching URL parameter
+to the corresponding body kind by matching **name and value**.
+
+**Why declined:** burpsy already ships 2 of Burp's 6 relocation directions
+(`insertion.go:381`); the remaining matching adds a comparison cost to a kind
+that rarely fires. Re-open if a real target shows a relocation the blanket clause
+move gets wrong.
+
+
+## G-reflected-xss-header-reach — the reflected-XSS row could not probe headers
+
+**Verified 2026-09-17 against HEAD, measured with `cmd/xsschallenge`.**
+
+The three core injection rows (SQL injection, reflected XSS, file path traversal) named their
+own insertion-point literal:
+
+    var coreInjectionKinds = []string{"query", "body", "cookie"}   // checks_core_injection.go:52
+
+Two consequences, both real:
+
+1. **No `header`.** A value reflected out of an HTTP header was structurally unreachable by the
+   reflected-XSS row, because no probe was ever sent into a header. `cmd/xsschallenge`'s
+   `/x/header` case (User-Agent reflected into the body) is exactly this shape.
+2. **The operator's configuration was ignored.** `scanner/insertion_point_types/*` reaches every
+   other probe site through `cc.ProbeInsertionKinds()`, but these three passed the literal
+   instead — so turning cookie insertion off changed what the audit queue displayed and not one
+   byte of what these rows sent.
+
+**Fix:** all three call sites now pass `cc.ProbeInsertionKinds()`, so the configured kinds govern
+and `header` is in the default set (`DefaultProbeInsertionKinds` at probe_harness.go:40).
+
+**Evidence — `cmd/xsschallenge`, before → after:**
+
+| | before | after |
+|---|---|---|
+| `header-user-agent` | **MISS** | **hit** (Cross-site scripting (reflected)) |
+| detection | 20/23 | **21/23 (91%)** |
+| false positives | 0/9 | 0/9 |
+
+The two remaining misses are unchanged and are separate capability gaps:
+
+- `stored` — the batch-audit cycle cannot close (checks_stored.go's own header documents this);
+  the deferred phase did not reach the `/x/stored/view` render in this run.
+- `cookie-pref` — NOT YET DIAGNOSED. An earlier draft of this note claimed the cookie
+  insertion point used a percent-encoding codec that escaped `<`/`>`; that is FALSE and was
+  retracted before landing. `percentEscape` (bcheck/insertion.go:1871-1884) escapes only
+  `& = + ; # %`, bytes `<= 0x20`, and bytes `>= 0x7f`. `<`, `>` and `"` are printable ASCII and
+  pass through raw, so a cookie point does carry markup and the kind is enumerated. The miss has
+  a different cause and needs its own diagnosis before anything is claimed about it.
+
+### Decline 4b — Crawler default-bound divergence
+
+**Burp:** `Preferences/CrawlDefaults.json` publishes `maximum_link_depth: 4`,
+`maximum_crawl_time: 150`, `maximum_unique_locations: 1500`. It ships no template-visit
+key at all (verified 2026-10-01: enumerating every leaf key in that file, none matches
+`template`), so burpsy's 20 is a bound burpsy invented — a deliberate one, argued at
+limits.go:159-163 — with nothing on Burp's side to diverge from.
+**burpsy:** `internal/crawler/limits.go` defaults to depth 6, 5 minutes, 300 locations,
+and 20 template visits. These are burpsy's chosen conservatism for a pentest tool,
+not an oversight. `GET /api/crawl` now publishes both sets under
+`default_limits` (burpsy's) and `burp_defaults` (Burp's) so a console can show the delta.
+
+**One divergence the note above missed, and it is the largest of the four:** `maximum_request_count`
+is **0** in `Preferences/CrawlDefaults.json`, which means Burp's crawler is UNBOUNDED on requests.
+burpsy's is 500 (`limits.go:151`). A Burp crawl of a large application therefore keeps going while
+burpsy's stops and says so — which is the difference an operator migrating a crawl will hit first, and
+the one least likely to be recognised as a policy choice because a crawl that stops is not obviously a
+crawl that was told to. It belongs beside the other three comparisons rather than with the invented
+bounds below.
+
+**Every other entry in `burp_defaults` is a burpsy-invented bound, and zero misreads as one.**
+`maximum_frontier_size`, `maximum_links_per_page`, `maximum_parse_bytes`, `maximum_capture_bytes`,
+`maximum_fingerprints`, `maximum_relogins` and `maximum_submissions_per_form` have no Burp
+counterpart at all — the same enumeration that cleared the template key clears these. A console
+rendering that table shows "Burp's frontier bound: 0", and 0 in that column is indistinguishable
+from "Burp enforces no limit" when the truth is "Burp has no such setting". Separating the two needs
+a change to `internal/web/api_crawl.go`, which is another session's working set; recorded here so the
+distinction travels with the entry rather than being rediscovered.
+
+### Decline 5 — HTTP/2 pseudo-header awareness
+
+**Burp:** `Zee2.java:12-63` classifies `:scheme` / `:method` / `:path` /
+`:authority` as a distinct header class (literals `map_root.tsv:10712-10715`),
+used by `Ze0j.findInvalidHeaderNames` (`Ze0j.java:170-171`) to keep them out of
+the ordinary-header insertion-point path.
+
+**Why declined:** the sender is HTTP/1.1 `writeHTTP1` (`sender.go:597`) and
+nothing in burpsy reads pseudo-headers, so there is no insertion-point class for
+the rule to protect. Re-open if an HTTP/2 sender lands.
+
+### Decline 6 — Name+value relocation matching
+
+**Burp:** `InsertionPointBuilder.java:1035-1045` moves the matching URL parameter
+to the corresponding body kind by matching **name and value**.
+
+**Why declined:** burpsy already ships 2 of Burp's 6 relocation directions
+(`insertion.go:381`); the remaining matching adds a comparison cost to a kind
+that rarely fires. Re-open if a real target shows a relocation the blanket clause
+move gets wrong.
+
+
+## G-reflected-xss-header-reach — the reflected-XSS row could not probe headers
+
+**Verified 2026-09-17 against HEAD, measured with `cmd/xsschallenge`.**
+
+The three core injection rows (SQL injection, reflected XSS, file path traversal) named their
+own insertion-point literal:
+
+    var coreInjectionKinds = []string{"query", "body", "cookie"}   // checks_core_injection.go:52
+
+Two consequences, both real:
+
+1. **No `header`.** A value reflected out of an HTTP header was structurally unreachable by the
+   reflected-XSS row, because no probe was ever sent into a header. `cmd/xsschallenge`'s
+   `/x/header` case (User-Agent reflected into the body) is exactly this shape.
+2. **The operator's configuration was ignored.** `scanner/insertion_point_types/*` reaches every
+   other probe site through `cc.ProbeInsertionKinds()`, but these three passed the literal
+   instead — so turning cookie insertion off changed what the audit queue displayed and not one
+   byte of what these rows sent.
+
+**Fix:** all three call sites now pass `cc.ProbeInsertionKinds()`, so the configured kinds govern
+and `header` is in the default set (`DefaultProbeInsertionKinds` at probe_harness.go:40).
+
+**Evidence — `cmd/xsschallenge`, before → after:**
+
+| | before | after |
+|---|---|---|
+| `header-user-agent` | **MISS** | **hit** (Cross-site scripting (reflected)) |
+| detection | 20/23 | **21/23 (91%)** |
+| false positives | 0/9 | 0/9 |
+
+The two remaining misses are unchanged and are separate capability gaps:
+
+- `stored` — the batch-audit cycle cannot close (checks_stored.go's own header documents this);
+  the deferred phase did not reach the `/x/stored/view` render in this run.
+- `cookie-pref` — NOT YET DIAGNOSED. An earlier draft of this note claimed the cookie
+  insertion point used a percent-encoding codec that escaped `<`/`>`; that is FALSE and was
+  retracted before landing. `percentEscape` (bcheck/insertion.go:1871-1884) escapes only
+  `& = + ; # %`, bytes `<= 0x20`, and bytes `>= 0x7f`. `<`, `>` and `"` are printable ASCII and
+  pass through raw, so a cookie point does carry markup and the kind is enumerated. The miss has
+  a different cause and needs its own diagnosis before anything is claimed about it.
+
+## Crawler: out-of-scope resources — burpsy is stricter than Burp BY DEFAULT (2026-10-01, burpsy-react-ui-hgor)
+
+**Declared divergence, and it is burpsy's side.** No default was changed and the chokepoint is
+untouched; this records a difference an operator comparing against Burp cannot otherwise see.
+
+Burp distinguishes *navigational* scope (what gets crawled and audited) from *resource* scope (what a
+page may load to work at all), and **the second defaults to permissive**:
+
+- `crawler.customization.allow_out_of_scope_resources` — Zxcp.java:123; constructor parameter in
+  Zula.java:43,65; panel label "Fetch required resources and data from out-of-scope hosts"
+  (Zrfn.java:159).
+- Default **true** — `Preferences/CrawlDefaults.json`, `allow_out_of_scope_resources: true`
+  (tree 2026.7.1, build 51467).
+- Burp's own documentation states the consequence: *"This setting controls whether Burp Scanner
+  issues requests to out-of-scope hosts where necessary. Websites often require the browser to load
+  externally hosted subresources or fetch data from an API to function correctly. … Out-of-scope
+  requests are not audited."* (`crawl-settings.html:273`, with the paired read-timeout
+  `timeout_for_in_progress_resource_requests`, default 10, `CrawlDefaults.json`).
+
+burpsy refuses. `enqueue`'s scope gate refuses an out-of-scope URL before the frontier sees it and
+`sender.AuthorisedSender` refuses again on the wire — CRAWL-02, a deliberate design decision this
+bead does not propose weakening. On a site whose fonts, app shell or API live on a CDN or a
+third-party host, a burpsy crawl therefore reports far fewer locations than a Burp crawl of the same
+seed, with no indication that the difference is a policy choice rather than a bug or a broken target.
+
+**What landed, and what did not.** `SkipOutOfScopeResource` now distinguishes the case the crawler can
+actually observe — a framed or embedded document (`iframe`, `frame`, `object`, `embed`) refused for
+naming an out-of-scope host, as against a navigational link refused by the same rule. The count reaches
+`Report.Limits.OutOfScopeResources` and is stated in the crawl's `Caveat` **even for a complete
+crawl**, because a crawl that refused every CDN asset ran to completion within a narrower world than
+the operator expects — and the pre-existing caveat only speaks when a bound was hit, which is exactly
+the silence this bead is about.
+
+**The larger half, still open.** For the subresources that dominate this scenario — `img`, `script`,
+`link`, `source`, `video`, `audio` — burpsy produces **no ledger entry at all**, because it never
+discovers them (`internal/crawler/discover.go:24`). It does not refuse them; it never looks at them.
+Against Burp, which fetches them, a page served largely from a CDN reads as "found, no links". No skip
+reason can express that, because nothing was refused. Two options, neither taken here and both real
+work: record the discovered-but-not-queued subresource hosts as an explicit coverage statement on the
+report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
+honest one and is the smaller.

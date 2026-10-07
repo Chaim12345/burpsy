@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
@@ -38,6 +39,9 @@ type networkSettingsView struct {
 
 type networkAcceptedView struct {
 	ResolutionPolicies []string `json:"resolution_policies"`
+	// ResolutionFamilies is read from the engine, not hardcoded in the panel, so a family value can
+	// appear in the selector only if the engine accepts it — the same rule the policy list follows.
+	ResolutionFamilies []string `json:"resolution_families"`
 	RedirectModes      []string `json:"redirect_modes"`
 	MaxTimeoutMS       int      `json:"max_timeout_ms"`
 	MaxRedirectHops    int      `json:"max_redirect_hops"`
@@ -58,6 +62,11 @@ func networkAccepted() networkAcceptedView {
 	sort.Strings(keys)
 	return networkAcceptedView{
 		ResolutionPolicies: []string{string(sender.ResolutionSystem), string(sender.ResolutionResolver)},
+		// Read from the engine so the panel's selector can only offer a value Validate accepts, the
+		// same rule ResolutionPolicies and RedirectModes follow.
+		ResolutionFamilies: []string{
+			string(sender.FamilySystem), string(sender.FamilyIPv4), string(sender.FamilyIPv6),
+		},
 		RedirectModes: []string{
 			string(sender.RedirectNever), string(sender.RedirectOnSite),
 			string(sender.RedirectInScope), string(sender.RedirectAlways),
@@ -97,6 +106,18 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			n.Resolution.Policy = sender.ResolutionPolicy(s)
 			return nil
 		},
+		// Burp's resolution-address preference (settings/network/dns.html:49-65), which exists
+		// "because routing restrictions may permit only one family" (burpsy-react-ui-mr83 part 2).
+		// The refusal names the three values so a typo is a message rather than a silent filter that
+		// matches no address.
+		"family": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var s string
+			if err := json.Unmarshal(raw, &s); err != nil {
+				return fmt.Errorf("wants a family name as a string")
+			}
+			n.Resolution.Family = sender.AddressFamily(s)
+			return nil
+		},
 		"resolver": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchString(raw, &n.Resolution.Resolver)
 		},
@@ -121,6 +142,12 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			return nil
 		},
 		"max_hops": func(n *sender.NetworkSettings, raw json.RawMessage) error { return patchInt(raw, &n.Redirects.MaxHops) },
+		// Burp's "Follow redirections and resubmit cookies" (settings/tools/repeater.html:143-145),
+		// which burpsy lacked entirely (burpsy-react-ui-mr83). Off by default here as it is there: a
+		// cookie the target set mid-chain is not something the operator asked to send.
+		"replay_cookies": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Redirects.ReplayCookies)
+		},
 	},
 	"continue": {
 		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {
@@ -131,6 +158,23 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 		},
 		"expect_continue_timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchInt(raw, &n.Continue.ExpectTimeoutMS)
+		},
+	},
+	"tls": {
+		"verify": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.TLS.Verify)
+		},
+		"root_ca_path": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchString(raw, &n.TLS.RootCAPath)
+		},
+		"min_version": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			var v uint16
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return fmt.Errorf("wants the TLS version number: 0x0301 for TLS 1.0, 0x0302 for 1.1, " +
+					"0x0303 for 1.2, 0x0304 for 1.3")
+			}
+			n.TLS.MinVersion = v
+			return nil
 		},
 	},
 	"streaming": {
@@ -144,6 +188,23 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 		},
 		"timeout_ms": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchInt(raw, &n.Streaming.TimeoutMS)
+		},
+		"store": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			// A pointer field, so a document that never set it reads as the shipped on rather than a
+			// bare false — see StreamingSettings.Store. The patch always carries an explicit value, so
+			// here the pointer is always set.
+			var b bool
+			if err := json.Unmarshal(raw, &b); err != nil {
+				return fmt.Errorf("wants true or false")
+			}
+			n.Streaming.Store = &b
+			return nil
+		},
+		"strip_chunked_encoding_metadata": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Streaming.StripChunkedMetadata)
+		},
+		"use_text_event_stream_header": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			return patchBool(raw, &n.Streaming.UseTextEventStreamHeader)
 		},
 	},
 }
@@ -258,6 +319,59 @@ func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Reques
 	if err := s.sender.ApplyNetwork(next); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// The proxy leg reads the same streaming settings, and this is the one place they change.
+	//
+	// Without this the panel would describe a host list that only the sender obeyed, while browser
+	// traffic through the proxy kept buffering — the exact "a rule that silently lapses for part of
+	// the traffic" failure this file's other comments keep warning about, in the one surface where an
+	// operator is most likely to be reading the setting: an event stream that arrives empty
+	// (burpsy-react-ui-wet3).
+	//
+	// A refusal here is reported rather than swallowed, and it is not: Set only refuses a negative
+	// window, which Normalise has already rejected above, so this cannot fail on a document the sender
+	// accepted. The check is here so that if it ever can, the operator is told instead of the proxy
+	// silently keeping the previous list.
+	// The upstream-TLS policy, pushed to the proxy leg for the same reason the streaming settings are:
+	// one console edit, both legs. A refusal here is reported rather than swallowed — unlike the
+	// sender's CA load, a bundle that will not parse is the operator's mistake and saying so at the
+	// moment they save it is the difference between a fixable error and a handshake failure twenty
+	// minutes later (burpsy-react-ui-f365).
+	if s.proxyServer != nil {
+		tlsPolicy := s.proxyServer.TLS()
+		tlsPolicy.WithVerify(next.TLS.Verify)
+		if minErr := tlsPolicy.WithMinVersion(next.TLS.MinVersion); minErr != nil {
+			http.Error(w, minErr.Error(), http.StatusBadRequest)
+			return
+		}
+		if caPath := next.TLS.RootCAPath; caPath != "" {
+			if caErr := tlsPolicy.WithRootCAFile(caPath); caErr != nil {
+				http.Error(w, "tls.root_ca_path: "+caErr.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if s.proxyServer != nil {
+		if err := s.proxyServer.Streaming().Set(next.Streaming.Hosts, time.Duration(next.Streaming.TimeoutMS)*time.Millisecond); err != nil {
+			s.logger.Warn("proxy streaming policy refused settings the sender accepted", zap.Error(err))
+		}
+		// The three response-handling switches reach the proxy leg for the same reason the host list
+		// does: one console edit, both legs. StoreStreamed reads a nil (never-set, or loaded from a
+		// document that predates the switch) as on, so an operator who never opened the panel keeps the
+		// recording behaviour that shipped.
+		s.proxyServer.Streaming().SetResponseHandling(
+			next.Streaming.StoreStreamed(),
+			next.Streaming.StripChunkedMetadata,
+			next.Streaming.UseTextEventStreamHeader,
+		)
+		// The resolution and 100-continue half, pushed for exactly the same reason: without it a
+		// hostname override would apply to Repeater and silently not to the browser traffic the
+		// operator is driving through the proxy, and an interim 100 would be handed to the client
+		// as its response (burpsy-react-ui-o1eu). Set cannot fail — the document was validated
+		// above — so there is no refusal to report here.
+		s.proxyServer.Network().Set(next.Resolution, next.Continue)
 	}
 
 	confirmed := s.sender.Network()

@@ -21,6 +21,42 @@ PASS=0; FAIL=0
 ok(){ echo "  PASS  $1"; PASS=$((PASS+1)); }
 no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 
+# gated_post PATTERN URL [curl args...] — POST to a confirmation-worthy route the way an operator does.
+#
+# Every mutating call to a riskAttack/riskScope/riskCredential/riskDestructive route is refused with
+# 428 unless it carries a one-time token (burpsy-react-ui-ejp5). This suite predates that gate, so it
+# called those routes bare and read the 428 as a product regression — which is how a gate is supposed
+# to look to a harness nobody updated.
+#
+# The pattern is passed separately from the URL on purpose, and getting that wrong is the mistake
+# this comment exists to stop repeating: a confirmation is minted against the MANIFEST pattern, so
+# "/api/audit/" mints at "/api/audit/confirm". Deriving it from a concrete call path gives
+# "/api/audit/0/confirm", which is not a registered mint endpoint and answers 404 — the same
+# concrete-path-for-a-pattern confusion the MCP transport documents in burpsy-react-ui-q31t.
+gated_post(){
+  local pattern="$1"; local url="$2"; shift 2
+  local token err
+  err=$(mktemp)
+  token=$(python3 - "$WEB_PORT" "$pattern" <<'PY' 2>"$err"
+import json,sys,urllib.request
+web,pattern=sys.argv[1],sys.argv[2]
+r=urllib.request.urlopen(urllib.request.Request(
+    f"http://127.0.0.1:{web}{pattern.rstrip('/')}/confirm",b"",{"content-type":"application/json"}),timeout=10)
+print(json.load(r).get("token",""))
+PY
+)
+  if [ -z "$token" ]; then
+    # Echo a marker rather than sending the call unconfirmed: a missing token is a harness (or
+    # route) defect, and letting the call through would report it as a product failure with the
+    # wrong cause attached. The caller's own assertion then fails on the marker, once.
+    echo "MINT-FAILED for $pattern: $(tr -d '\n' < "$err" | tail -c 160)"
+    rm -f "$err"
+    return 0
+  fi
+  rm -f "$err"
+  curl -s -X POST "$url" -H "X-Burpsy-Confirm: $token" "$@"
+}
+
 BIN=$(mktemp -u /tmp/burpsy-go-e2e.XXXXXX)
 cleanup(){
   [ -n "${TARGET_PID:-}" ] && kill "$TARGET_PID" 2>/dev/null
@@ -116,12 +152,13 @@ PY
 )
 [ "$FIRST_ID" = "0" ] && ok "first captured exchange is id 0" || no "lowest exchange id is '$FIRST_ID', expected 0"
 
-AUD=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/0")
-[ "$AUD" = "200" ] && ok "POST /api/audit/0 accepted" || no "POST /api/audit/0 -> HTTP $AUD"
-AUDB=$(curl -s -X POST "http://127.0.0.1:$WEB_PORT/api/audit/0")
+AUD=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/0" -H 'content-type: application/json')
+[ "$AUD" = "428" ] && ok "an unconfirmed POST /api/audit/0 is refused (the gate)" \
+  || no "unconfirmed POST /api/audit/0 -> HTTP $AUD, want 428"
+AUDB=$(gated_post "/api/audit/" "http://127.0.0.1:$WEB_PORT/api/audit/0" -H 'content-type: application/json')
 echo "$AUDB" | grep -q '"exchange_id":0' && ok "audit ran against exchange 0" || no "audit body: ${AUDB:0:160}"
 # The legacy alias had the same bug spelled differently ("exchange_id is required" for a supplied 0).
-LEG=$(curl -s -X POST "http://127.0.0.1:$WEB_PORT/api/scanner/audit" \
+LEG=$(gated_post "/api/scanner/audit" "http://127.0.0.1:$WEB_PORT/api/scanner/audit" \
       -H 'content-type: application/json' -d '{"exchange_id":0}')
 echo "$LEG" | grep -q '"exchange_id":0' && ok "legacy alias accepts exchange 0" || no "legacy alias: ${LEG:0:160}"
 
@@ -178,10 +215,15 @@ echo "=== 7. intruder attack runs against the point ==="
 ATT=$(python3 - "$WEB_PORT" "$REP_MSG" "$TARGET_PORT" <<'PY'
 import json,sys,urllib.request
 web,mid,tgt=sys.argv[1],int(sys.argv[2]),sys.argv[3]
+# The attack is confirmation-worthy, so the operator's two steps are both performed here: mint a
+# token for the route, then spend it on the call. A bare POST is a 428 by design.
+tok=json.load(urllib.request.urlopen(urllib.request.Request(
+    f"http://127.0.0.1:{web}/api/intruder/run/confirm",b"",{"content-type":"application/json"}),timeout=10))["token"]
 body=json.dumps({"msg_id":mid,"target":f"http://127.0.0.1:{tgt}",
                  "point_index":0,"payloads":["AAA","BBB","'"],"all":False}).encode()
 r=urllib.request.urlopen(urllib.request.Request(
-    f"http://127.0.0.1:{web}/api/intruder/run",body,{"content-type":"application/json"}),timeout=60)
+    f"http://127.0.0.1:{web}/api/intruder/run",body,
+    {"content-type":"application/json","X-Burpsy-Confirm":tok}),timeout=60)
 print(r.read().decode())
 PY
 )
@@ -216,8 +258,11 @@ web,tgt=sys.argv[1],sys.argv[2]
 raw=f"GET /token HTTP/1.1\r\nHost: 127.0.0.1:{tgt}\r\nConnection: close\r\n\r\n"
 body=json.dumps({"target":f"http://127.0.0.1:{tgt}","protocol":"http","request":raw,"count":12,
                  "location":{"kind":"cookie","name":"E2E_SESSION"}}).encode()
+tok=json.load(urllib.request.urlopen(urllib.request.Request(
+    f"http://127.0.0.1:{web}/api/sequencer/capture/confirm",b"",{"content-type":"application/json"}),timeout=10))["token"]
 started=json.load(urllib.request.urlopen(urllib.request.Request(
-    f"http://127.0.0.1:{web}/api/sequencer/capture",body,{"content-type":"application/json"}),timeout=20))
+    f"http://127.0.0.1:{web}/api/sequencer/capture",body,
+    {"content-type":"application/json","X-Burpsy-Confirm":tok}),timeout=20))
 for _ in range(200):
     view=json.load(urllib.request.urlopen(f"http://127.0.0.1:{web}/api/sequencer/capture/{started['id']}",timeout=10))
     if not view["capturing"]:

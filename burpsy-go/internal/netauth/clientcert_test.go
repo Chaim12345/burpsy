@@ -300,21 +300,22 @@ func Test_restore_returns_what_it_loaded_and_names_what_it_could_not(t *testing.
 
 // A persisted row whose scheme this build does not implement is dropped and named, never
 // coerced. Coercing it to Basic would send the operator's password to a host under a scheme
-// they never chose.
+// they never chose. NTLMv2 is implemented (ntlm.go) and restores like basic does.
 func Test_restoring_credentials_refuses_an_unknown_scheme_rather_than_coercing_it(t *testing.T) {
 	store, failures := RestoreCredentials([]CredentialRow{
 		{Host: "ok.example.com", Scheme: "basic", Username: "admin", Password: testPassword},
 		{Host: "ntlm.example.com", Scheme: "ntlmv2", Username: "admin", Password: testPassword},
 		{Host: "", Scheme: "basic", Username: "admin", Password: testPassword},
 	})
-	if store.Len() != 1 {
-		t.Fatalf("expected one restored rule, got %d", store.Len())
+	if store.Len() != 2 {
+		t.Fatalf("expected the basic and ntlmv2 rows restored, got %d", store.Len())
 	}
-	if _, ok := store.Match("ntlm.example.com"); ok {
-		t.Error("the NTLM row was restored under some other scheme; a credential must never be " +
-			"presented under a scheme the operator did not choose")
+	rule, ok := store.Match("ntlm.example.com")
+	if !ok || string(rule.Scheme) != "ntlmv2" {
+		t.Errorf("the NTLMv2 row did not restore as ntlmv2: got %+v, ok=%v; a credential must never be "+
+			"presented under a scheme the operator did not choose", rule, ok)
 	}
-	if len(failures) != 2 {
-		t.Fatalf("expected the NTLM row and the hostless row to be named, got %d: %v", len(failures), failures)
+	if len(failures) != 1 {
+		t.Fatalf("expected only the hostless row to be named, got %d: %v", len(failures), failures)
 	}
 }

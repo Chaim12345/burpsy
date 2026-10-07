@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Crosshair, FileSearch, Pause, Play, Plus, RotateCcw, Search, Square, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { api, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { ApiError, api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { fetchRaw } from "../lib/actions";
+import {
+  intruderExportFilenames,
+  intruderPayloadResolver,
+  intruderReportToCSV,
+  payloadLabel,
+} from "../lib/intruder-export";
 import {
   AttackActionStale,
   useIntruderAttackAction,
@@ -9,9 +16,15 @@ import {
   useIntruderPoints,
   useIntruderRun,
   type IntruderRunRequest,
+  useWordlists,
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
+import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
+import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
+import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
+import { delayVariationFields } from "../lib/intruder-variation";
+import { filterTableRows } from "../lib/table-filter";
 import {
   DEFAULT_PAYLOADS,
   emptyIntruderConfig,
@@ -22,23 +35,28 @@ import {
 import {
   ATTACK_MODES,
   HASH_ALGORITHMS,
+  NORMALIZATION_FORMS,
   PAYLOAD_LAYERS,
   PAYLOAD_RULES,
-  assignmentAt,
-  attackProgress,
   customIteratorSize,
   customIteratorSlots,
   dateSetSize,
   emptyRule,
   estimateRequests,
-  planSetLengths,
+  attackProgress,
   quoteRegex,
-  resolvePayloads,
+  parseCharSubstitutions,
+  FOLLOW_REDIRECTS_MODES,
+  type Attempt,
   type AttackMode,
+  type ErrorBucket,
+  type FollowRedirectsMode,
   type IntruderAttacksResp,
   type PayloadRuleName,
   type PayloadRuleSpec,
+  type PayloadSetReport,
   type ResolvedPayload,
+  type ResultBucket,
   type RunView,
   type SetSize,
 } from "../lib/types.tools";
@@ -65,7 +83,55 @@ import {
   Textarea,
   Tooltip,
 } from "../ui/primitives";
-import { SimpleTable } from "../ui/table";
+import { SortableTable, type Column } from "../ui/table";
+import { ExtractorCell } from "../ui/extractor-manager";
+import type { MenuGroup } from "../ui/menu";
+
+/**
+ * The filter field above each result table, with the honest count (burpsy-react-ui-4rd).
+ *
+ * The filter is client-side over the rows the server already sent, so "N of M" is
+ * exact rather than a page-sized sample, and a filter that hides everything says so
+ * instead of leaving an empty-looking table that reads as "no results".
+ */
+function ResultFilter({
+  label,
+  value,
+  onChange,
+  shown,
+  total,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  shown: number;
+  total: number;
+}): JSX.Element {
+  return (
+    <div className="results-filter">
+      <div className="search-field">
+        <Search size={15} />
+        <Input
+          aria-label={label}
+          title={label}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Filter rows"
+        />
+        {value ? (
+          <IconButton label={`Clear ${label.toLowerCase()}`} size="small" onClick={() => onChange("")}>
+            <X size={13} />
+          </IconButton>
+        ) : null}
+      </div>
+      {value ? (
+        <span className="cell-dim">
+          {formatCount(shown)} of {formatCount(total)} rows
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 function countPayloads(text: string): number {
   return text.split("\n").filter((line) => line.trim() !== "").length;
@@ -73,6 +139,17 @@ function countPayloads(text: string): number {
 
 function payloadList(text: string): string[] {
   return text.split("\n").filter((line) => line.trim() !== "");
+}
+
+/**
+ * Renders an attempt's `time_of_day` (an RFC 3339 string) the way the rest of this app renders a
+ * wall-clock moment (collaborator.tsx, extensions.tsx: `toLocaleTimeString()`), never
+ * "Invalid Date" for a value this browser cannot parse — an older server that omitted the field
+ * would otherwise render the literal string `Invalid Date` in every row.
+ */
+function formatTimeOfDay(iso: string): string {
+  const at = new Date(iso);
+  return Number.isNaN(at.getTime()) ? "—" : at.toLocaleTimeString();
 }
 
 /** Editor for one payload processing rule; the visible fields depend on the rule. */
@@ -140,6 +217,19 @@ function RuleRow({
           ))}
         </Select>
       ) : null}
+      {uses.includes("form") ? (
+        <Select
+          aria-label={`Rule ${index + 1} normalization form`}
+          value={rule.form}
+          onChange={(event) => onChange({ ...rule, form: event.target.value })}
+        >
+          {NORMALIZATION_FORMS.map((form) => (
+            <option key={form} value={form}>
+              {form}
+            </option>
+          ))}
+        </Select>
+      ) : null}
       {uses.includes("algorithm") ? (
         <Select
           aria-label={`Rule ${index + 1} algorithm`}
@@ -161,22 +251,6 @@ function RuleRow({
       </IconButton>
     </div>
   );
-}
-
-/**
- * One resolved payload combination as a string, and whether every part of it is real payload text.
- *
- * A part the browser cannot name is rendered as its position in its set rather than omitted or
- * guessed, because "set 2 payload #18" tells the operator where to look and an invented payload
- * tells them something false.
- */
-function payloadLabel(parts: ResolvedPayload[]): { text: string; complete: boolean } {
-  if (!parts.length) return { text: "", complete: false };
-  const complete = parts.every((part) => part.text !== null);
-  const text = parts
-    .map((part) => (part.text === null ? `set ${part.set + 1} payload #${part.index + 1}` : part.text === "" ? "(empty)" : part.text))
-    .join(" | ");
-  return { text, complete };
 }
 
 /**
@@ -233,6 +307,7 @@ function StoredMessage({ id, label, onClose }: { id: number; label: string; onCl
               ? `Could not load message ${id}: ${message.error instanceof Error ? message.error.message : String(message.error)}`
               : "No bytes stored for this message.")
         }
+        bodyBase64={message.data?.body_base64}
         filename={`intruder-message-${id}.txt`}
       />
     </Modal>
@@ -265,6 +340,154 @@ function ResponseCell({
 }
 
 /**
+ * What a results row can hand to another tool.
+ *
+ * A row is described by the message ids the server stored for it, not by the row type: a bucket
+ * and an attempt differ in what they count, and not at all in what "send this request to Repeater"
+ * means. Either id is `null` when nothing was stored — a send that failed, a detail row past the
+ * engine's DetailLimit, or a server older than the recording itself — and the menu greys the
+ * matching action rather than offering one that would resolve nothing.
+ */
+interface ResultHandoff {
+  requestId: number | null;
+  responseId: number | null;
+  /** How the row names itself in a Repeater tab title and in the toasts. */
+  label: string;
+}
+
+/**
+ * Repeater's protocol has to come from the target the attack actually used.
+ *
+ * `openRepeaterTab` defaults `protocol` to "https", so an http attack's request would arrive in
+ * Repeater as https and fail the handshake against a server that never offered TLS — the same bug
+ * `schemeOf` in lib/actions.ts exists to prevent for captured exchanges. The intruder target is
+ * URL-shaped ("http://host:port", from exchangeAuthority), with the bare-authority form handled
+ * the way targetParts does it server-side.
+ */
+function targetScheme(target: string): "http" | "https" {
+  const t = target.trim();
+  const scheme = t.indexOf("://");
+  if (scheme >= 0) return t.slice(0, scheme).toLowerCase() === "https" ? "https" : "http";
+  return /:443$/.test(t) ? "https" : "http";
+}
+
+/**
+ * The cross-tool actions an Intruder result supports (burpsy-react-ui-79u).
+ *
+ * Until this existed a result was a dead end: the Results tab could show a response and nothing
+ * else, so the way to retest an interesting row was to read the payload off the table and rebuild
+ * the request by hand in Repeater. Burp's results rows carry the suite context menu, and
+ * `configure-attack/settings.html` names "Send requests or responses to other Burp tools" as one
+ * of the three reasons its store-requests setting exists.
+ *
+ * This is deliberately not `useExchangeActions`: that menu is keyed on an `Exchange`, and an
+ * attack ordinal is not one. Fabricating an exchange id to reuse the menu would put the rest of
+ * its actions — Add to scope, Record an issue, annotate — behind an id that names nothing.
+ */
+function useResultMenu(target: string): (row: ResultHandoff) => MenuGroup[] {
+  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
+  const setComparerSlot = useApp((state) => state.setComparerSlot);
+  const setRoute = useApp((state) => state.setRoute);
+
+  return useCallback(
+    (row: ResultHandoff): MenuGroup[] => {
+      // One loader for every action: the bytes are fetched on select, not on right-click, so
+      // opening a menu over a table of 500 rows costs nothing.
+      const withBytes = (id: number | null, what: string, use: (raw: string) => void) => () => {
+        if (id === null) return;
+        void (async () => {
+          try {
+            use(await fetchRaw(id));
+          } catch (error) {
+            toast.error(`Could not load ${what} bytes: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        })();
+      };
+      const noRequest = row.requestId === null;
+      const noResponse = row.responseId === null;
+      const compare = (id: number | null, what: string, slot: "a" | "b") =>
+        withBytes(id, what, (raw) => {
+          setComparerSlot(slot, raw);
+          setRoute("comparer");
+          toast.success(`${row.label} ${what} loaded into slot ${slot.toUpperCase()}`);
+        });
+      return [
+        {
+          id: "tools",
+          actions: [
+            {
+              id: "repeater",
+              label: "Send to Repeater",
+              icon: Repeat2,
+              disabled: noRequest,
+              onSelect: withBytes(row.requestId, "request", (raw) => {
+                openRepeaterTab({
+                  name: row.label.slice(0, 42),
+                  target,
+                  protocol: targetScheme(target),
+                  request: raw,
+                });
+                setRoute("repeater");
+                toast.success(`${row.label} sent to Repeater`);
+              }),
+            },
+          ],
+        },
+        {
+          id: "comparer",
+          title: "Send to Comparer",
+          actions: [
+            {
+              id: "compare-request-a",
+              label: "Request to slot A",
+              icon: Combine,
+              disabled: noRequest,
+              onSelect: compare(row.requestId, "request", "a"),
+            },
+            {
+              id: "compare-request-b",
+              label: "Request to slot B",
+              icon: ArrowRightLeft,
+              disabled: noRequest,
+              onSelect: compare(row.requestId, "request", "b"),
+            },
+            {
+              id: "compare-response-a",
+              label: "Response to slot A",
+              icon: Combine,
+              disabled: noResponse,
+              onSelect: compare(row.responseId, "response", "a"),
+            },
+            {
+              id: "compare-response-b",
+              label: "Response to slot B",
+              icon: ArrowRightLeft,
+              disabled: noResponse,
+              onSelect: compare(row.responseId, "response", "b"),
+            },
+          ],
+        },
+        {
+          id: "clipboard",
+          actions: [
+            {
+              id: "copy-request",
+              label: "Copy request",
+              icon: Copy,
+              disabled: noRequest,
+              onSelect: withBytes(row.requestId, "request", (raw) => {
+                void copyToClipboard(raw).then(() => toast.success(`${row.label} request copied`));
+              }),
+            },
+          ],
+        },
+      ];
+    },
+    [openRepeaterTab, setComparerSlot, setRoute, target],
+  );
+}
+
+/**
  * The attack report, presented as accounting rather than a payload dump: every
  * bound the engine applied (capped, truncated, skipped, unbucketed) is shown, so
  * a small result set is never mistaken for a complete one.
@@ -274,49 +497,28 @@ function AttackResult({
   examples,
   snapshot,
   onOpenMessage,
+  bucketMenu,
+  attemptMenu,
 }: {
   view: RunView;
   examples: Map<number, string[]>;
   snapshot: IntruderPayloadSnapshot | null;
   onOpenMessage: (id: number, label: string) => void;
+  // Two typed builders rather than one over a `ResultBucket | Attempt` union: the two row shapes
+  // name their stored bytes under different field names, and a union would push that branch into
+  // this component, which has no reason to know either.
+  bucketMenu?: (bucket: ResultBucket) => MenuGroup[];
+  attemptMenu?: (attempt: Attempt) => MenuGroup[];
 }): JSX.Element {
-  const { report, payload_sets: sets } = view;
+  const { report, payload_sets: sets, redirects_followed: redirectsFollowed } = view;
 
-  /**
-   * Decode an attempt's ordinal into its payload combination.
-   *
-   * The server sends an `examples` entry for every ordinal it kept a row for — every bucket's
-   * first ordinal, and every attempt in the (detail-limited) attempts table — resolved server-side
-   * from the post-processing-rule payload sets (api_tools.go's payloadsAt), so a rule that
-   * transforms bytes without dropping any (add_prefix, hash, …) still names the payload that was
-   * actually sent. That covers every row this page renders today; the fallback below recomputes
-   * the ordinal from the plan — pure arithmetic on the index, which is what
-   * internal/intruder/plan.go's Fill is (burpsy-react-ui-fvx) — for an older server that predates
-   * that coverage, or an ordinal outside what Examples carries. The set lengths come from the
-   * report's own per-set counts, so the fallback arithmetic runs against the sets the engine
-   * actually used, not the sets the form currently holds.
-   */
-  const payloadsAt = useMemo(() => {
-    const setCounts = sets.map((set) => set.count);
-    const mode = snapshot?.mode ?? report.kind;
-    const points = snapshot?.points ?? 0;
-    const lengths = planSetLengths(mode, points, setCounts);
-    // A set whose server-reported count disagrees with the browser's list is a set whose indices
-    // moved — a processing rule skipped a payload — so its text is treated as unknown.
-    const known = setCounts.map((count, index) => {
-      const items = snapshot?.sets[index] ?? null;
-      return items && items.length === count ? items : null;
-    });
-    return (ordinal: number): ResolvedPayload[] | null => {
-      const fromServer = examples.get(ordinal);
-      // An empty example list is the server saying it could not place that ordinal either, so it
-      // must fall through to "unknown" rather than render as a blank payload.
-      if (fromServer?.length) return fromServer.map((text, index) => ({ set: index, index: -1, text }));
-      const slots = assignmentAt(mode, points, lengths, report.planned, ordinal);
-      if (!slots || !slots.length) return null;
-      return resolvePayloads(slots, known);
-    };
-  }, [examples, report.kind, report.planned, sets, snapshot]);
+  // Ordinal → payload combination, shared with the CSV export so the sheet and the
+  // table can never disagree about what a row's payloads were (lib/intruder-export.ts
+  // carries the full story: server examples first, plan arithmetic as the fallback).
+  const payloadsAt = useMemo(
+    () => intruderPayloadResolver({ report, sets, examples, snapshot }),
+    [examples, report.kind, report.planned, sets, snapshot],
+  );
   /**
    * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
    *
@@ -330,6 +532,350 @@ function AttackResult({
    */
   const { stopped, paused, reached } = attackProgress(report);
 
+  /**
+   * Sorting and filtering for the four result tables (burpsy-react-ui-4rd).
+   *
+   * Sort accessors expose the raw values (statuses as numbers, nulls as
+   * undefined with sortUndefined pinning them last), so ordering follows the
+   * data rather than the formatted text; cell renderers keep the exact markup
+   * the static tables had. The filter runs over the same accessor values, so
+   * typing "404" or "refused" finds the rows whose visible cells carry those
+   * words.
+   */
+  const [bucketFilter, setBucketFilter] = useState("");
+  const [errorFilter, setErrorFilter] = useState("");
+  const [setFilter, setSetFilter] = useState("");
+  const [attemptFilter, setAttemptFilter] = useState("");
+
+  /**
+   * Burp's Comment column ("any user-applied comment", viewing-results.html) — an annotation the
+   * operator types against one result row. There is no server-side row for it to live on: a report
+   * is generated once per run and never persisted (api_tools.go builds and returns it inline), so a
+   * comment is a browser-only fact, keyed by ordinal like the payload resolver above. Reset whenever
+   * a new report arrives — `view` is a fresh object every run, and a comment surviving onto a
+   * different attack's ordinal 3 would annotate the wrong request.
+   */
+  const [comments, setComments] = useState<Map<number, string>>(new Map());
+  useEffect(() => setComments(new Map()), [view]);
+
+  /**
+   * The custom extractor columns (burpsy-react-ui-28n8.1), the same saved set History renders. A row
+   * here is not an exchange: it names its stored response by MESSAGE id, so values are requested by
+   * message id. Every bucket keeps its exemplar response; an attempt keeps one only when it opened its
+   * bucket, so most attempt cells say the response was not kept rather than reading as "no match".
+   * Defined in History, where the manager lives — here the columns are read-only.
+   */
+  const extractorsQuery = useHistoryExtractors();
+  const savedExtractors = useMemo(() => extractorsQuery.data?.extractors ?? [], [extractorsQuery.data]);
+  const extractorSig = useMemo(() => extractorSignature(savedExtractors), [savedExtractors]);
+  const extractMessageIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const bucket of report.buckets) if (bucket.example_response_id !== null) ids.add(bucket.example_response_id);
+    for (const attempt of report.attempts) if (attempt.response_id !== null) ids.add(attempt.response_id);
+    return [...ids].sort((a, b) => a - b);
+  }, [report.buckets, report.attempts]);
+  const extractValues = useMessageExtractValues(extractMessageIds, extractorSig, savedExtractors.length > 0);
+  const extractLoading = savedExtractors.length > 0 && extractMessageIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+  function extractorColumns<Row>(responseOf: (row: Row) => number | null, noResponseTitle: string): Column<Row>[] {
+    return savedExtractors.map((extractor) => ({
+      id: extractorColumnId(extractor.name),
+      header: extractor.name,
+      sortUndefined: "last" as const,
+      accessorFn: (row: Row) => {
+        const id = responseOf(row);
+        const value = id === null ? undefined : extractValues.data?.[String(id)]?.[extractor.name];
+        return value == null ? undefined : value;
+      },
+      cell: ({ row }: { row: { original: Row } }) => {
+        const id = responseOf(row.original);
+        return (
+          <ExtractorCell
+            value={id === null ? undefined : extractValues.data?.[String(id)]?.[extractor.name]}
+            hasResponse={id !== null}
+            loading={extractLoading}
+            failed={extractValues.isError}
+            noResponseTitle={noResponseTitle}
+          />
+        );
+      },
+    }));
+  }
+
+  const bucketColumns: Column<ResultBucket>[] = [
+    {
+      accessorFn: (bucket) => bucket.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">error</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => (bucket.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) =>
+        row.original.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>,
+    },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    // Per-expression totals for the bucket table (irt): the slot-wise sum over every response
+    // the bucket holds, so a bucket can be sorted by how often a given error string appeared.
+    ...(view.report.grep_match_labels ?? []).map((label, li) => ({
+      accessorFn: (bucket: ResultBucket) => {
+        const totals = bucket.grep_match_totals ?? [];
+        const v = totals[li];
+        return v !== undefined && v > 0 ? v : undefined;
+      },
+      id: `bucket_grep_item_${li}`,
+      header: label.length > 18 ? label.slice(0, 17) + "…" : label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: ResultBucket } }) => {
+        const totals = row.original.grep_match_totals ?? [];
+        const v = totals[li];
+        return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
+    {
+      accessorFn: (bucket) => (bucket.grep_matches ? bucket.grep_matches : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) => (
+        <>
+          {row.original.grep_matches ? <Badge tone="info">{row.original.grep_matches}</Badge> : <span className="cell-dim">—</span>}
+          {row.original.grep_extract ? <code title={row.original.grep_extract}> {row.original.grep_extract}</code> : null}
+        </>
+      ),
+    },
+    ...extractorColumns<ResultBucket>((bucket) => bucket.example_response_id, "The engine stored no response for this bucket"),
+    {
+      id: "first_payload",
+      header: "First payload",
+      enableSorting: false,
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.first_ordinal)} ordinal={row.original.first_ordinal} />,
+    },
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell
+          id={row.original.example_response_id}
+          label={`Response to attempt ${row.original.first_ordinal}`}
+          onOpen={onOpenMessage}
+        />
+      ),
+    },
+  ];
+  const bucketRows = filterTableRows(report.buckets, bucketColumns, bucketFilter);
+
+  const errorColumns: Column<ErrorBucket>[] = [
+    { accessorKey: "error", header: "Error", cell: ({ row }) => <span title={row.original.error}>{row.original.error}</span> },
+    { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorFn: (bucket) => bucket.first_ordinal ?? undefined,
+      id: "first_ordinal",
+      header: "First ordinal",
+      sortUndefined: "last",
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number | undefined>() ?? "—"}</span>,
+    },
+  ];
+  const errorRows = filterTableRows(report.errors, errorColumns, errorFilter);
+
+  const setColumns: Column<PayloadSetReport>[] = [
+    {
+      id: "set",
+      header: "Set",
+      accessorFn: (set) => sets.indexOf(set) + 1,
+      cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span>,
+    },
+    { accessorKey: "kind", header: "Kind", cell: ({ row }) => <Badge>{row.original.kind}</Badge> },
+    { accessorKey: "count", header: "Used", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      accessorKey: "total",
+      header: "Described",
+      cell: ({ row }) => (
+        <span className="cell-num">
+          {formatCount(row.original.total)}
+          {row.original.total_exact ? "" : "+"}
+        </span>
+      ),
+    },
+    {
+      accessorFn: (set) => (set.truncated ? "yes" : "no"),
+      id: "truncated",
+      header: "Truncated",
+      cell: ({ row }) =>
+        row.original.truncated ? (
+          <Badge tone="warn">at {formatCount(row.original.max_count)}</Badge>
+        ) : (
+          <span className="cell-dim">no</span>
+        ),
+    },
+    { accessorKey: "skipped", header: "Skipped", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
+    {
+      id: "dropped",
+      header: "Dropped because",
+      enableSorting: false,
+      cell: ({ row }) =>
+        row.original.dropped.length ? (
+          row.original.dropped.map((reason) => (
+            <Badge tone="warn" key={reason.reason}>
+              {reason.reason} ×{reason.count}
+            </Badge>
+          ))
+        ) : (
+          <span className="cell-dim">—</span>
+        ),
+    },
+  ];
+  const setRows = filterTableRows(sets, setColumns, setFilter);
+
+  const attemptColumns: Column<Attempt>[] = [
+    { accessorKey: "ordinal", header: "#", cell: ({ getValue }) => <span className="cell-num">{getValue<number>()}</span> },
+    {
+      id: "payload",
+      header: "Payload",
+      // The resolved combination is what the cell shows, so it is also what
+      // sorting and filtering see — including the "set 2 payload #18" text a
+      // server-side set renders.
+      accessorFn: (attempt) => {
+        const parts = payloadsAt(attempt.ordinal);
+        return parts ? payloadLabel(parts).text : undefined;
+      },
+      cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.ordinal)} ordinal={row.original.ordinal} />,
+    },
+    {
+      accessorFn: (attempt) => attempt.status ?? undefined,
+      id: "status",
+      header: "Status",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.status === null ? (
+          <Badge tone="bad">—</Badge>
+        ) : (
+          <Badge tone={statusTone(row.original.status)}>{row.original.status}</Badge>
+        ),
+    },
+    {
+      // Burp's "Time of day - the time of day the request was made" (viewing-results.html),
+      // distinct from the "Time" column above, which is a duration. attempt.time_of_day is
+      // RFC 3339 (Go's default time.Time encoding); an unparseable value reads as "—" rather than
+      // "Invalid Date" — the same defensive parse formatTimeOfDay does for every row.
+      accessorFn: (attempt) => Date.parse(attempt.time_of_day) || undefined,
+      id: "time_of_day",
+      header: "Time of day",
+      sortUndefined: "last",
+      cell: ({ row }) => <span className="cell-num">{formatTimeOfDay(row.original.time_of_day)}</span>,
+    },
+    { accessorKey: "response_len", header: "Length", cell: ({ getValue }) => <span className="cell-num">{formatBytes(getValue<number>())}</span> },
+    { accessorKey: "duration_ms", header: "Time", cell: ({ getValue }) => <span className="cell-num">{formatDuration(getValue<number>())}</span> },
+    {
+      accessorFn: (attempt) => (attempt.reflected ? "yes" : "no"),
+      id: "reflected",
+      header: "Reflected",
+      cell: ({ row }) => (row.original.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>),
+    },
+    {
+      accessorFn: (attempt) => (attempt.grep_matched ? "match" : undefined),
+      id: "grep",
+      header: "Grep",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>,
+    },
+    // One column per expression (irt): "Burp adds a results column for each expression in the
+    // list. This records the number of times the expression is found in the response." Sorting
+    // on the header sorts by that expression's count, which is how the table is read. Labels
+    // come from the report — the expressions as the operator typed them.
+    ...(view.report.grep_match_labels ?? []).map((label, li) => ({
+      accessorFn: (attempt: Attempt) => {
+        const counts = attempt.grep_match_counts ?? [];
+        const v = counts[li];
+        return v !== undefined && v > 0 ? v : undefined;
+      },
+      id: `grep_item_${li}`,
+      header: label.length > 18 ? label.slice(0, 17) + "…" : label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: Attempt } }) => {
+        const counts = row.original.grep_match_counts ?? [];
+        const v = counts[li];
+        return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
+    {
+      accessorFn: (attempt) => attempt.error ?? undefined,
+      id: "error",
+      header: "Error",
+      sortUndefined: "last",
+      cell: ({ row }) => (row.original.error ? <span title={row.original.error}>{row.original.error}</span> : <span className="cell-dim">—</span>),
+    },
+    {
+      // Burp lists Timeout as its own column, distinct from Error, so a target that stalls on
+      // every Nth payload is visible as a pattern rather than buried inside error-message text.
+      accessorFn: (attempt) => (attempt.timeout ? "yes" : "no"),
+      id: "timeout",
+      header: "Timeout",
+      cell: ({ row }) => (row.original.timeout ? <Badge tone="bad">timeout</Badge> : <span className="cell-dim">no</span>),
+    },
+    {
+      // Burp: "Cookies - any cookies received in the response". Names only — see Attempt.cookies'
+      // own doc for why values never surface here.
+      accessorFn: (attempt) => (attempt.cookies.length ? attempt.cookies.join(", ") : undefined),
+      id: "cookies",
+      header: "Cookies",
+      sortUndefined: "last",
+      cell: ({ row }) =>
+        row.original.cookies.length ? (
+          <span title={row.original.cookies.join(", ")}>{row.original.cookies.join(", ")}</span>
+        ) : (
+          <span className="cell-dim">—</span>
+        ),
+    },
+    ...extractorColumns<Attempt>(
+      (attempt) => attempt.response_id,
+      "Response not kept: only the attempt that opened its bucket stores one — read the bucket's row, or use Grep - Extract for every attempt",
+    ),
+    {
+      id: "response",
+      header: "Response",
+      enableSorting: false,
+      cell: ({ row }) => (
+        <ResponseCell id={row.original.response_id} label={`Response to attempt ${row.original.ordinal}`} onOpen={onOpenMessage} />
+      ),
+    },
+    {
+      // Burp: "Comment - any user-applied comment". Browser-only (see the `comments` state's own
+      // doc above) — typing here never leaves this tab, and it rides into the CSV export below so
+      // an annotation an operator made survives past the session that made it.
+      accessorFn: (attempt) => comments.get(attempt.ordinal) ?? "",
+      id: "comment",
+      header: "Comment",
+      cell: ({ row }) => (
+        <Input
+          aria-label={`Comment on attempt ${row.original.ordinal}`}
+          placeholder="Add a comment"
+          value={comments.get(row.original.ordinal) ?? ""}
+          onChange={(event) => {
+            const next = event.target.value;
+            setComments((prev) => {
+              const copy = new Map(prev);
+              if (next === "") copy.delete(row.original.ordinal);
+              else copy.set(row.original.ordinal, next);
+              return copy;
+            });
+          }}
+        />
+      ),
+    },
+  ];
+  const attemptRows = filterTableRows(report.attempts, attemptColumns, attemptFilter);
+
   const caveats = [
     stopped
       ? `Attack ${paused ? "paused" : "stopped"} after ${formatCount(reached)} of ${formatCount(
@@ -342,10 +888,42 @@ function AttackResult({
     report.unbucketed ? `${formatCount(report.unbucketed)} results outside the shown buckets` : null,
     report.attempts.length < report.sent ? `Per-attempt detail limited to ${formatCount(report.detail_limit)} rows` : null,
     report.auto_throttle_engaged ? `Auto-throttle engaged ${report.auto_throttle_engaged}×` : null,
+    // n39: the error-handling count is a caveat, not a footnote — an attack that retried its
+    // way to a full result set says so, the way Burp's own results mark retried requests.
+    report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
+    report.baseline ? "Item 0 is the unmodified baseline request (no payloads) — every other row is one ordinal higher than the payload set's arithmetic." : null,
   ].filter((value): value is string => value !== null);
 
   return (
     <>
+      <div className="toolbar">
+        <Tooltip content="Download the attack's per-attempt rows as a CSV; the caveats ride at the top of the file">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).csv;
+              downloadText(file, intruderReportToCSV(report, report.attempts, payloadsAt, new Date(), comments), "text/csv");
+              toast.success(`Exported ${formatCount(report.attempts.length)} attempts to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export CSV
+          </Button>
+        </Tooltip>
+        <Tooltip content="Download the full report — buckets, attempts, payload sets and bounds — as JSON">
+          <Button
+            variant="outline"
+            onClick={() => {
+              const file = intruderExportFilenames(report).json;
+              downloadText(file, JSON.stringify(view, null, 2), "application/json");
+              toast.success(`Exported the report to ${file}`);
+            }}
+          >
+            <Download size={14} />
+            Export report (JSON)
+          </Button>
+        </Tooltip>
+      </div>
       <div className="metric-grid">
         <Badge tone="neutral" className="sr-only">
           report
@@ -377,6 +955,13 @@ function AttackResult({
           <strong>{formatDuration(report.elapsed_ms)}</strong>
           <small>{report.grep_matched ? `${formatCount(report.grep_matched)} grep matches` : "mode " + report.kind}</small>
         </div>
+        {redirectsFollowed ? (
+          <div className="card metric">
+            <span>Redirects followed</span>
+            <strong>{formatCount(redirectsFollowed)}</strong>
+            <small>additional requests this attack sent chasing a 3xx</small>
+          </div>
+        ) : null}
       </div>
 
       {caveats.length ? (
@@ -399,36 +984,26 @@ function AttackResult({
           detail="Responses grouped by status, length and reflection. Interesting rows are the ones that differ from the crowd."
         />
         {report.buckets.length ? (
-          <SimpleTable headers={["Status", "Length", "Reflected", "Count", "Grep", "First payload", "Response"]}>
-            {report.buckets.map((bucket) => (
-              <tr key={`${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}>
-                <td>
-                  {bucket.status === null ? <Badge tone="bad">error</Badge> : <Badge tone={statusTone(bucket.status)}>{bucket.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(bucket.response_len)}</span>
-                </td>
-                <td>{bucket.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  {bucket.grep_matches ? <Badge tone="info">{bucket.grep_matches}</Badge> : <span className="cell-dim">—</span>}
-                  {bucket.grep_extract ? <code title={bucket.grep_extract}> {bucket.grep_extract}</code> : null}
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(bucket.first_ordinal)} ordinal={bucket.first_ordinal} />
-                </td>
-                <td>
-                  <ResponseCell
-                    id={bucket.example_response_id}
-                    label={`Response to attempt ${bucket.first_ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter buckets"
+              value={bucketFilter}
+              onChange={setBucketFilter}
+              shown={bucketRows.length}
+              total={report.buckets.length}
+            />
+            {bucketRows.length ? (
+              <SortableTable
+                data={bucketRows}
+                columns={bucketColumns}
+                getRowId={(bucket) => `${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}
+                ariaLabel="Result buckets"
+                menuGroups={bucketMenu}
+              />
+            ) : (
+              <p className="cell-dim">No buckets match the filter — all {report.buckets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No buckets" detail="The attack produced no grouped responses." />
         )}
@@ -437,59 +1012,49 @@ function AttackResult({
       {report.errors.length ? (
         <Card>
           <SectionHeading title="Errors" detail="Grouped by message, with the first attempt that hit each." />
-          <SimpleTable headers={["Error", "Count", "First ordinal"]}>
-            {report.errors.map((bucket) => (
-              <tr key={bucket.error} className="row-flag-bad">
-                <td title={bucket.error}>{bucket.error}</td>
-                <td>
-                  <span className="cell-num">{formatCount(bucket.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{bucket.first_ordinal ?? "—"}</span>
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter errors"
+            value={errorFilter}
+            onChange={setErrorFilter}
+            shown={errorRows.length}
+            total={report.errors.length}
+          />
+          {errorRows.length ? (
+            <SortableTable
+              data={errorRows}
+              columns={errorColumns}
+              getRowId={(bucket) => bucket.error}
+              ariaLabel="Attack errors"
+              rowClassName={() => "row-flag-bad"}
+            />
+          ) : (
+            <p className="cell-dim">No errors match the filter — all {report.errors.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
 
       <Card>
         <SectionHeading title="Payload set accounting" detail="What each set produced, and what was bounded away." />
         {sets.length ? (
-          <SimpleTable headers={["Set", "Kind", "Used", "Described", "Truncated", "Skipped", "Dropped because"]}>
-            {sets.map((set, index) => (
-              <tr key={`${set.kind}-${index}`}>
-                <td>{index + 1}</td>
-                <td>
-                  <Badge>{set.kind}</Badge>
-                </td>
-                <td>
-                  <span className="cell-num">{formatCount(set.count)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">
-                    {formatCount(set.total)}
-                    {set.total_exact ? "" : "+"}
-                  </span>
-                </td>
-                <td>{set.truncated ? <Badge tone="warn">at {formatCount(set.max_count)}</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>
-                  <span className="cell-num">{formatCount(set.skipped)}</span>
-                </td>
-                <td>
-                  {set.dropped.length ? (
-                    set.dropped.map((reason) => (
-                      <Badge tone="warn" key={reason.reason}>
-                        {reason.reason} ×{reason.count}
-                      </Badge>
-                    ))
-                  ) : (
-                    <span className="cell-dim">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <>
+            <ResultFilter
+              label="Filter payload sets"
+              value={setFilter}
+              onChange={setSetFilter}
+              shown={setRows.length}
+              total={sets.length}
+            />
+            {setRows.length ? (
+              <SortableTable
+                data={setRows}
+                columns={setColumns}
+                getRowId={(set) => `${set.kind}-${sets.indexOf(set)}`}
+                ariaLabel="Payload set accounting"
+              />
+            ) : (
+              <p className="cell-dim">No payload sets match the filter — all {sets.length} are hidden.</p>
+            )}
+          </>
         ) : (
           <Empty title="No set accounting" detail="The server reported no per-set breakdown." />
         )}
@@ -501,37 +1066,25 @@ function AttackResult({
             title="Attempts"
             detail={`Per-request detail, capped by the server at ${formatCount(report.detail_limit)} rows.`}
           />
-          <SimpleTable headers={["#", "Payload", "Status", "Length", "Time", "Reflected", "Grep", "Error", "Response"]}>
-            {report.attempts.map((attempt) => (
-              <tr key={attempt.ordinal} className={attempt.error ? "row-flag-bad" : undefined}>
-                <td>
-                  <span className="cell-num">{attempt.ordinal}</span>
-                </td>
-                <td>
-                  <PayloadCell parts={payloadsAt(attempt.ordinal)} ordinal={attempt.ordinal} />
-                </td>
-                <td>
-                  {attempt.status === null ? <Badge tone="bad">—</Badge> : <Badge tone={statusTone(attempt.status)}>{attempt.status}</Badge>}
-                </td>
-                <td>
-                  <span className="cell-num">{formatBytes(attempt.response_len)}</span>
-                </td>
-                <td>
-                  <span className="cell-num">{formatDuration(attempt.duration_ms)}</span>
-                </td>
-                <td>{attempt.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>}</td>
-                <td>{attempt.grep_matched ? <Badge tone="info">match</Badge> : <span className="cell-dim">—</span>}</td>
-                <td title={attempt.error ?? ""}>{attempt.error ?? <span className="cell-dim">—</span>}</td>
-                <td>
-                  <ResponseCell
-                    id={attempt.response_id}
-                    label={`Response to attempt ${attempt.ordinal}`}
-                    onOpen={onOpenMessage}
-                  />
-                </td>
-              </tr>
-            ))}
-          </SimpleTable>
+          <ResultFilter
+            label="Filter attempts"
+            value={attemptFilter}
+            onChange={setAttemptFilter}
+            shown={attemptRows.length}
+            total={report.attempts.length}
+          />
+          {attemptRows.length ? (
+            <SortableTable
+              data={attemptRows}
+              columns={attemptColumns}
+              getRowId={(attempt) => String(attempt.ordinal)}
+              ariaLabel="Attempts"
+              rowClassName={(attempt) => (attempt.error ? "row-flag-bad" : undefined)}
+              menuGroups={attemptMenu}
+            />
+          ) : (
+            <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
+          )}
         </Card>
       ) : null}
     </>
@@ -541,6 +1094,9 @@ function AttackResult({
 export function IntruderPage(): JSX.Element {
   const seed = useApp((state) => state.intruderSeed);
   const setIntruderSeed = useApp((state) => state.setIntruderSeed);
+  // The wordlist inventory (kal): the bundled corpus plus this session's uploads, listed
+  // once for every file-source position the operator configures.
+  const wordlistsQuery = useWordlists();
 
   // The whole configuration lives in the store, not in this component: app.tsx mounts one page at
   // a time, so component-local state was destroyed by any nav click, taking the finished report
@@ -551,6 +1107,13 @@ export function IntruderPage(): JSX.Element {
   const setStoredRun = useApp((state) => state.setIntruderRun);
   const tab = useApp((state) => state.intruderTab);
   const setTab = useApp((state) => state.setIntruderTab);
+
+  // The menubar's Intruder menu talks to this page rather than launching attacks of its own: a
+  // second copy of `onRun` in app.tsx would be a second launcher, and the two would drift. The menu
+  // states an intention here; everything below decides whether it can be honoured and says why not.
+  const command = useApp((state) => state.intruderCommand);
+  const clearCommand = useApp((state) => state.clearIntruderCommand);
+  const setStatus = useApp((state) => state.setIntruderStatus);
 
   /** A setter for one configuration field, accepting a value or an updater like useState's. */
   function field<K extends keyof IntruderConfig>(key: K) {
@@ -573,6 +1136,7 @@ export function IntruderPage(): JSX.Element {
     allPoints,
     points,
     selected,
+    manualSpans,
     payloadTexts,
     payloadTypes,
     payloadNumbers,
@@ -585,10 +1149,25 @@ export function IntruderPage(): JSX.Element {
     grepMatch,
     grepMatchMode,
     grepExtract,
+    grepMatchList,
+    grepMatchCaseSensitive,
+    grepMatchExcludeHeaders,
+    autoPauseEnabled,
+    autoPauseMode,
+    autoPauseExpressions,
+    autoPauseSimple,
+    autoPauseCaseSensitive,
     poolName,
     maxRequests,
     maxInFlight,
     rps,
+    delayJitterPct,
+    delayIncrementMS,
+    retries,
+    retryDelayMS,
+    baseline,
+    setConnectionClose,
+    storePayloads,
   } = config;
 
   const setMsgId = field("msgId");
@@ -597,6 +1176,7 @@ export function IntruderPage(): JSX.Element {
   const setAllPoints = field("allPoints");
   const setPoints = field("points");
   const setSelected = field("selected");
+  const setManualSpans = field("manualSpans");
   const setPayloadTexts = field("payloadTexts");
   const setPayloadTypes = field("payloadTypes");
   const setPayloadNumbers = field("payloadNumbers");
@@ -606,13 +1186,67 @@ export function IntruderPage(): JSX.Element {
   const setPayloadCustom = field("payloadCustom");
   const setPayloadNulls = field("payloadNulls");
   const setRules = field("rules");
+  // Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): the final-pass encoding
+  // set, applied after the rules above regardless of payload type. Default is Burp's own
+  // default character list, so the safety net is on unless the operator empties it.
+  const [urlEncodeChars, setURLEncodeChars] = useState("=&+%;?/ #:");
+  // Burp's "Follow redirections" (tirx). "" is not sent at all — the standing network policy
+  // decides, exactly as an attack that never mentions it always has — so this control cannot
+  // silently turn following on for an operator who only opened this tab to look at Grep.
+  const [redirectMode, setRedirectMode] = useState<FollowRedirectsMode | "">("");
+  // Burp's other two attack settings (fmxv), written through the persisted config like every other
+  // attack setting: an operator who turns either on expects it still on when the tab is reopened, and
+  // a launch that silently loses the setting would send a differently-shaped request than the one on
+  // screen.
+  const setSetConnectionClose = field("setConnectionClose");
+  const setStorePayloads = field("storePayloads");
+
+  /**
+   * The 8 generator payload types added for 2g13 (char_substitution, case_modification,
+   * illegal_unicode, character_blocks, bit_flipper, username, ecb_shuffler) plus copy_other's
+   * one field, keyed by set index rather than one `useState` array per type. The existing
+   * payload types above each carry their own typed, persisted array (payloadNumbers,
+   * payloadBrute, …) in the IntruderConfig store; these 9 share one generic bucket instead —
+   * a deliberately smaller first pass than duplicating that per-type machinery nine more
+   * times. Values are read with a fallback (`advField`/`advBool`), so an index that was never
+   * touched behaves exactly like one initialised to the type's defaults, and nothing needs a
+   * resize effect the way the array-backed types do (an index past what the mode currently
+   * renders is simply never read).
+   */
+  const [advancedFields, setAdvancedFields] = useState<Record<number, Record<string, string>>>({});
+  const [advancedFlags, setAdvancedFlags] = useState<Record<number, Record<string, boolean>>>({});
+  const advField = (index: number, key: string, fallback = "") => advancedFields[index]?.[key] ?? fallback;
+  const setAdvField = (index: number, key: string, value: string) =>
+    setAdvancedFields((cur) => ({ ...cur, [index]: { ...cur[index], [key]: value } }));
+  const advBool = (index: number, key: string, fallback: boolean) => advancedFlags[index]?.[key] ?? fallback;
+  const setAdvBool = (index: number, key: string, value: boolean) =>
+    setAdvancedFlags((cur) => ({ ...cur, [index]: { ...cur[index], [key]: value } }));
   const setGrepMatch = field("grepMatch");
   const setGrepMatchMode = field("grepMatchMode");
   const setGrepExtract = field("grepExtract");
+  // Grep - Match as a LIST (irt): one expression per line, with Burp's Match type / Case
+  // sensitive / Exclude HTTP headers flags. The legacy single-string field is kept and still
+  // wins when the list is empty, so an operator's stored config never silently stops matching.
+  const setGrepMatchList = field("grepMatchList");
+  const setGrepMatchCaseSensitive = field("grepMatchCaseSensitive");
+  const setGrepMatchExcludeHeaders = field("grepMatchExcludeHeaders");
+  // Auto-pause is five draft fields, not one switch: the expressions and the mode are the attack's
+  // own settings, so an operator who turns the switch off and on again must find their list intact
+  // rather than retyping it. The switch decides only whether the block is SENT (burpsy-react-ui-2cvk).
+  const setAutoPauseEnabled = field("autoPauseEnabled");
+  const setAutoPauseMode = field("autoPauseMode");
+  const setAutoPauseExpressions = field("autoPauseExpressions");
+  const setAutoPauseSimple = field("autoPauseSimple");
+  const setAutoPauseCaseSensitive = field("autoPauseCaseSensitive");
   const setPoolName = field("poolName");
   const setMaxRequests = field("maxRequests");
   const setMaxInFlight = field("maxInFlight");
   const setRps = field("rps");
+  const setDelayJitterPct = field("delayJitterPct");
+  const setDelayIncrementMS = field("delayIncrementMS");
+  const setRetries = field("retries");
+  const setRetryDelayMS = field("retryDelayMS");
+  const setBaseline = field("baseline");
 
   const result = storedRun?.view ?? null;
   const legacyResult = storedRun?.legacy ?? null;
@@ -640,6 +1274,29 @@ export function IntruderPage(): JSX.Element {
   const [myTaskId, setMyTaskId] = useState<number | null>(null);
   const attacks = useIntruderAttacks(run.isPending);
   const attackAction = useIntruderAttackAction();
+
+  // Results handoff (burpsy-react-ui-79u). A bucket's stored exchange is its exemplar's, so both
+  // row types are labelled by the ordinal whose bytes they actually carry — a bucket row that said
+  // "bucket 200/1024" while resending ordinal 7's request would be naming the wrong thing.
+  const resultMenu = useResultMenu(target);
+  const bucketMenu = useCallback(
+    (bucket: ResultBucket) =>
+      resultMenu({
+        requestId: bucket.example_request_id,
+        responseId: bucket.example_response_id,
+        label: `Intruder attempt ${bucket.first_ordinal}`,
+      }),
+    [resultMenu],
+  );
+  const attemptMenu = useCallback(
+    (attempt: Attempt) =>
+      resultMenu({
+        requestId: attempt.request_id,
+        responseId: attempt.response_id,
+        label: `Intruder attempt ${attempt.ordinal}`,
+      }),
+    [resultMenu],
+  );
 
   // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
   // to that; api_types.go), so the page's URL-shaped target has to be reduced the same way before it
@@ -716,12 +1373,16 @@ export function IntruderPage(): JSX.Element {
       label: seed.label,
       points: [],
       selected: [],
+      manualSpans: [],
     }));
     setStoredRun(null);
     setIntruderSeed(null);
   }, [seed, setConfig, setIntruderSeed, setStoredRun]);
 
-  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, selected.length);
+  // Manual markers take a payload slot exactly like a discovered point does — Burp counts every
+  // mark on the request, however it was made.
+  const pointCount = selected.length + manualSpans.length;
+  const setsNeeded = mode === "sniper" || mode === "battering_ram" ? 1 : Math.max(1, pointCount);
 
   // Keep the payload-set count in step with the mode and the chosen positions.
   useEffect(() => {
@@ -804,10 +1465,28 @@ export function IntruderPage(): JSX.Element {
       }
       if (t === "custom_iterator") return customIteratorSize(payloadCustom[i]?.positions ?? "");
       if (t === "null") return Number(payloadNulls[i] ?? "0") || 0;
+      // The 9 types added for 2g13: the true count depends on server-side generator logic
+      // (2^k substitutable positions, a factorial permutation count, …) this page does not
+      // reimplement — unknown is the honest answer, the same one `file` already gives, not a
+      // guessed number standing in for one (burpsy-react-ui-1ww is exactly the bug that
+      // guessing here caused once already).
+      if (
+        t === "char_substitution" ||
+        t === "case_modification" ||
+        t === "illegal_unicode" ||
+        t === "character_blocks" ||
+        t === "character_frobber" ||
+        t === "bit_flipper" ||
+        t === "username" ||
+        t === "ecb_shuffler" ||
+        t === "copy_other"
+      ) {
+        return null;
+      }
       return countPayloads(payloadTexts[i] ?? "");
     });
   }, [payloadTypes, payloadTexts, payloadNumbers, payloadFiles, payloadBrute, payloadDates, payloadCustom, payloadNulls]);
-  const estimate = useMemo(() => estimateRequests(mode, selected.length, setSizes), [mode, selected.length, setSizes]);
+  const estimate = useMemo(() => estimateRequests(mode, pointCount, setSizes), [mode, pointCount, setSizes]);
   const examples = useMemo(
     () => new Map((result?.examples ?? []).map((example) => [example.first_ordinal, example.payloads])),
     [result],
@@ -821,7 +1500,7 @@ export function IntruderPage(): JSX.Element {
   const canRun =
     canDiscover &&
     target.trim() !== "" &&
-    selected.length > 0 &&
+    pointCount > 0 &&
     setSizes.every((size) => size === null || size > 0) &&
     !run.isPending;
 
@@ -841,6 +1520,44 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
+  /** A hand-marked position (Burp's Add §): wrap the editor's selection in a marker pair. */
+  const onAddManualSpan = useCallback(
+    (span: { start: number; end: number; text: string }) => {
+      // The editor shows the request with the existing "§" pairs folded in, so its offsets are
+      // display offsets; map them back to raw request bytes before storing.
+      const current = useApp.getState().intruder.manualSpans;
+      const { start, end } = selectionToRawSpan(current, span.start, span.end);
+      const result = addManualSpan(current, start, end, span.text);
+      if (!result.ok) {
+        toast.error(result.reason);
+        return;
+      }
+      setManualSpans(result.spans);
+    },
+    [setManualSpans],
+  );
+
+  // Burp's Auto §: replace the hand marks with the scanner's default set — here, the standard
+  // discovery (not "every candidate"), every found point selected.
+  const onAutoMark = () => {
+    setManualSpans([]);
+    setSelected([]);
+    discover.mutate(
+      { msg_id: Number(msgId), all: false },
+      {
+        onSuccess: (found) => {
+          setPoints(found);
+          setSelected(found.map((point) => point.index));
+          if (!found.length) toast.error("No insertion points were found in that message");
+          else toast.success(`${found.length} insertion ${found.length === 1 ? "point" : "points"} marked`);
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
+
+  const onClearMarks = () => setManualSpans([]);
+
   /**
    * The payload text this browser can name, per set, at the moment of launch.
    *
@@ -851,7 +1568,7 @@ export function IntruderPage(): JSX.Element {
    */
   const payloadSnapshot = (): IntruderPayloadSnapshot => ({
     mode,
-    points: selected.length,
+    points: pointCount,
     sets: payloadTypes.map((t, i) => {
       if (t === "list") return payloadList(payloadTexts[i] ?? "");
       if (t === "null") return Array.from({ length: Number(payloadNulls[i] ?? "0") || 0 }, () => "");
@@ -859,8 +1576,17 @@ export function IntruderPage(): JSX.Element {
     }),
   });
 
+  /**
+   * A launch refused because of auto-pause, shown next to the expressions rather than only in the
+   * Results tab. The server compiles these with RE2 and answers 400 for one that does not compile
+   * (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did nothing is the
+   * wrong place for it: the operator's next action is to edit the expression, not to read a report.
+   */
+  const [autoPauseError, setAutoPauseError] = useState<string | null>(null);
+
   const onRun = async () => {
     setStoredRun(null);
+    setAutoPauseError(null);
     setMyTaskId(null);
     // Snapshot the attacks already running, so the one that appears next is unambiguously ours even
     // if an identical attack is running elsewhere. Best-effort: if the list cannot be read, fall
@@ -880,19 +1606,73 @@ export function IntruderPage(): JSX.Element {
       all: allPoints,
       mode,
       points: selected,
+      // Manual markers go as raw byte ranges; the server splices them alongside the discovered
+      // points and refuses one that overruns the request or overlaps another position.
+      ...(manualSpans.length ? { manual_points: manualSpans.map(({ start, end }) => ({ start, end })) } : {}),
       max_requests: maxRequests,
       ...(rules.length ? { payload_rules: rules } : {}),
+      // The final-pass encoding set (burpsy-react-ui-8cbc). Empty means none; the
+      // default list is Burp's own.
+      ...(urlEncodeChars !== "" ? { url_encode_characters: urlEncodeChars } : {}),
       // Both grep fields are RE2 patterns on the server. A literal typed in simple mode is quoted
       // here so it matches itself; regex mode sends what was typed (burpsy-react-ui-tpy).
-      ...(grepMatch.trim()
+      // Grep - Match: the list form when the operator typed expressions, else the legacy single
+      // string. The two shapes are the same feature at two sizes and the server refuses both at
+      // once, so exactly one of these two branches can ever fire (irt).
+      ...(grepMatchList.some((e) => e.trim())
+        ? {
+            grep_match_list: grepMatchList.map((e) => e.trim()).filter(Boolean),
+            grep_match_simple: grepMatchMode === "simple",
+            ...(grepMatchMode === "simple" && grepMatchCaseSensitive ? { grep_match_case_sensitive: true } : {}),
+            ...(grepMatchExcludeHeaders ? { grep_match_exclude_headers: true } : {}),
+          }
+        : grepMatch.trim()
         ? { grep_match: grepMatchMode === "simple" ? quoteRegex(grepMatch.trim()) : grepMatch.trim() }
         : {}),
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
+      // Auto-pause (burpsy-react-ui-2cvk). The block is sent only when the switch is on, and only
+      // with expressions in it, for the same reason every other optional field here is omitted
+      // rather than sent empty: an absent field and an empty expression list must not be two wire
+      // shapes for "I did not choose". An enabled switch with nothing typed sends nothing, and says
+      // so in the control's own hint rather than letting the server refuse it at launch.
+      ...(autoPauseEnabled && autoPauseExpressions.some((e) => e.trim())
+        ? {
+            auto_pause: {
+              expressions: autoPauseExpressions.map((e) => e.trim()).filter(Boolean),
+              missing: autoPauseMode === "missing",
+              simple: autoPauseSimple,
+              ...(autoPauseSimple && autoPauseCaseSensitive ? { case_sensitive: true } : {}),
+            },
+          }
+        : {}),
       // A named pool states rps, concurrency and throttling itself; the server refuses a request
       // that carries both, so the inline pair is omitted rather than sent and dropped.
       ...(usePool
         ? { pool: poolName.trim() }
-        : { max_in_flight: maxInFlight, ...(rps.trim() ? { rps: Number(rps) } : {}) }),
+        : {
+            max_in_flight: maxInFlight,
+            ...(rps.trim() ? { rps: Number(rps) } : {}),
+            // Burp's resource-pool variations (nn0n). Omitted entirely when the operator left both
+            // blank or zeroed, so an attack that does not vary its delay posts the wire shape it
+            // always did — and the engine takes the flat token-bucket path it always took.
+            ...delayVariationFields(delayJitterPct, delayIncrementMS),
+          }),
+      // Error handling (n39): empty means the server's default — Burp's own 3 retries with a
+      // 2000ms pause. A field that names a number sends it; 0 disables retries.
+      ...(retries.trim() !== "" ? { retries: Number(retries) } : {}),
+      ...(retryDelayMS.trim() !== "" ? { retry_delay_ms: Number(retryDelayMS) } : {}),
+      // Burp's "Make unmodified baseline request" (v34): sent only when asked, so the wire
+      // shape for "off" stays what every existing client already posts.
+      ...(baseline ? { baseline: true } : {}),
+      // Burp's "Follow redirections" (tirx). Omitted, not sent as "", when the operator left it on
+      // the standing policy — an absent field and an empty string must not become two different
+      // wire shapes for "I did not choose", the same discipline url_encode_characters above holds.
+      ...(redirectMode !== "" ? { follow_redirects: redirectMode } : {}),
+      // Set Connection header and Store full payloads (fmxv). Sent only when asked, for the same
+      // reason baseline above: the wire shape for "off" stays what every existing client posts, so
+      // a saved attack resumes byte-for-byte as it did.
+      ...(setConnectionClose ? { set_connection_close: true } : {}),
+      ...(storePayloads ? { store_full_payloads: true } : {}),
     };
     if (useSources) {
       body.payload_sources = payloadTypes.map((t, i) => {
@@ -918,6 +1698,76 @@ export function IntruderPage(): JSX.Element {
         if (t === "null") {
           return { type: "null", count: Number(payloadNulls[i] ?? "0") || 0 };
         }
+        if (t === "char_substitution") {
+          return {
+            type: "char_substitution",
+            words: payloadList(advField(i, "words")),
+            subs: parseCharSubstitutions(advField(i, "subs")),
+            max_per_word: Number(advField(i, "max_per_word")) || 0,
+          };
+        }
+        if (t === "case_modification") {
+          return {
+            type: "case_modification",
+            words: payloadList(advField(i, "words")),
+            lower: advBool(i, "lower", true),
+            upper: advBool(i, "upper", true),
+            capitalize: advBool(i, "capitalize", true),
+          };
+        }
+        if (t === "illegal_unicode") {
+          const forms: ("overlong2" | "overlong3" | "overlong4")[] = [];
+          if (advBool(i, "overlong2", true)) forms.push("overlong2");
+          if (advBool(i, "overlong3", false)) forms.push("overlong3");
+          if (advBool(i, "overlong4", false)) forms.push("overlong4");
+          return {
+            type: "illegal_unicode",
+            chars: advField(i, "chars", "/"),
+            forms,
+            percent_encode: advBool(i, "percent_encode", true),
+          };
+        }
+        if (t === "character_blocks") {
+          return {
+            type: "character_blocks",
+            chars: advField(i, "chars", "A"),
+            min_len: Number(advField(i, "min_len", "1")) || 1,
+            max_len: Number(advField(i, "max_len", "100")) || 1,
+            step: Number(advField(i, "step", "1")) || 1,
+          };
+        }
+        if (t === "bit_flipper") {
+          return { type: "bit_flipper", base: advField(i, "base") };
+        }
+        if (t === "username") {
+          return { type: "username", names: payloadList(advField(i, "names")) };
+        }
+        if (t === "ecb_shuffler") {
+          return {
+            type: "ecb_shuffler",
+            sample: advField(i, "sample"),
+            encoding: advField(i, "encoding", "base64") as "base64" | "hex",
+            block_size: Number(advField(i, "block_size", "16")) || 16,
+          };
+        }
+        if (t === "copy_other") {
+          return { type: "copy_other", position: Number(advField(i, "position", "0")) || 0 };
+        }
+        if (t === "recursive_grep") {
+          return {
+            type: "recursive_grep",
+            initial: advField(i, "initial"),
+            extract_re: advField(i, "extract_re"),
+            stop_duplicate: advBool(i, "stop_duplicate", true),
+          };
+        }
+        if (t === "collaborator") {
+          return {
+            type: "collaborator",
+            count: Number(advField(i, "collab_count", "10")) || 10,
+            include_location: advBool(i, "collab_include_location", true),
+          };
+        }
         return { type: "list", items: payloadList(payloadTexts[i] ?? "") };
       });
     } else {
@@ -938,9 +1788,106 @@ export function IntruderPage(): JSX.Element {
           toast.success("Attack finished");
         }
       },
-      onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      onError: (error) => {
+        // A launch refused because of auto-pause is also shown next to the expressions rather than
+        // only here. The server compiles them with RE2 and answers 400 for one that does not
+        // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
+        // nothing is the wrong place for it: the operator's next action is to edit the expression.
+        // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
+        // form, and blaming the expressions would send the operator to the wrong control.
+        if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
+          setAutoPauseError(error.message);
+        }
+        toast.error(error instanceof Error ? error.message : String(error));
+      },
     });
   };
+
+  // The payload upload (016): the operator's wordlist goes up as the request body, and the
+  // response's stored path drops into this set's file-path field — the ordinary file source
+  // resolves it, so an uploaded list and a server-side one are the same thing to the engine.
+  const [uploading, setUploading] = useState(false);
+  const uploadPayloadFile = async (index: number, file: File) => {
+    setUploading(true);
+    try {
+      const res = await fetch("/api/intruder/payload-files", {
+        method: "POST",
+        headers: { "X-Payload-Filename": file.name },
+        body: file,
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const out = (await res.json()) as { filename: string; lines: number };
+      setPayloadFiles((cur) => cur.map((v, i) => (i === index ? out.filename : v)));
+      toast.success(`Uploaded ${file.name} — ${formatCount(out.lines)} payloads; the server stored it as ${out.filename}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+  /**
+   * Why this attack will not launch, in the page's own terms.
+   *
+   * `canRun` is a boolean, and a menu item that refuses without a reason is the thing this bead
+   * exists to avoid. The order matches the order an operator fills the form in, so the message names
+   * the first thing still missing rather than the last.
+   */
+  const launchRefusal = (): string => {
+    if (msgId.trim() === "") return "Choose a stored message id first.";
+    if (!canDiscover) return `"${msgId}" is not a stored message id.`;
+    if (target.trim() === "") return "The attack has no target authority.";
+    if (selected.length === 0) return "No insertion points are selected — discover and choose some first.";
+    const empty = setSizes.findIndex((size) => size !== null && size <= 0);
+    if (empty >= 0) return `Payload set ${empty + 1} is empty, so there is nothing to send.`;
+    return "This attack is not ready to launch.";
+  };
+
+  // Publish what this page permits so the menubar can grey its items truthfully, and say WHY when it
+  // greys one. Only the mounted page knows an attack is in flight, so the menu reads it from here
+  // rather than guessing.
+  const launchRefusalNow = run.isPending ? "An attack is already running." : canRun ? null : launchRefusal();
+  useEffect(() => {
+    setStatus({ refusal: launchRefusalNow, running: run.isPending, controllable: myTaskId !== null });
+  }, [launchRefusalNow, run.isPending, myTaskId, setStatus]);
+  // Leaving the page takes the knowledge with it: a status left behind would tell the menubar an
+  // attack is running long after the mutation that was running it was unmounted.
+  useEffect(() => () => setStatus(null), [setStatus]);
+
+  /**
+   * Perform a menubar instruction.
+   *
+   * Depends on `command` alone on purpose: `onRun` and `controlAttack` are rebuilt every render, so
+   * listing them would re-fire the effect — and re-firing this one launches an attack. The command
+   * is cleared first, so a refusal consumes the instruction exactly like a launch does and a second
+   * click is a second command (that is what the nonce is for).
+   */
+  useEffect(() => {
+    if (!command) return;
+    clearCommand();
+    if (command.kind === "start") {
+      if (run.isPending) {
+        toast.info("An attack is already running — stop it before starting another");
+        return;
+      }
+      if (!canRun) {
+        toast.error(launchRefusal());
+        return;
+      }
+      void onRun();
+      return;
+    }
+    if (!run.isPending) {
+      toast.info("No attack is running, so there is nothing to stop");
+      return;
+    }
+    if (myTaskId === null) {
+      toast.info("Still locating the attack — its controls appear in the header once it is named");
+      return;
+    }
+    controlAttack("stop");
+  }, [command]);
 
   // Only a known count can be over budget. When the estimate is a floor the guard may still fire —
   // a floor above the cap is certainly above it — but its silence proves nothing, which is why the
@@ -1071,6 +2018,7 @@ export function IntruderPage(): JSX.Element {
                       setMsgId(event.target.value);
                       setPoints([]);
                       setSelected([]);
+                      setManualSpans([]);
                     }}
                     placeholder="e.g. 42"
                   />
@@ -1101,6 +2049,7 @@ export function IntruderPage(): JSX.Element {
                     setAllPoints(next);
                     setPoints([]);
                     setSelected([]);
+                    setManualSpans([]);
                   }}
                   label="Include every candidate position"
                 />
@@ -1110,9 +2059,43 @@ export function IntruderPage(): JSX.Element {
                 <Search size={14} />
                 {discover.isPending ? "Scanning…" : "Find positions"}
               </Button>
+              {/* Burp's Auto § and Clear §. Add § lives in the editor's selection menu below,
+                  because it needs a selection and the editor is the only thing that has one. */}
+              <Button variant="outline" onClick={onAutoMark} disabled={!canDiscover || discover.isPending}>
+                <Crosshair size={14} />
+                Auto §
+              </Button>
+              <Button variant="outline" onClick={onClearMarks} disabled={!manualSpans.length}>
+                <Trash2 size={14} />
+                Clear §
+              </Button>
             </div>
 
             {discover.error ? <ErrorNotice error={discover.error} onRetry={onDiscover} /> : null}
+
+            {manualSpans.length ? (
+              <div className="row-list point-list">
+                {manualSpans.map((span, i) => (
+                  <div className="point-row" key={`${span.start}-${span.end}`}>
+                    <span>
+                      <strong>manual {i + 1}</strong>
+                      <small>
+                        bytes {span.start}–{span.end} · {span.text || "(empty)"}
+                      </small>
+                    </span>
+                    {/* Manual markers are always used — there is no deselect, only removal. */}
+                    <Badge tone="accent">used</Badge>
+                    <Button
+                      variant="ghost"
+                      aria-label={`Remove manual marker ${i + 1}`}
+                      onClick={() => setManualSpans((current) => current.filter((s) => s !== span))}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {points.length ? (
               <div className="row-list point-list">
@@ -1146,7 +2129,8 @@ export function IntruderPage(): JSX.Element {
                   );
                 })}
               </div>
-            ) : canDiscover ? (
+            ) : manualSpans.length ? null
+            : canDiscover ? (
               <Empty title="No positions loaded" detail="Find positions before launching an attack." />
             ) : (
               <Empty
@@ -1163,14 +2147,20 @@ export function IntruderPage(): JSX.Element {
               <HttpEditor
                 label={`Base request · message ${msgId}`}
                 readOnly
+                // Shown with the markers folded in — the editor displays the same "§"-wrapped
+                // request Burp's Positions tab does. The editor is read-only here, so the display
+                // text cannot drift from the request the stored raw offsets were measured against.
                 value={
-                  baseMessage.data?.text ??
-                  (baseMessage.isFetching
-                    ? "Loading the base request…"
-                    : baseMessage.error
-                      ? `Could not load message ${msgId}.`
-                      : "No bytes stored for this message.")
+                  baseMessage.data?.text
+                    ? displayText(baseMessage.data.text, manualSpans)
+                    : (baseMessage.isFetching
+                      ? "Loading the base request…"
+                      : baseMessage.error
+                        ? `Could not load message ${msgId}.`
+                        : "No bytes stored for this message.")
                 }
+                payloadMarks={{ onAdd: onAddManualSpan }}
+                bodyBase64={baseMessage.data?.body_base64}
                 filename={`intruder-base-${msgId}.txt`}
               />
             </Card>
@@ -1217,6 +2207,17 @@ export function IntruderPage(): JSX.Element {
                             <option value="dates">Dates</option>
                             <option value="custom_iterator">Custom iterator</option>
                             <option value="null">Null payloads</option>
+                            <option value="char_substitution">Character substitution</option>
+                            <option value="case_modification">Case modification</option>
+                            <option value="illegal_unicode">Illegal Unicode</option>
+                            <option value="character_blocks">Character blocks</option>
+                            <option value="character_frobber">Character frobber</option>
+                            <option value="bit_flipper">Bit flipper</option>
+                            <option value="username">Username generator</option>
+                            <option value="ecb_shuffler">ECB block shuffler</option>
+                            <option value="copy_other">Copy other payload</option>
+                            <option value="recursive_grep">Recursive grep</option>
+                            <option value="collaborator">Collaborator payloads</option>
                           </Select>
                         )}
                       </Field>
@@ -1277,18 +2278,61 @@ export function IntruderPage(): JSX.Element {
                         </Field>
                       </div>
                     ) : t === "file" ? (
-                      <Field label="Server file path" hint="File must exist on server; blank lines skipped">
-                        {(id) => (
-                          <Input
-                            id={id}
-                            value={payloadFiles[index] ?? ""}
-                            onChange={(e) =>
-                              setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
-                            }
-                            placeholder="/tmp/payloads.txt or ./wordlists/sqli.txt"
+                      <div className="stack">
+                        {/* The wordlist manager (kal): the inventory of bundled and uploaded
+                            lists, one select instead of a path the operator must invent. The
+                            builtin entries fill the path as "builtin:<name>" (resolved from
+                            the binary), uploads as their stored path — both read by the same
+                            file source, so nothing downstream changes. */}
+                        <Field label="Available wordlists" hint="Bundled lists resolve from the binary; uploads from this session">
+                          {(id) => (
+                            <Select
+                              id={id}
+                              value=""
+                              onChange={(e) => {
+                                const ref = e.target.value;
+                                if (!ref) return;
+                                setPayloadFiles((cur) => cur.map((v, i) => (i === index ? ref : v)));
+                              }}
+                            >
+                              <option value="">Choose a wordlist…</option>
+                              {(wordlistsQuery.data?.wordlists ?? []).map((wl) => (
+                                <option key={wl.ref} value={wl.ref}>
+                                  {wl.name} ({wl.kind === "builtin" ? "bundled" : "upload"}, {wl.lines} lines)
+                                </option>
+                              ))}
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Server file path" hint="File must exist on server; blank lines skipped. Bundled lists use builtin:<name>">
+                          {(id) => (
+                            <Input
+                              id={id}
+                              value={payloadFiles[index] ?? ""}
+                              onChange={(e) =>
+                                setPayloadFiles((cur) => cur.map((v, i) => (i === index ? e.target.value : v)))
+                              }
+                              placeholder="builtin:sqli-basic or /tmp/payloads.txt"
+                            />
+                          )}
+                        </Field>
+                        {/* Upload (016): the operator's own wordlist from their machine. The response's
+                            stored path fills the field above, so the attack reads it through the ordinary
+                            file source — the engine cannot tell an uploaded list from a server-side one,
+                            which is the whole point. */}
+                        <label className="field-label" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
+                          <input
+                            type="file"
+                            disabled={uploading}
+                            style={{ maxWidth: 260 }}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) void uploadPayloadFile(index, file);
+                            }}
                           />
-                        )}
-                      </Field>
+                          {uploading ? "uploading…" : "or upload from this machine"}
+                        </label>
+                      </div>
                     ) : t === "brute_force" ? (
                       <div className="form-grid">
                         <Field label="Charset">
@@ -1417,6 +2461,144 @@ export function IntruderPage(): JSX.Element {
                           />
                         )}
                       </Field>
+                    ) : t === "char_substitution" ? (
+                      <div className="stack">
+                        <Field label="Words (one per line)">
+                          {(id) => (
+                            <Textarea id={id} value={advField(index, "words")} onChange={(e) => setAdvField(index, "words", e.target.value)} placeholder="password&#10;admin" />
+                          )}
+                        </Field>
+                        <Field label="Substitutions (one per line, char=replacement)" hint="e.g. e=3 to substitute every 'e' with '3' in some combinations">
+                          {(id) => (
+                            <Textarea id={id} value={advField(index, "subs")} onChange={(e) => setAdvField(index, "subs", e.target.value)} placeholder="e=3&#10;a=4&#10;o=0" />
+                          )}
+                        </Field>
+                        <Field label="Max combinations per word" hint="0 = unbounded (still capped by max payloads overall)">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "max_per_word")} onChange={(e) => setAdvField(index, "max_per_word", e.target.value)} placeholder="0" />}
+                        </Field>
+                      </div>
+                    ) : t === "case_modification" ? (
+                      <div className="stack">
+                        <Field label="Words (one per line)">
+                          {(id) => <Textarea id={id} value={advField(index, "words")} onChange={(e) => setAdvField(index, "words", e.target.value)} placeholder="admin&#10;root" />}
+                        </Field>
+                        <div className="row-list">
+                          <Checkbox checked={advBool(index, "lower", true)} onCheckedChange={(v) => setAdvBool(index, "lower", v)} label="lower case" />
+                          <Checkbox checked={advBool(index, "upper", true)} onCheckedChange={(v) => setAdvBool(index, "upper", v)} label="UPPER CASE" />
+                          <Checkbox checked={advBool(index, "capitalize", true)} onCheckedChange={(v) => setAdvBool(index, "capitalize", v)} label="Capitalize" />
+                        </div>
+                      </div>
+                    ) : t === "illegal_unicode" ? (
+                      <div className="stack">
+                        <Field label="Characters (each must be ASCII)">
+                          {(id) => <Input id={id} value={advField(index, "chars", "/")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="/" />}
+                        </Field>
+                        <div className="row-list">
+                          <Checkbox checked={advBool(index, "overlong2", true)} onCheckedChange={(v) => setAdvBool(index, "overlong2", v)} label="overlong 2-byte" />
+                          <Checkbox checked={advBool(index, "overlong3", false)} onCheckedChange={(v) => setAdvBool(index, "overlong3", v)} label="overlong 3-byte" />
+                          <Checkbox checked={advBool(index, "overlong4", false)} onCheckedChange={(v) => setAdvBool(index, "overlong4", v)} label="overlong 4-byte" />
+                          <Checkbox checked={advBool(index, "percent_encode", true)} onCheckedChange={(v) => setAdvBool(index, "percent_encode", v)} label="%-encode (for a URL/query context)" />
+                        </div>
+                      </div>
+                    ) : t === "character_blocks" ? (
+                      <div className="form-grid">
+                        <Field label="Characters (cycled to fill each block)">
+                          {(id) => <Input id={id} value={advField(index, "chars", "A")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="A" />}
+                        </Field>
+                        <Field label="Min length">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "min_len", "1")} onChange={(e) => setAdvField(index, "min_len", e.target.value)} />}
+                        </Field>
+                        <Field label="Max length">
+                          {(id) => <Input id={id} type="number" min={0} value={advField(index, "max_len", "100")} onChange={(e) => setAdvField(index, "max_len", e.target.value)} />}
+                        </Field>
+                        <Field label="Step">
+                          {(id) => <Input id={id} type="number" value={advField(index, "step", "1")} onChange={(e) => setAdvField(index, "step", e.target.value)} />}
+                        </Field>
+                      </div>
+                    ) : t === "bit_flipper" ? (
+                      <Field label="Base value" hint="One payload per bit of this value, with that bit inverted.">
+                        {(id) => <Input id={id} value={advField(index, "base")} onChange={(e) => setAdvField(index, "base", e.target.value)} placeholder="e.g. a sample cookie or token value" />}
+                      </Field>
+                    ) : t === "username" ? (
+                      <Field label="Full names (one per line, e.g. 'John Smith')" hint="Generates first, last, first.last, firstlast, flast and firstl for each name.">
+                        {(id) => <Textarea id={id} value={advField(index, "names")} onChange={(e) => setAdvField(index, "names", e.target.value)} placeholder="John Smith&#10;Ada Lovelace" />}
+                      </Field>
+                    ) : t === "ecb_shuffler" ? (
+                      <div className="form-grid">
+                        <Field label="Sample value (already encoded)" hint="A captured encrypted value, e.g. a session cookie">
+                          {(id) => <Input id={id} value={advField(index, "sample")} onChange={(e) => setAdvField(index, "sample", e.target.value)} placeholder="base64 or hex" />}
+                        </Field>
+                        <Field label="Encoding">
+                          {(id) => (
+                            <Select id={id} value={advField(index, "encoding", "base64")} onChange={(e) => setAdvField(index, "encoding", e.target.value)}>
+                              <option value="base64">Base64</option>
+                              <option value="hex">Hex</option>
+                            </Select>
+                          )}
+                        </Field>
+                        <Field label="Block size (bytes)" hint="16 for AES, 8 for DES/3DES/Blowfish">
+                          {(id) => <Input id={id} type="number" min={1} value={advField(index, "block_size", "16")} onChange={(e) => setAdvField(index, "block_size", e.target.value)} />}
+                        </Field>
+                      </div>
+                    ) : t === "character_frobber" ? (
+      <div>
+        <Field
+          label="Base value"
+          hint="The current value to mutate, e.g. a session token. Each payload changes one character of it and holds the rest fixed, which is how you find which position the check depends on."
+        >
+          {(id) => <Input id={id} value={advField(index, "base", "")} onChange={(e) => setAdvField(index, "base", e.target.value)} placeholder="e.g. eyJhbGciOi..." />}
+        </Field>
+        <Field label="Characters" hint="Leave empty for the printable ASCII range (0x20-0x7e), which is what a token's characters come from.">
+          {(id) => <Input id={id} value={advField(index, "chars", "")} onChange={(e) => setAdvField(index, "chars", e.target.value)} placeholder="0123456789abcdef" />}
+        </Field>
+      </div>
+    ) : t === "copy_other" ? (
+                      <Field
+                        label="Position to copy (0-based)"
+                        hint="Pitchfork and cluster bomb. This position's payload is the named one's on every request — the case Burp documents it for: two parameters that must always match while the Cluster bomb varies the rest. Refused in sniper and battering ram, which advance one set across every position (see the server's own error)."
+                      >
+                        {(id) => <Input id={id} type="number" min={0} value={advField(index, "position", "0")} onChange={(e) => setAdvField(index, "position", e.target.value)} />}
+                      </Field>
+                    ) : t === "collaborator" ? (
+                      <div className="stack">
+                        <Field
+                          label="Number of payloads to generate"
+                          hint="One fresh out-of-band address per payload, minted when the attack launches and listed on the Collaborator page. Bounded at 100 by the server, like the Collaborator page's own batch."
+                        >
+                          {(id) => <Input id={id} type="number" min={1} max={100} value={advField(index, "collab_count", "10")} onChange={(e) => setAdvField(index, "collab_count", e.target.value)} />}
+                        </Field>
+                        <Checkbox
+                          checked={advBool(index, "collab_include_location", true)}
+                          onCheckedChange={(v) => setAdvBool(index, "collab_include_location", v)}
+                          label="Include Collaborator server location"
+                        />
+                        <p className="cell-dim">
+                          Each payload is a unique address on the interaction channel. Unchecking the server location yields the bare interaction id — it cannot receive a callback by itself. The attack refuses to launch when no interaction server is configured, rather than inserting a placeholder.
+                        </p>
+                      </div>
+                    ) : t === "recursive_grep" ? (
+                      <div className="stack">
+                        <Field
+                          label="Initial payload for first request"
+                          hint="The chain starts here — the first extraction needs a response to read."
+                        >
+                          {(id) => <Input id={id} value={advField(index, "initial")} onChange={(e) => setAdvField(index, "initial", e.target.value)} placeholder="e.g. a — the first row key to enumerate" />}
+                        </Field>
+                        <Field
+                          label="Extract grep item (regex)"
+                          hint="First capture group of its match in the previous response becomes the next payload; the whole match when the pattern has no group. Capture capped at 256 bytes."
+                        >
+                          {(id) => <Input id={id} value={advField(index, "extract_re")} onChange={(e) => setAdvField(index, "extract_re", e.target.value)} placeholder="e.g. next: ([a-z]+)" />}
+                        </Field>
+                        <Checkbox
+                          checked={advBool(index, "stop_duplicate", true)}
+                          onCheckedChange={(v) => setAdvBool(index, "stop_duplicate", v)}
+                          label="Stop if duplicate payload found"
+                        />
+                        <p className="cell-dim">
+                          Runs one request at a time (each payload derives from the previous response — the server forces max_in_flight to 1, as Burp forces its resource pool for these attacks). The chain ends when the extract matches nothing, or on a duplicate if checked; the report lists every derived payload per request.
+                        </p>
+                      </div>
                     ) : null}
                   </Card>
                 );
@@ -1454,6 +2636,26 @@ export function IntruderPage(): JSX.Element {
             ) : (
               <p className="field-hint">No processing rules. Payloads are sent exactly as written.</p>
             )}
+            {/* Burp's "URL-encode these characters" (burpsy-react-ui-8cbc): a final pass over
+                every generated payload, after the rules regardless of payload type — the
+                safety net that keeps a payload from breaking the request it travels in.
+                Spaces and control characters are always encoded additionally server-side,
+                because a request containing them cannot be delivered. */}
+            <div className="card-pad" style={{ borderTop: "1px solid var(--line)" }}>
+              <Field
+                label="URL-encode these characters"
+                hint="Percent-encoded in every payload as the final step before sending. Clear the box to disable."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    value={urlEncodeChars}
+                    onChange={(event) => setURLEncodeChars(event.target.value)}
+                    placeholder="=&+%;?/ #:"
+                  />
+                )}
+              </Field>
+            </div>
           </Card>
         </TabsContent>
 
@@ -1570,6 +2772,137 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+              {/* Burp's two resource-pool variations (nn0n). A flat rate is a signature: a lockout
+                  counter that a constant rate trips at request N trips at request N every run. The
+                  engine schedules each gap itself when either of these is set — seeded, so the
+                  delays a run took can be replayed — and refuses a variation it cannot honour
+                  rather than quietly moving it to one it can. */}
+              <Field
+                label="With random variations (± %)"
+                hint={
+                  poolName
+                    ? "Set by the selected pool."
+                    : "Burp's resource-pool option. Each gap between requests lands within this percentage of the interval the rate above states. Blank or 0 is a flat delay; 100 or more is refused."
+                }
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={99}
+                    step="5"
+                    disabled={poolName !== ""}
+                    value={poolName ? "" : delayJitterPct}
+                    onChange={(event) => setDelayJitterPct(event.target.value)}
+                    placeholder={poolName ? "from the pool" : "no variation"}
+                  />
+                )}
+              </Field>
+              <Field
+                label="Increase delay between requests (ms)"
+                hint={
+                  poolName
+                    ? "Set by the selected pool."
+                    : "Burp's delay increment: every gap is this many milliseconds longer than the one before it, so an attack that starts inside a rate-limit window stays inside it as the window fills. Blank or 0 does not ramp."
+                }
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={600000}
+                    disabled={poolName !== ""}
+                    value={poolName ? "" : delayIncrementMS}
+                    onChange={(event) => setDelayIncrementMS(event.target.value)}
+                    placeholder={poolName ? "from the pool" : "no increase"}
+                  />
+                )}
+              </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Error handling"
+              detail="What happens when the target hiccups. Burp's defaults apply when these are blank."
+            />
+            <div className="form-grid">
+              <Field
+                label="Retries on network failure"
+                hint="How many times a failed request is sent again before its error counts. Blank = 3 (Burp's default); 0 disables. A retried request is still one attempt — the report counts retries separately."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    value={retries}
+                    onChange={(event) => setRetries(event.target.value)}
+                    placeholder="3"
+                  />
+                )}
+              </Field>
+              <Field
+                label="Pause before retry (ms)"
+                hint="How long to wait between retries. Blank = 2000ms (Burp's default). Bounded at 600000, Burp's own validation."
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    min={0}
+                    max={600000}
+                    value={retryDelayMS}
+                    onChange={(event) => setRetryDelayMS(event.target.value)}
+                    placeholder="2000"
+                  />
+                )}
+              </Field>
+              <Checkbox
+                checked={baseline}
+                onCheckedChange={(v) => setBaseline(v)}
+                label="Make unmodified baseline request"
+              />
+              <p className="cell-dim">
+                Issues the template with every position at its base value as item 0 — "Baseline request (no payloads)" — so the attack responses hang against a base response to compare with. Every result ordinal shifts by one.
+              </p>
+              {/* Burp's remaining two attack settings (fmxv). The engine has implemented both
+                  since 29a7ee3; this is the first path a request has to reach them, and the first
+                  time an operator can see either one at all. */}
+              <Checkbox
+                checked={setConnectionClose}
+                onCheckedChange={(v) => setSetConnectionClose(v)}
+                label="Set Connection header"
+              />
+              <p className="cell-dim">
+                Adds or updates <code>Connection: close</code> on every request this attack sends. Applied after the
+                payloads are spliced in, so an existing header keeps its spelling and spacing and only its value changes.
+              </p>
+              <Checkbox
+                checked={storePayloads}
+                onCheckedChange={(v) => setStorePayloads(v)}
+                label="Store full payloads"
+              />
+              <p className="cell-dim">
+                Keeps each result&apos;s full payload values, so the report can name the payloads behind a row instead of
+                an ordinal. Costs a small per-row slice header over the payload strings the attack already holds — the
+                bytes are shared, not copied.
+              </p>
+              {/* Burp's third attack setting, and the one this build does not implement. Said here
+                  rather than left to be discovered at the target: "Use denial-of-service mode" sends
+                  the request and deliberately does not read the response, which needs a fire-and-forget
+                  send AND every attempt-recording path to learn "no response was read" instead of
+                  counting a zero-length one. A checkbox that quietly reported an empty response as a
+                  zero-length 0 would be the exact lie this project treats as worse than the gap. */}
+              <p className="field-hint">
+                <strong>Use denial-of-service mode is not implemented.</strong> Burp sends each request and
+                deliberately does not read the response. Doing that honestly here needs a send that can
+                leave without reading, plus every place an attempt records its status, length and
+                reflection to carry &ldquo;no response was read&rdquo; rather than a zero — otherwise the
+                report would count a request it never saw an answer to.
+              </p>
             </div>
             {poolName ? (
               <p className="field-hint">
@@ -1605,9 +2938,36 @@ export function IntruderPage(): JSX.Element {
                 )}
               </Field>
               <Field
-                label="Grep match"
+                label="Grep match — expressions (one per line)"
+                hint="One results column per expression, counting every occurrence in each response (irt). Leave empty to use the single expression below. Empty lines are skipped."
+              >
+                {(id) => (
+                  <Textarea
+                    id={id}
+                    value={grepMatchList.join("\n")}
+                    onChange={(event) => setGrepMatchList(event.target.value.split("\n"))}
+                    placeholder={"error\nexception\ninvalid\nSQL syntax"}
+                  />
+                )}
+              </Field>
+              <div className="row-list">
+                <Checkbox
+                  checked={grepMatchCaseSensitive}
+                  onCheckedChange={(v) => setGrepMatchCaseSensitive(v)}
+                  label="Case sensitive match (simple-string mode only)"
+                />
+                <Checkbox
+                  checked={grepMatchExcludeHeaders}
+                  onCheckedChange={(v) => setGrepMatchExcludeHeaders(v)}
+                  label="Exclude HTTP headers"
+                />
+              </div>
+              <Field
+                label="Grep match (single expression)"
                 hint={
-                  grepMatchMode === "simple"
+                  grepMatchList.some((e) => e.trim())
+                    ? "Ignored while the expression list above has entries — the list is the same feature at a larger size, and the server refuses both at once."
+                    : grepMatchMode === "simple"
                     ? "Counts responses containing this exact text. Regex characters in it are escaped for you."
                     : "Counts responses matching this regular expression (RE2). Alternate with |."
                 }
@@ -1636,10 +2996,180 @@ export function IntruderPage(): JSX.Element {
               </Field>
             </div>
           </Card>
+
+          <Card>
+            <SectionHeading
+              title="Auto-pause"
+              detail="Burp's tools/intruder/configure-attack/settings.html auto-pause: stop the attack on a signal in the responses, instead of watching it and pressing Pause."
+            />
+            <div className="form-grid">
+              <Checkbox
+                checked={autoPauseEnabled}
+                onCheckedChange={(v) => setAutoPauseEnabled(v)}
+                label="Enable auto-pause"
+              />
+              <p className="cell-dim">
+                The engine has always implemented this (burpsy-react-ui-8f2) and the report has
+                always counted what it paused on; until now there was no control that could set it,
+                so the only way to halt a spray was the manual pause — which requires watching the
+                attack. The switch decides only whether the block below is sent: your expressions are
+                kept whether it is on or off.
+              </p>
+              {autoPauseEnabled ? (
+                <>
+                  <Field
+                    label="Pause when"
+                    hint="Appears: pause as soon as one of these appears in a response. Missing: pause when none of them does — the &quot;the spray stopped working&quot; signal, which is the one you cannot see by watching."
+                  >
+                    {(id) => (
+                      <Select
+                        id={id}
+                        value={autoPauseMode}
+                        onChange={(event) => setAutoPauseMode(event.target.value as "appears" | "missing")}
+                      >
+                        <option value="appears">An expression appears</option>
+                        <option value="missing">No expression appears</option>
+                      </Select>
+                    )}
+                  </Field>
+                  <Field
+                    label="Expressions (one per line)"
+                    hint={
+                      autoPauseExpressions.some((e) => e.trim())
+                        ? `${autoPauseExpressions.filter((e) => e.trim()).length} expression(s). Simple mode matches the text exactly; regex mode is RE2.`
+                        : "Nothing sent until you type at least one. An enabled switch with no expression has no condition to test, and the server would refuse it — so the field is omitted rather than sent empty."
+                    }
+                  >
+                    {(id) => (
+                      <Textarea
+                        id={id}
+                        value={autoPauseExpressions.join("\n")}
+                        onChange={(event) => setAutoPauseExpressions(event.target.value.split("\n"))}
+                        placeholder={"account locked\ntoo many attempts\n429"}
+                      />
+                    )}
+                  </Field>
+                  {autoPauseError ? (
+                    <p className="field-hint" role="alert">
+                      <strong>The server refused this auto-pause:</strong> {autoPauseError}
+                    </p>
+                  ) : null}
+                  <div className="row-list">
+                    <Checkbox
+                      checked={autoPauseSimple}
+                      onCheckedChange={(v) => setAutoPauseSimple(v)}
+                      label="Simple string (rather than regular expression)"
+                    />
+                    <Checkbox
+                      checked={autoPauseCaseSensitive}
+                      onCheckedChange={(v) => setAutoPauseCaseSensitive(v)}
+                      label="Case sensitive (simple-string mode only)"
+                    />
+                  </div>
+                  <p className="cell-dim">
+                    {autoPauseSimple
+                      ? "Simple mode is case-folded unless you tick the box above. In regex mode the expression carries its own case flags, the way Go's regexp does, so this switch does not apply."
+                      : "Regex mode (RE2). Each expression carries its own case behaviour, so the case-sensitive switch above does not apply here."}
+                  </p>
+                </>
+              ) : null}
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Redirections"
+              detail="Burp's tools/intruder/configure-attack/settings.html: whether an attack chases a 3xx to the page that actually carries the result."
+            />
+            <div className="form-grid">
+              <Field
+                label="Follow redirections"
+                hint="Every hop is re-authorised against scope on its own rendered bytes, the same gate the request itself went through — a payload can steer a hop somewhere nobody named."
+              >
+                {(id) => (
+                  <Select id={id} value={redirectMode} onChange={(event) => setRedirectMode(event.target.value as FollowRedirectsMode | "")}>
+                    <option value="">Standing network policy (Never, unless changed in Network settings)</option>
+                    {FOLLOW_REDIRECTS_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
+            </div>
+          </Card>
         </TabsContent>
 
         <TabsContent value="results" className="tool-pane">
           {run.error ? <ErrorNotice error={run.error} onRetry={onRun} /> : null}
+
+          {/* The live attack window. While /run holds its response open there is no report to render,
+              but the attack is not silent: the settled-send counts move every second (the attacks
+              poll), and the controls are the same ones the header carries — Burp's results window is
+              where an operator goes to watch, so the watching view carries the controls too. The
+              per-row report still arrives only when the attack completes; pretending otherwise would
+              render rows the collector has not folded yet. */}
+          {run.isPending ? (
+            <Card>
+              <SectionHeading
+                title="Attack in progress"
+                detail={
+                  myAttack
+                    ? "Counts are live; the full report arrives when the attack ends."
+                    : "Finding this attack in the running list…"
+                }
+              />
+              {myAttack ? (
+                <div className="stack">
+                  <div className="toolbar">
+                    <Badge tone={myAttack.status === "paused" ? "warn" : "accent"}>
+                      {myAttack.status === "paused" ? "paused" : "running"}
+                    </Badge>
+                    <span className="cell-dim">
+                      {formatCount(myAttack.sent)} got responses, {formatCount(myAttack.failed)} failed — of{" "}
+                      {formatCount(myAttack.planned)} planned
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {myAttack.status === "paused" ? (
+                      <Tooltip content="Resume the paused attack">
+                        <Button variant="outline" onClick={() => controlAttack("resume")} disabled={attackAction.isPending}>
+                          <Play size={14} />
+                          Resume
+                        </Button>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip content="Pause the attack; it holds its place and can be resumed">
+                        <Button variant="outline" onClick={() => controlAttack("pause")} disabled={attackAction.isPending}>
+                          <Pause size={14} />
+                          Pause
+                        </Button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content="Stop the attack; the report will show everything sent so far">
+                      <Button variant="outline" onClick={() => controlAttack("stop")} disabled={attackAction.isPending}>
+                        <Square size={14} />
+                        Stop
+                      </Button>
+                    </Tooltip>
+                  </div>
+                  <div className="progress-track" aria-hidden="true">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width:
+                          myAttack.planned > 0
+                            ? `${Math.min(100, ((myAttack.sent + myAttack.failed) / myAttack.planned) * 100)}%`
+                            : "0%",
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <Badge tone="info">locating attack…</Badge>
+              )}
+            </Card>
+          ) : null}
 
           {result ? (
             <AttackResult
@@ -1647,6 +3177,8 @@ export function IntruderPage(): JSX.Element {
               examples={examples}
               snapshot={snapshot}
               onOpenMessage={(id, messageLabel) => setOpenMessage({ id, label: messageLabel })}
+              bucketMenu={bucketMenu}
+              attemptMenu={attemptMenu}
             />
           ) : null}
 

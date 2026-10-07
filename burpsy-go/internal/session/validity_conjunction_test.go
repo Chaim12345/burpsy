@@ -24,7 +24,7 @@ func TestAFlatRuleEvaluatesEveryStatedClause(t *testing.T) {
 	}
 	body := []byte("<html><body>Please log in to continue</body></html>")
 
-	got := rule.Evaluate(200, map[string]string{}, body)
+	got := rule.Evaluate(200, map[string]string{}, body, "")
 	if got == Valid {
 		t.Fatal("a logged-out login page reported a VALID session: status_is matched and " +
 			"body_not_contains was never evaluated. recovery.go would skip re-login and the " +
@@ -45,7 +45,7 @@ func TestTheSameRuleStillAcceptsAGenuineSession(t *testing.T) {
 	}
 	body := []byte("<html><body>Welcome back, admin</body></html>")
 
-	if got := rule.Evaluate(200, map[string]string{}, body); got != Valid {
+	if got := rule.Evaluate(200, map[string]string{}, body, ""); got != Valid {
 		t.Fatalf("Evaluate = %d, want Valid — both stated clauses hold", got)
 	}
 }
@@ -77,7 +77,7 @@ func TestSingleClauseRulesAreUnchanged(t *testing.T) {
 		{"nil rule", nil, 200, nil, "anything", Indeterminate},
 	}
 	for _, c := range cases {
-		if got := c.rule.Evaluate(c.st, c.hdrs, []byte(c.body)); got != c.want {
+		if got := c.rule.Evaluate(c.st, c.hdrs, []byte(c.body), ""); got != c.want {
 			t.Errorf("%s: Evaluate = %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -92,7 +92,7 @@ func TestADefiniteInvalidOutranksAnIndeterminate(t *testing.T) {
 		StatusIs:     statusPtr(200), // status 0 below -> Indeterminate
 		BodyContains: "admin",        // absent -> Invalid
 	}
-	if got := rule.Evaluate(0, nil, []byte("logged out")); got != Invalid {
+	if got := rule.Evaluate(0, nil, []byte("logged out"), ""); got != Invalid {
 		t.Fatalf("Evaluate = %d, want Invalid — a proven-false clause must not be softened "+
 			"to Indeterminate by an unmeasured one", got)
 	}
@@ -118,8 +118,8 @@ func TestTheFlatFormAgreesWithAnExplicitAllBlock(t *testing.T) {
 		{500, "Please log in"},
 	}
 	for _, in := range inputs {
-		f := flat.Evaluate(in.st, nil, []byte(in.body))
-		e := explicit.Evaluate(in.st, nil, []byte(in.body))
+		f := flat.Evaluate(in.st, nil, []byte(in.body), "")
+		e := explicit.Evaluate(in.st, nil, []byte(in.body), "")
 		if f != e {
 			t.Errorf("status=%d body=%q: flat=%d explicit All{}=%d — the two spellings must agree",
 				in.st, in.body, f, e)
@@ -138,14 +138,14 @@ func TestCombinatorsComposeWithLeafClauses(t *testing.T) {
 			{BodyContains: "account"},
 		},
 	}
-	if got := rule.Evaluate(200, nil, []byte("your account page")); got != Valid {
+	if got := rule.Evaluate(200, nil, []byte("your account page"), ""); got != Valid {
 		t.Errorf("status 200 + Any{} satisfied = %d, want Valid", got)
 	}
-	if got := rule.Evaluate(200, nil, []byte("nothing familiar")); got != Invalid {
+	if got := rule.Evaluate(200, nil, []byte("nothing familiar"), ""); got != Invalid {
 		t.Errorf("status 200 + Any{} unsatisfied = %d, want Invalid — the Any{} block must be "+
 			"reached, not shadowed by the leaf clause", got)
 	}
-	if got := rule.Evaluate(403, nil, []byte("your account page")); got != Invalid {
+	if got := rule.Evaluate(403, nil, []byte("your account page"), ""); got != Invalid {
 		t.Errorf("status 403 + Any{} satisfied = %d, want Invalid — the leaf clause must still count", got)
 	}
 }
@@ -154,14 +154,14 @@ func TestCombinatorsComposeWithLeafClauses(t *testing.T) {
 // "could not be determined" is still "could not be determined", not "true".
 func TestNotNegatesButPreservesIndeterminate(t *testing.T) {
 	rule := &ValidityRule{Not: &ValidityRule{BodyContains: "Please log in"}}
-	if got := rule.Evaluate(200, nil, []byte("Please log in")); got != Invalid {
+	if got := rule.Evaluate(200, nil, []byte("Please log in"), ""); got != Invalid {
 		t.Errorf("Not{body contains login} on a login page = %d, want Invalid", got)
 	}
-	if got := rule.Evaluate(200, nil, []byte("Welcome")); got != Valid {
+	if got := rule.Evaluate(200, nil, []byte("Welcome"), ""); got != Valid {
 		t.Errorf("Not{body contains login} on a session page = %d, want Valid", got)
 	}
 	unknown := &ValidityRule{Not: &ValidityRule{StatusIs: statusPtr(200)}}
-	if got := unknown.Evaluate(0, nil, nil); got != Indeterminate {
+	if got := unknown.Evaluate(0, nil, nil, ""); got != Indeterminate {
 		t.Errorf("Not{unmeasured} = %d, want Indeterminate", got)
 	}
 }

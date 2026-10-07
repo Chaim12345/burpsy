@@ -53,6 +53,58 @@ type networkProxyRuleView struct {
 	Direct bool `json:"direct"`
 }
 
+// networkCarrierView is the global SOCKS layer as the panel sees it.
+type networkCarrierView struct {
+	// Configured is false when no hop is installed, which is the state every surface is in until an
+	// operator names one. It is distinct from Socks == "", which is the same state spelled differently.
+	Configured bool `json:"configured"`
+	// Socks is the hop's redacted address, or "" when none is installed. Read from the carrier's own
+	// view rather than from the settings document, so the panel shows what is IN FORCE.
+	Socks string `json:"socks"`
+	// Bypass lists the destination host patterns that skip the hop.
+	Bypass []string `json:"bypass"`
+	// RemoteResolve asks the SOCKS server to resolve destination names, which is what makes an
+	// internal-only hostname reachable through it. It is a SOCKS feature and is refused for an HTTP
+	// hop rather than silently ignored.
+	RemoteResolve bool `json:"remote_resolve"`
+	// Attached is every egress surface holding this carrier, for the reason the policy's own Attached
+	// field exists: a setting that only one surface honours looks global on screen and is not.
+	Attached []string `json:"attached"`
+	// Limits names what the carrier does NOT cover, in the operator's terms.
+	//
+	// It is reported rather than left in a code comment because a carrier that silently skips one
+	// destination is a setting that looks complete and is not — the same overclaim the Attached field
+	// exists to prevent, one level down. Today that is an HTTPS upstream proxy: crypto/tls calls
+	// DialContext on the net.Dialer it is handed and Go's net.Dialer has no field a carrier can
+	// replace, so the hop cannot be put underneath one without reimplementing the TLS dial
+	// (burpsy-react-ui-mr83 part 3).
+	Limits []string `json:"limits"`
+}
+
+// carrierUpdate is one edit to the global SOCKS layer.
+type carrierUpdate struct {
+	// Socks is the hop's address. Empty CLEARS the carrier, which is an operator removing the setting
+	// and must land on a direct dial rather than on a hop to nowhere.
+	Socks string `json:"socks"`
+	// Bypass lists destination host patterns that skip the hop, in the same language a destination
+	// rule uses: an exact name or `*.example.com`.
+	Bypass []string `json:"bypass"`
+	// RemoteResolve asks the SOCKS server to resolve destination names. Refused for an HTTP hop,
+	// where the setting would be silently ignored.
+	RemoteResolve bool `json:"remote_resolve"`
+}
+
+// applyCarrierUpdate installs a carrier edit, and reports rather than swallows a refusal: a bad SOCKS
+// address or a remote-DNS request on an HTTP hop is the operator's mistake, and finding out when the
+// first outbound connection hangs is much worse than being told now.
+func (s *Server) applyCarrierUpdate(u carrierUpdate) error {
+	if s.upstreamCarrier == nil {
+		return fmt.Errorf("no carrier is wired into this process, so a layer stored here would be " +
+			"consulted by nothing")
+	}
+	return s.upstreamCarrier.SetSocks(u.Socks, u.Bypass, u.RemoteResolve)
+}
+
 // networkProxyView is GET /api/network/proxy.
 type networkProxyView struct {
 	// Wired reports that a policy object exists for this process. False means every field below is a
@@ -70,6 +122,12 @@ type networkProxyView struct {
 	// Attached is every egress surface holding this policy — "sender", "proxy", "web". See the file
 	// comment: this is the field that keeps the panel from implying coverage it cannot see.
 	Attached []string `json:"attached"`
+	// Carrier is the global SOCKS layer: a TCP hop that EVERY outbound connection is opened through,
+	// beneath whichever proxy a rule selected above. It is reported separately from the rules because
+	// it is a different kind of thing — the rules answer "which proxy carries this host" and the carrier
+	// answers "what opens the socket to reach that proxy" — and showing one without the other is how an
+	// operator concludes the other is covered (burpsy-react-ui-mr83 part 3).
+	Carrier networkCarrierView `json:"carrier"`
 	// Persisted reports whether edits survive a restart. False when no -db was given, which is worth
 	// saying next to a settings panel whose changes would otherwise silently be for this run only.
 	Persisted bool `json:"persisted"`
@@ -90,6 +148,11 @@ type networkProxyUpdate struct {
 	Pattern string  `json:"pattern"`
 	Proxy   string  `json:"proxy"`
 	Default *string `json:"default"`
+	// Carrier edits the global SOCKS layer, which is a different thing from the rules above: a rule
+	// answers "which proxy carries this host" and a carrier answers "what opens the socket to reach
+	// that proxy". A panel that showed one and not the other would let an operator conclude the other
+	// is covered (burpsy-react-ui-mr83 part 3).
+	Carrier *carrierUpdate `json:"carrier"`
 }
 
 func (s *Server) handleNetworkProxy(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +169,13 @@ func (s *Server) handleNetworkProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getNetworkProxy(w http.ResponseWriter, _ *http.Request) {
+	s.writeNetworkProxy(w)
+}
+
+// writeNetworkProxy renders the whole view. Shared by the GET and by every POST, because a POST that
+// answers with a partial acknowledgement is how a panel and a server come to disagree about what is
+// in force — and the carrier's whole claim is that it is global.
+func (s *Server) writeNetworkProxy(w http.ResponseWriter) {
 	view := networkProxyView{
 		Wired:                s.upstreamProxy != nil,
 		Rules:                []networkProxyRuleView{},
@@ -118,6 +188,20 @@ func (s *Server) getNetworkProxy(w http.ResponseWriter, _ *http.Request) {
 		// Named from the parser's own accepted set rather than retyped, so a scheme added there shows
 		// up here and the panel cannot offer one the dial path cannot speak.
 		Schemes: upstream.Schemes(),
+	}
+	// The carrier is read from its own object, never rebuilt from the settings document, so the panel
+	// shows what is IN FORCE. A carrier that is wired but bypasses everything reads identically to one
+	// that is not installed, and only the live object can tell them apart.
+	if s.upstreamCarrier != nil {
+		proxy, bypass, remote, configured := s.upstreamCarrier.Configured()
+		view.Carrier = networkCarrierView{
+			Configured:    configured,
+			Socks:         proxy,
+			Bypass:        bypass,
+			RemoteResolve: remote,
+			Attached:      s.upstreamCarrier.AttachedSurfaces(),
+			Limits:        s.upstreamCarrier.Limits(),
+		}
 	}
 	if s.upstreamProxy != nil {
 		def := s.upstreamProxy.Default()
@@ -161,9 +245,23 @@ func (s *Server) updateNetworkProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pattern := strings.TrimSpace(req.Pattern)
-	if req.Default == nil && pattern == "" {
-		http.Error(w, "Nothing to change: send a pattern with its proxy, a default, or both",
+	if req.Default == nil && pattern == "" && req.Carrier == nil {
+		http.Error(w, "Nothing to change: send a pattern with its proxy, a default, a carrier, or any of them",
 			http.StatusBadRequest)
+		return
+	}
+	// The carrier is applied FIRST and on its own, because it is a different layer from the rules: a
+	// body that sets a valid carrier and an invalid rule must leave the carrier working. The reverse
+	// order would leave an operator with neither, which for a body they believed they had saved is
+	// the same silent failure as any other half-applied edit.
+	if req.Carrier != nil {
+		if err := s.applyCarrierUpdate(*req.Carrier); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Default == nil && pattern == "" {
+		s.writeNetworkProxy(w)
 		return
 	}
 	// Both arms are validated before either is applied, so a body with a good default and a bad rule

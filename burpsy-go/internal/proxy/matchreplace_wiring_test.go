@@ -119,7 +119,7 @@ func TestProxyRewritesRequestAndResponseWireBytesViaMatchReplace(t *testing.T) {
 
 	// History must record the bytes actually sent, not the client's originals: captured == wire.
 	ex := awaitExchange(t, store)
-	storedReq, err := store.Get(ex.Request)
+	storedReq, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("stored request id does not resolve: %v", err)
 	}

@@ -68,7 +68,17 @@ type platformAuthResponse struct {
 	// actually built with the credential store attached. See sender.CarriesPlatformAuth:
 	// this can be false in a Server assembled without it, and a rule that is stored but
 	// never presented must not look configured.
+	//
+	// It covers the sender alone, not the proxy leg. The proxy carries the same store
+	// (burpsy-react-ui-trcy wired it), but a Server can be assembled with one and not the
+	// other, and a flag that claimed to cover both would be reporting the sender's state for
+	// the proxy's. PresentedOnProxy is that second answer; an operator reading "configured"
+	// in the panel needs both to be true before the claim is honest.
 	PresentedOnEgress bool `json:"presented_on_egress"`
+	// PresentedOnProxy reports whether the proxy leg was built with the credential store
+	// attached, so browser traffic through the listener presents these rules. See
+	// proxy.ProxyConfig.CarriesPlatformAuth.
+	PresentedOnProxy bool `json:"presented_on_proxy"`
 }
 
 // clientCertsResponse is GET /api/network/client-certs.
@@ -126,6 +136,10 @@ func (s *Server) getNetworkAuth(w http.ResponseWriter, _ *http.Request) {
 		Schemes:           schemes,
 		Unsupported:       netauth.UnsupportedSchemes(),
 		PresentedOnEgress: s.sender != nil && s.sender.CarriesPlatformAuth(),
+		// A nil proxy is a Server assembled without one — a test harness, or an embedder that
+		// only wants the web surface — and that is not a failure, so it reads false rather than
+		// being reported as a misconfiguration.
+		PresentedOnProxy: s.proxyServer != nil && s.proxyServer.CarriesPlatformAuth(),
 	})
 }
 

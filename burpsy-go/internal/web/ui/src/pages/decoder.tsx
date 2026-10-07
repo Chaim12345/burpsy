@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { EditorView } from "@codemirror/view";
 import { ArrowDown, ArrowUp, Braces, Copy, Eraser, Hash, Play, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard, formatBytes } from "../lib/api";
@@ -10,6 +11,8 @@ import {
   newTransformStep,
   useTransformPipeline,
 } from "../lib/data.workbench";
+import { encodingFamily, familyForValue } from "../lib/decoder-colours";
+import { resolveSelection, splitInput } from "../lib/decoder-span";
 import type { TransformKind, TransformResult, TransformStep } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
@@ -132,13 +135,27 @@ function ResultCard({
   result,
   index,
   view,
+  before,
+  after,
+  isSelection,
 }: {
   result: TransformResult;
   index: number;
   view: "text" | "hex";
+  /** Untouched text before the transformed span; empty in whole-input mode. */
+  before: string;
+  /** Untouched text after the transformed span; empty in whole-input mode. */
+  after: string;
+  /** True when only a selected span was transformed, so len/utf-8 describe the span. */
+  isSelection: boolean;
 }): JSX.Element {
   const label = `${KIND_LABEL[result.kind]} · ${result.value === "auto" ? "smart detect" : result.value}`;
   const smart = result.kind === "decode" && result.value === "auto";
+  // The colour is the encoding this step actually applied — the step's value, or, for a smart
+  // decode, the last layer the server reported it peeled. Null means no tint (nothing detected).
+  const family = encodingFamily(result.kind, result.value, result.layers);
+  // Empty output only reads as "(empty output)" when there is no surrounding text to show.
+  const emptyWhole = !before && !after && !result.output;
   return (
     <Card>
       <div className="detail-head">
@@ -147,6 +164,11 @@ function ResultCard({
           <strong>{label}</strong>
         </div>
         <div className="detail-actions">
+          {isSelection ? (
+            <Badge tone="info" title="Only the selected span was transformed; the rest of the input is shown unchanged around it. The byte count and UTF-8 flag describe the span.">
+              selection
+            </Badge>
+          ) : null}
           <Badge>{formatBytes(result.len)}</Badge>
           {result.utf8 ? null : <Badge tone="warn">not utf-8</Badge>}
           {result.truncated ? <Badge tone="warn">truncated</Badge> : null}
@@ -169,11 +191,20 @@ function ResultCard({
         result.layers && result.layers.length ? (
           <div className="chip-row">
             <span className="eyebrow">detected</span>
-            {result.layers.map((layer, position) => (
-              <Badge tone="accent" key={`${layer}-${position}`}>
-                {layer}
-              </Badge>
-            ))}
+            {result.layers.map((layer, position) => {
+              const layerFamily = familyForValue(layer);
+              return (
+                <Badge
+                  tone="accent"
+                  className="enc-badge"
+                  data-encoding={layerFamily ?? undefined}
+                  key={`${layer}-${position}`}
+                >
+                  {layerFamily ? <span className="enc-dot" data-encoding={layerFamily} aria-hidden="true" /> : null}
+                  {layer}
+                </Badge>
+              );
+            })}
           </div>
         ) : (
           <div className="notice notice-warn">
@@ -199,8 +230,31 @@ function ResultCard({
       ) : null}
 
       {/* `prose` alone still reads correctly if tool-output is not merged; the extra
-          class only adds the monospace column alignment a hex dump needs. */}
-      <div className="prose tool-output">{view === "hex" ? hexDump(result.output) : result.output || "(empty output)"}</div>
+          class only adds the monospace column alignment a hex dump needs.
+
+          Text view colour-codes the transformed span by the encoding actually applied and
+          shows any untouched prefix/suffix around it plain — Burp's "The data is color-coded
+          to indicate the type of encoding or decoding that is applied." Hex view dumps the
+          reconstructed whole (before + span + after), since a byte grid has no colour to carry. */}
+      <div className="prose tool-output">
+        {view === "hex" ? (
+          hexDump(before + result.output + after)
+        ) : emptyWhole ? (
+          "(empty output)"
+        ) : (
+          <>
+            {before}
+            <span
+              className="enc-span"
+              data-encoding={family ?? undefined}
+              title={family ? `${label} applied to this span` : undefined}
+            >
+              {result.output}
+            </span>
+            {after}
+          </>
+        )}
+      </div>
     </Card>
   );
 }
@@ -210,6 +264,17 @@ export function DecoderPage(): JSX.Element {
   const [steps, setSteps] = useState<TransformStep[]>(() => [newTransformStep("decode", "auto")]);
   const [view, setView] = useState<"text" | "hex">("text");
   const pipeline = useTransformPipeline();
+
+  // The input is the shared CodeMirror editor. Its selection is read through the DOM at run time
+  // (EditorView.findFromDOM) rather than pushed up through a prop, because src/ui/editor.tsx is
+  // owned by another agent and exposes no onSelectionChange — this is the read that would become
+  // that prop. `views={false}` keeps the editor on the Raw view with no charset override, so its
+  // document is byte-identical to `input` and its char offsets index `input` directly.
+  const editorWrapRef = useRef<HTMLDivElement>(null);
+
+  // The selection context of the last run, snapshotted at execute time so the result cards render
+  // the prefix/suffix that belong to the results on screen even as the live selection moves on.
+  const [runSplit, setRunSplit] = useState<{ before: string; after: string; whole: boolean } | null>(null);
 
   // A hand-off from another surface (History's "Send to Decoder") lands as a seed rather than a
   // URL param, because the input is arbitrary bytes no router should carry. Consumed once and
@@ -246,13 +311,26 @@ export function DecoderPage(): JSX.Element {
 
   const removeStep = (id: string) => setSteps((current) => current.filter((step) => step.id !== id));
 
-  const execute = () =>
+  const execute = () => {
+    // Burp: "The transformation applies to the whole data set. To apply the transformation to only
+    // a portion of the data, select the relevant section before you choose an operation." A real
+    // selection in the input feeds only that span through the pipeline; the surrounding text is
+    // held aside and shown unchanged around each step's output. No selection → whole input, as before.
+    const view = editorWrapRef.current ? EditorView.findFromDOM(editorWrapRef.current) : null;
+    const main = view?.state.selection.main;
+    const selection = resolveSelection(input.length, main ? main.from : null, main ? main.to : null);
+    const parts = splitInput(input, selection);
+    setRunSplit({ before: parts.before, after: parts.after, whole: selection.whole });
     pipeline.mutate(
-      { input, steps },
+      { input: parts.span, steps },
       {
         onSuccess: (result) => {
           if (result.failedAt === null) {
-            toast.success(`${result.results.length} step(s) ran`);
+            toast.success(
+              selection.whole
+                ? `${result.results.length} step(s) ran`
+                : `${result.results.length} step(s) ran on the selection`,
+            );
             return;
           }
           toast.error(`Step ${result.failedAt + 1} failed: ${result.message ?? "unknown error"}`);
@@ -260,6 +338,7 @@ export function DecoderPage(): JSX.Element {
         onError: (cause) => toast.error(`Pipeline could not run: ${cause.message}`),
       },
     );
+  };
 
   // A hash is one-way, so anything chained after it transforms a digest rather
   // than the operator's data. Worth saying once, not blocking.
@@ -301,6 +380,7 @@ export function DecoderPage(): JSX.Element {
               onClick={() => {
                 setInput("");
                 pipeline.reset();
+                setRunSplit(null);
                 toast.success("Input and output cleared");
               }}
             >
@@ -315,20 +395,24 @@ export function DecoderPage(): JSX.Element {
         }
       />
 
-      <HttpEditor
+      {/* Wrapped so the run handler can find this editor's CodeMirror view by DOM and read its
+          selection — see execute(). */}
+      <div ref={editorWrapRef}>
+        <HttpEditor
           views={false}
-        label="Input"
-        value={input}
-        onChange={setInput}
-        height="160px"
-        filename="decoder-input.txt"
-        placeholder="paste a cookie, a JWT, a URL-encoded parameter…"
-      />
+          label="Input"
+          value={input}
+          onChange={setInput}
+          height="160px"
+          filename="decoder-input.txt"
+          placeholder="paste a cookie, a JWT, a URL-encoded parameter…"
+        />
+      </div>
 
       <Card>
         <SectionHeading
           title="Transform pipeline"
-          detail="Each step is fed the previous step's output, and every intermediate result stays on screen."
+          detail="Each step is fed the previous step's output, and every intermediate result stays on screen. Select a span in the input to transform only that part; with nothing selected the whole input is transformed."
           actions={
             <>
               <Button variant="outline" size="small" onClick={() => addStep("decode")}>
@@ -387,7 +471,15 @@ export function DecoderPage(): JSX.Element {
             ) : null}
             {run.results.length ? (
               run.results.map((result, index) => (
-                <ResultCard key={result.stepId} result={result} index={index} view={view} />
+                <ResultCard
+                  key={result.stepId}
+                  result={result}
+                  index={index}
+                  view={view}
+                  before={runSplit && !runSplit.whole ? runSplit.before : ""}
+                  after={runSplit && !runSplit.whole ? runSplit.after : ""}
+                  isSelection={Boolean(runSplit && !runSplit.whole)}
+                />
               ))
             ) : (
               <Empty title="No output" detail="The first step failed, so nothing was produced." />

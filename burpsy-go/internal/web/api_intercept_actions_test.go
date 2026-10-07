@@ -9,7 +9,6 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intercept"
 )
 
-
 type ruleListView struct {
 	Wired  bool `json:"wired"`
 	Active bool `json:"active"`

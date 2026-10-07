@@ -19,6 +19,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/persist"
+	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 	"software.sslmate.com/src/go-pkcs12"
@@ -183,8 +184,10 @@ func Test_deleting_an_absent_rule_answers_404(t *testing.T) {
 func Test_the_network_api_refuses_unusable_rules(t *testing.T) {
 	server := networkServer()
 	cases := map[string]string{
-		"no scheme":          `{"host":"example.com","username":"a","password":"b"}`,
-		"unsupported scheme": `{"host":"example.com","scheme":"ntlmv2","username":"a","password":"b"}`,
+		"no scheme": `{"host":"example.com","username":"a","password":"b"}`,
+		// ntlmv2 is implemented (ntlm.go); NTLMv1 is the unsupported Burp scheme this
+		// build refuses, so it names the refusal class instead.
+		"unsupported scheme": `{"host":"example.com","scheme":"ntlmv1","username":"a","password":"b"}`,
 		"unknown scheme":     `{"host":"example.com","scheme":"bearer","username":"a","password":"b"}`,
 		"no host":            `{"host":"  ","scheme":"basic","username":"a","password":"b"}`,
 		"no username":        `{"host":"example.com","scheme":"basic","username":"","password":"b"}`,
@@ -514,4 +517,67 @@ func Test_a_binding_that_could_not_be_restored_is_reported(t *testing.T) {
 func jsonString(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
+}
+
+// senderWithAuth is a sender carrying the credential store, which is the state the panel calls
+// "configured on egress".
+func senderWithAuth(creds *netauth.Credentials) *sender.SenderConfig {
+	c := sender.DefaultSenderConfig()
+	c.PlatformAuth = creds
+	return c
+}
+
+// The panel's "these rules are configured" claim covers the proxy leg as well as the sender, and the
+// two are separate answers because a Server can be assembled with one and not the other. Before
+// burpsy-react-ui-trcy the proxy never carried the store at all, so an operator's rules were stored,
+// the panel said so, and their browser's traffic went out unauthenticated.
+func TestThePanelReportsWhetherTheProxyLegCarriesTheCredentials(t *testing.T) {
+	store := core.NewTrafficStore()
+	creds := netauth.NewCredentials()
+	rule, err := netauth.NewCredential("intranet.example.com", netauth.SchemeBasic, "operator", "pw", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds.Add(rule)
+
+	// Both legs wired: the honest "configured" state.
+	both := networkServer().
+		WithNetAuth(creds, netauth.NewClientCerts()).
+		WithSender(sender.NewSender(senderWithAuth(creds))).
+		WithProxyServer(proxy.NewServer(proxy.NewProxyConfig(store).WithPlatformAuth(creds)))
+	rec := call(t, both, http.MethodGet, "/api/network/auth", "")
+	var view struct {
+		Rules             []netauth.CredentialView `json:"rules"`
+		PresentedOnEgress bool                     `json:"presented_on_egress"`
+		PresentedOnProxy  bool                     `json:"presented_on_proxy"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Rules) != 1 {
+		t.Fatalf("rules = %d, want 1: the panel would show an empty list while the store holds one", len(view.Rules))
+	}
+	if !view.PresentedOnEgress {
+		t.Error("presented_on_egress is false while the sender carries the store")
+	}
+	if !view.PresentedOnProxy {
+		t.Error("presented_on_proxy is false while the proxy carries the store: the panel would claim the rules are not presented for browser traffic when they are (burpsy-react-ui-trcy)")
+	}
+
+	// The pre-fix shape: a store with rules, and a proxy that never received it. This is the state
+	// the bead found, and the flag has to say so rather than reporting the sender's truth for both.
+	proxyOnly := networkServer().
+		WithNetAuth(creds, netauth.NewClientCerts()).
+		WithSender(sender.NewSender(senderWithAuth(creds))).
+		WithProxyServer(proxy.NewServer(proxy.NewProxyConfig(store)))
+	rec = call(t, proxyOnly, http.MethodGet, "/api/network/auth", "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if !view.PresentedOnEgress {
+		t.Error("presented_on_egress is false; the sender does carry the store")
+	}
+	if view.PresentedOnProxy {
+		t.Error("presented_on_proxy is true for a proxy that was never given the store: a flag that reports the sender's state for the proxy's is exactly the overclaim trcy records")
+	}
 }

@@ -162,9 +162,13 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/url"
+	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -210,9 +214,29 @@ type Scope interface {
 // Config configures one crawl. Zero-valued Limits and RequestsPerSecond take their defaults; the
 // collaborators are required and New says so rather than crawling with a piece missing.
 type Config struct {
-	// Seeds are the URLs the crawl starts from. At least one is required, and each must be an
-	// absolute http or https URL with a host.
+	// Seeds are the URLs the crawl starts from. At least one is required — unless SeedRequests is
+	// set — and each must be an absolute http or https URL with a host.
 	Seeds []string
+	// SeedRequests are concrete requests to send instead of, or beside, Seeds: a method, a URL, the
+	// headers belonging to that one request, and a body. They exist for the one caller whose attack
+	// surface is not a set of URLs — the API-only scan, whose definition names methods and bodies, so
+	// `DELETE /items/1` and `GET /items/1` are two endpoints of one path and cannot both be a URL.
+	//
+	// Only honoured when SeedsOnly is set, and refused by New otherwise rather than ignored: a plain
+	// crawl silently dropping the caller's method and body would send a GET at a path the operator
+	// meant to POST to, and nothing on screen would say so.
+	SeedRequests []SeedRequest
+	// SeedsOnly fetches exactly what Seeds and SeedRequests name and follows nothing: no robots.txt
+	// probe, no link or form extraction, no redirect traversal. See Run and perform.
+	//
+	// This is a different scan rather than a tighter bound on the same one. A crawl's job is
+	// discovery, so every mechanism that adds a request the operator did not name is a feature of it;
+	// an API-only scan's job is to send the endpoints a definition describes and audit the replies, so
+	// the same mechanisms are switched off rather than merely budgeted — a definition describing
+	// twelve operations should produce twelve requests and a report that says twelve, not twelve
+	// requests plus whatever a JSON response's embedded links happened to suggest. Report.SeedsOnly
+	// records which of the two ran, so a report can be read without knowing what was launched.
+	SeedsOnly bool
 	// Scope is the engagement scope. Required: a crawler with no scope gate is an SSRF engine that
 	// dials whatever the target names.
 	Scope Scope
@@ -239,8 +263,36 @@ type Config struct {
 	// SubmitForms turns form submission on (CRAWL-03). The zero value is off, and that is the
 	// requirement, not a default: a crawl that submits forms writes to the application.
 	SubmitForms bool
+	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
+	// candidate URLs are also mined from HTML comments and script bodies — the places
+	// single-page apps and comment-leaked admin paths live. Off by default is NOT a statement
+	// about the value — Burp ships the phase ON by default (1000 links) — it is because burpsy's
+	// default crawl has been narrower than the donor's until this lands, and an operator who
+	// never heard of the setting should get the behaviour they have always got. The wire field
+	// is the opt-in; the Burp-config key lands through the customization table.
+	RequestSpeculative bool
+	// The API-discovery switches (burpsy-react-ui-bwwg). Each corresponds to one Burp
+	// `crawler/customization/*` key and to one thing this crawler can now do with a definition it
+	// meets during a crawl.
+	//
+	// Defaulted ON, which is the opposite of RequestSpeculative above and for a different reason.
+	// There the phase sends requests nobody asked for, so it is opt-in. These READ a document the
+	// target already published and turn its own declared routes into crawl candidates — they cannot
+	// reach anything the crawl would not have reached through a link, and leaving them off by
+	// default would make the capability present but unreachable without a Burp config file, which is
+	// the "a feature nobody can find" shape Burp ships its defaults to avoid.
+	ParseAPIDefinitions         bool
+	ParseSOAPWSDLs              bool
+	PerformGraphQLIntrospection bool
+	GuessHiddenGraphQLEndpoints bool
 	// Limits bounds the crawl. See Limits and DefaultLimits.
 	Limits Limits
+	// ErrorHandling is what the crawl does about requests that FAIL, rather than only counting
+	// them (burpsy-react-ui-o0c5). The zero value means "the caller named none of these" and the
+	// engine's documented defaults apply — which is a DIFFERENT state from a family whose
+	// thresholds are all zero, which means never pause. That distinction is why every field is a
+	// pointer; see ErrorHandling.
+	ErrorHandling ErrorHandling
 	// RequestsPerSecond caps the request rate. Zero takes DefaultRequestsPerSecond.
 	RequestsPerSecond float64
 	// Pool is a resolved named resource pool's limits, or nil for this package's own defaults.
@@ -272,11 +324,176 @@ type Config struct {
 	// that the session is gone. Empty (the default) disables this signal and keeps the
 	// status-flip rule. Compiled in New; a malformed pattern is a construction error.
 	LoginPagePattern string
+	// OnFetch, when set, is called once for every fetch that reached the shared capture path, at the
+	// moment its exchange exists in the store — while the crawl is still running.
+	//
+	// It exists for one caller and one gap. Burp's crawl→audit bridge is per-URL and event-driven: a
+	// newly-reached URL is published to the audit bus as it is reached, so the audit of the first page
+	// overlaps the crawl of the twentieth. burpsy's caller audited Report.Fetches after Run returned,
+	// which made "crawl and audit" a crawl *then* an audit — the first finding of a twenty-minute
+	// crawl could not appear until minute twenty, and a crawl stopped at minute nineteen produced
+	// none at all. This callback is the smallest thing that closes that.
+	//
+	// It deliberately changes nothing the crawl counts: Report is built exactly as before, a nil
+	// callback is the previous behaviour to the byte, and the crawler learns nothing about auditing —
+	// it announces a fetch and the caller decides what that is worth. The alternative shape, pushing
+	// ids straight into the live sweep's queue, was rejected: the sweep walks store ids in order
+	// because an id is handed out at capture time and a later one can complete first, and auditing
+	// past that gap would skip a request still in flight.
+	//
+	// Two things a consumer must know. It runs synchronously on the crawl goroutine, so a callback
+	// that blocks throttles the crawl — take the id, hand it to a consumer, return. And the Fetch is
+	// a capture-time snapshot: URL, Method, Status, ExchangeID, Depth, FoundAt and LinkText are final,
+	// while Fingerprint, DuplicateOf and RetentionExcluded are decided on branches below this point
+	// and are zero here. The matching entry in Report.Fetches carries the completed record.
+	OnFetch func(Fetch)
+	// RequestWellKnown requests the standard .well-known documents once per seed authority
+	// (burpsy-react-ui-bc2x). Opt-in, like Katana's -kf: it adds seven requests per authority to every
+	// crawl, which changes what a crawl sends — a decision for the operator, not a silent default.
+	RequestWellKnown bool
+	// Render, when set, is how the crawler sees the DOM a browser builds: it returns the
+	// rendered document for a URL, and the crawler extracts links from it that the wire
+	// markup never carried (burpsy-react-ui-nx7b).
+	//
+	// Burp has this shape as browser-based navigation
+	// (crawler.customization.browser_based_navigation_mode), and the reason is the same
+	// here: a single-page application's routes and script-built hrefs are structurally
+	// invisible to a parser over the wire response, and a crawl that never sees them
+	// under-reports coverage while looking complete.
+	//
+	// The function is a hook rather than a *domexec.Browser for two reasons. The crawler
+	// must not depend on chromedp at the point of use — the same discipline that keeps
+	// BrowserProvider an interface on the scanner — and the caller owns the browser's
+	// lifetime: the web layer hands the crawl the same lazy provider the audit's DOM
+	// checks use, so one process runs one browser, not one per subsystem.
+	//
+	// Honesty rules the caller must know. A nil Render is the previous crawl to the byte —
+	// no skip is recorded, because nothing was declined. A non-nil Render that fails is
+	// SkipRenderUnavailable, counted and sampled like any other refusal, so a crawl whose
+	// browser died says so instead of quietly claiming the wire parse was the whole story.
+	// The rendered pass runs AFTER the static parse of the same response and admits only
+	// links the wire parse did not already carry; its discoveries count in LinksFound like
+	// any other link and are depth-bounded by the same frontier gates, and MaxLocations
+	// still bounds the crawl as a whole.
+	Render func(ctx context.Context, url string) (string, error)
+	// RenderWithOutcome is Render plus HOW the render ended. It is the optional form: a caller that
+	// only has Render is still wired, and a caller that supplies this one gets a capped page reported
+	// as capped rather than presented as an empty one (burpsy-react-ui-efra).
+	//
+	// A render that reaches its cap has read the DOM while the page was still changing, so whatever
+	// content it had not yet produced is MISSING rather than absent — and a crawl that counted it as
+	// an empty page reports an application as having fewer locations than it has. That is the
+	// confident wrong answer this field exists to prevent, and it is why RenderWithOutcome is
+	// preferred at every call site in this repository.
+	RenderWithOutcome func(ctx context.Context, url string) (string, RenderOutcome, error)
+	// RenderOptions tunes the wait. Zero-valued takes the package defaults, which are NON-ZERO: the
+	// floor of this feature is the fixed sleep the previous implementation used, so a crawl
+	// configured with nothing waits at least as long as it always did and no crawl gets slower.
+	RenderOptions RenderOptions
 	// MaxSkipRecords bounds the sampled refusal detail. Zero takes DefaultMaxSkipRecords; a negative
 	// value keeps counts only.
 	MaxSkipRecords int
 	// Logger is optional.
 	Logger *zap.Logger
+}
+
+// RenderOptions is what a render waits for before it reads the DOM. Mirrored rather than imported
+// from internal/domexec, because the crawler must not depend on chromedp at the point of use — the
+// same discipline that keeps the render a hook rather than a *domexec.Browser.
+type RenderOptions struct {
+	// DOMQuiet is how long the DOM must be UNCHANGED before the page counts as settled.
+	// Non-positive takes DefaultRenderDOMQuiet.
+	DOMQuiet time.Duration
+	// NetworkIdle is how long no request may be in flight before the page counts as settled.
+	// Non-positive takes DefaultRenderNetworkIdle.
+	NetworkIdle time.Duration
+	// MaxWait is the hard cap on the whole wait. Non-positive takes DefaultRenderMaxWait; without it
+	// a page that never goes quiet — a websocket, a polling dashboard — waits forever.
+	MaxWait time.Duration
+}
+
+// The render defaults, and why none of them is zero. The previous implementation slept a fixed
+// 300 ms, so that is the FLOOR this feature may not go below: a crawl configured with nothing must
+// wait at least as long as it always did. Zero would mean "read at the load event", which is the
+// defect (burpsy-react-ui-efra).
+const (
+	// DefaultRenderDOMQuiet is the settle window for the DOM.
+	//
+	// 300 ms, not shorter, and that is the floor rather than a preference: the implementation this
+	// replaces slept a fixed 300 ms before reading the DOM, so a crawl configured with nothing must
+	// not read the DOM EARLIER than it always did. The wait is now conditional — a page that settles
+	// early returns as soon as it does, so the common case is FASTER than the old fixed sleep and the
+	// 300 ms only applies to a page that keeps changing.
+	DefaultRenderDOMQuiet = 300 * time.Millisecond
+	// DefaultRenderNetworkIdle is the settle window for in-flight requests. Longer than the DOM
+	// window because a pending request is a stronger signal that something is coming.
+	DefaultRenderNetworkIdle = 500 * time.Millisecond
+	// DefaultRenderMaxWait caps the whole wait. Ten seconds is longer than any first paint an operator
+	// will sit through and short enough that a thousand-page crawl does not spend hours on the ones
+	// that never settle.
+	DefaultRenderMaxWait = 10 * time.Second
+)
+
+func (o RenderOptions) withDefaults() RenderOptions {
+	if o.DOMQuiet <= 0 {
+		o.DOMQuiet = DefaultRenderDOMQuiet
+	}
+	if o.NetworkIdle <= 0 {
+		o.NetworkIdle = DefaultRenderNetworkIdle
+	}
+	if o.MaxWait <= 0 {
+		o.MaxWait = DefaultRenderMaxWait
+	}
+	return o
+}
+
+// RenderOutcome says how a render ended.
+//
+// Settled and Capped are opposites on purpose: exactly one is true for a render that returned. A
+// caller that checks neither is assuming every page it rendered was complete, which is the claim that
+// makes a thin crawl look like a small application.
+type RenderOutcome struct {
+	// Settled reports that the page went quiet inside MaxWait.
+	Settled bool
+	// Capped reports that MaxWait was reached first, so the DOM was read while the page was still
+	// changing. What it did not have yet is missing, not absent.
+	Capped bool
+	// Waited is how long the render actually took.
+	Waited time.Duration
+	// Requests are the XHR/fetch requests the page issued while it rendered (burpsy-react-ui-hzzl).
+	Requests []RenderedRequest
+}
+
+// RenderedRequest is one request a rendered page issued at run time.
+type RenderedRequest struct {
+	URL    string
+	Method string
+}
+
+// SeedRequest is one concrete request a seeds-only run sends: what one operation of an API
+// definition reduces to.
+//
+// It carries a method, headers and a body rather than a URL, because those are the whole identity of
+// the endpoint. A URL is what a crawl starts from; a request is what a scan of a *described* API
+// starts from, and a described API's endpoints are distinguished by their verbs and their bodies.
+// The values themselves come from wherever the definition's schema or schema-free request line came
+// from (see internal/apidoc, which is the package that builds these).
+type SeedRequest struct {
+	// Method is the HTTP method. Empty means GET, which is what a definition that omits `method`
+	// means too.
+	Method string
+	// URL is the absolute request target, query string included.
+	URL string
+	// Headers are headers for this one request, on top of Config.Headers. Framing headers — Host,
+	// Content-Length, Content-Type — are refused at construction rather than written, because the
+	// request line and the body would disagree. See validateHeader.
+	Headers map[string]string
+	// Body, when non-empty, is sent with ContentType below and a computed Content-Length.
+	Body []byte
+	// ContentType is the body's media type. Empty with a non-empty Body sends no Content-Type at
+	// all, which is a request the target has to decide how to read — so callers give one whenever
+	// they can, and internal/apidoc always does when it synthesises a body.
+	ContentType string
 }
 
 // Fetch is one request the crawl actually sent, and what came back. The list of these is the "what
@@ -321,6 +538,12 @@ type Fetch struct {
 	// a link with no text. Carried because "which of the four links to /logout was followed" is not
 	// answerable from the URL alone, and because a rendering needs something to label an edge with.
 	LinkText string `json:"link_text,omitempty"`
+	// FoundByRender marks a fetch whose link existed only in the DOM a browser built for the
+	// page it was discovered on (Config.Render) — invisible to the wire markup the static parse
+	// read (nx7b). The crawl-paths edge carries it so an operator can see which of the crawl's
+	// edges a browser-less crawl would not have found at all, which is the honest shape of the
+	// coverage claim a rendered pass adds.
+	FoundByRender bool `json:"found_by_render,omitempty"`
 }
 
 // Report is one crawl's whole outcome.
@@ -330,8 +553,13 @@ type Fetch struct {
 // A caller can therefore always answer "what happened to the other ones", which is the property that
 // makes a crawl report readable as coverage rather than as a highlight reel.
 type Report struct {
-	// Seeds is what the crawl was pointed at.
+	// Seeds is what the crawl was pointed at. On a seeds-only run every SeedRequest's URL appears
+	// here too, so the field answers "what did this scan point at" for both scan kinds.
 	Seeds []string `json:"seeds"`
+	// SeedsOnly records that this run followed nothing: it fetched exactly the URLs it was given and
+	// stopped. Carried rather than inferred from the absence of links, because a crawl that found no
+	// links and a scan that never looked for any produce identical counts and are different runs.
+	SeedsOnly bool `json:"seeds_only,omitempty"`
 	// Query is the crawl-scope query as the operator wrote it, empty when there was none.
 	Query string `json:"query,omitempty"`
 	// RetentionQuery is the post-fetch traversal query as the operator wrote it.
@@ -339,6 +567,14 @@ type Report struct {
 	// FormSubmission records whether form submission was on (CRAWL-03), so a report cannot be read
 	// as "this application has no forms" when it means "forms were not submitted".
 	FormSubmission bool `json:"form_submission"`
+	// RequestSpeculative records whether the speculative-hidden-link phase ran
+	// (burpsy-react-ui-t5m0) — whether the crawl followed links mined from comments
+	// and script bodies at all.
+	RequestSpeculative bool `json:"request_speculative,omitempty"`
+	// SpeculativeAdmitted counts the speculative-phase candidates the crawl actually
+	// enqueued and therefore followed. Beside RequestSpeculative so a report says
+	// both "the phase ran" and "it followed N hidden links".
+	SpeculativeAdmitted int `json:"speculative_admitted,omitempty"`
 	// RobotsPolicy is the constant of the same name — carried, not implied.
 	RobotsPolicy string `json:"robots_policy"`
 	// Pool is the named resource pool this crawl ran under, empty when it ran under this package's
@@ -363,12 +599,75 @@ type Report struct {
 	// exceeded the capture bound. Its own member of the partition rather than folded into Failed:
 	// nothing failed, a bound was applied, and the two call for different responses from an operator.
 	NotCaptured int `json:"not_captured"`
+	// FollowUpRecovered counts requests that failed at the transport in the main pass and were fetched
+	// by a follow-up pass (o0c5). They are in Fetched, not Failed — the partition above still holds,
+	// each request counted once by how it ENDED — and this says how much coverage the retry bought.
+	FollowUpRecovered int `json:"follow_up_recovered,omitempty"`
 
 	// RobotsPathsFound counts paths taken from a robots.txt and offered to the frontier. Reported
 	// separately from LinksFound because they are a different kind of discovery: nothing linked to
 	// them, the target asked for them not to be visited, and that request was deliberately not
 	// honoured. An operator reviewing a crawl should be able to see how much of it came from there.
 	RobotsPathsFound int `json:"robots_paths_found"`
+	// SitemapsParsed counts sitemap documents read, and SitemapLocationsFound the URLs they named.
+	// Reported together because either alone is unreadable: a count of documents with no locations
+	// says the operator's target publishes empty sitemaps, and a count of locations with no documents
+	// says nothing about where they came from (burpsy-react-ui-qjtx).
+	SitemapsParsed        int `json:"sitemaps_parsed"`
+	SitemapLocationsFound int `json:"sitemap_locations_found"`
+	// JSONDocumentsRead counts JSON bodies scanned for locations, and JSONLocationsFound the
+	// locations they named (burpsy-react-ui-mz1n). Reported together for the same reason the
+	// sitemap pair is: documents with no locations and locations with no documents are
+	// different facts about a target, and one number cannot carry both.
+	JSONDocumentsRead  int `json:"json_documents_read"`
+	JSONLocationsFound int `json:"json_locations_found"`
+	// JavaScriptRead counts script responses read for locations, JavaScriptLocationsFound the
+	// candidates the two extractors produced before admit()'s gates (burpsy-react-ui-jwy5).
+	// JavaScriptParseFailures counts scripts the AST pass could not parse — the text miner still read
+	// them — and JavaScriptTruncated those read only up to MaxParseBytes.
+	JavaScriptRead           int `json:"javascript_read,omitempty"`
+	JavaScriptLocationsFound int `json:"javascript_locations_found,omitempty"`
+	JavaScriptParseFailures  int `json:"javascript_parse_failures,omitempty"`
+	JavaScriptTruncated      int `json:"javascript_truncated,omitempty"`
+	// RenderedRequestsAdmitted counts same-origin GET requests a rendered page issued at run time and
+	// that were admitted as locations; the other two count what was observed and deliberately not sent
+	// — a page's own non-GET requests, and requests to another origin (burpsy-react-ui-hzzl).
+	RenderedRequestsAdmitted    int `json:"rendered_requests_admitted,omitempty"`
+	RenderedRequestsNotGET      int `json:"rendered_requests_not_get,omitempty"`
+	RenderedRequestsOtherOrigin int `json:"rendered_requests_other_origin,omitempty"`
+	// APIDocumentsRead counts API definitions (OpenAPI, Swagger, WSDL) the crawl read, and
+	// APIEndpointsFound the operations they declared (burpsy-react-ui-bwwg). Reported as a pair for
+	// the same reason the JSON pair is: a definition read is not a definition understood, and a
+	// report carrying only the first would read as success.
+	APIDocumentsRead  int `json:"api_documents_read,omitempty"`
+	APIEndpointsFound int `json:"api_endpoints_found,omitempty"`
+	// SourceMapsFetched counts the source maps this crawl fetched (burpsy-react-ui-jwy5). Reported so
+	// an operator can see that the map pass ran and found something, which is otherwise invisible: a
+	// .map is an artifact of a bundle, not a location, so it never appears in the location counts.
+	SourceMapsFetched int `json:"source_maps_fetched,omitempty"`
+	// Phases counts locations admitted, by the phase that produced them
+	// (burpsy-react-ui-hbjo). Every phase is present with a zero rather than only the ones that
+	// fired, so a reader can tell "this crawl never reached the rendered pass" from "this crawl has no
+	// rendered pass", and the numbers sum to the discovered total because an unrecognised tag is
+	// counted under PhaseNone rather than dropped.
+	Phases map[CrawlPhase]int `json:"phases,omitempty"`
+	// SitemapSeeded counts requests this crawl did not make because the site map already held that
+	// exact request (burpsy-react-ui-z8qf). Zero for a crawl seeded from nothing, which is the
+	// common case and the one that must not read as a failure.
+	//
+	// Deliberately separate from the request and location counts: a seeded request is one this crawl
+	// declined to make, and folding it into either of those would either inflate what the crawl did
+	// or hide what it saved.
+	SitemapSeeded int `json:"sitemap_seeded"`
+	// GraphQLEndpointsFound counts the operations a GraphQL introspection answer declared. Beside
+	// APIEndpointsFound rather than folded into it, because a GraphQL operation is a FIELD on one
+	// endpoint's type rather than a path of its own, and counting them together would hide which
+	// surface they came from.
+	GraphQLEndpointsFound int `json:"graphql_endpoints_found,omitempty"`
+	// SitemapIndexesFollowed counts <sitemapindex> documents whose entries were themselves sitemaps.
+	// A large site publishes a handful of sitemaps pointing at the rest, so this is the difference
+	// between "read one file" and "read the list the operator published".
+	SitemapIndexesFollowed int `json:"sitemap_indexes_followed"`
 	// HeadersWithheld counts requests sent without Config.Headers because their origin was not one the
 	// operator seeded. Non-zero means the crawl left the origins it was given credentials for, so any
 	// "nothing found" beyond that point is unauthenticated coverage rather than a clean result — which
@@ -391,8 +690,60 @@ type Report struct {
 	Skips SkipReport `json:"skips"`
 	// Limits says which bounds were hit and how many URLs went unfetched (CRAWL-07).
 	Limits LimitReport `json:"limits"`
+	// LocationFolds counts responses recognised as a known location by the TOLERANCE BAND rather
+	// than by exact fingerprint equality (burpsy-react-ui-9x67, location_band.go). Reported beside
+	// DuplicateLocations, and not folded into it, because it is the only number that says how much
+	// of the crawl's location count rests on a tolerance: a report claiming 300 locations where 120
+	// were folded by a band of 2 is making a coverage claim a reader cannot audit from
+	// `locations` alone, and this is where they learn it.
+	//
+	// Always a subset of DuplicateLocations, and it counts an actual loss of a second traversal
+	// rather than a guess at one: a folded page's links were NOT queued again, so this is the
+	// number of pages the band kept out of the frontier.
+	LocationFolds int `json:"location_folds,omitempty"`
+	// RenderedAudit is the browser's second look over the crawl's locations (burpsy-react-ui-xuim):
+	// which distinct locations were rendered in a headless browser, and at how many of them the
+	// page's own script produced content the wire response never contained. Nil when the pass did
+	// not run — no browser configured — which the crawl reports through Skips
+	// (SkipRenderUnavailable) rather than through this block, so a missing block is never
+	// mistaken for a pass that found nothing.
+	RenderedAudit *RenderedAuditReport `json:"rendered_audit,omitempty"`
 	// Elapsed is the crawl's wall-clock duration.
 	Elapsed time.Duration `json:"elapsed"`
+}
+
+// RenderedAuditReport is what the rendered-DOM audit over a crawl's locations managed to do
+// (burpsy-react-ui-xuim). The counters are the StoredDOMRenderOutcome shape, because the two
+// passes answer the same question over different inputs — "what did a browser see that the
+// HTTP pass did not" — and an operator reading both reports should not have to learn two
+// vocabularies for it.
+type RenderedAuditReport struct {
+	// Candidates is how many distinct location URLs existed to render.
+	Candidates int `json:"candidates"`
+	// NoScript is how many were skipped because their wire response carries no script: a page
+	// with no script renders to what it already was, so a browser cannot reveal anything new.
+	NoScript int `json:"no_script"`
+	// Capped is how many were dropped by MaxRenderedLocations and never looked at.
+	Capped int `json:"capped"`
+	// Rendered is how many pages were loaded in a browser.
+	Rendered int `json:"rendered"`
+	// Failed is how many could not be loaded.
+	Failed int `json:"failed"`
+	// ScriptOnly is how many rendered pages carried content the wire response never contained —
+	// the finding: content that exists only after the page's script runs is invisible to every
+	// wire-bytes check, including the crawl's own audit.
+	ScriptOnly int `json:"script_only"`
+	// Declined explains a pass that did not run for a reason that is not an error.
+	Declined string `json:"declined,omitempty"`
+}
+
+// Summary renders the outcome in the vocabulary a report can print.
+func (r RenderedAuditReport) Summary() string {
+	if r.Declined != "" {
+		return "no rendered-DOM audit: " + r.Declined
+	}
+	return fmt.Sprintf("%d of %d location(s) rendered in a browser, %d with content the wire response never carried",
+		r.Rendered, r.Candidates, r.ScriptOnly)
 }
 
 // Complete reports whether the crawl exhausted its frontier without hitting a bound. False means the
@@ -410,12 +761,19 @@ func (r Report) Summary() string {
 	if r.FormSubmission {
 		forms = "on"
 	}
+	// The location clause says how much of the count rests on a tolerance rather than on exact
+	// identity, because that is the number a reader cannot otherwise audit: `locations` alone reads
+	// as 300 distinct pages whether or not 120 of them were recognised by a band. Only stated when
+	// non-zero — a crawl that folded nothing has nothing to disclaim.
+	locs := fmt.Sprintf("%d locations (%d duplicate)", r.Locations, r.DuplicateLocations)
+	if r.LocationFolds > 0 {
+		locs += fmt.Sprintf(", %d of the duplicates by the location tolerance band", r.LocationFolds)
+	}
 	s := fmt.Sprintf(
-		"crawled %d URLs in %s: %d locations (%d duplicate), %d links and %d forms found, %d forms submitted (submission %s), %d refused by scope, %d failed to send; %s",
+		"crawled %d URLs in %s: %s, %d links and %d forms found, %d forms submitted (submission %s), %d refused by scope, %d failed to send; %s",
 		r.Fetched,
 		r.Elapsed.Round(time.Millisecond),
-		r.Locations,
-		r.DuplicateLocations,
+		locs,
 		r.LinksFound,
 		r.FormsFound,
 		r.FormsSubmitted,
@@ -434,10 +792,16 @@ func (r Report) Summary() string {
 type frontierItem struct {
 	url    *url.URL
 	method string
-	// body and contentType are set for a form submission, empty otherwise.
+	// body and contentType are set for a form submission and for a seeds-only request, empty
+	// otherwise.
 	body        []byte
 	contentType string
-	depth       int
+	// headers are per-request headers on top of Config.Headers, set only by admitSeedRequest. Kept
+	// on the item rather than folded into Config.Headers because they belong to one request: an API
+	// definition's declared header parameter is that operation's, and putting it in Config.Headers
+	// would send it on every other operation's request as well.
+	headers map[string]string
+	depth   int
 	// foundAt is the URL of the page this was discovered on, empty for a seed. Reporting only.
 	foundAt string
 	// text is the link text or form label, for reporting a later refusal against the right label.
@@ -449,6 +813,22 @@ type frontierItem struct {
 	// an ordinary item — same rate limit, same scope gate, same capture — and differs only in that its
 	// body is read as a path list instead of as markup. See seedFromRobots.
 	robots bool
+	// renderedOrigin marks an item whose link existed only in the DOM a browser built for the
+	// page it came from (Config.Render) — invisible to the wire markup the static parse read
+	// (nx7b). Carried to the Fetch edge so the crawl paths can say which edges a browser-less
+	// crawl would not have found at all.
+	renderedOrigin bool
+	// tag is the element the item was discovered from — "a", "img", "script", "form", "sitemap",
+	// "api:openapi", and so on. Carried onto the item because the scope gate has to distinguish a
+	// SUBRESOURCE refusal from a navigational one (burpsy-react-ui-hgor), and the tag is the only
+	// thing that says which it was. Empty for a seed, which is what a seed is: something the operator
+	// named rather than something a page carried.
+	tag string
+	// speculative marks an item the speculative-hidden-link phase mined from a comment or
+	// script body (burpsy-react-ui-t5m0). It passes every gate a navigational link passes;
+	// the flag exists so the crawl-wide cap can count it and the report can say how many
+	// hidden links the crawl followed.
+	speculative bool
 }
 
 // Crawler runs one crawl. Not safe for concurrent Run calls: the frontier, the seen sets and the
@@ -456,12 +836,41 @@ type frontierItem struct {
 type Crawler struct {
 	cfg    Config
 	limits Limits
+	// suiteGate blocks while the dashboard's suite-wide pause is set. A plain func rather than a
+	// *dash.Registry so this package keeps not importing the dashboard: the crawl engine has no
+	// business knowing what a task row is, and the caller that owns both can hand the two together.
+	// Nil means unpaced, which is what every caller outside the web layer is.
+	suiteGate func(context.Context)
+	// eh is the resolved error-handling policy: what this crawl does about requests that fail rather
+	// than only counting them (burpsy-react-ui-o0c5). Resolved once in New, so every reader sees the
+	// same set and a threshold cannot differ between the pass that trips it and the report that
+	// names it.
+	eh ErrorHandling
+	// followUp is the set of requests that ended in a transport failure, kept for the follow-up pass.
+	// Per-crawl, not per-run, and drained pass by pass so a request that fails twice is retried on
+	// the NEXT pass rather than twice in the same one.
+	followUp []frontierItem
+	// The three running counters the pause thresholds read (o0c5). Per-crawl, and reset by any
+	// success — a threshold is about CONSECUTIVE failures, and a counter that only ever went up would
+	// be a lifetime total, which is a different policy and a much more trigger-happy one.
+	consecutiveTimeouts     int
+	consecutiveAuthFailures int
+	timeouts                int
+	// speculativeAdmitted counts the speculative-phase links actually enqueued (burpsy-react-ui-t5m0).
+	// Counted at admission, after every other gate has passed, so the cap bounds what the crawl
+	// FOLLOWS — not what it saw. Refusals at the cap are SkipSpeculativeLimit, and the stop is
+	// StopSpeculativeLinks.
+	speculativeAdmitted int
 	// query is the parsed crawl-scope query (DSL-03), nil when the operator gave none. Parsed once in
 	// New, so a malformed query is a construction error and never a per-URL surprise.
 	query *query.Expr
 	// seedURLs are the validated, absolute seeds. Held parsed rather than re-parsed per Run, because
 	// New has already rejected everything wrong with them.
 	seedURLs []*url.URL
+	// seedRequests are the validated SeedRequests as frontier items, admitted by Run in place of the
+	// seed loop when SeedsOnly is set. Built here for the same reason seedURLs is: New is where a
+	// malformed method, URL or header gets refused, so Run has nothing left to validate.
+	seedRequests []frontierItem
 	// retention is the parsed post-fetch query (DSL-03 gate b), nil when the operator gave none.
 	retention *query.Expr
 	// limiter is the aggregate rate cap; hostLimiters holds one per authority. See visit for why both.
@@ -485,7 +894,31 @@ type Crawler struct {
 	// senders caches one AuthorisedSender per origin. Cached because AuthorisedSender counts its own
 	// sends and refusals per target, and building a fresh one per request would throw those counters
 	// away — they are the crawler's cross-check that its own Refused count matches the chokepoint's.
-	senders map[string]*sender.AuthorisedSender
+	// graphqlAnswer receives the body of a response that was captured for an introspection query, and
+	// returns the operations to admit from it.
+	//
+	// A HOOK rather than a second send, and that is the whole point: perform() already has the bytes
+	// in hand after capture, so a reader that wanted them has to be given them here or it has to ask
+	// the target again. Asking again would double the traffic for one fact, and would make the second
+	// request the one whose answer differed from the first — a schema that changed mid-crawl would
+	// then be reported as whatever the second request saw. nil means nobody asked, which is every
+	// crawl that is not looking for GraphQL.
+	graphqlAnswer func(u *url.URL, body []byte) []APIDocEndpoint
+	// guessedGraphQL records the guessed paths already probed, so a host is probed once per path
+	// rather than once per page that happens to sit on it.
+	guessedGraphQL map[string]bool
+	// introspected records the URLs already introspected, so an endpoint reached from five
+	// pages is asked once rather than five times.
+	introspected map[string]bool
+	// formSubmissions counts submissions per FORM SIGNATURE, for the per-form cap
+	// (burpsy-react-ui-u0k3). Bounded in use by the cap itself: an entry is created only when a form is
+	// actually submitted, and that form is never submitted again once the cap is reached, so the map
+	// grows with the number of DISTINCT forms submitted rather than with the number of submissions.
+	formSubmissions map[string]int
+	// guessHiddenGraphQL is the armed state of the guess, as opposed to guessedGraphQL which is
+	// the set of paths already probed. Two names because one is a switch and one is a ledger.
+	guessHiddenGraphQL bool
+	senders            map[string]*sender.AuthorisedSender
 
 	// credentialOrigins are the origins Config.Headers may be sent to: the seeds' own origins, and
 	// nothing else. Keyed by originKey, so scheme, host and port all have to match.
@@ -514,12 +947,27 @@ type Crawler struct {
 	// that grows for the whole crawl and never shrinks, and it is bounded by Limits.MaxFingerprints —
 	// stated rather than left at the MaxFrontier + MaxRequests it worked out to before, since a
 	// derivative bound moves whenever either of those does and nothing reported it.
-	queued    map[string]bool
-	locations map[string]string
+	queued map[string]bool
+	// locations maps one exact location fingerprint to where it was first seen, plus the link
+	// targets the tolerance band compares against. The extra fields are the band's price and
+	// nothing else: only recordStructuredLocation writes an entry with targets, and only it reads
+	// them.
+	locations map[string]locationEntry
+	// locationShapes indexes locations by their shape digest — skeleton, form signatures and text
+	// bucket, everything but the link targets — so the tolerance band compares a candidate only
+	// against locations that share its shape. Bounded by the same MaxFingerprints the location map
+	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
+	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
+	locationShapes map[string][]string
 	// templates counts fetches admitted per URL template, for the quota. Bounded by
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
 	templates map[string]int
+	// sitemapSeeded counts the requests pre-marked from the site map (burpsy-react-ui-z8qf).
+	// Reported rather than assumed: a seeding feature whose saving nobody can see is one nobody
+	// can tell is working. See sitemap_seed.go for what is seeded and — the more important half —
+	// what deliberately is not.
+	sitemapSeeded int
 	// templateOK remembers the URL templates this crawl has seen return 200, so the session
 	// expiry detector can tell a template that flipped from one that simply never worked. Set at
 	// most per template, like the quota table; an entry is removed when a template stops matching.
@@ -531,6 +979,8 @@ type Crawler struct {
 	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
 	// in New so a malformed pattern is a construction error, never a per-URL surprise.
 	loginPage *regexp.Regexp
+	// wellKnownSeeded records the authorities whose .well-known documents were admitted (bc2x).
+	wellKnownSeeded map[string]bool
 	// robotsSeeded records the authorities whose robots.txt has already been read, so it is read once
 	// per authority and never in a loop.
 	robotsSeeded map[string]bool
@@ -543,8 +993,11 @@ type Crawler struct {
 // field a frontier URL does not have, a header that would split a request. A crawl that started and
 // then reported those as per-URL skips would bury an operator's typo in a refusal ledger.
 func New(cfg Config) (*Crawler, error) {
-	if len(cfg.Seeds) == 0 {
+	if len(cfg.Seeds) == 0 && len(cfg.SeedRequests) == 0 {
 		return nil, fmt.Errorf("a crawl needs at least one seed URL")
+	}
+	if len(cfg.SeedRequests) > 0 && !cfg.SeedsOnly {
+		return nil, fmt.Errorf("SeedRequests was set without SeedsOnly: a crawl that follows links does not know what to do with a method, a body or a per-request header, so it would send a GET at a path meant for a POST. Set SeedsOnly, or pass the URLs as Seeds")
 	}
 	if cfg.Scope == nil {
 		return nil, fmt.Errorf("a crawl needs a scope: without one the crawler dials whatever the target names, which is an SSRF engine and not a crawler")
@@ -577,6 +1030,52 @@ func New(cfg Config) (*Crawler, error) {
 			u.Path = "/"
 		}
 		seeds = append(seeds, u)
+	}
+
+	// SeedRequests become frontier items here, and their URLs join the seed *set*: credentialOrigins,
+	// the robots decision and Report.Seeds all key off "the URLs the operator named", and a request
+	// the operator named is one of those. Validated to exactly the standard a seed URL is, because a
+	// definition is input like any other — the fact that it arrived as a file rather than as a typed
+	// URL changes nothing about what a request built from it may contain.
+	seedRequests := make([]frontierItem, 0, len(cfg.SeedRequests))
+	for i, req := range cfg.SeedRequests {
+		method := strings.ToUpper(strings.TrimSpace(req.Method))
+		if method == "" {
+			method = "GET"
+		}
+		label := fmt.Sprintf("request %d (%s %s)", i+1, method, req.URL)
+		u, err := url.Parse(strings.TrimSpace(req.URL))
+		if err != nil {
+			return nil, fmt.Errorf("%s is not a URL: %w", label, err)
+		}
+		if !supportedScheme(u.Scheme) {
+			return nil, fmt.Errorf("%s has scheme %q; a scan can only send http or https", label, u.Scheme)
+		}
+		if u.Host == "" {
+			return nil, fmt.Errorf("%s has no host", label)
+		}
+		if u.User != nil {
+			return nil, fmt.Errorf("%s embeds credentials in the URL; put them in Config.Headers or the request's own Headers", label)
+		}
+		u.Fragment = ""
+		u.RawFragment = ""
+		if u.Path == "" {
+			u.Path = "/"
+		}
+		for name, value := range req.Headers {
+			if err := validateHeader(name, value); err != nil {
+				return nil, fmt.Errorf("%s: %w", label, err)
+			}
+		}
+		if len(req.Body) > 0 && req.ContentType == "" {
+			return nil, fmt.Errorf("%s carries a %d-byte body with no Content-Type; a target has no way to know how to read it", label, len(req.Body))
+		}
+		seeds = append(seeds, u)
+		cfg.Seeds = append(cfg.Seeds, u.String())
+		seedRequests = append(seedRequests, frontierItem{
+			url: u, method: method, depth: 0,
+			body: req.Body, contentType: req.ContentType, headers: req.Headers,
+		})
 	}
 
 	var expr *query.Expr
@@ -675,7 +1174,11 @@ func New(cfg Config) (*Crawler, error) {
 	c := &Crawler{
 		cfg:    cfg,
 		limits: cfg.Limits.normalise(),
-		query:  expr,
+		// Resolved ONCE, here, so the pass that trips a threshold and the report that names it read
+		// the same numbers. A zero ErrorHandling is filled from the defaults; a family the caller
+		// populated — including one it filled with zeros, meaning never pause — is left alone.
+		eh:    cfg.ErrorHandling.resolved(),
+		query: expr,
 		// MaxInFlight of 1 states the sequential loop as a bound rather than accepting an in-flight
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
@@ -690,7 +1193,8 @@ func New(cfg Config) (*Crawler, error) {
 		// computed from the same parse the requests are.
 		credentialOrigins: make(map[string]bool),
 		queued:            make(map[string]bool),
-		locations:         make(map[string]string),
+		locations:         make(map[string]locationEntry),
+		locationShapes:    make(map[string][]string),
 		templates:         make(map[string]int),
 		templateOK:        make(map[string]bool),
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
@@ -708,10 +1212,31 @@ func New(cfg Config) (*Crawler, error) {
 	// are recorded on the report's LimitReport through the same counters, so a seed refused by scope
 	// is visible rather than a crawl that mysteriously fetched nothing.
 	c.seedURLs = seeds
+	c.seedRequests = seedRequests
 	// Config.Headers travel only to the origins the operator seeded. Recorded here, from the parsed
 	// seeds, so the key is computed by the same function that keys the outgoing request.
 	for _, s := range seeds {
 		c.credentialOrigins[originKey(s)] = true
+	}
+
+	// The two GraphQL bookkeeping sets, always present. Unconditional rather than armed with the
+	// reader: a nil map here panics on assignment the first time a crawl reaches a GraphQL envelope,
+	// and a panic is a worse answer than an empty crawl.
+	if c.guessedGraphQL == nil {
+		c.guessedGraphQL = map[string]bool{}
+	}
+	if c.introspected == nil {
+		c.introspected = map[string]bool{}
+	}
+	if c.formSubmissions == nil {
+		c.formSubmissions = map[string]int{}
+	}
+
+	// The GraphQL reader, armed only if the operator's configuration asks for it. Here rather than at
+	// each use, so there is exactly ONE place that decides whether this crawl will send a POST of its
+	// own initiative — and so the answer is visible in one glance rather than spread across the reader.
+	if cfg.PerformGraphQLIntrospection || cfg.GuessHiddenGraphQLEndpoints {
+		c.armGraphQL()
 	}
 	return c, nil
 }
@@ -773,31 +1298,79 @@ func supportedScheme(scheme string) bool {
 // and everything that can stop the crawl is a recorded stop, so there is no failure left that a
 // single error value would describe better than the report does. Configuration errors were already
 // returned by New.
+// WithSuiteGate attaches the dashboard's suite-wide pause. The crawl calls it between fetches;
+// nil, the default, is a crawl nothing can pause but its own context.
+func (c *Crawler) WithSuiteGate(gate func(context.Context)) *Crawler {
+	c.suiteGate = gate
+	return c
+}
+
+// WithTaskID stamps every exchange and finding this crawl captures with the registry task that owns
+// it, returning the crawler so it reads as part of a construction chain.
+//
+// A method rather than a Config field because of an ordering constraint that cannot be removed: the
+// id is handed out when the task is registered, and the config is built *before* that, so a
+// configuration mistake is a refusal the operator can fix rather than a task that appears only to
+// fail. Config.Capture.TaskID therefore cannot be set by the caller that knows the id, and the only
+// alternative would be for every crawl caller to rebuild the whole config after registering.
+//
+// Nothing here is crawler-specific — it writes Config.Capture.TaskID, which scanner.Capture already
+// documented as the one place a surface states whose run its traffic belongs to. Without it a crawl's
+// exchanges are indistinguishable from the operator's own browsing, and "audit what I just crawled"
+// has to be answered by guessing from timestamps.
+func (c *Crawler) WithTaskID(id uint64) *Crawler {
+	c.cfg.Capture.TaskID = id
+	return c
+}
+
 func (c *Crawler) Run(ctx context.Context) Report {
 	started := time.Now()
 	rep := Report{
-		Seeds:          c.cfg.Seeds,
-		Query:          c.cfg.Query,
-		RetentionQuery: c.cfg.RetentionQuery,
-		FormSubmission: c.cfg.SubmitForms,
-		RobotsPolicy:   RobotsPolicy,
+		Seeds:              c.cfg.Seeds,
+		SeedsOnly:          c.cfg.SeedsOnly,
+		Query:              c.cfg.Query,
+		RetentionQuery:     c.cfg.RetentionQuery,
+		FormSubmission:     c.cfg.SubmitForms,
+		RequestSpeculative: c.cfg.RequestSpeculative,
+		RobotsPolicy:       RobotsPolicy,
 		// Both from the crawler rather than from cfg, so what is reported is the pool the limiters
 		// were actually built from and not the pool the caller meant to pass.
 		Pool:            c.poolName,
 		PoolConcurrency: c.poolConcurrency,
+		// The count is on the Crawler rather than only the Report, because SeedFromSiteMap is called
+		// by a caller that may run before Run (burpsy-react-ui-z8qf) and a report that only learned
+		// of it at Run time would report a seed it did not cause.
+		SitemapSeeded: c.sitemapSeeded,
 	}
 	lim := LimitReport{Limits: c.limits}
 
-	for _, u := range c.seedURLs {
-		c.admitSeed(u, &lim)
-	}
-	// One robots.txt per seed authority, queued behind the seeds so the operator's own starting points
-	// are fetched first. Not honoured as a restriction — read as a list of paths the target would
-	// rather nobody looked at. See the package docs.
-	for _, u := range c.seedURLs {
-		c.admitRobots(u, &lim)
+	if c.cfg.SeedsOnly {
+		// The definition is the attack surface, so the frontier starts as the definition's endpoints
+		// and — because perform returns before link extraction — stays that. No robots.txt: the probe
+		// is a request nobody described, which is the thing this mode exists to exclude.
+		for _, item := range c.seedRequests {
+			c.admitSeedRequest(item, &lim)
+		}
+	} else {
+		for _, u := range c.seedURLs {
+			c.admitSeed(u, &lim)
+		}
+		// One robots.txt per seed authority, queued behind the seeds so the operator's own starting
+		// points are fetched first. Not honoured as a restriction — read as a list of paths the target
+		// would rather nobody looked at. See the package docs.
+		for _, u := range c.seedURLs {
+			c.admitRobots(u, &lim)
+		}
+		// The standard .well-known documents, once per seed authority (burpsy-react-ui-bc2x).
+		if c.cfg.RequestWellKnown {
+			for _, u := range c.seedURLs {
+				c.admitWellKnown(u, &rep, &lim)
+			}
+		}
 	}
 
+	// pausedByPolicy is set when the error-handling thresholds end the crawl (o0c5).
+	pausedByPolicy := false
 	for {
 		// Frontier-empty is tested before every bound, so a crawl that fetched exactly its request
 		// budget and had nothing left to do reports as complete rather than as truncated. A bound is
@@ -808,6 +1381,13 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		if err := ctx.Err(); err != nil {
 			lim.record(StopCancelled)
 			break
+		}
+		// The dashboard's "Pause all tasks", between fetches (burpsy-react-ui-cijs). Held here
+		// rather than inside a fetch so the request in flight always completes and is recorded
+		// whole — the same placement the sequencer's capture loop uses. Cancellation stays senior:
+		// GateCheck answers ctx.Done, and the ctx.Err above runs on the next turn of the loop.
+		if c.suiteGate != nil {
+			c.suiteGate(ctx)
 		}
 		if rep.Fetched >= c.limits.MaxRequests {
 			lim.record(StopRequestBudget)
@@ -825,6 +1405,34 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		item := c.frontier[0]
 		c.frontier = c.frontier[1:]
 		c.visit(ctx, item, &rep, &lim)
+		// One GraphQL probe pass per origin, after the origin's first page has been fetched. After,
+		// not before, because a probe is a request and the crawl's own coverage claim is better
+		// served by reaching a page the operator seeded first; and keyed on the origin rather than
+		// the URL so a site with two hundred pages is probed four times, not eight hundred.
+		if c.guessHiddenGraphQL {
+			c.guessGraphQL(ctx, item.url, &rep, &lim)
+		}
+		// The operator's error-handling policy (o0c5), checked after every visit: a target that keeps
+		// timing out, or keeps rejecting the session, ends the crawl with a NAMED stop rather than the
+		// crawl grinding through the rest of its budget against it.
+		if c.checkPauseThresholds(&rep, &lim) {
+			pausedByPolicy = true
+			break
+		}
+	}
+
+	// The follow-up pass, run after the main loop and before the report is assembled, so the counts
+	// it produces are the counts the report carries (o0c5).
+	//
+	// AFTER, not during: a follow-up pass is defined as re-issuing what the crawl FAILED to fetch,
+	// and the crawl does not know which requests those are until it has tried them all. Retrying
+	// inside the loop would also spend the request budget twice per request, which is the one thing a
+	// bound on cost must not do.
+	//
+	// Not after a policy pause: the policy just said this target is timing out or rejecting the
+	// session, and retrying its failures is exactly the traffic the operator configured it to stop.
+	if !pausedByPolicy {
+		c.runFollowUpPasses(ctx, &rep, &lim)
 	}
 
 	lim.FrontierRemaining = len(c.frontier)
@@ -840,7 +1448,259 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	rep.HeadersWithheld = c.headersWithheld
 	rep.Limits = lim
 	rep.Skips = c.skips.Snapshot()
+	rep.SpeculativeAdmitted = c.speculativeAdmitted
 	return rep
+}
+
+// runFollowUpPasses re-issues the requests that ended in a transport failure, up to the configured
+// count (burpsy-react-ui-o0c5).
+//
+// Through the ordinary perform path, deliberately: a retried request is captured, scanned and
+// traversed exactly like a first attempt, so a flaky endpoint that answers on the second try
+// contributes its links like any other. A retry that bypassed perform would re-send the bytes and
+// discard the answer, which recovers a status code and no coverage — the opposite of the point.
+//
+// Bounded twice, and the second bound is the one that matters: at most FollowUpPasses extra attempts
+// per request, and never more than MaxRequests sends in total, because a follow-up pass spends the
+// SAME request budget the main pass spent. A crawl that retried without that second bound would send
+// up to 2x its stated maximum, which is the one way a retry feature can make a tool cost more than
+// the operator agreed to.
+//
+// A request that fails again stays in the set, so a later pass retries it again — a target that is
+// down for the whole crawl ends with a report naming every one of its failures rather than a single
+// mention per pass.
+func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *LimitReport) {
+	passes := c.eh.followUpPasses()
+	if passes <= 0 || len(c.followUp) == 0 {
+		return
+	}
+	// The budget is rep.Fetched against MaxRequests — the SAME measure the main loop stops on. It was
+	// lim.Requests, which is assigned once after the loop and reads zero for the whole crawl, so a
+	// follow-up pass could spend a second full request budget on top of the first: the one way a
+	// retry feature makes a tool cost more than the operator agreed to.
+	for pass := 0; pass < passes; pass++ {
+		if len(c.followUp) == 0 {
+			break
+		}
+		// Cancellation is honoured between passes, and a cancelled retry stops the whole family:
+		// a caller who pressed stop is not asking for the requests that already failed either.
+		if ctx.Err() != nil {
+			lim.record(StopFollowUpCancelled)
+			return
+		}
+		// A fresh slice, not c.followUp[:0]: a request that fails again is appended to c.followUp
+		// while this pass is still iterating, and appending into the same backing array would
+		// overwrite the requests this pass has not reached yet.
+		remaining := c.followUp
+		c.followUp = nil
+		for i, item := range remaining {
+			if ctx.Err() != nil {
+				c.followUp = append(c.followUp, remaining[i:]...)
+				lim.record(StopFollowUpCancelled)
+				return
+			}
+			if rep.Fetched >= c.limits.MaxRequests {
+				// Put BACK rather than dropped: it failed and this crawl was not allowed to try again,
+				// so it belongs in the report as an untried request rather than vanish.
+				c.followUp = append(c.followUp, remaining[i:]...)
+				lim.record(StopFollowUpBudget)
+				return
+			}
+			// Failed counts requests that ENDED failed, not attempts: the earlier failure is withdrawn
+			// before the retry, and perform counts it again only if the retry fails too. Without this a
+			// recovered request would stay in Failed and Fetched at once.
+			rep.Failed--
+			fetchedBefore := rep.Fetched
+			c.perform(ctx, item, c.buildRequest(item), rep, lim)
+			if rep.Fetched > fetchedBefore {
+				rep.FollowUpRecovered++
+			}
+			// The policy holds during a follow-up pass too: retrying a host that has started timing out
+			// again is the traffic the operator configured the crawl to stop.
+			if c.checkPauseThresholds(rep, lim) {
+				c.followUp = append(c.followUp, remaining[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// noteTransportFailure records a send that never came back, for the follow-up pass, and advances the
+// timeout counters the pause thresholds read (o0c5).
+//
+// The two are one function because they happen at the same moment: a failure is both something to
+// retry and something that counts toward "this target keeps timing out". Splitting them would let a
+// caller wire one without the other, and the half that retries is the half an operator notices.
+//
+// Only a TIMEOUT extends the consecutive streak; a refused connection or reset breaks it, because
+// Burp's threshold is about a target that has stopped answering, not one that answers "no".
+func (c *Crawler) noteTransportFailure(item frontierItem, timedOut bool) {
+	c.followUp = append(c.followUp, item)
+	if timedOut {
+		c.timeouts++
+		c.consecutiveTimeouts++
+		return
+	}
+	c.consecutiveTimeouts = 0
+}
+
+// noteSent records a send that came back with a response, whatever its status: the target answered,
+// so the consecutive-timeout streak is over.
+func (c *Crawler) noteSent() { c.consecutiveTimeouts = 0 }
+
+// noteAuth records the outcome of restoring an expired session: a failed re-login extends the
+// consecutive authentication-failure streak, a successful one ends it.
+func (c *Crawler) noteAuth(ok bool) {
+	if ok {
+		c.consecutiveAuthFailures = 0
+		return
+	}
+	c.consecutiveAuthFailures++
+}
+
+// isTimeout reports whether a send failed because it ran out of time — a dial, read or overall
+// deadline — as opposed to being refused or reset.
+func isTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
+// checkPauseThresholds trips the crawl's pause policy, returning true when the crawl must stop.
+//
+// A DISTINCT stop per threshold rather than one "paused" reason, because an operator reading
+// "paused" cannot tell whether the target is slow, refusing, or rejecting their credentials, and
+// those three call for three different responses.
+func (c *Crawler) checkPauseThresholds(rep *Report, lim *LimitReport) bool {
+	// A family with every threshold at 0 is a crawl that never pauses — the shape of Burp's shipped
+	// "Never stop crawl due to application errors". Checked as a whole, because a 0 threshold must
+	// not read as "unbounded": `armed` is what makes 0 mean disarmed rather than unset.
+	if !c.eh.PauseConfigured() {
+		return false
+	}
+	if n, want := c.consecutiveTimeouts, c.eh.timeoutCount(); armed(&n) && want > 0 && c.consecutiveTimeouts >= want {
+		lim.record(StopPausedTimeouts)
+		return true
+	}
+	// The denominator is the sends this crawl has made — fetched plus failed — NOT lim.Requests,
+	// which is assigned once after the loop and reads zero for the whole crawl (see introspect): a
+	// percentage over it could never fire.
+	if want, sent := c.eh.timeoutPercent(), rep.Fetched+rep.Failed; want > 0 && sent > 0 &&
+		100*c.timeouts/sent >= want {
+		lim.record(StopPausedTimeoutPercentage)
+		return true
+	}
+	if n, want := c.consecutiveAuthFailures, c.eh.authFailures(); armed(&n) && want > 0 && c.consecutiveAuthFailures >= want {
+		lim.record(StopPausedAuthFailures)
+		return true
+	}
+	return false
+}
+
+// fetchSourceMap fetches one source map and mines the paths out of it.
+//
+// A source map's `sources` array is the ORIGINAL file list of a bundle — the pre-minification paths,
+// which for a SPA is the route table written in readable form. That is a higher-value find than the
+// minified body it came from, and it is one request to obtain.
+//
+// The map is NOT parsed as an exchange or traversed: its sources are file paths, not locations, and
+// treating "/src/routes/dashboard.ts" as a URL to fetch would flood the frontier with TypeScript
+// filenames that 404. What is taken is the PATH STRINGS inside each source's `sourcesContent` when
+// the map carries it, which is the same mining the speculative phase already does, applied to better
+// text. A map with no embedded content (the common case for a production build that ships maps
+// without sources) therefore yields nothing — and says so, rather than reporting a fetch that found
+// nothing as a success.
+func (c *Crawler) fetchSourceMap(ctx context.Context, mapURL string, item frontierItem, rep *Report, lim *LimitReport) {
+	if mapURL == item.url.String() {
+		return
+	}
+	u, err := url.Parse(mapURL)
+	if err != nil {
+		return
+	}
+	mapItem := frontierItem{url: u, method: "GET", depth: item.depth, foundAt: item.url.String(),
+		text: "source map for " + item.url.String()}
+	// Captured through perform, so this request is bounded, rate-limited and recorded. The response is
+	// NOT counted as a location: a .map is an artifact of a bundle, not a page of the application.
+	before := rep.Fetched
+	c.perform(ctx, mapItem, c.buildRequest(mapItem), rep, lim)
+	if rep.Fetched <= before {
+		// Scope refused it, or the transport failed. Both are already recorded by perform with their own
+		// reasons; nothing to add, and adding a second reason here would double-count one event.
+		return
+	}
+	rep.SourceMapsFetched++
+	c.mineSourceMapBody(mapItem, item, rep, lim)
+}
+
+// mineSourceMapBody reads a fetched map's sourcesContent back out of the store and admits the
+// URL-shaped paths inside it, through the same speculative gates every other hidden link passes.
+//
+// # Why sourcesContent and never `sources`
+//
+// The map's `sources` array is a file list — "/src/routes/dashboard.ts" is a TypeScript path inside
+// the build tree, not a URL the application serves. Admitting those would flood the frontier with
+// filenames that 404. sourcesContent is the ORIGINAL SOURCE TEXT itself, which for a SPA is where
+// the route table lives in readable form — `router.get("/admin", …)` written by a human. The
+// speculativeURLFields gates (root-relative or absolute only, punctuation-aware) are applied to it
+// unchanged: the same discipline that keeps a comment's prose out of the frontier also keeps a
+// TypeScript import path out, which is the exact reason to reuse them rather than write looser
+// rules "just for maps".
+//
+// # Why read the body back rather than hold the bytes
+//
+// The map was captured through the shared seam; its bytes live in the store indexed by exchange id.
+// Reading them back through GetExchange→Get→Body means the text mined is byte-for-byte the bytes the
+// passive check set already examined, and no copy of a potentially multi-megabyte map is held by the
+// frontier or the report. This is the architecture's own rule: raw bytes are written once and never
+// copied (AGENTS.md, "The one invariant").
+//
+// # The cap and the honest empty
+//
+// A map whose sourcesContent is absent (the common case for a production build that ships maps
+// without sources) yields nothing, and that is the true answer — the fetch is counted and the
+// report says so, rather than padded into a success. The MaxSpeculativeLinks cap still bounds the
+// mining through the same accounting every other speculative overflow takes.
+func (c *Crawler) mineSourceMapBody(mapItem frontierItem, item frontierItem, rep *Report, lim *LimitReport) {
+	// The map's own fetch row, found BY URL rather than by position. The obvious `rep.Fetches[len-1]`
+	// is wrong: perform appends the map's row, but the crawl is concurrent and by the time this runs
+	// the rows for the root page and the robots probe may already sit after it — the map's row was
+	// not last on the first probe, and the row that WAS last was the root page's, whose ExchangeID is
+	// 0. A store assigns ids from 0, so "ExchangeID == 0" is a real id and cannot be the sentinel
+	// either; matching the URL is the only lookup that cannot confuse a row for the wrong one.
+	var fetch Fetch
+	found := false
+	for _, f := range rep.Fetches {
+		if f.URL == mapItem.url.String() {
+			fetch, found = f, true
+			break
+		}
+	}
+	if !found {
+		return
+	}
+	ex, err := c.cfg.Capture.Store.GetExchange(fetch.ExchangeID)
+	if err != nil || ex.Response == nil {
+		return
+	}
+	msg, gerr := c.cfg.Capture.Store.Get(*ex.Response)
+	if gerr != nil {
+		return
+	}
+	content := sourceMapSourcesContent(msg.Body())
+	// No emptiness guard, deliberately: speculativeURLFields("") returns no candidates, so an absent
+	// sourcesContent produces no admission and no request — the honest empty — without a branch that
+	// a reader has to verify against the extractor to know it is not load-bearing.
+	// The map was fetched for item; the paths inside it are found relative to the page that named
+	// the map, at the page's own depth so the map pass cannot dig deeper than the page that carried it.
+	for _, raw := range speculativeURLFields(content) {
+		c.admit(discoveredLink{raw: raw, tag: "source map", speculative: true}, item.url, item.depth, rep, lim)
+	}
 }
 
 // visit sends one frontier item, captures and scans the response through the shared seam, and folds
@@ -891,8 +1751,13 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 			Reason: SkipSendFailed, URL: item.url.String(), Method: item.method,
 			Text: item.text, FoundAt: item.foundAt, Detail: err.Error(),
 		})
+		// Kept for the follow-up pass and counted toward the timeout thresholds (o0c5): before this,
+		// a failed request was recorded and forgotten, and a flaky target left a coverage hole with no
+		// second attempt.
+		c.noteTransportFailure(item, isTimeout(err))
 		return
 	}
+	c.noteSent()
 	c.observe(item.url, res.Status)
 
 	// Capped before capture, not after. The bytes are already in memory — SendRaw read them, bounded
@@ -922,6 +1787,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		Started:  time.Now().Add(-res.Duration),
 		Duration: res.Duration,
 		Protocol: core.ProtocolHTTP1,
+		// The address the fetch's socket actually reached — SendOutcome carries it read off the
+		// live connection, so a crawled row answers "which host did this name resolve to" the way
+		// a proxied row does (burpsy-react-ui-gj4f). Empty only when the send failed, and this
+		// path only runs after a successful one.
+		ServerIP: res.Outcome.ServerIP,
 		// Attributed, so history can distinguish what the crawl caused from what the operator's own
 		// browser did. Leaving it unset would land this in the store as unattributed, which is the
 		// store's honest default and the wrong answer when the surface is known.
@@ -950,9 +1820,20 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	fetch := Fetch{
 		URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth,
 		FoundAt: item.foundAt, LinkText: item.text,
+		FoundByRender: item.renderedOrigin,
 	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
+	}
+	// Announced here, where the record is complete, rather than beside each rep.Fetches append. The
+	// appends are at ten return sites — the unreadable stored response, the expired session, a
+	// seeds-only run, robots.txt, a redirect, an encoded body, a non-HTML body, a retention-excluded
+	// response, a duplicate location, and the ordinary tail — and a consumer wired at each of them
+	// would silently miss whichever branch the next edit adds, auditing less than the crawl fetched
+	// with nothing on screen saying so. One call at the one point every branch passes through cannot
+	// drift that way. See Config.OnFetch for what the snapshot does and does not carry.
+	if c.cfg.OnFetch != nil {
+		c.cfg.OnFetch(fetch)
 	}
 
 	// Read the response back out of the store rather than re-parsing the wire bytes: this way the
@@ -974,6 +1855,23 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 	contentType := string(msg.Header("Content-Type"))
 	body := msg.Body()
+
+	// A GraphQL introspection answer, read here because this is where the DECODED body exists. It was
+	// first installed just after the capture, against res.Raw — which is the whole raw HTTP response,
+	// status line and headers included, so every probe against it was reading the head and never the
+	// body. That is worth recording: a hook placed one step too early looks correct, compiles, and
+	// silently never fires, and the only symptom is a feature that reports nothing.
+	if c.graphqlAnswer != nil {
+		if ops := c.graphqlAnswer(item.url, body); len(ops) > 0 {
+			c.admitGraphQLOperations(item.url, ops, rep, lim)
+		} else if looksLikeGraphQLEndpoint(body) && !c.introspected[item.url.String()] {
+			// The body carries a GraphQL envelope, so this URL is a GraphQL endpoint and the only way
+			// to learn its operations is to ask. Recorded once per URL, because a crawl that fetches
+			// the same endpoint from five pages must not introspect it five times.
+			c.introspected[item.url.String()] = true
+			c.introspect(ctx, item.url, rep, lim)
+		}
+	}
 
 	// Session expiry (Phase 6, Gap A). Checked here — after CRAWL-02 has captured and scanned the
 	// bytes, before the robots/redirect/content branches — so a login *redirect* (a template that was
@@ -999,6 +1897,22 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		if fetch.Status == 200 {
 			c.templateOK[template] = true
 		}
+	}
+
+	// A seeds-only run is done with this request. It has been scope-authorised, sent, captured and
+	// scanned — everything above is shared with a crawl on purpose, so a definition-driven scan is no
+	// more privileged and no less recorded than any other traffic. What is skipped is everything that
+	// would add a request the definition did not name: the robots probe (not admitted at all), the
+	// redirect target, the retention query's traversal gate, and link and form extraction.
+	//
+	// Deliberately no fingerprint and no location record either. A fingerprint exists so a crawl can
+	// tell "the same page again" from "a new page" and not re-descend a subtree; this run never
+	// descends, so the map would only serve to collapse two endpoints returning the same bytes into
+	// one location — which is a coverage claim about a scan that made no such claim. Report.Locations
+	// is 0 for a seeds-only run and that number is true.
+	if c.cfg.SeedsOnly {
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
 	}
 
 	// robots.txt is captured and scanned like everything else — it has already been, above — and then
@@ -1038,6 +1952,55 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	// A sitemap, admitted from a robots.txt `Sitemap:` line (burpsy-react-ui-qjtx). It arrives here
+	// looking exactly like the defect it replaces: fetched, stored, scanned, and about to be recorded
+	// as a non-HTML body — indistinguishable from a target that published no URL list at all.
+	//
+	// A SIBLING of the HTML gate, not a relaxation of it. isHTML exists for HTML extraction — the
+	// link walk, form submit, base-href resolution — and none of that applies here; admitting XML
+	// through that gate would hand every non-HTML response to the HTML extractor looking for anchors
+	// it will never find. A PDF below still records SkipNotHTML exactly as before.
+	if LooksLikeSitemap(contentType, body) {
+		c.consumeSitemap(item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
+	// A JSON document that names its own endpoints (burpsy-react-ui-mz1n), branch (b) of the
+	// same shape as the sitemap sibling above: a SIBLING of the HTML gate, not a relaxation of
+	// it. Burp reads non-HTML for locations (its API / DISCOVERED_CONTENT action kinds), and a
+	// documented API reachable from the crawled HTML contributed nothing here before this.
+	//
+	// The JSON reader is deliberately narrow: it takes URLs, slash-rooted paths, and relative
+	// references only under a key that names a link. A bare word is not a path — guessing that
+	// an arbitrary string is one is how a crawler invents URLs nobody observed.
+	// An API DEFINITION — OpenAPI, Swagger, WSDL (burpsy-react-ui-bwwg). Checked BEFORE the
+	// generic JSON gate below, and the order is load-bearing: a definition is also valid JSON, so
+	// the narrow reader would look at it first, find the URL-shaped strings inside a `servers` block
+	// or an example, and admit those — while missing every route the document actually declares. A
+	// document read by the wrong reader is worse than one not read, because it produces locations.
+	if c.cfg.ParseAPIDefinitions || c.cfg.ParseSOAPWSDLs {
+		if c.consumeAPIDocument(item, contentType, body, &fetch, rep, lim) {
+			rep.Fetches = append(rep.Fetches, fetch)
+			return
+		}
+	}
+
+	if LooksLikeJSON(contentType, body) {
+		c.consumeJSON(item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
+	// A JavaScript response (burpsy-react-ui-jwy5): a SPA's routes live in its bundles, and before
+	// this an external script reached the not-HTML skip below with every path inside it unread. A
+	// SIBLING of the HTML gate, like the sitemap and JSON readers above, for the same reason.
+	if LooksLikeJavaScript(contentType, item.url.Path) {
+		c.consumeJavaScript(ctx, item, contentType, body, &fetch, rep, lim)
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
+
 	if !isHTML(contentType) {
 		fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 		c.recordLocation(fetch.Fingerprint, item.url.String(), &fetch, rep)
@@ -1070,9 +2033,17 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
-	page := parsePage(body, item.url, c.limits)
+	page := parsePage(body, item.url, c.limits, c.cfg.RequestSpeculative)
 	if page.truncated {
 		lim.record(StopParseBytes)
+	}
+	// A source map the page's scripts named (burpsy-react-ui-jwy5, criterion 2). Fetched through the
+	// ordinary perform() path rather than from a side channel, so the request is scope-authorised,
+	// rate-limited, captured and counted exactly like any other — which is what keeps the bead's
+	// "passive: no requests beyond fetching a .map" true in a way an operator can check: the map
+	// fetch appears in the fetch log like everything else this crawl sent.
+	if page.sourceMap != "" {
+		c.fetchSourceMap(ctx, page.sourceMap, item, rep, lim)
 	}
 	if page.dropped > 0 {
 		lim.record(StopLinksPerPage)
@@ -1084,13 +2055,19 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		})
 	}
 	fetch.Fingerprint = page.fingerprint
-	if !c.recordLocation(page.fingerprint, item.url.String(), &fetch, rep) {
-		// Already seen at another URL: the links here are the links there, so descending again would
-		// spend budget re-walking a subtree already covered.
+	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
+		// Already seen at another URL, exactly or within the tolerance band: the links here are the
+		// links there, so descending again would spend budget re-walking a subtree already covered.
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
 	}
 
+	staticTargets := make(map[string]bool, len(page.links))
+	for _, l := range page.links {
+		if u, err := resolveAgainst(item.url, l.raw); err == nil {
+			staticTargets[u.String()] = true
+		}
+	}
 	rep.LinksFound += len(page.links)
 	rep.FormsFound += len(page.forms)
 	for _, l := range page.links {
@@ -1099,33 +2076,152 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	for _, f := range page.forms {
 		c.admitForm(f, item.url, item.depth+1, rep, lim)
 	}
+
+	// The rendered second pass (burpsy-react-ui-nx7b): the DOM a browser builds for this
+	// URL, read for links the wire markup never carried. An SPA's routes and a script-built
+	// href exist only after the page's own script has run, so the static parse above cannot
+	// see them no matter how well it parses — this is the whole reason Burp has a
+	// browser-based navigation mode, and it is why the pass runs only for HTML and only
+	// when the caller gave the crawler a browser.
+	//
+	// Ordering rules the shape of everything below:
+	//
+	//   - The rendered pass runs AFTER the static links were admitted, so a link present in
+	//     both readings is discovered once, by the wire parse, and attributed to it.
+	//   - The frontier gates apply unchanged: admit() is the same scope, destructive,
+	//     depth and dedup machinery any other link goes through, so a rendered discovery
+	//     gets no exemption and no second-class treatment.
+	//   - Failures are SkipRenderUnavailable, never silent: the rendered view is the only
+	//     place these links exist, so a render that did not happen narrows the coverage
+	//     claim, and a narrowed claim the operator cannot see is the defect this ledger
+	//     exists to prevent.
+	// The outcome form when the caller supplied one, so a CAPPED render is reported as capped. The
+	// plain form still works and still reports nothing about settling, because a caller that wired
+	// only Render has not told this engine it cares (burpsy-react-ui-efra).
+	render := c.cfg.Render
+	var renderOutcome *RenderOutcome
+	if c.cfg.RenderWithOutcome != nil {
+		render = func(ctx context.Context, url string) (string, error) {
+			html, outcome, err := c.cfg.RenderWithOutcome(ctx, url)
+			renderOutcome = &outcome
+			return html, err
+		}
+	}
+	if render != nil {
+		rendered, rerr := render(ctx, item.url.String())
+		if rerr != nil {
+			c.skips.record(SkipRecord{
+				Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt,
+				Detail:  "the rendered-DOM pass failed: " + rerr.Error(),
+			})
+		} else {
+			// A render that hit its cap was read while the page was still changing. Its links are
+			// still admitted -- they are real -- but the page is also recorded as capped, because
+			// whatever it had not rendered yet is missing rather than absent, and a crawl that
+			// presents a capped page as an empty one reports the application as smaller than it is.
+			if renderOutcome != nil && renderOutcome.Capped {
+				c.skips.record(SkipRecord{
+					Reason: SkipRenderUnavailable, URL: item.url.String(), Method: item.method,
+					FoundAt: item.foundAt,
+					Detail: "the rendered-DOM pass reached its " +
+						c.cfg.RenderOptions.withDefaults().MaxWait.String() +
+						" cap while the page was still changing, so its links are incomplete",
+				})
+			}
+			renderedPage := parsePage([]byte(rendered), item.url, c.limits, c.cfg.RequestSpeculative)
+			for _, l := range renderedPage.links {
+				if u, err := resolveAgainst(item.url, l.raw); err == nil {
+					if staticTargets[u.String()] {
+						continue
+					}
+				}
+				// The edge names the rendering as the origin (nx7b's honesty rule): a reader
+				// of the crawl paths must be able to tell that this link was invisible to
+				// the wire bytes and only the browser found it. The rendered document is
+				// tagged "rendered" and keeps the link's own text, so the edge reads the
+				// same as any other in every other respect.
+				l.foundAtRendered = true
+				rep.LinksFound++
+				c.admit(l, item.url, item.depth+1, rep, lim)
+			}
+			if renderOutcome != nil {
+				c.admitRenderedRequests(renderOutcome.Requests, item, rep, lim)
+			}
+		}
+	}
 	rep.Fetches = append(rep.Fetches, fetch)
 }
 
-// recordLocation folds one fingerprint into the location map. It reports false when the fingerprint
-// had already been seen, in which case the fetch is annotated with where it was first seen and the
-// duplicate is counted.
-func (c *Crawler) recordLocation(fingerprint, at string, fetch *Fetch, rep *Report) bool {
-	if fingerprint == "" {
-		return true
+// admitRenderedRequests admits the requests a rendered page issued at run time (burpsy-react-ui-hzzl)
+// — the API calls a single-page app makes, which no served byte and no rendered link names. Measured
+// as the largest class of locations a headless crawler reached and burpsy did not (dvi7).
+//
+// Only SAME-ORIGIN GETs become discovered links, through admit()'s gates like any other link. A
+// cross-origin request is a third party the page talks to (analytics, a CDN) — admitting it would fill
+// the skip ledger with out-of-scope refusals; a non-GET is the page ACTING (a POST it made), and
+// replaying it from a crawler would be acting rather than discovering. Both are counted, never sent.
+func (c *Crawler) admitRenderedRequests(reqs []RenderedRequest, item frontierItem, rep *Report, lim *LimitReport) {
+	for _, r := range reqs {
+		u, err := url.Parse(r.URL)
+		if err != nil || !strings.EqualFold(u.Scheme, item.url.Scheme) || !strings.EqualFold(u.Host, item.url.Host) {
+			rep.RenderedRequestsOtherOrigin++
+			continue
+		}
+		if m := strings.ToUpper(r.Method); m != "" && m != "GET" {
+			rep.RenderedRequestsNotGET++
+			continue
+		}
+		rep.RenderedRequestsAdmitted++
+		c.admit(discoveredLink{raw: u.String(), tag: "rendered:xhr", foundAtRendered: true}, item.url, item.depth+1, rep, lim)
 	}
-	if first, seen := c.locations[fingerprint]; seen {
-		rep.DuplicateLocations++
-		fetch.DuplicateOf = first
-		c.skips.record(SkipRecord{
-			Reason: SkipDuplicateLocation, URL: at,
-			Detail: "the same contents were already seen at " + first,
-		})
-		return false
-	}
-	c.locations[fingerprint] = at
-	return true
 }
 
 // admitSeed puts one validated seed on the frontier. Seeds skip the destructive check (see
 // destructive.go) and pass every other gate.
 func (c *Crawler) admitSeed(u *url.URL, lim *LimitReport) {
 	c.enqueue(frontierItem{url: u, method: "GET", depth: 0}, "", lim)
+}
+
+// admitSeedRequest puts one validated SeedRequest on the frontier. It goes through enqueue exactly as
+// a seed does — same scope gate, same crawl-scope query, same rate limiters, same capture — and
+// differs only in that it carries a method, a body and its own headers rather than being a URL.
+// Skipping the destructive check is the same judgement admitSeed makes, for the same reason: this is
+// the operator's own instruction, in this case one their API definition stated.
+func (c *Crawler) admitSeedRequest(item frontierItem, lim *LimitReport) {
+	c.enqueue(item, "", lim)
+}
+
+// wellKnownPaths are the RFC 8615 documents an application publishes about itself — a security
+// contact, its OpenID / OAuth metadata (which names its endpoints), a password-change URL, the app-link
+// association files, a CSAF advisory index. Measured as a class a known-files crawler reached and
+// burpsy never requested (the dvi7 benchmark).
+var wellKnownPaths = []string{
+	"/.well-known/security.txt",
+	"/.well-known/openid-configuration",
+	"/.well-known/oauth-authorization-server",
+	"/.well-known/change-password",
+	"/.well-known/apple-app-site-association",
+	"/.well-known/assetlinks.json",
+	"/.well-known/csaf/provider-metadata.json",
+}
+
+// admitWellKnown admits the .well-known documents for a seed's authority, once per authority, as
+// discovered links through admit() — scope, the destructive gate, dedup and the phase tally apply
+// exactly as to any link, so an authority the scope excludes is not asked for them either.
+func (c *Crawler) admitWellKnown(seed *url.URL, rep *Report, lim *LimitReport) {
+	key := strings.ToLower(seed.Scheme) + "://" + strings.ToLower(seed.Hostname()) + ":" + strconv.Itoa(int(portOf(seed)))
+	if c.wellKnownSeeded[key] {
+		return
+	}
+	if c.wellKnownSeeded == nil {
+		c.wellKnownSeeded = map[string]bool{}
+	}
+	c.wellKnownSeeded[key] = true
+	root := &url.URL{Scheme: seed.Scheme, Host: seed.Host, Path: "/"}
+	for _, p := range wellKnownPaths {
+		c.admit(discoveredLink{raw: p, tag: "well-known"}, root, 1, rep, lim)
+	}
 }
 
 // admitRobots queues the one /robots.txt request for a seed's authority, at most once per authority.
@@ -1196,6 +2292,305 @@ func (c *Crawler) seedFromRobots(body []byte, item frontierItem, rep *Report, li
 	}
 }
 
+// consumeSitemap reads one sitemap document and admits what it names.
+//
+// Every <loc> enters as a DISCOVERED LINK rather than a seed, for the same reason robots.txt paths
+// do: a target-supplied URL passes the destructive-action check, the scope gate and the crawl-scope
+// query like anything else the response contained. A sitemap naming /admin/purge-all must not
+// become a privileged request just because the target wrote it down.
+//
+// A <sitemapindex> entry is re-admitted as a sitemap to fetch — depth-limited like any other link —
+// because its <loc>s are sitemaps rather than pages, and following only the index would find every
+// one of them empty.
+func (c *Crawler) consumeSitemap(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	entries, _, failure := ParseSitemap(body)
+	if failure != "" {
+		// A parse failure is REPORTED, not folded into "0 locations". A gzipped sitemap, a truncated
+		// fetch and a document that was never a sitemap are three different facts, and an operator
+		// seeing "0 locations" has no way to tell which they are looking at.
+		c.skips.record(SkipRecord{
+			Reason: SkipSitemapUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: failure,
+		})
+		return
+	}
+	rep.SitemapsParsed++
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+
+	for _, e := range entries {
+		rep.SitemapLocationsFound++
+		if e.IsIndex {
+			rep.SitemapIndexesFollowed++
+		}
+		c.admit(discoveredLink{raw: e.Loc, tag: "sitemap", text: e.LastMod}, item.url, item.depth+1, rep, lim)
+	}
+}
+
+// consumeJavaScript reads one script for locations and admits them (burpsy-react-ui-jwy5). See
+// jsextract.go for the two extractors and why their union is taken.
+//
+// Passive in the sense the bead asks for: reading the script sends nothing. The one request this
+// function can cause itself is the script's own source map, through fetchSourceMap — the same path an
+// inline script's map already takes — and every location it admits goes through admit()'s gates like
+// any link.
+func (c *Crawler) consumeJavaScript(ctx context.Context, item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	rep.JavaScriptRead++
+
+	parse := body
+	if max := c.limits.MaxParseBytes; max > 0 && len(parse) > max {
+		// Bounded like every other parse: a 40 MB vendor bundle is read up to the cap and the report
+		// says so, rather than the crawl stalling on one file.
+		parse = parse[:max]
+		rep.JavaScriptTruncated++
+	}
+	cands, parseFailed := extractJavaScript(parse)
+	if parseFailed {
+		rep.JavaScriptParseFailures++
+	}
+	for _, cand := range cands {
+		rep.JavaScriptLocationsFound++
+		c.admit(discoveredLink{raw: cand.raw, tag: cand.tag, text: cand.note}, item.url, item.depth+1, rep, lim)
+	}
+
+	// The script's own source map, resolved against the script — the map is the bundle's original file
+	// list, and an external bundle's map was never followed before because external bundles were never
+	// read.
+	if ref := sourceMapReference(string(body)); ref != "" {
+		if mapURL, err := resolveAgainst(item.url, ref); err == nil {
+			c.fetchSourceMap(ctx, mapURL.String(), item, rep, lim)
+		}
+	}
+}
+
+// consumeJSON reads one JSON document and admits the locations it names.
+//
+// Every location enters as a DISCOVERED LINK rather than a seed, going through the same gates a
+// sitemap's <loc> does — destructiveness, scope, the crawl-scope query, depth, dedup, capacity —
+// because a URL a target published is exactly as untrusted as one it linked from a page. A JSON
+// body naming /admin/purge-all must not become a privileged request because the API documented it.
+//
+// A document that parses but names nothing records NO skip: SkipNotHTML used to fire for it and
+// told an operator nothing true, since the response was read and simply had no locations in it.
+// A document that fails to parse records SkipJSONUnparsed, whose remedy is different from
+// "this is not HTML" (burpsy-react-ui-mz1n).
+func (c *Crawler) consumeJSON(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) {
+	locs, failure := ParseJSONLocations(body)
+	if failure != "" {
+		// Only a body that CLAIMED to be JSON and then failed gets the distinct reason. A
+		// response whose content type is JSON but whose body is HTML at an /api path is a
+		// target quirk, and reporting it as a parse failure would be noise; the branch only
+		// runs when LooksLikeJSON already said the body announces itself as one, so a failure
+		// here is real.
+		c.skips.record(SkipRecord{
+			Reason: SkipJSONUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: failure,
+		})
+		rep.JSONDocumentsRead++
+		return
+	}
+	rep.JSONDocumentsRead++
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	for _, loc := range locs {
+		rep.JSONLocationsFound++
+		c.admit(discoveredLink{raw: loc.Raw, tag: "json:" + loc.Key}, item.url, item.depth+1, rep, lim)
+	}
+}
+
+// consumeAPIDocument reads an API definition and admits the endpoints it declares, reporting whether
+// it consumed this response.
+//
+// The bool is "this was a definition and I handled it", so the caller returns rather than falling
+// through to the JSON or HTML gates. A body that is NOT a definition returns false and is left
+// entirely alone — which is the overwhelming majority of what a crawl fetches, and it must reach the
+// gates below untouched.
+//
+// Every endpoint enters as a DISCOVERED LINK, through the same admit() gates a page's href goes
+// through, for the reason consumeJSON argues and it is worth repeating because it is the whole safety
+// argument: a URL a target published is exactly as untrusted as one it linked from a page. A JSON
+// body naming /admin/purge-all must not become a privileged request because the API documented it, and
+// the destructiveness gate runs before scope so a documented logout reports as the logout it is.
+//
+// The path is the document's own template, and it is resolved against the URL the document was
+// FETCHED FROM rather than a base declared inside it. A definition that says `servers: [{url:
+// https://elsewhere.test}]` is a claim about another host; following it would take the crawl off the
+// target the operator scoped, and admit() is where scope is decided.
+func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body []byte, fetch *Fetch, rep *Report, lim *LimitReport) bool {
+	if LooksLikeWSDL(contentType, body) && !c.cfg.ParseSOAPWSDLs {
+		// The document IS a WSDL and the operator's configuration turned the WSDL reader off.
+		// Falling through is the honest reading: the body is XML, so the JSON gate will not claim it
+		// and it records SkipNotHTML like any other document this crawl cannot read. Recording a
+		// skip reason here would imply the reader tried and failed, when it was switched off.
+		return false
+	}
+	if !LooksLikeWSDL(contentType, body) && !c.cfg.ParseAPIDefinitions {
+		return false
+	}
+
+	format, eps, failure := ParseAPIDocument(contentType, body)
+	if format == APIDocNone {
+		return false
+	}
+	rep.APIDocumentsRead++
+	if failure != "" {
+		// The acceptance criterion, and the reason this is a distinct skip: the target PUBLISHED an
+		// API definition and the crawl still cannot see it. Reporting zero endpoints here would tell
+		// the operator their target has no API, which is the failure this whole change exists to
+		// remove.
+		c.skips.record(SkipRecord{
+			Reason: SkipAPIUnparsed, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Detail: string(format) + ": " + failure,
+		})
+		return true
+	}
+
+	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
+	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
+	for _, ep := range eps {
+		rep.APIEndpointsFound++
+		c.admit(discoveredLink{raw: apiEndpointPath(ep), text: ep.OperationID, tag: "api:" + string(format)},
+			item.url, item.depth+1, rep, lim)
+	}
+	return true
+}
+
+// apiEndpointPath is the path one declared operation is requested at.
+//
+// A templated path keeps its braces here: admit() resolves the reference, and the fetch that follows
+// fills the parameters. Substituting a placeholder value at this point would be inventing data the
+// document never declared, and the crawl's fingerprinting would then treat every such URL as one
+// location — which is true, and less useful than the template that says which segment is a parameter.
+//
+// A WSDL operation carries no path at all (it lives in the port's <soap:address>), so it yields the
+// document's own URL rather than an empty one, which would resolve to the current page and re-fetch
+// what has already been fetched.
+func apiEndpointPath(ep APIDocEndpoint) string {
+	if strings.TrimSpace(ep.Path) != "" {
+		return ep.Path
+	}
+	return ""
+}
+
+// ---- GraphQL discovery (burpsy-react-ui-bwwg, criterion 4) ----------------------------------
+
+// commonGraphQLPaths are the paths Burp's "Test common GraphQL endpoints" button probes
+// (Zrf0.java:3629).
+//
+// They are a GUESS, not an observation, which is exactly what guess_hidden_graphql_endpoints says —
+// and why Burp ships that switch OFF in its own defaults and this implementation honours that. Each
+// is resolved against a host the crawl is ALREADY sending to, so a guess can never introduce an origin
+// the operator did not scope.
+var commonGraphQLPaths = []string{"/graphql", "/api/graphql", "/gql", "/query"}
+
+// armGraphQL installs the introspection reader when the operator's configuration asks for it.
+//
+// Armed in New rather than checked at each use, so there is exactly one place that decides whether the
+// crawl will send a POST of its own. Every reader here refuses by default — a crawl that sends traffic
+// nobody asked for is the failure mode this package is built to avoid — and these two switches are the
+// only ones that make it send on its own initiative.
+func (c *Crawler) armGraphQL() {
+	if c.cfg.PerformGraphQLIntrospection {
+		c.graphqlAnswer = func(u *url.URL, body []byte) []APIDocEndpoint {
+			if !LooksLikeGraphQLAnswer(body) {
+				// Not a GraphQL answer. Not a failure and not a skip: this is the ordinary answer for
+				// every POST the crawl makes against an endpoint that is not GraphQL, and recording a
+				// refusal here would fill the ledger with noise that buries the real one.
+				return nil
+			}
+			ops, failure := ParseGraphQLOperations(body)
+			if failure != "" {
+				// The endpoint IS GraphQL and the answer could not be read. Distinct from the case
+				// above in the only way that matters to an operator: this one is worth a look.
+				c.skips.record(SkipRecord{
+					Reason: SkipGraphQLUnparsed, URL: u.String(), Method: "POST", Detail: failure,
+				})
+				return nil
+			}
+			return ops
+		}
+	}
+	if c.cfg.GuessHiddenGraphQLEndpoints {
+		c.guessHiddenGraphQL = true
+	}
+}
+
+// introspect sends one introspection query to a URL the crawl has established is a GraphQL endpoint.
+//
+// Straight to perform, for the reason guessGraphQL gives: this is a request, so it is scope-authorised,
+// rate limited, captured and counted by the same path every other crawl request takes. A separate send
+// would be traffic the crawl's own report does not mention.
+func (c *Crawler) introspect(ctx context.Context, u *url.URL, rep *Report, lim *LimitReport) {
+	// rep.Fetched, NOT lim.Requests: lim.Requests is assigned once from rep.Fetched AFTER the loop
+	// finishes, so for the whole crawl it reads zero and a bound checked against it is no bound at
+	// all. Reading the live counter is the difference between a stated request limit and one that
+	// only appears to hold.
+	if rep.Fetched >= c.limits.MaxRequests {
+		c.skips.record(SkipRecord{
+			Reason: SkipGraphQLIntrospection, URL: u.String(), Method: "POST",
+			Detail: "the crawl-wide request bound is spent, so the endpoint was not introspected",
+		})
+		return
+	}
+	item := frontierItem{url: u, method: "POST", foundAt: u.String(),
+		body: graphqlIntrospectionBody(), contentType: "application/json"}
+	c.perform(ctx, item, c.buildRequest(item), rep, lim)
+}
+
+// guessGraphQL probes the common GraphQL paths on one origin, once each.
+//
+// Behind its own switch, which Burp ships off. Same-origin only: the paths hang off the URL the crawl
+// is already on, so a guess cannot reach a host the operator did not scope. Each probe goes through
+// perform() like every other request, so it is scope-authorised, rate limited, captured and counted —
+// and an introspection query that scope refuses is recorded as SkipSendRefused rather than sent.
+func (c *Crawler) guessGraphQL(ctx context.Context, u *url.URL, rep *Report, lim *LimitReport) {
+	if !c.guessHiddenGraphQL {
+		return
+	}
+	base := *u
+	base.Path, base.RawQuery, base.Fragment = "/", "", ""
+	for _, path := range commonGraphQLPaths {
+		probe := base
+		probe.Path = path
+		if c.guessedGraphQL[probe.String()] {
+			continue
+		}
+		// The bound is checked BEFORE the request goes out, not after: an operator reading the request
+		// count must never see a number that omits what was actually sent. rep.Fetched, not
+		// lim.Requests — see introspect for why the latter reads zero throughout the crawl.
+		if rep.Fetched >= c.limits.MaxRequests {
+			c.skips.record(SkipRecord{
+				Reason: SkipGraphQLIntrospection, URL: probe.String(), Method: "POST",
+				Detail: "the crawl-wide request bound is spent, so the GraphQL probe was not sent",
+			})
+			return
+		}
+		c.guessedGraphQL[probe.String()] = true
+		item := frontierItem{url: &probe, method: "POST", foundAt: u.String(),
+			body: graphqlIntrospectionBody(), contentType: "application/json"}
+		// Straight to perform, NOT through visit/enqueue: a guessed path must not be depth-counted or
+		// admitted as a location before the answer says there is anything there. perform is where the
+		// send, the scope gate and the capture happen, which is all a probe needs.
+		c.perform(ctx, item, c.buildRequest(item), rep, lim)
+	}
+}
+
+// admitGraphQLOperations puts the operations an introspection answer named on the frontier.
+//
+// Every operation goes to the ENDPOINT the answer came from, not to a path from the schema: a GraphQL
+// operation is a field on the endpoint's own type, so they all share one URL and differ only in the
+// query they send. Admitting the endpoint is what makes the crawl fetch it, and the operation name
+// travels as the item's text so a report says which field was found.
+func (c *Crawler) admitGraphQLOperations(u *url.URL, ops []APIDocEndpoint, rep *Report, lim *LimitReport) {
+	rep.GraphQLEndpointsFound += len(ops)
+	for _, op := range ops {
+		c.admit(discoveredLink{raw: u.RequestURI(), text: op.OperationID, tag: "graphql:" + op.OperationID},
+			u, 0, rep, lim)
+	}
+}
+
 // robotsLiteralPrefix reduces a robots.txt path pattern to the longest leading literal, so a pattern
 // becomes a path that can actually be requested.
 func robotsLiteralPrefix(pattern string) string {
@@ -1207,6 +2602,22 @@ func robotsLiteralPrefix(pattern string) string {
 		return ""
 	}
 	return pattern
+}
+
+// countPhase adds one to a phase's tally on the report.
+//
+// The map is created with every phase at zero rather than lazily on first use, so the report always
+// carries the full legend. A reader showing "0 rendered" has been told the crawl never got there; a
+// reader with no "rendered" key at all can only guess.
+func (c *Crawler) countPhase(rep *Report, phase CrawlPhase) {
+	if rep.Phases == nil {
+		rep.Phases = make(map[CrawlPhase]int, len(CrawlPhaseAll)+1)
+		for _, p := range CrawlPhaseAll {
+			rep.Phases[p] = 0
+		}
+		rep.Phases[PhaseNone] = 0
+	}
+	rep.Phases[phase]++
 }
 
 // admit runs one discovered link through the frontier's gates, in this order:
@@ -1225,6 +2636,11 @@ func robotsLiteralPrefix(pattern string) string {
 // refusal, the exact signal that matched. There is no path out of this function that declines a link
 // without recording why.
 func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report, lim *LimitReport) {
+	// Counted FIRST, before any gate can refuse. A link the crawl then declines is still something it
+	// discovered and attributed: counting only what was fetched would make the tallies describe egress
+	// rather than discovery, and an operator asking "did this crawl ever reach the sitemap" would be
+	// answered by a number that says no when the answer is yes.
+	c.countPhase(rep, PhaseOfTag(l.tag))
 	u, err := resolveAgainst(base, l.raw)
 	if err != nil {
 		c.skips.record(SkipRecord{
@@ -1264,7 +2680,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 		})
 		return
 	}
-	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text}, base.String(), lim)
+	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, tag: l.tag, renderedOrigin: l.foundAtRendered, speculative: l.speculative}, base.String(), lim)
 }
 
 // admitForm turns one discovered form into a request, or records why it did not.
@@ -1286,6 +2702,27 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 			Detail:  fmt.Sprintf("%d fields; turn form submission on to submit it", len(f.fields)),
 		})
 		return
+	}
+
+	// The per-form cap (burpsy-react-ui-u0k3), checked here — after the enabled check, because a
+	// crawl with submission off has submitted nothing and its count is meaningless, and before the
+	// per-form shape checks, because a form that could not be submitted anyway should report THAT
+	// rather than a cap it never reached.
+	//
+	// Counted against the form's SIGNATURE rather than its URL: a search box on every page of a site is
+	// ONE form submitted N times, and a per-URL count would bound nothing on exactly the page that
+	// needs the bound.
+	if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+		sig := f.signature(base)
+		if c.formSubmissions[sig] >= cap {
+			c.skips.record(SkipRecord{
+				Reason: SkipFormSubmissionCap, URL: target, Method: f.method, Text: f.label,
+				FoundAt: base.String(),
+				Detail: fmt.Sprintf("this form has already been submitted %d times, the configured cap "+
+					"(max_submissions_per_form); raise it to explore further", c.formSubmissions[sig]),
+			})
+			return
+		}
 	}
 
 	if f.method != "GET" && f.method != "POST" {
@@ -1369,6 +2806,12 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 	}
 	if c.enqueue(item, base.String(), lim) {
 		rep.FormsSubmitted++
+		// Counted here, on the SUCCESS path, so the cap counts submissions MADE rather than forms
+		// CONSIDERED. Counting earlier would let a refused form consume budget and fire the cap on a
+		// form that was never sent — which is the more confusing failure of the two.
+		if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
+			c.formSubmissions[f.signature(base)]++
+		}
 	}
 }
 
@@ -1386,8 +2829,26 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		}); ok {
 			detail = s.Explain(host, port, item.url.Path, tls)
 		}
+		// Two refusals that look identical in one number, told apart by WHAT the link was (its
+		// tag): a subresource the page loads to work at all, versus a navigational link a person
+		// would follow. The second is scope doing its job; the first is where burpsy is stricter
+		// than Burp, whose crawler fetches out-of-scope resources by default
+		// (allow_out_of_scope_resources = true in Preferences/CrawlDefaults.json). An operator
+		// looking at "why is my crawl empty" needs those answered separately, because on a modern
+		// site — fonts, a CDN-hosted app shell, a third-party API — the second is the whole
+		// explanation and the first says nothing (burpsy-react-ui-hgor).
+		//
+		// The refusal itself is unchanged. This records WHICH refusal happened, which is all the
+		// bead asks for: nothing here relaxes the chokepoint.
+		reason := SkipOutOfScope
+		if isResourceTag(item.tag) {
+			reason = SkipOutOfScopeResource
+			// Counted on the LIMITS rather than only in the ledger, because the caveat a complete
+			// crawl prints is built from the limits and would otherwise never mention it.
+			lim.OutOfScopeResources++
+		}
 		c.skips.record(SkipRecord{
-			Reason: SkipOutOfScope, URL: item.url.String(), Method: item.method,
+			Reason: reason, URL: item.url.String(), Method: item.method,
 			Text: item.text, FoundAt: foundAt, Detail: detail,
 		})
 		return false
@@ -1460,7 +2921,24 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
+	// The speculative-hidden-link cap (burpsy-react-ui-t5m0), checked LAST: every other
+	// gate has passed, so what is counted is what the crawl will follow, not what it saw.
+	// The link is admitted through the same frontier as a navigational one — the cap is
+	// the only thing that distinguishes how many.
+	if item.speculative && c.speculativeAdmitted >= c.limits.MaxSpeculativeLinks {
+		lim.record(StopSpeculativeLinks)
+		lim.SpeculativeDropped++
+		c.skips.record(SkipRecord{
+			Reason: SkipSpeculativeLimit, URL: item.url.String(), Method: item.method,
+			Text: item.text, FoundAt: foundAt,
+			Detail: fmt.Sprintf("the speculative-link bound of %d is spent", c.limits.MaxSpeculativeLinks),
+		})
+		return false
+	}
 	c.queued[key] = true
+	if item.speculative {
+		c.speculativeAdmitted++
+	}
 	c.frontier = append(c.frontier, item)
 	return true
 }
@@ -1515,6 +2993,9 @@ func (r frontierRow) Header(string) ([]string, bool) { return nil, false }
 // unhighlighted and uncommented — a claim rather than an absence.
 func (r frontierRow) Annotation() (string, string, bool) { return "", "", false }
 
+// See fetchedRow.TaskID: a frontier candidate has no run attribution to answer with.
+func (r frontierRow) TaskID() (uint64, bool) { return 0, false }
+
 // fetchedRow is what a crawl-retention query is evaluated against: a response that exists, so every
 // field the grammar has is a real answer rather than an absence. This is the difference between the
 // two DSL-03 gates, and the reason the pre-fetch one has to refuse queries this one accepts.
@@ -1559,6 +3040,11 @@ func (r fetchedRow) DurationUs() (int64, bool) { return 0, false }
 // fetch, before an operator has seen the row, so an annotation cannot exist yet. A later re-scan
 // through a different consumer can answer it.
 func (r fetchedRow) Annotation() (string, string, bool) { return "", "", false }
+
+// No run attribution: fetchedRow and frontierRow are per-fetch candidates, and the crawl's own
+// task id is not a fact about a candidate — it is a fact about the crawl that will decide on it.
+// (0, false): every task comparison fails, the same as the annotation ones.
+func (r fetchedRow) TaskID() (uint64, bool) { return 0, false }
 
 func (r fetchedRow) Header(name string) ([]string, bool) {
 	if r.resp == nil {
@@ -1685,6 +3171,17 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 			c.headersWithheld++
 		}
 	}
+	// This request's own headers, which only a seeds-only run sets — an API definition's declared
+	// header parameters. Sorted, because Go's map order is random and two scans of one definition
+	// must produce byte-identical requests: a request whose headers swap places between runs looks
+	// like the definition changed. validateHeader has already refused CR, LF, a colon in a name and
+	// every framing header, so this loop writes nothing that could split the request.
+	for _, name := range sortedHeaderNames(item.headers) {
+		b.WriteString(name)
+		b.WriteString(": ")
+		b.WriteString(item.headers[name])
+		b.WriteString("\r\n")
+	}
 	if len(item.body) > 0 {
 		b.WriteString("Content-Type: ")
 		b.WriteString(item.contentType)
@@ -1695,6 +3192,17 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 	b.WriteString("\r\n")
 	b.Write(item.body)
 	return []byte(b.String())
+}
+
+// sortedHeaderNames orders one request's headers. See buildRequest for why the order is fixed rather
+// than incidental.
+func sortedHeaderNames(headers map[string]string) []string {
+	out := make([]string, 0, len(headers))
+	for name := range headers {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // hostHeader is the authority for the Host header: the port is omitted when it is the scheme's
@@ -1726,4 +3234,35 @@ func isHTML(contentType string) bool {
 		return true
 	}
 	return false
+}
+
+// isResourceTag reports whether a discovered link was a SUBRESOURCE — something the page EMBEDS to
+// work at all — rather than a navigational link a person would follow.
+//
+// The set is only the elements discover.go actually queues. `img`, `script`, `link`, `source`,
+// `video` and `audio` are NOT in it because the crawler never discovers them at all (discover.go:24),
+// so no out-of-scope refusal can ever carry one of those tags — naming them here would be a classifier
+// with no reachable input, and a table that claims to distinguish things this crawler never sees.
+//
+// That absence is itself half of this bead's answer, and the larger half: for a stylesheet, a script
+// or a font on a CDN, burpsy produces NO ledger entry whatsoever. It does not refuse the asset — it
+// never looks at it. An operator comparing against Burp, whose crawler fetches exactly those
+// (allow_out_of_scope_resources = true), sees a page render as "found, no links" where Burp saw its
+// full content. No skip reason can express that, because nothing was refused; see the bead.
+//
+// So the set here is what remains: frames and embedded documents. A browser loads them for the page;
+// a person does not click them; and they are the one case where burpsy's scope refusal IS the reason
+// the content is missing.
+func isResourceTag(tag string) bool {
+	// The synthetic prefixes are never resources: "json:", "api:" and "graphql:" name locations read
+	// out of a document, and "speculative" is a URL mined from non-rendered text.
+	if tag == "" || strings.Contains(tag, ":") {
+		return false
+	}
+	switch tag {
+	case "iframe", "frame", "object", "embed":
+		return true
+	default:
+		return false
+	}
 }

@@ -17,6 +17,11 @@ import (
 
 type passthroughView struct {
 	Patterns []string `json:"patterns"`
+	// Burp's two coupling switches (burpsy-react-ui-n1fi) and the count of hosts auto-add has written,
+	// so the panel shows the behaviour rather than a list that silently grows.
+	ApplyOutOfScope  bool `json:"apply_out_of_scope"`
+	AutoAddOnFailure bool `json:"auto_add_on_failure"`
+	AutoAdded        int  `json:"auto_added"`
 }
 
 // viewPassthrough renders the policy's current list. Passthrough returns a copy,
@@ -27,7 +32,12 @@ func (s *Server) viewPassthrough() passthroughView {
 	if patterns == nil {
 		patterns = []string{}
 	}
-	return passthroughView{Patterns: patterns}
+	return passthroughView{
+		Patterns:         patterns,
+		ApplyOutOfScope:  s.tlsPolicy.ApplyOutOfScope(),
+		AutoAddOnFailure: s.tlsPolicy.AutoAddOnFailure(),
+		AutoAdded:        s.tlsPolicy.AutoAddedCount(),
+	}
 }
 
 // mirrorTlsPassthrough writes the policy's current list through to SQLite when a
@@ -37,6 +47,7 @@ func (s *Server) viewPassthrough() passthroughView {
 func (s *Server) mirrorTlsPassthrough() {
 	if s.persist != nil {
 		s.persist.SaveTlsPassthrough(s.tlsPolicy.Passthrough())
+		s.persist.SaveTlsPassthroughMode(s.tlsPolicy.ApplyOutOfScope(), s.tlsPolicy.AutoAddOnFailure())
 	}
 }
 
@@ -72,6 +83,31 @@ func (s *Server) handleTlsPassthrough(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.tlsPolicy.AddPassthrough(pattern)
+		s.mirrorTlsPassthrough()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.viewPassthrough())
+
+	case http.MethodPut:
+		// The two coupling switches. A whole document, so a client sends the state it wants and reads
+		// back the confirmed one — the convention every other switch endpoint here follows.
+		if s.tlsPolicy == nil {
+			http.Error(w, "No TLS policy is attached to this server, so there is no passthrough list to manage", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			ApplyOutOfScope  *bool `json:"apply_out_of_scope"`
+			AutoAddOnFailure *bool `json:"auto_add_on_failure"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.ApplyOutOfScope != nil {
+			s.tlsPolicy.SetApplyOutOfScope(*req.ApplyOutOfScope)
+		}
+		if req.AutoAddOnFailure != nil {
+			s.tlsPolicy.SetAutoAddOnFailure(*req.AutoAddOnFailure)
+		}
 		s.mirrorTlsPassthrough()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(s.viewPassthrough())

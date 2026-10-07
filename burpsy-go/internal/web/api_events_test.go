@@ -304,7 +304,7 @@ func TestEveryChangeSourceAnnouncesItsOwnKind(t *testing.T) {
 			s.findings.Add(core.NewFinding{Name: "passive finding"})
 		}},
 		{"a tool log entry", changeToolLog, func() {
-			s.toolLog.Record(toollog.ToolRepeater, "live.test", 80, false, "GET", "/one", 200, toollog.Bytes(42), 3, "")
+			s.toolLog.Record(toollog.ToolRepeater, "live.test", 80, false, "GET", "/one", 200, toollog.Bytes(42), 3, "", nil)
 		}},
 		{"an activity event", changeDashboard, func() {
 			s.events.Record(dash.EventScopeChanged, dash.SeverityInfo, "scope edited")

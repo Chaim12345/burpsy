@@ -33,6 +33,21 @@ type redirectServer struct {
 	port  uint16
 	mu    sync.Mutex
 	paths []string
+	// requests holds each request's whole head, in arrival order, for tests that assert on a header
+	// rather than a path. Empty entries are recorded for connections that produced no request line.
+	requests []string
+}
+
+// lastRequest returns the most recent request head this server received, or "" when it has received
+// none. It is the accessor the cookie-replay tests read, because what matters there is the Cookie
+// header on the wire and not which path was asked for.
+func (r *redirectServer) lastRequest() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.requests) == 0 {
+		return ""
+	}
+	return r.requests[len(r.requests)-1]
 }
 
 // newRedirectServer answers each request by consulting reply(path). An empty reply is a 404.
@@ -62,8 +77,13 @@ func newRedirectServer(t *testing.T, reply func(path string) string) *redirectSe
 				if rerr != nil {
 					return
 				}
+				// The whole head is kept, not just the path: a test that asserts on a header the
+				// follower added — the cookie a 302 set, replayed to the next hop — cannot do it from a
+				// path list. Additive: seen() is unchanged.
+				head := first
 				for {
 					line, herr := br.ReadString('\n')
+					head += line
 					if herr != nil || line == "\r\n" || line == "\n" {
 						break
 					}
@@ -74,6 +94,7 @@ func newRedirectServer(t *testing.T, reply func(path string) string) *redirectSe
 				}
 				srv.mu.Lock()
 				srv.paths = append(srv.paths, path)
+				srv.requests = append(srv.requests, head)
 				srv.mu.Unlock()
 
 				body := reply(path)

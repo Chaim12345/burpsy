@@ -1,0 +1,6 @@
+# NOTE: the `merge=beads` driver was removed deliberately (2026-09-08).
+# It ran `bd merge %A %O %A %B`, but bd 0.44 no longer has a `merge` subcommand, so the driver
+# failed silently and git produced a ZERO-LENGTH .beads/issues.jsonl. bd then auto-imports that
+# file when it is newer than the DB, which wiped the whole 264-issue tracker.
+# Plain git merge on this file produces conflict markers instead: loud, and recoverable.
+# Reconcile a conflicted export per-issue by newest `updated_at`, then let bd auto-import it.

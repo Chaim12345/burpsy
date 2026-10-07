@@ -22,6 +22,7 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -45,6 +46,12 @@ type bcheckSink struct {
 	ex          *core.Exchange
 	meter       *probeMeter
 	probeBudget time.Duration
+	// check names the corpus check this sink serves. A corpus check chooses its own
+	// payloads, so the coverage ledger cannot attribute novelty to a payload the way
+	// ProbeHarness's guide can — but every probe still reaches a path, and the cell
+	// it lands in is recorded per check name so the coverage report can say which
+	// corpus checks opened new ground.
+	check string
 }
 
 // Send writes raw request bytes to the bound target through the same gate every
@@ -74,6 +81,15 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	k.meter.succeeded()
+	// Coverage guidance (burpsy-react-ui-6c90): a corpus check's probe reached a
+	// path of the target, and the cell it landed in is recorded per exchange and
+	// check name. The guide cannot score these probes by payload — the check
+	// script chooses its own — but the coverage half of the loop is the same one
+	// the built-in checks feed.
+	if k.sc.pathCov != nil {
+		raw := string(resp)
+		k.sc.pathCov.Record(fmt.Sprintf("%d", k.ex.ID), responseStatus(raw), len(responseBody(raw)))
+	}
 	return resp, nil
 }
 
@@ -136,7 +152,8 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 		return nil, errCheckUnsupported
 	}
 	bctx := bcheck.NewContext()
-	bctx.Response = resp.Raw()
+	// Readable, like the probe responses sendProbe hands the check (s68u).
+	bctx.Response, _ = readableResponse(resp.Raw())
 	bctx.Host = ex.Host
 	bctx.Port = ex.Port
 	bctx.TLS = ex.TLS
@@ -144,10 +161,10 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	// The request is optional: a host-given check can run on the response
 	// alone, but an insertion-point or `send request` check needs the bytes and
 	// will refuse (SendFailed) rather than guess.
-	if req, err := s.store.Get(ex.Request); err == nil {
+	if req, err := s.store.Get(core.MsgOrZero(ex.Request)); err == nil {
 		bctx.Request = req.Raw()
 	}
-	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s)}
+	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s), check: check.Name}
 	// The tool runner rides the context like the sink: the evaluator asks for a
 	// named tool, this scanner resolves it through the allowlist. Nil keeps the
 	// pre-tool behaviour — a check that somehow reaches `run tool` without one

@@ -155,7 +155,7 @@ func TestAForwardedWebSocketFrameIsRelayedByteIdentically(t *testing.T) {
 	frame := core.EncodeWsFrame(core.WsOpcodeText, []byte(`{"msg":"hello"}`), &mask)
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, nil, false)
+		_ = engine.Forward(h.ID, nil, false, nil)
 	})
 	defer stop()
 
@@ -235,7 +235,7 @@ func TestAnEditedClientFrameIsReMaskedAndCarriesTheEdit(t *testing.T) {
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		// fixContentLength false: a WebSocket frame has no Content-Length, and asking the HTTP
 		// rewriter to find one in a JSON payload is how a frame gets mangled.
-		_ = engine.Forward(h.ID, ptr(edited), false)
+		_ = engine.Forward(h.ID, ptr(edited), false, nil)
 	})
 	defer stop()
 
@@ -269,7 +269,7 @@ func TestAnEditedServerFrameGoesOutUnmasked(t *testing.T) {
 	const edited = `{"balance":999999}`
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, ptr(edited), false)
+		_ = engine.Forward(h.ID, ptr(edited), false, nil)
 	})
 	defer stop()
 
@@ -334,7 +334,7 @@ func TestAFrameSplitAcrossReadsIsHeldOnceAndWhole(t *testing.T) {
 				len(h.Raw), len(payload))
 		}
 		offered++
-		_ = engine.Forward(h.ID, nil, false)
+		_ = engine.Forward(h.ID, nil, false, nil)
 	})
 	defer stop()
 
@@ -374,7 +374,7 @@ func TestSeveralFramesInOneReadAreEachHeldInOrder(t *testing.T) {
 	var seen []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		seen = append(seen, string(h.Raw))
-		_ = engine.Forward(h.ID, nil, false)
+		_ = engine.Forward(h.ID, nil, false, nil)
 	})
 	defer stop()
 
@@ -453,7 +453,7 @@ func TestAFragmentedMessageIsReassembledAndOfferedWhole(t *testing.T) {
 	var offered []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		offered = append(offered, string(h.Raw))
-		_ = engine.Forward(h.ID, nil, false)
+		_ = engine.Forward(h.ID, nil, false, nil)
 	})
 	defer stop()
 
@@ -487,7 +487,7 @@ func TestEditingAReassembledMessageSendsOneFrameWithTheEdit(t *testing.T) {
 	const edited = "REPLACED"
 
 	stop := wsOperator(engine, func(h *intercept.Held) {
-		_ = engine.Forward(h.ID, ptr(edited), false)
+		_ = engine.Forward(h.ID, ptr(edited), false, nil)
 	})
 	defer stop()
 
@@ -549,7 +549,7 @@ func TestAPingBetweenFragmentsPassesThroughWithoutBreakingReassembly(t *testing.
 	var offered []string
 	stop := wsOperator(engine, func(h *intercept.Held) {
 		offered = append(offered, string(h.Raw))
-		_ = engine.Forward(h.ID, nil, false)
+		_ = engine.Forward(h.ID, nil, false, nil)
 	})
 	defer stop()
 

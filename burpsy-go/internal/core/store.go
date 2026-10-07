@@ -18,6 +18,26 @@ const DefaultSegmentTargetBytes = 100 * 1024 * 1024 // 100 MB
 // MsgId is a handle to a stored message. Cheap to copy; carries no payload.
 type MsgId uint64
 
+// MsgPtr returns a pointer to a message id, for the many places that build an Exchange from a value
+// they know exists.
+//
+// It exists so the new *MsgId field does not turn every construction site into a three-line dance
+// with a local variable, and so the conversion is one named thing a reader can see is deliberate.
+func MsgPtr(id MsgId) *MsgId { return &id }
+
+// MsgOrZero returns a message id, or 0 when there is none.
+//
+// It is for the READ paths that immediately hand the id to store.Get, where a nil and a 0 are the
+// same answer — Get(0) on a store that has no message 0 returns an error, and Get(0) on one that
+// does returns that message. Those call sites are exactly the ones where the distinction does not
+// matter, and naming it is more honest than a nil check that guards nothing.
+func MsgOrZero(id *MsgId) MsgId {
+	if id == nil {
+		return 0
+	}
+	return *id
+}
+
 // ExchangeID is a handle to a stored exchange.
 //
 // A distinct type, not a bare uint64, and the reason is a bug this cost us. Messages and exchanges
@@ -343,8 +363,20 @@ func (d ExchangeDuration) String() string {
 
 // Exchange represents one proxied exchange. Holds IDs, never payloads.
 type Exchange struct {
-	ID          ExchangeID
-	Request     MsgId
+	ID ExchangeID
+	// Request is the message id of this exchange's request, or nil when it has none.
+	//
+	// A POINTER, and the reason is the same one ExchangeID is its own type for: message ids are a
+	// dense counter from ZERO, so 0 is the first message the project ever captured and is a perfectly
+	// real id. A bare MsgId therefore cannot say "no request" — its zero value IS a valid request, and
+	// a blind CONNECT tunnel, which has no request bytes at all, left the field at that zero and every
+	// consumer read it as "this row's request is message 0". The history detail pane then rendered the
+	// project's first request under the label Request for a tunnel that has none: another exchange's
+	// bytes presented as this one's, with nothing on screen marking it (burpsy-react-ui-wtov).
+	//
+	// Response has always been a pointer for the same reason. One rule, one type, and an absence a
+	// consumer can actually see.
+	Request     *MsgId
 	Response    *MsgId
 	Host        string
 	Port        uint16
@@ -377,10 +409,22 @@ type Exchange struct {
 	// Sitemap columns both rely on exactly that pair — see the mimeLabel note in ui/src/lib/api.ts.
 	Mime      string
 	StartedMs uint64
-	// Duration is how long the exchange took, or the explicit "nobody measured this". See
-	// ExchangeDuration for why it is not a millisecond count.
+	// Duration is how long the exchange took start to finish — the request going out to the last
+	// response byte arriving — or the explicit "nobody measured this". It is Burp's "End response
+	// timer". See ExchangeDuration for why it is not a millisecond count.
 	Duration ExchangeDuration
-	Notes    *string
+	// TTFB is time-to-first-byte: the request going out to the *first* response byte arriving, or the
+	// explicit "nobody measured this". It is Burp's "Start response timer", and it is what tells a slow
+	// origin (long TTFB, quick body) apart from a slow-bodied one (quick TTFB, long total) — a
+	// distinction Duration alone erases, because both read as one large total.
+	//
+	// Measured only by producers that time the first byte at the wire: the HTTP/1 and HTTP/2 proxy
+	// relays. A producer that only ever knew the whole round trip — Repeater, Intruder, the crawler,
+	// a restore of a row written before this field existed — leaves it Unmeasured, which the wire and
+	// the UI render as "no split", never as an instantaneous first byte. Same fail-safe zero as
+	// Duration.
+	TTFB  ExchangeDuration
+	Notes *string
 	// Highlight is the operator's colour tag for this row, empty when unset. It mirrors the UI's
 	// Organizer highlight vocabulary (see ValidHighlights) rather than inventing a second one, so the
 	// same colour means the same thing whichever tool set it. Unlike organizer.Item.Highlight, the wire
@@ -408,6 +452,24 @@ type Exchange struct {
 	// A pointer rather than a zero sentinel, because exchange 0 is a real exchange and is very often
 	// the first thing an operator sends to Repeater.
 	ParentID *ExchangeID
+	// RequestFP fingerprints this exchange's raw request bytes (FNV-1a), computed once at
+	// capture by RequestFingerprint. It exists so the audit ledger's URL-keyed scopes can
+	// tell two captures of one endpoint apart (burpsy-react-ui-6n4d): same fingerprint =
+	// same unit (identical work, still collapsed), different fingerprint = the endpoint's
+	// semantics changed and the checks run again. Zero means "not computed" — an exchange
+	// minted without the capture seam has no fingerprint and keys the way it always did.
+	RequestFP uint64
+	// RequestParams is how many parameters this exchange's request carries, in Burp's sense: the
+	// query string's, plus a form body's when there is one (burpsy-react-ui-7py5). Computed once at
+	// capture by RequestParameterCount, at the same seam as RequestFP and for the same reason — a
+	// history row carries no request body, so a consumer that wanted this would have to read the
+	// bytes back, which is the cost the history/message split exists to prevent.
+	//
+	// The number is EXACT for a urlencoded or multipart body and a lower bound otherwise: a body this
+	// cannot parse is counted as one rather than zero, because reporting zero would tell an operator a
+	// request has no parameters when nobody examined it. Zero therefore means "certainly no
+	// parameters", which is a weaker claim than it looks and is the honest one.
+	RequestParams int
 	// Cookies names the cookies the response set, in first-seen order. Computed once at
 	// capture by CookieNames, for the same reason Mime is: listing history must never read
 	// response bytes. Nil means none were set — like Mime, only Response separates "none
@@ -416,6 +478,235 @@ type Exchange struct {
 	// Title is the response's HTML <title> text, or "" when it has none. Computed once at
 	// capture by ResponseTitle: a list-time parse would read bodies to render a column.
 	Title string
+	// ServerIP is the destination server's resolved IP, Burp's history "IP" column
+	// (burpsy-react-ui-mr4p). Empty when the producer did not resolve one — a capture site with no
+	// upstream socket in hand, or an exchange this process never dialled.
+	//
+	// Recorded at capture for the same reason Mime and Title are: listing history must never do
+	// work per row. Here the reason is stronger than a file read — the address is a property of a
+	// socket that is closed by the time anyone lists the row, and re-resolving the name later
+	// would answer a different question (where does this host point NOW) and present it as a fact
+	// about the exchange.
+	ServerIP string
+	// ListenerPort is the proxy listener port the request arrived on, Burp's history "Listener
+	// port" column (burpsy-react-ui-he81). Zero when the producer was not a listener — every
+	// exchange from Repeater, Intruder, the crawler or the scanner.
+	//
+	// It exists because a rebindable listener and several configured listeners are both reachable
+	// now, and with neither recorded there was no way to tell which one captured a row.
+	ListenerPort uint16
+
+	// The earlier stages of this exchange's own bytes, retained so history can show what a
+	// transformation did rather than only that one happened (burpsy-react-ui-c05, under epic mrjw).
+	//
+	// # The four fields, and why the naming is "the stage that differs from the next one"
+	//
+	// Burp's Proxy history lets an operator read a message three ways — Original (what the client
+	// sent), Auto-modified (what the tool's own rules made of it) and Edited (what the operator's
+	// hand made of that, which is what actually went out). burpsy kept only the last of the three,
+	// so a Match & Replace rule's effect on real traffic was invisible; Counters.ModifiedUnrecorded
+	// is an accountability substitute for the bytes, which is how proxy.go's own comment puts it.
+	//
+	// The stages are:
+	//
+	//	stage 0  the client's bytes, after protocol normalisation only  (RequestOriginal)
+	//	stage 1  after the automatic rules                               (RequestAuto)
+	//	stage 2  after any manual edit — what went on the wire          (Request / Response)
+	//
+	// A variant is stored **only when it differs from the next stage**, and nil means "the same as
+	// the next stage". So nothing modified costs no extra message at all, an edit made by a rule and
+	// not by hand costs one, and an exchange edited both ways costs two. Storing all three
+	// unconditionally would be simpler and would be wrong here: it would multiply the resident set
+	// by three for all traffic, and this store's whole design is that the resident set does not
+	// scale with work in flight. See the package doc's "raw bytes are written once and never
+	// copied" — a variant is a second write, so it is spent only where a difference exists to
+	// describe.
+	//
+	// Reading a variant is therefore a walk backwards, which VariantFor does so no caller has to
+	// remember the rule.
+	RequestOriginal *MsgId
+	RequestAuto     *MsgId
+	// ResponseOriginal and ResponseAuto are the response's stages, on the same rule. They are
+	// pointers like Response rather than values like Request, because a response may not exist yet
+	// and "no response" must not be confusable with "response identical to the original".
+	ResponseOriginal *MsgId
+	ResponseAuto     *MsgId
+
+	// UserEdited says the operator modified this exchange by hand — in Intercept. It is Burp's
+	// history "Edited" column: "Flag whether the request or response were modified by the user",
+	// and Montoya's ProxyHttpRequestResponse.edited().
+	//
+	// # Why this is a fact and not arithmetic over the stages
+	//
+	// It used to be derived — "any stage was retained, so something changed the bytes" — and that
+	// is wrong in the direction that matters, because the stage boundary is taken *above* the
+	// operator's hold while several automatic rewrites run below it. Stripping Proxy-* headers,
+	// the request-direction option rules and the retarget all happen after the hold, so each of
+	// them landed in the same gap a hand edit occupies: a request curl sent through the proxy was
+	// recorded as user-edited purely because burpsy had removed its Proxy-Connection header
+	// (burpsy-react-ui-sd0d). A column that flags most traffic as hand-modified has no signal left.
+	//
+	// The two facts are independent and both are kept, because they answer different questions:
+	// the stages say *what the bytes became* (the viewer's Original / Auto-modified / Edited
+	// readings, and they stay exactly as they were), and this says *who did it*. A Match & Replace
+	// rule that rewrites a header produces a retained stage and leaves this false — the rule is
+	// the tool's, not the operator's.
+	//
+	// A retarget sets it: the bytes may be identical and the item is still not the one the client
+	// sent, because its destination is not. That is a modification by the operator's hand, and it
+	// is exactly what an operator looking at this column is trying to find.
+	UserEdited bool
+}
+
+// Variant names one of Burp's three readings of a message in history.
+//
+// It exists as a type rather than three loose accessors because the UI, the wire and the store all
+// have to agree on the same three names, and because the zero value is deliberately VariantEdited:
+// every caller that does not know about variants at all must keep getting exactly what it got
+// before, which is the bytes that travelled.
+type Variant int
+
+const (
+	// VariantEdited is the message as it went on the wire — the request after the operator's own
+	// intercept edit, the response after theirs. This is the zero value and the default view.
+	VariantEdited Variant = iota
+	// VariantOriginal is the message as the peer sent it, before any automatic rule or manual edit.
+	VariantOriginal
+	// VariantAutoModified is the message after the automatic (Match & Replace) rules and before any
+	// manual edit. With no manual edit this equals VariantEdited, and with no automatic rule it
+	// equals VariantOriginal; both fall out of the storage rule rather than needing special cases.
+	VariantAutoModified
+)
+
+// String renders a variant for the wire and for an operator. Unknown values render as "edited"
+// rather than as an empty string, because every caller that has no opinion means the wire bytes.
+func (v Variant) String() string {
+	switch v {
+	case VariantOriginal:
+		return "original"
+	case VariantAutoModified:
+		return "auto-modified"
+	default:
+		return "edited"
+	}
+}
+
+// ParseVariant reads a variant name off the wire, refusing anything it does not know rather than
+// falling back to a default: a query string asking for a view that does not exist is a caller
+// mistake, and answering it with different bytes than were asked for is how a comparison tool
+// silently compares the wrong thing.
+func ParseVariant(s string) (Variant, bool) {
+	switch s {
+	case "", "edited":
+		return VariantEdited, true
+	case "original":
+		return VariantOriginal, true
+	case "auto-modified", "automodified":
+		return VariantAutoModified, true
+	}
+	return VariantEdited, false
+}
+
+// VariantFor resolves one variant of a request or response to the message that holds it, walking
+// the stages backwards.
+//
+// The walk is the whole point of storing only the differing stages, and it is why this is one
+// method rather than four field reads at each call site: getting the order wrong here is how a
+// caller ends up showing the original bytes under the "auto-modified" label. ok is false when the
+// variant does not exist — no response for this exchange, or a request stage that was never
+// stored because nothing differed. Callers must treat that as "this variant is not available"
+// rather than substituting the edited view, or the UI would offer three tabs whose contents are
+// two lies.
+func (e *Exchange) VariantFor(direction Direction, v Variant) (MsgId, bool) {
+	if e == nil {
+		return 0, false
+	}
+	if direction == DirectionRequest {
+		switch v {
+		case VariantOriginal:
+			// stage 0, or the earliest stage that was actually written.
+			if e.RequestOriginal != nil {
+				return *e.RequestOriginal, true
+			}
+			if e.RequestAuto != nil {
+				return *e.RequestAuto, true
+			}
+			// A pointer, so a tunnel with no request resolves to "no such variant" rather than to
+			// message 0. The caller asks which bytes a variant holds; a row with none has no variant to
+			// name, and answering 0 would name another exchange's message (burpsy-react-ui-wtov).
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
+		case VariantAutoModified:
+			if e.RequestAuto != nil {
+				return *e.RequestAuto, true
+			}
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
+		default:
+			if e.Request == nil {
+				return 0, false
+			}
+			return *e.Request, true
+		}
+	}
+	switch v {
+	case VariantOriginal:
+		if e.ResponseOriginal != nil {
+			return *e.ResponseOriginal, true
+		}
+		if e.ResponseAuto != nil {
+			return *e.ResponseAuto, true
+		}
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	case VariantAutoModified:
+		if e.ResponseAuto != nil {
+			return *e.ResponseAuto, true
+		}
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	default:
+		if e.Response == nil {
+			return 0, false
+		}
+		return *e.Response, true
+	}
+}
+
+// HasRetainedStage reports whether this exchange kept any earlier reading of a message than the one
+// that travelled, so a caller can offer exactly the comparisons that have bytes behind them.
+//
+// A single bool rather than one per variant, because the two earlier readings appear and disappear
+// together: the storage rule writes stage 1 only where it differs from the final bytes and stage 0
+// only where it differs from stage 1, so at least one of them exists as soon as the message was
+// changed by anything at all. Which of the two a given reading resolves to is VariantFor's question,
+// and answering that one here as well is how the two answers would come to disagree.
+//
+// Derived from the stored ids rather than from a separate flag, for the same reason: a flag is a
+// second answer to a question the ids already answer.
+func (e *Exchange) HasRetainedStage(direction Direction) bool {
+	if e == nil {
+		return false
+	}
+	if direction == DirectionRequest {
+		return e.RequestOriginal != nil || e.RequestAuto != nil
+	}
+	if e.Response == nil {
+		// No response at all, so there is no earlier reading of one either. Spelled out rather than
+		// left to two nil checks on the stage ids: those are nil for an exchange whose response has
+		// not arrived *and* for one whose response arrived unmodified, and a caller that wants to
+		// distinguish those is asking about Response, not about this.
+		return false
+	}
+	return e.ResponseOriginal != nil || e.ResponseAuto != nil
 }
 
 // Source names the surface an exchange came from.
@@ -455,6 +746,10 @@ const (
 	SourceIntruder Source = "intruder"
 	// SourceScanner is an active audit probe.
 	SourceScanner Source = "scanner"
+	// SourceImport is traffic brought in from a file — a HAR export, say — rather than captured live.
+	// It is kept distinct from SourceProxy for the same reason Repeater is: history must not claim the
+	// operator's own client sent a request that in fact arrived from a colleague's session or a CI run.
+	SourceImport Source = "import"
 )
 
 // Attributed reports whether a producer named this exchange's origin.
@@ -497,7 +792,13 @@ type TrafficStore struct {
 	// API did — it looked an exchange up by its request *message* id, and reported findings against
 	// whichever unrelated exchange happened to share that number. This index makes the correct
 	// lookup available so callers holding a message id never have to guess.
-	byRequest   map[MsgId]*Exchange
+	byRequest map[MsgId]*Exchange
+	// deleted holds the exchange ids the operator removed (burpsy-react-ui-r6li). Exchange ids
+	// are positional — Restore's contract — so a deletion cannot splice the slice without
+	// renumbering every later row mid-engagement; the slot stays and the flag decides visibility.
+	// A map rather than a bool on Exchange: the flag is store state, not wire shape, and keeping
+	// it off the struct means no projection can leak it by accident.
+	deleted     map[ExchangeID]bool
 	bytes       int64
 	nextID      uint64
 	captureDir  string
@@ -541,6 +842,7 @@ func NewTrafficStore() *TrafficStore {
 		wsMessages: make([]*WsMessage, 0),
 		wsPayloads: make([][]byte, 0),
 		locations:  make([]Location, 0),
+		deleted:    make(map[ExchangeID]bool),
 	}
 }
 
@@ -636,7 +938,12 @@ func (ts *TrafficStore) AddExchange(ex *Exchange) {
 	if ts.byRequest == nil {
 		ts.byRequest = make(map[MsgId]*Exchange)
 	}
-	ts.byRequest[ex.Request] = ex
+	// An exchange with no request is not indexed at all. Indexing it under the zero would make
+	// byRequest[0] return a tunnel for whatever asked about message 0 — and message 0 is a real
+	// message (burpsy-react-ui-wtov).
+	if ex.Request != nil {
+		ts.byRequest[*ex.Request] = ex
+	}
 
 	if ts.onExchange != nil {
 		ts.onExchange(ex)
@@ -719,12 +1026,31 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	defer ts.mu.Unlock()
 	ts.messages = messages
 	ts.exchanges = exchanges
+	// The request column in the durable store is NOT NULL, so a row that had no request persisted as
+	// 0 — which is also a real message id, and the model cannot tell the two apart from the row alone.
+	// The store CAN: it holds the whole message set, and position is the id, so a 0 that names no
+	// restored message can only have meant "no request".
+	//
+	// The conservative direction is the other one when message 0 IS present: the row is read as
+	// naming it, because the alternative is asserting an absence the disk cannot support. A tunnel
+	// restored into a session that also captured a first request therefore comes back pointing at
+	// that request -- the same shape as the original defect, and narrowed to the case where the
+	// column genuinely cannot say. burpsy-react-ui-wtov.
+	for _, e := range exchanges {
+		if e.Request != nil && *e.Request == 0 && len(messages) == 0 {
+			e.Request = nil
+		}
+	}
 	// Rebuilt in lockstep with the exchange slice: a finding restored from the durable mirror holds
 	// a request message id, and without this index its host and path could not be resolved after a
 	// restart even though both were captured.
 	ts.byRequest = make(map[MsgId]*Exchange, len(exchanges))
 	for _, ex := range exchanges {
-		ts.byRequest[ex.Request] = ex
+		// Same rule as AddExchange: a row with no request is not indexed, so a restore cannot
+		// reintroduce the byRequest[0] collision that AddExchange avoids (burpsy-react-ui-wtov).
+		if ex.Request != nil {
+			ts.byRequest[*ex.Request] = ex
+		}
 	}
 	// The locations index is rebuilt from the messages themselves, in lockstep.
 	// A disk-backed message restored from the durable mirror carries the span
@@ -742,9 +1068,13 @@ func (ts *TrafficStore) Restore(messages []*StoredMessage, exchanges []*Exchange
 	// now point at payloads from a previous life.
 	ts.wsMessages = nil
 	ts.wsPayloads = nil
-	if len(messages) > 0 {
-		ts.nextID = uint64(len(messages))
-	}
+	// Unconditional: ids are positions, so the counter is the length of what was restored — INCLUDING
+	// zero. A guard that skipped the reset for an empty restore left the counter at the previous
+	// contents' length, which an in-console switch to a new project file then exposed: the next capture
+	// got id 3 while landing in slot 0, so every message stored after the switch was unreadable and every
+	// exchange pointing at one showed no bytes (burpsy-react-ui-nagj). Nothing else assigns nextID, so
+	// there is no other source of truth an empty restore could be protecting.
+	ts.nextID = uint64(len(messages))
 	var total int64
 	for _, m := range messages {
 		total += int64(m.Len())
@@ -810,8 +1140,46 @@ func (ts *TrafficStore) GetExchange(id ExchangeID) (*Exchange, error) {
 	if uint64(id) >= uint64(len(ts.exchanges)) {
 		return nil, fmt.Errorf("exchange not found: %d", id)
 	}
+	if ts.deleted[id] {
+		return nil, fmt.Errorf("exchange not found: %d", id)
+	}
 
 	return ts.exchanges[id], nil
+}
+
+// DeleteExchanges marks the given exchange ids deleted (burpsy-react-ui-r6li): Burp's
+// "Delete items". Positional ids stay stable — see the deleted field — so a deletion never
+// renumbers live traffic. Already-deleted and out-of-range ids are skipped rather than
+// succeeding quietly; the return is the number that actually left the view, so the API can
+// answer "3 deleted, 1 not found" honestly.
+func (ts *TrafficStore) DeleteExchanges(ids []ExchangeID) int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	removed := 0
+	for _, id := range ids {
+		if uint64(id) >= uint64(len(ts.exchanges)) || ts.deleted[id] {
+			continue
+		}
+		ts.deleted[id] = true
+		removed++
+	}
+	return removed
+}
+
+// ClearExchanges marks every exchange deleted (burpsy-react-ui-r6li): Burp's "Clear (tool)".
+// Returns how many rows left the view. Messages are untouched — the underlying bytes stay in a
+// persisted store, and every id elsewhere keeps meaning what it meant.
+func (ts *TrafficStore) ClearExchanges() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	removed := 0
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			ts.deleted[ex.ID] = true
+			removed++
+		}
+	}
+	return removed
 }
 
 // ValidHighlights is the wire vocabulary for Exchange.Highlight: exactly the UI's HIGHLIGHTS list
@@ -843,6 +1211,9 @@ func (ts *TrafficStore) UpdateExchangeAnnotation(id ExchangeID, notes *string, n
 	if uint64(id) >= uint64(len(ts.exchanges)) {
 		return nil, fmt.Errorf("exchange not found: %d", id)
 	}
+	if ts.deleted[id] {
+		return nil, fmt.Errorf("exchange not found: %d", id)
+	}
 	ex := ts.exchanges[id]
 	if notesSet {
 		ex.Notes = notes
@@ -866,7 +1237,7 @@ func (ts *TrafficStore) ExchangeByRequest(id MsgId) (*Exchange, error) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	if ex, ok := ts.byRequest[id]; ok {
+	if ex, ok := ts.byRequest[id]; ok && !ts.deleted[ex.ID] {
 		return ex, nil
 	}
 	return nil, fmt.Errorf("no exchange has request message %d", id)
@@ -899,7 +1270,7 @@ func (ts *TrafficStore) PriorExchange(host string, port uint16, tls bool, path s
 		if ExchangeID(i) >= before {
 			continue
 		}
-		if ex.Host != host || ex.Port != port || ex.TLS != tls {
+		if ex.Host != host || ex.Port != port || ex.TLS != tls || ts.deleted[ex.ID] {
 			continue
 		}
 		// The path carries the query string, so an exact match is one endpoint: "/a" and "/a?x=1"
@@ -916,13 +1287,19 @@ func (ts *TrafficStore) PriorExchange(host string, port uint16, tls bool, path s
 	return best, true
 }
 
-// Exchanges returns all exchanges (for history listing).
+// Exchanges returns all exchanges visible to the operator (for history listing): rows the
+// operator deleted (burpsy-react-ui-r6li) are not listed. The slice copy skips them rather
+// than splicing the underlying storage — positional ids stay stable.
 func (ts *TrafficStore) Exchanges() []*Exchange {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
-	result := make([]*Exchange, len(ts.exchanges))
-	copy(result, ts.exchanges)
+	result := make([]*Exchange, 0, len(ts.exchanges))
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			result = append(result, ex)
+		}
+	}
 	return result
 }
 
@@ -930,7 +1307,16 @@ func (ts *TrafficStore) Exchanges() []*Exchange {
 func (ts *TrafficStore) Count() (messages, exchanges int) {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return len(ts.messages), len(ts.exchanges)
+	// The exchange count answers "how much is in the capture" — a row the operator deleted is
+	// not in the capture as far as they are concerned, so it is not counted (r6li). Messages
+	// keep their raw count: message ids still resolve and the bytes still exist.
+	exchanges = 0
+	for _, ex := range ts.exchanges {
+		if !ts.deleted[ex.ID] {
+			exchanges++
+		}
+	}
+	return len(ts.messages), exchanges
 }
 
 // Bytes returns the total stored bytes.

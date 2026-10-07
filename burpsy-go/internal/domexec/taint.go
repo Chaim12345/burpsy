@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -688,27 +689,209 @@ func sameNavigation(a, b string) bool {
 // content that exists only once the page's own script has run (e.g. a
 // client-side template rendering stored data), which is invisible to an
 // HTTP-only scanner that only ever sees the raw response body.
+// RenderOptions is what a render waits for before it reads the DOM, and what it gives up on.
+//
+// The three are separate because they fail differently and an operator diagnosing a thin crawl needs
+// to know which one bit. Burp exposes the same pair ("Network idle threshold (ms):",
+// map_root.tsv:7393, and the DOM-quiet window at Zgjj.java:161-165), and the reason it matters is
+// that a modern target's content arrives AFTER load: a render that reads at the load event sees an
+// empty shell, contributes no links, and the crawl then reports an application as having almost no
+// locations — a confident wrong answer (burpsy-react-ui-efra).
+type RenderOptions struct {
+	// DOMQuiet is how long the DOM must be UNCHANGED before the page counts as settled. Zero takes
+	// DefaultDOMQuiet.
+	//
+	// A page that fetches and renders in three steps is empty at the load event and complete a
+	// moment later; this is the window that catches it.
+	DOMQuiet time.Duration
+	// NetworkIdle is how long no request may be in flight before the page counts as settled. Zero
+	// takes DefaultNetworkIdle.
+	//
+	// Separate from DOMQuiet because a page can be quiet in the DOM while a request is still running
+	// (a skeleton that has not been replaced yet), and can be busy in the DOM with no request at all
+	// (a carousel). Whichever fires first settles it; requiring both would hang on a page that
+	// polls forever, which is a normal thing for a dashboard to do.
+	NetworkIdle time.Duration
+	// MaxWait is the hard cap. Zero takes DefaultMaxRenderWait.
+	//
+	// It exists because both windows above are LOWER bounds on quietness, and a page that never goes
+	// quiet — a websocket, a polling feed, an analytics beacon that never stops — would otherwise
+	// wait forever. Capping and REPORTING the cap is the difference between a truncated render and a
+	// hung crawl.
+	MaxWait time.Duration
+}
+
+// The defaults, and the reason they are non-zero: the floor of this feature is the 300 ms the
+// previous implementation slept unconditionally, so a crawl configured with nothing waits at least
+// as long as it always did and no crawl gets SLOWER. Zero would mean "read at the load event",
+// which is the defect.
+const (
+	// DefaultDOMQuiet is the settle window for the DOM. 300 ms is the fixed sleep the
+	// implementation this replaces used unconditionally, so it is the FLOOR: a page that settles early
+	// returns as soon as it does, and 300 ms only applies to one that keeps changing.
+	DefaultDOMQuiet = 300 * time.Millisecond
+	// DefaultNetworkIdle is the settle window for in-flight requests. Shorter than DOMQuiet because a
+	// pending request is a stronger signal that something is coming than a DOM that has not changed
+	// yet.
+	DefaultNetworkIdle = 500 * time.Millisecond
+	// DefaultMaxRenderWait caps the whole wait. Ten seconds is longer than any first paint an
+	// operator will sit through and short enough that a crawl of a thousand pages does not spend
+	// three hours on the ones that never settle.
+	DefaultMaxRenderWait = 10 * time.Second
+)
+
+func (o RenderOptions) withDefaults() RenderOptions {
+	if o.DOMQuiet <= 0 {
+		o.DOMQuiet = DefaultDOMQuiet
+	}
+	if o.NetworkIdle <= 0 {
+		o.NetworkIdle = DefaultNetworkIdle
+	}
+	if o.MaxWait <= 0 {
+		o.MaxWait = DefaultMaxRenderWait
+	}
+	return o
+}
+
+// RenderOutcome says how a render ended, so a caller can report a truncated page rather than
+// presenting it as an empty one.
+type RenderOutcome struct {
+	// Settled reports that the page went quiet inside MaxWait.
+	Settled bool
+	// Capped reports that MaxWait was reached first — the DOM was read while the page was still
+	// changing, so whatever it did not have yet is missing rather than absent.
+	Capped bool
+	// Waited is how long the render actually took.
+	Waited time.Duration
+	// Requests are the XHR and fetch requests the page itself issued while it rendered
+	// (burpsy-react-ui-hzzl): the run-time API calls a single-page app makes, which appear in no
+	// served byte and no rendered link. Capped at MaxRenderedRequests; RequestsDropped counts the rest.
+	Requests        []RenderedRequest
+	RequestsDropped int
+}
+
+// RenderedRequest is one request a page issued at run time.
+type RenderedRequest struct {
+	URL    string
+	Method string
+	// Type is the CDP resource type, "XHR" or "Fetch".
+	Type string
+}
+
+// MaxRenderedRequests bounds how many run-time requests one render records, so a page that polls or
+// streams cannot grow a crawl's frontier without bound.
+const MaxRenderedRequests = 200
+
+// RenderedDOMWithOptions reads the rendered DOM of one page, waiting for it to settle first, and
+// says whether it did.
+func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
+	opts = opts.withDefaults()
+	started := time.Now()
+	html, reqs, dropped, err := b.renderedDOM(ctx, targetURL, opts, started)
+	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped}
+	if err != nil {
+		return "", outcome, err
+	}
+	// A render that finished inside the cap with the page quiet is settled. We do not measure
+	// "quiet" again here: the wait below already established it, and re-measuring would cost another
+	// window for an answer the caller does not use.
+	outcome.Settled = outcome.Waited < opts.MaxWait
+	outcome.Capped = !outcome.Settled
+	return html, outcome, nil
+}
+
 func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, error) {
+	html, _, err := b.RenderedDOMWithOptions(ctx, targetURL, RenderOptions{})
+	return html, err
+}
+
+func (b *Browser) renderedDOM(ctx context.Context, targetURL string, opts RenderOptions, started time.Time) (string, []RenderedRequest, int, error) {
 	tabCtx, cancel, err := b.newTab(ctx)
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
 	defer cancel()
 
+	// The page's own run-time requests, recorded as the browser announces them. XHR and Fetch only:
+	// documents, scripts and images are already reachable from the served or rendered markup, and the
+	// requests a page MAKES are the ones nothing else can see.
+	var mu sync.Mutex
+	var reqs []RenderedRequest
+	dropped := 0
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		e, ok := ev.(*network.EventRequestWillBeSent)
+		if !ok || e.Request == nil || (e.Type != network.ResourceTypeXHR && e.Type != network.ResourceTypeFetch) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(reqs) >= MaxRenderedRequests {
+			dropped++
+			return
+		}
+		reqs = append(reqs, RenderedRequest{URL: e.Request.URL, Method: e.Request.Method, Type: string(e.Type)})
+	})
+
 	var html string
 	err = chromedp.Run(tabCtx,
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			return network.Enable().Do(ctx)
+		}),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			_, err := page.AddScriptToEvaluateOnNewDocument(instrumentationJS).Do(ctx)
 			return err
 		}),
 		chromedp.Navigate(targetURL),
-		chromedp.Sleep(300*time.Millisecond),
+		// A plain action, not a chromedp one: the wait reads the DOM on every tick with its own
+		// Evaluate, so wrapping it would nest an action inside an action and lose the tab context.
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			waitForSettle(ctx, opts)
+			return nil
+		}),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &html),
 	)
+	mu.Lock()
+	out, gone := append([]RenderedRequest(nil), reqs...), dropped
+	mu.Unlock()
 	if err != nil {
-		return "", fmt.Errorf("domexec: render %q: %w", targetURL, err)
+		return "", out, gone, fmt.Errorf("domexec: render %q: %w", targetURL, err)
 	}
-	return html, nil
+	return html, out, gone, nil
+}
+
+// waitForSettle blocks until the page is quiet in either the DOM or the network, or MaxWait elapses.
+//
+// Both signals are polled rather than waited on, because neither is an event chromedp can await
+// directly: the DOM has no "changed" event, and a request counter has to be read out of the page on
+// every tick. The poll is deliberately coarse — the window is measured in hundreds of milliseconds,
+// so a 50 ms tick costs nothing measurable and a finer one would only burn the render's own budget.
+//
+// The cap is enforced by the SAME deadline rather than by a second timer, so a page that never settles
+// costs exactly MaxWait and not MaxWait plus a timeout race.
+func waitForSettle(ctx context.Context, opts RenderOptions) {
+	deadline := time.Now().Add(opts.MaxWait)
+	// lastHTML is the previous sample, and lastChange is when it last differed. A page that is still
+	// being written keeps pushing lastChange forward and never looks quiet, which is the behaviour the
+	// DOM window is asking for.
+	lastHTML, lastChange := "", time.Now()
+	for {
+		if time.Now().After(deadline) {
+			return
+		}
+		var now string
+		if err := chromedp.Evaluate(`document.documentElement.outerHTML`, &now).Do(ctx); err != nil {
+			// The page is gone or the tab died: there is nothing left to wait for, and the caller
+			// reports the render as unavailable rather than as an empty page.
+			return
+		}
+		if now != lastHTML {
+			lastHTML, lastChange = now, time.Now()
+		}
+		if time.Since(lastChange) >= opts.DOMQuiet {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // StoredRender is one load of a page that was given no attacker-controlled source at all.

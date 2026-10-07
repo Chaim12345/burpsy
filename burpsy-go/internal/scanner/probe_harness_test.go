@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func harnessAgainst(t *testing.T, handler http.HandlerFunc, path string) *CheckC
 	if err != nil {
 		t.Fatalf("put response: %v", err)
 	}
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port,
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port,
 		TLS: false, Method: "GET", Path: path}
 	store.AddExchange(ex)
 
@@ -273,7 +274,7 @@ func TestAnUnsentProbeIsInconclusiveNotCleanEvidence(t *testing.T) {
 	store := core.NewTrafficStore()
 	reqID, _ := store.Put([]byte(fmt.Sprintf("GET /s?q=1 HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)), core.DirectionRequest)
 	respID, _ := store.Put([]byte("HTTP/1.1 200 OK\r\n\r\nseed"), core.DirectionResponse)
-	ex := &core.Exchange{Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: "/s?q=1"}
+	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: "/s?q=1"}
 	store.AddExchange(ex)
 	s := NewActiveScanner(store, zap.NewNop()).WithSender(sender.NewSender(nil))
 	cc := NewCheckContext(s, ex, nil)
@@ -317,7 +318,7 @@ func TestCoverageReportsDeclinedPointsThatWereNeverTested(t *testing.T) {
 		t.Fatalf("NewProbeHarness: %v", err)
 	}
 	h.declined = append(h.declined, bcheck.Declined{
-		What: "request body", Reason: "multipart body: framing not modelled"})
+		What: "request body", Reason: "plain text: matches no modelled container"})
 
 	cov := h.Coverage(nil, 1)
 	if cov.PointsDeclined != 1 {
@@ -439,5 +440,55 @@ func TestLazyBrowserProviderReportsAMissingBinary(t *testing.T) {
 	}
 	if err := p.Close(); err != nil {
 		t.Errorf("Close on a never-started provider errored: %v", err)
+	}
+}
+
+// TestOrderPayloadsLeavesUntouchedListsAlone pins the fail-open half of the
+// coverage guide: with no recorded novelty every payload keeps its written
+// position, so a check author's ordering is never silently reshuffled.
+func TestOrderPayloadsLeavesUntouchedListsAlone(t *testing.T) {
+	h := &ProbeHarness{}
+	in := []string{"a", "b", "c"}
+	got := h.orderPayloads(bcheck.InsertionPoint{Name: "q", Kind: "query"}, in)
+	if !reflect.DeepEqual(got, in) {
+		t.Fatalf("orderPayloads with no history = %v, want %v", got, in)
+	}
+}
+
+// TestOrderPayloadsPutsNovelPayloadsFirst pins the feedback half: a payload
+// that has opened new response cells before is sent ahead of the rest, so the
+// next exchange spends its budget on the branch that historically explored
+// furthest.
+func TestOrderPayloadsPutsNovelPayloadsFirst(t *testing.T) {
+	place := bcheck.InsertionPoint{Name: "q", Kind: "query"}
+	// The harness needs the exchange it is scoring against: the place key is (host, point), so a
+	// harness with no exchange has no host and the guide's history — recorded under "h.test" — is
+	// unreachable by construction. This is the arrangement orderPayloads nil-guards against.
+	h := &ProbeHarness{exchange: &core.Exchange{Host: "h.test"}}
+	h.scanner = &ActiveScanner{guide: newPayloadGuide()}
+	h.scanner.guide.RecordOutcome(pointPlace("h.test", place), "b", true)
+	h.scanner.guide.RecordOutcome(pointPlace("h.test", place), "a", false)
+	got := h.orderPayloads(place, []string{"a", "b", "c"})
+	want := []string{"b", "a", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("orderPayloads = %v, want %v", got, want)
+	}
+}
+
+// TestOrderPayloadsIsStableOnTies pins the stability guarantee: payloads with
+// equal novelty keep their relative order, so the guide only ever promotes the
+// proven explorers and never shuffles the rest.
+func TestOrderPayloadsIsStableOnTies(t *testing.T) {
+	place := bcheck.InsertionPoint{Name: "q", Kind: "query"}
+	// Same host the outcomes below are recorded under, for the same reason as
+	// TestOrderPayloadsPutsNovelPayloadsFirst.
+	h := &ProbeHarness{exchange: &core.Exchange{Host: "h.test"}}
+	h.scanner = &ActiveScanner{guide: newPayloadGuide()}
+	h.scanner.guide.RecordOutcome(pointPlace("h.test", place), "c", true)
+	h.scanner.guide.RecordOutcome(pointPlace("h.test", place), "a", true)
+	got := h.orderPayloads(place, []string{"a", "b", "c"})
+	want := []string{"a", "c", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("orderPayloads = %v, want %v", got, want)
 	}
 }

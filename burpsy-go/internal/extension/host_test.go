@@ -93,8 +93,8 @@ func Test_a_load_completes_the_handshake_and_reports_the_manifest(t *testing.T) 
 	if view.Version != "1.2.3" || view.Type != "go-test" {
 		t.Errorf("version/type = %q/%q, want 1.2.3/go-test", view.Version, view.Type)
 	}
-	if len(view.Registrations) != 3 || view.RegistrationsRefused != 0 {
-		t.Errorf("registrations = %d accepted, %d refused; want 3 and 0",
+	if len(view.Registrations) != 4 || view.RegistrationsRefused != 0 {
+		t.Errorf("registrations = %d accepted, %d refused; want 4 and 0",
 			len(view.Registrations), view.RegistrationsRefused)
 	}
 
@@ -144,6 +144,8 @@ func Test_each_registration_kind_invokes_its_documented_method(t *testing.T) {
 			func(r InvokeResult) string { return r.Output }},
 		{"act", InvokeParams{Registration: "act"}, "menu.invoke",
 			func(r InvokeResult) string { return r.Output }},
+		{"key", InvokeParams{Registration: "key"}, "hotkey.invoke",
+			func(r InvokeResult) string { return r.Output }},
 		{"tab", InvokeParams{Registration: "tab", Message: &message, Raw: "GET / HTTP/1.1\r\n\r\n"}, "editor.render",
 			func(r InvokeResult) string { return r.Text }},
 	}
@@ -173,8 +175,8 @@ func Test_each_registration_kind_invokes_its_documented_method(t *testing.T) {
 	}
 
 	view := h.List().Extensions[0]
-	if view.Invocations != 4 || view.InvocationFailures != 0 {
-		t.Errorf("counters = %d invocations / %d failures, want 4 and 0",
+	if view.Invocations != 5 || view.InvocationFailures != 0 {
+		t.Errorf("counters = %d invocations / %d failures, want 5 and 0",
 			view.Invocations, view.InvocationFailures)
 	}
 }
@@ -466,8 +468,10 @@ func Test_the_registration_bound_refuses_the_excess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(view.Registrations) != 2 || view.RegistrationsRefused != 1 {
-		t.Errorf("accepted %d, refused %d; want 2 and 1", len(view.Registrations), view.RegistrationsRefused)
+	// Four declared, two permitted: the excess two are refused and counted, so the number
+	// an operator reads is the number the host kept.
+	if len(view.Registrations) != 2 || view.RegistrationsRefused != 2 {
+		t.Errorf("accepted %d, refused %d; want 2 and 2", len(view.Registrations), view.RegistrationsRefused)
 	}
 }
 

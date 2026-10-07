@@ -92,7 +92,7 @@ func jarServer(t *testing.T, addr string, setCookies ...string) (*Server, *core.
 	for _, sc := range setCookies {
 		resp += "Set-Cookie: " + sc + "\r\n"
 	}
-	coord.AbsorbResponseCookies("127.0.0.1", uint16(port), false, []byte(resp+"\r\n"))
+	coord.AbsorbResponseCookies(session.SourceIntruder, "127.0.0.1", uint16(port), false, []byte(resp+"\r\n"))
 	srv.WithSessionCoordinator(coord)
 	return srv, store
 }

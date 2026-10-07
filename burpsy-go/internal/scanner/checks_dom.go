@@ -14,6 +14,17 @@ package scanner
 // that can never fire, and a permanently silent check is worse than an honest decline: it
 // looks like coverage in every report that counts runnable checks.
 //
+// # DOM clobbering: the one DOM Invader attack type with no row here, on purpose
+//
+// DOM Invader's set (dom-invader/settings/attack-types.html) is covered by the families below
+// except clobbering, and clobbering has no row for a structural reason, not an oversight: its
+// observable is a NAMED PROPERTY READ (window.someId resolving to an injected element), which
+// is identifier resolution the ES engine cannot model — named access is a DOM behaviour — and
+// is not one of domexec's instrumented sinks either. Burp places the detection in the DOM
+// Invader browser extension, not the scanner (no catalog row, no issue-descriptions page, zero
+// clobber strings in the binary). The disposition is stated in docs/SCANNER-COVERAGE.md so the
+// catalog's coverage numbers are never read as including it.
+//
 // # Why a missing browser is an error
 //
 // ObserveTaint on no browser observes nothing, and nothing is indistinguishable from a clean

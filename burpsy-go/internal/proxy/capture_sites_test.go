@@ -200,7 +200,7 @@ func TestNoProxyCaptureCanStallACursorWalkingTheIndex(t *testing.T) {
 	// assertion the old sites failed: a rejected store.Put left respID at its zero value and the row was
 	// indexed with Response pointing at message 0, so a row could claim a request as its response.
 	for _, ex := range store.Exchanges() {
-		req, err := store.Get(ex.Request)
+		req, err := store.Get(core.MsgOrZero(ex.Request))
 		if err != nil {
 			t.Errorf("exchange %d (%s): its request id does not resolve: %v", ex.ID, ex.Path, err)
 			continue

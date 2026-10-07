@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +54,11 @@ const (
 	// KindCrawl is one crawl from a seed URL. Named here rather than in the crawler so the crawler
 	// depends on this package and not the other way round.
 	KindCrawl Kind = "crawl"
+	// KindAPIScan is one seeds-only sweep of the endpoints an API definition describes. It runs on
+	// the crawl engine (see crawler.Config.SeedsOnly) and registers under its own kind anyway, because
+	// "did my link-following crawl finish" and "did my definition sweep finish" are different questions
+	// and the task list is where they get answered.
+	KindAPIScan Kind = "api-scan"
 	// KindDiscovery is one content-discovery sweep delegated to an external tool (ffuf). Named here
 	// for the same reason KindCrawl is: internal/extscan is a leaf that knows nothing about this
 	// registry, and the web handler that drives it should not have to invent a kind string.
@@ -132,6 +138,11 @@ type Task struct {
 	// keeps running. That is why Registry.Cancel reports what it found rather than what it achieved.
 	cancel func()
 }
+
+// TaskPaused reports the suite-wide pause from a task's point of view: the dashboard row
+// shows "paused" not because the task itself stopped but because the gate ahead of it did —
+// the honest framing of what the operator is looking at.
+func (t Task) TaskPaused(reg *Registry) bool { return reg != nil && t.Running() && reg.Paused() }
 
 // Cancellable reports whether this task registered a cancel function. Read by the dashboard so a
 // stop button appears only where it can do something: a button that silently does nothing is worse
@@ -220,6 +231,13 @@ const DefaultTaskCapacity = 500
 
 // Registry is the live table of long-running work.
 type Registry struct {
+	// paused is Burp's suite-wide "Pause all tasks" gate (dashboardPauseAllTasksButton,
+	// burpsy-react-ui-8gw): when set, every gate-check point in every task loop blocks until
+	// resumed. It lives on the registry rather than per task because Burp's pause is
+	// suite-wide — one switch that every task honours — and a per-task flag would need every
+	// task author to consult it, which is exactly the discipline a shared gate enforces for
+	// free. Seeded false: nothing pauses until the operator asks.
+	paused   atomic.Bool
 	mu       sync.RWMutex
 	tasks    []*Task
 	capacity int
@@ -554,6 +572,108 @@ func (r *Registry) CancelKind(kind Kind) int {
 		cancel()
 	}
 	return len(cancels)
+}
+
+// PauseAll sets the suite-wide gate: every task loop that reaches a GateCheck blocks until
+// ResumeAll. It reports how many running tasks exist, so the API can say "nothing running"
+// rather than an unqualified "paused" — pausing an empty dashboard is not a lie, but the
+// operator deserves to know nothing was actually holding.
+//
+// Like Cancel, this touches only the flag: a task already inside one unit of work finishes
+// that unit before it sees the gate. That is the contract, not a limitation — pausing inside
+// a request would leave an attack with a half-sent request and an unread response, which is
+// worse than one request past the line.
+func (r *Registry) PauseAll() int {
+	if r == nil {
+		return 0
+	}
+	r.paused.Store(true)
+	return r.RunningCount()
+}
+
+// ResumeAll clears the suite-wide gate and reports how many running tasks were waiting
+// behind it. Note records that a run sat paused, so a long wall-clock gap in a task's
+// timeline is explained by the panel rather than guessed at.
+func (r *Registry) ResumeAll() int {
+	if r == nil {
+		return 0
+	}
+	was := r.paused.Swap(false)
+	if !was {
+		return 0
+	}
+	// The gate-check channels are broadcast by the waiter itself: each task's GateCheck
+	// polls the flag on its own tick, so no registry-side wake is needed — and the count
+	// here is the tasks that will notice on their next tick.
+	return r.RunningCount()
+}
+
+// Paused reports the suite-wide gate state, for the panel and the warning bar.
+func (r *Registry) Paused() bool {
+	if r == nil {
+		return false
+	}
+	return r.paused.Load()
+}
+
+// GateCheck blocks while the suite-wide pause is set. A task loop calls it between units of
+// work; a paused gate turns every task loop into a waiting loop that still answers ctx.Done,
+// so a pause plus a cancel stops cleanly instead of ordering the two.
+//
+// The tick is short (50ms) so resume latency is invisible, and long enough that a dashboard
+// of dozens of tasks adds no measurable load. This is the whole pause mechanism: a flag,
+// a poll, and a select that keeps cancellation senior to pausing.
+func (r *Registry) GateCheck(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	for r.paused.Load() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// RunningCount reports how many tasks are running, for pause/resume reporting.
+func (r *Registry) RunningCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for i := range r.tasks {
+		if r.tasks[i].Running() {
+			n++
+		}
+	}
+	return n
+}
+
+// Delete removes one task from the list, and reports whether it did (burpsy-react-ui-r6q): Burp's
+// "Delete task". A RUNNING task is refused, not deleted — a list entry that vanishes while its work
+// keeps going is a lie about what is happening now, which is the one thing this registry exists to
+// tell the truth about. Cancel the run first, then the row can go. An unknown id answers false so
+// the API can say "not found" rather than "deleted".
+func (r *Registry) Delete(id uint64) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, t := range r.tasks {
+		if t.ID != id {
+			continue
+		}
+		if t.Running() {
+			return false
+		}
+		r.tasks = append(r.tasks[:i], r.tasks[i+1:]...)
+		return true
+	}
+	return false
 }
 
 // RunningOfKind returns the ids of running tasks of this kind, newest last. Lets a route report which

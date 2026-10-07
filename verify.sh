@@ -195,17 +195,15 @@ else
       skip "$s did not run: no go toolchain on PATH — the Go wiring is UNVERIFIED on this machine"
       continue
     fi
-    # e2e-ui.sh drives the web console in a real Chromium, so it needs node, the playwright package
-    # AND a downloaded browser binary — three things that can each be absent independently. Rather
-    # than restate those conditions here (the /tmp/BChecks condition above is already spelled in two
-    # places and they can drift), the script answers the question itself: `--check` exits 3 and prints
-    # the reason when it would refuse. The reason is what lands in the summary a human reads.
+    # e2e-ui.sh is no longer part of the gate. The web console is verified by the live browser pass
+    # (ui-live.sh + burpsy-go/docs/UI-VERIFICATION.md), which is faster, checks the code in the tree
+    # rather than a suite that transpiles without typechecking, and reports what a browser actually
+    # showed. The suite is kept and still runs — it is what regenerates e2e/artifacts/screenshots/ —
+    # but a ~10 minute Chromium run per verify is a cost this gate should not pay for a check that is
+    # no longer how a UI claim is judged. Run it directly when you want the screenshots.
     if [ "$s" = "e2e-ui.sh" ]; then
-      UIWHY=$(./e2e-ui.sh --check 2>&1); UIRC=$?
-      if [ "$UIRC" != "0" ]; then
-        skip "$s did not run: $UIWHY — the web console is UNVERIFIED in a browser on this machine"
-        continue
-      fi
+      skip "$s did not run: superseded as the UI gate by ui-live.sh + burpsy-go/docs/UI-VERIFICATION.md — run it directly for the screenshots"
+      continue
     fi
     R=$(./"$s" 2>&1 | tail -3 | grep -oE '[0-9]+ passed, [0-9]+ failed')
     case "$R" in

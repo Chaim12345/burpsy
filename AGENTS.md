@@ -1,4 +1,4 @@
-<!-- Generated: 2026-07-28 | Updated: 2026-08-17 -->
+<!-- Generated: 2026-07-28 | Updated: 2026-09-04 -->
 
 # burpsy
 
@@ -42,7 +42,8 @@ is Rust, `burpsy-go/internal/scanner` is Go, and they are different code with th
 | `Cargo.toml` | Rust workspace manifest. Edition 2024, resolver 3, thirteen member crates |
 | `verify.sh` | The Rust gate: build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
 | `e2e-go.sh` | End-to-end smoke test that runs the **Go** binary — the Go analogue of `e2e.sh`, ports offset by 100 so the two suites cannot collide |
-| `e2e-ui.sh` | End-to-end suite for the React web UI served by the Go binary |
+| `ui-live.sh` | **The UI gate.** Boots the real console, seeded, and prints the live browser pass an agent drives with `agent-browser` (see `burpsy-go/docs/UI-VERIFICATION.md`) |
+| `e2e-ui.sh` | Playwright suite for the React web UI. Still runnable, no longer the gate — see `burpsy-go/docs/UI-VERIFICATION.md` for why |
 | `ROADMAP.md` | Top-level feature roadmap / Burp teardown reference (the working plan lives in `.planning/`) |
 | `DESIGN.md` | The design-system contract between the Figma source and the React UI in `burpsy-go/internal/web/ui/` |
 | `serve.sh`, `integrate.sh` | Launch / integration harness for the Rust tree |
@@ -81,8 +82,10 @@ There are two hierarchies, one per tree:
   `burpsy-go/`. Check `burpsy-go/gaps.md` before assuming a capability is missing — it may already be
   ported.
 - **The Go gate is `go build ./... && go vet ./... && gofmt -l . && go test ./...`, all clean, plus
-  `e2e-go.sh` / `e2e-ui.sh`.** The Rust gate is `verify.sh`. Run the gate for the tree you touched;
-  do not declare work complete without it.
+  `e2e-go.sh`.** A change that touches the React console additionally takes the live browser pass
+  (`./ui-live.sh`, then `burpsy-go/docs/UI-VERIFICATION.md`) — Playwright is no longer the UI gate.
+  The Rust gate is `verify.sh`. Run the gate for the tree you touched; do not declare work complete
+  without it.
 - **Commit messages here are unusually substantive** — they explain why a change is right and what
   the obvious alternative gets wrong. Match that; a one-line summary will look out of place.
 - Never commit CA material or keys, and never commit compiled binaries (a 13 MB `crawl-scan-demo`
@@ -105,7 +108,14 @@ go vet ./...                   # must be clean
 gofmt -l .                     # must print nothing
 go test ./...                  # unit tests across every package
 ../e2e-go.sh                   # end-to-end against the Go binary
-../e2e-ui.sh                   # end-to-end for the React UI
+```
+
+UI changes (anything under `burpsy-go/internal/web/ui/`) add a live browser pass:
+
+```bash
+./ui-live.sh                   # boot the real console, seeded, and print the pass
+                               # ... drive it with agent-browser, then ./ui-live.sh --stop
+                               # what the pass must cover: burpsy-go/docs/UI-VERIFICATION.md
 ```
 
 Rust (the frozen reference):
@@ -279,3 +289,15 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Beads issue tracker (bd)
+
+Issues live in Beads (`bd`), Dolt-backed, remote-synced via `sync.remote` in `.beads/config.yaml`.
+The Dolt DB is the source of truth; `.beads/issues.jsonl` is a possibly-stale export (2026-08-27:
+146 open there vs 182 open in the DB — trust `bd`, not the JSONL).
+
+- `bd` CLI (npm `@beads/bd`) — not preinstalled; sandbox install: `npm config set prefix ~/.npm-global && npm i -g @beads/bd` (global prefix `/usr/local` is root-owned).
+- First-time DB setup in a fresh clone: `bd bootstrap --yes` (needs non-interactive git creds for the dolt refs fetch, and `chmod 700 .beads`). If `dolt clone` fails with `Error 1007: database exists`, rename `dolt_database` in `.beads/metadata.json` to a fresh name, `rm -rf .beads/embeddeddolt`, re-run bootstrap (bd v1.2.2 pre-creates the DB dir then collides with itself).
+- `bd bootstrap`/`bd init` prompt `[Y/n]` on stdin — in non-interactive shells pass `--yes` or they hang forever with no output.
+- Triage snapshot 2026-09-04: 258 total, 182 open (0 blocked, 100 ready; 13 open P1 = 5 epics + 8 tasks), 15 issues carry `decision-needed`. No duplicate titles detected. P1 claims spot-verified against code (intruder §-markers, proxy listener editor, logger bytes, intruder payload column all genuinely missing). Next up per `bd ready`: P1 intruder trio (33t, fvx, mun) under epic i4fa.
+- Closed so far, one per commit: 33t (intruder payload positions via bcheck single-parser), fvx (intruder payload column), mun (manual § markers), 5bl (logger exchange links + detail viewer). Remaining P1 tasks per `bd ready`: 77m (proxy listener editor), 6rb (WS extensions toggle), vlf (history search checkboxes), t2s (scanner config keys) — each under its P1 epic.

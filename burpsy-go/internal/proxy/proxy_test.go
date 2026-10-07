@@ -143,6 +143,7 @@ func TestTLSInterceptionMITM(t *testing.T) {
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()).
 		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())).
 		WithFindings(findings))
@@ -263,6 +264,7 @@ func TestConnectPassthroughBlind(t *testing.T) {
 	proxySrv := NewServer(NewProxyConfig(store).
 		WithScope(testScope()).
 		WithTlsPolicy(policy).
+		WithUpstreamTLS(permissiveTLS()).
 		WithLogger(zap.NewNop()))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -304,7 +306,7 @@ func TestConnectPassthroughBlind(t *testing.T) {
 	if exchanges[0].Method != "CONNECT" || !exchanges[0].TLS {
 		t.Errorf("exchange = %+v, want CONNECT tunnel marked TLS", exchanges[0])
 	}
-	if _, err := store.Get(exchanges[0].Request); err == nil {
+	if _, err := store.Get(core.MsgOrZero(exchanges[0].Request)); err == nil {
 		t.Error("passthrough tunnel should not store request messages")
 	}
 }

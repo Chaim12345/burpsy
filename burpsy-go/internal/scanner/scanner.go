@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -34,6 +35,11 @@ type ActiveScanner struct {
 	// auditCfg is the budget/breaker configuration, when an operator set one explicitly. Nil defers
 	// to AuditConfig, which derives it from ScanConfig.
 	auditCfg *AuditConfig
+	// suiteGate blocks while the dashboard's suite-wide pause is set, checked between checks. A
+	// plain func rather than a *dash.Registry: this package does import dash for the breakdown
+	// types, but an audit engine that reached into the task registry to ask whether to keep working
+	// would be the wrong direction of dependency. Nil is unpaced (burpsy-react-ui-cijs).
+	suiteGate func(context.Context)
 	// pace bounds how fast and how concurrently probes leave this scanner: a named resource pool's
 	// limits, attached to every AuthorisedSender probeGate hands out. Nil means unpaced, which is
 	// exactly what every audit did before pools existed.
@@ -52,6 +58,10 @@ type ActiveScanner struct {
 	// that need a tool are counted at load (LoadReport.Tools) and excluded
 	// from the dispatch set, never run against nothing.
 	toolRunner bcheck.ToolRunner
+	// disabledChecks is the per-row enable/disable the corpus leaf renders (burpsy-react-ui-kdqj):
+	// keyed by name, read by corpusChecksEnabled at the same two sites s.corpus is read. Nil until
+	// the first disable — a process where nothing was ever disabled holds no map.
+	disabledChecks map[string]bool
 	// browsers hands out the shared headless browser for DOM checks. Nil means no DOM
 	// capability: CheckContext.Browser then returns an error, so a DOM check reports that
 	// it could not look rather than reporting an empty observation set.
@@ -86,6 +96,12 @@ type ActiveScanner struct {
 	sessions *session.Coordinator
 	// provenance counts findings by source for the four "<x> generated issue" rows.
 	provenance *ProvenanceLedger
+	// pathCov and guide are the coverage-guided-mutation ledgers (burpsy-react-ui-6c90):
+	// every probe's response cell per exchange, and the per-place payload novelty the
+	// guide prioritises by. See coverage_guided.go for why the response space is the
+	// coverage signal when the target is remote.
+	pathCov *PathCoverage
+	guide   *payloadGuide
 	// jsLib and jwtWeak are the two native checks (SCAN-01 in js_vulns.go, SCAN-02 in jwt_weak.go).
 	// Each carries its own dataset and coverage counters, so they are built once per scanner and
 	// reused across audits rather than rebuilt per exchange — re-parsing the 514 KB retire.js corpus
@@ -205,6 +221,18 @@ type ScanConfig struct {
 	// later exchange, so they need a StoredLedger. Off by default.
 	CheckStored    bool
 	CustomPayloads []string
+
+	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
+	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
+	// this configuration uses, and the one that keeps a preset that never mentions selection
+	// behaving exactly as before.
+	//
+	// Burp's dispatch is a two-stage filter for precisely this: the family switches (below), then a
+	// per-check predicate over the selected issue types (Zwy6.java:36-75, and lambda$isEnabled$1 at
+	// :170-184). Without the second stage a run cannot be narrowed past its families, so the ordinary
+	// workflow — fix a bug, re-audit for that one issue class — is unreachable
+	// (burpsy-react-ui-kvmx).
+	IssueTypes []uint32
 }
 
 // Finding represents a security finding.
@@ -212,7 +240,7 @@ type Finding struct {
 	ID          uint64
 	Name        string
 	Severity    string // "info", "low", "medium", "high", "critical"
-	Confidence  string // "certain", "firm", "tentative"
+	Confidence  string // "certain", "firm", "tentative", "suppressed-negative"
 	Description string
 	URL         string
 	Method      string
@@ -221,7 +249,46 @@ type Finding struct {
 	Solution    string
 	ExchangeID  core.ExchangeID
 	Timestamp   time.Time
+	// Confirm is the DOM dynamic tier's verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): promoted / retired / unavailable / unsupported-source, empty for
+	// every finding the tier never saw. Carried beside Confidence rather than folded into it,
+	// because Confidence is a graded belief and Confirm is a machine-checkable fact about one
+	// load — an operator filtering by either should not lose the other.
+	Confirm DOMConfirmState `json:"confirm,omitempty"`
+	// Triage is the LLM post-scan second look's note (ei0v): the model's verdict on this
+	// finding — real-risk / investigate-further / false-positive-likely — with its reasoning
+	// and the model+prompt that produced it. ADVICE, never promotion: a triage line never
+	// moves Confidence or Severity, because a nondeterministic verdict graded on a scale the
+	// engine earned through evidence would be the exact honest-counting violation the
+	// enrich rule (enrich.go) already refuses for catalog severities. Nil = not investigated;
+	// triaged-not-investigated is the feature being off, not an empty verdict.
+	Triage *TriageNote `json:"triage,omitempty"`
+	// MergeKey overrides the dedup target as this finding's identity, for the rows whose identity is
+	// not a location (burpsy-react-ui-7tc1). JWT weak-HMAC sets it to the recovered secret: the
+	// target is where the token was seen, and one weak key seen on 200 pages is one finding, not 200.
+	// Empty — the behaviour for every other row — means the target is the key.
+	MergeKey string
 }
+
+// TriageNote is one LLM triage verdict attached to a finding (ei0v).
+type TriageNote struct {
+	// Verdict is one of TriageVerdict*.
+	Verdict string `json:"verdict"`
+	// Reasoning is the model's own explanation, carried verbatim — an operator acting on
+	// the verdict reads WHY, and a summary the engine wrote would be a third opinion.
+	Reasoning string `json:"reasoning"`
+	// Model names what produced this, so an operator knows which model to believe.
+	Model string `json:"model"`
+	// InvestigatedAt is when the note landed, so a re-triage after a finding change is
+	// distinguishable from a stale note.
+	InvestigatedAt time.Time `json:"investigated_at"`
+}
+
+const (
+	TriageVerdictRealRisk            = "real-risk"
+	TriageVerdictInvestigateFurther  = "investigate-further"
+	TriageVerdictFalsePositiveLikely = "false-positive-likely"
+)
 
 // NewActiveScanner creates a new active scanner.
 func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScanner {
@@ -245,6 +312,8 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckHostDiscovery:   true,
 		},
 		findings: make([]*Finding, 0),
+		pathCov:  newPathCoverage(),
+		guide:    newPayloadGuide(),
 	}
 }
 
@@ -485,6 +554,7 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 		}
 		if err == nil && resp != nil {
 			meter.succeeded()
+			decodeTypedResponse(resp)
 			return string(resp.Body)
 		}
 		meter.failure()
@@ -546,6 +616,25 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	if err == nil && resp != nil {
 		meter.succeeded()
+		// Auto-backoff (burpsy-react-ui-fkl8): a 429 or 503 means the target is asking for
+		// less pace, and it is observed HERE — the one place every probe response passes —
+		// so every check family shares one backoff without each of them learning the rule.
+		// Recorded on the meter (per-run state, already threaded to every send site) rather
+		// the scanner (cross-run state, which would leak one host's rate limit into the next
+		// audit against a different target).
+		if resp.StatusCode == 429 || resp.StatusCode == 503 {
+			meter.rateLimited(resp.StatusCode)
+		}
+		// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a probe response is a
+		// response the scanner drove, and Burp's jar can monitor the Scanner. Absorbed from the
+		// response's raw bytes at the one place every probe response passes. A probe session that
+		// sets a cookie is a real session fact — the audit's own auth-diff comparison
+		// (infra_authdiff.go) consumes the jar, so an audit against a rotating-session target
+		// keeps its authenticated context only if this line exists.
+		if s.sessions != nil {
+			s.sessions.AbsorbResponseCookies(session.SourceScanner, exchange.Host, exchange.Port, exchange.TLS, resp.Raw)
+		}
+		decodeTypedResponse(resp)
 		return resp
 	}
 	meter.failure()
@@ -586,6 +675,7 @@ func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.
 	}
 	if err == nil && resp != nil {
 		meter.succeeded()
+		decodeTypedResponse(resp)
 		return resp
 	}
 	meter.failure()
@@ -615,11 +705,14 @@ func (s *ActiveScanner) getResponseBody(exchange *core.Exchange) string {
 		return ""
 	}
 	// Get body span
-	bodySpan := msg.Shape.Body
-	if bodySpan.IsEmpty() {
+	if msg.Shape.Body.IsEmpty() {
 		return ""
 	}
-	return string(msg.Slice(bodySpan))
+	// Readable (s68u). The probes this base is compared with come back decoded on every path: the
+	// typed sends through net/http's transparent gzip, the raw ones through readableResponse at
+	// their egress (ProbeHarness.send, sendProbe, the GraphQL transport). Read raw, a gzip base
+	// against a plaintext probe made every differential compare compressed bytes with text.
+	return string(readableBody(msg))
 }
 
 // min returns the minimum of two integers.
@@ -670,6 +763,27 @@ type PassiveScanner struct {
 
 	findings   []*Finding
 	findingsMu sync.RWMutex
+
+	// secrets switches the secret-detection response module (burpsy-react-ui-8j0d) on for every
+	// capture that runs this scanner — proxy, crawl, Repeater, API scan alike, because each builds its
+	// Capture around this one scanner. Off by default: a module that always ran would be a surface
+	// reporting findings nobody enabled.
+	secrets atomic.Bool
+}
+
+// SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.
+func (s *PassiveScanner) SetSecretDetection(on bool) { s.secrets.Store(on) }
+
+// SecretDetection reports whether captured responses are scanned for leaked secrets.
+func (s *PassiveScanner) SecretDetection() bool { return s.secrets.Load() }
+
+// ResponseModules is the module set the scanner's own switches install, run by Capture.ScanExchange
+// after any modules the Capture names itself.
+func (s *PassiveScanner) ResponseModules() []ResponseModule {
+	if s == nil || !s.secrets.Load() {
+		return nil
+	}
+	return []ResponseModule{&SecretsModule{}}
 }
 
 // NewPassiveScanner creates a passive scanner with the built-in header/cookie
@@ -873,11 +987,11 @@ func (s *PassiveScanner) getResponseBody(exchange *core.Exchange) string {
 	if err != nil {
 		return ""
 	}
-	bodySpan := msg.Shape.Body
-	if bodySpan.IsEmpty() {
+	if msg.Shape.Body.IsEmpty() {
 		return ""
 	}
-	return string(msg.Slice(bodySpan))
+	// Dechunked and decompressed (jgnf): a check matching the body must read text, not gzip.
+	return string(readableBody(msg))
 }
 
 // getResponseHeaders retrieves the response headers from the store.
@@ -889,8 +1003,10 @@ func (s *PassiveScanner) getResponseHeaders(exchange *core.Exchange) string {
 	if err != nil {
 		return ""
 	}
-	// Return full raw message for header parsing
-	return string(msg.Raw())
+	// The full message for header parsing, with its body readable (jgnf): the info-disclosure
+	// check matches over this whole string, body included.
+	raw, _ := readableResponse(msg.Raw())
+	return string(raw)
 }
 
 // GetFindings returns all passive findings.

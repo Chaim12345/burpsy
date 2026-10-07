@@ -52,6 +52,49 @@ func TestProxyOptionsGetReturnsEveryKeyAndCounters(t *testing.T) {
 	}
 }
 
+// The WebSocket strip rides the same endpoint, but unlike the response rules its
+// engine-side default is ON — seeded by NewProxyConfig so a capture stays readable.
+// A panel that rendered it off before the operator touched anything would be
+// describing a state the relay is not in, which is the failure every view here
+// exists to prevent.
+func TestProxyOptionsGetReportsTheWebSocketStripSeededOn(t *testing.T) {
+	config := proxy.NewProxyConfig(core.NewTrafficStore())
+	ts := NewServer(core.NewTrafficStore(), core.NewScope()).WithProxyOptions(config.Options())
+	req := httptest.NewRequest(http.MethodGet, "/api/proxy/options", nil)
+	rec := httptest.NewRecorder()
+	ts.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/proxy/options = %d, want 200", rec.Code)
+	}
+	var view struct {
+		Options map[string]bool `json:"options"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !view.Options["strip_sec_websocket_extensions"] {
+		t.Error("the panel shows Sec-WebSocket-Extensions stripping off, but the relay strips by default; an operator reading the panel would expect compressed frames to arrive decoded")
+	}
+}
+
+// The settings panel PUTs the strip key like any other; the confirmed answer and
+// the relay must agree, because the handshake reads the very set this PUT writes.
+func TestProxyOptionsPutFlipsTheWebSocketStrip(t *testing.T) {
+	config := proxy.NewProxyConfig(core.NewTrafficStore())
+	ts := NewServer(core.NewTrafficStore(), core.NewScope()).WithProxyOptions(config.Options())
+
+	req := httptest.NewRequest(http.MethodPut, "/api/proxy/options", strings.NewReader(`{"strip_sec_websocket_extensions": false}`))
+	rec := httptest.NewRecorder()
+	ts.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if config.Options().Get(proxy.OptStripWsExtensions) {
+		t.Error("PUT confirmed off, but the set the handshake reads still has stripping on")
+	}
+}
+
 func TestProxyOptionsPutFlipsAKeyAndReportsConfirmedState(t *testing.T) {
 	ts := newTestServerWithProxyOptions(t)
 	// The body is the flat map of keys to booleans — the same shape the panel sends.

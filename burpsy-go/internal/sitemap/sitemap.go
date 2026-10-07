@@ -28,15 +28,21 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // PathNode represents one URL path on a host, with the exchanges that touched it.
 type PathNode struct {
-	Path        string
-	Methods     map[string]int // method → count
-	Statuses    map[int]int    // status → count
+	Path     string
+	Methods  map[string]int // method → count
+	Statuses map[int]int    // status → count
+	// Mimes is the distinct media-type words (core.Exchange.Mime, already stripped of parameters
+	// and lowercased — see MimeEssence) recorded at this path. Keyed for dedup; order comes from the
+	// serialiser, not from insertion. Populated only for nodes with responses, so a folder
+	// synthesised to hold children aggregates its subtree on the way back up (foldPaths' assemble).
+	Mimes       map[string]struct{}
 	ExchangeIDs []core.ExchangeID
 }
 
@@ -52,9 +58,131 @@ type HostNode struct {
 type SiteMap struct {
 	mu    sync.RWMutex
 	hosts map[string]*HostNode // key = host:port:tls
+	// suppressed holds the host keys and host-prefixed path keys the operator removed
+	// (burpsy-react-ui-10e). Removal is a SUPPRESSION, not a deletion: the map is a projection of
+	// the exchange store, and deleting the underlying exchanges would renumber nothing but break
+	// HTTP history rows, findings and audit references that name them. The suppression is the
+	// recorded decision — the map stops showing what the operator removed, the store keeps every
+	// byte — and Add consults it before folding, so a re-capture of a suppressed host stays out.
+	//
+	// Key shapes mirror hostKey/host+path identity, with the verb Burp distinguishes:
+	//   "h:p:t"                    — whole host ("Delete host")
+	//   "h:p:t|item|<path>"        — one path node exactly ("Delete item")
+	//   "h:p:t|branch|<path>"      — the path and every descendant ("Delete branch")
+	// Item and branch are different sentences an operator can mean, so they are stored apart and
+	// answered differently: an item delete of /api must leave /api/data visible (it is a different
+	// row), while a branch delete of /api must take /api/data with it even though nothing ever
+	// requested /api itself — the folder was synthesised, its children live at their own path keys,
+	// and only a prefix rule reaches them.
+	suppressed map[string]struct{}
+	// inserted is every host/path an operator added to the map themselves (amu). A SEPARATE map
+	// rather than entries in `hosts`, for the reason the decision recorded: the observed tree is
+	// rebuilt from the traffic store by Sync, so anything written into it would be erased on the next
+	// rebuild and would make reference.ts's disclosure ("a host on the map was observed at some
+	// point") false for every node on it. The two sets are merged on read, never on write.
+	inserted map[string]*InsertedNode
 }
 
-func New() *SiteMap { return &SiteMap{hosts: make(map[string]*HostNode)} }
+// InsertedNode is a host/path an operator put on the map without sending traffic to it.
+//
+// Carries no counts, no methods and no statuses, because there are none: nothing was observed here.
+// That absence IS the node's meaning, and the wire says so explicitly rather than rendering zeroes an
+// operator would read as observations.
+type InsertedNode struct {
+	Host  string
+	Port  uint16
+	TLS   bool
+	Path  string
+	Added time.Time
+}
+
+func New() *SiteMap {
+	return &SiteMap{
+		hosts:      make(map[string]*HostNode),
+		suppressed: make(map[string]struct{}),
+		inserted:   make(map[string]*InsertedNode),
+	}
+}
+
+// Insert records a host/path an operator added to the map (amu).
+//
+// Idempotent on the exact node: adding the same one twice keeps the first Added time, because "when
+// did you add this" is a fact about the first time, and a re-add that moved it would make the
+// timestamp a record of the last click rather than of the decision.
+//
+// An inserted path that is ALREADY observed is recorded as nothing new: the observation is the
+// stronger fact about that node, the caller is told so, and the map does not gain a second entry
+// claiming a URL was never looked at when it was.
+func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added time.Time) (alreadyObserved bool) {
+	if host == "" {
+		return false
+	}
+	if path == "" && port == 0 {
+		// A host with no port cannot be named: HostKey folds the port into the key, and "app.test:0"
+		// would be a node that matches no authority. Refuse by returning, leaving the map unchanged.
+		return false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if observedLocked(sm.hosts, host, port, tls, path) {
+		return true
+	}
+	key := insertKey(host, port, tls, path)
+	if _, ok := sm.inserted[key]; ok {
+		return false
+	}
+	sm.inserted[key] = &InsertedNode{Host: host, Port: port, TLS: tls, Path: path, Added: added}
+	return false
+}
+
+// observedLocked reports whether the observed tree already holds that exact node. Callers hold sm.mu.
+func observedLocked(hosts map[string]*HostNode, host string, port uint16, tls bool, path string) bool {
+	hn := hosts[hostKey(host, port, tls)]
+	if hn == nil {
+		return false
+	}
+	if path == "" {
+		return true
+	}
+	_, ok := hn.Paths[path]
+	return ok
+}
+
+// Inserts returns every operator-added node, in a stable order so the UI and the API agree on what
+// the map contains. Callers hold sm.mu.
+func (sm *SiteMap) insertsLocked() []*InsertedNode {
+	out := make([]*InsertedNode, 0, len(sm.inserted))
+	for _, n := range sm.inserted {
+		out = append(out, n)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+// Inserts is the public read: every operator-added node, host and path alike.
+func (sm *SiteMap) Inserts() []*InsertedNode {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.insertsLocked()
+}
+
+// Inserted reports whether the operator added this exact node. A node that is also observed answers
+// false here: the observation is the fact the map will draw.
+func (sm *SiteMap) Inserted(host string, port uint16, tls bool, path string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	_, ok := sm.inserted[insertKey(host, port, tls, path)]
+	return ok
+}
+
+func insertKey(host string, port uint16, tls bool, path string) string {
+	return hostKey(host, port, tls) + "\x00" + path
+}
 
 // Sync rebuilds the sitemap from the traffic store's current exchanges.
 //
@@ -109,6 +237,12 @@ func (sm *SiteMap) Add(ex *core.Exchange) {
 
 func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 	key := hostKey(ex.Host, ex.Port, ex.TLS)
+	// A suppressed host or branch stays suppressed for re-captures too: Add runs before this on the
+	// live path, but Sync's rebuild walks every stored exchange through here, so the check lives at
+	// the fold rather than only at the observer.
+	if sm.suppressedByLocked(key, ex.Path) {
+		return
+	}
 	hn := sm.hosts[key]
 	if hn == nil {
 		hn = &HostNode{
@@ -125,6 +259,7 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 			Path:     ex.Path,
 			Methods:  make(map[string]int),
 			Statuses: make(map[int]int),
+			Mimes:    make(map[string]struct{}),
 		}
 		hn.Paths[ex.Path] = pn
 	}
@@ -140,7 +275,101 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 	if ex.Status != nil {
 		pn.Statuses[int(*ex.Status)]++
 	}
+	if ex.Mime != "" {
+		pn.Mimes[ex.Mime] = struct{}{}
+	}
 	insertIDAt(pn, at, ex.ID)
+}
+
+const (
+	// suppressItem and suppressBranch are the two path-level verbs stored in the suppression set.
+	// Values are opaque; they exist so the map keys read the same in logs as in code.
+	suppressItem   = "item"
+	suppressBranch = "branch"
+)
+
+// suppressedByLocked reports whether this host or this path under it is suppressed. A whole-host
+// entry answers for every path; an item entry answers its exact path; a branch entry answers the
+// path and anything beneath it (prefix on segment boundaries, so /api/ does not swallow /apiary).
+// Callers hold sm.mu.
+func (sm *SiteMap) suppressedByLocked(hostKey string, path string) bool {
+	if _, ok := sm.suppressed[hostKey]; ok {
+		return true
+	}
+	if path == "" {
+		return false
+	}
+	clean := path
+	if i := strings.IndexByte(clean, '?'); i >= 0 {
+		clean = clean[:i]
+	}
+	if _, ok := sm.suppressed[hostKey+"|"+suppressItem+"|"+clean]; ok {
+		return true
+	}
+	prefix := hostKey + "|" + suppressBranch + "|"
+	if _, ok := sm.suppressed[prefix+clean]; ok {
+		return true
+	}
+	// Branches also cover anything under the deleted path. Walk ancestors rather than every key:
+	// the capture path is short, and a host key prefix already answered the whole-host case.
+	for cut := clean; ; {
+		i := strings.LastIndexByte(cut, '/')
+		if i <= 0 {
+			return false
+		}
+		cut = cut[:i]
+		if _, ok := sm.suppressed[prefix+cut]; ok {
+			return true
+		}
+	}
+}
+
+// Suppress removes a host, a branch or a single item from the map's view
+// (burpsy-react-ui-10e): Burp's "Delete host"/"Delete branch"/"Delete item". hostKey is
+// HostKey(host, port, tls); path "" suppresses the whole host; kind picks item (exact path only)
+// or branch (path and every descendant). The dropped nodes leave the tree immediately and stay out
+// across Sync rebuilds and re-captures; the exchanges themselves are untouched, which is the
+// recorded decision on the issue — history, findings and audit rows keep their references. There
+// is deliberately no undo: re-capturing traffic re-populates the map, and a suppressed entry that
+// keeps blocking honest traffic is an operator-visible decision they can revisit by restarting
+// with a fresh capture. An Unsuppress would also need a "list what is suppressed" surface to be
+// usable, which is a bigger feature than this issue.
+func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.suppressed == nil {
+		sm.suppressed = make(map[string]struct{})
+	}
+	if path == "" {
+		sm.suppressed[hostKey] = struct{}{}
+		// Dropping the host drops its whole subtree from the in-memory tree now; suppressing each
+		// path individually is not needed — the host key answers for all of them.
+		delete(sm.hosts, hostKey)
+		return
+	}
+	sm.suppressed[hostKey+"|"+kind+"|"+path] = struct{}{}
+	if hn, ok := sm.hosts[hostKey]; ok {
+		if kind == suppressBranch {
+			// Prefix removal for the live tree: every path at or under the branch goes now, not on
+			// the next fold. The stored suppression set is what keeps them out afterwards.
+			for p := range hn.Paths {
+				if p == path || strings.HasPrefix(p, path+"/") {
+					delete(hn.Paths, p)
+				}
+			}
+		} else {
+			delete(hn.Paths, path)
+		}
+		// A host with nothing left shows an empty branch forever; drop it too.
+		if len(hn.Paths) == 0 {
+			delete(sm.hosts, hostKey)
+		}
+	}
+}
+
+// HostKey exposes the host-key shape the suppression set and the web layer agree on.
+func HostKey(host string, port uint16, tls bool) string {
+	return hostKey(host, port, tls)
 }
 
 // idSlot returns where id belongs in an ascending slice, and whether it is
@@ -242,6 +471,7 @@ func (pn *PathNode) clone() *PathNode {
 		Path:        pn.Path,
 		Methods:     make(map[string]int, len(pn.Methods)),
 		Statuses:    make(map[int]int, len(pn.Statuses)),
+		Mimes:       make(map[string]struct{}, len(pn.Mimes)),
 		ExchangeIDs: make([]core.ExchangeID, len(pn.ExchangeIDs)),
 	}
 	for m, n := range pn.Methods {
@@ -249,6 +479,9 @@ func (pn *PathNode) clone() *PathNode {
 	}
 	for s, n := range pn.Statuses {
 		out.Statuses[s] = n
+	}
+	for m := range pn.Mimes {
+		out.Mimes[m] = struct{}{}
 	}
 	copy(out.ExchangeIDs, pn.ExchangeIDs)
 	return out

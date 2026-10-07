@@ -1,0 +1,201 @@
+package web
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/burpsy-go/burpsy/internal/grpcproto"
+)
+
+// ---- Protobuf / gRPC body decoding (burpsy-react-ui-3x2g) ----------------------------------------
+//
+// gRPC and protobuf bodies are opaque binary in the editor, history and Repeater; these two
+// endpoints make one readable and editable without a .proto. Decode turns a body into a field tree
+// (optionally after stripping gRPC framing); Encode turns an edited tree back into the body bytes,
+// re-framing it when it was gRPC. Pure transforms — they read a body the operator is already looking
+// at and send nothing, so riskLocal.
+
+// protoFrameView is one decoded frame: a bare protobuf body is one frame with no flags, a gRPC body
+// is one per length-prefixed frame.
+type protoFrameView struct {
+	Compressed bool              `json:"compressed,omitempty"`
+	Trailer    bool              `json:"trailer,omitempty"`
+	Fields     []grpcproto.Field `json:"fields,omitempty"`
+	// Text is set for a frame that is not a protobuf message to decode — a gRPC-web trailer block, or
+	// a compressed frame this build does not inflate — so the view shows something rather than an
+	// empty tree.
+	Text string `json:"text,omitempty"`
+	// Error is why a frame did not decode as protobuf (so the view falls back to its raw bytes rather
+	// than claiming an empty message).
+	Error string `json:"error,omitempty"`
+}
+
+type protoDecodeResponse struct {
+	GRPC   bool             `json:"grpc"`
+	Frames []protoFrameView `json:"frames"`
+	// Messages and Message are set only when a .proto was supplied (burpsy-react-ui-3pco): every
+	// message the schema declares, and the one the fields were named against ("" when the schema has
+	// several and the operator has not chosen, in which case the fields are shown unnamed).
+	Messages []string `json:"messages,omitempty"`
+	Message  string   `json:"message,omitempty"`
+}
+
+// handleProtobufDecode serves POST /api/protobuf/decode. riskLocal.
+func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		BodyBase64 string `json:"body_base64"`
+		GRPC       bool   `json:"grpc"`
+		// Proto is optional .proto source and Message the message type to read the body as; together
+		// they turn `#1 varint 150` into `user_id (int32) 150`. Without Proto the response is the
+		// schemaless view, unchanged.
+		Proto   string `json:"proto"`
+		Message string `json:"message"`
+		// RPCPath and Direction let a gRPC body name its own type: the call path (/pkg.Service/Method)
+		// plus the schema's service block give the request and response messages, so the operator
+		// need not pick one. Direction is "request" or "response". Message, when set, wins.
+		RPCPath   string `json:"rpc_path"`
+		Direction string `json:"direction"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
+		http.Error(w, `the body must be {"body_base64":"...","grpc":bool,"proto":"...","message":"..."}`, http.StatusBadRequest)
+		return
+	}
+	var schema *grpcproto.Schema
+	if strings.TrimSpace(body.Proto) != "" {
+		parsed, perr := grpcproto.ParseProto(body.Proto)
+		if perr != nil {
+			// 400, not a silent schemaless fallback: an operator who pasted a schema and sees unnamed
+			// fields would assume the schema did not match the body, when it did not parse.
+			http.Error(w, perr.Error(), http.StatusBadRequest)
+			return
+		}
+		schema = parsed
+		if body.Message == "" && body.RPCPath != "" {
+			body.Message = schema.MessageForRPC(body.RPCPath, body.Direction)
+		}
+		if body.Message == "" {
+			body.Message = schema.DefaultMessage()
+		}
+		if body.Message != "" {
+			// Validate the name up front so a typo is a clear 400 rather than an unnamed tree.
+			if _, aerr := schema.Annotate(nil, body.Message); aerr != nil {
+				http.Error(w, aerr.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	raw, err := base64.StdEncoding.DecodeString(body.BodyBase64)
+	if err != nil {
+		http.Error(w, "body_base64 is not valid base64", http.StatusBadRequest)
+		return
+	}
+
+	resp := protoDecodeResponse{GRPC: body.GRPC}
+	if body.GRPC {
+		frames, err := grpcproto.Unframe(raw)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		for _, fr := range frames {
+			view := protoFrameView{Compressed: fr.Compressed, Trailer: fr.Trailer}
+			switch {
+			case fr.Trailer:
+				view.Text = string(fr.Message)
+			case fr.Compressed:
+				view.Text = "(compressed frame — burpsy does not inflate gRPC frames; strip the compression flag to edit)"
+			default:
+				if fields, derr := grpcproto.Decode(fr.Message); derr != nil {
+					view.Error = derr.Error()
+				} else {
+					view.Fields = annotateFields(schema, body.Message, fields)
+				}
+			}
+			resp.Frames = append(resp.Frames, view)
+		}
+	} else {
+		fields, derr := grpcproto.Decode(raw)
+		view := protoFrameView{}
+		if derr != nil {
+			view.Error = derr.Error()
+		} else {
+			view.Fields = annotateFields(schema, body.Message, fields)
+		}
+		resp.Frames = []protoFrameView{view}
+	}
+	if schema != nil {
+		resp.Messages = schema.Messages()
+		resp.Message = body.Message
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// annotateFields names fields against the chosen message, or returns them untouched when there is no
+// schema or no message chosen. The message was validated before decoding began, so an Annotate error
+// here cannot happen; falling back to the unnamed tree keeps the handler total regardless.
+func annotateFields(schema *grpcproto.Schema, message string, fields []grpcproto.Field) []grpcproto.Field {
+	if schema == nil || message == "" {
+		return fields
+	}
+	named, err := schema.Annotate(fields, message)
+	if err != nil {
+		return fields
+	}
+	return named
+}
+
+// handleProtobufEncode serves POST /api/protobuf/encode. riskLocal.
+func (s *Server) handleProtobufEncode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		GRPC   bool             `json:"grpc"`
+		Frames []protoFrameView `json:"frames"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
+		http.Error(w, `the body must be {"grpc":bool,"frames":[...]}`, http.StatusBadRequest)
+		return
+	}
+	if !body.GRPC {
+		if len(body.Frames) != 1 {
+			http.Error(w, "a bare protobuf body is exactly one frame", http.StatusBadRequest)
+			return
+		}
+		raw, err := grpcproto.Encode(body.Frames[0].Fields)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"body_base64": base64.StdEncoding.EncodeToString(raw)})
+		return
+	}
+
+	var frames []grpcproto.Frame
+	for _, fv := range body.Frames {
+		var message []byte
+		switch {
+		case fv.Trailer, fv.Compressed:
+			// A frame burpsy did not decode is written back from its text verbatim — the operator
+			// cannot edit its fields, but its bytes must survive a re-encode of the other frames.
+			message = []byte(fv.Text)
+		default:
+			enc, err := grpcproto.Encode(fv.Fields)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			message = enc
+		}
+		frames = append(frames, grpcproto.Frame{Compressed: fv.Compressed, Trailer: fv.Trailer, Message: message})
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"body_base64": base64.StdEncoding.EncodeToString(grpcproto.Reframe(frames))})
+}

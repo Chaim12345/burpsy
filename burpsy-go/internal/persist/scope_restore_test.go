@@ -387,3 +387,55 @@ func TestAV2EraDatabaseStillRestoresItsRules(t *testing.T) {
 		t.Fatalf("restored %+v, want old.test with /api prefix intact", r)
 	}
 }
+
+// The disabled flag (burpsy-react-ui-1xb) survives the round trip. The dangerous direction is
+// silent widening: a disabled rule restored as active admits a host the operator took out of
+// scope by hand, across a restart, with nothing reporting it. The active direction is pinned
+// too, because both must survive, not just the surprising one.
+func TestRestoreKeepsAScopeRulesDisabledState(t *testing.T) {
+	p := newTestStore(t)
+	rule := core.NewScopeRule(core.ScopeInclude, "app.test")
+	rule.Enabled = false
+	active := core.NewScopeRule(core.ScopeInclude, "other.test")
+	p.SaveScope([]*core.ScopeRule{rule, active})
+
+	loaded, err := p.LoadScope()
+	if err != nil {
+		t.Fatalf("LoadScope: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded %d rules, want 2", len(loaded))
+	}
+	if loaded[0].Enabled {
+		t.Error("a rule saved disabled came back active — a restart widened scope")
+	}
+	if !loaded[1].Enabled {
+		t.Error("a rule saved active came back disabled — a restart narrowed scope")
+	}
+	// And the flag does real work after the restore: the disabled rule matches nothing.
+	if loaded[0].Matches("app.test", 80) {
+		t.Error("a restored disabled rule still matches its own host")
+	}
+	if !loaded[1].Matches("other.test", 80) {
+		t.Error("a restored active rule stopped matching its own host")
+	}
+}
+
+// The drop switch (burpsy-react-ui-5j4i) survives the round trip. Its dangerous direction is
+// silent: a fence the operator raised, lost to a restart, sends traffic the operator believes
+// is being refused — worse than a fence that never existed, because the panel says it is up.
+// The off direction is pinned too: a fresh run must not inherit a fence nobody raised.
+func TestRestoreKeepsTheDropOutOfScopeSwitch(t *testing.T) {
+	p := newTestStore(t)
+	if p.LoadScopeDropOutOfScope() {
+		t.Fatal("a fresh store must read the switch as off; the seed both core.NewScope and a new Burp project use")
+	}
+	p.SaveScopeDropOutOfScope(true)
+	if !p.LoadScopeDropOutOfScope() {
+		t.Fatal("the switch did not survive the round trip; a restart would silently lower the egress fence")
+	}
+	p.SaveScopeDropOutOfScope(false)
+	if p.LoadScopeDropOutOfScope() {
+		t.Fatal("turning the switch off did not survive; the fence would come back on its own")
+	}
+}

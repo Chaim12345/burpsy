@@ -150,6 +150,12 @@ func TestResponseRulesApplyToOutOfScopePlaintextTraffic(t *testing.T) {
 	defer closeOrigin()
 
 	options := NewOptions()
+	// The retention these tests pin is the seeded one: dont_log_out_of_scope ON. Set
+	// explicitly because NewOptions is all-off, and the unrecorded branch this file
+	// exists to test only runs when the exchange is actually being dropped.
+	if err := options.Set(OptDontLogOutOfScope, true); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 	if err := options.Set(OptRemoveAllJavaScript, true); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -250,6 +256,11 @@ func TestAnUnchangedOutOfScopeResponseIsNotCountedAsUnrecorded(t *testing.T) {
 	port, _ := strconv.Atoi(portStr)
 
 	options := NewOptions()
+	// Seeded retention, set explicitly: see the comment in
+	// TestResponseRulesApplyToOutOfScopePlaintextTraffic.
+	if err := options.Set(OptDontLogOutOfScope, true); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 	if err := options.Set(OptRemoveAllJavaScript, true); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
@@ -282,6 +293,11 @@ func TestWithNoRulesOnAnOutOfScopeForwardIsUntouched(t *testing.T) {
 	defer closeOrigin()
 
 	options := NewOptions()
+	// Seeded retention, set explicitly: see the comment in
+	// TestResponseRulesApplyToOutOfScopePlaintextTraffic.
+	if err := options.Set(OptDontLogOutOfScope, true); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
 	srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
 		WithScope(outOfScope()).
 		WithOptions(options).

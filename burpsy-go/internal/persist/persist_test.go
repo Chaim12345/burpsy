@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -38,13 +39,13 @@ func TestRestore_RoundTripsMessagesAndExchanges(t *testing.T) {
 	}
 	status := uint16(200)
 	store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
+		Request: core.MsgPtr(reqID), Response: &respID, Host: "a", Port: 80, TLS: false,
 		Method: "GET", Path: "/", Status: &status, ResponseLen: 20,
 	})
 	// A tool-originated resend beside the proxy traffic: the mirror must restore each row's
 	// attribution exactly, because HTTP history's tool-traffic filter reads nothing but this field.
 	store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: "a", Port: 80, TLS: false,
+		Request: core.MsgPtr(reqID), Response: &respID, Host: "a", Port: 80, TLS: false,
 		Method: "GET", Path: "/repeated", Status: &status, ResponseLen: 20,
 		Source: core.SourceRepeater,
 	})
@@ -141,6 +142,33 @@ func TestRestore_RoundTripsFindingsAndOrganizer(t *testing.T) {
 	}
 }
 
+// persistSettings is what the two production callers pass: the rule set's own view of its
+// set-wide switches, rather than a hand-written literal a test could get wrong in a way that
+// matches a bug in the callers.
+func persistSettings(mr *matchreplace.RuleSet) MatchRuleSettings {
+	return MatchRuleSettings{
+		UpdateContentLength: mr.UpdateContentLength(),
+		InScopeOnly:         mr.InScopeOnly(),
+	}
+}
+
+// TestMatchRulesAbsentSwitchReadsAsOff states the migration rule: a project written before the
+// in-scope restriction existed has no row for it, and restoring one must not narrow its rules to
+// whatever scope happens to be loaded. Absent means off, which is the engine's default and Burp's.
+func TestMatchRulesAbsentSwitchReadsAsOff(t *testing.T) {
+	p := newTestStore(t)
+	rules, settings, err := p.LoadMatchRules()
+	if err != nil {
+		t.Fatalf("LoadMatchRules on an empty store: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("rules from an empty store = %+v, want none", rules)
+	}
+	if settings.InScopeOnly || settings.UpdateContentLength {
+		t.Fatalf("settings from an empty store = %+v, want every switch off", settings)
+	}
+}
+
 func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	p := newTestStore(t)
 	scope := core.NewScope()
@@ -153,7 +181,11 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 	mr.SetRules([]*matchreplace.Rule{rule})
 	mr.SetUpdateContentLength(true)
-	p.SaveMatchRules(mr.Rules(), mr.UpdateContentLength())
+	// Both set-wide switches, and deliberately not both the same value: two booleans saved
+	// through one struct is exactly the shape where a swapped pair compiles and passes, so the
+	// one that must survive is the one that is not the default.
+	mr.SetInScopeOnly(true)
+	p.SaveMatchRules(mr.Rules(), persistSettings(mr))
 
 	sess := session.NewCoordinator(zap.NewNop())
 	sessRule := session.NewSessionRule("login", []string{"127.0.0.1"}, []session.MacroStep{
@@ -177,7 +209,7 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 
 	tl := toollog.New()
 	tl.SetPersistenceSink(p.SaveToolLog)
-	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, toollog.Bytes(64), 5, "")
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/", 200, toollog.Bytes(64), 5, "", nil)
 
 	restoredScope := core.NewScope()
 	restoredMR := matchreplace.NewRuleSet()
@@ -192,6 +224,9 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 	if !restoredMR.UpdateContentLength() {
 		t.Fatalf("content-length flag did not survive restore")
+	}
+	if !restoredMR.InScopeOnly() {
+		t.Fatalf("the 'only apply to in-scope items' flag did not survive restore; a rule set restored without it rewrites out-of-scope traffic the operator had excluded")
 	}
 	mrRules := restoredMR.Rules()
 	if len(mrRules) != 1 || mrRules[0].StringMatch != `X-(\d+)` {
@@ -224,6 +259,48 @@ func TestRestore_RoundTripsScopeMatchreplaceSessionToolLog(t *testing.T) {
 	}
 }
 
+// A linked row must keep its exchange through both halves of the round trip, and a row with no
+// link must come back with none — not with exchange 0, which is a real exchange in a
+// position-is-the-id store and would point Logger's message viewer at the wrong bytes.
+func TestRestore_ToolLogExchangeLinkRoundTrips(t *testing.T) {
+	p := newTestStore(t)
+	tl := toollog.New()
+	tl.SetPersistenceSink(p.SaveToolLog)
+
+	linked := core.ExchangeID(7)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/linked", 200, toollog.Bytes(64), 5, "", &linked)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/bare", 200, toollog.Bytes(64), 5, "", nil)
+	zero := core.ExchangeID(0)
+	tl.Record(toollog.ToolRepeater, "h", 80, false, "GET", "/zero", 200, toollog.Bytes(64), 5, "", &zero)
+
+	restoredTL := toollog.New()
+	if err := p.Restore(nil, nil, nil, nil, nil, nil, restoredTL); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	entries := restoredTL.All()
+	if len(entries) != 3 {
+		t.Fatalf("restored %d tool log entries, want 3", len(entries))
+	}
+	for _, e := range entries {
+		switch e.Path {
+		case "/linked":
+			if e.Exchange == nil || *e.Exchange != 7 {
+				t.Fatalf("%s: exchange = %v, want 7", e.Path, e.Exchange)
+			}
+		case "/bare":
+			if e.Exchange != nil {
+				t.Fatalf("%s: exchange = %v, want none", e.Path, e.Exchange)
+			}
+		case "/zero":
+			if e.Exchange == nil || *e.Exchange != 0 {
+				t.Fatalf("%s: exchange = %v, want a real 0, not NULL", e.Path, e.Exchange)
+			}
+		default:
+			t.Fatalf("unexpected restored path %q", e.Path)
+		}
+	}
+}
+
 func TestOpen_FailsOnBogusPath(t *testing.T) {
 	if _, err := Open(filepath.Join(t.TempDir(), "no", "such", "dir", "x.db"), zap.NewNop()); err == nil {
 		t.Fatalf("Open in missing directory succeeded, want error")
@@ -245,7 +322,7 @@ func TestRestore_RoundTripsMergedFinding(t *testing.T) {
 		id = findings.Add(core.NewFinding{
 			Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
 			Confidence: core.ConfidenceFirm, Param: param, Target: target,
-			Occurrences: []core.Occurrence{{ExchangeID: core.ExchangeID(i), Request: core.MsgId(i * 2)}},
+			Occurrences: []core.Occurrence{{ExchangeID: core.ExchangeID(i), Request: core.MsgPtr(core.MsgId(i * 2))}},
 		})
 	}
 
@@ -274,7 +351,7 @@ func TestRestore_RoundTripsMergedFinding(t *testing.T) {
 	got := restored.Add(core.NewFinding{
 		Name: "Cross-site scripting (reflected)", Severity: core.SeverityHigh,
 		Confidence: core.ConfidenceFirm, Param: "lang", Target: target,
-		Occurrences: []core.Occurrence{{ExchangeID: 9, Request: 18}},
+		Occurrences: []core.Occurrence{{ExchangeID: 9, Request: core.MsgPtr(core.MsgId(18))}},
 	})
 	if got != id {
 		t.Fatalf("Add after restore returned %d, want the restored finding %d", got, id)
@@ -324,5 +401,145 @@ func TestRestore_RoundTripsFindingTaskID(t *testing.T) {
 		t.Fatalf("untracked finding %d did not survive the restore", untracked)
 	} else if got.TaskID != 0 {
 		t.Errorf("TaskID = %d, want 0 for a finding no task produced", got.TaskID)
+	}
+}
+
+// A rule's ordered action list must survive the round trip intact — every kind, every per-kind
+// field, the per-action Enabled and Stop flags, and the nested branches of a check.
+//
+// This test exists because the actions column was added to a table whose load path rebuilds a rule
+// field by field, and that is the shape where a saved column is written and never read back: the
+// rule returns looking plausible, carrying the *synthesised* legacy list (run the macro) instead of
+// the operator's own, and the difference is invisible until a real request goes out without the
+// header that authenticated it. persist_test.go already documents that exact defect for the four
+// scope fields (7nh2/6db6); this is the same assertion for the new column, so the next field added
+// here fails loudly rather than silently degrading to the pre-action behaviour.
+//
+// Asserted through the marshalled JSON rather than field by field: a hand-written comparison only
+// checks the fields whoever wrote it remembered, and the field that gets forgotten in the load path
+// is the same one that gets forgotten in the assertion.
+func TestRestore_SessionRuleActionListRoundTrips(t *testing.T) {
+	p := newTestStore(t)
+	sess := session.NewCoordinator(zap.NewNop())
+	rule := session.NewSessionRule("csrf", []string{"127.0.0.1"}, []session.MacroStep{
+		{Method: "GET", URL: "http://127.0.0.1/form"},
+	})
+	// The actions below spend {{csrf}}, and the rule is refused unless something extracts it — so
+	// the extraction is here to make the rule legal, not as a second thing under test.
+	csrf, err := session.NewExtraction("csrf", "header", `(.+)`, 1)
+	if err != nil {
+		t.Fatalf("NewExtraction: %v", err)
+	}
+	csrf.Header = "X-CSRF"
+	rule.Extractions = []*session.Extraction{csrf}
+	// The canonical Burp recipe this issue was filed about, plus a check with both branches
+	// populated: run a macro, then conditionally set a header or replace part of the request. Every
+	// action carries a non-default field, because a field left at its zero value round-trips
+	// correctly even when the load path drops it.
+	rule.Actions = []*session.Action{
+		{Kind: session.ActionRunMacro, Enabled: true},
+		{
+			Kind:    session.ActionCheckValidity,
+			Enabled: true,
+			Then: []*session.Action{
+				{Kind: session.ActionSetHeader, Enabled: true, Name: "X-CSRF", Value: "{{csrf}}"},
+			},
+			Else: []*session.Action{
+				{Kind: session.ActionSetParam, Enabled: true, Name: "tok", Value: "{{csrf}}", In: "body"},
+				{Kind: session.ActionSetCookie, Enabled: true, Name: "sid", Value: "{{csrf}}"},
+				{Kind: session.ActionReplace, Enabled: true, Match: `id=(\d+)`, Replacement: "id=1", Regex: true},
+			},
+		},
+		{Kind: session.ActionAddCookiesFromJar, Enabled: true},
+		// Disabled and stopping, both non-default: a load path that dropped either would leave a
+		// rule that runs an action the operator switched off, or runs past one they made final.
+		{Kind: session.ActionInvokeExtension, Enabled: false, Stop: true, Extension: "acme.session"},
+	}
+	if _, err := sess.AddRule(rule); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+	saved := sess.AllRules()
+	p.SaveSessionRules(saved)
+
+	restoredSess := session.NewCoordinator(zap.NewNop())
+	if err := p.Restore(nil, nil, nil, nil, restoredSess, nil, nil); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	rs := restoredSess.AllRules()
+	if len(rs) != 1 {
+		t.Fatalf("restored %d session rules, want the one that was saved", len(rs))
+	}
+	want, err := json.Marshal(saved[0].EffectiveActions())
+	if err != nil {
+		t.Fatalf("marshal saved actions: %v", err)
+	}
+	got, err := json.Marshal(rs[0].EffectiveActions())
+	if err != nil {
+		t.Fatalf("marshal restored actions: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("the rule's action list did not survive the round trip.\n got: %s\nwant: %s\n"+
+			"A rule that restores with a different action list runs something the operator never "+
+			"wrote — and because an absent list synthesises the legacy run-the-macro shape, the "+
+			"degraded rule still looks like a working one.", got, want)
+	}
+	// Named explicitly as well as compared, so a change that broke the nesting could not pass by
+	// making both sides equally wrong.
+	if n := len(rs[0].Actions); n != 4 {
+		t.Fatalf("restored %d top-level actions, want the 4 that were saved", n)
+	}
+	if n := len(rs[0].Actions[1].Else); n != 3 {
+		t.Fatalf("the check's else branch restored %d actions, want 3; a nested branch is the part "+
+			"of the list a flat load path silently loses", n)
+	}
+	if !rs[0].Actions[3].Stop || rs[0].Actions[3].Enabled {
+		t.Fatalf("the last action restored as enabled=%v stop=%v, want enabled=false stop=true",
+			rs[0].Actions[3].Enabled, rs[0].Actions[3].Stop)
+	}
+}
+
+// The project name must survive a close and reopen, because the name is a property of the
+// database file, not of the process: an operator who renames a project and restarts burpsy
+// has to see the name they typed, or the name was never really attached to the project.
+func TestProjectNameRoundTripsThroughAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "project.db")
+	p, err := Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if name, err := p.ProjectName(); err != nil || name != "" {
+		t.Fatalf("a fresh project reads name=%q err=%v, want \"\" — an absent row is not a name", name, err)
+	}
+	if err := p.SetProjectName("Springfield bank, phase 2"); err != nil {
+		t.Fatalf("SetProjectName: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	name, err := reopened.ProjectName()
+	if err != nil {
+		t.Fatalf("ProjectName after reopen: %v", err)
+	}
+	if name != "Springfield bank, phase 2" {
+		t.Fatalf("the project name did not survive the reopen: got %q\n"+
+			"The name is a property of the project file; losing it across a restart would make the "+
+			"Project menu's readout a per-session label rather than a project identity.", name)
+	}
+
+	// A blank name is refused by the API layer, not here — but the store must still round-trip
+	// whatever it is given without inventing a placeholder, so the caller's rules stay the
+	// only rules.
+	if err := reopened.SetProjectName(""); err != nil {
+		t.Fatalf("SetProjectName(\"\"): %v — the store must store what it is given", err)
+	}
+	name, _ = reopened.ProjectName()
+	if name != "" {
+		t.Fatalf("an explicitly cleared name read back as %q, want \"\"", name)
 	}
 }

@@ -10,11 +10,13 @@ package scanner
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"go.uber.org/zap"
 )
 
 // auditTestExchange builds one exchange record the way the Rust test helper does: no store, no
@@ -182,19 +184,19 @@ func Test_the_ledger_tracks_check_indices_beyond_one_bitmap_word(t *testing.T) {
 
 func Test_two_consecutive_check_failures_abandon_the_unit_and_two_units_fail_the_item(t *testing.T) {
 	b := newItemBreaker(DefaultAuditConfig())
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("one failure is not enough")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit")
 	}
 	if b.unitFinished(true) {
 		t.Error("one abandoned unit is not enough to fail the item")
 	}
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("the streak restarted with the unit, so this is failure one again")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit again")
 	}
 	if !b.unitFinished(true) {
@@ -207,14 +209,14 @@ func Test_two_consecutive_check_failures_abandon_the_unit_and_two_units_fail_the
 
 func Test_a_success_between_failures_resets_the_unit_breaker(t *testing.T) {
 	b := newItemBreaker(DefaultAuditConfig())
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("one failure is not enough")
 	}
 	b.checkSucceeded()
-	if b.checkFailed() {
+	if b.checkFailed("u", "c") {
 		t.Error("the streak restarted, so this is failure one again")
 	}
-	if !b.checkFailed() {
+	if !b.checkFailed("u", "c") {
 		t.Error("the second consecutive failure abandons the unit")
 	}
 }
@@ -238,7 +240,7 @@ func Test_a_healthy_unit_resets_the_item_breaker(t *testing.T) {
 func Test_zero_disables_a_breaker_as_the_shipped_never_stop_preset_does(t *testing.T) {
 	b := newItemBreaker(AuditConfigWithoutBreakers())
 	for i := 0; i < 50; i++ {
-		if b.checkFailed() {
+		if b.checkFailed("u", "c") {
 			t.Fatalf("with the breaker off no failure count abandons the unit (failure %d)", i+1)
 		}
 	}
@@ -510,6 +512,10 @@ func Test_an_absent_option_and_an_option_set_to_zero_are_different_answers(t *te
 // Every OptUint32 on BuiltInConfig must have a row in builtInConfigKeys. Without this, a key added to
 // the struct would be silently unreportable *and* silently not applied — Apply would skip it and the
 // listing would omit it, and nothing would fail.
+//
+// Rows without a read (the per-issue selection keys this engine cannot apply) are exempt from the
+// field side of the count but not from the reporting side: Keys() must still list them, with
+// Applies false.
 func Test_every_built_in_config_field_has_a_key_row(t *testing.T) {
 	typ := reflect.TypeOf(BuiltInConfig{})
 	optFields := make([]string, 0, typ.NumField())
@@ -518,15 +524,21 @@ func Test_every_built_in_config_field_has_a_key_row(t *testing.T) {
 			optFields = append(optFields, typ.Field(i).Name)
 		}
 	}
-	if len(optFields) != len(builtInConfigKeys) {
-		t.Fatalf("BuiltInConfig has %d overlayable field(s) %v but builtInConfigKeys has %d row(s): a field with no row is neither applied nor listed",
-			len(optFields), optFields, len(builtInConfigKeys))
+	fieldRows := 0
+	for _, k := range builtInConfigKeys {
+		if k.read != nil {
+			fieldRows++
+		}
+	}
+	if len(optFields) != fieldRows {
+		t.Fatalf("BuiltInConfig has %d overlayable field(s) %v but builtInConfigKeys has %d field-backed row(s): a field with no row is neither applied nor listed",
+			len(optFields), optFields, fieldRows)
 	}
 	// Keys() must report all of them, every time, set or not: an operator has to be able to tell "this
 	// preset leaves the time budget alone" from "this engine has no time budget".
 	for _, c := range BuiltInConfigs {
-		if got := len(c.Keys()); got != len(optFields) {
-			t.Errorf("%s reported %d key(s), want all %d", c.Name, got, len(optFields))
+		if got := len(c.Keys()); got != len(builtInConfigKeys) {
+			t.Errorf("%s reported %d key(s), want all %d", c.Name, got, len(builtInConfigKeys))
 		}
 	}
 	seen := map[string]bool{}
@@ -538,8 +550,225 @@ func Test_every_built_in_config_field_has_a_key_row(t *testing.T) {
 			t.Errorf("two rows are named %q", k.name)
 		}
 		seen[k.name] = true
+		// Three states, and the rule is that a row's claim must match how it is applied:
+		//
+		//   applies && read != nil  -- a scalar key this engine overlays
+		//   applies && read == nil  -- LIST-shaped: honoured through a different path entirely
+		//   !applies && read == nil -- genuinely unrepresentable
+		//   !applies && read != nil -- the impossible one, and a silent-state lie
+		//
+		// The third is what burpsy-react-ui-86le was: the row claimed NOT applied while the engine
+		// honoured the control through a list-valued field this oracle cannot see. So a row with no
+		// scalar read must not silently claim the plain two-state answer.
+		if k.read == nil && k.applies && !k.listShaped {
+			t.Errorf("key row %q has no read and is not list-shaped but claims to apply: an "+
+				"unrepresentable key must be honest about it", k.name)
+		}
+		if k.read == nil && k.listShaped && !strings.HasPrefix(k.what, "partly applied: ") {
+			t.Errorf("key row %q is list-shaped but its description does not say so: %q", k.name, k.what)
+		}
 	}
 }
+
+// Every insertion_point_types key must map to at least one bcheck kind, and every kind it maps to
+// must be one bcheck.Enumerate understands — a kind string that drifted would silently stop
+// selecting points rather than failing.
+func Test_every_insertion_point_key_maps_to_a_bcheck_kind(t *testing.T) {
+	known := map[string]bool{}
+	for _, k := range DefaultProbeInsertionKinds {
+		known[k] = true
+	}
+	// The full class list the enumerator supports, spelled independently of the overlay: kinds the
+	// engine default does not enable but a shipped configuration may ask for.
+	for _, kind := range []string{"query", "header", "cookie", "body", "param_name_url", "param_name_body", "url_path_filename", "url_path_folder", "entire_body"} {
+		known[kind] = true
+	}
+	for _, k := range builtInConfigKeys {
+		if !strings.HasPrefix(k.burpKey, "scanner/insertion_point_types/") {
+			continue
+		}
+		kinds, ok := insertionPointKindFor[k.name]
+		if !ok || len(kinds) == 0 {
+			t.Errorf("insertion key %q has no bcheck kind mapping", k.name)
+			continue
+		}
+		for _, kind := range kinds {
+			if !known[kind] {
+				t.Errorf("insertion key %q maps to unknown kind %q", k.name, kind)
+			}
+		}
+	}
+}
+
+// A preset that names the insertion_point_types section must build the run's point set from the full
+// Burp-shaped default, then apply each set key — so disabling one class leaves the others on
+// (including the finer ones the engine default does not enumerate), and enabling entire body alone
+// adds exactly that.
+func Test_insertion_point_overlay_adds_and_removes_kinds(t *testing.T) {
+	base := DefaultAuditConfig()
+
+	off := BuiltInConfig{Name: "off", InsertCookies: SomeUint32(0), InsertParamName: SomeUint32(0)}
+	applied := off.Apply(base)
+	want := map[string]bool{"query": true, "header": true, "cookie": false, "body": true,
+		"param_name_url": false, "param_name_body": false, "url_path_filename": true, "url_path_folder": true}
+	for kind, wantOn := range want {
+		if containsKind(applied.InsertionKinds, kind) != wantOn {
+			t.Errorf("cookies+param-name off: kind %q present = %v, want %v", kind, containsKind(applied.InsertionKinds, kind), wantOn)
+		}
+	}
+
+	on := BuiltInConfig{Name: "on", InsertEntireBody: SomeUint32(1)}
+	applied = on.Apply(base)
+	if !containsKind(applied.InsertionKinds, "entire_body") {
+		t.Error("entire body on: entire_body missing from the run's point classes")
+	}
+	if containsKind(applied.InsertionKinds, "relocate_body_to_query") {
+		t.Error("relocation kinds belong to a different Burp section and must not join the point set")
+	}
+
+	all := BuiltInConfig{Name: "all", InsertURLParams: SomeUint32(0), InsertBodyParams: SomeUint32(0),
+		InsertCookies: SomeUint32(0), InsertHTTPHeaders: SomeUint32(0), InsertParamName: SomeUint32(0),
+		InsertURLPathFilename: SomeUint32(0), InsertURLPathFolders: SomeUint32(0), InsertEntireBody: SomeUint32(0)}
+	applied = all.Apply(base)
+	if len(applied.InsertionKinds) != 1 || applied.InsertionKinds[0] != "none" {
+		t.Errorf("every class disabled should pin the none sentinel, got %v", applied.InsertionKinds)
+	}
+
+	// No insertion key set: the engine default stands, untouched.
+	untouched := BuiltInConfig{Name: "untouched"}.Apply(base)
+	if len(untouched.InsertionKinds) != 0 {
+		t.Errorf("a preset that never names the section must leave the engine default, got %v", untouched.InsertionKinds)
+	}
+}
+
+// optField is the value side of an OptUint32 the oracle compares. An unset key's "inherited"
+// comparison compares the field to itself; only a set key's value is actually asserted.
+func optField(v OptUint32) uint64 {
+	return uint64(v.Value)
+}
+
+func containsKind(kinds []string, kind string) bool {
+	for _, k := range kinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// The issues_reported overlay must narrow the check set exactly as documented: passive off drops
+// the passive families, each active tier selects the checks carrying that rank, JavaScript off
+// drops the DOM family, and a key that was never set inherits the base switches.
+//
+// The three active keys are INDEPENDENT. That is the whole point of the tier ranking: before it,
+// "any tier true" left every base switch alone, so a preset that enabled only the light checks and
+// refused the intrusive ones still ran the intrusive ones. Each key now selects its own rank.
+func Test_issues_reported_gate_narrows_the_check_set(t *testing.T) {
+	allOn := &ScanConfig{
+		MaxConcurrency: 1,
+		Timeout:        5 * time.Second,
+		CheckSqli:      true, CheckXss: true, CheckPathTraversal: true, CheckSSRF: true,
+		CheckXXE: true, CheckJwtWeak: true, CheckJSVulns: true,
+		CheckPassiveAnalysis: true, CheckPassivePosture: true, CheckHeaders: true,
+		CheckHostDiscovery: true, CheckExtendedCoverage: true, CheckReflectionProbes: true,
+		CheckResponseDependence: true, CheckActiveInjection: true, CheckDOM: true,
+		CheckExtendedActive: true, CheckOutOfBand: true, CheckStored: true, CheckCorpus: true,
+	}
+	s := NewActiveScanner(core.NewTrafficStore(), zap.NewNop()).WithConfig(allOn)
+	baseCount := len(s.enabledChecks())
+	if baseCount == 0 {
+		t.Fatal("the scanner has no checks enabled, so the gate has nothing to narrow")
+	}
+
+	passive := s.enabledChecksUnder(AuditConfig{PassiveChecks: SomeUint32(0)})
+	if len(passive) >= baseCount {
+		t.Errorf("passive off left %d checks, want fewer than the base %d", len(passive), baseCount)
+	}
+
+	allTiersOff := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(0)})
+	if len(allTiersOff) >= baseCount {
+		t.Errorf("all active tiers off left %d checks, want fewer than the base %d", len(allTiersOff), baseCount)
+	}
+	if len(allTiersOff) == 0 {
+		t.Error("all active tiers off should leave the passive families running, not nothing")
+	}
+
+	// The three keys select independent sets. Enabling only the light tier must exclude the
+	// intrusive checks even though their base switch is on — the assertion the old collapsed gate
+	// made impossible to write.
+	lightOnly := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(1), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(0)})
+	if len(lightOnly) >= baseCount {
+		t.Errorf("light-only left %d checks, want fewer than the base %d: the intrusive checks ran under a preset that disabled them", len(lightOnly), baseCount)
+	}
+	for _, c := range lightOnly {
+		// Passive rows are exempt: they hang from scan_type_passive and send no request, so no
+		// active tier selects or excludes them.
+		if !c.passive && c.invasiveness != TierLight {
+			t.Errorf("light-only admitted %q, which is ranked %s", c.name, c.invasiveness)
+		}
+	}
+
+	// Enabling only the intrusive tier excludes the light checks: the selection is by rank, not a
+	// suffix of the base order.
+	intrusiveOnly := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(0), MediumActiveChecks: SomeUint32(0), IntrusiveActiveChecks: SomeUint32(1)})
+	if len(intrusiveOnly) >= baseCount {
+		t.Errorf("intrusive-only left %d checks, want fewer than the base %d", len(intrusiveOnly), baseCount)
+	}
+	for _, c := range intrusiveOnly {
+		if !c.passive && c.invasiveness != TierIntrusive {
+			t.Errorf("intrusive-only admitted %q, which is ranked %s", c.name, c.invasiveness)
+		}
+	}
+
+	// All three on reproduces the base set: the rank filter admits everything when every tier is
+	// enabled, so a full preset is not a narrower run than no preset.
+	allTiersOn := s.enabledChecksUnder(AuditConfig{LightActiveChecks: SomeUint32(1), MediumActiveChecks: SomeUint32(1), IntrusiveActiveChecks: SomeUint32(1)})
+	if len(allTiersOn) < baseCount {
+		t.Errorf("all tiers on left %d checks, want at least the base %d", len(allTiersOn), baseCount)
+	}
+
+	noGate := s.enabledChecksUnder(AuditConfig{})
+	if len(noGate) != baseCount {
+		t.Errorf("no gate keys set must equal the base set: %d, want %d", len(noGate), baseCount)
+	}
+}
+
+// A run whose configuration names explicit point classes must enumerate those classes in its queue
+// rows, not the engine default.
+func Test_run_insertion_kinds_come_from_the_configuration(t *testing.T) {
+	cfg := AuditConfig{InsertionKinds: []string{"query", "entire_body"}}
+	if got := cfg.insertionKinds(); len(got) != 2 || got[0] != "query" || got[1] != "entire_body" {
+		t.Errorf("explicit kinds = %v, want the configuration's own list", got)
+	}
+	if got := (AuditConfig{}).insertionKinds(); len(got) != len(DefaultProbeInsertionKinds) {
+		t.Errorf("default kinds = %v, want the engine default", got)
+	}
+}
+
+// insertionKindsByName and relocationKindsByName are this test's own copy of which point class each
+// key governs, written out here so the oracle is independent of the table's apply functions. It is
+// the one place a row pointed at the wrong class can be caught by a test that does not read the
+// table it is checking.
+var (
+	insertionKindsByName = map[string][]string{
+		"insert_url_params":        {"query"},
+		"insert_body_params":       {"body"},
+		"insert_cookies":           {"cookie"},
+		"insert_http_headers":      {"header"},
+		"insert_param_name":        {"param_name_url", "param_name_body"},
+		"insert_url_path_filename": {"url_path_filename"},
+		"insert_url_path_folders":  {"url_path_folder"},
+		"insert_entire_body":       {"entire_body"},
+	}
+	relocationKindsByName = map[string]string{
+		"relocate_body_to_url":    "relocate_body_to_query",
+		"relocate_body_to_cookie": "relocate_body_to_cookie",
+		"relocate_url_to_body":    "relocate_query_to_body",
+		"relocate_url_to_cookie":  "relocate_query_to_cookie",
+		"relocate_cookie_to_body": "relocate_cookie_to_body",
+		"relocate_cookie_to_url":  "relocate_cookie_to_query",
+	}
+)
 
 // Keys() and Apply() must agree, and the oracle is a switch written out by hand here: this test's copy
 // of "which AuditConfig field does this key land in" is independent of the table's, so a row whose
@@ -559,18 +788,180 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 		for _, k := range c.Keys() {
 			var got, wantSet, wantUnset uint64
 			switch k.Name {
+			case "quick_scan_url_params", "quick_scan_body_params", "quick_scan_cookies",
+				"quick_scan_http_headers", "quick_scan_param_name",
+				"quick_scan_url_path_filename", "quick_scan_url_path_folders",
+				"quick_scan_entire_body":
+				// The eight per-kind light-tier keys, checked through the DERIVED set rather than
+				// the scalar: the claim is about which point classes reach the light pass, and a
+				// test that read the OptUint32 would pass while the derived set was wrong -- which is
+				// the shape of bug burpsy-react-ui-iueb is the precedent for.
+				//
+				// A preset that sets none of them leaves LightAuditKinds.Set false, and every kind is
+				// in the light pass. That IS the assertion for a preset that does not mention them.
+				if k.Set {
+					if !applied.LightAuditKinds.Set {
+						t.Errorf("%s sets %s but the derived light-audit set says nothing was configured; "+
+							"the key was applied and then ignored, which is the failure this exists to catch",
+							c.Name, k.Name)
+						break
+					}
+				} else if applied.LightAuditKinds.Set {
+					t.Errorf("%s does not set %s but the derived set is configured; an unset key must say "+
+						"nothing, or a preset that never mentions quick scans narrows the light pass",
+						c.Name, k.Name)
+					break
+				}
+			case "number_of_follow_up_passes":
+				// Set and NOT set both resolve through followUpPasses rather than the raw OptUint32,
+				// so the overlay oracle checks the resolved count: a preset that sets 2 must leave the
+				// run on 2, and a preset that does not set it must leave the base's (burpsy-react-ui-5efx).
+				if k.Set {
+					got = uint64(applied.followUpPasses())
+					wantSet = uint64(k.Value)
+				} else {
+					got, wantUnset = uint64(applied.followUpPasses()), uint64(base.followUpPasses())
+				}
 			case "consecutive_check_failures_to_abandon_unit":
 				got, wantSet, wantUnset = uint64(applied.ConsecutiveCheckFailuresToAbandonUnit), uint64(k.Value), uint64(base.ConsecutiveCheckFailuresToAbandonUnit)
 			case "consecutive_unit_failures_to_fail_item":
 				got, wantSet, wantUnset = uint64(applied.ConsecutiveUnitFailuresToFailItem), uint64(k.Value), uint64(base.ConsecutiveUnitFailuresToFailItem)
 			case "pause_session_after_failed_items":
 				got, wantSet, wantUnset = uint64(applied.PauseSessionAfterFailedItems), uint64(k.Value), uint64(base.PauseSessionAfterFailedItems)
+			case "pause_session_at_failed_item_percentage":
+				got, wantSet, wantUnset = uint64(applied.PauseSessionAtFailedItemPercentage), uint64(k.Value), uint64(base.PauseSessionAtFailedItemPercentage)
 			case "maximum_audit_time_minutes":
 				got = uint64(applied.TimeBudget)
 				wantSet = uint64(time.Duration(k.Value) * time.Minute)
 				wantUnset = uint64(base.TimeBudget)
+			case "scan_type_passive":
+				got, wantSet, wantUnset = optField(applied.PassiveChecks), uint64(k.Value), optField(base.PassiveChecks)
+			case "scan_type_light_active":
+				got, wantSet, wantUnset = optField(applied.LightActiveChecks), uint64(k.Value), optField(base.LightActiveChecks)
+			case "scan_type_medium_active":
+				got, wantSet, wantUnset = optField(applied.MediumActiveChecks), uint64(k.Value), optField(base.MediumActiveChecks)
+			case "scan_type_intrusive_active":
+				got, wantSet, wantUnset = optField(applied.IntrusiveActiveChecks), uint64(k.Value), optField(base.IntrusiveActiveChecks)
+			case "scan_type_javascript_analysis":
+				got, wantSet, wantUnset = optField(applied.JavaScriptAnalysis), uint64(k.Value), optField(base.JavaScriptAnalysis)
+			case "store_issues_within_queue_items":
+				got, wantSet, wantUnset = optField(applied.StoreQueueItems), uint64(k.Value), optField(base.StoreQueueItems)
+			case "use_nested_insertion_points":
+				// A switch carried as OptUint32, so what is checked is the VALUE (1 on, 0 off), not
+				// whether the option is present. 0 is the meaningful setting here — it is what stops
+				// the enumerator expanding a point inside an already-spliced value — so a check that
+				// only asked "is it set?" would pass while the preset turned the feature the wrong
+				// way (burpsy-react-ui-iueb).
+				got, wantSet, wantUnset = optField(applied.NestedInsertionPoints), uint64(k.Value), optField(base.NestedInsertionPoints)
+			case "max_insertion_points_per_base_request":
+				// A cap, not a flag: the value itself is what must land on the field, so this checks
+				// the number rather than a presence bit. An unset key must leave the base's value
+				// alone — the enumerator falls back to bcheck.DefaultMaxInsertionPoints only when the
+				// field is unset, and a preset silently overwriting that default with 0 would turn
+				// "no cap stated" into "admit nothing", which is the one reading that is certainly
+				// wrong (burpsy-react-ui-iueb).
+				got, wantSet, wantUnset = optField(applied.MaxInsertionPointsPerRequest), uint64(k.Value), optField(base.MaxInsertionPointsPerRequest)
+			case "skip_ineffective_checks":
+				// A boolean-shaped gate (y4om), so the overlay is a scalar. Checked through the
+				// Set/Value pair rather than a resolved boolean because that is what the row writes,
+				// and because "unset means Burp's default (on)" cannot be observed on the field —
+				// a preset that does not set the key must leave the field UNSET rather than write a
+				// 1, or the operator's "inherit" would become an explicit decision on every preset.
+				got = optField(applied.SkipIneffectiveChecks)
+				if !k.Set {
+					wantSet, wantUnset = 0, 0
+				} else {
+					wantSet, wantUnset = uint64(k.Value), 0
+				}
+			case "max_items_in_progress":
+				// The admission cap (3ymo). Checked through the RUN's resolved value rather than
+				// the config field, because a preset value of 0 means the engine's own
+				// smallest-real-cap clamp rather than "unbounded" — resolvedMaxItemsInProgress
+				// turns it into 1, and asserting the raw field would demand 0 be preserved, which
+				// is precisely the deadlock the clamp exists to prevent.
+				//
+				// Unset means the shipped default, so a preset that does not set the key holds
+				// DefaultMaxItemsInProgress rather than zero.
+				if !k.Set {
+					// Unset is a no-op overlay, so the applied config holds what the BASE held —
+					// which is the zero value unless the base also set it. Asserting the shipped
+					// default here would be wrong: Apply does not resolve defaults, and the run's
+					// newAuditRun does that later.
+					got, wantSet, wantUnset = optField(applied.MaxItemsInProgress), 0, 0
+					break
+				}
+				want := uint64(k.Value)
+				if k.Value == 0 {
+					want = 1 // set-and-zero is the smallest real cap, not "unbounded"
+				}
+				got, wantSet, wantUnset = uint64(applied.resolvedMaxItemsInProgress()), want, 0
+			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
+				// Field-less by design: this engine has no per-issue selection, the row reports
+				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
+				// to check beyond that it must not have been treated as a scalar.
+				got, wantSet, wantUnset = 1, 1, 1
+			case "relocate_body_to_url", "relocate_body_to_cookie", "relocate_url_to_body",
+				"relocate_url_to_cookie", "relocate_cookie_to_body", "relocate_cookie_to_url":
+				// A relocation key adds or removes one point class. The class is spelled here, by
+				// hand, so a row pointed at the wrong one fails rather than agreeing with itself.
+				// (Burp spells the query string "url".)
+				present := uint64(0)
+				if containsKind(applied.InsertionKinds, relocationKindsByName[k.Name]) {
+					present = 1
+				}
+				got = present
+				wantSet = uint64(k.Value) // 1 adds the class, 0 removes it
+				wantUnset = 0             // the base holds no relocation class
+			case "insert_url_params", "insert_body_params", "insert_cookies", "insert_http_headers",
+				"insert_param_name", "insert_url_path_filename", "insert_url_path_folders", "insert_entire_body":
+				// Insertion keys land in the point-class list, not a scalar field, and a preset that
+				// sets any of them materialises the full Burp-shaped set before applying each. So the
+				// contract checked here is per class: every class this key governs is present when the
+				// key is 1 and absent when it is 0, and an unset key leaves the class absent (the base
+				// holds no point classes at all).
+				present := uint64(0)
+				for _, kind := range insertionKindsByName[k.Name] {
+					if containsKind(applied.InsertionKinds, kind) {
+						present = 1
+					}
+				}
+				got = present
+				wantSet = uint64(k.Value)
+				wantUnset = 0
+			case "skip_all_tests_for_parameters":
+				// A LIST-shaped key: applied through a path this oracle cannot see, and named here
+				// rather than left in the default arm precisely because the guard below refuses an
+				// applying key it cannot check. What is checked is the half that matters: the control
+				// does not reach a scalar, and a PRESET cannot carry a list-valued key at all -- the
+				// value is set on the run (burpsy-react-ui-86le).
+				if len(applied.SkipAllTestsForParameters) != 0 {
+					t.Errorf("preset %q reported %s as applied but a preset cannot carry a "+
+						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 0, 0, 0
+			case "scan_speed":
+				// The per-check mutation-set selector (burpsy-react-ui-ev7y). Named here because the
+				// guard below refuses an applying key this oracle cannot check, and the check is the
+				// ordinary one: the row's value reaches its own field.
+				got = uint64(applied.ScanSpeed.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
+			case "scan_accuracy":
+				// The mutation-token count (4/8/10). Same contract as scan_speed above.
+				got = uint64(applied.ScanAccuracy.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
 			default:
-				t.Fatalf("%s reports key %q, which this test does not know how to check — add it here rather than letting it go unverified", c.Name, k.Name)
+				// A key with no field and no apply path can only be reported, never overlaid, so the
+				// contract this test checks for it is that it did not reach a scalar. Naming all of
+				// them here would verify nothing more and would need editing every time Burp adds a
+				// key this engine does not implement. A key that *applies* must be named above: that
+				// is the half of this oracle worth keeping, because it is where a row can be pointed
+				// at the wrong field.
+				if k.Applies {
+					t.Fatalf("%s reports key %q as applying, which this test does not know how to check — add it here rather than letting it go unverified", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 1, 1, 1
 			}
 			if k.Set && got != wantSet {
 				t.Errorf("%s sets %s to %d but the applied config holds %d", c.Name, k.Name, wantSet, got)

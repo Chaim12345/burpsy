@@ -81,6 +81,26 @@ test.describe("axe — transient surfaces", () => {
     expect(results.violations.filter((violation) => !(violation.id in ALLOWED_RULES))).toEqual([]);
   });
 
+  test("the suite-wide search dialog", async ({ page }) => {
+    await pinTheme(page, "dark");
+    await gotoApp(page);
+    await page.getByRole("button", { name: "Search across tools" }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+
+    // A real search first, so the scan covers the result table, the status badges, the row buttons
+    // and the highlighted preview. The dialog's opening state renders none of them, and an empty
+    // form is the easiest possible thing to make accessible.
+    await dialog.getByLabel("Search for").fill("ORIGIN-OK");
+    await dialog.getByRole("button", { name: "Search", exact: true }).click();
+    await dialog.locator("tr", { hasText: "/zebra" }).click();
+    await expect(dialog.locator(".search-dialog-message mark").first()).toBeVisible();
+
+    const results = await new AxeBuilder({ page }).withTags(TAGS).analyze();
+    process.stdout.write(`  axe dark search dialog: ${summarise(results.violations)}\n`);
+    expect(results.violations.filter((violation) => !(violation.id in ALLOWED_RULES))).toEqual([]);
+  });
+
   test("the shortcut sheet", async ({ page }) => {
     await pinTheme(page, "dark");
     await gotoApp(page);

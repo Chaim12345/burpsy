@@ -269,3 +269,36 @@ func TestNilControlIsAWorkingNoOp(t *testing.T) {
 	c.complete()
 	c.StopOnContext(context.Background(), nil, "x")
 }
+
+func TestProgressCountsWhatTheCollectorSettles(t *testing.T) {
+	a, send, _ := controlledAttack(t, 50, nil)
+	ctrl := NewControl()
+	// One in five sends fails, so both counters move and their sum still reaches the plan.
+	flaky := 0
+	flakySend := func(raw []byte) (Sent, error) {
+		flaky++
+		if flaky%5 == 0 {
+			return Sent{}, context.DeadlineExceeded
+		}
+		return send(raw)
+	}
+	report := Run(a.WithControl(ctrl), flakySend, nil)
+
+	sent, failed := ctrl.Progress()
+	if sent != report.Sent || failed != report.Failed {
+		t.Errorf("progress = (%d sent, %d failed), report = (%d sent, %d failed): the live view disagrees with the report",
+			sent, failed, report.Sent, report.Failed)
+	}
+	if sent+failed != 50 {
+		t.Errorf("sent+failed = %d, want one settled outcome per planned request", sent+failed)
+	}
+}
+
+func TestNilControlProgressCountsNothing(t *testing.T) {
+	var c *Control
+	c.note(true)
+	c.note(false)
+	if sent, failed := c.Progress(); sent != 0 || failed != 0 {
+		t.Errorf("nil control progress = (%d, %d), want (0, 0)", sent, failed)
+	}
+}

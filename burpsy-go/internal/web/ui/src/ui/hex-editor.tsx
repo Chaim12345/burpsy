@@ -56,11 +56,18 @@ export interface HexSelection {
 
 export function HexEditor({
   value,
+  bytes: bytesProp,
   onChange,
   label,
   onRevealInRaw,
 }: {
   value: string;
+  /** The true wire bytes, when the caller has them (MessageView.body_base64, burpsy-react-ui-p836).
+   *  `value` is a JSON string, and JSON replaced every byte >= 0x80 of a non-UTF-8 body with U+FFFD —
+   *  encoding that string back shows EF BF BD triplets in the dump where the wire bytes belong. Given,
+   *  the dump shows these bytes instead; absent, `value` is encoded as before (valid for every
+   *  UTF-8-clean message, which was the only case before p836). */
+  bytes?: Uint8Array;
   /** Absent means read-only — a captured response, a sequencer token. */
   onChange?: (value: string) => void;
   label: string;
@@ -89,7 +96,7 @@ export function HexEditor({
     setRefusal(null);
   }, [value]);
 
-  const encoded = useMemo(() => messageBytes(value), [value]);
+  const encoded = useMemo(() => bytesProp ?? messageBytes(value), [bytesProp, value]);
   const bytes = draft ?? encoded;
   const length = bytes.length;
 

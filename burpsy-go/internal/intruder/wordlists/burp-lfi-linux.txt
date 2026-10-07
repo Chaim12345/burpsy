@@ -1,0 +1,42 @@
+# burpsy bundled wordlist: Local file inclusion targets (Linux)
+# Source: Burp Suite's own shipped Intruder payload resource (PayloadStrings), reproduced
+#   verbatim from the files PortSwigger bundles with Burp Suite itself.
+# Licence basis: these ARE PortSwigger's shipped payloads, carried over as-is; unlike
+#   burpsy's other starter lists, this content is not third-party OWASP/SecLists material —
+#   it is Burp's own bundled data, redistributed here as plain wordlist files.
+# Placeholders such as {base}, {domain}, {file} are Burp's template syntax and are
+#   preserved as-is; the attack engine substitutes them at send time.
+/etc/issue
+/etc/passwd
+/etc/shadow
+/etc/group
+/etc/hosts
+/etc/motd
+/etc/mysql/my.cnf
+/proc/1/fd/1
+/proc/self/environ
+/proc/version
+/proc/cmdline
+/proc/sched_debug
+/proc/mounts
+/proc/net/arp
+/proc/net/route
+/proc/net/tcp
+/proc/net/udp
+/proc/self/cwd/index.php
+/proc/self/cwd/main.py
+/root/.bash_history
+/root/.ssh/id_rsa
+/var/run/secrets/kubernetes.io/serviceaccount
+/var/lib/mlocate/mlocate.db
+/var/lib/mlocate.db
+/var/log/apache/access.log
+/var/log/apache/error.log
+/var/log/httpd/error_log
+/usr/local/apache/log/error_log
+/usr/local/apache2/log/error_log
+/var/log/nginx/access.log
+/var/log/nginx/error.log
+/var/log/vsftpd.log
+/var/log/sshd.log
+/var/log/mail

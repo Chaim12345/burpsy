@@ -24,7 +24,7 @@ func seedExchange(t *testing.T, store *TrafficStore, id ExchangeID, host string,
 		t.Fatalf("put response: %v", err)
 	}
 	ex := &Exchange{
-		Request:  reqID,
+		Request:  MsgPtr(reqID),
 		Response: &respID,
 		Host:     host,
 		Port:     port,

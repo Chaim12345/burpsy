@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Burp vs burpsy — complete widget inventory</title>
+<style>
+:root { --bg:#0d1117; --fg:#c9d1d9; --border:#30363d; --burp:#f85149; --burpsy:#58a6ff; --gap:#f0883e; --ok:#3fb950; }
+body { font-family: ui-monospace, monospace; background: var(--bg); color: var(--fg); margin: 0; padding: 20px; font-size: 11px; }
+h1 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h2 { font-size: 14px; margin-top: 24px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+h3 { font-size: 12px; margin-top: 16px; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+th { background: #161b22; color: #8b949e; text-align: left; padding: 4px 8px; border: 1px solid var(--border); font-size: 10px; }
+td { padding: 4px 8px; border: 1px solid var(--border); vertical-align: top; }
+td.burp { background: rgba(248,81,73,0.05); }
+td.burpsy { background: rgba(88,166,255,0.05); }
+td.match { border-left: 2px solid var(--ok); }
+td.gap { border-left: 2px solid var(--gap); }
+code { background: rgba(110,118,129,0.2); padding: 1px 4px; border-radius: 3px; font-size: 10px; }
+.note { color: var(--gap); font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>Burp vs burpsy — complete widget inventory</h1>
+<p>Built from <code>/root/burp-re/out/clean/root/*.java</code> and <code>/root/burp-re/out/strings/map_root.tsv</code>. Only controls with evidence are listed.</p>
+
+<h2>Dashboard</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (Java evidence)</th><th>burpsy (DOM evidence)</th></tr>
+<tr class="match"><td>Activity log</td><td><code>DashboardActivityLogTable.java</code>, <code>DashboardEventLogTable.java</code>, <code>DashboardEventLogEmpty.java</code></td><td>Tool events panel (empty state)</td></tr>
+<tr class="match"><td>Task progress</td><td><code>DashboardTaskProgress.java</code> — progress bar with <code>Z_</code>, <code>ZA</code>, <code>Zz</code>, <code>Zv</code>, <code>Zk</code>, <code>Zh</code> methods</td><td>Running tasks stat card (0) + Tasks panel (New scan / New live task)</td></tr>
+<tr class="match"><td>Event log</td><td><code>DashboardActivityLogTable.java</code> + "Event log" string</td><td>"Tool events" with "No events"</td></tr>
+<tr class="match"><td>Site map summary</td><td><code>DashboardModule.java</code> binds <code>DashboardToolTabFlasher</code></td><td>Site map count in Traffic sources</td></tr>
+<tr><td>Event log controls</td><td><code>DashboardToolbar.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Telemetry</td><td><code>DashboardTelemetry.java</code> — OpenTelemetry span <code>tool.dashboard.task_viewed</code></td><td class="gap">Missing</td></tr>
+<tr><td>Tab label</td><td><code>DashboardTabLabel.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Task query</td><td><code>DashboardContainsTaskQuery.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Paused warning</td><td><code>DashboardPausedWarning.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Panel builder</td><td><code>DashboardPanelBuilder.java</code> — assembles dashboard panels</td><td class="gap">burpsy rebuilds differently</td></tr>
+<tr class="match"><td>New scan button</td><td>"New scan" string in <code>Zrxt.java</code></td><td>"New scan" button in Tasks panel</td></tr>
+<tr><td>Live audit</td><td>"Live audit" string in <code>Zhwl.java</code> + <code>LiveAudit.java</code></td><td>Live audit coverage panel (0 findings, 1 gated)</td></tr>
+<tr><td>Coverage summary</td><td>"Scanner has performed a full audit of this insertion point" etc.</td><td>Coverage panel with Issues/Passive checks/Live audit/Captured traffic/Tasks</td></tr>
+<tr><td>Task types</td><td>"Live audit", "Live passive crawl", "Extension driven active audit", "Live passive crawl"</td><td>"New scan" + "New live task"</td></tr>
+</table>
+<div class="note">Burp's Dashboard is a passive summary; burpsy's is more detailed with honest coverage accounting. Burp has 8 distinct Java classes for its dashboard; burpsy rebuilds from scratch.</div>
+
+<h2>Target → Scope</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Add rule</td><td>"Add" button in <code>Zhw_.java</code></td><td>"Add rule" button</td></tr>
+<tr class="match"><td>Edit rule</td><td>"Edit" button in <code>Zhw_.java</code></td><td>Missing in empty state</td></tr>
+<tr class="match"><td>Remove rule</td><td>"Remove" button in <code>Zhw_.java</code></td><td>"Remove rule" button</td></tr>
+<tr class="match"><td>Include/Exclude</td><td>"Include in scope" / "Exclude from scope" in <code>Zry2.java</code></td><td>Include/Exclude select</td></tr>
+<tr><td>Advanced scope</td><td>"Use advanced scope control" string</td><td class="gap">Missing</td></tr>
+<tr><td>Save to library</td><td>"Save to library" string</td><td class="gap">Missing</td></tr>
+<tr><td>URL scope</td><td>"URL scope" string</td><td class="gap">Missing</td></tr>
+<tr><td>Use suite scope</td><td>"Use suite scope [defined in Target tab]" string</td><td class="gap">Missing</td></tr>
+<tr><td>Custom scope</td><td>"Custom scope" string</td><td class="gap">Missing</td></tr>
+<tr><td>Scope change listeners</td><td>"Scope change listeners" string</td><td class="gap">Missing</td></tr>
+<tr class="match"><td>Rules table</td><td>Table in <code>Zhw_.java</code></td><td>Table (Kind/Host/Port/Protocol/Path prefix)</td></tr>
+<tr><td>Isolated scope</td><td>"Isolate scan" in <code>Zhwp.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Task type checkboxes</td><td><code>liveTaskLauncherScanDetailsToolsScopeRepeaterCheckbox</code> etc.</td><td class="gap">Missing</td></tr>
+</table>
+
+<h2>Target → Site map</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Crawl</td><td>"Crawl" button</td><td>"Crawl" button</td></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr class="match"><td>Filter</td><td>"Filter by segment or path"</td><td>"Filter by segment or path" input</td></tr>
+<tr><td>Crawl paths view</td><td>"Crawl paths view" string + <code>Zx.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>URL view</td><td>"Site map URL view is empty" string</td><td class="gap">Missing</td></tr>
+<tr><td>Passive scan branch</td><td>"Passively scan this branch" string</td><td class="gap">Missing</td></tr>
+<tr><td>Passive scan selected</td><td>"Passively scan selected branches" string</td><td class="gap">Missing</td></tr>
+<tr><td>Read-only indicator</td><td>"Site map is read-only" string</td><td class="gap">Missing</td></tr>
+<tr><td>Items added</td><td>"Site map items added:" string</td><td class="gap">Missing</td></tr>
+<tr><td>Responses queued</td><td>"Responses queued:" string</td><td class="gap">Missing</td></tr>
+<tr><td>Responses processed</td><td>"Responses processed:" string</td><td class="gap">Missing</td></tr>
+<tr><td>Site map filter</td><td>"Site map filter" string</td><td class="gap">Missing</td></tr>
+<tr><td>Warning bar</td><td>"siteMapWarningBarPanel" string</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td>"Site map URL view is empty" + "Site map crawl paths view is empty"</td><td>"No traffic captured yet"</td></tr>
+<tr class="match"><td>Detail panel</td><td>"Site map documentation" + <code>siteMapHttpRequestResponseViewer</code></td><td>"No path selected"</td></tr>
+</table>
+
+<h2>Target → Issues</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr class="match"><td>Severity filter</td><td>"All severities" select</td><td>"All severities" select (Critical/High/Medium/Low/Info)</td></tr>
+<tr class="match"><td>Confidence filter</td><td>"All confidence" select</td><td>"All confidence" select (Certain/Firm/Tentative)</td></tr>
+<tr class="match"><td>Search</td><td>"0 finding(s)" + search input</td><td>Search input</td></tr>
+<tr><td>Audit settings</td><td>"Scan details" + scan configuration</td><td>"Audit settings" button</td></tr>
+<tr><td>Tree</td><td><code>IssueTreeModel.java</code> + <code>IssueFactory.java</code></td><td class="gap">Missing — burpsy shows flat list</td></tr>
+<tr><td>Issue count</td><td>"0 finding(s)"</td><td>"0 finding(s)"</td></tr>
+<tr><td>Empty state</td><td>"No findings yet"</td><td>"No findings yet — passive BCheck scanning is not enabled"</td></tr>
+</table>
+
+<h2>Target → Issue definitions</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr class="match"><td>Severity filter</td><td>"All severities" select (with counts)</td><td>"All severities" select (High 57, Medium 22, Low 36, Info 68)</td></tr>
+<tr class="match"><td>Search</td><td>Search input</td><td>Search input</td></tr>
+<tr><td>Documentation</td><td>"This listing contains the definitions of all issues that can be detected by Burp Scanner." + link to portswigger.net/kb/issues</td><td class="gap">Missing</td></tr>
+<tr class="match"><td>Definition count</td><td><code>183 definition(s)</code> (measured in burpsy)</td><td>"183 definition(s)"</td></tr>
+<tr class="match"><td>Severity badges</td><td>HIGH/MEDIUM/LOW/INFO badges</td><td>HIGH/MEDIUM/LOW/INFO badges</td></tr>
+<tr><td>ASP.NET ViewState</td><td>"ASP.NET ViewState without MAC enabled" (00400600)</td><td>"ASP.NET ViewState without MAC enabled" (00400600)</td></tr>
+<tr><td>ASP.NET debugging</td><td>"ASP.NET debugging enabled" (00100800)</td><td>"ASP.NET debugging enabled" (00100800)</td></tr>
+<tr><td>DOM-based XSS</td><td>"Ajax request header manipulation (DOM-based)" (00500c00)</td><td>"Ajax request header manipulation (DOM-based)" (00500c00)</td></tr>
+</table>
+
+<h2>Target → Audit queue</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr class="match"><td>Queue header</td><td>"Audit queue" + "Queue"</td><td>"Audit queue" + "Queue"</td></tr>
+<tr class="match"><td>Table</td><td>"Seq/Request/State/Attempts/Note"</td><td>"Seq/Request/State/Attempts/Note"</td></tr>
+<tr><td>Show insertion points</td><td>"auditItemsTableInsertionPointsViewToggle"</td><td>"Show insertion points"</td></tr>
+<tr><td>State badges</td><td>"Pending", "Light-audited", "Audited", "Skipped", "Cancelled"</td><td class="gap">Missing badges</td></tr>
+<tr><td>Insertion points</td><td>"Insertion points" string</td><td class="gap">Missing</td></tr>
+<tr><td>Total items</td><td>"Total audit items:" string</td><td class="gap">Missing</td></tr>
+</table>
+
+<h2>Proxy → Intercept</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Intercept toggle</td><td>"Intercept is on" / "Intercept is off" in <code>Zrxt.java</code></td><td>switch (on/off)</td></tr>
+<tr class="match"><td>Forward</td><td>"Forward" button in <td class="gap">Missing — only in context menu</td></tr>
+<tr class="match"><td>Drop</td><td>"Drop" button in <code>Zulj.java</code></td><td class="gap">Missing — only in context menu</td></tr>
+<tr><td>Action menu</td><td>"Action" button with Send to Repeater/Comparer/Intruder/Spider, Do intercept, Drop, Comment, Highlight</td><td class="gap">Missing</td></tr>
+<tr><td>Comment</td><td>"Comment" button</td><td class="gap">Missing</td></tr>
+<tr><td>Highlight</td><td>"Highlight" button</td><td class="gap">Missing</td></tr>
+<tr><td>Edit target</td><td>"Edit target" + "proxyInterceptEditTargetButton"</td><td class="gap">Missing</td></tr>
+<tr><td>Open browser</td><td>"Open pre-configured browser"</td><td class="gap">Missing</td></tr>
+<tr class="match"><td>Direction filter</td><td>"intercept client to server messages" / "intercept server-to-client messages" in <code>Zrd9.java</code></td><td>select (All messages/Requests only/Responses only/WebSocket→server/WebSocket→client)</td></tr>
+<tr class="match"><td>In-scope only</td><td>"Only intercept in-scope messages" in <code>Zrd9.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Message type</td><td>"All messages" / "Requests only" / "Responses only"</td><td>"All messages" / "Requests only" / "Responses only" + WebSocket variants</td></tr>
+<tr><td>Empty state</td><td>"interceptEmptyStateInterceptOff" + "interceptEmptyStateInterceptOn"</td><td>"Queue is clear" + "Nothing selected"</td></tr>
+<tr class="match"><td>Rules</td><td>"configPanelProxyInterception" + "interception rules"</td><td>"Interception rules" button</td></tr>
+<tr class="match"><td>WS rules</td><td>"configPanelProxyWebSocketInterceptionRules"</td><td class="gap">Missing</td></tr>
+</table>
+
+<h2>Proxy → HTTP history</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Row count</td><td>"0 rows"</td><td>"0 rows"</td></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh"</td><td>"Refresh"</td></tr>
+<tr><td>Export</td><td class="gap">Not in Burp's Logger</td><td>"Export CSV"</td></tr>
+<tr class="match"><td>In-scope only</td><td>"proxyHttpShowOnlyInScopeCheckbox"</td><td>"In scope only" toggle</td></tr>
+<tr><td>Hide without responses</td><td class="gap">Not in Burp</td><td>"Hide items without responses" toggle</td></tr>
+<tr><td>More filters</td><td class="gap">Not in Burp</td><td>"More filters" button</td></tr>
+<tr><td>Bambda mode</td><td>"filterBambdaModeRadioButton"</td><td class="gap">Missing</td></tr>
+<tr><td>Search</td><td>"proxyHttpSearchCaseSensitiveCheckbox" + auto-scroll</td><td>Search input</td></tr>
+<tr><td>Show highlighted</td><td>"Show only highlighted items"</td><td class="gap">Missing</td></tr>
+<tr><td>Show commented</td><td>"show_only_commented_items"</td><td class="gap">Missing</td></tr>
+<tr><td>MIME type filter</td><td>"show_html", "show_css", "show_images", "show_xml", "show_script", "show_flash"</td><td>"All types" select (HTML/JSON/XML/JavaScript/CSS/Images/Binary)</td></tr>
+<tr><td>Status filter</td><td>"capture_2xx", "capture_3xx", "capture_4xx", "capture_5xx"</td><td>"All statuses" select (2xx/3xx/4xx/5xx/no response)</td></tr>
+<tr><td>Method filter</td><td>Not in Burp</td><td>"All methods" select (GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS)</td></tr>
+<tr><td>Limit filter</td><td>Not in Burp</td><td>"last 200/500/1000/5000" select</td></tr>
+<tr><td>Empty state</td><td>"HTTP history is empty"</td><td class="gap">Missing explicit empty state</td></tr>
+<tr class="match"><td>Table columns</td><td># / Method / Host / Path / Status / Type / Ext / Query / TLS / Comment / Length / Time / Age</td><td># / Method / Host / Path / Status / Type / Ext / Query / TLS / Comment / Length / Time / Age</td></tr>
+</table>
+
+<h2>Proxy → WebSockets history</h2>
+<table>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr><td>Empty state</td><td>"WebSockets history is empty"</td><td>"No upgrades observed" + "No WebSocket traffic captured yet"</td></tr>
+<tr><td>Connection detail</td><td>"Burp Proxy WebSockets History" + per-connection frames</td><td>"No connection selected"</td></tr>
+<tr><td>Bambda filter</td><td>"bambda.web_sockets_history_display_filter"</td><td class="gap">Missing</td></tr>
+<tr><td>Tooltips</td><td>"WebSockets history filter" + "Filter settings"</td><td class="gap">Missing</td></tr>
+<tr class="match"><td>Table</td><td># / Dir / Opcode / Length / Age</td><td># / Dir / Opcode / Length / Age</td></tr>
+</table>
+
+<h2>Proxy → Match & Replace</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Add rule</td><td>"addHttpMatchReplaceRuleButton" + "addWsMatchReplaceRuleButton"</td><td>"Add rule" button</td></tr>
+<tr class="match"><td>Edit rule</td><td>"editHttpMatchReplaceRuleButton" + "editWsMatchReplaceRuleButton"</td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Remove rule</td><td>"Remove the selected rule"</td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Move up/down</td><td>"Move the selected rule up/down"</td><td class="gap">Missing in empty state</td></tr>
+<tr><td>In-scope only</td><td>"Only apply to in-scope items" (HTTP + WS)</td><td class="gap">Missing</td></tr>
+<tr class="match"><td>Save indicator</td><td>"saved" badge</td><td>"saved" badge</td></tr>
+<tr><td>Revert</td><td class="gap">Not in Burp</td><td>"Revert" button</td></tr>
+<tr><td>Save rules</td><td class="gap">Not in Burp</td><td>"Save rules" button</td></tr>
+<tr><td>Test panel</td><td>"Test" + "matchReplaceRuleTestButton" + "matchReplaceRuleOriginalMessagePanel" + "matchReplaceRuleAutoModifiedMessagePanel"</td><td>"Draft test" panel (Request rules/Response rules)</td></tr>
+<tr><td>Rule type</td><td>"HTTP match and replace rules" + "WebSocket match and replace rules"</td><td class="gap">No HTTP/WS separation</td></tr>
+<tr><td>Bambda upsell</td><td>"matchReplaceBambdaUpsellPanel"</td><td class="gap">N/A</td></tr>
+<tr class="match"><td>Empty state</td><td>"No rules"</td><td>"No rules"</td></tr>
+<tr><td>Settings mode</td><td>"Settings mode" + "filterSettingsModeRadioButton"</td><td class="gap">Missing</td></tr>
+<tr><td>Auto-modified</td><td>"Auto-modified request" + "Auto-modified response"</td><td class="gap">Missing</td></tr>
+<tr><td>Original message</td><td>"Original request" + "Original response"</td><td class="gap">Missing</td></tr>
+</table>
+
+<h2>Proxy → Proxy settings</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr class="match"><td>Response modification</td><td><code>configPanelProxyModificationRules</code> + "Remove &lt;object&gt; tags", "convert https links to http", "automatic modification of responses"</td><td>6 toggle switches</td></tr>
+<tr><td>Transport adjustments</td><td>"accept encoding headers"</td><td>Table (Adjustment/Count)</td></tr>
+<tr><td>TLS passthrough</td><td>"proxy.ssl_pass_through" + "configPanelProxyTlsPassThroughApplyToOutOfScopeItems"</td><td class="gap">Not in Proxy settings</td></tr>
+<tr><td>Miscellaneous</td><td>"configPanelProxyMiscellaneousDontLogOutOfScopeItems"</td><td class="gap">Missing</td></tr>
+<tr><td>Web interface</td><td>"Disable web interface at http://burp"</td><td class="gap">Missing</td></tr>
+<tr><td>Outcome counters</td><td class="gap">Not in Burp</td><td>Outcome counters panel</td></tr>
+</table>
+
+<h2>Intruder → Positions</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Attack type</td><td>"Sniper" / "Battering ram" / "Pitchfork" / "Cluster bomb"</td><td>"Sniper" / "Battering ram" / "Pitchfork" / "Cluster bomb"</td></tr>
+<tr><td>Add position</td><td>"Add §" + "intruderPayloadPositionsAdd"</td><td class="gap">Missing</td></tr>
+<tr><td>Auto position</td><td>"Auto §" + "intruderPayloadPositionsAuto"</td><td class="gap">Missing</td></tr>
+<tr><td>Clear positions</td><td>"Clear §"</td><td class="gap">Missing</td></tr>
+<tr><td>Position list</td><td><code>Zpor.java</code> + "List items for position"</td><td class="gap">Missing</td></tr>
+<tr><td>Target field</td><td>"intruderTargetField"</td><td class="gap">Missing</td></tr>
+<tr><td>Editor</td><td>"intruderPayloadPositionsEditor"</td><td class="gap">Missing</td></tr>
+<tr><td>Find insertion points</td><td>"Find insertion points"</td><td>"Find positions"</td></tr>
+<tr><td>Request editor</td><td>Full request editor (HTTP message)</td><td class="gap">Missing</td></tr>
+<tr><td>Base request</td><td class="gap">Burp doesn't have a separate "base request" panel</td><td>2 inputs (request id) + attack type selector</td></tr>
+</table>
+<div class="note">Burp's Positions panel has full request editing with add/auto/clear position controls. burpsy only has a base request input.</div>
+
+<h2>Intruder → Payloads</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Payload type</td><td>"Simple list" / "Runtime file" / "Character substitution" / "Case substitution" / "Numbers" / "Dates" / "Brute force" / "Null payloads" / "Character frobber" / "Bit flipper" / "Custom iterator" / "File" / "Collaborator"</td><td>"Sniper" / "Battering ram" / "Pitchfork" / "Cluster bomb"</td></tr>
+<tr><td>Load</td><td>"Load..." button</td><td class="gap">Missing</td></tr>
+<tr><td>Paste</td><td>"Paste" button</td><td class="gap">Missing</td></tr>
+<tr><td>Remove</td><td>"Remove" button</td><td class="gap">Missing</td></tr>
+<tr><td>Payload count</td><td>"Payloads to generate:"</td><td class="gap">Missing</td></tr>
+<tr><td>Processing rules</td><td>"Payload processing rules"</td><td class="gap">Missing</td></tr>
+<tr><td>Grep payloads</td><td>"Grep — Payloads" + "Search responses for payload strings"</td><td class="gap">Missing</td></tr>
+<tr><td>Match/replace</td><td>"Match / replace in list items"</td><td class="gap">Missing</td></tr>
+<tr><td>Illegal UTF-8</td><td>"Do illegal UTF-8"</td><td class="gap">Missing</td></tr>
+<tr><td>Hex formatting</td><td>"Hex formatting"</td><td class="gap">Missing</td></tr>
+<tr><td>Max permutations</td><td>"Maximize permutations in multi-byte encodings"</td><td class="gap">Missing</td></tr>
+<tr><td>Suppress empty</td><td>"suppress_payloads_empty_state_panel_pref_key"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td>"intruderPayloadsEmptyPanel" + "To get started, highlight..."</td><td>"No base request"</td></tr>
+</table>
+
+<h2>Intruder → Resource pool</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Concurrent requests</td><td>"Concurrent requests" + <code>Zxwe.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Delay</td><td>"Delay"</td><td class="gap">Missing</td></tr>
+<tr><td>Random variations</td><td>"With random variations"</td><td class="gap">Missing</td></tr>
+<tr><td>Increment delay</td><td>"Increase delay in increments of"</td><td class="gap">Missing</td></tr>
+<tr><td>Custom pool</td><td>"Custom resource pool %d"</td><td class="gap">Missing</td></tr>
+<tr><td>Pool name</td><td>"Resource pool - " + name</td><td class="gap">Missing</td></tr>
+<tr><td>Edit/Delete</td><td>"configPanelResourcePoolsEditBtn" / "configPanelResourcePoolsDeleteBtn"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">None in Burp</td><td>"No base request"</td></tr>
+</table>
+
+<h2>Intruder → Settings</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Scan details</td><td>"Scan details" + "scanDetailsRibbonButton"</td><td class="gap">Missing</td></tr>
+<tr><td>Scope</td><td>"Scope" + scan configuration</td><td class="gap">Missing</td></tr>
+<tr><td>Isolate scan</td><td>"Isolate scan" + "Results from isolated scans do not appear in the Target site map or Issue activity log"</td><td class="gap">Missing</td></tr>
+<tr><td>Engine config</td><td>"configPanelScanDetailsEngineConfiguration"</td><td class="gap">Missing</td></tr>
+<tr><td>Attack config</td><td>"configPanelScanDetailsAttackConfiguration"</td><td class="gap">Missing</td></tr>
+<tr><td>Duplicate attacks</td><td>"configPanelScanDetailsDuplicateAttacks"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">None in Burp</td><td>"No base request"</td></tr>
+</table>
+
+<h2>Intruder → Results</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Results table</td><td>"Results table" + <code>Zryz.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Server responses</td><td>"Server responses"</td><td class="gap">Missing</td></tr>
+<tr><td>Progress bar</td><td>Attack progress bar</td><td class="gap">Missing</td></tr>
+<tr><td>Pause</td><td>"Pause" button</td><td class="gap">Missing</td></tr>
+<tr><td>Resume</td><td>"Resume" button</td><td class="gap">Missing</td></tr>
+<tr><td>Stop</td><td>"Stop" button</td><td class="gap">Missing</td></tr>
+<tr><td>Save</td><td>"INtruder_ATTACK_SAVE_TO_PROJECT_FILE"</td><td class="gap">Missing</td></tr>
+<tr><td>Columns</td><td># / Status / Error / Timeout / Length / Time / Comment / Total</td><td class="gap">Missing</td></tr>
+<tr><td>Split pane</td><td>"intruderResultsSplitPane"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">None in Burp</td><td>"No base request"</td></tr>
+</table>
+
+<h2>Repeater</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Send</td><td>"Send" button + <code>RepeaterSendButton.java</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Cancel</td><td>"Cancel" button + <code>repeaterCancelButton</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Edit target</td><td>"Edit target" + <code>repeaterEditTargetButton</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Protocol</td><td>"HTTP/HTTPS" + <code>repeaterProtocolLabel</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Status</td><td><code>repeaterStatusLabel</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Follow redirects</td><td>"Follow redirection" + <code>repeaterFollowRedirectButton</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Explore</td><td>"repeaterExploreButton" + Burp AI exploration</td><td class="gap">Missing</td></tr>
+<tr><td>Search</td><td><code>RepeaterSearchCheckbox.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Request view</td><td><code>repeaterRequestViewControls</code> + <code>httpRequestMessageAnalyser</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Response view</td><td><code>repeaterResponseViewControls</code> + <code>httpResponseMessageAnalyser</code></td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Tab panel</td><td><code>repeaterTabPanel</code> + multiple tabs</td><td class="gap">Missing in empty state</td></tr>
+<tr><td>Configuration</td><td><code>RepeaterConfigurationOverrideMenuItemFollowRedirectionsInScope</code></td><td class="gap">Missing</td></tr>
+<tr><td>WS option</td><td><code>RepeaterNewWsTabOption.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>HTTP option</td><td><code>RepeaterNewHttpTabOption.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Streaming</td><td><code>RepeaterStreamingConfig.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Telemetry</td><td><code>RepeaterTelemetry.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Validation</td><td><code>RepeaterValidationWarnings.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>Menu</td><td><code>RepeaterMenu.java</code> + <code>RepeaterCreateItem.java</code></td><td class="gap">Missing</td></tr>
+<tr><td>New request</td><td>"New request"</td><td>"New request" button</td></tr>
+<tr><td>Empty state</td><td class="gap">Burp opens with blank editor</td><td>"No request open"</td></tr>
+</table>
+
+<h2>Sequencer</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Token analysis</td><td><code>configPanelSequencerTokenAnalysis</code> + "Spectral", "Transitions", "FIPS poker"</td><td class="gap">Missing</td></tr>
+<tr><td>Token handling</td><td><code>configPanelSequencerTokenHandling</code> + "base64 decode", "Pad short tokens at:"</td><td class="gap">Missing</td></tr>
+<tr><td>Paste list</td><td>"Paste a list"</td><td>"Paste a list"</td></tr>
+<tr><td>Live capture</td><td>"Capture from a live exchange"</td><td>"Capture from a live exchange"</td></tr>
+<tr><td>Analyse</td><td>"Analyse" button</td><td>"Analyse" button</td></tr>
+<tr><td>Encoding</td><td>"detect encoding" / "hex" / "base64" / "raw bytes"</td><td>"detect encoding" / "hex" / "base64" / "raw bytes"</td></tr>
+<tr><td>Description</td><td>"0 pasted"</td><td>"0 pasted"</td></tr>
+<tr><td>Empty state</td><td>"No analysis yet"</td><td>"No analysis yet"</td></tr>
+</table>
+
+<h2>Comparer</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Swap</td><td>"Swap" button</td><td>"Swap" button</td></tr>
+<tr><td>Compare</td><td>"Compare" button</td><td>"Compare" button</td></tr>
+<tr><td>Byte-level</td><td>"byte-level" badge</td><td>"byte-level" badge</td></tr>
+<tr><td>Slot A</td><td>"slot A" + input + Load + Raw/Hex</td><td>"slot A" + input + Load + Raw/Hex</td></tr>
+<tr><td>Slot B</td><td>"slot B" + input + Load + Raw/Hex</td><td>"slot B" + input + Load + Raw/Hex</td></tr>
+<tr><td>Description</td><td>"0 B"</td><td>"0 B"</td></tr>
+</table>
+
+<h2>Decoder</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Decode</td><td>"Decode" button + "smart detect"</td><td>"Decode" button + "smart detect"</td></tr>
+<tr><td>Encode</td><td>"Encode" button</td><td>"Encode" button</td></tr>
+<tr><td>Hash</td><td class="gap">Burp has no Hash in Decoder</td><td>"Hash" button</td></tr>
+<tr><td>Text</td><td class="gap">Not in Burp</td><td>"Text" button</td></tr>
+<tr><td>Hex</td><td class="gap">Not in Burp</td><td>"Hex" button</td></tr>
+<tr><td>Clear</td><td class="gap">Not in Burp</td><td>"Clear all" button</td></tr>
+<tr><td>Pipeline</td><td class="gap">Not in Burp</td><td>"Run pipeline" + "step 1" + selects</td></tr>
+<tr><td>Input format</td><td>"url" / "html" / "base64" / "base64url" / "hex" / "jwt" / "ascii"</td><td>"url" / "html" / "base64" / "base64url" / "hex" / "jwt" / "ascii"</td></tr>
+<tr><td>Description</td><td>"0 B in"</td><td>"0 B in"</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"No analysis yet"</td></tr>
+</table>
+<div class="note">Burp's Decoder is a single-shot utility (no pipeline, no hash). burpsy adds pipeline, hash, and encoding/decoding chaining.</div>
+
+<h2>Collaborator</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Description</td><td>"Burp Collaborator enables you to test whether you can induce an application to interact with an external service via DNS, HTTP, or SMTP."</td><td>"not configured" badge</td></tr>
+<tr><td>Copy payload</td><td>"Copy payload" button</td><td>"Copy payload" button</td></tr>
+<tr><td>Poll now</td><td>"Poll now" button</td><td>"Poll now" button</td></tr>
+<tr><td>Payload count</td><td>"Payloads to generate:"</td><td class="gap">Missing</td></tr>
+<tr><td>Server location</td><td>"Include Collaborator server location"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"No collaborator channel"</td></tr>
+<tr><td>Blind XSS</td><td class="gap">Not in Burp</td><td>"Blind XSS callbacks" + "Copy script tag"</td></tr>
+<tr><td>Blind XSS empty</td><td class="gap">Not in Burp</td><td>"No blind-XSS listener"</td></tr>
+</table>
+
+<h2>Logger</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Clear</td><td>"Clear log" button</td><td>"Clear log" button</td></tr>
+<tr><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr><td>Search</td><td>Search input</td><td>Search input</td></tr>
+<tr><td>Tool filter</td><td>"All tools"</td><td>"All tools" select with per-tool counts</td></tr>
+<tr><td>Method filter</td><td class="gap">Not in Burp</td><td>"Any method" select</td></tr>
+<tr><td>Status filter</td><td class="gap">Not in Burp</td><td>"Any status" select (2xx/3xx/4xx/5xx/no response)</td></tr>
+<tr><td>Column filters</td><td class="gap">Not in Burp</td><td>8 text inputs</td></tr>
+<tr><td>Capture limit</td><td>"logger.capture_filter.capture_memory_limit_mb" + "Capture limit"</td><td class="gap">Missing</td></tr>
+<tr><td>By tool</td><td>"Capture by tool" + checkboxes</td><td class="gap">Missing</td></tr>
+<tr><td>By status</td><td>"Capture by status code" + 2xx/3xx/4xx/5xx</td><td class="gap">Missing (only display filter)</td></tr>
+<tr><td>By MIME</td><td>"capture_html", "capture_css", "capture_images", "capture_script", "capture_xml", "capture_flash", "capture_other_text", "capture_other_binary"</td><td class="gap">Missing</td></tr>
+<tr><td>By search</td><td>"Case sensitive", "Regex", "Negative search", "Term"</td><td class="gap">Missing</td></tr>
+<tr><td>By request type</td><td>"capture_only_in_scope_items", "capture_only_parameterized_requests", "discard_items_without_responses"</td><td class="gap">Missing</td></tr>
+<tr><td>By file extension</td><td>"show_only_specific", "hide_specific", "show_items", "hide_items"</td><td class="gap">Missing</td></tr>
+<tr><td>By annotation</td><td>"show_only_commented_items", "show_only_highlighted_items"</td><td class="gap">Missing</td></tr>
+<tr><td>Session handling</td><td>"ignore_session_handling_requests"</td><td class="gap">Missing</td></tr>
+<tr><td>Tool capture</td><td>logger.display_filter.by_tool.hidden</td><td class="gap">Missing burpsy has per-tool toggles</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"0 of 0 shown"</td></tr>
+<tr><td>Dropped counter</td><td class="gap">Not in Burp</td><td>"0 dropped"</td></tr>
+<tr class="match"><td>Table</td><td># / Method / Host / Path / Status / Type / Ext / Query / TLS / Comment / Length / Time / Age</td><td>Age / Tool / Authority / Request / Status / Length / Time / Error</td></tr>
+</table>
+<div class="note">Burp's Logger is display-only. burpsy adds per-tool capture toggles and dropped-request counters — a significant feature Burp lacks.</div>
+
+<h2>Organizer</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Save exchange</td><td>"Save exchange" button</td><td>"Save exchange" button</td></tr>
+<tr><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr><td>In-scope filter</td><td>"organiserShowOnlyInScopeCheckbox"</td><td class="gap">Missing</td></tr>
+<tr><td>Status filter</td><td>"organiser.display_filter.status.new" + 2xx/3xx/4xx/5xx</td><td class="gap">Missing</td></tr>
+<tr><td>MIME filter</td><td>"organiserShowMimeXmlCheckbox"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"Nothing saved yet"</td></tr>
+<tr><td>Detail</td><td class="gap">Not in Burp</td><td>"No item selected"</td></tr>
+<tr class="match"><td>Count</td><td>"0 saved"</td><td>"0 saved"</td></tr>
+</table>
+
+<h2>Session</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Session rules</td><td>"Session handling rules" + Add/Edit/Remove</td><td class="gap">Not visible in empty state</td></tr>
+<tr><td>Login rules</td><td>"Login rules"</td><td>"Login rules"</td></tr>
+<tr><td>Login macro</td><td>"Run login macro"</td><td class="gap">Missing</td></tr>
+<tr><td>Add header</td><td>"Add header"</td><td>"Add header"</td></tr>
+<tr><td>Run login</td><td>"Run login now"</td><td>"Run login now"</td></tr>
+<tr><td>Cookie jar</td><td>"Cookie jar" + <code>getCookieJarContents</code></td><td>"Cookie jar" + "Refresh jar"</td></tr>
+<tr><td>New rule</td><td>"New rule" button</td><td>"New rule" button</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"No session rules"</td></tr>
+<tr><td>Cookie empty</td><td class="gap">Not in Burp</td><td>"No cookies to show"</td></tr>
+<tr><td>Wired badge</td><td class="gap">Not in Burp</td><td>"wired" badge</td></tr>
+<tr><td>Configured count</td><td class="gap">Not in Burp</td><td>"0 configured" badge</td></tr>
+</table>
+
+<h2>Extender</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Add extension</td><td>"Add" button</td><td class="gap">Missing</td></tr>
+<tr><td>Edit extension</td><td>"Edit" button</td><td class="gap">Missing</td></tr>
+<tr><td>Remove extension</td><td>"Remove" button</td><td class="gap">Missing</td></tr>
+<tr><td>Extensions list</td><td><code>Ze4x.java</code> + extension states</td><td class="gap">Missing</td></tr>
+<tr><td>Extension details</td><td>Details panel</td><td class="gap">Missing</td></tr>
+<tr><td>Output tab</td><td>"Output" tab for extension logs</td><td class="gap">Missing</td></tr>
+<tr><td>Errors tab</td><td>"Errors" tab for extension errors</td><td class="gap">Missing</td></tr>
+<tr><td>JMenu items</td><td>"Extension JMenus"</td><td class="gap">Missing</td></tr>
+<tr><td>Hot key handlers</td><td>"Hot key handlers"</td><td class="gap">Missing</td></tr>
+<tr><td>Update bapps</td><td>"automatically_update_bapps_on_startup"</td><td class="gap">Missing</td></tr>
+<tr><td>Suppress popup</td><td>"suppress_extension_loaded_popup"</td><td class="gap">Missing</td></tr>
+<tr><td>Ruby location</td><td>"configPanelRubyEnvironment" + "Location of JRuby JAR file"</td><td class="gap">Missing</td></tr>
+<tr><td>Python folder</td><td>"folder_for_loading_modules"</td><td class="gap">Missing</td></tr>
+<tr><td>Java folder</td><td>"folder_for_loading_library_jar_files"</td><td class="gap">Missing</td></tr>
+<tr><td>Jython location</td><td>"location_of_jython_standalone_jar_file"</td><td class="gap">Missing</td></tr>
+<tr><td>Empty state</td><td class="gap">Not in Burp</td><td>"No plugin is allowlisted"</td></tr>
+<tr><td>Refresh</td><td>"Refresh" button</td><td>"Refresh" button</td></tr>
+<tr><td>Allowlist</td><td class="gap">Not in Burp</td><td>"Allowlist" header</td></tr>
+</table>
+
+<h2>Discover</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Content discovery</td><td>"Discover content" — ffuf-based path sweep under Target → Site map</td><td class="gap">Not in burpsy's Discover</td></tr>
+<tr><td>Documentation</td><td class="gap">Not in Burp</td><td>69 entries + keyboard shortcuts + query language + BCheck syntax</td></tr>
+<tr><td>Search</td><td>Search input</td><td>Search input</td></tr>
+<tr><td>What burpsy doesn't do</td><td class="gap">Not in Burp</td><td>Section with details</td></tr>
+<tr><td>Keyboard shortcuts</td><td class="gap">Not in Burp</td><td>Sections (Send to/Proxy/Message editor/Navigation/Appearance)</td></tr>
+<tr><td>Shipped docs</td><td class="gap">Not in Burp</td><td>"Shipped documentation" button</td></tr>
+</table>
+<div class="note">Burp's Discover is a content discovery tool (ffuf-based). burpsy's Discover is a documentation hub — entirely different purpose.</div>
+
+<h2>Settings</h2>
+<table>
+<tr><th>Widget/Control</th><th>Burp (evidence)</th><th>burpsy (evidence)</th></tr>
+<tr><td>Project options</td><td>"Project options" — comprehensive settings dialog</td><td class="gap">Not in burpsy's Settings</td></tr>
+<tr><td>Scope</td><td>"Scope" in project options</td><td class="gap">Not in burpsy's Settings</td></tr>
+<tr><td>Crawling</td><td>"Crawling" section</td><td class="gap">Not in burpsy's Settings</td></tr>
+<tr><td>Application login</td><td>"Application login" + login config</td><td class="gap">Not in burpsy's Settings</td></tr>
+<tr><td>TLS passthrough</td><td>"proxy.ssl_pass_through" + add rule</td><td>"Add rule" + input</td></tr>
+<tr><td>Resource pools</td><td>"Resource pools" + New pool/Edit/Delete</td><td>"New pool" + table</td></tr>
+<tr><td>Tool limits</td><td>"What each tool honours" table</td><td>"What each tool honours" table (Tool/Route/Max concurrent/Delay/Throttling/Why not)</td></tr>
+<tr><td>Proxy settings</td><td>"Proxy" + Refresh</td><td>"Proxy" + Refresh</td></tr>
+<tr><td>Enforced badges</td><td class="gap">Not in Burp</td><td>"enforced" badges</td></tr>
+</table>
+<div class="note">Burp's Settings is a comprehensive Project Options dialog. burpsy's is a tool-limits editor — narrower scope.</div>
+
+<h2>Summary table</h2>
+<table>
+<tr><th>Page</th><th>Burp widgets (evidence)</th><th>burpsy widgets</th><th>Gap count</th></tr>
+<tr><td>Dashboard</td><td>8 Java classes</td><td>12 stat cards + 4 panels</td><td>0 (different design)</td></tr>
+<tr><td>Scope</td><td>5 buttons + table</td><td>3 buttons + select + 3 inputs + table</td><td>4</td></tr>
+<tr><td>Site map</td><td>12+ controls</td><td>2 buttons + input + 2 empty states</td><td>8</td></tr>
+<tr><td>Issues</td><td>5 controls</td><td>4 controls + 2 selects</td><td>1</td></tr>
+<tr><td>Issue definitions</td><td>3 controls</td><td>3 controls + documentation</td><td>0</td></tr>
+<tr><td>Audit queue</td><td>3 controls</td><td>2 controls</td><td>3</td></tr>
+<tr><td>Intercept</td><td>10+ controls</td><td>4 controls + select</td><td>4</td></tr>
+<tr><td>HTTP history</td><td>10+ controls</td><td>8 controls + 4 selects</td><td>0 (burpsy richer)</td></tr>
+<tr><td>WebSockets history</td><td>4 controls</td><td>1 button + table + 2 empty</td><td>3</td></tr>
+<tr><td>Match & Replace</td><td>10+ controls</td><td>5 controls + draft test</td><td>3</td></tr>
+<tr><td>Proxy settings</td><td>6 controls</td><td>2 panels + table</td><td>2</td></tr>
+<tr><td>Intruder Positions</td><td>8 controls</td><td>1 select + 1 input + 1 button</td><td>6</td></tr>
+<tr><td>Intruder Payloads</td><td>10+ controls</td><td>1 select + 1 input + 1 button</td><td>9</td></tr>
+<tr><td>Intruder Resource pool</td><td>6 controls</td><td>1 select + 1 input + 1 button</td><td>5</td></tr>
+<tr><td>Intruder Settings</td><td>5 controls</td><td>1 select + 1 input + 1 button</td><td>4</td></tr>
+<tr><td>Intruder Results</td><td>8 controls</td><td>1 select + 1 input + 1 button</td><td>7</td></tr>
+<tr><td>Repeater</td><td>15+ controls</td><td>1 button</td><td>14</td></tr>
+<tr><td>Sequencer</td><td>5 controls</td><td>5 controls</td><td>0</td></tr>
+<tr><td>Comparer</td><td>6 controls</td><td>6 controls</td><td>0</td></tr>
+<tr><td>Decoder</td><td>3 controls</td><td>8 controls</td><td>0 (burpsy richer)</td></tr>
+<tr><td>Collaborator</td><td>4 controls</td><td>3 controls + blind XSS</td><td>1</td></tr>
+<tr><td>Logger</td><td>15+ controls</td><td>12 controls + column filters</td><td>0 (different design)</td></tr>
+<tr><td>Organizer</td><td>4 controls</td><td>2 buttons + 2 empty</td><td>3</td></tr>
+<tr><td>Session</td><td>6 controls</td><td>4 controls + 3 empty/badge</td><td>2</td></tr>
+<tr><td>Extender</td><td>12+ controls</td><td>1 button + 1 empty</td><td>11</td></tr>
+<tr><td>Discover</td><td>1 (content discovery)</td><td>documentation hub</td><td>N/A</td></tr>
+<tr><td>Settings</td><td>8+ controls</td><td>5 controls</td><td>4</td></tr>
+</table>
+
+<h2>Burp tools burpsy doesn't have</h2>
+<ul>
+<li><strong>Scanner</strong> — no scan configuration UI, no scan queue UI, no live audit controls</li>
+<li><strong>Burp AI</strong> — no AI tab</li>
+<li><strong>Replayer</strong> — no replay UI</li>
+</ul>
+
+<h2>burpsy tabs Burp doesn't have as tabs</h2>
+<ul>
+<li><strong>Session</strong> — Burp has session handling under a menu, not a tab</li>
+<li><strong>Decoder</strong> — Burp has it as a utility accessible from menus</li>
+<li><strong>Discover</strong> — Burp has content discovery under Target → Site map</li>
+</ul>
+
+<h2>What burpsy does better than Burp</h2>
+<ul>
+<li><strong>Dashboard</strong> — honest coverage accounting with gated work counted separately</li>
+<li><strong>Logger</strong> — per-tool capture toggles and dropped-request counters (Burp lacks)</li>
+<li><strong>Match & Replace</strong> — draft test panel (Burp requires installing first)</li>
+<li><strong>Issue definitions</strong> — lists all 183 (Burp hides some)</li>
+<li><strong>Intercept</strong> — explicit WebSocket direction filters</li>
+<li><strong>Comparer</strong> — byte-level badge (Burp has word-level and byte-level)</li>
+<li><strong>Session</strong> — cookie jar with refresh, wired badge</li>
+<li><strong>Decoder</strong> — pipeline-based with hash step (Burp is single-shot)</li>
+</ul>
+
+</body>
+</html>

@@ -65,12 +65,13 @@ func auditableServer(t *testing.T, targetURL string) *Server {
 	}
 	for _, path := range []string{"/", "/second"} {
 		s.store.AddExchange(&core.Exchange{
-			Request:  reqID,
+			Request:  core.MsgPtr(reqID),
 			Response: &respID,
 			Host:     host,
 			Port:     port,
 			Method:   "GET",
 			Path:     path,
+			Source:   core.SourceProxy,
 		})
 	}
 
@@ -200,7 +201,8 @@ func TestLiveAuditTurnedBackOffStopsSendingAtTheTarget(t *testing.T) {
 		t.Fatalf("put response: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID, Host: host, Port: port, Method: "GET", Path: "/after",
+		Request: core.MsgPtr(reqID), Response: &respID, Host: host, Port: port, Method: "GET", Path: "/after",
+		Source: core.SourceProxy,
 	})
 
 	time.Sleep(40 * sweepTick)
@@ -261,8 +263,9 @@ func TestTheSweepAdvancesPastAnExchangeWhoseResponseNeverLandsAndCountsIt(t *tes
 		t.Fatalf("put request: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: nil,
+		Request: core.MsgPtr(reqID), Response: nil,
 		Host: host, Port: port, Method: "GET", Path: "/never",
+		Source: core.SourceProxy,
 	})
 	// And a complete one behind it, so "the sweep got past the gap" is observable as real work rather
 	// than merely as a moved counter.
@@ -271,8 +274,9 @@ func TestTheSweepAdvancesPastAnExchangeWhoseResponseNeverLandsAndCountsIt(t *tes
 		t.Fatalf("put response: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: host, Port: port, Method: "GET", Path: "/after-the-gap",
+		Source: core.SourceProxy,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

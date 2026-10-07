@@ -32,7 +32,7 @@ func Test_exchange_zero_can_be_audited_HONEST_05(t *testing.T) {
 			if err != nil {
 				t.Fatalf("put response: %v", err)
 			}
-			ex := &core.Exchange{Request: reqID, Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"}
+			ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: &respID, Host: "h.test", Port: 80, Method: "GET", Path: "/first"}
 			s.store.AddExchange(ex)
 			// Asserted, not assumed: if the store ever stopped counting from zero this test would
 			// still pass while proving nothing, which is the failure mode it exists to catch.

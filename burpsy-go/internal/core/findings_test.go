@@ -73,7 +73,7 @@ func xssAt(param string, ex ExchangeID, target FindingTarget) NewFinding {
 		Target:     target,
 		Occurrences: []Occurrence{{
 			ExchangeID: ex,
-			Request:    MsgId(uint64(ex) * 2),
+			Request:    MsgPtr(MsgId(uint64(ex) * 2)),
 		}},
 	}
 }

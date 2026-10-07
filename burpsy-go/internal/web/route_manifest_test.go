@@ -48,608 +48,6 @@ import (
 // when driven by a model rather than by a human clicking, and the only place that can be declared
 // without every future facade re-deciding it is next to the route.
 
-// riskClass says what an unattended caller can do with a route. Declared per route so one shared
-// server-side check can enforce confirmation, rather than 21 facades each deciding for themselves.
-type riskClass string
-
-const (
-	// riskRead reads state and sends nothing outbound.
-	riskRead riskClass = "read"
-	// riskLocal mutates burpsy's own state — annotations, rules, settings — without sending traffic.
-	riskLocal riskClass = "local-write"
-	// riskEgress sends traffic to the engagement target. Bounded: one request, or a handful.
-	riskEgress riskClass = "egress"
-	// riskAttack sends unbounded traffic: an attack, an audit, a crawl, a capture. The class MCP-02
-	// requires confirmation for, because a model that miscounts here is a denial of service against a
-	// client's production system.
-	riskAttack riskClass = "attack"
-	// riskScope changes what the engagement is allowed to touch. Confirmation-worthy for the opposite
-	// reason to riskAttack: it does not send anything itself, it removes the thing that says no.
-	riskScope riskClass = "scope"
-	// riskCredential reads or replays credentials — the cookie jar, session macros. Confirmation-worthy
-	// because the output is secret, not because the call is dangerous.
-	riskCredential riskClass = "credential"
-	// riskDestructive irreversibly discards evidence.
-	//
-	// This class was added because writing the manifest found a route nobody had classified:
-	// `DELETE /api/tools/log` answers {"cleared": true} and wipes the record of every request this
-	// process has sent. On an engagement that log is the answer to "what did you send to my
-	// production system", so losing it is not the same kind of act as clearing a filter box — and
-	// riskLocal, which is what it would otherwise have been folded into, is defined as writing
-	// burpsy's own state and is exactly the wrong shape for it. Discovered by
-	// Test_every_route_rejects_a_verb_it_does_not_implement, which is the whole argument for having
-	// a manifest: the verb was reachable, undocumented, and destructive.
-	riskDestructive riskClass = "destructive"
-	// riskAsset serves a static asset (the UI, the CA certificate).
-	riskAsset riskClass = "asset"
-	// riskExecute runs operator-supplied code in this process's privileges: it starts a plugin from the
-	// -plugins allowlist as a child process, or invokes something that plugin registered.
-	//
-	// Its own class because none of the others fits and folding it into one of them would understate
-	// it. riskLocal is defined as writing burpsy's own state, and this writes nothing; riskEgress and
-	// riskAttack are about what leaves for the target, and a plugin may send nothing at all. What makes
-	// it confirmation-worthy is the direction the others do not cover: the code on the far side is not
-	// this program's, and after a load it is running until something stops it. The gate is the same as
-	// scanner's `run tool` — the request names an allowlist key, never a path — so this class marks
-	// "the operator already authorised this binary; a caller still has to mean it".
-	riskExecute riskClass = "execute"
-)
-
-// route is one registered pattern and what it accepts.
-type route struct {
-	// methods is every verb the handler answers. The 405 test derives the disallowed set from it, so
-	// an entry that overstates this weakens a real check — keep it exact.
-	methods []string
-	summary string
-	risk    riskClass
-	// subPath is a concrete path under a subtree pattern, for the routes registered with a trailing
-	// slash. Required for those, because the pattern itself is not a requestable URL: "/api/audit/"
-	// with no id is not what any caller sends, and testing the bare prefix would exercise a branch no
-	// operator reaches.
-	subPath string
-	// pathValidatedFirst marks a handler that resolves its path segment *before* checking the method,
-	// so a bogus segment answers 404 rather than 405 whatever the verb. Correct behaviour — "there is
-	// no such direction" is a truer answer than "wrong verb" — but it means the 405 test has to send a
-	// valid segment, which is what subPath supplies.
-	pathValidatedFirst bool
-}
-
-// manifest is every route this server registers. Keep it sorted by pattern; the test enforces that,
-// because a map this size that is not sorted is a merge conflict generator.
-var manifest = map[string]route{
-	"/": {
-		methods: []string{"GET"}, risk: riskAsset,
-		summary: "the operator console: index.html, app.js, style.css, and the SPA catch-all",
-	},
-	"/api/advisories": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the issue-definition catalogue as index rows, filterable by ?q= and ?severity=",
-	},
-	"/api/advisories/": {
-		// 00100200 is SQL injection — a real type index, so the 405 test exercises the path a caller
-		// actually sends rather than a segment that would 404 before reaching the verb guard.
-		methods: []string{"GET"}, risk: riskRead, subPath: "00100200",
-		summary: "one issue definition in full, by hexadecimal type index",
-	},
-	"/api/audit/": {
-		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
-		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
-	},
-	"/api/backup": {
-		// riskDestructive, not riskLocal, and the reasoning is worth stating because "take a backup"
-		// sounds like the safest call in the manifest.
-		//
-		// It writes a snapshot, and then it *prunes*: snapshots beyond the retention count are
-		// deleted. An unattended caller invoking this in a loop would therefore roll the entire
-		// retention window off the disk — every older snapshot gone, irreversibly — while each
-		// individual call reported success. That is the same shape as DELETE /api/tools/log, which is
-		// what this class was created for, and riskLocal is defined as writing burpsy's own state,
-		// which is exactly the wrong shape for it.
-		//
-		// Pruning only ever removes files matching the name pattern this feature writes, so an
-		// operator's own files in the same directory are never touched.
-		methods: []string{"POST"}, risk: riskDestructive,
-		summary: "snapshot the project database now via VACUUM INTO, then prune snapshots beyond the " +
-			"retention count; refuses with 503 when the instance has no -db",
-	},
-	"/api/blindxss": {
-		// riskCredential, not riskRead, and the classification is the interesting part. A blind-XSS
-		// callback carries `document.cookie` as the victim's browser saw it — a session token belonging
-		// to someone who is very often not the engagement's subject. That is the definition of this
-		// class ("the output is secret, not the call dangerous"), and reading it as riskRead would let an
-		// unattended caller pull third-party session material without confirming.
-		methods: []string{"GET"}, risk: riskCredential,
-		summary: "the blind-XSS channel: whether it is listening and why not, every payload minted " +
-			"through it, and the callbacks recorded against them",
-	},
-	"/api/blindxss/payload": {
-		// Local: minting a token changes what the listener will answer for and sends nothing outbound.
-		// The traffic a payload eventually causes comes from a victim's browser, not from here — which
-		// is exactly why the response states that an unfired payload is outstanding rather than clean.
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "mint one blind-XSS correlation payload to plant: the token, the script URL and the " +
-			"script tag carrying it",
-	},
-	"/api/collaborator/interaction/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "0",
-		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
-	},
-	"/api/collaborator/interactions": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "index rows for recorded out-of-band interactions: id, type, client IP, time",
-	},
-	"/api/collaborator/payload": {
-		// riskEgress, and the one route in this manifest whose egress is NOT to the engagement target:
-		// minting registers a payload domain with the interaction server, which tells a third party that
-		// an engagement is running. Bounded (one registration per process), so not riskAttack — but a
-		// read classification would be wrong, because this is the only route here that can open a
-		// subprocess and a public DNS registration.
-		methods: []string{"POST"}, risk: riskEgress,
-		summary: "mint one out-of-band payload address; refuses with 409 and no address when no " +
-			"interaction server is configured",
-	},
-	"/api/collaborator/poll": {
-		// POST but riskRead, like /api/intruder/points and /api/sequencer/analyse: the verb marks an
-		// operator asking for something now, not an outbound send. Nothing leaves the process — the
-		// interactsh-client subprocess owns polling, and this re-reads the log it writes.
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "re-read the interaction log now instead of waiting for the page's next tick",
-	},
-	"/api/collaborator/server": {
-		// riskScope, not riskLocal, and the reasoning is worth stating because riskLocal is the
-		// tempting reading: this route sends nothing. The provider it installs is lazy, so no
-		// registration, no subprocess and no packet happens here.
-		//
-		// What it does is decide *which third party* subsequently learns that an engagement is
-		// running, and where the callback data for it lands. /api/collaborator/payload is already
-		// riskEgress on the grounds that registering a domain discloses the engagement to a third
-		// party; the route that chooses that party is at least as confirmation-worthy as the one that
-		// contacts it. Classified riskLocal, an unattended caller could silently repoint every future
-		// out-of-band callback at a host of its choosing — including by passing the literal "public"
-		// to send it to interactsh's shared pool — and no confirmation would be asked.
-		//
-		// Refuses with 409 once a channel has registered, so it cannot orphan payloads already handed
-		// out; that is a correctness guard, not a reason to soften the class.
-		methods: []string{"POST"}, risk: riskScope,
-		summary: "point this installation at an interaction server without restarting: a URL, or " +
-			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered",
-	},
-	"/api/collaborator/status": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the out-of-band channel's state: configured or not, the registered domain, minted " +
-			"payloads, and how many corpus checks are gated without it",
-	},
-	"/api/config/export": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "one JSON bundle of every configurable surface: scope, intercept rules, session handling rules",
-	},
-	// Import rewrites what the engagement may touch — the bundle carries scope — so it shares
-	// /api/scope's confirmation-worthy class rather than sitting with ordinary writes.
-	// /api/scanner/config joins it: flipping audit families mid-engagement changes what the
-	// scanner is allowed to send, which is the same class of decision.
-	"/api/config/import": {
-		methods: []string{"POST"}, risk: riskScope,
-		summary: "apply a configuration bundle; a bundle with any invalid rule is refused without applying any part",
-	},
-	"/api/crawl": {
-		// GET reports the last crawl's coverage report; POST starts one.
-		methods: []string{"GET", "POST"}, risk: riskAttack,
-		summary: "GET: the last crawl's coverage report. POST: crawl from a seed URL under stated bounds",
-	},
-	"/api/dashboard": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "running tasks, the activity log, and every coverage summary with its breakdown",
-	},
-	"/api/discovery": {
-		// riskAttack for the same reason /api/crawl is: a POST hands a wordlist to ffuf, which then
-		// sends one request per word — unbounded traffic at the target, chosen by a file rather than by
-		// the caller. The GET is a read, but the manifest classifies a pattern and the stronger of the
-		// two verbs is the one an unattended caller has to confirm.
-		methods: []string{"GET", "POST"}, risk: riskAttack,
-		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
-			"path space with a wordlist (Burp's \"Discover content\")",
-	},
-	"/api/events": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "SSE change stream; the UI refetches on a frame rather than polling",
-	},
-	"/api/events/stats": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the stream's own counters: frames sent, subscribers, coalesced signals",
-	},
-	"/api/exchange/": {
-		methods: []string{"GET", "PATCH"}, risk: riskLocal, subPath: "0",
-		summary: "one exchange row by id; PATCH sets its notes and/or highlight (UX-15)",
-	},
-	"/api/exchanges/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "0",
-		summary: "legacy alias for /api/exchange/ — kept because the Rust UI shipped against it",
-	},
-	"/api/extensions": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "every allowlisted plugin, the state breakdown across them, and the policy in force",
-	},
-	"/api/extensions/apis": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the JSON-RPC contract a plugin is written against, generated from the dispatched method set",
-	},
-	"/api/extensions/console": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "one plugin's output and error consoles, with what the bound dropped",
-	},
-	"/api/extensions/invoke": {
-		// riskExecute, not riskLocal: this runs a registration inside an operator-supplied process and
-		// hands it engagement data.
-		methods: []string{"POST"}, risk: riskExecute,
-		summary: "run one registration a loaded plugin declared: a context-menu item, a menu action, or an editor tab",
-	},
-	"/api/extensions/load": {
-		// The one route on this API that starts a process. See riskExecute.
-		methods: []string{"POST"}, risk: riskExecute,
-		summary: "start one allowlisted plugin as a child process and complete the JSON-RPC handshake",
-	},
-	"/api/extensions/unload": {
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "stop a running plugin: ask it to exit, then close its stdin, then kill it",
-	},
-	"/api/findings": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "legacy alias for /api/issues",
-	},
-	"/api/headers/uninteresting": {
-		// riskLocal, and this one genuinely is: it changes how burpsy *presents* a comparison and
-		// nothing else. No traffic, no credentials, and it cannot widen what the engagement may
-		// touch. The lists only ever cause differences to be labelled — never dropped — so even a
-		// maliciously broad list cannot hide a difference from an operator, it can only dim it.
-		methods: []string{"GET", "PUT"}, risk: riskLocal,
-		summary: "the header names the Comparer discounts, per direction, with the response-side " +
-			"defaults and the list of surfaces that consult them",
-	},
-	"/api/history": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "proxy history, filtered by the typed query DSL",
-	},
-	"/api/http2/program": {
-		methods: []string{"POST"}, risk: riskEgress,
-		summary: "send a raw HTTP/2 frame program: the pseudo-header and frame-level surface",
-	},
-	"/api/intercept": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "interception state: enabled, wired, and what is currently held",
-	},
-	"/api/intercept/": {
-		// POST only, and this is also the catch-all under /api/intercept — see the note in setupRoutes
-		// about preserving handleInterceptHeld's breadth through the Phase 1 ServeMux migration.
-		methods: []string{"POST"}, risk: riskLocal, subPath: "1",
-		summary: "resolve one held message: forward, drop, or forward edited bytes",
-	},
-	"/api/intercept/drop-all": {
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "drop every held message in one round trip; answers the count actually dropped",
-	},
-	"/api/intercept/enable": {
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "turn interception on or off",
-	},
-	"/api/intercept/forward-all": {
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "forward every held message unmodified in one round trip; answers the count actually forwarded",
-	},
-	"/api/intercept/in-scope-only": {
-		// riskLocal: it narrows what burpsy HOLDS and sends nothing. Worth stating why it is not
-		// stronger, because turning it on means more traffic reaches the target without operator
-		// review — but that traffic was going there anyway; interception is a hold, not a gate, and
-		// the engagement scope already decides what may be touched.
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "Burp's \"Only intercept in-scope messages\": filter the hold queue to the engagement scope",
-	},
-	"/api/intercept/rules/": {
-		// "requests" and "responses", plural — see directionFor. The singular was a guess when this
-		// entry was first written, and it answered 404 "Unknown direction" for every verb, which the
-		// 405 test read as a missing guard. The handler was right; the manifest was wrong.
-		methods: []string{"GET", "PUT"}, risk: riskLocal, subPath: "requests",
-		pathValidatedFirst: true,
-		summary:            "the match rules deciding which messages are held, per direction",
-	},
-	"/api/intruder/attacks": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "every intruder attack this process is running, with its status; sends nothing",
-	},
-	"/api/intruder/attacks/": {
-		methods: []string{"POST"}, risk: riskLocal, subPath: "1/stop",
-		summary: "POST {task_id}/{pause|resume|stop}: control a running attack; unknown id answers 404, " +
-			"an attack past acting on answers 409",
-	},
-	"/api/intruder/points": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "enumerate insertion points in a stored request; sends nothing",
-	},
-	"/api/intruder/run": {
-		methods: []string{"POST"}, risk: riskAttack,
-		summary: "run an intruder attack: payloads spliced into one insertion point set",
-	},
-	"/api/issues": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "findings, with the catalogue advisory each resolved to",
-	},
-	"/api/message/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "0",
-		summary: "raw bytes of one stored message, with pretty and hex views",
-	},
-	"/api/network/auth": {
-		// riskCredential, and not riskLocal, because that is what these rows are: an
-		// operator's account on the target. A GET cannot disclose the password — the wire
-		// shape has no field for it — but it does enumerate which accounts are configured
-		// against which hosts, and a POST arms every subsequent send to replay one. Both
-		// are things an unattended caller should have to ask about.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
-		summary: "platform authentication: per-host HTTP credentials (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
-	},
-	"/api/network/client-certs": {
-		// Same class for the same reason: a TLS client identity is a credential, and DELETE
-		// silently removing one would leave an app that had been reachable failing its
-		// handshake with nothing on the panel to explain it.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
-		summary: "client TLS certificates: PKCS#12 identities bound per host (PKCS#11 tokens are out of scope). Never serves a passphrase or key",
-	},
-	"/api/network/proxy": {
-		// riskLocal by the letter of its definition — it mutates settings and sends nothing — and by
-		// precedent: /api/tools/rules rewrites every proxied request and is classified here too.
-		//
-		// Recorded because there is a real argument for more: a rule set here redirects all future
-		// egress, credentials and session cookies included, through a host the caller chose, which is
-		// an exfiltration primitive in a way that editing a rewrite rule is not. It is left at
-		// riskLocal rather than promoted quietly, because the confirmation-worthy sets below are
-		// asserted deliberately and moving a route into one is a decision, not a side effect. A future
-		// reader who wants it confirmed should add it to wantScope (or a new class) and say why here.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
-		summary: "the upstream proxy / SOCKS chain both egress paths follow: ordered host-pattern rules " +
-			"with a default. POST upserts a rule and/or the default, DELETE removes one by exact pattern " +
-			"(404 when absent) or clears all with ?all=true",
-	},
-	"/api/network/settings": {
-		// riskScope, not riskLocal, and the reason is the hostname-resolution table. The scope gate
-		// authorises a *name*; an override decides which machine that name's authorised bytes are
-		// delivered to. Writing one therefore changes what the engagement can reach without changing
-		// what the scope says — which is riskScope's definition, "it removes the thing that says no",
-		// arrived at from the other direction. The redirect mode belongs in the same class for the
-		// plainer reason that it turns one authorised request into a chain of them.
-		methods: []string{"GET", "PUT"}, risk: riskScope,
-		summary: "hostname resolution overrides, DNS lookup policy, connect/read/total timeouts, the " +
-			"opt-in redirect policy, 100-continue and open-ended response handling; PUT is a partial " +
-			"patch that refuses an unknown key by name and persists what it accepts",
-	},
-	// Both pool routes are riskScope rather than riskLocal, and the reason is the whole point of the
-	// class: a pool decides how hard every tool that names it may hit the target, so raising one from
-	// two concurrent requests to two hundred arms every future crawl, audit and attack to send far
-	// more traffic than the operator who set the pool authorised. That is the same kind of decision as
-	// /api/scanner/config's audit families — it changes what this process is allowed to send — and it
-	// is not made visible by the traffic at the moment it is made, which is exactly when an unattended
-	// caller should have to confirm. Classifying a saved-limits editor as an ordinary local write
-	// would be reading "sends nothing itself" as "harmless".
-	"/api/pools": {
-		methods: []string{"GET", "POST"}, risk: riskScope,
-		summary: "the saved named resource pools, with which of each pool's bounds every tool path can " +
-			"actually honour; POST saves a new one",
-	},
-	"/api/pools/": {
-		methods: []string{"PUT", "DELETE"}, risk: riskScope, subPath: "nonesuch",
-		summary: "replace or delete one pool by name; a DELETE is refused while a schedule still " +
-			"references it, naming the schedules",
-	},
-	"/api/protocols": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded",
-	},
-
-	"/api/proxy/ca": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "which CA is signing intercepted TLS right now: subject and expiry, never the key",
-	},
-	"/api/proxy/ca/import": {
-		// riskCredential. The other classes are all worse fits: nothing is sent (not riskEgress or
-		// riskAttack), and calling it riskLocal would put "replace the trust anchor this proxy signs
-		// every intercepted site with" in the same class as a table-density preference.
-		//
-		// It belongs with the cookie jar and the client certificates because it *takes* a long-lived
-		// private key over HTTP. The consequence is unusual for this manifest: a successful call
-		// invalidates every trust-store install the operator has already done, because the previous CA
-		// stops signing and every cached leaf is discarded. An unattended caller must not be able to
-		// do that without asking, and an operator who is asked will understand why.
-		methods: []string{"POST"}, risk: riskCredential,
-		summary: "import an operator-supplied CA certificate and private key, replacing the signing CA " +
-			"and clearing the leaf cache; refuses the whole pair if it is not a usable CA",
-	},
-	"/api/proxy/options": {
-		methods: []string{"GET", "PUT"}, risk: riskLocal,
-		summary: "the proxy's live response modification rules and strip-Accept-Encoding knob, with the outcome counters",
-	},
-	"/api/proxy/passthrough": {
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal,
-		summary: "the TLS passthrough host-pattern list, live: add and remove without restarting the proxy",
-	},
-	"/api/repeater/send": {
-		methods: []string{"POST"}, risk: riskEgress,
-		summary: "send one operator-authored request and record the exchange",
-	},
-	"/api/report/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "json",
-		summary: "export findings as json, sarif or html",
-	},
-	"/api/scanner/audit": {
-		methods: []string{"POST"}, risk: riskAttack,
-		summary: "legacy alias for /api/audit/{id}, taking the id in the body",
-	},
-	"/api/scanner/audit-items": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the audit queue: per-item state, plan progress, dispositions and the insertion points each covers",
-	},
-	"/api/scanner/audit-items/": {
-		// POST {id}/again only — Burp's "Audit again". riskAttack rather than riskLocal because it is
-		// not a state change on a row: it starts an audit that sends real traffic, through the same
-		// runAudit as /api/audit/{id}. A verb in the path is what makes that classifiable by reading
-		// the route; a PATCH of a "state" field that happened to launch a scan would not be.
-		methods: []string{"POST"}, risk: riskAttack, subPath: "0/again",
-		pathValidatedFirst: true,
-		summary:            "re-audit one queued item: POST {id}/again, Burp's auditItemContextMenuAuditAgain",
-	},
-	"/api/scanner/config": {
-		methods: []string{"GET", "PUT"}, risk: riskScope,
-		summary: "the audit families and performance knobs, readable and editable while the process runs; PUT persists the overrides",
-	},
-	"/api/scanner/configs": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the built-in scan configurations, generated from the table rather than listed by hand",
-	},
-	"/api/scanner/coverage": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "what the check set covers, and what it declines to look at",
-	},
-	"/api/scanner/live": {
-		methods: []string{"GET", "POST"}, risk: riskAttack,
-		summary: "the live sweep over newly-completed proxied traffic; POST opts in",
-	},
-	"/api/scanner/passive-branch": {
-		// riskLocal, and the reasoning belongs here rather than only in the handler: a passive sweep
-		// SENDS NOTHING. It re-reads responses the store already holds, so copying /api/scanner/audit's
-		// riskAttack by analogy would demand confirmation for an operation that touches no target —
-		// which trains operators to click through the confirmations that matter. riskRead understates
-		// it, because the sweep manufactures findings and findings are what an operator reports. It
-		// mutates burpsy's own findings state and nothing else, which is riskLocal exactly.
-		methods: []string{"POST"}, risk: riskLocal,
-		summary: "Burp's \"Passively scan this branch\": re-run the passive set over one site-map " +
-			"branch's already-captured exchanges, reporting scanned/out-of-scope/no-response as a partition",
-	},
-	// riskAttack, on both, and not because a POST here sends anything: it arms something that will.
-	// A saved schedule starts a crawl or an audit against a live target at a wall-clock time with
-	// nobody watching, which is strictly more than /api/crawl does — a crawl launched now is at least
-	// observed. Deferring an attack is not a way to make launching it cheaper, and a class assigned by
-	// "did this call put bytes on the wire" would let an unattended caller arm a nightly scan without
-	// the confirmation it needs to launch one.
-	"/api/schedules": {
-		methods: []string{"GET", "POST"}, risk: riskAttack,
-		summary: "the saved scheduled tasks, what the clock has done with them (fired, failed, missed, " +
-			"unstarted) and the missed-window policy; POST arms a new one",
-	},
-	"/api/schedules/": {
-		methods: []string{"PUT", "DELETE"}, risk: riskAttack, subPath: "nonesuch",
-		summary: "replace or delete one schedule by name; a replace re-arms the timing and keeps the " +
-			"run counters",
-	},
-	"/api/scope": {
-		methods: []string{"GET", "POST"}, risk: riskScope,
-		summary: "the engagement scope: what every sender is allowed to reach",
-	},
-	"/api/sequencer/analyse": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "statistical analysis of a token sample; sends nothing",
-	},
-	"/api/sequencer/capture": {
-		methods: []string{"POST"}, risk: riskAttack,
-		summary: "start a capture: N sends of one request, one token extracted per response",
-	},
-	"/api/sequencer/capture/": {
-		// Two operations under one subtree, and deliberately different verbs: reading a token list does
-		// not change state, stopping a capture does. Unguarded, `GET .../stop` answered {"stopped":true}
-		// — a state change reported for a request that could not have caused one.
-		methods: []string{"GET", "POST"}, risk: riskRead, subPath: "1",
-		summary: "GET {id}: one capture's accumulated tokens. POST stop: cancel a running capture",
-	},
-	"/api/session/cookies": {
-		methods: []string{"GET"}, risk: riskCredential,
-		summary: "the coordinator's cookie jar, per authority (see HONEST-03)",
-	},
-	"/api/session/login": {
-		methods: []string{"POST"}, risk: riskCredential,
-		summary: "run a login macro, or probe whether the current session is still valid",
-	},
-	"/api/session/rules": {
-		methods: []string{"GET", "POST"}, risk: riskCredential,
-		summary: "session handling rules: which hosts get re-authenticated, and how",
-	},
-	"/api/session/rules/": {
-		// PUT and DELETE only. The collection route below is where GET and POST live.
-		methods: []string{"PUT", "DELETE"}, risk: riskCredential, subPath: "1",
-		summary: "one session rule by id: PUT replaces it (including macro promotion), DELETE removes it",
-	},
-	"/api/sitemap": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "the site map as a real tree, with per-subtree exchange counts",
-	},
-	"/api/stats": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "proxy counters, tool counts, and the DOM engine's admission state",
-	},
-	"/api/tasks/": {
-		methods: []string{"POST"}, risk: riskLocal, subPath: "{id}/cancel",
-		summary: "POST {id}/cancel: ask a running task to stop; an unknown or finished id answers 404",
-	},
-	"/api/tools/compare": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "diff two messages or two pasted buffers",
-	},
-	"/api/tools/decode": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "run one decode layer over a buffer, reporting whether it was partial",
-	},
-	"/api/tools/encode": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "run one encode layer over a buffer",
-	},
-	"/api/tools/hash": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "hash a buffer under a named algorithm",
-	},
-	"/api/tools/log": {
-		// DELETE clears the whole log, which nothing documented and nothing had classified until the
-		// 405 test found the verb reachable. See riskDestructive. POST toggles one tool's capture
-		// axis — the destructive *incoming* arm: switching a tool off means its next requests are
-		// sent and deliberately not recorded, so it is a local-write to a destructive fact rather
-		// than a destructive act in itself.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskDestructive,
-		summary: "GET: every request this process sent, per tool, with what it dropped at the bound and " +
-			"the capture axis (which tools are recorded at all, and how many requests went unrecorded). " +
-			"POST: turn one tool's capture on or off. DELETE: clears it, discarding the record of what was sent to the target",
-	},
-	"/api/tools/organizer": {
-		methods: []string{"GET", "POST"}, risk: riskLocal,
-		summary: "the organizer's saved items",
-	},
-	"/api/tools/organizer/": {
-		// POST updates and DELETE removes. Not GET, and not PUT — both of which this entry originally
-		// guessed at. Worth recording because POST-to-update is unusual enough that a reader would
-		// expect PUT, and the 405 test is what settled it.
-		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
-		summary: "one organizer item by id: POST updates title/note/highlight, DELETE removes it",
-	},
-	"/api/tools/rules": {
-		// PUT, not POST: the whole rule set is replaced as a document rather than appended to, which is
-		// the right shape for a list whose order is its semantics.
-		methods: []string{"GET", "PUT"}, risk: riskLocal,
-		summary: "match & replace rules applied to proxied traffic; PUT replaces the whole set",
-	},
-	"/api/tools/rules/test": {
-		methods: []string{"POST"}, risk: riskRead,
-		summary: "dry-run the match & replace set against a buffer without installing it",
-	},
-	"/api/ws/connections": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "WebSocket connections the proxy has relayed",
-	},
-	"/api/ws/history": {
-		methods: []string{"GET"}, risk: riskRead,
-		summary: "WebSocket frames, per connection",
-	},
-	"/api/ws/message/": {
-		methods: []string{"GET"}, risk: riskRead, subPath: "1",
-		summary: "one WebSocket frame's payload, as text or hex",
-	},
-	"/ca.crt": {
-		methods: []string{"GET"}, risk: riskAsset,
-		summary: "the CA certificate the proxy signs leaves with, so a browser can be told to trust it",
-	},
-}
-
 // registeredPatterns parses setupRoutes and returns every pattern it registers, plus every call whose
 // pattern was not a string literal. See the file comment for why this is read out of the source.
 func registeredPatterns(t *testing.T) (literal []string, nonLiteral int) {
@@ -825,6 +223,33 @@ func Test_every_route_rejects_a_verb_it_does_not_implement(t *testing.T) {
 		if spec.subPath != "" {
 			path = pattern + spec.subPath
 		}
+		// Each action sub-path is swept with its own allowed set, so a verb guard missing from one
+		// branch of a subtree cannot hide behind a sibling branch that has one.
+		for suffix, verbs := range spec.actionPaths {
+			actionAllowed := map[string]bool{}
+			for _, v := range verbs {
+				actionAllowed[v] = true
+			}
+			if actionAllowed[http.MethodGet] {
+				actionAllowed[http.MethodHead] = true
+			}
+			actionPath := pattern + suffix
+			for _, method := range allMethods {
+				if actionAllowed[method] || method == http.MethodOptions {
+					continue
+				}
+				t.Run(method+" "+actionPath, func(t *testing.T) {
+					req := httptest.NewRequest(method, actionPath, nil)
+					rec := httptest.NewRecorder()
+					s.mux.ServeHTTP(rec, req)
+					if rec.Code != http.StatusMethodNotAllowed {
+						t.Errorf("%s %s answered %d, want 405. This is an ACTION path: it changes state, "+
+							"so every verb it does not implement must be refused before it acts.\nbody: %s",
+							method, actionPath, rec.Code, strings.TrimSpace(rec.Body.String()))
+					}
+				})
+			}
+		}
 		for _, method := range allMethods {
 			if allowed[method] || method == http.MethodOptions {
 				continue
@@ -902,7 +327,9 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	sort.Strings(execute)
 
 	wantAttack := []string{
-		"/api/audit/", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
+		// /api/authz/test re-sends a captured request to its target under several credentials; it is
+		// traffic to the target and belongs here (burpsy-react-ui-cr37). Sorted position: after audit/*.
+		"/api/apiscan", "/api/audit/", "/api/audit/selected", "/api/authz/test", "/api/crawl", "/api/discovery", "/api/intruder/run", "/api/scanner/audit",
 		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
 		// against a live target through runAudit. That it is spelled as an action on an existing queue
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission
@@ -950,7 +377,12 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		"/api/blindxss",
 		"/api/network/auth", "/api/network/client-certs",
 		"/api/proxy/ca/import",
-		"/api/session/cookies", "/api/session/login", "/api/session/rules", "/api/session/rules/",
+		"/api/session/cookies", "/api/session/login",
+		// Resolving a recovery prompt makes burpsy replay the stored login on the operator's behalf,
+		// which is the same authority as the other routes in this class — hence credential, not local.
+		"/api/session/prompts/",
+		"/api/session/rules", "/api/session/rules/",
+		"/api/settings/triage",
 	}
 	equal := func(name string, got, want []string) {
 		if strings.Join(got, " ") != strings.Join(want, " ") {
@@ -967,7 +399,33 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// snapshots and deletes the rest, so a caller invoking it in a loop rolls the whole retention
 	// window off the disk irreversibly while every individual response reports success. Same shape as
 	// clearing the tool log, which is what this class was created for.
-	equal("destructive", destructive, []string{"/api/backup", "/api/tools/log"})
+	// /api/issues/ joins because its DELETE discards a finding — engagement evidence, per the class
+	// definition. The PUT on the same subtree is only a triage note on evidence that survives it; it
+	// rides along rather than splitting one pattern across two classes.
+	// /api/sitemap joins because its DELETE removes a branch from the view the operator reasons and
+	// reports from (burpsy-react-ui-10e). The stored exchanges survive — the recorded decision — so
+	// it is the mildest member here; it sits in the class because making a worked branch invisible
+	// is closer to "discard evidence" than to "write burpsy's own state", and because an unattended
+	// caller trimming the map would hide what the operator is being shown.
+	// /api/proxy/ca/regenerate joins the destructive class because it irreversibly discards the
+	// current signing CA: the previous certificate stops signing, every cached leaf is dropped, and
+	// persisting the new pair overwrites the old key on disk with no path back. See its manifest entry
+	// for why it is not the credential class its sibling import sits in.
+	//
+	// /api/dashboard/events joins because its DELETE clears the event log — scope.changed and
+	// crawl.refused are the record of what the engagement was allowed to touch and what the tool
+	// refused, so discarding them is discarding evidence, the same act as clearing the tool log.
+	//
+	// /api/project/open joins because a switch REPLACES every in-memory store with another file's
+	// contents (burpsy-react-ui-dlw2): the console then shows the other project's history, and an
+	// unattended caller switching it would hide the operator's engagement behind someone else's.
+	//
+	// /api/proxy/ca/export joins because handing out the signing key is irreversible
+	// (burpsy-react-ui-j92x): once a copy exists elsewhere nothing here can take it back.
+	//
+	// /api/browser/clear joins because it deletes the operator browser's profile — cookies, logins and
+	// history — which nothing brings back (burpsy-react-ui-bufa).
+	equal("destructive", destructive, []string{"/api/backup", "/api/browser/clear", "/api/dashboard/events", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

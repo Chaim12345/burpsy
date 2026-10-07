@@ -41,8 +41,17 @@ go vet ./...          # clean
 gofmt -l .            # prints nothing
 go test ./...         # unit tests across every package
 ../e2e-go.sh          # end-to-end against the built binary
-../e2e-ui.sh          # end-to-end for the React UI
 ```
+
+Anything under `internal/web/ui/` adds the live browser pass, which is the UI gate:
+
+```bash
+../ui-live.sh         # boots the real console, seeded, and prints the pass to drive
+                      # with agent-browser; the definition is docs/UI-VERIFICATION.md
+```
+
+The playwright suite (`../e2e-ui.sh`) is still in the tree and still runs, but it is no longer the
+gate — see `docs/UI-VERIFICATION.md` for why.
 
 Do not declare work done without the gate for whatever you touched. `gofmt -l .` printing a path is
 a failure, not a suggestion.

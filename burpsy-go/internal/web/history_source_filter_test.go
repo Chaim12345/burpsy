@@ -59,7 +59,7 @@ func addExchangeWithSource(t *testing.T, s *Server, path string, source core.Sou
 		t.Fatalf("put request: %v", err)
 	}
 	s.store.AddExchange(&core.Exchange{
-		Request: reqID,
+		Request: core.MsgPtr(reqID),
 		Host:    "h.test",
 		Port:    80,
 		Method:  "GET",

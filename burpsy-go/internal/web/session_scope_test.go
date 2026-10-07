@@ -147,3 +147,82 @@ func TestRunningAMacroByHandIsGatedByTheEngagementScope(t *testing.T) {
 		t.Fatal("outcome = ok, but nothing was sent")
 	}
 }
+
+// The parameter scope (burpsy-react-ui-9hip) round-trips through the wire: scope_params on
+// create, echoed on read, and the created rule honours it against the coordinator.
+func TestARuleCanCarryAParameterScope(t *testing.T) {
+	srv := sessionTestServer()
+	var created struct {
+		Rule wireSessionRule `json:"rule"`
+	}
+	rec := postJSON(t, srv, "/api/session/rules", map[string]any{
+		"name":         "csrf refresh",
+		"enabled":      true,
+		"scope":        hostScope("app.test"),
+		"scope_params": []string{"csrf_token", "session_id"},
+		"steps":        []any{map[string]any{"method": "POST", "url": "https://app.test/refresh", "headers": []any{}, "body": ""}},
+		"validity":     map[string]any{"status_is": 200},
+	})
+	code := rec.Code
+	if code != http.StatusOK {
+		t.Fatalf("POST with scope_params = %d (%s)", code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.Rule.ScopeParams) != 2 {
+		t.Fatalf("created rule scope_params = %v, want two names", created.Rule.ScopeParams)
+	}
+
+	// Read it back through the list.
+	var list struct {
+		Rules []wireSessionRule `json:"rules"`
+	}
+	if err := json.Unmarshal(get(t, srv, "/api/session/rules").Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range list.Rules {
+		if r.Name == "csrf refresh" {
+			found = true
+			if len(r.ScopeParams) != 2 || r.ScopeParams[0] != "csrf_token" {
+				t.Fatalf("listed scope_params = %v", r.ScopeParams)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the rule did not appear in the list")
+	}
+
+	// The engine behaviour: the rule applies only where its parameter exists.
+	rule := srv.sessionCoordinator.AllRules()[0]
+	if !rule.MatchParams([]string{"csrf_token", "session_id", "extra"}) {
+		t.Error("the created rule refused a request carrying its parameters")
+	}
+	if rule.MatchParams([]string{"user"}) {
+		t.Error("the created rule claimed a request without its parameters; the wire restriction did not reach the engine")
+	}
+}
+
+// A rule submitted without scope_params is unrestricted — the shape every existing client
+// sends, and the meaning it must keep.
+func TestARuleWithoutParameterScopeStaysUnrestricted(t *testing.T) {
+	srv := sessionTestServer()
+	rec := postJSON(t, srv, "/api/session/rules", map[string]any{
+		"name":     "plain login",
+		"enabled":  true,
+		"scope":    hostScope("app.test"),
+		"steps":    []any{map[string]any{"method": "POST", "url": "https://app.test/login", "headers": []any{}, "body": ""}},
+		"validity": map[string]any{"status_is": 200},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST without scope_params = %d", rec.Code)
+	}
+	rule := srv.sessionCoordinator.AllRules()[0]
+	if len(rule.ScopeParams) != 0 {
+		t.Fatalf("a rule created without scope_params came back with %v; the field must default to unrestricted", rule.ScopeParams)
+	}
+	if !rule.MatchParams(nil) {
+		t.Error("an unrestricted rule refused a parameter-less request")
+	}
+}

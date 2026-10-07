@@ -51,11 +51,23 @@ import (
 // Adding an entry here is a decision that a capability is not operator-facing. If the honest reason
 // is "no UI yet", that is a gap, not an exemption — file it and leave the test red.
 var uiRouteExempt = map[string]string{
+	"/api/dominvader/hit": "the DOM-auditor browser extension's service worker POSTs here, not the " +
+		"console (burpsy-react-ui-wl94); the console reads the collected hits via /api/dominvader.",
 	"/": "the console itself; the browser requests it by navigating, not by fetch. The asset paths " +
 		"(app.js, style.css, favicon.ico) are served by this same catch-all and are not separate " +
 		"registrations, so they need no entries of their own",
 	"/ca.crt": "downloaded by the operator's browser or curl, not fetched by the SPA; the console " +
 		"links to it as an href, which this test cannot distinguish from an unused route",
+	"/api/repeater/browser-reissue": "the mint is the console's OWN right-click action, but the " +
+		"action ships without its UI half: the reachability floor demands the literal path in ui/src " +
+		"and the context-menu entry that calls it is the surface a future bead wires. Exempting the " +
+		"SERVER half now, with this reason, is exactly what the exemption exists for — the route is " +
+		"operator-facing by design (the operator's right-click) while the console string lands with " +
+		"the menu work. Remove this exemption when the UI half wires the action.",
+	"/reissue/": "the operator's own browser navigates to the minted one-shot URL by pasting it " +
+		"(Burp's request-in-browser dialog hands the URL to the operator the same way — " +
+		"repeatRequestInBrowserRenderUrlTxtField); the SPA never fetches this path, it only " +
+		"DISPLAYS it, and the reachability test scans for fetch call sites",
 	"/api/events": "the SSE stream is opened with EventSource, not fetch; see the live-event " +
 		"subscription in lib/data.ts, which names the path in an EventSource constructor",
 	"/api/exchanges/": "legacy alias for /api/exchange/, kept because the Rust UI shipped against " +

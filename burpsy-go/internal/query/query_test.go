@@ -28,6 +28,8 @@ type fakeRow struct {
 	highlight       string
 	comment         string
 	annotationKnown bool
+	task            uint64
+	hasTask         bool
 }
 
 func (f fakeRow) Host() string               { return f.host }
@@ -37,6 +39,7 @@ func (f fakeRow) Status() int                { return f.status }
 func (f fakeRow) Mime() string               { return f.mime }
 func (f fakeRow) Body() []byte               { return f.body }
 func (f fakeRow) ResponseLen() (int64, bool) { return f.length, f.hasLength }
+func (f fakeRow) TaskID() (uint64, bool)     { return f.task, f.hasTask }
 
 // headers is nil by default, so a stub that says nothing about headers reports every header
 // absent — which fails every comparison, the same rule the real adapters carry.
@@ -532,6 +535,11 @@ func (c ruleCandidate) Body() []byte { return []byte(c.rawBody) }
 // honestly rather than be given zeroes to satisfy the interface.
 func (c ruleCandidate) ResponseLen() (int64, bool) { return int64(len(c.rawBody)), true }
 func (c ruleCandidate) DurationUs() (int64, bool)  { return 0, false }
+
+// A match-and-replace candidate has no run attribution — nothing tracked a rule's candidate row,
+// which is exactly what (0, false) says. Returning (0, true) would make `task = 0` match every
+// candidate, an answer about attribution the candidate cannot give.
+func (c ruleCandidate) TaskID() (uint64, bool) { return 0, false }
 
 // A match-and-replace candidate models a request line and a body, not a parsed head, so it reports
 // every header absent. Honest for this consumer: it genuinely cannot see headers, and absent fails

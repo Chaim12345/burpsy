@@ -8,6 +8,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/query"
 )
 
 // ---- Passively scan a branch (burpsy-react-ui-p09) ---------------------------------------------
@@ -55,6 +56,19 @@ type passiveBranchReq struct {
 	// Port, when non-zero, narrows to one port. Zero means every port on the host, because a site map
 	// branch is an authority and an operator pointing at example.com means both 80 and 443.
 	Port uint16 `json:"port"`
+	// Exclude is Burp's pre-scan filter step (burpsy-react-ui-a13), as a query over this package's own
+	// filter grammar: exchanges the query does not match are dropped from the sweep before the
+	// scanner sees them. Empty means no filter, so every caller predating this field is unchanged.
+	//
+	// A query that MATCHES the items to drop — the opposite polarity from /api/history?q=, which
+	// keeps what it matches. Same grammar, same adapter, opposite question, and the field is named
+	// `exclude` so the polarity is stated rather than inferred.
+	//
+	// A query rather than four booleans because the filters and the filter language are then one
+	// thing. Burp's shipped list (`extension != "js"` and its siblings) is a query like any other, an
+	// operator can narrow past the presets, and "what filtered this sweep" is a string the audit
+	// trail can record — none of which four booleans would give.
+	Exclude string `json:"exclude,omitempty"`
 }
 
 // passiveBranchResp is the sweep's whole outcome.
@@ -78,6 +92,14 @@ type passiveBranchResp struct {
 	// Findings is how many the sweep produced, after the finding store's own deduplication — so it
 	// is what an operator will actually see, not how many times a check fired.
 	Findings int `json:"findings"`
+	// Filtered is how many were in the branch and removed by the operator's pre-scan filter, before
+	// any of the sweep's own gates. Its own field for the reason the others have one: without it,
+	// "12 scanned of 40" cannot be reconciled — an operator who asked to drop static assets and then
+	// watched 20 of them vanish would have no way to learn the filter ran at all.
+	Filtered int `json:"filtered"`
+	// Exclude echoes the filter the sweep actually applied, so the response states the rule rather
+	// than leaving the caller to remember what it sent.
+	Exclude string `json:"exclude,omitempty"`
 	// Loaded is how many passive checks were available. Zero means the sweep ran and could not have
 	// found anything, which is not the same as a clean branch, and the caller must not render them
 	// alike.
@@ -110,10 +132,28 @@ func (s *Server) handlePassiveBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The pre-scan filter (a13), compiled once and refused with the grammar's own error — the caret
+	// included — rather than a boolean that silently does nothing. An operator who typed a filter the
+	// server ignored would be reading a sweep that did not honour it, which is the exact failure
+	// the honest-counting rule exists to prevent.
+	//
+	// Empty means no filter rather than a query that matches nothing: a nil *queryFilter matches
+	// everything, which is what an absent filter has to mean, and the same shape /api/history?q= uses.
+	var filter *queryFilter
+	if trimmed := strings.TrimSpace(req.Exclude); trimmed != "" {
+		var err error
+		filter, err = compileQuery(trimmed, s.store)
+		if err != nil {
+			http.Error(w, "The pre-scan filter is not a valid query:\n"+query.Render(err), http.StatusBadRequest)
+			return
+		}
+	}
+
 	resp := passiveBranchResp{
 		Host:       req.Host,
 		PathPrefix: req.PathPrefix,
 		Port:       req.Port,
+		Exclude:    strings.TrimSpace(req.Exclude),
 		Loaded:     s.passiveScanner.Loaded(),
 	}
 
@@ -127,6 +167,15 @@ func (s *Server) handlePassiveBranch(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		resp.Matched++
+
+		// The operator's filter, ahead of every gate the sweep owns: a filtered exchange is one the
+		// operator asked not to spend on, so it leaves before the no-response and scope partitions
+		// count it. Putting it after them would report the same exchange as both filtered and
+		// skipped, and the partition would no longer add up.
+		if filter != nil && filter.match(ex) {
+			resp.Filtered++
+			continue
+		}
 
 		if ex.Response == nil {
 			// A passive check reads a response. No response is not a clean result.
@@ -156,7 +205,7 @@ func (s *Server) handlePassiveBranch(w http.ResponseWriter, r *http.Request) {
 	task.FinishWithNote(dash.Breakdown{
 		Found:   uint64(resp.Findings),
 		Skipped: uint64(resp.SkippedNoResponse),
-		Gated:   uint64(resp.SkippedOutOfScope),
+		Gated:   uint64(resp.SkippedOutOfScope + resp.Filtered),
 	}, resp.Summary)
 
 	s.live.notify(changeIssues)
@@ -213,6 +262,13 @@ func passiveBranchSummary(r passiveBranchResp) string {
 	b.WriteString(" in this branch")
 
 	var skips []string
+	if r.Filtered > 0 {
+		filter := "the pre-scan filter"
+		if r.Exclude != "" {
+			filter = "the pre-scan filter (" + r.Exclude + ")"
+		}
+		skips = append(skips, strconv.Itoa(r.Filtered)+" removed by "+filter)
+	}
 	if r.SkippedOutOfScope > 0 {
 		skips = append(skips, strconv.Itoa(r.SkippedOutOfScope)+" refused by the current scope (they "+
 			"were captured, possibly under a wider scope)")

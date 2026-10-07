@@ -116,6 +116,18 @@ func (s *ActiveScanner) WithBrowserProvider(p BrowserProvider) *ActiveScanner {
 // looking correctly configured from the outside.
 // A nil receiver answers false, like enabledChecks: a server with no scanner attached has no DOM
 // capability, and making the caller check twice invites the check being forgotten once.
+// BrowserForRender hands out the configured browser for rendering outside a check — the
+// crawler's rendered-DOM discovery pass (burpsy-react-ui-nx7b). An error rather than a nil
+// browser, for the same reason Browser() below the interface is: a caller that silently got
+// no browser would read a render failure as "the page has no such links", which is the
+// failure mode this project exists to avoid.
+func (s *ActiveScanner) BrowserForRender(ctx context.Context) (*domexec.Browser, error) {
+	if s == nil || s.browsers == nil {
+		return nil, fmt.Errorf("no DOM execution capability is configured")
+	}
+	return s.browsers.Browser(ctx)
+}
+
 func (s *ActiveScanner) DOMCapabilityConfigured() bool {
 	return s != nil && s.browsers != nil
 }

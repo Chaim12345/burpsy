@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"net/textproto"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -43,6 +44,20 @@ const (
 	// one source rather than four. The crawler is not listed separately for that reason — its
 	// absorption is a macro step, and a "crawler" entry would name a second path that does not exist.
 	SourceMacro AbsorptionSource = "macro"
+	// SourceRepeater is the Repeater's own send (burpsy-react-ui-sn3j): a response the operator
+	// resent by hand. Burp's own monitored-tool list offers Proxy, Intruder, Scanner, Sequencer,
+	// Repeater, Extensions; the surfaces burpsy has that hold raw responses are the Repeater, the
+	// Intruder's stored exemplars and the scanner's audit reads, named in Burp's vocabulary.
+	SourceRepeater AbsorptionSource = "repeater"
+	// SourceIntruder is an attack's stored exemplar response (burpsy-react-ui-sn3j). One per result
+	// bucket, not one per request — the engine's memory contract — so an attack that lands in four
+	// buckets offers the jar four responses, which is the same set of Set-Cookie lines the attack
+	// actually saw behave distinctly.
+	SourceIntruder AbsorptionSource = "intruder"
+	// SourceScanner is the audit engine's own probe responses (burpsy-react-ui-sn3j). An audit reads
+	// through sender.Authorised paths that record exchanges; the responses a check sends are the
+	// scanner's to observe.
+	SourceScanner AbsorptionSource = "scanner"
 )
 
 // JarObservation is what the jar can say about itself beyond its contents.
@@ -67,8 +82,27 @@ type absorption struct {
 	mu      sync.RWMutex
 	sources map[AbsorptionSource]bool
 
+	// monitored is the operator's monitored-tool set (burpsy-react-ui-sn3j): which sources may
+	// ABSORB. Registered sources still count as attached; a source switched off here shows in
+	// Observation as attached-but-not-monitoring rather than vanishing, because "the Repeater
+	// never registered" and "you switched the Repeater off" are different facts an operator
+	// debugging an empty jar needs told apart. Defaults to ALL sources, matching Burp's
+	// proxy-on-by-default taken to the surface set this port has: a disabled-by-default switch
+	// would reproduce the exact state AbsorbResponseCookies exists to end (see its contract
+	// note), and an off-by-default entry here would silently un-fill a jar that was filling.
+	monitored map[AbsorptionSource]bool
+
 	responses atomic.Uint64
 	cookies   atomic.Uint64
+}
+
+// monitors answers whether one source may absorb. Unbuilt map = every source may, which is the
+// default; an explicitly built map answers membership.
+func (a *absorption) monitors(src AbsorptionSource) bool {
+	if len(a.monitored) == 0 {
+		return true
+	}
+	return a.monitored[src]
 }
 
 func (a *absorption) attach(src AbsorptionSource) {
@@ -132,11 +166,27 @@ func (c *Coordinator) Observation() JarObservation {
 // A response whose head does not parse is counted as observed and absorbed from zero times. That is
 // not a silent drop: the observation counter moves, so a proxy feeding malformed heads shows as
 // traffic observed with nothing absorbed rather than as no traffic at all.
-func (c *Coordinator) AbsorbResponseCookies(host string, port uint16, tls bool, response []byte) int {
+// AbsorbResponseCookies reads every Set-Cookie header from one raw HTTP response and folds it into
+// the jar for the given authority, attributed to the surface calling it. It returns how many
+// Set-Cookie lines it found.
+//
+// The monitored-tool set (burpsy-react-ui-sn3j) is the switch Burp's settings expose: a source
+// the operator switched off has its response COUNTED as observed — the wiring is real either
+// way, and Observation must still be able to say "the Repeater is attached and traffic is
+// flowing" — but absorbs nothing. That is the same three-state honesty the observation counters
+// exist for: attached / attached-and-monitoring / absorbing.
+//
+// The default is every source monitored (see absorption.monitored), matching the contract note
+// this method has carried since it was proxy-only: the switch must not reproduce the
+// "a jar the UI says X fills and X does not fill" state it was written to end.
+func (c *Coordinator) AbsorbResponseCookies(src AbsorptionSource, host string, port uint16, tls bool, response []byte) int {
 	if c == nil {
 		return 0
 	}
 	c.absorb.responses.Add(1)
+	if !c.absorb.monitors(src) {
+		return 0
+	}
 	values := setCookieValues(response)
 	for _, v := range values {
 		c.jarMgr.AbsorbSetCookie(host, port, tls, v)
@@ -146,6 +196,58 @@ func (c *Coordinator) AbsorbResponseCookies(host string, port uint16, tls bool, 
 		return n
 	}
 	return 0
+}
+
+// SetMonitoredSources sets which surfaces may absorb cookies (burpsy-react-ui-sn3j) — Burp's
+// "configure the cookie jar to monitor any of the following tools". An empty set is refused
+// rather than read as "monitor nothing": un-monitoring every surface is a jar that can only
+// stay empty, and a caller who means it can pass a set that names no attached source — but an
+// empty slice, the zero value of a missed field on a wire shape, must not silently stop the
+// jar filling. Every entry is trimmed; an unknown name is kept: the vocabulary belongs to the
+// caller (Burp's list includes Sequencer and Extensions, which this port does not attach), and
+// a set naming an unattached source monitors it for the day it attaches — the same
+// registered-when-wired rule AttachAbsorptionSource holds.
+func (c *Coordinator) SetMonitoredSources(srcs []string) {
+	if c == nil {
+		return
+	}
+	c.absorb.mu.Lock()
+	defer c.absorb.mu.Unlock()
+	if len(srcs) == 0 {
+		return
+	}
+	m := make(map[AbsorptionSource]bool, len(srcs))
+	for _, raw := range srcs {
+		name := AbsorptionSource(strings.TrimSpace(raw))
+		if name != "" {
+			m[name] = true
+		}
+	}
+	c.absorb.monitored = m
+}
+
+// MonitoredSources reports the monitored-tool set in force: every attached source when the
+// default holds, or the configured subset. Sorted, so two reads of one state agree.
+func (c *Coordinator) MonitoredSources() []string {
+	if c == nil {
+		return nil
+	}
+	c.absorb.mu.RLock()
+	defer c.absorb.mu.RUnlock()
+	if len(c.absorb.monitored) == 0 {
+		out := make([]string, 0, len(c.absorb.sources))
+		for src := range c.absorb.sources {
+			out = append(out, string(src))
+		}
+		sort.Strings(out)
+		return out
+	}
+	out := make([]string, 0, len(c.absorb.monitored))
+	for src := range c.absorb.monitored {
+		out = append(out, string(src))
+	}
+	sort.Strings(out)
+	return out
 }
 
 // setCookieValues extracts the Set-Cookie header values from a raw HTTP response, in the order the

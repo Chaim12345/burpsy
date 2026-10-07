@@ -42,6 +42,15 @@ const (
 	ConfidenceCertain Confidence = iota
 	ConfidenceFirm
 	ConfidenceTentative
+	// ConfidenceSuppressedNegative is the DOM dynamic tier's retired verdict
+	// (burpsy-react-ui-m97j): the static candidate is still named, and a real browser loaded
+	// the page with a canary in the flow's source and no instrumented sink received it. It is
+	// a weaker grade than Tentative — tentative says "we do not know", suppressed-negative says
+	// "we looked once and saw nothing", and one load is evidence against reachability, not
+	// proof of safety. Kept as a confidence grade rather than a boolean on the finding because
+	// the store, the issues API and the exports all grade confidence already; a second axis
+	// would have to be threaded through each of them to say one thing.
+	ConfidenceSuppressedNegative
 )
 
 func (c Confidence) String() string {
@@ -52,6 +61,8 @@ func (c Confidence) String() string {
 		return "Firm"
 	case ConfidenceTentative:
 		return "Tentative"
+	case ConfidenceSuppressedNegative:
+		return "Suppressed-negative"
 	default:
 		return "Unknown"
 	}
@@ -84,6 +95,8 @@ func ParseConfidence(v string) Confidence {
 		return ConfidenceCertain
 	case "firm":
 		return ConfidenceFirm
+	case "suppressed-negative":
+		return ConfidenceSuppressedNegative
 	default:
 		return ConfidenceTentative
 	}
@@ -101,9 +114,13 @@ func ParseConfidence(v string) Confidence {
 // is also what keeps findings persisted before this field existed resolving correctly.
 type Occurrence struct {
 	ExchangeID ExchangeID
-	Request    MsgId
-	Response   *MsgId
-	Span       Span
+	// Request mirrors core.Exchange.Request, for the same reason and with the same hazard: message ids
+	// are a dense counter from zero, so a bare MsgId cannot say "no request" — its zero is the first
+	// message the project ever captured. A finding attributed to a request-less row would otherwise
+	// point at that message (burpsy-react-ui-wtov).
+	Request  *MsgId
+	Response *MsgId
+	Span     Span
 }
 
 // FindingTarget is the logical location a finding is about — the thing two findings must agree on
@@ -187,6 +204,31 @@ type DedupPolicy struct {
 	Exempt map[string]bool
 }
 
+// TriageNote is the LLM post-scan second look's verdict on one finding (ei0v). The engine
+// copies the scanner package's verdict vocabulary; the reasoning is carried verbatim.
+type TriageNote struct {
+	Verdict        string    `json:"verdict"`
+	Reasoning      string    `json:"reasoning"`
+	Model          string    `json:"model"`
+	InvestigatedAt time.Time `json:"investigated_at"`
+}
+
+// SetTriage attaches (or, with nil, clears) the second-look note on one finding. The note
+// is written under the store lock so a re-audit merging into the same finding cannot lose
+// it, and it never touches the severity or confidence fields — advice rides beside grades.
+func (fs *FindingStore) SetTriage(id uint64, note *TriageNote) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	for _, f := range fs.findings {
+		if f.ID == id {
+			f.Triage = note
+			fs.signalChangeLocked()
+			return true
+		}
+	}
+	return false
+}
+
 // Inserted represents inserted payload information.
 type Inserted struct {
 	Original string
@@ -207,6 +249,12 @@ type NewFinding struct {
 	// coverage summary and a finding count cannot be tied together: the dashboard can say an audit
 	// swept 200 exchanges and that 12 findings exist, and nothing relates the two.
 	TaskID uint64
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding
+	// (burpsy-react-ui-m97j): promoted / retired / unavailable / unsupported-source, "" for every
+	// finding the tier never saw. Carried beside Confidence because they answer different
+	// questions: Confidence is a graded belief a human filters on, Confirm is what one browser
+	// load actually observed about one finding.
+	Confirm string `json:"confirm,omitempty"`
 	// Param is the name of the parameter, header or cookie the finding was observed at, empty when
 	// the finding is about a resource rather than one of its inputs — a DOM sink's source
 	// expression, or an insertion point a BCheck fired at.
@@ -215,6 +263,28 @@ type NewFinding struct {
 	// (the first is Name). Zero means the producer did not resolve one, which disables merging for
 	// this finding. See FindingTarget.
 	Target FindingTarget
+	// MergeKey OVERRIDES the target as the second half of this finding's dedup key, for the rows
+	// whose identity is not a location (burpsy-react-ui-7tc1).
+	//
+	// Most rows are about a place, and Name+Target is the right question. A weak-JWT finding is not:
+	// the same key cracked on /api/session and on /login is ONE weakness reported twice, and keying
+	// on the target files it as two issues for one fact. The value here is the producer's own
+	// statement of what makes two of these the same issue — for JWT weak-HMAC, the secret that was
+	// recovered, which is the thing actually proven.
+	//
+	// Empty means the target is the key, which is every row's behaviour before this field existed.
+	MergeKey string
+	// Evidence is the excerpt that justifies the finding — the matched text the producer saw,
+	// redacted by that producer to whatever it must be (burpsy-react-ui-cx31).
+	//
+	// It answers "WHICH value", where Name and Description answer "what kind of thing". A finding
+	// that says "AWS secret access key exposed" without the excerpt tells an operator that a
+	// credential leaked and nothing about which one, so recovering that means re-fetching the
+	// traffic by hand — which is the whole job the tool is doing for them.
+	//
+	// Optional: most findings legitimately have none, and empty is not a refusal. It is a finding
+	// with nothing to quote.
+	Evidence string `json:"evidence,omitempty"`
 }
 
 // Finding represents a security finding.
@@ -225,11 +295,22 @@ type Finding struct {
 	Confidence  Confidence
 	Description string
 	Remediation string
+	// Evidence is this finding's excerpt, carried from NewFinding.Evidence (burpsy-react-ui-cx31).
+	// See that field for why it is not optional in practice even though it is optional in shape.
+	Evidence    string `json:"evidence,omitempty"`
 	Occurrences []Occurrence
 	Inserted    *Inserted
 	// TaskID is the run that produced this finding, or 0 when nothing tracked it. See NewFinding.
 	TaskID    uint64
 	Timestamp uint64
+	// Confirm is the DOM dynamic tier's machine verdict for a static-pass finding. See
+	// NewFinding.Confirm — empty for every finding the tier never saw, which is every finding
+	// except the DOM pass's own.
+	Confirm string `json:"confirm,omitempty"`
+	// Triage is the LLM second look's note (ei0v): verdict + reasoning + model. ADVICE never
+	// promotion — it is carried beside Confidence/ConfidenceOverride and moves neither, the
+	// same rule SeverityOverride already obeys. Nil = not investigated.
+	Triage *TriageNote `json:"triage,omitempty"`
 	// Param names the parameter the finding was observed at, empty when it is about a resource.
 	// See NewFinding.Param. On a merged finding this is the *first* param observed; Params below is
 	// the full set and is what a reader should use.
@@ -245,6 +326,47 @@ type Finding struct {
 	Params []string
 	// Target is the logical location this finding is about. See NewFinding.Target.
 	Target FindingTarget
+	// MergedCount is how many later observations were folded into this finding by a keep_existing
+	// merge (burpsy-react-ui-oorl) — the difference between "seen once" and "seen forty times and
+	// shown once". keep_new resets it: the content it counted is gone.
+	MergedCount int
+	// MergeKey is the identity this finding was filed under when its producer gave one (see
+	// NewFinding.MergeKey). Kept so the dedup index can be rebuilt after a restore or a policy change:
+	// without it a restored leaked-key or weak-JWT finding was re-indexed by its path, and the next
+	// sighting of the same secret filed a second finding.
+	MergeKey string
+
+	// SeverityOverride is the operator's severity for this finding, nil while the engine's own
+	// severity stands. An override beats both the engine's report and a later merge that would
+	// raise it (see mergeLocked) — the operator looked at this finding and overruled the scanner;
+	// an automated re-observation is not a rebuttal.
+	SeverityOverride *Severity
+	// ConfidenceOverride is the operator's confidence, same contract as SeverityOverride.
+	ConfidenceOverride *Confidence
+	// FalsePositive marks a finding the operator has dismissed as not an issue. It stays in the
+	// store — deleting is a separate, destructive act — but the UI dims it and the severity
+	// counts exclude it.
+	FalsePositive bool
+	// Comment is the operator's note on this finding, empty when none was left.
+	Comment string
+}
+
+// EffectiveSeverity is the severity the finding should be reported at: the operator's override
+// when one exists, the engine's severity otherwise.
+func (f *Finding) EffectiveSeverity() Severity {
+	if f.SeverityOverride != nil {
+		return *f.SeverityOverride
+	}
+	return f.Severity
+}
+
+// EffectiveConfidence is the confidence the finding should be reported at, same rule as
+// EffectiveSeverity.
+func (f *Finding) EffectiveConfidence() Confidence {
+	if f.ConfidenceOverride != nil {
+		return *f.ConfidenceOverride
+	}
+	return f.Confidence
 }
 
 // HasParam reports whether the finding was observed at the named parameter.
@@ -281,6 +403,16 @@ type FindingStore struct {
 	// finding on every intake — the passive path adds a finding per response, and an engagement's
 	// store runs to thousands. Rebuilt wholesale by Restore, maintained by Delete and Clear.
 	byKey map[string]*Finding
+	// onDelete is an optional write-through hook (see SetDeleteSink). It runs under the store lock
+	// with the finding's id, must not call back into the store, and must not fail the in-memory
+	// delete — memory is authoritative, SQLite is durable backup.
+	onDelete func(id uint64)
+
+	// consolidation is the operator's action on a collision (burpsy-react-ui-oorl); the zero value
+	// resolves to keep_existing. tally and tallyByTask count what each collision became.
+	consolidation ConsolidationPolicy
+	tally         ConsolidationTally
+	tallyByTask   map[uint64]*ConsolidationTally
 }
 
 // NewFindingStore creates a new finding store.
@@ -315,7 +447,7 @@ func (fs *FindingStore) SetDedupPolicy(p *DedupPolicy) {
 func (fs *FindingStore) rebuildIndexLocked() {
 	fs.byKey = make(map[string]*Finding, len(fs.findings))
 	for _, f := range fs.findings {
-		if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok {
+		if key, ok := fs.dedupKeyFor(f.Name, f.Target, f.MergeKey); ok {
 			if _, clash := fs.byKey[key]; !clash {
 				fs.byKey[key] = f
 			}
@@ -334,11 +466,26 @@ func (fs *FindingStore) rebuildIndexLocked() {
 // Query strings are deliberately not in the key. /search?q=a and /search?q=b are the same endpoint,
 // and merging across them is precisely the behaviour that turns five parameter hits into one issue.
 func (fs *FindingStore) dedupKeyLocked(name string, t FindingTarget) (string, bool) {
+	return fs.dedupKeyFor(name, t, "")
+}
+
+// dedupKeyFor is dedupKeyLocked with the producer's optional merge key. A non-empty mergeKey
+// REPLACES the target as the second half of the key rather than adding to it, which is the whole
+// point: for a row whose identity is not a location, keying on the location as well would file one
+// proven weakness as several issues.
+func (fs *FindingStore) dedupKeyFor(name string, t FindingTarget, mergeKey string) (string, bool) {
 	if name == "" || t.Host == "" {
 		return "", false
 	}
 	if dedupExemptRows[name] {
 		return "", false
+	}
+	if mergeKey != "" {
+		// Scoped by host as well as the merge key. Two hosts can each ship a JWT signed with the
+		// string "secret", and that is two findings: the weakness is only actionable on the
+		// application that issued the token, and reporting one host's weak key as another host's
+		// issue would be a claim about the wrong system.
+		return name + "\x00" + t.Host + "\x00" + mergeKey, true
 	}
 	if fs.policy != nil {
 		if fs.policy.Exempt[name] {
@@ -377,10 +524,20 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	key, mergeable := fs.dedupKeyLocked(finding.Name, finding.Target)
+	key, mergeable := fs.dedupKeyFor(finding.Name, finding.Target, finding.MergeKey)
 	if mergeable {
 		if existing, ok := fs.byKey[key]; ok {
-			fs.mergeLocked(existing, finding)
+			action := fs.actionForLocked(finding.Name)
+			fs.noteCollisionLocked(finding.TaskID, action)
+			if action == ConsolidateKeepBoth {
+				// Filed below as its own finding; byKey keeps the oldest owner (see the guard there).
+				goto file
+			}
+			if action == ConsolidateKeepNew {
+				fs.replaceLocked(existing, finding)
+			} else {
+				fs.mergeLocked(existing, finding)
+			}
 			// onAdd, not a separate update hook: the sink is a write-through mirror of a finding's
 			// current state, and persist.Store.SaveFinding is an INSERT OR REPLACE keyed on the id,
 			// so re-offering the merged finding rewrites its row rather than inserting a second
@@ -395,6 +552,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		}
 	}
 
+file:
 	id := fs.nextID
 	fs.nextID++
 
@@ -405,12 +563,15 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		Confidence:  finding.Confidence,
 		Description: finding.Description,
 		Remediation: finding.Remediation,
+		Evidence:    finding.Evidence,
 		Occurrences: append([]Occurrence(nil), finding.Occurrences...),
 		Inserted:    finding.Inserted,
 		TaskID:      finding.TaskID,
+		Confirm:     finding.Confirm,
 		Timestamp:   uint64(getTimestamp()),
 		Param:       finding.Param,
 		Target:      finding.Target,
+		MergeKey:    finding.MergeKey,
 	}
 	if finding.Param != "" {
 		f.Params = []string{finding.Param}
@@ -426,7 +587,11 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 		if fs.byKey == nil {
 			fs.byKey = make(map[string]*Finding)
 		}
-		fs.byKey[key] = f
+		// keep_both files a second finding for a key that already has an owner; the owner stays the
+		// oldest, so the next keep_existing observation lands where the first did.
+		if _, owned := fs.byKey[key]; !owned {
+			fs.byKey[key] = f
+		}
 	}
 	if fs.onAdd != nil {
 		fs.onAdd(f)
@@ -437,6 +602,7 @@ func (fs *FindingStore) Add(finding NewFinding) uint64 {
 
 // mergeLocked folds one new observation into an existing finding. Called with the write lock held.
 func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
+	existing.MergedCount++
 	existing.Occurrences = append(existing.Occurrences, incoming.Occurrences...)
 	if incoming.Param != "" && !existing.HasParam(incoming.Param) {
 		existing.Params = append(existing.Params, incoming.Param)
@@ -446,14 +612,26 @@ func (fs *FindingStore) mergeLocked(existing *Finding, incoming NewFinding) {
 			existing.Param = incoming.Param
 		}
 	}
-	if incoming.Severity > existing.Severity {
+	// An operator override outlives the engine's opinion (see Finding.SeverityOverride): the raise
+	// and the lowering below run only while no override stands. Re-raising a severity the operator
+	// already overruled would turn the override off on the next re-audit — exactly the
+	// "suppressed false positive that comes back" the triage feature must not do.
+	if existing.SeverityOverride == nil && incoming.Severity > existing.Severity {
 		existing.Severity = incoming.Severity
 	}
-	if incoming.Confidence < existing.Confidence {
+	if existing.ConfidenceOverride == nil && incoming.Confidence < existing.Confidence {
 		existing.Confidence = incoming.Confidence
 	}
 	if existing.Inserted == nil && incoming.Inserted != nil {
 		existing.Inserted = incoming.Inserted
+	}
+	// Evidence is the FIRST observation's, like Description, so a finding's quoted excerpt does not
+	// depend on scan order — the rule Add's doc states for every text field. The one exception is an
+	// empty first: a check that produced no excerpt on the first sighting and one on the second
+	// leaves the merged finding with none at all, which would drop the only record of WHICH value
+	// leaked on the very finding an operator most needs it for. Backfill in that direction only.
+	if existing.Evidence == "" && incoming.Evidence != "" {
+		existing.Evidence = incoming.Evidence
 	}
 }
 
@@ -489,6 +667,48 @@ func (fs *FindingStore) SetPersistenceSink(onAdd func(f *Finding)) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	fs.onAdd = onAdd
+}
+
+// SetDeleteSink installs the hook called after a finding is removed, or nil to remove it. Single
+// slot, like SetPersistenceSink. The durable mirror needs this to drop the row — without it a
+// deleted finding walks back in on the next restart, reading its row out of SQLite.
+func (fs *FindingStore) SetDeleteSink(onDelete func(id uint64)) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.onDelete = onDelete
+}
+
+// Triage applies an operator decision to one finding under the write lock and mirrors the result
+// through the persistence sink. The mutation function must not call back into the store. Returns
+// false when no finding carries that id — a stale row on the operator's screen, which the API
+// surfaces as 404 rather than silently writing nothing.
+func (fs *FindingStore) Triage(id uint64, mutate func(f *Finding)) bool {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	f := fs.byIDLocked(id)
+	if f == nil {
+		return false
+	}
+	mutate(f)
+	// onAdd, not a separate update hook: the sink is a write-through mirror of a finding's current
+	// state, and SaveFinding is an INSERT OR REPLACE keyed on the id, so re-offering the triaged
+	// finding rewrites its row rather than inserting a second one.
+	if fs.onAdd != nil {
+		fs.onAdd(f)
+	}
+	fs.signalChangeLocked()
+	return true
+}
+
+// byIDLocked finds a finding by id. Linear because triage is an operator action, not an intake
+// path; the byKey index answers a different question (dedup) and does not map ids.
+func (fs *FindingStore) byIDLocked(id uint64) *Finding {
+	for _, f := range fs.findings {
+		if f.ID == id {
+			return f
+		}
+	}
+	return nil
 }
 
 // Restore replaces the store's contents with a previously persisted snapshot.
@@ -556,6 +776,9 @@ func (fs *FindingStore) Delete(id uint64) bool {
 			if key, ok := fs.dedupKeyLocked(f.Name, f.Target); ok && fs.byKey[key] == f {
 				delete(fs.byKey, key)
 			}
+			if fs.onDelete != nil {
+				fs.onDelete(id)
+			}
 			fs.signalChangeLocked()
 			return true
 		}
@@ -565,12 +788,23 @@ func (fs *FindingStore) Delete(id uint64) bool {
 }
 
 // Clear removes all findings.
+// Clear removes all findings. Each removed id goes through the delete sink so the durable mirror
+// empties with the memory — the sink is nil-able because a zero-value store is usable without one.
 func (fs *FindingStore) Clear() {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	if fs.onDelete != nil {
+		for _, f := range fs.findings {
+			fs.onDelete(f.ID)
+		}
+	}
 	fs.findings = fs.findings[:0]
 	fs.byKey = make(map[string]*Finding)
 	fs.nextID = 0
+	// The tallies describe what happened to findings that are now gone, so they go with them. The
+	// policy is the operator's setting and stays.
+	fs.tally = ConsolidationTally{}
+	fs.tallyByTask = nil
 	fs.signalChangeLocked()
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,7 +79,24 @@ type Config struct {
 	MaxMessageBytes     int
 	MaxRegistrations    int
 
-	Logger *zap.Logger
+	// ReloadOnStart loads every allowlisted plugin as NewHost returns, instead of waiting for the
+	// operator to press Load (burpsy-react-ui-1ye7).
+	//
+	// OFF by default, and the default is the careful one: "burpsy was started with -plugins" must
+	// not silently mean "burpsy executed three binaries on boot" — see NewHost's own note. A plugin
+	// author who is iterating turns it on; an operator running someone else's plugins leaves it off.
+	ReloadOnStart bool
+	// AutoReload re-loads a loaded plugin when its executable changes on disk, so an author who has
+	// just rebuilt does not have to press Unload and Load to see the new binary.
+	//
+	// Polling rather than inotify, deliberately: the watch set is the allowlist — a handful of paths
+	// at most — and a poll costs one stat each per interval, against a filesystem-notification
+	// dependency that behaves differently on every platform this runs on. The cost is bounded and
+	// the behaviour is the same everywhere.
+	AutoReload bool
+	// ReloadInterval is how often AutoReload stats the watch set. Zero takes DefaultReloadInterval.
+	ReloadInterval time.Duration
+	Logger         *zap.Logger
 }
 
 func (c Config) withDefaults() Config {
@@ -102,6 +120,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxRegistrations <= 0 {
 		c.MaxRegistrations = DefaultMaxRegistrations
+	}
+	if c.ReloadInterval <= 0 {
+		c.ReloadInterval = DefaultReloadInterval
 	}
 	if c.Logger == nil {
 		c.Logger = zap.NewNop()
@@ -137,6 +158,10 @@ type plugin struct {
 	// stopping distinguishes an exit we asked for from one we did not, which is the
 	// difference between StateUnloaded and StateCrashed.
 	stopping bool
+	// binStamp is the executable's mtime+size as of the load that produced the current session —
+	// the baseline Config.AutoReload compares against on each poll (burpsy-react-ui-1ye7). Zero
+	// for a plugin that has never loaded, which is why the watcher checks state before comparing.
+	binStamp binStamp
 }
 
 // Host owns every allowlisted plugin and the processes they run as.
@@ -173,6 +198,17 @@ func NewHost(cfg Config) *Host {
 	// construction, and a list whose order came from Go's map iteration would
 	// reshuffle the operator's table on every refresh.
 	sort.Strings(h.ordered)
+	// ReloadOnStart first, then the watcher: the loads must already have happened when the watch
+	// takes its first baseline, or the first poll would see every just-loaded plugin as "changed
+	// since I looked" and reload each one once for nothing (burpsy-react-ui-1ye7).
+	//
+	// Both are off by default, which keeps NewHost's own contract above intact: it still starts
+	// nothing unless the operator asked, and "burpsy was started with -plugins" still does not mean
+	// "burpsy executed three binaries on boot".
+	if cfg.ReloadOnStart {
+		h.loadAllowlist()
+	}
+	h.startAutoReload()
 	return h
 }
 
@@ -204,6 +240,59 @@ func (h *Host) lookup(name string) (*plugin, error) {
 		return nil, fmt.Errorf("%q: %w", name, ErrUnknownPlugin)
 	}
 	return p, nil
+}
+
+// ResolveRegistration finds the loaded plugin that declares `id` with kind `kind`.
+//
+// It exists because a session rule's Invoke-an-extension action names a *registration*, not a
+// plugin: Burp's action points at an extension's session-handling action by name, and making the
+// operator also name the plugin that owns it would be a second field that must agree with the
+// first. Resolution is by registration id across the loaded plugins, and the two ways it can fail
+// are separated on purpose — "no plugin offers this" and "two plugins offer this" need different
+// fixes, and a rule that silently picked one of the two would send a real request through the wrong
+// plugin.
+func (h *Host) ResolveRegistration(id string, kind Kind) (string, error) {
+	if id == "" {
+		return "", errors.New("the registration id is empty, so no plugin can be resolved")
+	}
+	h.mu.Lock()
+	names := append([]string(nil), h.ordered...)
+	byName := make(map[string]*plugin, len(h.byName))
+	for name, p := range h.byName {
+		byName[name] = p
+	}
+	h.mu.Unlock()
+	var owners []string
+	for _, name := range names {
+		p := byName[name]
+		p.mu.Lock()
+		loaded := p.state == StateLoaded && p.session != nil
+		var declares bool
+		for _, reg := range p.registrations {
+			if reg.ID == id && reg.Kind == kind {
+				declares = true
+				break
+			}
+		}
+		p.mu.Unlock()
+		if declares && loaded {
+			owners = append(owners, name)
+		}
+	}
+	switch len(owners) {
+	case 0:
+		return "", fmt.Errorf("no loaded plugin registers %q as a %s; a plugin must be loaded and must declare "+
+			"the registration in its manifest", id, kind)
+	case 1:
+		return owners[0], nil
+	default:
+		// Named, not chosen. Burp's own model has one extension per action, and here the id is the
+		// plugin's own handle — two plugins using the same one is an ambiguity only the operator
+		// can resolve, and guessing would fire the wrong code against a live engagement.
+		return "", fmt.Errorf("two loaded plugins register %q as a %s (%s); rename one, because a rule "+
+			"that picked one would send a real request through whichever it happened to choose",
+			id, kind, strings.Join(owners, ", "))
+	}
 }
 
 // List reports every allowlisted plugin and the state breakdown across them.
@@ -365,6 +454,11 @@ func (h *Host) Load(name string) (PluginView, error) {
 	p.refused = refused
 	p.loadedAtMs = time.Now().UnixMilli()
 	p.session = sess
+	// The baseline Config.AutoReload's watch compares against, taken here — at the load that
+	// produced this session — rather than at the poll. A stamp read later would be the stamp of
+	// whatever is on disk by then, so a rebuild that landed DURING the load would be recorded as
+	// the thing already running and never reloaded (burpsy-react-ui-1ye7).
+	p.binStamp, _ = stampOf(p.spec.Path)
 	view := p.viewLocked()
 	p.mu.Unlock()
 
@@ -375,6 +469,27 @@ func (h *Host) Load(name string) (PluginView, error) {
 
 	go h.watch(p, sess)
 	return view, nil
+}
+
+// fmtChordRefused is the refusal for a hotkey whose chord this console cannot spell. A
+// format string constant rather than an inline literal, because the message names the
+// rule and the rule is one sentence, not two spellings of it.
+const fmtChordRefused = "%q asks for %q, which this console cannot spell as a binding (mod or alt, plus shift, plus exactly one key)"
+
+// fmtChordCollision is the refusal for a hotkey whose chord is already taken — by a
+// shell binding or by another plugin. First wins; the second is refused.
+const fmtChordCollision = "%q asks for %q, which is already bound to %s"
+
+// shellChords is the set of chords the shell already uses. A plugin cannot take
+// these — they belong to the console's own actions.
+var shellChords = map[string]bool{
+	"mod+r": true, "mod+i": true, "mod+o": true, "mod+f": true,
+	"alt+t": true, "mod+enter": true, "mod+k": true,
+	"mod+alt+right": true, "mod+alt+left": true,
+	"mod+shift+l": true, "shift+slash": true,
+	// Editor codec keys (fixed, not rebindable)
+	"mod+u": true, "mod+shift+u": true, "mod+h": true, "mod+shift+h": true,
+	"mod+b": true, "mod+shift+b": true, "mod+s": true,
 }
 
 // validate keeps the registrations that mean something and counts the rest.
@@ -392,6 +507,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		refused++
 		p.console.append(StreamError, SourceHost, "registration refused: "+reason)
 	}
+	takenChords := map[string]string{} // chord -> plugin name (first wins)
 	for _, reg := range declared {
 		switch {
 		case len(kept) >= h.cfg.MaxRegistrations:
@@ -401,11 +517,28 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case seen[reg.ID]:
 			refuse(fmt.Sprintf("%q is declared twice; an invoke could not say which was meant", reg.ID))
 		case !validKinds[reg.Kind]:
-			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu and editor-tab only",
+			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action and hotkey",
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
+		case reg.Kind == KindHotKey && reg.Chord == "":
+			refuse(fmt.Sprintf("%q is a hotkey with no chord; there is nothing to install", reg.ID))
+		case reg.Kind == KindHotKey && NormaliseChord(reg.Chord) == "":
+			refuse(fmt.Sprintf(fmtChordRefused, reg.ID, reg.Chord))
 		default:
+			if reg.Kind == KindHotKey {
+				chord := NormaliseChord(reg.Chord)
+				if shellChords[chord] {
+					refuse(fmt.Sprintf(fmtChordCollision, reg.ID, reg.Chord, "a shell binding"))
+					continue
+				}
+				if otherPlugin, taken := takenChords[chord]; taken {
+					refuse(fmt.Sprintf(fmtChordCollision, reg.ID, reg.Chord, fmt.Sprintf("plugin %q", otherPlugin)))
+					continue
+				}
+				takenChords[chord] = p.name
+				reg.Binding = chord
+			}
 			seen[reg.ID] = true
 			kept = append(kept, reg)
 		}
@@ -487,7 +620,7 @@ func (h *Host) unload(p *plugin, reason string) (PluginView, error) {
 
 // Invoke runs one registration.
 //
-// The three literal method names below are the dispatch decision *and* the thing
+// The five literal method names below are the dispatch decision *and* the thing
 // the protocol tests check: Test_the_documented_method_set_is_the_dispatched_method_set
 // reads them out of the source, and Test_each_registration_kind_invokes_its_documented_method
 // drives a real plugin and asserts which method arrived. A map from kind to method
@@ -532,6 +665,10 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "menu.invoke", params, &result)
 	case KindEditorTab:
 		err = sess.call(callCtx, "editor.render", params, &result)
+	case KindSessionAction:
+		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
+	case KindHotKey:
+		err = sess.call(callCtx, "hotkey.invoke", params, &result)
 	default:
 		// Unreachable: validate() refuses any other kind at load. Kept as a real
 		// error rather than a panic so a future kind added to validKinds and not

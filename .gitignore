@@ -67,3 +67,13 @@ opencode.json
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Backups an agent tool writes beside an MCP / editor config before rewriting it, named
+# <config>.<pid>.<timestamp>.<n>.bak. Machine-written, churn per run, and a config backup is the
+# kind of file a credential could land in — never content.
+*.json.*.bak
+# The beads database backup bd takes before a version upgrade.
+.beads.backup-*/
+__pycache__/
+# Screenshots of other tools taken with the repo as cwd (dsh = DeepSeek Harness) — not burpsy.
+/dsh-*.png

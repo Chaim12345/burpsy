@@ -376,14 +376,21 @@ func storedSubmitNote(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "note saved\n")
 }
 
-// storedRenderNotes inlines every stored note directly into its own script string literal with no
+// storedRenderNotes inlines every stored note directly into its own script statement with no
 // escaping, so a value carrying a quote breaks out of the string and runs as script.
+//
+// The note is assigned as a bare expression rather than written into a string literal. That
+// distinction is the whole point of the row: a value inside `var note = '<value>'` is correctly
+// contained by the quotes, so a scanner that refuses to call it a breakout is RIGHT, and a fixture
+// shaped that way cannot demonstrate stored XSS at all. Assigning the stored value as its own
+// expression is what an application that concatenates user input into a script body actually does,
+// and it is the shape in which a token really does reach executable position.
 func storedRenderNotes(w http.ResponseWriter, r *http.Request) {
 	notes := storedSnapshot(&storedNoteMu, &storedNoteLog)
 	w.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(w, "<!DOCTYPE html><html><body><h1>Sticky notes</h1><script>")
 	for _, n := range notes {
-		fmt.Fprintf(w, "var note = '%s'; console.log(note);\n", n)
+		fmt.Fprintf(w, "var note = 'sticky'; note = %s; console.log(note);\n", n)
 	}
 	fmt.Fprint(w, "</script></body></html>")
 }

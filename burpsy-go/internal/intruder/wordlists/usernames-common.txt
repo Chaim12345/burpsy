@@ -1,0 +1,58 @@
+# burpsy bundled wordlist: common usernames
+# Source: the standard default/common-username corpus (SecLists' Username basic set,
+#   derived from public default-account documentation).
+# Licence basis: MIT-licensed SecLists content (permissively licensed); nothing here is
+#   extracted from PortSwigger's shipped resources.
+admin
+administrator
+root
+test
+guest
+user
+demo
+operator
+superuser
+super
+sysadmin
+system
+manager
+management
+webmaster
+hostmaster
+postmaster
+info
+support
+sales
+help
+service
+backup
+backupuser
+default
+public
+ftp
+ftpuser
+www
+www-data
+apache
+nginx
+mysql
+postgres
+oracle
+sa
+dbadmin
+dev
+developer
+sysadm
+netadm
+secadm
+staff
+employee
+student
+teacher
+operator1
+admin1
+admin2
+admin01
+admin123
+test1
+user1

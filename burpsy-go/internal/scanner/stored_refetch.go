@@ -26,6 +26,21 @@ import (
 	"github.com/burpsy-go/burpsy/internal/sender"
 )
 
+// PendingCount reports how many deferred claims are unsettled, without creating the registry on
+// first use the way Pending does. That distinction is the guard the web audit paths need: an audit
+// that registered nothing must skip FinishScan entirely (the re-fetch pass is real traffic), and
+// calling Pending() to count would itself register a registry where there was none — making the
+// guard read one where zero claims exist.
+func (s *ActiveScanner) PendingCount() int {
+	if s == nil {
+		return 0
+	}
+	s.pendingMu.Lock()
+	r := s.pending
+	s.pendingMu.Unlock()
+	return r.PendingCount()
+}
+
 // Pending returns the scan's deferred-evidence registry, creating it on first use.
 func (s *ActiveScanner) Pending() *PendingRegistry {
 	if s == nil {
@@ -218,7 +233,7 @@ func (s *ActiveScanner) recordRefetch(t refetchTarget, body string) (*core.Excha
 		return nil, err
 	}
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: t.exchange.Host, Port: t.exchange.Port, TLS: t.exchange.TLS,
 		Method: "GET", Path: t.path,
 		// Read from the bytes actually stored above, which name no Content-Type — so this is "" and the

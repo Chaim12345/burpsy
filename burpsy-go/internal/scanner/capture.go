@@ -31,6 +31,7 @@
 package scanner
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -46,6 +47,38 @@ import (
 //
 // Copied by value at every call site: the four fields are handles to shared, internally-locked
 // objects, so a copy addresses the same store, the same scanner and the same finding store.
+// coreNewFindingFor converts one scanner finding into the store's shape, against the exchange it was
+// observed on.
+//
+// Named rather than inlined because this conversion is the ONLY place a scanner finding's identity
+// becomes the key the store merges on, and a conversion nothing can call is a conversion nothing can
+// test. Every test that reads a Finding field directly is reading one side of this: the check sets
+// MergeKey, core's store honours it, and deleting the single line that carries it between them left
+// every such test green (burpsy-react-ui-7tc1).
+func coreNewFindingFor(f *Finding, ex *core.Exchange) core.NewFinding {
+	nf := core.NewFinding{
+		Name:        f.Name,
+		Severity:    core.ParseSeverity(f.Severity),
+		Confidence:  core.ParseConfidence(f.Confidence),
+		Description: f.Description,
+		Remediation: f.Solution,
+		Param:       f.Param,
+		// Evidence was missing from this mapping entirely, so every check that populated it lost it
+		// on the way into the store (burpsy-react-ui-cx31). A redacted excerpt that never arrives is
+		// indistinguishable from a check that found nothing to quote.
+		Evidence: f.Evidence,
+		// The dedup target, taken from the exchange in hand rather than resolved later. This is
+		// the path that produces the most duplicates by far — a passive check re-fires on every
+		// response — so it is the one that most needs the store to be able to merge.
+		Target: core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path},
+		// A finding may state its own identity where the target is not it (7tc1). Empty for every
+		// row whose issue is a place, which is all of them except JWT weak-HMAC.
+		MergeKey: f.MergeKey,
+	}
+	nf.TaskID = ex.TaskID
+	return nf
+}
+
 type Capture struct {
 	// Store receives both messages and the exchange index row. Required by Record; ScanExchange
 	// needs it only for the DOM pass, which reads the response back out of it.
@@ -57,6 +90,16 @@ type Capture struct {
 	Findings *core.FindingStore
 	// Logger carries the DOM pass's truncation caveat. Nil is tolerated and silences it.
 	Logger *zap.Logger
+	// ResponseModules are the pluggable post-request analyzers run over each captured response
+	// after the check set and the DOM pass (burpsy-react-ui-8j0d's seam; see response_modules.go).
+	// Nil or empty runs none — the zero value is every previous behaviour, so a surface that wires
+	// no modules is unaffected.
+	//
+	// Why a separate slice rather than folding the modules into PassiveScanner: a module sends
+	// nothing and has no catalog issue to resolve by name, so it is not a CheckDescriptor and making
+	// it one would force a check-shaped question (what issue is this?) that a module cannot answer.
+	// The two run side by side over the same captured bytes.
+	ResponseModules []ResponseModule
 	// Source is the default attribution for every exchange recorded through this handle, for a surface
 	// that only ever produces one kind. A CapturedExchange naming its own Source overrides it.
 	//
@@ -90,6 +133,24 @@ type CapturedExchange struct {
 	// Request and Response are the exact bytes sent and received.
 	Response []byte
 	Request  []byte
+	// RequestOriginal and RequestAuto are the request's earlier stages (burpsy-react-ui-c05), and
+	// ResponseOriginal and ResponseAuto the response's — see core.Exchange's four fields for what a
+	// stage is and for the rule that a variant is written only where it differs from the next one.
+	//
+	// Nil is the common case and means "nothing differed", so a producer that never touches bytes
+	// passes nothing and stores nothing extra. Record enforces the rule rather than trusting the
+	// producer: a stage equal to the one after it is not written, because the difference between
+	// two identical byte slices is not information and paying a second copy of every unmodified
+	// message to record "nothing changed" would undo the store's whole cost model.
+	RequestOriginal  []byte
+	RequestAuto      []byte
+	ResponseOriginal []byte
+	ResponseAuto     []byte
+	// UserEdited says the operator modified this exchange by hand (Burp's history "Edited"
+	// column). Carried from the producing site rather than derived here, because only that site
+	// knows: it is the one that compares the bytes it showed the operator with the bytes the hold
+	// returned. See core.Exchange.UserEdited for why the stage fields cannot stand in for it.
+	UserEdited bool
 	// Started is when the request went out and Duration how long the exchange took; both are
 	// carried rather than measured here, because Record runs after the fact.
 	//
@@ -98,6 +159,18 @@ type CapturedExchange struct {
 	// microsecond resolution and was not at millisecond resolution.
 	Started  time.Time
 	Duration time.Duration
+	// FirstByte is the instant the first response byte arrived from upstream, or the zero time when
+	// this producer did not time it. Started→FirstByte is the recorded exchange's TTFB (Burp's "Start
+	// response timer"; see core.Exchange.TTFB). The zero time is an unambiguous "unmeasured" — a real
+	// first-byte instant is never the zero time — so, unlike Duration below, it needs no "exact zero
+	// means unset" convention.
+	FirstByte time.Time
+	// Completed is the instant the last response byte finished being read from upstream, or the zero
+	// time when unset. When set, Started→Completed is the recorded total (Burp's "End response timer"),
+	// and it is taken at the wire — before any operator intercept hold or write back to the client — so
+	// the total is transfer time, not console latency. When unset, Duration is used instead, for
+	// producers that hand Record a whole-round-trip measurement rather than the two wire instants.
+	Completed time.Time
 	// Protocol is which protocol carried the exchange. The zero value is core.ProtocolHTTP1.
 	Protocol core.Protocol
 	// Source names the surface this exchange came from, so an operator reading history can tell traffic
@@ -120,6 +193,18 @@ type CapturedExchange struct {
 	// a WebSocket handshake the proxy rewrote before forwarding, and a response the operator
 	// dropped so the client received nothing.
 	Notes *string
+	// Highlight is the operator's colour tag on this capture, "" when unset — the
+	// operator's intercept annotation riding to history (burpsy-react-ui-5q8u). Same
+	// carry-here rule as Notes: the store's observers run inside AddExchange, so a
+	// highlight attached afterwards is one none of them ever record. Same vocabulary
+	// as core.ValidHighlights.
+	Highlight string
+	// ServerIP is the destination server's resolved IP for this exchange, and ListenerPort the
+	// proxy listener port the request arrived on. Both empty/zero for a producer that has neither
+	// in hand — see core.Exchange's fields of the same names for what each means and why they are
+	// recorded here rather than derived at list time (burpsy-react-ui-mr4p, burpsy-react-ui-he81).
+	ServerIP     string
+	ListenerPort uint16
 }
 
 // ErrNoResponse is returned by Record when there are no response bytes to capture.
@@ -187,6 +272,13 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture: storing the request: %w", err)
 	}
+	// The earlier stages, walked forward so each is compared against the stage that follows it —
+	// which is the rule the store reads back with (core.Exchange.VariantFor). A failure to store an
+	// *extra* copy is reported but never fatal: the exchange's own bytes are already committed, and
+	// losing a variant costs the operator a comparison view, whereas refusing the exchange would
+	// cost them the traffic. The error is returned only for the request/response themselves.
+	reqOriginal, reqAuto := c.storeStages("request", x.RequestOriginal, x.RequestAuto, x.Request, core.DirectionRequest)
+
 	respID, err := c.Store.Put(x.Response, core.DirectionResponse)
 	if err != nil {
 		// The request is already in the message log, which is append-only and has no retraction. That
@@ -195,9 +287,16 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// nothing will read it as a completed exchange.
 		return nil, fmt.Errorf("capture: storing the response: %w", err)
 	}
+	respOriginal, respAuto := c.storeStages("response", x.ResponseOriginal, x.ResponseAuto, x.Response, core.DirectionResponse)
 	ex := &core.Exchange{
-		Request:     reqID,
-		Response:    &respID,
+		Request:  core.MsgPtr(reqID),
+		Response: &respID,
+
+		RequestOriginal:  reqOriginal,
+		RequestAuto:      reqAuto,
+		ResponseOriginal: respOriginal,
+		ResponseAuto:     respAuto,
+
 		Status:      storedStatus(c.Store, respID),
 		Host:        x.Host,
 		Port:        x.Port,
@@ -205,6 +304,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		Method:      x.Method,
 		Path:        x.Path,
 		Duration:    x.duration(),
+		TTFB:        x.ttfb(),
 		StartedMs:   uint64(x.Started.UnixMilli()),
 		Protocol:    x.Protocol,
 		ResponseLen: len(x.Response),
@@ -214,18 +314,81 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// and filter have anything to work with at all.
 		Mime: core.MimeEssence(x.Response),
 		// Same seam as Mime: the bytes are here, so the derived columns are decided here.
-		Cookies: core.CookieNames(x.Response),
-		Title:   core.ResponseTitle(x.Response),
-		Notes:   x.Notes,
+		// RequestFP is the request-content fingerprint the audit ledger keys changed-content
+		// re-audits on (6n4d) — computed here for the same reason Mime is: this is the one
+		// place the raw bytes are in hand, and a consumer that had to read them back would
+		// re-pay the store for bytes it already paid for once.
+		RequestFP: core.RequestFingerprint(x.Request),
+		// Same seam and same reason as RequestFP: the request bytes are here, so the count history
+		// filters on is decided here rather than by a consumer reading them back. This is what makes
+		// the "Parameterized requests" filter mean what Burp's does (burpsy-react-ui-7py5) — before it,
+		// the filter could only see the query string and dropped every body-only parameterized request.
+		RequestParams: core.RequestParameterCount(x.Request),
+		Cookies:       core.CookieNames(x.Response),
+		Title:         core.ResponseTitle(x.Response),
+		Notes:         x.Notes,
+		Highlight:     x.Highlight,
 		// The per-exchange source wins when it is set, so a surface with a default can still record one
 		// exchange as something else; otherwise the handle's default applies. Neither is substituted for
 		// the other when both are unset — unattributed is a real answer, see above.
 		Source: sourceOf(x.Source, c.Source),
 		TaskID: taskOf(x.TaskID, c.TaskID),
+		// Carried, not derived — the producing site is the only one that saw both the bytes it showed
+		// the operator and the bytes the hold returned. See core.Exchange.UserEdited.
+		UserEdited: x.UserEdited,
+		// Carried, never derived. Both describe sockets that are closed by the time a row is
+		// listed, so this seam is the only place either answer exists.
+		ServerIP:     x.ServerIP,
+		ListenerPort: x.ListenerPort,
 	}
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)
 	return ex, nil
+}
+
+// storeStages writes the earlier stages of one message and returns the ids worth recording, or nil
+// nils when nothing differed (burpsy-react-ui-c05).
+//
+// It walks forward — original against auto, auto against the final — so the two comparisons are the
+// same ones core.Exchange.VariantFor walks backwards to read. Both directions having to agree is why
+// the rule lives in one place per side rather than being re-decided at each capture site, and it is
+// the reason a stage is dropped when it is byte-identical to the next: two references to one message
+// would be the store's honest shape for "nothing changed", but a *fourth* copy of an unmodified
+// message per exchange is not, and the difference is what keeps this feature from multiplying the
+// resident set by three.
+//
+// A failure to store an extra stage is logged and the stage is dropped rather than failing the
+// capture: the exchange's own bytes are already committed, and losing a comparison view costs the
+// operator far less than losing the traffic. Under-recorded and said so, which is this project's
+// direction for every partial result.
+func (c Capture) storeStages(what string, original, auto, final []byte, dir core.Direction) (origID, autoID *core.MsgId) {
+	if auto == nil && original == nil {
+		return nil, nil
+	}
+	keep := func(stage []byte, next []byte) *core.MsgId {
+		if stage == nil || bytes.Equal(stage, next) {
+			return nil
+		}
+		id, err := c.Store.Put(stage, dir)
+		if err != nil {
+			if c.Logger != nil {
+				c.Logger.Warn("capture: keeping the earlier stage of a message failed, so this exchange records only the later one",
+					zap.String("message", what), zap.Error(err))
+			}
+			return nil
+		}
+		return &id
+	}
+	// Auto is compared against the final first; the original is then compared against auto when auto
+	// was kept, and against the final when it was not — which is exactly "compared against the next
+	// stage that exists".
+	autoID = keep(auto, final)
+	next := final
+	if autoID != nil {
+		next = auto
+	}
+	origID = keep(original, next)
+	return origID, autoID
 }
 
 // duration reads CapturedExchange.Duration as a measurement or as the absence of one.
@@ -240,10 +403,31 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 // core.MeasuredDuration on the exchange it builds itself; this seam's contract is the zero rule, stated
 // on the field.
 func (x CapturedExchange) duration() core.ExchangeDuration {
+	// A producer that timed the two wire instants wins: Completed→Started is the transfer total, taken
+	// before any intercept hold, so it is not inflated by the operator's own hold time the way a
+	// record-site time.Since(startTime) would be. Falls back to the whole-round-trip Duration for
+	// producers that carry only that (Repeater, Intruder, the crawler), and to unmeasured for neither.
+	if !x.Completed.IsZero() && !x.Started.IsZero() {
+		return core.MeasuredDuration(x.Completed.Sub(x.Started))
+	}
 	if x.Duration == 0 {
 		return core.UnmeasuredDuration()
 	}
 	return core.MeasuredDuration(x.Duration)
+}
+
+// ttfb reads the time-to-first-byte from the two wire instants, or reports it unmeasured.
+//
+// Both instants must be set: a producer that has one but not the other has not timed the first byte
+// against the request, and inventing the difference from a half-set pair would be exactly the kind of
+// fabricated measurement core.ExchangeDuration's Measured flag exists to prevent. The zero time is the
+// honest "unset" here — no exact-zero-microseconds convention is needed, because a real instant is
+// never the zero time.
+func (x CapturedExchange) ttfb() core.ExchangeDuration {
+	if x.FirstByte.IsZero() || x.Started.IsZero() {
+		return core.UnmeasuredDuration()
+	}
+	return core.MeasuredDuration(x.FirstByte.Sub(x.Started))
 }
 
 // sourceOf picks the attribution for one row: what the exchange named, else what the handle defaults
@@ -314,21 +498,18 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 	}
 	findings = append(findings, dom.Findings()...)
 
+	// The response modules, over the same captured bytes as the two passes above and at this same
+	// call site, so a module's findings are indexed and stored by exactly the path every other
+	// finding takes — same Occurrence, same exchange, same store. A module returns its own smaller
+	// ResponseFinding shape (no catalog issue to resolve by name, no insertion point), so each is
+	// translated into the check shape below rather than appended directly: a finding that bypassed
+	// coreNewFindingFor would carry no exchange and be unreachable from history.
+	modules := append(c.ResponseModules[:len(c.ResponseModules):len(c.ResponseModules)], c.Scanner.ResponseModules()...)
+	findings = append(findings, moduleFindings(c.Store, ex, modules)...)
+
 	for _, f := range findings {
 		EnrichFinding(f)
-		nf := core.NewFinding{
-			Name:        f.Name,
-			Severity:    core.ParseSeverity(f.Severity),
-			Confidence:  core.ParseConfidence(f.Confidence),
-			Description: f.Description,
-			Remediation: f.Solution,
-			Param:       f.Param,
-			// The dedup target, taken from the exchange in hand rather than resolved later. This is
-			// the path that produces the most duplicates by far — a passive check re-fires on every
-			// response — so it is the one that most needs the store to be able to merge.
-			Target: core.FindingTarget{Host: ex.Host, Port: ex.Port, TLS: ex.TLS, Path: ex.Path},
-		}
-		nf.TaskID = ex.TaskID
+		nf := coreNewFindingFor(f, ex)
 		if ex.Response != nil {
 			nf.Occurrences = []core.Occurrence{{
 				ExchangeID: ex.ID,

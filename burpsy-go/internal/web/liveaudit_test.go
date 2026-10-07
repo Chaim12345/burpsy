@@ -14,6 +14,11 @@ type liveAuditResp struct {
 	Hint     string `json:"hint"`
 	Swept    uint64 `json:"swept"`
 	Findings uint64 `json:"findings"`
+	// Behind, BehindForMs and BatchLimit are the backlog's three numbers (burpsy-react-ui-iosv):
+	// how much is left, how long it has been left, and the admission bound the last tick ran with.
+	Behind      uint64 `json:"behind"`
+	BehindForMs int64  `json:"behind_for_ms"`
+	BatchLimit  uint64 `json:"batch_limit"`
 }
 
 func liveAuditGet(t *testing.T, s *Server) liveAuditResp {

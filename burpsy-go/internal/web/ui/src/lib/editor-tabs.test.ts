@@ -1,0 +1,85 @@
+// The message-editor tab preferences (burpsy-react-ui-t94i): what the store model does, and
+// what the editor wire is. The DOM half (the strip rendering hidden-off and reordered, the
+// settings popover's checkboxes) needs a mounted console; the model rules are worth pinning
+// without one because they decide whether a control exists at all — the failure class this
+// bead was filed on.
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { defaultEditorTabPrefs, moveEditorTab, type EditorTabPrefs, type OptionalEditorTab } from "./store";
+
+const ALL_TABS: OptionalEditorTab[] = ["render", "graphql", "jwt", "params", "headers", "queryparams", "bodyparams", "cookies", "attributes"];
+
+describe("moveEditorTab", () => {
+  test("the first move materialises the default order once, then moves within it", () => {
+    const first = moveEditorTab(defaultEditorTabPrefs, "headers", -1);
+    // headers sits at index 5 by default (render, graphql, jwt, params, protobuf, headers, ...); up
+    // one swaps it with protobuf, while params keeps its slot.
+    expect(first.order.indexOf("headers"), "an operator's first reorder should not have to fight an empty array").toBe(4);
+    expect(first.order.indexOf("protobuf")).toBe(5);
+    expect(first.order.indexOf("params")).toBe(3);
+  });
+
+  test("a move at the edge is a no-op that returns the same order, not a wrap", () => {
+    const base: EditorTabPrefs = { hidden: [], order: [...ALL_TABS] };
+    const up = moveEditorTab(base, "render", -1);
+    expect(up.order, "render cannot move above first place; wrapping it to the end would be the opposite of what the button says").toEqual(ALL_TABS);
+    const down = moveEditorTab(base, "attributes", 1);
+    expect(down.order).toEqual(ALL_TABS);
+  });
+
+  test("hidden state rides along unchanged, because a hidden tab's position is still worth keeping", () => {
+    const base: EditorTabPrefs = { hidden: ["jwt"], order: [] };
+    const moved = moveEditorTab(base, "params", -1);
+    expect(moved.hidden, "a reorder must not silently re-show a tab the operator hid").toEqual(["jwt"]);
+  });
+});
+
+describe("the editor wires the prefs", () => {
+  // Structural, the same style nonprinting.test.ts uses for its DOM half: the wire runs
+  // between the store and a render, and no unit test of moveEditorTab can see it.
+  const editor = readFileSync(join(import.meta.dir, "..", "ui", "editor.tsx"), "utf8");
+
+  test("the five Burp extra tabs are in the strip's view union", () => {
+    for (const view of ["headers", "queryparams", "bodyparams", "cookies", "attributes"]) {
+      expect(editor, `${view} must be a MessageView or it cannot be a tab`).toMatch(new RegExp(`"${view}"`));
+    }
+  });
+
+  test("hidden tabs are filtered out of the strip, so a Show checkbox can actually hide", () => {
+    expect(editor).toMatch(/editorTabs\.hidden\.includes\(tab as OptionalEditorTab\)/);
+  });
+
+  test("the order array reorders the strip rather than decorating it", () => {
+    expect(editor).toMatch(/rank\(a\) - rank\(b\)/);
+  });
+
+  test("the settings popover offers every optional tab with Show checkboxes and Up/Down moves", () => {
+    expect(editor).toMatch(/editor-tabs-settings/);
+    expect(editor).toMatch(/moveEditorTab\(editorTabs, tab, -1\)/);
+    expect(editor).toMatch(/moveEditorTab\(editorTabs, tab, 1\)/);
+  });
+
+  test("the store persists the prefs, so a curated strip survives a reload", () => {
+    const store = readFileSync(join(import.meta.dir, "store.ts"), "utf8");
+    expect(store).toMatch(/editorTabs: state\.editorTabs/);
+  });
+});
+
+describe("the five extra tab views reuse the Inspector's own parsers", () => {
+  // The one rule that makes these tabs honest: they read through the same lib/message parsers
+  // the Inspector does, so the tab and the Inspector can never disagree about the same bytes.
+  const sections = readFileSync(join(import.meta.dir, "..", "ui", "message-sections.tsx"), "utf8");
+
+  test("every view derives from lib/message, not a second parser", () => {
+    expect(sections).toMatch(/headerSpans\(raw\)/);
+    expect(sections).toMatch(/querySpans\(raw\)/);
+    expect(sections).toMatch(/bodyParamSpans\(raw\)/);
+    expect(sections).toMatch(/cookieSpans\(raw\)/);
+    expect(sections).toMatch(/cookiesOf\(parsed\.headers, true\)/);
+    expect(
+      sections.includes("setHeaderAt") || sections.includes("addHeader"),
+      "the tabs are readings, not writers — the Inspector owns the write path",
+    ).toBe(false);
+  });
+});

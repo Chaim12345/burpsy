@@ -90,7 +90,7 @@ func TestRecordFrameProgramGoesThroughTheOneCapturePath(t *testing.T) {
 
 	// The stored request holds the program's exact octets as its body, so nothing was re-encoded on the way
 	// into history.
-	req, err := store.Get(ex.Request)
+	req, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("reading the stored request: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestAConnectionOnlyProgramIsRecordedWithoutInventingAPath(t *testing.T) {
 	if !strings.Contains(*ex.Notes, "host level only") {
 		t.Fatalf("the row must say which decision authorised it: %q", *ex.Notes)
 	}
-	req, err := store.Get(ex.Request)
+	req, err := store.Get(core.MsgOrZero(ex.Request))
 	if err != nil {
 		t.Fatalf("reading the stored request: %v", err)
 	}

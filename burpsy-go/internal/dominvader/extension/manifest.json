@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "burpsy DOM auditor",
+  "version": "0.1.0",
+  "description": "Operator-side DOM taint instrumentation (burpsy-react-ui-wl94): watches a canary through the page's own sources and sinks and reports every flow back to burpsy.",
+  "background": { "service_worker": "sw.js" },
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN",
+      "js": ["config.js", "instrument.js"]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED",
+      "js": ["relay.js"]
+    }
+  ]
+}

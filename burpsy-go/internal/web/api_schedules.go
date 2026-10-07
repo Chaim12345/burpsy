@@ -235,7 +235,7 @@ func (s *Server) registerScheduleKinds() {
 			// rate together, and a saved form almost always carries one.
 			req.RequestsPerSecond = 0
 		}
-		taskID, seeds, err := s.startCrawl(req)
+		taskID, seeds, _, _, err := s.startCrawl(req)
 		if err != nil {
 			return "", err
 		}
@@ -276,7 +276,7 @@ func (s *Server) registerScheduleKinds() {
 		if params.ExchangeID == nil {
 			return "", errors.New("a scheduled audit needs params.exchange_id: the exchange to audit")
 		}
-		cfg, named, err := s.resolveAuditConfig(params.Config)
+		cfg, named, unapplied, err := s.resolveAuditConfig(params.Config)
 		if err != nil {
 			return "", err
 		}
@@ -290,7 +290,7 @@ func (s *Server) registerScheduleKinds() {
 		// as every starter has. The bound that stops it is the audit's own wall-clock budget.
 		go func() {
 			auditCtx := pool.WithLimiter(context.Background(), limiter)
-			s.runAudit(auditCtx, id, cfg, named)
+			s.runAudit(auditCtx, id, cfg, named, unapplied)
 			s.live.notify(changeIssues)
 			s.live.notify(changeDashboard)
 		}()

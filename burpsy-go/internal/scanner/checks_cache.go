@@ -283,7 +283,7 @@ func cacheChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckCachePoi
 // transport-level differential they require.
 func CacheCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
-		nativeDescriptor(cachePoisonIssue, DispatchScopePerUrl, cacheChecksEnabled, checkWebCachePoisoning),
-		nativeDescriptor(cacheDeceptionIssue, DispatchScopePerUrl, cacheChecksEnabled, checkWebCacheDeception),
+		mediumDescriptor(cachePoisonIssue, DispatchScopePerUrl, cacheChecksEnabled, checkWebCachePoisoning),
+		mediumDescriptor(cacheDeceptionIssue, DispatchScopePerUrl, cacheChecksEnabled, checkWebCacheDeception),
 	}
 }

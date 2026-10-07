@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Burp vs burpsy UI structure — from Java source</title>
+<style>
+:root { --bg:#1a1a1a; --fg:#e0e0e0; --border:#333; --burp:#c0392b; --burpsy:#2980b9; --gap:#e67e22; --ok:#27ae60; }
+body { font-family: ui-monospace, monospace; background: var(--bg); color: var(--fg); margin: 0; padding: 20px; font-size: 12px; }
+h1 { font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+h2 { font-size: 14px; margin-top: 30px; }
+h3 { font-size: 12px; margin-top: 20px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 12px 0; }
+.panel { border: 1px solid var(--border); border-radius: 4px; padding: 12px; background: #222; }
+.panel.burp { border-left: 3px solid var(--burp); }
+.panel.burpsy { border-left: 3px solid var(--burpsy); }
+.panel h3 { margin: 0 0 8px; font-size: 12px; }
+.panel.burp h3 { color: var(--burp); }
+.panel.burpsy h3 { color: var(--burpsy); }
+.el { display: inline-block; background: #333; border: 1px solid #555; border-radius: 2px; padding: 1px 5px; margin: 1px; font-size: 10px; white-space: nowrap; }
+.el.btn { background: #4a4a4a; }
+.el.input { background: #2a2a2a; color: #aaa; }
+.el.select { background: #2a2a2a; }
+.el.table { background: #3a3a3a; }
+.el.badge { background: #555; }
+.el.empty { background: #2a2a2a; color: #888; font-style: italic; }
+.gap { border: 1px dashed var(--gap); }
+.match { border: 1px solid var(--ok); }
+.note { color: var(--gap); font-size: 10px; margin-top: 4px; }
+code { background: #333; padding: 0 3px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Burp Suite vs burpsy UI structure</h1>
+<p>Mockups built from <code>/root/burp-re/out/clean/root/*.java</code> (decompiled Burp) vs rendered DOM of burpsy at <code>http://127.0.0.1:18181</code>. Red border = Burp, blue = burpsy. Dashed orange = gap.</p>
+
+<!-- INTRUDER -->
+<h2>Intruder — 5 sub-tabs</h2>
+
+<h3>Positions (<code>Zr7k.java</code> + <code>Zr7h.java</code>)</h3>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Positions</h3>
+<div><span class="el btn">Add §</span> <span class="el btn">Auto §</span> <span class="el btn">Clear §</span></div>
+<div><span class="el">§ marker list</span> <span class="el">request editor</span></div>
+<div><span class="el btn">Find insertion points</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Positions</h3>
+<div><span class="el btn">Find positions</span></div>
+<div><span class="el select">Sniper / Battering ram / Pitchfork / Cluster bomb</span></div>
+<div><span class="el input">base request id</span></div>
+<div><span class="el empty">No base request</span></div>
+<div class="note">⚠ Same panel as all other sub-tabs</div>
+</div>
+</div>
+
+<h3>Payloads (<code>Zija.java</code> + <code>Zr7m.java</code>)</h3>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Payloads</h3>
+<div><span class="el select">Payload type: Simple list / Runtime file / Character substitution / ...</span></div>
+<div><span class="el btn">Load...</span> <span class="el btn">Paste</span> <span class="el btn">Remove</span></div>
+<div><span class="el">Payloads to generate: <code>N</code></span></div>
+<div><span class="el">Payload processing rules</span></div>
+<div><span class="el sub">Grep — Payloads</span> <span class="el sub">Match / replace in list items</span></div>
+<div><span class="el sub">Do illegal UTF-8</span> <span class="el sub">Hex formatting</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Payloads</h3>
+<div><span class="el btn">Find positions</span></div>
+<div><span class="el select">Sniper / Battering ram / Pitchfork / Cluster bomb</span></div>
+<div><span class="el input">base request id</span></div>
+<div><span class="el empty">No base request</span></div>
+<div class="note">⚠ Identical to Positions — no payload-specific controls</div>
+</div>
+</div>
+
+<h3>Resource pool (<code>Zxcq.java</code> + <code>Zh3g.java</code>)</h3>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Resource pool</h3>
+<div><span class="el">Concurrent requests: <code>N</code></span></div>
+<div><span class="el">Delay: <code>N</code> ms</span></div>
+<div><span class="el">With random variations</span></div>
+<div><span class="el">Increase delay in increments of <code>N</code></span></div>
+<div><span class="el btn">Custom resource pool</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Resource pool</h3>
+<div><span class="el btn">Find positions</span></div>
+<div><span class="el select">Sniper / Battering ram / Pitchfork / Cluster bomb</span></div>
+<div><span class="el input">base request id</span></div>
+<div><span class="el empty">No base request</span></div>
+<div class="note">⚠ No resource pool controls at all</div>
+</div>
+</div>
+
+<h3>Settings (<code>Zxoh.java</code>)</h3>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Settings</h3>
+<div><span class="el">Scan details</span></div>
+<div><span class="el">Scope</span></div>
+<div><span class="el">Isolate scan</span></div>
+<div><span class="el">Engine configuration</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Settings</h3>
+<div><span class="el btn">Find positions</span></div>
+<div><span class="el select">Sniper / Battering ram / Pitchfork / Cluster bomb</span></div>
+<div><span class="el input">base request id</span></div>
+<div><span class="el empty">No base request</span></div>
+<div class="note">⚠ No scan settings controls</div>
+</div>
+</div>
+
+<h3>Results (<code>Zr_q.java</code>)</h3>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Results</h3>
+<div><span class="el btn">Results table</span> <span class="el btn">Server responses</span></div>
+<div><span class="el table"># / Status / Error / Timeout / Length / Time / Comment / Total</span></div>
+<div><span class="el">Attack progress bar</span></div>
+<div><span class="el btn">Pause</span> <span class="el btn">Resume</span> <span class="el btn">Stop</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Results</h3>
+<div><span class="el btn">Find positions</span></div>
+<div><span class="el select">Sniper / Battering ram / Pitchfork / Cluster bomb</span></div>
+<div><span class="el input">base request id</span></div>
+<div><span class="el empty">No base request</span></div>
+<div class="note">⚠ No results table, no attack controls</div>
+</div>
+</div>
+
+<!-- REPEATER -->
+<h2>Repeater</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Repeater</h3>
+<div><span class="el btn">+</span> <span class="el btn">×</span> <span class="el">Tab 1 / Tab 2 / ...</span></div>
+<div><span class="el input">Host:</span> <span class="el input">Port:</span> <span class="el select">HTTP/HTTPS</span></div>
+<div><span class="el btn">Send</span> <span class="el btn">Cancel</span></div>
+<div><span class="el">Request editor</span> <span class="el">Response editor</span></div>
+<div><span class="el">Message inspector</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Repeater</h3>
+<div><span class="el btn">New request</span></div>
+<div><span class="el empty">No request open</span></div>
+<div class="note">Editor exists but not reachable from empty state</div>
+</div>
+</div>
+
+<!-- LOGGER -->
+<h2>Logger</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Logger</h3>
+<div><span class="el btn">Clear log</span> <span class="el btn">Refresh</span></div>
+<div><span class="el input">Filter</span></div>
+<div><span class="el table">Time / Tool / Host / Method / Path / Status / Code / Length / Comment</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Logger</h3>
+<div><span class="el btn">Clear log</span> <span class="el btn">Refresh</span></div>
+<div><span class="el input">Search</span></div>
+<div><span class="el select">All tools (per-tool counts)</span></div>
+<div><span class="el select">Any method</span> <span class="el select">Any status</span></div>
+<div><span class="el table">Age / Tool / Authority / Request / Status / Length / Time / Error</span></div>
+<div><span class="el">0 of 0 shown</span> <span class="el badge">0 dropped</span></div>
+<div class="note">burpsy has per-tool capture toggles + dropped counters — Burp doesn't</div>
+</div>
+</div>
+
+<!-- INTERCEPT -->
+<h2>Intercept</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Intercept</h3>
+<div><span class="el btn">Intercept is on</span> / <span class="el btn">Intercept is off</span></div>
+<div><span class="el btn">Forward</span> <span class="el btn">Drop</span> <span class="el btn">Action ▾</span></div>
+<div><span class="el btn">Comment</span> <span class="el btn">Highlight</span></div>
+<div><span class="el table"># / Dir / Method / Host / Path / Status / Held / Len</span></div>
+<div><span class="el">Request viewer</span> <span class="el">Response viewer</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Intercept</h3>
+<div><span class="el badge">wired</span> <span class="el btn">switch</span></div>
+<div><span class="el select">All messages / Requests only / Responses only / WebSocket → server / WebSocket → client</span></div>
+<div><span class="el btn">Queue</span> <span class="el btn">Interception rules</span></div>
+<div><span class="el table"># / Dir / Method / Host / Path / Status / Held / Len</span></div>
+<div class="note">burpsy has explicit WebSocket direction filters — Burp doesn't</div>
+</div>
+</div>
+
+<!-- MATCH AND REPLACE -->
+<h2>Match and Replace</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Match and Replace</h3>
+<div><span class="el btn">Add</span> <span class="el btn">Edit</span> <span class="el btn">Remove</span> <span class="el btn">Up</span> <span class="el btn">Down</span></div>
+<div><span class="el table">Enabled / Type / Match / Replace / Comment / Scope</span></div>
+<div><span class="el">HTTP match and replace rules</span></div>
+<div><span class="el">WebSocket match and replace rules</span></div>
+<div><span class="el">Only apply to in-scope items</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Match & Replace</h3>
+<div><span class="el badge">saved</span> <span class="el btn">Revert</span> <span class="el btn">Save rules</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">Rules</span> <span class="el btn">Add rule</span> <span class="el btn">switch</span></div>
+<div><span class="el badge">0 of 0 enabled</span></div>
+<div><span class="el empty">No rules</span></div>
+<div><span class="el">Draft test</span> <span class="el select">Request rules / Response rules</span></div>
+<div class="note">burpsy's "Draft test" panel is a feature Burp lacks</div>
+</div>
+</div>
+
+<!-- SCOPE -->
+<h2>Scope</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Scope</h3>
+<div><span class="el btn">Add</span> <span class="el btn">Edit</span> <span class="el btn">Remove</span></div>
+<div><span class="el">Include in scope</span> <span class="el">Exclude from scope</span></div>
+<div><span class="el">Use advanced scope control</span></div>
+<div><span class="el">Save to library</span></div>
+<div><span class="el">URL scope</span></div>
+<div><span class="el">Use suite scope [defined in Target tab]</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Scope</h3>
+<div><span class="el badge">restricted</span> <span class="el btn">Clear scope</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">Add scope rule</span> <span class="el select">Include / Exclude</span></div>
+<div><span class="el input">host</span> <span class="el input">port</span> <span class="el input">path</span> <span class="el select">Any / HTTP / HTTPS</span></div>
+<div><span class="el btn">Add rule</span></div>
+<div><span class="el">Rules</span> <span class="el btn">Remove rule</span></div>
+<div><span class="el table">Kind / Host / Port / Protocol / Path prefix</span></div>
+<div class="note">Burp's "advanced scope control" and "Save to library" missing</div>
+</div>
+</div>
+
+<!-- SITE MAP -->
+<h2>Site map</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Site map</h3>
+<div><span class="el btn">Crawl</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">Site map URL view</span> / <span class="el">Crawl paths view</span></div>
+<div><span class="el">Passively scan this branch</span></div>
+<div><span class="el">Passively scan selected branches</span></div>
+<div><span class="el">Site map items added: <code>N</code></span></div>
+<div><span class="el">Responses queued: <code>N</code></span></div>
+<div><span class="el">Responses processed: <code>N</code></span></div>
+<div><span class="el">Site map is read-only</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Site map</h3>
+<div><span class="el badge">0 nodes</span> <span class="el badge">0 exchanges</span></div>
+<div><span class="el btn">Crawl</span> <span class="el btn">Refresh</span></div>
+<div><span class="el input">Filter by segment or path</span></div>
+<div><span class="el empty">No traffic captured yet</span></div>
+<div><span class="el empty">No path selected</span></div>
+<div class="note">Missing crawl paths view, passive scan branch controls, read-only indicator</div>
+</div>
+</div>
+
+<!-- COLLABORATOR -->
+<h2>Collaborator</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Collaborator</h3>
+<div><span class="el btn">Copy payload</span> <span class="el btn">Poll now</span></div>
+<div><span class="el">Payloads to generate: <code>N</code></span></div>
+<div><span class="el">Include Collaborator server location</span></div>
+<div><span class="el">Burp Collaborator enables you to test whether you can induce an application to interact with an external service via DNS, HTTP, or SMTP.</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Collaborator</h3>
+<div><span class="el badge">not configured</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">Interaction channel</span> <span class="el btn">Copy payload</span> <span class="el btn">Poll now</span></div>
+<div><span class="el empty">No collaborator channel</span></div>
+<div><span class="el">Blind XSS callbacks</span> <span class="el btn">Copy script tag</span></div>
+<div><span class="el empty">No blind-XSS listener</span></div>
+<div class="note">No configuration flow — Burp has "Configure interactsh"</div>
+</div>
+</div>
+
+<!-- EXTENDER -->
+<h2>Extender</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Extender</h3>
+<div><span class="el btn">Add</span> <span class="el btn">Edit</span> <span class="el btn">Remove</span></div>
+<div><span class="el">Extensions list</span></div>
+<div><span class="el">Extension details</span></div>
+<div><span class="el">Output / Errors tabs</span></div>
+<div><span class="el">installing / installed</span></div>
+<div><span class="el">Extension JMenus</span></div>
+<div><span class="el">Hot key handlers</span></div>
+</div>
+<div class="panel burpsy gap">
+<h3>burpsy — Extender</h3>
+<div><span class="el btn">Refresh</span></div>
+<div><span class="el">Allowlist</span></div>
+<div><span class="el empty">No plugin is allowlisted</span></div>
+<div class="note">Stub — no add/remove/configure UI</div>
+</div>
+</div>
+
+<!-- SESSION -->
+<h2>Session</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Session</h3>
+<div><span class="el btn">Add</span> <span class="el btn">Edit</span> <span class="el btn">Remove</span></div>
+<div><span class="el">Session handling rules</span></div>
+<div><span class="el">Login rules</span></div>
+<div><span class="el">Run login macro</span></div>
+<div><span class="el">Cookie jar</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Session</h3>
+<div><span class="el badge">wired</span> <span class="el btn">New rule</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">Login rules</span> <span class="el badge">0 configured</span></div>
+<div><span class="el empty">No session rules</span></div>
+<div><span class="el btn">New rule</span></div>
+<div><span class="el">Log in again</span> <span class="el input">username</span> <span class="el input">password</span></div>
+<div><span class="el btn">Add header</span> <span class="el btn">Run login now</span></div>
+<div><span class="el">Cookie jar</span> <span class="el btn">Refresh jar</span></div>
+<div><span class="el empty">No cookies to show</span></div>
+<div class="note">"New rule" button doesn't open a dialog in empty state</div>
+</div>
+</div>
+
+<!-- DECODER -->
+<h2>Decoder</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Decoder (utility, not a tab)</h3>
+<div><span class="el select">Decode / Encode</span></div>
+<div><span class="el select">Hex / Base64 / URL / HTML / Binary / Gzip / ...</span></div>
+<div><span class="el">Input / Output text areas</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Decoder (top-level tab)</h3>
+<div><span class="el badge">0 B in</span></div>
+<div><span class="el btn">Text</span> <span class="el btn">Hex</span> <span class="el btn">Clear all</span> <span class="el btn">Run pipeline</span></div>
+<div><span class="el">Transform pipeline</span></div>
+<div><span class="el btn">Decode</span> <span class="el btn">Encode</span> <span class="el btn">Hash</span></div>
+<div><span class="el select">smart detect / url / html / base64 / base64url / hex / jwt / ascii</span></div>
+<div class="note">burpsy's pipeline-based decoder is more structured than Burp's single-shot</div>
+</div>
+</div>
+
+<!-- DASHBOARD -->
+<h2>Dashboard</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Dashboard</h3>
+<div><span class="el">Event log</span></div>
+<div><span class="el">Site map</span></div>
+<div><span class="el">Logger</span></div>
+<div><span class="el">Live crawl view</span></div>
+<div><span class="el">Live audit</span></div>
+<div><span class="el">Live passive crawl</span></div>
+<div><span class="el">New scan</span></div>
+<div><span class="el">Task execution is paused</span></div>
+<div><span class="el">No proxy listeners are currently running</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Dashboard</h3>
+<div><span class="el">Exchanges</span> <span class="el">Capture store</span> <span class="el">Running tasks</span> <span class="el">Coverage gaps</span></div>
+<div><span class="el">critical / high / medium / low / info findings</span></div>
+<div><span class="el">Coverage: Issues / Passive checks / Live audit / Captured traffic / Tasks</span></div>
+<div><span class="el">Requests sent by burpsy</span></div>
+<div><span class="el">Tool events</span></div>
+<div><span class="el">Tasks: New scan / New live task</span></div>
+<div><span class="el">Traffic sources: crawl / intruder / proxy / repeater / scanner / unattributed</span></div>
+<div class="note">burpsy's coverage accounting is more honest — Burp hides incomplete work</div>
+</div>
+</div>
+
+<!-- SETTINGS -->
+<h2>Settings</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Settings (menu, not tab)</h3>
+<div><span class="el">Project options</span></div>
+<div><span class="el">Scope</span></div>
+<div><span class="el">Crawling</span></div>
+<div><span class="el">Application login</span></div>
+<div><span class="el">configFunctionScope</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Settings (top-level tab)</h3>
+<div><span class="el">Proxy</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">TLS passthrough</span> <span class="el btn">Refresh</span> <span class="el input">host pattern</span> <span class="el btn">Add rule</span></div>
+<div><span class="el">Resource pools</span> <span class="el badge">0 pools</span> <span class="el btn">New pool</span> <span class="el btn">Refresh</span></div>
+<div><span class="el">What each tool honours</span></div>
+<div><span class="el table">Tool / Route / Max concurrent / Delay / Throttling / Why not</span></div>
+<div class="note">burpsy's Settings is tool-limits only; Burp's is comprehensive project options</div>
+</div>
+</div>
+
+<!-- DISCOVER -->
+<h2>Discover</h2>
+<div class="grid">
+<div class="panel burp">
+<h3>Burp — Discover (under Target → Site map)</h3>
+<div><span class="el">Discover content</span></div>
+<div><span class="el">ffuf-based path sweep</span></div>
+</div>
+<div class="panel burpsy">
+<h3>burpsy — Discover (top-level tab)</h3>
+<div><span class="el input">Search</span></div>
+<div><span class="el badge">69 entries</span></div>
+<div><span class="el btn">What burpsy does not do</span></div>
+<div><span class="el btn">Query language</span></div>
+<div><span class="el btn">BCheck syntax</span></div>
+<div><span class="el btn">Keyboard — Send to</span></div>
+<div><span class="el btn">Keyboard — Proxy</span></div>
+<div><span class="el btn">Keyboard — Message editor</span></div>
+<div><span class="el btn">Keyboard — Navigation</span></div>
+<div><span class="el btn">Keyboard — Appearance and help</span></div>
+<div><span class="el btn">Shipped documentation</span></div>
+<div class="note">burpsy's Discover is a documentation hub; Burp's is a content discovery tool</div>
+</div>
+</div>
+
+<!-- SUMMARY -->
+<h2>Summary</h2>
+<table>
+<tr><th>Metric</th><th>Count</th></tr>
+<tr><td>Total burpsy pages</td><td>30</td></tr>
+<tr><td>Pages matching Burp</td><td>22</td></tr>
+<tr><td>Pages with functional gaps</td><td>5</td></tr>
+<tr><td>Burp tools burpsy is missing</td><td>3 (Scanner, Burp AI, Replayer)</td></tr>
+<tr><td>burpsy tabs Burp doesn't have as tabs</td><td>3 (Session, Decoder, Discover)</td></tr>
+<tr><td>High-severity gaps</td><td>1 (Intruder sub-tabs identical)</td></tr>
+<tr><td>Medium-severity gaps</td><td>4</td></tr>
+<tr><td>Low-severity gaps</td><td>2</td></tr>
+</table>
+
+</body>
+</html>

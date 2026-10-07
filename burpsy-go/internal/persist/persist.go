@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
@@ -23,6 +24,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
@@ -49,6 +51,26 @@ func (s *Store) Path() string {
 		return ""
 	}
 	return s.path
+}
+
+// ProjectName is the human name of this project file (burpsy-react-ui-je3y).
+//
+// One settings row, not its own table: the name is a single string that travels with the
+// database file, which is exactly what a "project" is here — burpsy has no separate project
+// container, the -db file IS the project, and the name is the one field of it a human wants
+// to see in a title bar. An absent row is the empty string, which the caller renders as
+// "Unnamed" rather than storing a placeholder — a stored "Unnamed" would be indistinguishable
+// from a real name the operator chose to type.
+func (s *Store) ProjectName() (string, error) {
+	return s.getSetting("project.name")
+}
+
+// SetProjectName stores the project name. The name is not blank here only because the API
+// refuses blank before it reaches this method; the store itself is the wrong place to enforce
+// an operator-facing rule, and a future caller (a rename from a script) may want different
+// validation than the console's dialog.
+func (s *Store) SetProjectName(name string) error {
+	return s.setSetting("project.name", name)
 }
 
 // Open opens (creating if necessary) the database at path and ensures the
@@ -174,7 +196,18 @@ CREATE TABLE IF NOT EXISTS scope_rules_v3 (
 	pattern     TEXT NOT NULL,
 	port        INTEGER,
 	path_prefix TEXT,
-	protocol    TEXT
+	protocol    TEXT,
+	enabled     INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS scope_libraries (
+	name       TEXT PRIMARY KEY,
+	rules_json TEXT NOT NULL,
+	saved_at   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS scan_config_library (
+	name     TEXT PRIMARY KEY,
+	doc      TEXT NOT NULL,
+	saved_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS matchreplace_rules (
 	ord      INTEGER PRIMARY KEY,
@@ -190,14 +223,21 @@ CREATE TABLE IF NOT EXISTS settings (
 	value TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS session_rules (
-	id           INTEGER PRIMARY KEY,
-	name         TEXT NOT NULL,
-	enabled      INTEGER NOT NULL,
-	scope_hosts  TEXT NOT NULL,
-	macro        TEXT NOT NULL,
-	validity     TEXT,
-	max_attempts INTEGER NOT NULL,
-	extractions  TEXT
+	id             INTEGER PRIMARY KEY,
+	name           TEXT NOT NULL,
+	enabled        INTEGER NOT NULL,
+	scope_hosts    TEXT NOT NULL,
+	scope_params   TEXT NOT NULL DEFAULT '',
+	scope_mode     TEXT NOT NULL DEFAULT '',
+	scope_path     TEXT NOT NULL DEFAULT '',
+	scope_port     INTEGER,
+	scope_protocol TEXT NOT NULL DEFAULT '',
+	scope_tools    TEXT NOT NULL DEFAULT '',
+	macro          TEXT NOT NULL,
+	validity       TEXT,
+	max_attempts   INTEGER NOT NULL,
+	extractions    TEXT,
+	actions        TEXT
 );
 CREATE TABLE IF NOT EXISTS organizer_items (
 	id        INTEGER PRIMARY KEY,
@@ -205,6 +245,11 @@ CREATE TABLE IF NOT EXISTS organizer_items (
 	title     TEXT NOT NULL,
 	note      TEXT NOT NULL,
 	highlight TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS organizer_collections (
+	id   INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	note TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS platform_auth (
 	ord      INTEGER PRIMARY KEY,
@@ -231,7 +276,9 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	status      INTEGER NOT NULL,
 	started_ms  INTEGER NOT NULL,
 	duration_ms INTEGER NOT NULL,
-	note        TEXT NOT NULL
+	note        TEXT NOT NULL,
+	comment     TEXT NOT NULL DEFAULT '',
+	highlight   TEXT NOT NULL DEFAULT ''
 );
 `
 	if _, err := s.db.Exec(schema); err != nil {
@@ -275,6 +322,94 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("session_rules", "ord", "INTEGER"); err != nil {
 		return err
 	}
+	// session_rules gained scope_params for Burp's parameter scope (burpsy-react-ui-9hip):
+	// a rule that updates a named parameter across requests — the canonical CSRF-token rule —
+	// must apply only where that parameter exists. Empty is the unrestricted rule every row
+	// written before this column carried, which is the only safe default: reading a legacy
+	// rule as parameter-restricted would silently stop every existing login macro from
+	// matching.
+	if err := s.addColumn("session_rules", "scope_params", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// session_rules gained the four URL-scope arms (burpsy-react-ui-6db6): the mode radio and the
+	// custom scope's path prefix, port and protocol. 7nh2 landed those arms in the model, the
+	// matcher, the validator and the wire but not here, so a rule saved as "Use custom scope,
+	// path prefix /api" came back after a restart matching every path and every port — the
+	// operator's stated *exclusion* silently gone, which is the dangerous direction: a rule
+	// confined to /api would replay a login macro at /logout.
+	//
+	// Empty is the unrestricted reading every row written before these columns carried, and it is
+	// the only safe default for the same reason scope_params' is: a legacy row must not come back
+	// restricted to a path or a port nobody stated. scope_port is the one nullable column because
+	// NULL means "no port arm", which an empty string cannot express for a numeric field.
+	for _, col := range []struct{ name, decl string }{
+		{"scope_mode", "TEXT NOT NULL DEFAULT ''"},
+		{"scope_path", "TEXT NOT NULL DEFAULT ''"},
+		{"scope_port", "INTEGER"},
+		{"scope_protocol", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumn("session_rules", col.name, col.decl); err != nil {
+			return err
+		}
+	}
+	// session_rules gained scope_tools for Burp's tools scope (so3): the tools a rule applies to.
+	// A JSON array in one column rather than a join table, because the list is an unordered set of
+	// names read whole or not at all and never queried across rules — the same reasoning scope_hosts
+	// already followed, and a second table would be a second place for it to be half-written.
+	// Empty is the unrestricted rule every row written before this column carried, which is the only
+	// safe default: reading a legacy rule as restricted to some tool would silently stop it firing.
+	if err := s.addColumn("session_rules", "scope_tools", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// session_rules gained `actions` (burpsy-react-ui-ayi): the ordered list of things a rule does,
+	// which replaced "check validity, then always replay the macro" as the only shape a rule could
+	// have. A JSON array in one column for the reason scope_tools is: the list is read whole or not
+	// at all and is never queried across rules.
+	//
+	// **Empty means "this row predates the column", and that is load-bearing.** The columns beside it
+	// (macro, validity, max_attempts) still describe such a rule completely, and an empty actions
+	// column is the signal the loader leaves the rule's list empty for session.Coordinator.RestoreRule
+	// to materialise — the one door every rule enters through, so a migrated rule and a freshly-typed
+	// one are converted by the same code rather than by two implementations of the same rule.
+	//
+	// The conversion is not written back by the *loader*: doing it here would make the load path and
+	// the AddRule path two places that decide what an untouched rule looks like, and they would drift.
+	// Once restored, the rule is saved with its list, which is correct — by then it has been through
+	// the door and is, in fact, a rule with actions.
+	if err := s.addColumn("session_rules", "actions", "TEXT"); err != nil {
+		return err
+	}
+	// exchanges gained the four earlier-stage message ids (burpsy-react-ui-c05), so a Match & Replace
+	// rewrite or an intercept edit stays comparable against the bytes the peer actually sent after a
+	// restart. NULL means "this stage was not retained" — which is both "nothing differed" and "this
+	// row predates the columns", and the two read the same way on the way back in: core.Exchange's
+	// VariantFor falls through to the next stage, so a legacy row simply has one view, which is what
+	// it has always had. Restoring a NULL as anything else — pointing the original at the recorded
+	// bytes, say — would make every legacy exchange claim a comparison that was never kept.
+	//
+	// The columns hold message ids rather than bytes, for the reason every message reference in this
+	// schema does: the bytes live once, in the segment log or in `messages`, and a second copy here
+	// would be the third place the same payload is stored.
+	for _, col := range []struct{ name, decl string }{
+		{"request_original_msg", "INTEGER"},
+		{"request_auto_msg", "INTEGER"},
+		{"response_original_msg", "INTEGER"},
+		{"response_auto_msg", "INTEGER"},
+	} {
+		if err := s.addColumn("exchanges", col.name, col.decl); err != nil {
+			return err
+		}
+	}
+	// exchanges gained user_edited: the operator modified this item by hand (Burp's history
+	// "Edited" column, burpsy-react-ui-sd0d). A column rather than arithmetic over the four stage
+	// ids beside it, because those say what the bytes became while this says who changed them — the
+	// stages are taken above the hold and several automatic rewrites run below it, so "a stage was
+	// retained" is not the same fact. NOT NULL DEFAULT 0 so a row written before the column existed
+	// reads back as "nobody edited this", which is the only safe reading: the alternative would
+	// mark every legacy row as hand-modified, which is the bug this column exists to fix.
+	if err := s.addColumn("exchanges", "user_edited", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	// exchanges gained duration_us so that "fast" and "never measured" stop being the same row.
 	// duration_ms is a whole-millisecond count, so a sub-millisecond exchange stored 0 — exactly what an
 	// exchange nobody timed stores. NULL here means unmeasured and a number means measured, including
@@ -299,11 +434,43 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("tool_log", "response_len", "INTEGER"); err != nil {
 		return err
 	}
+	// tool_log gained comment for operator annotations on tool rows. NULL reads back as "".
+	if err := s.addColumn("tool_log", "comment", "TEXT"); err != nil {
+		return err
+	}
+	// tool_log gained highlight for the same reason: the colour tag, sharing the
+	// organizer's vocabulary. NULL reads back as "" (no highlight).
+	if err := s.addColumn("tool_log", "highlight", "TEXT"); err != nil {
+		return err
+	}
+	// tool_log gained exchange_id so a restored row keeps its link to the traffic-store exchange its
+	// bytes live under — Logger's message viewer resolves request/response through it. Nullable for the
+	// same reason response_len is: NULL means no linked exchange (a transport failure, a whole-run row,
+	// or anything written before this column existed), and a viewer must show that as "no bytes to
+	// show", not as exchange 0 — the stores are position-is-the-id counters from zero, so 0 is a real
+	// exchange.
+	if err := s.addColumn("tool_log", "exchange_id", "INTEGER"); err != nil {
+		return err
+	}
 	// exchanges gained highlight for the same reason notes did: an operator annotation, not traffic,
 	// so it lives beside notes rather than in its own table. NULL and "" both read back as "" (no
 	// highlight) — a legacy row written before this column existed never has an opinion either way, so
 	// there is nothing to distinguish it from an exchange explicitly cleared.
 	if err := s.addColumn("exchanges", "highlight", "TEXT"); err != nil {
+		return err
+	}
+	// organizer_items gained status for the user-applied workflow status (Burp's New / In progress /
+	// Postponed / Done / Ignored). NULL reads back as "new": a legacy row was saved before the field
+	// existed, and "the operator never triaged this item" is exactly what "new" means — so a restored
+	// pre-status item shows up in the same untriaged state it was in, rather than as some invented
+	// default that looks like a decision.
+	if err := s.addColumn("organizer_items", "status", "TEXT"); err != nil {
+		return err
+	}
+	// organizer_items gained collection so an item can say which collection it sits in. 0 means
+	// the inbox — which is what every legacy row is, because collections did not exist when it was
+	// written and the inbox is where Burp's docs say messages appear before anyone organises them.
+	if err := s.addColumn("organizer_items", "collection", "INTEGER"); err != nil {
 		return err
 	}
 	// exchanges gained source so HTTP history can keep tool-originated sends (Repeater, Intruder,
@@ -340,6 +507,20 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	if err := s.addColumn("exchanges", "title", "TEXT"); err != nil {
 		return err
 	}
+	// exchanges gained request_params so the History "Parameterized requests" filter can mean what
+	// Burp's does (burpsy-react-ui-7py5). It counts the query string AND a form body, which is the
+	// half the path-only filter could not see because a history row carries no request body.
+	//
+	// NULLABLE, and NOT NULL DEFAULT 0 would be the wrong shape here for a reason the sibling columns
+	// do not share: for them a legacy row's zero is the honest reading (an unmeasured duration, no
+	// annotation, no source). For this one, zero means "certainly no parameters" — and a row written
+	// before the column existed was certainly NOT examined for parameters. Reading it as zero would
+	// keep it out of the filter and report a clean answer about a request nobody looked at, which is
+	// the same overclaim as an unreadable body counting zero. NULL reads back as -1, "not computed",
+	// and the filter treats a -1 as unknown rather than as none.
+	if err := s.addColumn("exchanges", "request_params", "INTEGER"); err != nil {
+		return err
+	}
 	// findings gained a target and a param set, both for deduplication (core.FindingStore.Add). The
 	// target is the second half of the dedup key, so without it a restored finding cannot attract new
 	// occurrences after a restart — it would start a second finding beside itself. params is the set
@@ -369,6 +550,54 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// exist, and after a reload nothing related the two. NULL on a legacy row reads back as 0, which
 	// is the same "nothing tracked it" the in-memory zero already means.
 	if err := s.addColumn("findings", "task_id", "INTEGER"); err != nil {
+		return err
+	}
+	// confirm is the DOM dynamic tier's machine verdict (m97j): promoted/retired/unavailable/
+	// unsupported-source, NULL for every finding the tier never saw. Carried to disk for the
+	// same reason task_id is: a verdict that survives only in memory means a confirmed DOM
+	// finding reverts to tentative on reload, and the issues list would contradict the log.
+	if err := s.addColumn("findings", "confirm", "TEXT"); err != nil {
+		return err
+	}
+	// Triage columns (burpsy-react-ui-pwd): the operator's severity/confidence override, the
+	// false-positive mark and a note must survive a restart exactly like the finding they modify.
+	// severity_override is NULL when the engine's own severity stands; false_positive defaults to 0
+	// so a legacy row reads as not-a-false-positive without a rewrite.
+	if err := s.addColumn("findings", "severity_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "confidence_override", "INTEGER"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "false_positive", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.addColumn("findings", "comment", "TEXT"); err != nil {
+		return err
+	}
+	// merged_count (burpsy-react-ui-oorl): how many observations a keep_existing merge folded in.
+	// Nullable rather than DEFAULT 0, so a row written before the count existed is distinguishable
+	// from a finding that genuinely never merged — see LoadFindings.
+	if err := s.addColumn("findings", "merged_count", "INTEGER"); err != nil {
+		return err
+	}
+	// evidence (burpsy-react-ui-cx31/8j0d): the redacted excerpt a check quoted. Core has carried it
+	// since cx31, but without a column it was gone after a restart — a leaked-key finding would come
+	// back saying a key leaked and no longer which one.
+	if err := s.addColumn("findings", "evidence", "TEXT"); err != nil {
+		return err
+	}
+	// merge_key: the producer's dedup identity (7tc1), so a restored finding is re-indexed under the
+	// key it was filed by rather than its path.
+	if err := s.addColumn("findings", "merge_key", "TEXT"); err != nil {
+		return err
+	}
+	// scope_rules_v3 gained enabled for the per-rule disable switch (burpsy-react-ui-1xb).
+	// NOT NULL with a default of 1 because ALTER TABLE cannot add a NOT NULL column without
+	// one, and 1 is the only safe value: every row written before this column existed was an
+	// active rule, and reading one back as disabled would silently shrink an engagement's
+	// scope across a restart.
+	if err := s.addColumn("scope_rules_v3", "enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
 		return err
 	}
 	return nil
@@ -471,6 +700,33 @@ func (s *Store) SaveMessage(m *core.StoredMessage) {
 // means a build older than this column still reads a sane row out of the same database, and it costs
 // four bytes; dropping it would silently turn every exchange into a zero-duration one over there. Which
 // column a *reader* trusts is decided in LoadExchanges.
+// requestParamValue is the one place the "not computed" reading is spelled, shared by the writer and
+// the reader so the two cannot disagree about what -1 means.
+//
+// core.Exchange.RequestParams is 0 or more, and -1 is the sentinel for a row that was never examined.
+// It lives in persist rather than in core because only persistence can produce it: a row this build
+// wrote always carries a real count, and the exchange it came from was built at the capture seam.
+const requestParamsUnknown = -1
+
+// requestParamValue maps an in-memory count onto the column. A negative count cannot occur at the
+// capture seam, so it is written as NULL rather than as a negative number a reader would have to
+// interpret.
+func requestParamValue(n int) any {
+	if n < 0 {
+		return nil
+	}
+	return n
+}
+
+// requestParamValueFromScan is the inverse: NULL becomes the unknown sentinel, and a stored count
+// becomes itself.
+func requestParamValueFromScan(v sql.NullInt64) int {
+	if !v.Valid {
+		return requestParamsUnknown
+	}
+	return int(v.Int64)
+}
+
 func (s *Store) SaveExchange(ex *core.Exchange) {
 	related, err := json.Marshal(ex.Related)
 	if err != nil {
@@ -491,12 +747,15 @@ func (s *Store) SaveExchange(ex *core.Exchange) {
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO exchanges
 		 (id, request_msg, response_msg, host, port, tls, method, path, status,
-		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ex.ID, uint64(ex.Request), nullMsg(ex.Response), ex.Host, int(ex.Port),
+		  response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
+		  request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited, request_params)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ex.ID, uint64(core.MsgOrZero(ex.Request)), nullMsg(ex.Response), ex.Host, int(ex.Port),
 		boolInt(ex.TLS), ex.Method, ex.Path, status, ex.ResponseLen,
 		ex.StartedMs, ex.Duration.Millis(), nullStr(ex.Notes), int(ex.Protocol), related, durationUs,
-		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title)
+		ex.Highlight, string(ex.Source), ex.Mime, cookies, ex.Title,
+		nullMsg(ex.RequestOriginal), nullMsg(ex.RequestAuto), nullMsg(ex.ResponseOriginal), nullMsg(ex.ResponseAuto),
+		boolInt(ex.UserEdited), requestParamValue(ex.RequestParams))
 	if err != nil {
 		s.log("exchange", err)
 	}
@@ -594,7 +853,8 @@ func (s *Store) shapeFor(id uint64, encoded, raw []byte, dir int, onDisk bool,
 func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 	rows, err := s.db.Query(
 		`SELECT id, request_msg, response_msg, host, port, tls, method, path, status,
-		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title
+		        response_len, started_ms, duration_ms, notes, protocol, related, duration_us, highlight, source, mime, cookies, title,
+		        request_original_msg, request_auto_msg, response_original_msg, response_auto_msg, user_edited, request_params
 		 FROM exchanges ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -618,11 +878,26 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		var mime sql.NullString
 		var cookies []byte
 		var title sql.NullString
+		// The four stage ids, NULL-tolerant for the columns' own sake: a row written before they
+		// existed scans NULL, which reads as "this stage was not retained" — the same answer a row
+		// written by this build for an unmodified exchange carries. See the migrate note.
+		var reqOriginal, reqAuto, respOriginal, respAuto sql.NullInt64
+		var userEdited int
+		// -1 rather than 0 for a row written before the column existed: see the migrate note. A legacy
+		// row was never examined for parameters, and 0 would be a claim about it that nobody made.
+		var requestParams sql.NullInt64
 		if err := rows.Scan(&ex.ID, &request, &response, &ex.Host, &port, &tls,
 			&ex.Method, &ex.Path, &status, &ex.ResponseLen, &ex.StartedMs,
-			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title); err != nil {
+			&durationMs, &notes, &protocol, &related, &durationUs, &highlight, &source, &mime, &cookies, &title,
+			&reqOriginal, &reqAuto, &respOriginal, &respAuto, &userEdited, &requestParams); err != nil {
 			return nil, err
 		}
+		ex.UserEdited = userEdited != 0
+		ex.RequestParams = requestParamValueFromScan(requestParams)
+		ex.RequestOriginal = msgIDPtr(reqOriginal)
+		ex.RequestAuto = msgIDPtr(reqAuto)
+		ex.ResponseOriginal = msgIDPtr(respOriginal)
+		ex.ResponseAuto = msgIDPtr(respAuto)
 		ex.Highlight = highlight.String
 		// NullString rather than string for the same reason source uses one: a row written before the
 		// column existed scans as NULL, and scanning NULL into a string is an error that would fail the
@@ -649,9 +924,19 @@ func (s *Store) LoadExchanges() ([]*core.Exchange, error) {
 		default:
 			ex.Duration = core.UnmeasuredDuration()
 		}
-		ex.Request = core.MsgId(request)
-		if v, ok := response.(int64); ok {
-			msg := core.MsgId(v)
+		// The response column is NULLable, so a NULL there is an absence the model can hold. The
+		// request column is NOT NULL -- SQLite cannot relax that with ALTER TABLE, and rebuilding the
+		// table to widen one column is a migration this change does not justify -- so a request-less
+		// row persists as 0.
+		//
+		// That 0 is AMBIGUOUS on disk: it is also a real message id. The model disambiguates on the
+		// way IN (a tunnel arrives with a nil Request) and cannot on the way OUT, because the column
+		// does not say which it was. So a restored row is asked which: if message 0 is not in the
+		// restored set, nothing can have meant it, and the row has no request. If it IS there, the
+		// column is read as naming it -- which is the conservative direction, because the alternative
+		// is asserting an absence the disk cannot support. burpsy-react-ui-wtov.
+		if response, ok := response.(int64); ok {
+			msg := core.MsgId(response)
 			ex.Response = &msg
 		}
 		ex.Port = uint16(port)
@@ -705,14 +990,30 @@ func (s *Store) SaveFinding(f *core.Finding) {
 	if f.Target.TLS {
 		tls = 1
 	}
+	// severity_override is written as NULL whenever no override stands, so a finding whose override
+	// is cleared reads back as NULL rather than as a stale value.
+	var sevOverride interface{}
+	if f.SeverityOverride != nil {
+		sevOverride = int(*f.SeverityOverride)
+	}
+	var confOverride interface{}
+	if f.ConfidenceOverride != nil {
+		confOverride = int(*f.ConfidenceOverride)
+	}
+	fp := 0
+	if f.FalsePositive {
+		fp = 1
+	}
 	_, err = s.db.Exec(
 		`INSERT OR REPLACE INTO findings
 		 (id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		  target_host, target_port, target_tls, target_path, params, task_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  target_host, target_port, target_tls, target_path, params, task_id,
+		  severity_override, confidence_override, false_positive, comment, confirm, merged_count, evidence, merge_key)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, f.Name, int(f.Severity), int(f.Confidence), f.Description,
 		f.Remediation, occ, ins, f.Timestamp, f.Param,
-		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID)
+		f.Target.Host, int(f.Target.Port), tls, f.Target.Path, params, f.TaskID,
+		sevOverride, confOverride, fp, f.Comment, f.Confirm, f.MergedCount, f.Evidence, f.MergeKey)
 	if err != nil {
 		s.log("finding", err)
 	}
@@ -722,7 +1023,8 @@ func (s *Store) SaveFinding(f *core.Finding) {
 func (s *Store) LoadFindings() ([]*core.Finding, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, severity, confidence, description, remediation, occurrences, inserted, timestamp, param,
-		        target_host, target_port, target_tls, target_path, params, task_id
+		        target_host, target_port, target_tls, target_path, params, task_id,
+		        severity_override, confidence_override, false_positive, comment, confirm, merged_count, evidence, merge_key
 		 FROM findings ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -737,15 +1039,39 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 		// zero target is exactly the right reading of that: unknown, so not eligible to merge.
 		var tHost, tPath sql.NullString
 		var tPort, tTLS, taskID sql.NullInt64
+		var confirmCol sql.NullString
+		// Triage columns are nullable: severity_override/confidence_override are NULL while the
+		// engine's own values stand, and every row written before they existed has NULLs for all
+		// four, which must load as "no triage" rather than fail the whole restore.
+		var sevOverride, confOverride, fp sql.NullInt64
+		var comment sql.NullString
+		var merged sql.NullInt64
+		var evidence, mergeKey sql.NullString
 		if err := rows.Scan(&f.ID, &f.Name, &sev, &conf, &f.Description, &f.Remediation, &occ, &ins, &ts, &f.Param,
-			&tHost, &tPort, &tTLS, &tPath, &params, &taskID); err != nil {
+			&tHost, &tPort, &tTLS, &tPath, &params, &taskID,
+			&sevOverride, &confOverride, &fp, &comment, &confirmCol, &merged, &evidence, &mergeKey); err != nil {
 			return nil, err
 		}
 		// NULL on a legacy row becomes 0, which is what an untracked finding already means in memory.
 		f.TaskID = uint64(taskID.Int64)
+		f.Confirm = confirmCol.String
+		f.Evidence = evidence.String
+		f.MergeKey = mergeKey.String
 		f.Severity = core.Severity(sev)
 		f.Confidence = core.Confidence(conf)
 		f.Timestamp = uint64(ts)
+		if sevOverride.Valid {
+			over := core.Severity(sevOverride.Int64)
+			f.SeverityOverride = &over
+		}
+		if confOverride.Valid {
+			over := core.Confidence(confOverride.Int64)
+			f.ConfidenceOverride = &over
+		}
+		f.FalsePositive = fp.Int64 != 0
+		if comment.Valid {
+			f.Comment = comment.String
+		}
 		f.Target = core.FindingTarget{
 			Host: tHost.String,
 			Port: uint16(tPort.Int64),
@@ -774,12 +1100,49 @@ func (s *Store) LoadFindings() ([]*core.Finding, error) {
 			}
 			f.Inserted = inserted
 		}
+		if merged.Valid {
+			f.MergedCount = int(merged.Int64)
+		} else if len(f.Occurrences) > 1 {
+			// A row from before the count existed. Every merge then appended the observation's
+			// occurrence, so occurrences beyond the first are the best available reading — exact for
+			// the passive path, which files one occurrence per observation, and an estimate only for a
+			// producer that filed several at once.
+			f.MergedCount = len(f.Occurrences) - 1
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()
 }
 
+// DeleteFinding drops one finding's mirror row. Wired as core.FindingStore's delete sink
+// (SetDeleteSink): the in-memory store is authoritative, but without this a finding deleted in the
+// UI walks straight back in on the next restart, restored from the row this file kept.
+func (s *Store) DeleteFinding(id uint64) {
+	if _, err := s.db.Exec(`DELETE FROM findings WHERE id = ?`, id); err != nil {
+		s.log("finding", err)
+	}
+}
+
 // ---- Scope -------------------------------------------------------------------------------------
+
+// SaveScopeDropOutOfScope persists Burp's "Drop all out-of-scope requests" switch, a scope
+// setting rather than a rule — it changes egress behaviour, not membership, so it rides the
+// settings table like every other toggle rather than scope_rules_v3.
+func (s *Store) SaveScopeDropOutOfScope(on bool) {
+	if err := s.setSetting("scope.drop_out_of_scope", fmt.Sprint(on)); err != nil {
+		s.log("scope drop_out_of_scope", err)
+	}
+}
+
+// LoadScopeDropOutOfScope restores the switch. Absent reads as off, the seed both core.NewScope
+// and a fresh Burp project use; a missing row is a first run, not a corruption.
+func (s *Store) LoadScopeDropOutOfScope() bool {
+	v, err := s.getSetting("scope.drop_out_of_scope")
+	if err != nil || v == "" {
+		return false
+	}
+	return v == "true"
+}
 
 // SaveScope replaces the scope rule set (small table; delete-and-reinsert is fine).
 //
@@ -831,8 +1194,8 @@ func (s *Store) SaveScope(rules []*core.ScopeRule) {
 		}
 		kind := scopeKindName(r.Kind)
 		if _, err := s.db.Exec(
-			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol) VALUES (?, ?, ?, ?, ?, ?)`,
-			i, kind, r.Pattern, port, pathPrefix, protocol); err != nil {
+			`INSERT INTO scope_rules_v3 (ord, kind, pattern, port, path_prefix, protocol, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			i, kind, r.Pattern, port, pathPrefix, protocol, boolInt(r.Enabled)); err != nil {
 			// Returning here would leave the durable scope narrower *or* wider than the live one with no
 			// record of which rules made it, so every remaining rule is still attempted and every failure
 			// is named.
@@ -879,11 +1242,11 @@ func scopeKindName(k core.ScopeRuleKind) string {
 // what stop an upgrade from failing open. Pinned by TestLoadScopeFallsBackToAnEmptyV2AndAPopulatedLegacyTable
 // and TestAV2EraDatabaseStillRestoresItsRules.
 func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
-	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol FROM scope_rules_v3 ORDER BY ord`)
+	rows, err := s.db.Query(`SELECT kind, pattern, port, path_prefix, protocol, enabled FROM scope_rules_v3 ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
-	out, err := scanScopeRows(rows, true, true)
+	out, err := scanScopeRows(rows, true, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -895,7 +1258,7 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err = scanScopeRows(v2rows, true, false)
+	out, err = scanScopeRows(v2rows, true, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -907,7 +1270,7 @@ func (s *Store) LoadScope() ([]*core.ScopeRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanScopeRows(legacy, false, false)
+	return scanScopeRows(legacy, false, false, false)
 }
 
 // checkLegacyScopeDivergence reports a legacy scope row that this build did not write.
@@ -985,7 +1348,7 @@ func scopeTriple(kind, pattern string, port *uint16) string {
 // rule from the pattern alone. A rule restricted to one port therefore came back matching every port on
 // that host — silently authorising traffic the operator had not authorised, for an include rule, and
 // silently excluding traffic they had allowed, for an exclude one.
-func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRule, error) {
+func scanScopeRows(rows *sql.Rows, withPath, hasProtocol, hasEnabled bool) ([]*core.ScopeRule, error) {
 	defer rows.Close()
 	var out []*core.ScopeRule
 	for rows.Next() {
@@ -993,7 +1356,17 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRul
 		var port sql.NullInt64
 		var pathPrefix sql.NullString
 		var protocol sql.NullString
-		if err := rows.Scan(&kind, &pattern, &port, &pathPrefix, &protocol); err != nil {
+		// enabled is scanned into a raw int rather than sql.NullInt64: older generations never
+		// select it, so the caller's hasEnabled flag decides whether the column exists at all,
+		// and the column itself is NOT NULL DEFAULT 1 wherever it does.
+		var enabled int
+		var scanArgs []any
+		if hasEnabled {
+			scanArgs = []any{&kind, &pattern, &port, &pathPrefix, &protocol, &enabled}
+		} else {
+			scanArgs = []any{&kind, &pattern, &port, &pathPrefix, &protocol}
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
 			return nil, err
 		}
 		// kind is stored as a string ("include"/"exclude") for readability.
@@ -1002,6 +1375,12 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRul
 			k = core.ScopeExclude
 		}
 		r := core.NewScopeRule(k, pattern)
+		// A row from an older generation (no enabled column, or a NULL the column predates)
+		// reads back active: that is what the rule was when it was written.
+		r.Enabled = true
+		if hasEnabled && enabled == 0 {
+			r.Enabled = false
+		}
 		if port.Valid && port.Int64 > 0 && port.Int64 <= 65535 {
 			p := uint16(port.Int64)
 			r.Port = &p
@@ -1019,10 +1398,400 @@ func scanScopeRows(rows *sql.Rows, withPath, hasProtocol bool) ([]*core.ScopeRul
 	return out, rows.Err()
 }
 
+// ---- Scope libraries (burpsy-react-ui-e365) ------------------------------------------------------
+//
+// Burp's scope panel carries "Save to library": a rule set is named, stored, and loaded back later —
+// across projects, and across the "clear it and try something else" step that otherwise costs an
+// operator the scope they spent an afternoon getting right. burpsy had only the live rule list, so
+// the only way back to a previous scope was to retype it.
+//
+// A library is stored as one JSON document per name rather than as rows in a fourth scope table. The
+// rejected alternative was a scope_library_rules table keyed (name, ord), mirroring scope_rules_v3:
+// it would make a library queryable by rule, which nothing wants, and it would make every future
+// column on a scope rule a migration on two tables that must not drift — and drift between two
+// tables that both describe authorisation is precisely the failure scope_rules_v3 exists because of.
+// A library is never matched against traffic; it is only ever read back whole and handed to the live
+// scope, so a blob is the honest shape. What the blob costs is that a corrupt document cannot be
+// partially recovered — which is why LoadScopeLibrary refuses by name instead of returning what it
+// could parse: an empty core.Scope is default-allow, so a library that silently loaded as "no rules"
+// would widen authorisation to everything at the exact moment the operator believed they had
+// narrowed it.
+
+// ScopeLibraryRule is one rule as a library stores it: the same arms scope_rules_v3 holds, in the
+// same lowercase vocabulary scopeKindName writes, so a library round-trips through exactly what the
+// live table can hold and nothing is lost between the two. Deliberately not core.ScopeRule — that
+// type carries compiled regular expressions and is free to grow unexported state, and a stored
+// document has to keep meaning the same thing after it does.
+type ScopeLibraryRule struct {
+	Kind       string  `json:"kind"`
+	Pattern    string  `json:"pattern"`
+	Port       *uint16 `json:"port,omitempty"`
+	PathPrefix *string `json:"path_prefix,omitempty"`
+	Protocol   *string `json:"protocol,omitempty"`
+	// Enabled is written always, not omitempty, because a disabled rule must come back disabled and
+	// omitempty would drop exactly that state from the document. Note the consequence of the plain
+	// bool: an absent field unmarshals to false, i.e. disabled. Nothing written by SaveScopeLibrary
+	// ever omits it, so that path is unreachable today — and it is the safe direction anyway, since a
+	// rule that comes back inactive narrows nothing it should not.
+	Enabled bool `json:"enabled"`
+}
+
+// ScopeLibrary is one entry of the listing: what a library is called, how many rules it holds and
+// when it was written. The rule bodies are deliberately absent — the list exists to be shown in a
+// picker, and sending every rule of every library to render a row count is bytes nobody reads.
+type ScopeLibrary struct {
+	Name string `json:"name"`
+	// Rules is the count, not the rules. Read from the stored document at save time rather than
+	// re-parsed per listing, so listing a corrupt library still names it instead of failing the
+	// whole list — see LoadScopeLibraries.
+	Rules   int   `json:"rules"`
+	SavedAt int64 `json:"saved_at"`
+}
+
+// scopeLibraryRules converts live rules into the stored shape.
+func scopeLibraryRules(rules []*core.ScopeRule) []ScopeLibraryRule {
+	out := make([]ScopeLibraryRule, 0, len(rules))
+	for _, r := range rules {
+		if r == nil {
+			continue
+		}
+		out = append(out, ScopeLibraryRule{
+			Kind:       scopeKindName(r.Kind),
+			Pattern:    r.Pattern,
+			Port:       r.Port,
+			PathPrefix: r.PathPrefix,
+			Protocol:   r.Protocol,
+			Enabled:    r.Enabled,
+		})
+	}
+	return out
+}
+
+// SaveScopeLibrary stores rules under name, replacing any library already called that, and reports
+// whether it replaced one.
+//
+// # Why this returns an error where SaveScope logs and continues
+//
+// SaveScope is write-through: the live core.Scope is still authoritative in memory, so a failed
+// INSERT costs a restart, not the operator's belief about what just happened — logging and carrying
+// on is right there. A library has no live copy. If this swallowed a failure the page would toast
+// "Saved to library" for a library that does not exist, and the operator would clear the scope
+// believing they could get it back. So the write path that has no second copy reports, and the one
+// that has a second copy logs.
+//
+// Overwrite is allowed rather than refused, because refusing would make "save the scope again after
+// editing it" — the ordinary second save — an error the operator has to work around by inventing a
+// second name. It is reported instead: `replaced` reaches the toast, so an overwrite is something
+// the operator is told about rather than something they discover later.
+func (s *Store) SaveScopeLibrary(name string, rules []*core.ScopeRule) (replaced bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is nowhere to save a scope library")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, errors.New("a scope library needs a name, so it can be found again")
+	}
+	body, err := json.Marshal(scopeLibraryRules(rules))
+	if err != nil {
+		return false, fmt.Errorf("serialise scope library %q: %w", name, err)
+	}
+	// Existence is read in the same call rather than left to the caller: two round trips would let a
+	// concurrent save land between them and make `replaced` a statement about a moment that has passed.
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scope_libraries WHERE name = ?`, name).Scan(&existing); err != nil {
+		return false, fmt.Errorf("look up scope library %q: %w", name, err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO scope_libraries (name, rules_json, saved_at) VALUES (?, ?, ?)`,
+		name, string(body), time.Now().UnixMilli()); err != nil {
+		return false, fmt.Errorf("save scope library %q: %w", name, err)
+	}
+	return existing > 0, nil
+}
+
+// LoadScopeLibraries lists every stored library, newest first.
+//
+// A library whose document cannot be parsed is still listed, with a rule count of -1 rather than 0.
+// Dropping it from the list would hide a name that exists — the operator would then save over it by
+// accident, or wonder where it went — and reporting 0 would be indistinguishable from an empty scope,
+// which is the one number that must never be guessed here. -1 is a count no real library can have, so
+// a caller that shows it cannot mistake it for a rule set.
+func (s *Store) LoadScopeLibraries() ([]ScopeLibrary, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("no database is open, so there are no scope libraries to list")
+	}
+	rows, err := s.db.Query(`SELECT name, rules_json, saved_at FROM scope_libraries ORDER BY saved_at DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ScopeLibrary{}
+	for rows.Next() {
+		var name, body string
+		var savedAt int64
+		if err := rows.Scan(&name, &body, &savedAt); err != nil {
+			return nil, err
+		}
+		count := -1
+		var parsed []ScopeLibraryRule
+		if err := json.Unmarshal([]byte(body), &parsed); err == nil {
+			count = len(parsed)
+		}
+		out = append(out, ScopeLibrary{Name: name, Rules: count, SavedAt: savedAt})
+	}
+	return out, rows.Err()
+}
+
+// LoadScopeLibrary reads one library back. found is false when no library carries that name, which is
+// a 404 at the endpoint; err is a document that exists and cannot be read, which is a 500 naming the
+// library and the parse failure.
+//
+// The two are kept apart because they mean opposite things to an operator: "there is no library
+// called that" is a typo, and "the library called that is unreadable" is data loss they need to know
+// about before they clear the scope they still have. Neither may become an empty rule list — see the
+// section header: an empty core.Scope is default-allow.
+func (s *Store) LoadScopeLibrary(name string) (rules []ScopeLibraryRule, found bool, err error) {
+	if s == nil || s.db == nil {
+		return nil, false, errors.New("no database is open, so there is no scope library to read")
+	}
+	name = strings.TrimSpace(name)
+	var body string
+	switch err := s.db.QueryRow(`SELECT rules_json FROM scope_libraries WHERE name = ?`, name).Scan(&body); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, false, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("read scope library %q: %w", name, err)
+	}
+	var parsed []ScopeLibraryRule
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		return nil, true, fmt.Errorf("scope library %q cannot be read: %w", name, err)
+	}
+	return parsed, true, nil
+}
+
+// DeleteScopeLibrary removes a library and reports whether there was one to remove.
+//
+// The boolean exists so a delete of a name that is not there can be refused rather than reported as a
+// success: an operator who mistypes a name and is told "deleted" believes a library is gone that is
+// still on disk, and will not look for it again.
+func (s *Store) DeleteScopeLibrary(name string) (deleted bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is no scope library to delete")
+	}
+	name = strings.TrimSpace(name)
+	res, err := s.db.Exec(`DELETE FROM scope_libraries WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete scope library %q: %w", name, err)
+	}
+	return n > 0, nil
+}
+
+// ---- Scan configuration library -----------------------------------------------------------------
+//
+// Burp's Configuration library: named scan configurations an operator saves, clones, renames and
+// deletes, and picks by name when launching a scan. The value is one opaque JSON document per name —
+// the web layer owns its shape (the resolved AuditConfig, so a restore reproduces exactly what the
+// operator last saw, not a sequence of edits) exactly as SaveScanConfig owns "scanconfig.overrides".
+//
+// The shipped built-in configurations are NOT stored here: they live in scanner.BuiltInConfigs and
+// are read-only, so the library is only the operator's own copies. That is what keeps a shipped name
+// unshadowable — the web layer refuses to save one under a shipped name, and the store never holds a
+// row that could compete with the built-in of the same name.
+//
+// # Why these return an error where SaveScanConfig logs
+//
+// Same split as the scope library: an override written to "scanconfig.overrides" still has its live
+// copy in the running scanner, so a failed write costs a restart. A saved configuration has no live
+// copy. If a failed save were swallowed the page would say "Saved" for a configuration that does not
+// exist, and the operator would rename or delete believing a durable copy is there. So this path
+// reports.
+
+// ScanConfigLibraryEntry is one stored configuration for the listing: its name, the opaque document,
+// and when it was written. The web layer decodes doc; the store treats it as bytes.
+type ScanConfigLibraryEntry struct {
+	Name    string
+	Doc     string
+	SavedAt int64
+}
+
+// SaveScanConfigLibrary stores doc under name, replacing any configuration already called that, and
+// reports whether it replaced one.
+//
+// Overwrite is allowed rather than refused, for the same reason SaveScopeLibrary allows it: re-saving
+// a configuration after editing it is the ordinary second save, and refusing would force a second
+// name. It is reported through `replaced` instead. Refusing a save onto a *shipped* name is the web
+// layer's job, because only it knows the built-in names — this store has no opinion about them.
+func (s *Store) SaveScanConfigLibrary(name, doc string) (replaced bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is nowhere to save a scan configuration")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false, errors.New("a saved scan configuration needs a name, so it can be found again")
+	}
+	var existing int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM scan_config_library WHERE name = ?`, name).Scan(&existing); err != nil {
+		return false, fmt.Errorf("look up scan configuration %q: %w", name, err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT OR REPLACE INTO scan_config_library (name, doc, saved_at) VALUES (?, ?, ?)`,
+		name, doc, time.Now().UnixMilli()); err != nil {
+		return false, fmt.Errorf("save scan configuration %q: %w", name, err)
+	}
+	return existing > 0, nil
+}
+
+// LoadScanConfigLibraries lists every saved configuration, newest first, so the picker orders the
+// operator's most recent work at the top the way the scope library does.
+func (s *Store) LoadScanConfigLibraries() ([]ScanConfigLibraryEntry, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("no database is open, so there are no saved scan configurations to list")
+	}
+	rows, err := s.db.Query(`SELECT name, doc, saved_at FROM scan_config_library ORDER BY saved_at DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ScanConfigLibraryEntry{}
+	for rows.Next() {
+		var e ScanConfigLibraryEntry
+		if err := rows.Scan(&e.Name, &e.Doc, &e.SavedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// LoadScanConfigLibrary reads one saved configuration back. found is false when no configuration
+// carries that name — a 404 at the endpoint; err is a row that exists and cannot be read. The two are
+// kept apart because "there is none called that" is a typo and "the one called that is unreadable" is
+// data loss the operator needs to know about before they overwrite it.
+func (s *Store) LoadScanConfigLibrary(name string) (doc string, found bool, err error) {
+	if s == nil || s.db == nil {
+		return "", false, errors.New("no database is open, so there is no saved scan configuration to read")
+	}
+	name = strings.TrimSpace(name)
+	switch err := s.db.QueryRow(`SELECT doc FROM scan_config_library WHERE name = ?`, name).Scan(&doc); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("read scan configuration %q: %w", name, err)
+	}
+	return doc, true, nil
+}
+
+// DeleteScanConfigLibrary removes a saved configuration and reports whether there was one to remove,
+// so a delete of a mistyped name is refused rather than reported as a success.
+func (s *Store) DeleteScanConfigLibrary(name string) (deleted bool, err error) {
+	if s == nil || s.db == nil {
+		return false, errors.New("no database is open, so there is no saved scan configuration to delete")
+	}
+	name = strings.TrimSpace(name)
+	res, err := s.db.Exec(`DELETE FROM scan_config_library WHERE name = ?`, name)
+	if err != nil {
+		return false, fmt.Errorf("delete scan configuration %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("delete scan configuration %q: %w", name, err)
+	}
+	return n > 0, nil
+}
+
+// ---- Interception startup state -----------------------------------------------------------------
+
+// SaveInterceptStartup persists Burp's "Default Proxy interception state"
+// (user_options.misc.enable_proxy_interception_at_startup and friends): what the
+// intercept switch should read when a server starts. Three modes, Burp's three:
+// "on", "off", and "restore" — the last reuses the last live state, which is
+// recorded here on every toggle so a restart can honour it.
+func (s *Store) SaveInterceptStartup(mode string) {
+	if err := s.setSetting("intercept.startup_mode", mode); err != nil {
+		s.log("intercept startup mode", err)
+	}
+}
+
+// LoadInterceptStartup reads the mode. Absent reads as "off", the seed both the
+// engine and every existing session used — a preference nobody wrote must not
+// turn interception on by surprise.
+func (s *Store) LoadInterceptStartup() string {
+	v, err := s.getSetting("intercept.startup_mode")
+	if err != nil || v == "" {
+		return "off"
+	}
+	switch v {
+	case "on", "off", "restore":
+		return v
+	}
+	return "off"
+}
+
+// SaveInterceptLive records the intercept switch's current state, for the
+// "restore" startup mode. Written by the enable endpoint alongside the live
+// toggle, best-effort like every other persistence sink.
+func (s *Store) SaveInterceptLive(on bool) {
+	if err := s.setSetting("intercept.live", fmt.Sprint(on)); err != nil {
+		s.log("intercept live state", err)
+	}
+}
+
+// LoadInterceptLive reads the last live state. Absent reads as off.
+func (s *Store) LoadInterceptLive() bool {
+	v, err := s.getSetting("intercept.live")
+	if err != nil || v == "" {
+		return false
+	}
+	return v == "true"
+}
+
+// ---- Automatic backup configuration -------------------------------------------------------------
+
+// SaveBackupConfig persists the automatic-backup settings (burpsy-react-ui-jkvb): Burp's
+// configPanelAutomaticProjectBackup interval and "delete backup file on clean shutdown". The value
+// is the web layer's own JSON blob — stored opaquely here, the same way a schedule's per-kind Params
+// are, so this package stays free of the backup feature's shape. The recurring backup itself is an
+// ordinary persisted schedule of kind "backup"; what cannot live there is the delete-on-shutdown
+// flag and the directory it applies to, which is what this carries.
+func (s *Store) SaveBackupConfig(configJSON string) {
+	if err := s.setSetting("backup.config", configJSON); err != nil {
+		s.log("backup config", err)
+	}
+}
+
+// LoadBackupConfig reads the stored blob, or ("", false) when none was ever written — the web layer
+// reads that as "automatic backup off", the seed that matches a project that never configured one.
+func (s *Store) LoadBackupConfig() (string, bool) {
+	v, err := s.getSetting("backup.config")
+	if err != nil || v == "" {
+		return "", false
+	}
+	return v, true
+}
+
 // ---- Match & Replace ---------------------------------------------------------------------------
 
-// SaveMatchRules replaces the match & replace rule set and content-length flag.
-func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, updateContentLength bool) {
+// MatchRuleSettings is the set-wide state that travels with the Match & Replace rule list.
+//
+// A struct rather than one more return value, and the reason is the shape of the mistake a
+// growing return tuple invites: LoadMatchRules used to answer three values, and the caller
+// destructured all three positionally. A fourth — which is what the in-scope restriction
+// added — is a fourth chance to write the flags in the wrong order, and both are bools, so
+// the compiler would accept a swap and the panel would then report the wrong switch.
+type MatchRuleSettings struct {
+	// UpdateContentLength is whether a body rewrite fixes the Content-Length header.
+	UpdateContentLength bool
+	// InScopeOnly is Burp's "Only apply to in-scope items" (config key
+	// `proxy.match_replace_disable_out_of_scope`). See matchreplace.RuleSet.SetInScopeOnly.
+	InScopeOnly bool
+}
+
+// SaveMatchRules replaces the match & replace rule set and its set-wide switches.
+func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, settings MatchRuleSettings) {
 	if _, err := s.db.Exec(`DELETE FROM matchreplace_rules`); err != nil {
 		s.log("matchreplace clear", err)
 		return
@@ -1038,16 +1807,24 @@ func (s *Store) SaveMatchRules(rules []*matchreplace.Rule, updateContentLength b
 			return
 		}
 	}
-	if err := s.setSetting("matchreplace.update_content_length", fmt.Sprint(updateContentLength)); err != nil {
+	if err := s.setSetting("matchreplace.update_content_length", fmt.Sprint(settings.UpdateContentLength)); err != nil {
 		s.log("matchreplace flag", err)
+	}
+	if err := s.setSetting("matchreplace.in_scope_only", fmt.Sprint(settings.InScopeOnly)); err != nil {
+		s.log("matchreplace scope flag", err)
 	}
 }
 
-// LoadMatchRules restores the rule set (recompiling regexes) and the flag.
-func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
+// LoadMatchRules restores the rule set (recompiling regexes) and its set-wide switches.
+//
+// An absent switch row reads as off, which is the engine's own default and Burp's: a project
+// saved before the in-scope restriction existed must not come back with rules silently
+// narrowed to whatever scope happens to be loaded at the time. Absent-means-off is the only
+// answer that cannot turn a restoration into a behaviour change.
+func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, MatchRuleSettings, error) {
 	rows, err := s.db.Query(`SELECT target, category, match, replace, comment, enabled FROM matchreplace_rules ORDER BY ord`)
 	if err != nil {
-		return nil, false, err
+		return nil, MatchRuleSettings{}, err
 	}
 	defer rows.Close()
 	var rules []*matchreplace.Rule
@@ -1056,20 +1833,28 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, bool, error) {
 		var match, replace, comment string
 		var enabled int
 		if err := rows.Scan(&target, &cat, &match, &replace, &comment, &enabled); err != nil {
-			return nil, false, err
+			return nil, MatchRuleSettings{}, err
 		}
 		r, err := matchreplace.NewRule(matchreplace.Target(target), matchreplace.Category(cat), match, replace, comment)
 		if err != nil {
-			return nil, false, err
+			return nil, MatchRuleSettings{}, err
 		}
 		r.Enabled = enabled != 0
 		rules = append(rules, r)
 	}
-	flag := false
-	if v, err := s.getSetting("matchreplace.update_content_length"); err == nil && v != "" {
-		flag = v == "true"
-	}
-	return rules, flag, nil
+	return rules, MatchRuleSettings{
+		UpdateContentLength: s.loadFlag("matchreplace.update_content_length"),
+		InScopeOnly:         s.loadFlag("matchreplace.in_scope_only"),
+	}, nil
+}
+
+// loadFlag reads one boolean settings row, treating an absent or unreadable row as off.
+//
+// The one place that decides what a missing flag means, so a flag added later cannot answer
+// the question differently by accident: true is exactly the string "true".
+func (s *Store) loadFlag(key string) bool {
+	v, err := s.getSetting(key)
+	return err == nil && v == "true"
 }
 
 // ---- Network authentication: platform credentials and client certificates ----------------------
@@ -1197,6 +1982,14 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if err != nil {
 			hosts = nil
 		}
+		params, err := json.Marshal(r.ScopeParams)
+		if err != nil {
+			params = nil
+		}
+		tools, err := json.Marshal(r.ScopeTools)
+		if err != nil {
+			tools = nil
+		}
 		macro, err := json.Marshal(r.Steps)
 		if err != nil {
 			macro = nil
@@ -1209,11 +2002,28 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 		if len(r.Extractions) > 0 {
 			exts, _ = json.Marshal(r.Extractions)
 		}
+		// Omitted when the list is empty, which only a rule that never went through the coordinator's
+		// door can be — the caller saves Coordinator.AllRules(), and every rule installed there has
+		// had its list materialised. Writing an empty array instead would be indistinguishable on the
+		// way back in from a NULL, and the loader is written to treat both as "pre-action row".
+		var actions []byte
+		if len(r.Actions) > 0 {
+			actions, _ = json.Marshal(r.Actions)
+		}
+		// The URL-scope arms are written as their own columns rather than folded into the hosts
+		// blob: they are a different axis (origin vs URL-shape), and a single blob would make a
+		// legacy row's *absence* of arms indistinguishable from a row that states none.
+		var scopePort interface{}
+		if r.ScopePort != nil {
+			scopePort = int64(*r.ScopePort)
+		}
 		if _, err := s.db.Exec(
 			`INSERT OR REPLACE INTO session_rules
-			 (id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions, ord)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, macro, validity, r.MaxAttempts, exts, i); err != nil {
+			 (id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
+			  scope_tools, macro, validity, max_attempts, extractions, actions, ord)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			int64(r.ID), r.Name, boolInt(r.Enabled), hosts, params, r.ScopeMode, r.ScopePathPrefix, scopePort,
+			r.ScopeProtocol, tools, macro, validity, r.MaxAttempts, exts, actions, i); err != nil {
 			s.log("session rule", err)
 			return
 		}
@@ -1229,7 +2039,8 @@ func (s *Store) SaveSessionRules(rules []*session.SessionRule) {
 // order column existed: such a row was written in id order, so id is the honest fallback for it.
 func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, enabled, scope_hosts, macro, validity, max_attempts, extractions
+		`SELECT id, name, enabled, scope_hosts, scope_params, scope_mode, scope_path, scope_port, scope_protocol,
+		        scope_tools, macro, validity, max_attempts, extractions, actions
 		 FROM session_rules ORDER BY COALESCE(ord, id), id`)
 	if err != nil {
 		return nil, err
@@ -1240,16 +2051,38 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 		r := &session.SessionRule{}
 		var id int64
 		var enabled int
-		var hosts, macro, validity, exts []byte
+		var hosts, params, macro, validity, exts, tools, actions []byte
 		var maxAttempts int
-		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &macro, &validity, &maxAttempts, &exts); err != nil {
+		// Nullable on purpose: NULL is "no port arm", which is a fact about the rule, not a
+		// number. A legacy row reads back NULL here and the rule keeps the unrestricted port.
+		var scopePort *int64
+		if err := rows.Scan(&id, &r.Name, &enabled, &hosts, &params, &r.ScopeMode, &r.ScopePathPrefix,
+			&scopePort, &r.ScopeProtocol, &tools, &macro, &validity, &maxAttempts, &exts, &actions); err != nil {
 			return nil, err
 		}
 		r.ID = session.RuleID(id)
 		r.Enabled = enabled != 0
 		r.MaxAttempts = maxAttempts
+		// A legacy row's empty column reads as no tools scope, which is unrestricted — the same
+		// fallback scope_hosts and scope_params take, for the same reason.
+		if len(tools) > 0 {
+			if err := json.Unmarshal(tools, &r.ScopeTools); err != nil {
+				return nil, err
+			}
+		}
+		if scopePort != nil {
+			port := uint16(*scopePort)
+			r.ScopePort = &port
+		}
 		if len(hosts) > 0 {
 			if err := json.Unmarshal(hosts, &r.ScopeHosts); err != nil {
+				return nil, err
+			}
+		}
+		// A NULL from a legacy-generation row (or the DEFAULT '' as []byte("")?) reads as
+		// unrestricted: empty params is the meaning every pre-9hip rule carries.
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &r.ScopeParams); err != nil {
 				return nil, err
 			}
 		}
@@ -1281,6 +2114,16 @@ func (s *Store) LoadSessionRules() ([]*session.SessionRule, error) {
 			}
 			r.Extractions = parsed
 		}
+		// NULL or empty leaves the list empty on purpose, and the rule then runs exactly what
+		// macro/validity/max_attempts describe once RestoreRule has materialised it — see the column's
+		// migration note above for why the conversion is not done here.
+		if len(actions) > 0 {
+			var parsed []*session.Action
+			if err := json.Unmarshal(actions, &parsed); err != nil {
+				return nil, err
+			}
+			r.Actions = parsed
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -1295,19 +2138,59 @@ func (s *Store) SaveOrganizer(items []organizer.Item) {
 		return
 	}
 	for _, it := range items {
+		// An empty Status is stored as the empty string and reads back as "new": LoadOrganizer
+		// treats "" and NULL alike, and the column is nullable, so a NULL written by an
+		// earlier build lands in the same state. That is the honest fallback — a caller that
+		// never set a status never triaged the item — as opposed to inventing a default that
+		// would look like a decision.
 		if _, err := s.db.Exec(
-			`INSERT OR REPLACE INTO organizer_items (id, exchange, title, note, highlight)
-			 VALUES (?, ?, ?, ?, ?)`,
-			it.ID, it.Exchange, it.Title, it.Note, it.Highlight); err != nil {
+			`INSERT OR REPLACE INTO organizer_items (id, exchange, title, note, highlight, status, collection)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			it.ID, it.Exchange, it.Title, it.Note, it.Highlight, string(it.Status), it.Collection); err != nil {
 			s.log("organizer item", err)
 			return
 		}
 	}
 }
 
+// SaveOrganizerCollections replaces the collection registry. Items carry their collection id
+// separately (organizer_items.collection), so this table holds only the group's own identity.
+func (s *Store) SaveOrganizerCollections(collections []organizer.Collection) {
+	if _, err := s.db.Exec(`DELETE FROM organizer_collections`); err != nil {
+		s.log("organizer collections clear", err)
+		return
+	}
+	for _, c := range collections {
+		if _, err := s.db.Exec(
+			`INSERT OR REPLACE INTO organizer_collections (id, name, note) VALUES (?, ?, ?)`,
+			c.ID, c.Name, c.Note); err != nil {
+			s.log("organizer collection", err)
+			return
+		}
+	}
+}
+
+// LoadOrganizerCollections restores the collection registry, ordered by id.
+func (s *Store) LoadOrganizerCollections() ([]organizer.Collection, error) {
+	rows, err := s.db.Query(`SELECT id, name, note FROM organizer_collections ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []organizer.Collection
+	for rows.Next() {
+		c := organizer.Collection{}
+		if err := rows.Scan(&c.ID, &c.Name, &c.Note); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // LoadOrganizer restores organizer items.
 func (s *Store) LoadOrganizer() ([]organizer.Item, error) {
-	rows, err := s.db.Query(`SELECT id, exchange, title, note, highlight FROM organizer_items ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id, exchange, title, note, highlight, status, collection FROM organizer_items ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1315,8 +2198,20 @@ func (s *Store) LoadOrganizer() ([]organizer.Item, error) {
 	var out []organizer.Item
 	for rows.Next() {
 		it := organizer.Item{}
-		if err := rows.Scan(&it.ID, &it.Exchange, &it.Title, &it.Note, &it.Highlight); err != nil {
+		// status is nullable: NULL and "" both mean "never triaged", which is what StatusNew
+		// is for. A value that is not one of the five valid statuses is also read as "new"
+		// rather than passed through — a status nobody defined is a wire/storage fault, and
+		// rendering it would present an operator a state they cannot set or filter on.
+		var status *string
+		var collection int
+		if err := rows.Scan(&it.ID, &it.Exchange, &it.Title, &it.Note, &it.Highlight, &status, &collection); err != nil {
 			return nil, err
+		}
+		it.Collection = collection
+		if status != nil && organizer.ValidStatus(organizer.Status(*status)) {
+			it.Status = organizer.Status(*status)
+		} else {
+			it.Status = organizer.StatusNew
 		}
 		out = append(out, it)
 	}
@@ -1333,12 +2228,18 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 	if e.ResponseLen != nil {
 		responseLen = int64(*e.ResponseLen)
 	}
+	// Same for the exchange link: NULL is "no linked exchange", and 0 is exchange 0, which is a real
+	// row in a position-is-the-id store.
+	var exchangeID any
+	if e.Exchange != nil {
+		exchangeID = int64(*e.Exchange)
+	}
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO tool_log
-		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight, exchange_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, int(e.Tool), e.Host, int(e.Port), boolInt(e.TLS), e.Method, e.Path,
-		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen)
+		int(e.Status), e.StartedMs, e.DurationMs, e.Note, responseLen, e.Comment, e.Highlight, exchangeID)
 	if err != nil {
 		s.log("tool_log", err)
 	}
@@ -1351,7 +2252,7 @@ func (s *Store) SaveToolLog(e *toollog.Entry) {
 // the exact claim this field was added to stop making: that the response was empty.
 func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	rows, err := s.db.Query(
-		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len
+		`SELECT id, tool, host, port, tls, method, path, status, started_ms, duration_ms, note, response_len, comment, highlight, exchange_id
 		 FROM tool_log ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -1361,8 +2262,9 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 	for rows.Next() {
 		e := &toollog.Entry{}
 		var tool, port, tls, status int
-		var responseLen sql.NullInt64
-		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen); err != nil {
+		var responseLen, exchangeID sql.NullInt64
+		var comment, highlight sql.NullString
+		if err := rows.Scan(&e.ID, &tool, &e.Host, &port, &tls, &e.Method, &e.Path, &status, &e.StartedMs, &e.DurationMs, &e.Note, &responseLen, &comment, &highlight, &exchangeID); err != nil {
 			return nil, err
 		}
 		e.Tool = toollog.Tool(tool)
@@ -1372,6 +2274,15 @@ func (s *Store) LoadToolLog() ([]*toollog.Entry, error) {
 		if responseLen.Valid {
 			n := int(responseLen.Int64)
 			e.ResponseLen = &n
+		}
+		e.Comment = comment.String
+		e.Highlight = highlight.String
+		// NULL reads back as no link — a row that never had one, or one written by an older build. It must
+		// not become exchange 0: the traffic store counts rows from zero, so 0 is a real exchange and
+		// defaulting to it would show the viewer the wrong message pair.
+		if exchangeID.Valid {
+			id := core.ExchangeID(exchangeID.Int64)
+			e.Exchange = &id
 		}
 		out = append(out, e)
 	}
@@ -1394,6 +2305,69 @@ func (s *Store) getSetting(key string) (string, error) {
 	return v, err
 }
 
+// SaveLiveSeenLedger persists the live sweep's cross-run seen ledger (apfh) as one
+// settings blob: a set of "host#fingerprint" keys, one per line. The sweep that owns the
+// ledger serialises it; a restart restores it so a re-seen exchange is still counted as
+// REQUEST_TO_AUDIT_DEDUPLICATED rather than re-audited from scratch.
+func (s *Store) SaveLiveSeenLedger(blob []byte) error {
+	return s.setSetting("live_audit_seen_ledger", string(blob))
+}
+
+// LoadLiveSeenLedger restores the seen ledger; empty (never saved) is a fresh ledger, not an
+// error.
+func (s *Store) LoadLiveSeenLedger() ([]byte, error) {
+	v, err := s.getSetting("live_audit_seen_ledger")
+	if err != nil {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// LLM Triage Settings (burpsy-react-ui-ei0v): the operator-supplied OpenAI-compatible
+// endpoint for the post-scan triage pass. One settings value holding JSON rather than a
+// table: three fields with no row identity of their own, the same ceremony-free shape the
+// TLS passthrough list uses. The API key rides in the same blob: the settings table is
+// burpsy's own local store, and the alternative (a separate secrets file) would be a second
+// thing to back up and to leak. SaveTriageSettings never echoes the key back — Load returns
+// it for the process that will dial, and the API layer reports only configured/not.
+type TriageSettings struct {
+	// Enabled is the operator's switch. The feature is OFF until an endpoint is configured
+	// AND the switch is on — two gates, because a configured-but-unwanted endpoint is a
+	// surprise bill and an on-but-unconfigured switch is a silent no-op.
+	Enabled bool `json:"enabled"`
+	// BaseURL is the OpenAI-compatible root, e.g. https://api.openai.com/v1 — the path
+	// /chat/completions is appended. No default: free OMP models are unreliable (the bead's
+	// own finding), and a compiled-in default would send finding text to whoever owns it.
+	BaseURL string `json:"base_url"`
+	// Model names what to call.
+	Model string `json:"model"`
+	// APIKey authenticates. Stored locally, never served back by the API.
+	APIKey string `json:"api_key"`
+}
+
+// SaveTriageSettings persists the triage endpoint configuration.
+func (s *Store) SaveTriageSettings(t TriageSettings) error {
+	raw, err := json.Marshal(t)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("llm_triage", string(raw))
+}
+
+// LoadTriageSettings restores it; empty (never saved) is a fresh, disabled config, not an
+// error.
+func (s *Store) LoadTriageSettings() (TriageSettings, error) {
+	v, err := s.getSetting("llm_triage")
+	if err != nil || v == "" {
+		return TriageSettings{}, err
+	}
+	var t TriageSettings
+	if err := json.Unmarshal([]byte(v), &t); err != nil {
+		return TriageSettings{}, err
+	}
+	return t, nil
+}
+
 // SaveTlsPassthrough replaces the persisted TLS passthrough host-pattern list.
 //
 // One settings value holding a JSON array rather than its own table: this is a
@@ -1414,6 +2388,34 @@ func (s *Store) SaveTlsPassthrough(patterns []string) {
 	if err := s.setSetting("tls.passthrough", string(encoded)); err != nil {
 		s.log("tls passthrough save", err)
 	}
+}
+
+// SaveTlsPassthroughMode persists the two coupling switches (burpsy-react-ui-n1fi): apply to
+// out-of-scope items, and auto-add a host when a client rejects burpsy's certificate.
+func (s *Store) SaveTlsPassthroughMode(applyOutOfScope, autoAddOnFailure bool) {
+	encoded, err := json.Marshal(map[string]bool{
+		"apply_out_of_scope": applyOutOfScope, "auto_add_on_failure": autoAddOnFailure,
+	})
+	if err != nil {
+		s.log("tls passthrough mode encode", err)
+		return
+	}
+	if err := s.setSetting("tls.passthrough.mode", string(encoded)); err != nil {
+		s.log("tls passthrough mode save", err)
+	}
+}
+
+// LoadTlsPassthroughMode restores the two switches; absence is both off.
+func (s *Store) LoadTlsPassthroughMode() (applyOutOfScope, autoAddOnFailure bool) {
+	v, err := s.getSetting("tls.passthrough.mode")
+	if err != nil || v == "" {
+		return false, false
+	}
+	var m map[string]bool
+	if json.Unmarshal([]byte(v), &m) != nil {
+		return false, false
+	}
+	return m["apply_out_of_scope"], m["auto_add_on_failure"]
 }
 
 // LoadTlsPassthrough restores the pattern list. A database that never saved one
@@ -1522,6 +2524,107 @@ func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
 	return s.setSetting("network.settings", string(encoded))
 }
 
+// SaveBrowserSettings persists the operator browser's settings (burpsy-react-ui-bufa) with the
+// project. Stored as the browser package's own JSON, under Burp's key names.
+func (s *Store) SaveBrowserSettings(raw []byte) error {
+	return s.setSetting("browser.settings", string(raw))
+}
+
+// LoadBrowserSettings returns the stored JSON, or nil when none was saved.
+func (s *Store) LoadBrowserSettings() ([]byte, error) {
+	v, err := s.getSetting("browser.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveSecretDetection persists whether captured responses are scanned for leaked secrets
+// (burpsy-react-ui-8j0d) with the project.
+func (s *Store) SaveSecretDetection(on bool) error {
+	v := "off"
+	if on {
+		v = "on"
+	}
+	return s.setSetting("scanner.secret_detection", v)
+}
+
+// LoadSecretDetection returns the stored switch; a project that never set it reads as off.
+func (s *Store) LoadSecretDetection() (bool, error) {
+	v, err := s.getSetting("scanner.secret_detection")
+	return v == "on", err
+}
+
+// SaveAuthzIdentities persists the access-control test identities (burpsy-react-ui-cr37) with the
+// project, as the raw identities JSON.
+func (s *Store) SaveAuthzIdentities(raw []byte) error {
+	return s.setSetting("authz.identities", string(raw))
+}
+
+// LoadAuthzIdentities returns the stored identities JSON, or nil when none was saved.
+func (s *Store) LoadAuthzIdentities() ([]byte, error) {
+	v, err := s.getSetting("authz.identities")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveFindingConsolidation persists the operator's issue-consolidation policy
+// (burpsy-react-ui-oorl) with the project, as the policy JSON.
+func (s *Store) SaveFindingConsolidation(raw []byte) error {
+	return s.setSetting("findings.consolidation", string(raw))
+}
+
+// LoadFindingConsolidation returns the stored policy JSON, or nil when none was saved.
+func (s *Store) LoadFindingConsolidation() ([]byte, error) {
+	v, err := s.getSetting("findings.consolidation")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveHistoryExtractors persists the custom history/Intruder extractor columns (burpsy-react-ui-28n8)
+// with the project, as the raw definitions JSON.
+func (s *Store) SaveHistoryExtractors(raw []byte) error {
+	return s.setSetting("history.extractors", string(raw))
+}
+
+// LoadHistoryExtractors returns the stored definitions JSON, or nil when none was saved.
+func (s *Store) LoadHistoryExtractors() ([]byte, error) {
+	v, err := s.getSetting("history.extractors")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
+// SaveSequencerSettings persists Burp's sequencer.* analysis settings (burpsy-react-ui-nm81) with the
+// project, so the tests an engagement's verdicts rest on travel with its database.
+func (s *Store) SaveSequencerSettings(set sequencer.Settings) error {
+	encoded, err := json.Marshal(set)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("sequencer.settings", string(encoded))
+}
+
+// LoadSequencerSettings restores them, normalised — a document saved before a key existed reads as
+// that analysis running. Absence yields nil and no error, meaning "Burp's defaults".
+func (s *Store) LoadSequencerSettings() (*sequencer.Settings, error) {
+	v, err := s.getSetting("sequencer.settings")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var out sequencer.Settings
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	norm := out.Normalise()
+	return &norm, nil
+}
+
 // LoadNetworkSettings restores the persisted network settings.
 //
 // Absence yields a nil and no error — an old database means "use sender's own defaults", and a nil lets
@@ -1556,6 +2659,13 @@ func (s *Store) LoadNetworkSettings() (*sender.NetworkSettings, error) {
 // settings row does not.
 const upstreamProxyKey = "network.proxy"
 
+// upstreamCarrierKey is the settings row the global SOCKS layer lives in.
+//
+// A separate row rather than a field inside the policy's snapshot, because the two are different
+// layers: a policy restored with a carrier attached to it would read as one thing, and an operator
+// who edits the rules would see the layer move with them.
+const upstreamCarrierKey = "network.carrier"
+
 // SaveUpstreamProxy mirrors the upstream proxy policy into the settings row, replacing whatever was
 // there.
 //
@@ -1567,6 +2677,45 @@ const upstreamProxyKey = "network.proxy"
 // included, so it is not a new secret-bearing artefact; it does mean the -db file must be treated as
 // engagement material. The API never serves these values back and no log line carries them — see
 // upstream.Proxy.Display, and upstream.Proxy.Raw for why this is the one caller that sees them.
+// SaveUpstreamCarrier persists the global SOCKS layer beside the policy it sits under.
+//
+// The same credentials-in-the-clear rule SaveUpstreamProxy states applies: a carrier restored without
+// its hop's credentials would come back looking configured and then fail authentication on every
+// connection, which is worse than not being configured at all because nothing on screen would say so.
+func (s *Store) SaveUpstreamCarrier(carrier *upstream.Carrier) {
+	raw, err := json.Marshal(carrier.Snapshot())
+	if err != nil {
+		s.log("upstream carrier marshal", err)
+		return
+	}
+	if err := s.setSetting(upstreamCarrierKey, string(raw)); err != nil {
+		s.log("upstream carrier", err)
+	}
+}
+
+// LoadUpstreamCarrier restores the global SOCKS layer, and reports whether a hop was in force.
+//
+// An absent row leaves the carrier untouched, which is the ordinary case: no row means no carrier was
+// ever configured, and that is not a failure to report. ok is false in that case so a caller can tell
+// "nothing was configured" from "a configured carrier was restored".
+func (s *Store) LoadUpstreamCarrier(carrier *upstream.Carrier) (bool, error) {
+	raw, err := s.getSetting(upstreamCarrierKey)
+	if err != nil || raw == "" {
+		return false, err
+	}
+	var snap upstream.CarrierSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	if snap.Socks == "" {
+		return false, nil
+	}
+	if err := carrier.Restore(snap); err != nil {
+		return false, fmt.Errorf("upstream carrier: %w", err)
+	}
+	return true, nil
+}
+
 func (s *Store) SaveUpstreamProxy(policy *upstream.Policy) {
 	raw, err := json.Marshal(policy.Snapshot())
 	if err != nil {
@@ -1648,15 +2797,20 @@ func (s *Store) Restore(
 		for _, r := range scopeRules {
 			scope.Add(r)
 		}
+		// Burp's "Drop all out-of-scope requests" survives the restart with the rules it
+		// governs: an egress fence that lapses because the process restarted is worse than
+		// one that was never raised, because the panel says it is up.
+		scope.SetDropOutOfScope(s.LoadScopeDropOutOfScope())
 	}
 
 	if mr != nil {
-		mrRules, flag, err := s.LoadMatchRules()
+		mrRules, settings, err := s.LoadMatchRules()
 		if err != nil {
 			return fmt.Errorf("load matchreplace: %w", err)
 		}
 		mr.SetRules(mrRules)
-		mr.SetUpdateContentLength(flag)
+		mr.SetUpdateContentLength(settings.UpdateContentLength)
+		mr.SetInScopeOnly(settings.InScopeOnly)
 	}
 
 	if sess != nil {
@@ -1713,7 +2867,11 @@ func (s *Store) Restore(
 		if err != nil {
 			return fmt.Errorf("load organizer: %w", err)
 		}
-		org.Restore(items)
+		collections, err := s.LoadOrganizerCollections()
+		if err != nil {
+			return fmt.Errorf("load organizer collections: %w", err)
+		}
+		org.Restore(items, collections)
 	}
 
 	if toolLog != nil {
@@ -1731,6 +2889,16 @@ func nullMsg(id *core.MsgId) any {
 		return nil
 	}
 	return uint64(*id)
+}
+
+// msgIDPtr is nullMsg's inverse: a stored stage id back to a pointer, so NULL stays "not retained"
+// rather than becoming message 0, which is a real message.
+func msgIDPtr(id sql.NullInt64) *core.MsgId {
+	if !id.Valid {
+		return nil
+	}
+	m := core.MsgId(id.Int64)
+	return &m
 }
 
 func nullStr(s *string) any {

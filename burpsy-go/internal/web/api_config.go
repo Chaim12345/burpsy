@@ -154,18 +154,35 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	coverage := exportCoverage()
+	// ?level=user|project narrows the bundle to one half of the configuration
+	// (burpsy-react-ui-wfiw). Absent means both, which is what every existing caller sends.
+	level, narrowed, levelErr := parseConfigLevel(r)
+	if levelErr != nil {
+		http.Error(w, "level must be \"user\" or \"project\"", http.StatusBadRequest)
+		return
+	}
+	coverage := exportCoverageAt(level, narrowed)
 	bundle := configBundle{
 		Version:  configBundleVersion,
 		Coverage: &coverage,
-		Scope:    &configScopeSection{},
-		// Every section starts non-nil so the key is written even when the surface is empty.
-		// See the SessionRules field comment: an absent key means "do not touch this surface",
-		// so an empty surface must still say so out loud.
-		Intercept:    map[string]configRuleState{},
-		SessionRules: []sessionRuleDto{},
+	}
+	// Each section is initialised ONLY when the requested level includes it. The
+	// non-nil-means-present rule still holds within a level: a section this bundle covers is
+	// written even when its surface is empty, and a section the level excludes is absent entirely
+	// — which the importer already reads as "do not touch this surface".
+	if sectionInLevel("scope", level, narrowed) {
+		bundle.Scope = &configScopeSection{}
+	}
+	if sectionInLevel("intercept", level, narrowed) {
+		bundle.Intercept = map[string]configRuleState{}
+	}
+	if sectionInLevel("session_rules", level, narrowed) {
+		bundle.SessionRules = []sessionRuleDto{}
 	}
 	for _, rule := range s.scope.Rules() {
+		if bundle.Scope == nil {
+			break
+		}
 		kind := "Include"
 		if rule.Kind == core.ScopeExclude {
 			kind = "Exclude"
@@ -177,15 +194,22 @@ func (s *Server) handleConfigExport(w http.ResponseWriter, r *http.Request) {
 	// Previously a literal map naming two of them, which meant a direction added
 	// later was importable but never exported — see interceptDirectionNames.
 	for _, d := range interceptDirectionNames {
+		if bundle.Intercept == nil {
+			break
+		}
 		list := s.intercept.Rules(d.Dir)
 		bundle.Intercept[d.Name] = configRuleState{Active: list.Active, Rules: rulesToSpecs(list.Rules)}
 	}
-	for _, rule := range s.sessionCoordinator.AllRules() {
-		bundle.SessionRules = append(bundle.SessionRules, ruleToDto(rule))
+	if bundle.SessionRules != nil {
+		for _, rule := range s.sessionCoordinator.AllRules() {
+			bundle.SessionRules = append(bundle.SessionRules, ruleToDto(rule))
+		}
 	}
-	bundle.UninterestingHeaders = &configUninterestingHeaders{
-		Request:  s.uninteresting.headers(false),
-		Response: s.uninteresting.headers(true),
+	if sectionInLevel("uninteresting_headers", level, narrowed) {
+		bundle.UninterestingHeaders = &configUninterestingHeaders{
+			Request:  s.uninteresting.headers(false),
+			Response: s.uninteresting.headers(true),
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(bundle)
@@ -196,6 +220,20 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// ?level=user|project narrows which sections of the bundle are APPLIED (burpsy-react-ui-wfiw),
+	// so restoring your own preferences cannot overwrite an engagement's scope and handing someone
+	// an engagement cannot overwrite their proxy settings. Absent means both, which is what every
+	// existing caller sends.
+	//
+	// The narrowing composes with the absent-section rule rather than replacing it: a section the
+	// level excludes is left untouched for exactly the same reason a section the bundle never
+	// mentioned is.
+	level, narrowed, levelErr := parseConfigLevel(r)
+	if levelErr != nil {
+		http.Error(w, "level must be \"user\" or \"project\"", http.StatusBadRequest)
+		return
+	}
+
 	var bundle configBundle
 	if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -272,26 +310,29 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 
 	// Phase two — everything converted, so every write below succeeds or the process is broken in a
 	// way no request shape can fix.
-	if bundle.Scope != nil {
+	if bundle.Scope != nil && sectionInLevel("scope", level, narrowed) {
 		s.scope.Clear()
 		for _, rule := range scopeRules {
 			s.scope.Add(rule)
 		}
 	}
 	for dir, set := range interceptSets {
+		if !sectionInLevel("intercept", level, narrowed) {
+			break
+		}
 		if err := s.intercept.SetRules(dir, set.active, set.rules); err != nil {
 			http.Error(w, "Invalid bundle: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
-	if bundle.UninterestingHeaders != nil {
+	if bundle.UninterestingHeaders != nil && sectionInLevel("uninteresting_headers", level, narrowed) {
 		// Nothing to validate: any string is an acceptable header name once normalised, and set()
 		// drops the empties. So this belongs in phase two with the other writes rather than needing
 		// a phase-one conversion.
 		s.uninteresting.set(false, bundle.UninterestingHeaders.Request)
 		s.uninteresting.set(true, bundle.UninterestingHeaders.Response)
 	}
-	if bundle.SessionRules != nil {
+	if bundle.SessionRules != nil && sectionInLevel("session_rules", level, narrowed) {
 		for _, existing := range s.sessionCoordinator.AllRules() {
 			s.sessionCoordinator.RemoveRule(existing.ID)
 		}

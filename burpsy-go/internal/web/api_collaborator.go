@@ -44,6 +44,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -120,6 +121,12 @@ type mintedPayload struct {
 	Address  string
 	Marker   string
 	MintedAt time.Time
+	// CustomData is the operator's own label, carried in the address so an interaction identifies
+	// which payload fired (burpsy-react-ui-80tc). Empty when none was given.
+	CustomData string
+	// WithoutServerLocation records that the operator asked for a payload that does not disclose
+	// which server it was minted from — Burp's PayloadOption.WITHOUT_SERVER_LOCATION.
+	WithoutServerLocation bool
 }
 
 // collaboratorRead is the outcome of one read of the interaction log — the third state the UI has to
@@ -159,6 +166,15 @@ type collaboratorPayloadView struct {
 	Marker       string `json:"marker"`
 	MintedAtMs   int64  `json:"minted_at_ms"`
 	Interactions int    `json:"interactions"`
+	// CustomData is the operator's own label for this payload (burpsy-react-ui-80tc), so the
+	// payload list says which parameter the payload was minted for. Omitted when empty, so a
+	// payload minted without one does not grow a field that says nothing.
+	CustomData string `json:"custom_data,omitempty"`
+	// WithoutServerLocation records that this payload was minted not to disclose its origin.
+	WithoutServerLocation bool `json:"without_server_location,omitempty"`
+	// Domain is omitted for a payload minted without a server location — the option's whole
+	// point is that the record does not say where it came from.
+	Domain string `json:"domain,omitempty"`
 }
 
 // collaboratorReadView is the last read of the interaction log. `ok` is separate from a zero count for
@@ -277,6 +293,21 @@ func (h *collaboratorHub) snapshot() ([]mintedPayload, *collaboratorRead) {
 
 // collaboratorMarker is a per-payload DNS label: lowercase, alphanumeric, and long enough that two
 // payloads minted in the same session cannot collide.
+// maxCollaboratorCustomData is Burp's bound on the custom-data field: 16 alphanumeric characters,
+// which is what fits inside a single DNS label without changing the address's shape.
+const maxCollaboratorCustomData = 16
+
+// isAlphanumeric reports whether every byte is an ASCII letter or digit.
+func isAlphanumeric(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
 func collaboratorMarker() (string, error) {
 	var raw [6]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -363,6 +394,18 @@ func (s *Server) gatedCorpusChecks() *int {
 	}
 	n := report.Collaborator
 	return &n
+}
+
+// domainFromAddress recovers the registered domain from a payload address, for the status view.
+// The address is `marker + "." + domain`, and the marker is the leading label, so the domain is
+// what follows the first dot. Returns "" when the address does not carry its marker, which is a
+// payload this process did not mint in the shape it expects.
+func domainFromAddress(address, marker string) string {
+	prefix := marker + "."
+	if !strings.HasPrefix(address, prefix) {
+		return ""
+	}
+	return strings.TrimPrefix(address, prefix)
 }
 
 // collaboratorStatusNow assembles the whole state. Never registers a channel.
@@ -453,12 +496,18 @@ func payloadViews(minted []mintedPayload, all []oob.Interaction) []collaboratorP
 				n++
 			}
 		}
-		out = append(out, collaboratorPayloadView{
-			Address:      p.Address,
-			Marker:       p.Marker,
-			MintedAtMs:   msOf(p.MintedAt),
-			Interactions: n,
-		})
+		view := collaboratorPayloadView{
+			Address:               p.Address,
+			Marker:                p.Marker,
+			MintedAtMs:            msOf(p.MintedAt),
+			Interactions:          n,
+			CustomData:            p.CustomData,
+			WithoutServerLocation: p.WithoutServerLocation,
+		}
+		if !p.WithoutServerLocation {
+			view.Domain = domainFromAddress(p.Address, p.Marker)
+		}
+		out = append(out, view)
 	}
 	return out
 }
@@ -612,6 +661,60 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Batch generation (burpsy-react-ui-v8q): Burp's "Payloads to generate" field. 1 (or absent)
+	// is the historical single mint, so the existing client keeps working. The ceiling keeps a
+	// fat-fingered 100000 from minting a hundred thousand rows the page then renders; 100 covers
+	// every legitimate use — a payload per injection point in a large form or header set.
+	count := 1
+	// customData is Burp's `generatePayload(String customData, ...)`: characters carried by the
+	// payload and recoverable from any interaction it causes, so an operator who mints five
+	// payloads for five parameters can tell which one fired (burpsy-react-ui-80tc).
+	// withoutServerLocation is Burp's PayloadOption.WITHOUT_SERVER_LOCATION, which drops the
+	// server-location field from the payload record.
+	//
+	// Both are optional, so a request carrying only a count behaves exactly as before.
+	var customData string
+	withoutLocation := false
+	if r.Body != nil {
+		var req struct {
+			Count                 int    `json:"count"`
+			CustomData            string `json:"custom_data"`
+			WithoutServerLocation bool   `json:"without_server_location"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {'count': N} or empty", http.StatusBadRequest)
+			return
+		}
+		if req.Count > 0 {
+			count = req.Count
+		}
+		customData = req.CustomData
+		withoutLocation = req.WithoutServerLocation
+	}
+	if customData != "" {
+		if !isAlphanumeric(customData) {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": "custom_data must be alphanumeric; it is carried inside the payload's own " +
+					"address, so any other character would change the address's shape",
+			})
+			return
+		}
+		if len(customData) > maxCollaboratorCustomData {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": fmt.Sprintf("custom_data is %d characters; the bound is %d, which is what "+
+					"fits inside a label without changing the address's shape",
+					len(customData), maxCollaboratorCustomData),
+			})
+			return
+		}
+	}
+	if count > maxCollaboratorBatch {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"error": fmt.Sprintf("count %d exceeds the batch bound of %d; a batch that large is a script's job, not a click's", count, maxCollaboratorBatch),
+		})
+		return
+	}
+
 	if _, configured := s.scanner.OOBRegistration(); !configured {
 		status := s.collaboratorStatusNow(false)
 		writeJSON(w, http.StatusConflict, map[string]interface{}{
@@ -637,32 +740,74 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	marker, err := collaboratorMarker()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
-		return
-	}
-	payload := mintedPayload{
-		Address:  marker + "." + channel.Domain(),
-		Marker:   marker,
-		MintedAt: time.Now(),
+	domain := channel.Domain()
+	minted := make([]mintedPayload, 0, count)
+	addresses := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		marker, err := collaboratorMarker()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": err.Error()})
+			return
+		}
+		payload := mintedPayload{
+			Address:               marker + "." + domain,
+			Marker:                marker,
+			MintedAt:              time.Now(),
+			CustomData:            customData,
+			WithoutServerLocation: withoutLocation,
+		}
+		minted = append(minted, payload)
+		addresses = append(addresses, payload.Address)
 	}
 	hub := s.collab()
 	hub.mu.Lock()
-	hub.minted = append(hub.minted, payload)
+	hub.minted = append(hub.minted, minted...)
 	hub.mu.Unlock()
 
+	// One address in the response keeps the single-mint client working unchanged; a batch adds
+	// the full list under "addresses". Said plainly because it is the difference between these
+	// addresses and Burp's. One Interactsh registration is one domain; the marker is what makes
+	// an address individually correlatable, and a caller who strips it gets callbacks it cannot
+	// attribute.
+	// Per-payload facts ride a "payloads" list as well as the single fields, so a batch client can
+	// tell which address carries which custom data (burpsy-react-ui-80tc) without re-deriving it
+	// from the marker.
+	payloadRows := make([]map[string]interface{}, 0, len(minted))
+	for _, m := range minted {
+		row := map[string]interface{}{
+			"address":     m.Address,
+			"marker":      m.Marker,
+			"custom_data": m.CustomData,
+		}
+		if !m.WithoutServerLocation {
+			row["domain"] = domain
+		}
+		payloadRows = append(payloadRows, row)
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"address": payload.Address,
-		"marker":  payload.Marker,
-		"domain":  channel.Domain(),
-		// Said plainly because it is the difference between this address and Burp's. One Interactsh
-		// registration is one domain; the marker is what makes this address individually correlatable,
-		// and a caller who strips it gets callbacks it cannot attribute.
+		"payloads":  payloadRows,
+		"address":   minted[0].Address,
+		"marker":    minted[0].Marker,
+		"domain":    domain,
+		"addresses": addresses,
+		"markers":   mintedMarkers(minted),
 		"marker_note": "the leading label is what attributes a callback to this address; every payload " +
 			"from this channel shares the domain after it",
 		"status": s.collaboratorStatusNow(true),
 	})
+}
+
+// maxCollaboratorBatch bounds one mint request. 100 payloads cover the real use — one per
+// injection point across a large request set — while keeping a typo from minting thousands
+// of rows the page then renders and the hub keeps forever.
+const maxCollaboratorBatch = 100
+
+func mintedMarkers(minted []mintedPayload) []string {
+	out := make([]string, 0, len(minted))
+	for _, m := range minted {
+		out = append(out, m.Marker)
+	}
+	return out
 }
 
 // handleCollaboratorInteractions serves GET /api/collaborator/interactions: index rows only.

@@ -12,7 +12,11 @@ package intruder
 
 import (
 	"bytes"
+	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
@@ -30,6 +34,16 @@ const (
 	PointEntireBody
 	PointCookieValue
 	PointHeaderValue
+	PointBodyJSONValue
+	PointBodyNestedValue
+	// PointBodyXMLValue is a text node or attribute value of an XML body.
+	PointBodyXMLValue
+	// PointBodyMultipartValue is one part's content in a multipart body.
+	PointBodyMultipartValue
+	// PointBodyMultipartAttr is a quoted parameter value on a multipart part's
+	// Content-Disposition header — its `name` or `filename`.
+	PointBodyMultipartAttr
+	PointManual
 )
 
 func (k PointKind) String() string {
@@ -52,16 +66,56 @@ func (k PointKind) String() string {
 		return "cookie_value"
 	case PointHeaderValue:
 		return "header_value"
+	case PointBodyJSONValue:
+		return "body_json_value"
+	case PointBodyNestedValue:
+		return "body_nested_value"
+	case PointBodyXMLValue:
+		return "body_xml_value"
+	case PointBodyMultipartValue:
+		return "body_multipart_value"
+	case PointBodyMultipartAttr:
+		return "body_multipart_attr"
+	case PointManual:
+		return "manual"
 	default:
 		return "unknown"
 	}
 }
+
+// escapeKind decides what ApplyAll does to a payload before splicing it into a
+// point's window. Native intruder points splice raw bytes — wire-faithful, the
+// operator's payload crosses exactly as typed. Points adopted from the scanner
+// enumerator (internal/bcheck, see points_bcheck.go) live inside a container
+// whose framing must survive the splice, and the enumerator already knows the
+// escape for each one: JSON string, XML text node or attribute value, MIME
+// quoted-string, or a rebuilt JSON/base64/XML-nested wire value. escapeNone is
+// the zero value so every point constructed before this existed behaves exactly
+// as before.
+type escapeKind uint8
+
+const (
+	escapeNone escapeKind = iota
+	// escapeBcheck rebuilds the point's whole wire value through the enumerator
+	// that produced it (bcheck.InsertionPoint.WireValue), which is the single
+	// definition of how a payload is escaped for each container, shared with the
+	// scanner. A payload the container cannot hold at all is refused there and
+	// the splice is skipped, never rewritten into something the operator did not
+	// type.
+	escapeBcheck
+)
 
 // InsertionPoint is an attack position: a span into the request plus what it is.
 type InsertionPoint struct {
 	Kind  PointKind
 	Span  core.Span
 	Label string
+
+	// escape and bc are zero/nil for every natively discovered point. bc points
+	// at the scanner-side point for every position adopted from the enumerator
+	// (JSON, XML, multipart, nested), whose wire value is rebuilt per payload.
+	escape escapeKind
+	bc     *bcheck.InsertionPoint
 }
 
 // PointConfig is which position families to generate. Maps 1:1 onto Burp's
@@ -75,6 +129,42 @@ type PointConfig struct {
 	EntireBody     bool
 	Cookies        bool
 	Headers        bool
+}
+
+// ManualSpan is an operator-marked payload position: a byte range of the base
+// request, named the way Burp names it — the § pair around a selection. Spans
+// are validated (in bounds, non-overlapping) before they become points, because
+// two overlapping markers would splice two payloads into the same bytes and the
+// result would depend on the splice order.
+type ManualSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// ManualPoints turns validated spans into insertion points. Every check that
+// can fail is done here rather than at the splice, so the caller's error is
+// about the operator's marking, not an engine-internal refusal.
+func ManualPoints(base []byte, spans []ManualSpan) ([]InsertionPoint, error) {
+	points := make([]InsertionPoint, 0, len(spans))
+	for i, span := range spans {
+		if span.Start < 0 || span.End > len(base) || span.Start >= span.End {
+			return nil, fmt.Errorf("manual point %d: start %d, end %d is not a byte range of the %d-byte request", i+1, span.Start, span.End, len(base))
+		}
+		for j, other := range spans {
+			if j >= i {
+				break
+			}
+			if span.Start < other.End && other.Start < span.End {
+				return nil, fmt.Errorf("manual points %d and %d overlap", j+1, i+1)
+			}
+		}
+		points = append(points, InsertionPoint{
+			Kind:  PointManual,
+			Span:  core.Span{Offset: span.Start, Len: span.End - span.Start},
+			Label: fmt.Sprintf("manual %d", i+1),
+		})
+	}
+	return points, nil
 }
 
 // DefaultPointConfig is Burp's own defaults: parameter values on; names/paths/headers off, as
@@ -207,6 +297,13 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 			pushKVPoints(raw, body, cfg.BodyParams, cfg.ParamNames,
 				PointBodyParamValue, PointBodyParamName, &out)
 		}
+		if cfg.BodyParams {
+			// Every other body container — JSON fields, XML nodes and attributes,
+			// multipart parts and their attributes, and base64/XML nested inside any
+			// of them — comes from the scanner's enumerator; see points_bcheck.go for
+			// why Intruder keeps exactly one body-container parser.
+			out = appendContainerPoints(raw, msg, body, raw[body.Offset:body.End()], out)
+		}
 		if cfg.EntireBody {
 			out = append(out, InsertionPoint{
 				Kind:  PointEntireBody,
@@ -267,9 +364,38 @@ func Apply(raw []byte, point *InsertionPoint, payload []byte) []byte {
 // BodyParamValue, and a UrlParamName sits directly against its value. The rule is
 // earliest-starting span wins, later overlapping spans are skipped, so the output is always a
 // well-formed request and never a half-spliced one.
+//
+// ApplyAll is the byte-only view for callers that cannot act on a refusal (Apply, and the
+// splice-shape tests): a payload the container cannot hold is dropped and the request is built
+// from what remains. The attack driver uses applyAllChecked instead, so it can record the
+// dropped attempt as skipped rather than sending it — see that function.
 func ApplyAll(raw []byte, places []ApplyPlace) []byte {
+	out, _ := applyAllChecked(raw, places)
+	return out
+}
+
+// applyAllChecked is ApplyAll with the refusals surfaced. refusals holds one reason per place
+// whose payload the container refused, in the enumerator's own words (escapePayload → bcheck's
+// WireValue). Its emptiness is the contract the driver acts on: a non-empty refusals means this
+// attempt could not be represented as the operator asked, so the driver records it as skipped
+// and never sends the bytes — otherwise a single-position attack whose only payload was refused
+// would go out as the unmodified base request and read in the report as a real send
+// (burpsy-react-ui-194b). The returned bytes are still a well-formed request (the refused places
+// simply do not appear in it), so a caller that only wants a request can ignore refusals.
+func applyAllChecked(raw []byte, places []ApplyPlace) (out []byte, refusals []string) {
 	sl := make([]spliced, 0, len(places))
 	for _, pl := range places {
+		payload, err := escapePayload(pl.Point, pl.Payload)
+		if err != nil {
+			// The payload cannot be written into its container at all: a multipart
+			// part's content carrying that part's boundary delimiter, a line break
+			// inside a quoted header attribute, a nested wire value that failed to
+			// rebuild. Splicing it anyway would end the container and send a request
+			// that is corrupt rather than mutated, so the position is dropped from the
+			// spliced output and its reason is carried out for the driver to record.
+			refusals = append(refusals, err.Error())
+			continue
+		}
 		start := pl.Point.Span.Offset
 		if start > len(raw) {
 			start = len(raw)
@@ -281,7 +407,7 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 		if end < start {
 			end = start
 		}
-		sl = append(sl, spliced{start: start, end: end, payload: pl.Payload})
+		sl = append(sl, spliced{start: start, end: end, payload: payload})
 	}
 	sortSpans(sl)
 
@@ -289,18 +415,35 @@ func ApplyAll(raw []byte, places []ApplyPlace) []byte {
 	for _, s := range sl {
 		extra += len(s.payload)
 	}
-	out := make([]byte, 0, len(raw)+extra)
+	built := make([]byte, 0, len(raw)+extra)
 	cursor := 0
 	for _, s := range sl {
 		if s.start < cursor {
 			continue
 		}
-		out = append(out, raw[cursor:s.start]...)
-		out = append(out, s.payload...)
+		built = append(built, raw[cursor:s.start]...)
+		built = append(built, s.payload...)
 		cursor = s.end
 	}
-	out = append(out, raw[cursor:]...)
-	return fixContentLength(out)
+	built = append(built, raw[cursor:]...)
+
+	// A chunked request's body is a sequence of size-prefixed chunks, and the
+	// splices above changed the bytes inside one of them. Every size before the
+	// spliced chunk still describes its data exactly; the spliced chunk's size
+	// is the only one that can be stale, and rewriteChunkedBody restates each
+	// size against the bytes it precedes — the same walk dechunk runs on the
+	// way in (rrm6). It also drops a stale Content-Length: with
+	// Transfer-Encoding: chunked the chunk stream frames the body, and a
+	// Content-Length counting the pre-splice bytes is the framing disagreement
+	// a smuggling probe is built to surface. Our own attack request is kept to
+	// one honest framing rather than two contradictory ones.
+	if shape, err := core.Parse(raw, core.DirectionRequest); err == nil {
+		if te := headerSpan(raw, shape, "transfer-encoding"); te != nil &&
+			bytes.Contains(bytes.ToLower(raw[te.Offset:te.End()]), []byte("chunked")) {
+			return rewriteChunkedBody(raw, built), refusals
+		}
+	}
+	return fixContentLength(built), refusals
 }
 
 // sortSpans orders by (start, end) ascending, matching the Rust sort_by_key.
@@ -339,6 +482,140 @@ func fixContentLength(raw []byte) []byte {
 	out = append(out, newVal...)
 	out = append(out, raw[min(hdr.End(), len(raw)):]...)
 	return out
+}
+
+// rewriteChunkedBody re-emits the spliced request's chunked body with honest
+// chunk sizes, and drops a Content-Length that no longer describes the body.
+//
+// The size lines in `out` are stale: exactly one chunk — the one a splice
+// landed in — has a size that no longer counts the bytes following it, so a
+// walk that trusted those sizes would measure every later chunk from the wrong
+// place. The walk is therefore anchored in `base`, the pre-splice request,
+// whose sizes are all honest: each base chunk's data span is located from
+// base's own size lines, then the same span is measured in `out` — identical
+// bytes for untouched chunks (only absolute offsets moved by the earlier
+// splices), one payload longer or shorter for the spliced chunk. The fresh
+// size is computed from what `out` actually holds, which is the whole repair.
+//
+// Content-Length is dropped when present: with Transfer-Encoding: chunked the
+// chunk stream frames the body, and a Content-Length counting the pre-splice
+// bytes is precisely the framing disagreement a smuggling probe is built to
+// surface. An attack request keeps one honest framing rather than two
+// contradictory ones.
+func rewriteChunkedBody(base, out []byte) []byte {
+	shape, err := core.Parse(base, core.DirectionRequest)
+	if err != nil {
+		return out
+	}
+	bodyStart := shape.Body.Offset
+	head := base[:bodyStart]
+
+	// The head is byte-identical between base and out — every splice lands
+	// inside the body — so out's body starts at the same offset. Rebuild the
+	// head, minus Content-Length, and track how its length moved so the body
+	// walk can translate offsets between the two frames.
+	sb := make([]byte, 0, len(out)+16)
+	sb = append(sb, head...)
+	delta := 0
+	if cl := headerSpan(base, shape, "content-length"); cl != nil {
+		lineStart := cl.Offset
+		for lineStart > 0 && head[lineStart-1] != '\n' {
+			lineStart--
+		}
+		lineEnd := cl.End()
+		for lineEnd < bodyStart && head[lineEnd] != '\n' {
+			lineEnd++
+		}
+		if lineEnd < bodyStart {
+			lineEnd++ // the '\n'
+		}
+		sb = sb[:lineStart]
+		sb = append(sb, head[lineEnd:]...)
+		delta = len(sb) - bodyStart
+	}
+
+	baseBody := base[bodyStart:]
+	outBody := out[bodyStart:]
+	bcur, ocur := 0, 0
+	for {
+		nl := bytes.IndexByte(baseBody[bcur:], '\n')
+		if nl < 0 {
+			// No more chunk headers: keep out's remaining bytes verbatim.
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		line := strings.TrimSpace(string(baseBody[bcur : bcur+nl]))
+		sizeHex := line
+		if i := strings.IndexByte(line, ';'); i >= 0 {
+			sizeHex = line[:i]
+		}
+		size, err := strconv.ParseUint(sizeHex, 16, 64)
+		if err != nil || size == 0 || uint64(len(baseBody)-(bcur+nl+1)) < size {
+			// Terminal chunk, truncated stream, or not a chunk header at all.
+			// No splice can live past this point — points are refused outside
+			// chunk data — so the tail is byte-identical modulo the shift.
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		dataStart := bcur + nl + 1
+		dataEnd := dataStart + int(size)
+		oLineStart := bcur + delta
+		oDataStart := dataStart + delta
+		// The spliced chunk's data in out: base's data with every splice that
+		// landed inside it already applied. Its length is whatever separates
+		// out's data start from the first byte of out's copy of the NEXT
+		// base line — but simpler and exact: out's body is base's body with
+		// the splices applied, so the next chunk header in out begins at
+		// (nextBaseHeader + deltaAfter), where deltaAfter accumulates each
+		// chunk's size change. Track it as we go.
+		nextNl := bytes.IndexByte(baseBody[dataEnd:], '\n')
+		var oDataEnd int
+		if nextNl < 0 {
+			oDataEnd = len(outBody)
+		} else {
+			oDataEnd = dataEnd + delta + nextNl
+			// oDataEnd currently points at out's next size line's newline;
+			// walk back over the CR to the end of out's data.
+			for oDataEnd > oDataStart && (outBody[oDataEnd-1] == '\n' || outBody[oDataEnd-1] == '\r') {
+				oDataEnd--
+			}
+		}
+		newSize := oDataEnd - oDataStart
+		if newSize < 0 {
+			sb = append(sb, outBody[ocur:]...)
+			break
+		}
+		// Emit: out's bytes up to the size line (excluding the old size text),
+		// then the fresh size, then the CRLF that ended base's size line, then
+		// out's data, then the CRLF that follows it.
+		sb = append(sb, outBody[ocur:oLineStart]...)
+		sb = append(sb, strconv.FormatInt(int64(newSize), 16)...)
+		sb = append(sb, baseBody[bcur+nl:dataStart]...) // the original "\r\n" of the size line
+		sb = append(sb, outBody[oDataStart:oDataEnd]...)
+		// chunk-terminating CRLF: in base it sits at dataEnd..(dataEnd+2 when CRLF).
+		sepEnd := dataEnd
+		for sepEnd < len(baseBody) && (baseBody[sepEnd] == '\r' || baseBody[sepEnd] == '\n') {
+			sepEnd++
+		}
+		oSepEnd := sepEnd + delta
+		sb = append(sb, outBody[oDataEnd:oSepEnd]...)
+		bcur = sepEnd
+		ocur = oSepEnd
+		// Accumulate this chunk's size change into the running offset delta.
+		delta += newSize - int(size)
+	}
+	return sb
+}
+
+// headerSpan returns the span of the first header named name, or nil.
+func headerSpan(raw []byte, shape core.MessageShape, name string) *core.Span {
+	for _, h := range shape.Headers {
+		if nameEq(raw, h.Name, name) {
+			vv := h.Value
+			return &vv
+		}
+	}
+	return nil
 }
 
 // ---- span helpers ------------------------------------------------------------------------

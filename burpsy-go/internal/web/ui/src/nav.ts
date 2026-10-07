@@ -22,6 +22,8 @@ import { AuditQueuePage } from "./pages/auditqueue";
 import { ComparerPage } from "./pages/comparer";
 import { CollaboratorPage } from "./pages/collaborator";
 import { ContentDiscoveryPage } from "./pages/contentdiscovery";
+import { DomInvaderPage } from "./pages/dominvader";
+import { AuthzPage } from "./pages/authz";
 import { DashboardPage } from "./pages/dashboard";
 import { DecoderPage } from "./pages/decoder";
 import { DiscoverPage } from "./pages/discover";
@@ -34,6 +36,8 @@ import { MatchReplacePage } from "./pages/matchreplace";
 import { OrganizerPage } from "./pages/organizer";
 import { ProxySettingsPage } from "./pages/proxysettings";
 import { RepeaterPage } from "./pages/repeater";
+import { ScannerChecksPage } from "./pages/scannerchecks";
+import { ScannerLaunchPage } from "./pages/scannerlaunch";
 import { ScannerPage } from "./pages/scanner";
 import { SequencerPage } from "./pages/sequencer";
 import { SessionPage } from "./pages/session";
@@ -41,6 +45,7 @@ import { SettingsPage } from "./pages/settings";
 import { ScopePage } from "./pages/scope";
 import { SiteMapPage } from "./pages/sitemap";
 import { WebSocketPage } from "./pages/wshistory";
+import { DetailWindowPage } from "./pages/detailwindow";
 
 /** One routable view. `id` is the URL hash and the routing key. */
 export interface NavLeaf {
@@ -48,6 +53,15 @@ export interface NavLeaf {
   label: string;
   description: string;
   page: ComponentType;
+  /**
+   * A routable leaf that is not a destination an operator chooses from the sub-tab row.
+   *
+   * The detached exchange window (wvcl) is the case: it has to be a ROUTE for the window to land
+   * on, but listing it beside HTTP history would offer "go to another detached window", which is
+   * not a navigation anyone wants. Routable and listed are separate questions, and this is the
+   * second one.
+   */
+  hidden?: boolean;
 }
 
 /**
@@ -88,6 +102,15 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "sitemap", label: "Site map", description: "Hosts, paths, and observed behaviour", page: SiteMapPage },
       { id: "scope", label: "Scope", description: "What the tools are allowed to touch", page: ScopePage },
+      {
+        // burpsy-react-ui-1yd: Burp has a SCANNER tool; naming this page after its output ("Issues")
+        // while burying the launch controls in a modal made scanning unfindable. The Scanner leaf
+        // gathers the launch controls and the check switches; the Issues leaf stays the results view.
+        id: "scannerlaunch",
+        label: "Scanner",
+        description: "Launch an audit and choose what it runs",
+        page: ScannerLaunchPage,
+      },
       { id: "scanner", label: "Issues", description: "Findings, coverage, and active audits", page: ScannerPage },
       { id: "auditqueue", label: "Audit queue", description: "What the active audit did with each exchange, and why any were skipped", page: AuditQueuePage },
       {
@@ -107,6 +130,18 @@ export const TOOLS: NavTool[] = [
         description: "Sweep a path space with ffuf, and what the scope check dropped",
         page: ContentDiscoveryPage,
       },
+      {
+        id: "dominvader",
+        label: "DOM auditor",
+        description: "Watch a canary through a page's sources and sinks while you browse",
+        page: DomInvaderPage,
+      },
+      {
+        id: "authz",
+        label: "Access control",
+        description: "Re-send a request as each identity and see whether access control held (BOLA/IDOR)",
+        page: AuthzPage,
+      },
     ],
   },
   {
@@ -117,6 +152,17 @@ export const TOOLS: NavTool[] = [
     leaves: [
       { id: "intercept", label: "Intercept", description: "Hold, edit, and release traffic in flight", page: InterceptPage },
       { id: "history", label: "HTTP history", description: "Every captured request and response", page: HistoryPage },
+      // Burp's detached detail (wvcl). Registered as a LEAF rather than a window type because this
+      // app is one mount driven by a hash: a window opened at #history?exchange=7 needs a route that
+      // renders one item, and a leaf is how a route exists. It carries no tab — the shell hides a
+      // leaf that is not its tool's sub-tab, so the window shows a page and not a second tab strip.
+      {
+        id: "exchange-detail",
+        label: "Exchange detail",
+        description: "One captured exchange on its own, for a window of its own",
+        page: DetailWindowPage,
+        hidden: true,
+      },
       { id: "wshistory", label: "WebSockets history", description: "Upgrade connections and frame payloads", page: WebSocketPage },
       {
         id: "matchreplace",
@@ -239,6 +285,12 @@ export const TOOLS: NavTool[] = [
         label: "APIs",
         description: "The JSON-RPC contract a plugin is written against",
         page: ExtenderApisPage,
+      },
+      {
+        id: "scannerchecks",
+        label: "Custom scan checks",
+        description: "The loaded BCheck corpus: what compiled, what ran, and a per-row switch",
+        page: ScannerChecksPage,
       },
     ],
   },

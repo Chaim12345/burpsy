@@ -75,3 +75,109 @@ export function base64Decode(input: string): string {
     return input;
   }
 }
+
+// ---- Burp's Convert selection, the remaining variants (burpsy-react-ui-b2nt) --------------------
+
+/** URL-encode every character (Burp's "all characters"), not just the key metacharacters. */
+export function urlEncodeAllChars(input: string): string {
+  let out = "";
+  for (const byte of new TextEncoder().encode(input)) {
+    out += `%${byte.toString(16).toUpperCase().padStart(2, "0")}`;
+  }
+  return out;
+}
+
+/** URL-encode every character using Burp's 2-byte Unicode form (%u0041). Only the BMP is
+ * representable; a surrogate pair becomes two %uXXXX escapes, which is what Burp emits. */
+export function urlEncodeAllCharsUnicode(input: string): string {
+  let out = "";
+  for (const character of input) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code > 0xffff) {
+      // A non-BMP code point has no %u form; encode its surrogate halves the way Burp does.
+      const high = 0xd800 + ((code - 0x10000) >> 10);
+      const low = 0xdc00 + ((code - 0x10000) & 0x3ff);
+      out += `%u${high.toString(16).toUpperCase().padStart(4, "0")}%u${low.toString(16).toUpperCase().padStart(4, "0")}`;
+      continue;
+    }
+    out += `%u${code.toString(16).toUpperCase().padStart(4, "0")}`;
+  }
+  return out;
+}
+
+/** HTML-encode every character as decimal numeric entities (&#65;). */
+export function htmlEncodeAllCharsDecimal(input: string): string {
+  let out = "";
+  for (const character of input) {
+    out += `&#${character.codePointAt(0)};`;
+  }
+  return out;
+}
+
+/** HTML-encode every character as hex numeric entities (&#x41;). */
+export function htmlEncodeAllCharsHex(input: string): string {
+  let out = "";
+  for (const character of input) {
+    out += `&#x${(character.codePointAt(0) ?? 0).toString(16)};`;
+  }
+  return out;
+}
+
+/** Base64-URL: the URL-safe alphabet, padding kept so decode is unambiguous. */
+export function base64UrlEncode(input: string): string {
+  return base64Encode(input).replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+export function base64UrlDecode(input: string): string {
+  try {
+    const binary = atob(input.trim().replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return input;
+  }
+}
+
+/** "Construct string" — byte-literal builders. Escapes every byte outside printable ASCII so
+ * the constructed string survives any downstream encoding; ASCII passes as-is. */
+export type ConstructDialect = "js_double" | "js_single" | "sql_mssql" | "sql_oracle" | "sql_mysql";
+
+export function constructString(input: string, dialect: ConstructDialect): string {
+  const chars = [...input];
+  const escJS = (code: number): string => {
+    if (code === 0x22) return '\\"';
+    if (code === 0x27) return "\\'";
+    if (code === 0x5c) return "\\\\";
+    if (code >= 0x20 && code <= 0x7e) return String.fromCharCode(code);
+    if (code <= 0xff) return `\\x${code.toString(16).padStart(2, "0")}`;
+    return `\\u${code.toString(16).padStart(4, "0")}`;
+  };
+  if (dialect.startsWith("js")) {
+    const quote = dialect === "js_double" ? '"' : "'";
+    return quote + chars.map((character) => escJS(character.codePointAt(0) ?? 0)).join("") + quote;
+  }
+  // SQL: printable ASCII stays inside a normal string literal (a single quote itself
+  // becomes a function call, since '' doubling is dialect-specific); everything else
+  // becomes CHAR(n) (MSSQL) or CHR(n) (Oracle/MySQL) glued with the dialect's
+  // concatenation operator — MSSQL's +, Oracle's and MySQL's ||. A printable run is one
+  // literal, so the common case reads as a plain quoted string rather than a function
+  // call per byte.
+  const fn = dialect === "sql_mssql" ? "CHAR" : "CHR";
+  const joiner = dialect === "sql_mssql" ? "+" : "||";
+  const glued: string[] = [];
+  let literal = "";
+  for (const character of chars) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code >= 0x20 && code <= 0x7e && code !== 0x27) {
+      literal += character;
+      continue;
+    }
+    if (literal) {
+      glued.push(`'${literal}'`);
+      literal = "";
+    }
+    glued.push(`${fn}(${code})`);
+  }
+  if (literal) glued.push(`'${literal}'`);
+  return glued.join(joiner);
+}

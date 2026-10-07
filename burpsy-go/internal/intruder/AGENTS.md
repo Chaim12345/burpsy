@@ -69,6 +69,20 @@ distinct behaviours, not with requests sent. `DetailLimit` (default 500) bounds 
 `MaxBuckets` (default 2000) bounds distinct buckets; both caps are reported (`Truncated`,
 `BucketsTruncated`, `Unbucketed`) so a cap never looks like checks that stopped firing.
 
+### Body containers come from the scanner's enumerator, not from a second parser here
+
+Form bodies are walked natively (wire-faithful, unescaped). Every other body container —
+JSON string values, XML text nodes and attributes, multipart part contents and their
+`name`/`filename` attributes, and the JSON/base64/XML nested inside any of them — is
+enumerated by `internal/bcheck` and adopted through `bcheck.InsertionPoint.BodyWindow`
+(`points_bcheck.go`). The enumerator also owns the escape for each container
+(`WireValue`), so a payload Intruder sends is byte-identical to what the scanner would
+send for the same container; a payload the container cannot hold (a multipart boundary
+delimiter inside that part's content, a line break inside a header attribute) is refused
+there and the position is skipped rather than spliced. Adding a container means adding it
+in `internal/bcheck` — a parser here would be the second model of the same format, which
+is the drift this design exists to prevent (burpsy-react-ui-33t, 63jg).
+
 ### Grep is reported but is not part of the bucket key
 
 `Grep` holds two optional `regexp` patterns applied to every response. Matches and the extracted
@@ -103,6 +117,8 @@ Tests include real local listeners (`engine_net_test.go`) and timing-sensitive r
 ### Internal
 
 - `internal/core` — `Span`, `StoredMessage`, the bytes attacks splice into and locate points within
+- `internal/bcheck` — the single body-container enumerator (JSON, XML, multipart, nested) whose
+  windows and escapes Intruder adopts (`points_bcheck.go`); it is a leaf here, never the reverse
 - `internal/dash` — `Breakdown`/`Reason`, the shared dashboard count shape (`breakdown.go`)
 - `internal/tools` — decoder codecs for the payload-processing encode/decode rules
 - `internal/httputil` — request/response byte helpers

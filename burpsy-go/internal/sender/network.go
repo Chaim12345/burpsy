@@ -2,6 +2,7 @@ package sender
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strconv"
@@ -34,6 +35,37 @@ type NetworkSettings struct {
 	Redirects  RedirectSettings   `json:"redirects"`
 	Continue   ContinueSettings   `json:"continue"`
 	Streaming  StreamingSettings  `json:"streaming"`
+	TLS        TLSSettings        `json:"tls"`
+}
+
+// TLSSettings is how the operator governs the certificate the TARGET presents.
+//
+// # Why it lives here rather than only on SenderConfig
+//
+// SenderConfig.TLSVerify has governed the sender's own egress leg since the codecs landed, but it is a
+// construction-time field with no settings surface behind it: an operator could not see it, could not
+// change it while running, and the proxy leg had no equivalent at all — every intercepted connection
+// was opened with verification off and nothing anywhere could say so (burpsy-react-ui-f365).
+//
+// Putting it in NetworkSettings gives it the same live, persisted, API-edited life as every other
+// network decision, and lets the same edit reach the sender and the proxy. The field is the SAME
+// setting, not a second one: an operator who turns verification off means it for every leg, and two
+// knobs that could disagree would be the overclaim this section exists to remove.
+//
+// Verify defaults to true, which is Burp's default and the only safe reading of a field whose absence
+// would otherwise mean "accept anything".
+type TLSSettings struct {
+	// Verify is whether the target's certificate is verified. True by default; false is the
+	// deliberate opt-out for a self-signed target, and it is the setting an assessor reaches for
+	// rather than one burpsy should choose on their behalf.
+	Verify bool `json:"verify"`
+	// RootCAPath is a PEM bundle added to the system pool for verification. Empty means the system
+	// pool alone. It is how an operator reaches a target whose issuer is private without giving up
+	// verification entirely.
+	RootCAPath string `json:"root_ca_path"`
+	// MinVersion is the lowest TLS version accepted, as Burp's protocol selection expresses it. Zero
+	// means Go's default, which is the floor Go considers safe.
+	MinVersion uint16 `json:"min_version"`
 }
 
 // ResolutionPolicy names where a hostname's address comes from.
@@ -76,6 +108,151 @@ type ResolutionSettings struct {
 	Resolver string `json:"resolver"`
 	// TimeoutMS bounds one lookup. Zero means the resolver's own default.
 	TimeoutMS int `json:"timeout_ms"`
+	// Family is the address family the answer is filtered to, which is Burp's resolution-address
+	// preference (settings/network/dns.html:49-65): "because routing restrictions may permit only one
+	// family". ResolutionSystem is the default and returns the resolver's order untouched.
+	Family AddressFamily `json:"family"`
+	// Lookup is the name-resolution seam the family preference resolves through. Nil means the
+	// configured resolver, or the system one.
+	//
+	// It exists because the preference's whole job is choosing between two families, and a machine
+	// that resolves only one of them cannot demonstrate the choice: localhost is IPv4-only on most
+	// boxes, so a test that used it passed whether or not the transport honoured the setting. A test
+	// that answers for both families can, and a real resolver cannot be asked for both on demand.
+	//
+	// Not part of the wire shape — it has no json tag and no key, so a settings document cannot set
+	// it. It is a seam, not a setting, and the only writer is a test.
+	Lookup func(ctx context.Context, host string) ([]string, error) `json:"-"`
+}
+
+// AddressFamily is which family a hostname's answer is filtered to.
+type AddressFamily string
+
+const (
+	// FamilySystem leaves the resolver's ordering alone, which is what every dial did before the
+	// preference existed. The default because the system order encodes the operator's own routing
+	// preferences, and overriding them is a decision they have to make.
+	FamilySystem AddressFamily = "system"
+	// FamilyIPv4 keeps only A records.
+	FamilyIPv4 AddressFamily = "ipv4"
+	// FamilyIPv6 keeps only AAAA records. A dual-stack target reachable only over IPv6 is the shape
+	// this exists for; a target reachable over NEITHER is refused, which is the honest outcome.
+	FamilyIPv6 AddressFamily = "ipv6"
+)
+
+// familyValue is the Go constant a family names, and whether the family is a filter at all. System is
+// not a filter: it means the resolver's own order, and returning its answer untouched is the whole
+// point rather than a special case of preferring one family.
+func (f AddressFamily) familyValue() (uint32, bool) {
+	switch f {
+	case FamilyIPv4:
+		return 4, true
+	case FamilyIPv6:
+		return 6, true
+	default:
+		return 0, false
+	}
+}
+
+// String names the family for the settings document and a refusal message.
+func (f AddressFamily) String() string {
+	switch f {
+	case FamilyIPv4:
+		return "ipv4"
+	case FamilyIPv6:
+		return "ipv6"
+	default:
+		return "system"
+	}
+}
+
+// filterFamily returns the addresses of one family from a resolver's answer, in the resolver's order.
+//
+// It is a filter over an existing answer set rather than a resolver rewrite, for a reason that is
+// about correctness rather than taste: a per-family query (AAAA rather than A) can be answered
+// differently by a split-horizon resolver than a filtered answer to a question the operator actually
+// asked, and the engagement's own DNS is the thing that knows. RFC 6555's "filtered AAAA" exists for
+// deployments that want it; a security tool should not be one by default.
+func filterFamily(addrs []string, family AddressFamily) ([]string, bool) {
+	want, ok := family.familyValue()
+	if !ok {
+		return addrs, true
+	}
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			// A literal that is not an IP, or something the resolver returned that is neither, is kept
+			// out: this function filters to one family and an unparseable answer is not of either.
+			continue
+		}
+		if ip.To4() != nil {
+			if want == 4 {
+				out = append(out, addr)
+			}
+			continue
+		}
+		if want == 6 {
+			out = append(out, addr)
+		}
+	}
+	return out, len(out) > 0
+}
+
+// resolutionFailure names why a hostname could not be turned into a dialable address, and is what a
+// caller reports when the family filter found nothing.
+//
+// "no address of that family" is the whole reason this is a separate type rather than an empty list: a
+// dual-stack host with only an IPv6 route, asked for IPv4, is a routing problem the operator has to
+// see. A generic "could not resolve" would read as a DNS fault and send them to the wrong setting.
+type resolutionFailure struct {
+	host   string
+	family AddressFamily
+	empty  bool
+}
+
+func (e *resolutionFailure) Error() string {
+	if e.empty {
+		return "resolution.family is " + e.family.String() + " and " + e.host +
+			" has no address of that family; a host reachable over the other family only cannot be " +
+			"dialled, and setting resolution.family to system would return both"
+	}
+	return "resolution found no usable address for " + e.host
+}
+
+// resolveForDial turns a hostname into one address to dial, applying the override table and then the
+// family preference.
+//
+// # Why it resolves rather than handing the name to the dialer
+//
+// net.Dialer takes a hostname and does this work itself, but it also does it the OPERATOR's platform
+// way: it walks the resolver's answers and connects to the first that opens, and on a dual-stack host
+// whose AAAA is unroutable it may try the AAAA, wait out the connect timeout, and only then try the A.
+// The result is a request that takes the connect timeout to fail on a host that was reachable all
+// along, which is the shape burpsy-react-ui-mr83 part 2 records: an operator with no setting that
+// fixes it, who must override the hostname one address at a time.
+func (n NetworkSettings) resolveForDial(ctx context.Context, host string) (string, error) {
+	if addr, ok := n.Resolution.resolveHost(host); ok {
+		// An override is an operator naming one address. The family preference does not second-guess
+		// it: they said this address, and a filter here would silently discard the address they typed
+		// and dial somewhere they did not ask for.
+		return addr, nil
+	}
+	if _, isFilter := n.Resolution.Family.familyValue(); !isFilter {
+		return host, nil
+	}
+
+	// Only the filtering path needs to resolve here; the system path hands the hostname to the dialer
+	// exactly as it always did.
+	candidates, err := n.Resolution.lookup(ctx, host)
+	if err != nil {
+		return "", &resolutionFailure{host: host, family: n.Resolution.Family}
+	}
+	filtered, ok := filterFamily(candidates, n.Resolution.Family)
+	if !ok {
+		return "", &resolutionFailure{host: host, family: n.Resolution.Family, empty: true}
+	}
+	return filtered[0], nil
 }
 
 // TimeoutSettings splits what SenderConfig.Timeout used to conflate.
@@ -124,6 +301,17 @@ type RedirectSettings struct {
 	Mode RedirectMode `json:"mode"`
 	// MaxHops bounds a chain. A redirect loop is the ordinary case, not the exotic one.
 	MaxHops int `json:"max_hops"`
+	// ReplayCookies makes a followed chain resubmit the cookies each hop's response set, to that
+	// hop's OWN authority. Burp exposes it as "Follow redirections and resubmit cookies"
+	// (settings/tools/repeater.html:143-145), and it is what makes a login or SSO flow that sets a
+	// cookie on a 302 work at all.
+	//
+	// Default OFF, unlike a browser's. burpsy sends what an operator wrote, and a cookie the target
+	// set mid-chain is not something they asked to send — a chain that suddenly carries a credential
+	// nobody typed is the surprise this setting exists to let an operator turn off. A target that sets
+	// throwaway cookies is the other reason: without a switch, following its redirects would keep
+	// resending them.
+	ReplayCookies bool `json:"replay_cookies"`
 }
 
 // ContinueSettings makes the 100-continue handling explicit.
@@ -156,6 +344,30 @@ type StreamingSettings struct {
 	// TimeoutMS is how long to keep reading a streaming response before returning what has arrived.
 	// Burp calls this the open-ended response timeout.
 	TimeoutMS int `json:"timeout_ms"`
+
+	// The three response-handling switches, Burp's streaming_responses.* keys. They govern what the
+	// proxy does with a response once it is recognised as streaming, and the proxy leg reads them off
+	// this document (api_network pushes them into proxy.StreamingPolicy).
+
+	// Store is "Store streaming responses (may result in large temp files)". A pointer, not a bare
+	// bool, because LoadNetworkSettings unmarshals onto an empty struct: a bare bool would decode a
+	// previously-saved document that predates this field as `false` and silently stop recording
+	// streamed bodies. Nil means the shipped default, which StoreStreamed reads as on.
+	Store *bool `json:"store,omitempty"`
+	// StripChunkedMetadata is "Strip chunked encoding metadata from streamed responses". Defaults off,
+	// which reproduces forwarding a streamed response exactly as it arrived.
+	StripChunkedMetadata bool `json:"strip_chunked_encoding_metadata"`
+	// UseTextEventStreamHeader is "Treat text/event-stream responses as streaming". Defaults off: a
+	// framed text/event-stream response takes the buffered path like any other framed response until
+	// the operator turns this on.
+	UseTextEventStreamHeader bool `json:"use_text_event_stream_header"`
+}
+
+// StoreStreamed reads the Store switch, defaulting a nil (never-set, or loaded from a document that
+// predates the field) to on — the behaviour that shipped before the switch existed, where every
+// streamed response was recorded.
+func (s StreamingSettings) StoreStreamed() bool {
+	return s.Store == nil || *s.Store
 }
 
 // Bounds on what the API will accept. Stated as constants so a refusal message can name the limit
@@ -206,6 +418,10 @@ func DefaultNetworkSettings() NetworkSettings {
 			Hosts:     nil,
 			TimeoutMS: 10_000,
 		},
+		// Verify ON. This is the default that matters most in the whole settings document: the
+		// alternative is a tool that accepts any certificate from any target and says nothing, which is
+		// the state burpsy-react-ui-f365 found the proxy permanently in.
+		TLS: TLSSettings{Verify: true},
 	}
 }
 
@@ -227,7 +443,26 @@ func (n NetworkSettings) Validate() error {
 	if err := n.Continue.validate(); err != nil {
 		return err
 	}
-	return n.Streaming.validate()
+	if err := n.Streaming.validate(); err != nil {
+		return err
+	}
+	return n.TLS.validate()
+}
+
+// validate refuses a TLS policy that cannot be applied, naming the field and the value.
+//
+// The min-version floor is the only check: there is no such thing as a TLS version below 1.0, and a
+// number claiming to be one is a corrupted document rather than a policy. The custom CA's CONTENTS are
+// not checked here — the path is read by whichever leg dials, and a bundle that turns out malformed is
+// reported at that handshake naming the path that produced it, which is the thing the operator has to
+// fix. Refusing the whole document because a file is temporarily unreadable would leave no way to save
+// an unrelated setting.
+func (t TLSSettings) validate() error {
+	if t.MinVersion != 0 && t.MinVersion < tls.VersionTLS10 {
+		return fmt.Errorf("tls.min_version is 0x%04x, which is below TLS 1.0: there is no protocol below "+
+			"it to select", t.MinVersion)
+	}
+	return nil
 }
 
 func (r ResolutionSettings) validate() error {
@@ -236,6 +471,12 @@ func (r ResolutionSettings) validate() error {
 	default:
 		return fmt.Errorf("resolution.policy is %q, and the only lookup policies are %q and %q",
 			r.Policy, ResolutionSystem, ResolutionResolver)
+	}
+	switch r.Family {
+	case "", FamilySystem, FamilyIPv4, FamilyIPv6:
+	default:
+		return fmt.Errorf("resolution.family is %q, and the only preferences are %q, %q and %q",
+			r.Family, FamilySystem, FamilyIPv4, FamilyIPv6)
 	}
 	if r.Policy == ResolutionResolver {
 		if strings.TrimSpace(r.Resolver) == "" {
@@ -377,6 +618,18 @@ func (n NetworkSettings) Normalise() NetworkSettings {
 	}
 	out.Resolution.Overrides = overrides
 
+	// The CA path is trimmed like every other free-text field, so a path pasted with a trailing
+	// newline does not become a file that does not exist. The value is otherwise untouched: a path the
+	// operator cannot reach is reported by the leg that tries to read it, naming the path.
+	out.TLS.RootCAPath = strings.TrimSpace(out.TLS.RootCAPath)
+
+	// An absent family is the system default, NOT an empty filter. Normalising it here is what keeps
+	// a settings document written before the field existed from resolving to nothing at all — the
+	// failure mode of a string-typed enum whose zero value is not a valid member.
+	if out.Resolution.Family == "" {
+		out.Resolution.Family = FamilySystem
+	}
+
 	if out.Redirects.Mode == "" {
 		out.Redirects.Mode = RedirectNever
 	}
@@ -403,6 +656,21 @@ func (n NetworkSettings) Normalise() NetworkSettings {
 // override would mean one address serving a whole subtree of names, and the operator who wrote
 // `*.example.com -> 10.0.0.1` almost certainly did not mean to send every host under that domain to
 // one box. Scope patterns are the place for wildcards; an address table is not.
+// DialAddress maps a host:port to the address this leg should actually dial, applying the
+// hostname overrides and then the address-family policy (burpsy-react-ui-o1eu).
+//
+// Exported so the proxy listener resolves a host exactly as this package's own sends do — one
+// implementation, so a split-horizon override cannot apply to Repeater and silently not to the
+// traffic the operator is driving through the proxy, which is the leg they are most likely to be
+// watching. An unparseable or unresolved address is returned as the caller built it: inventing one
+// would dial an address nobody named.
+func (r ResolutionSettings) DialAddress(ctx context.Context, host string, port uint16) string {
+	if replacement, ok := r.resolveHost(host); ok {
+		return net.JoinHostPort(replacement, strconv.Itoa(int(port)))
+	}
+	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+}
+
 func (r ResolutionSettings) resolveHost(host string) (string, bool) {
 	needle := strings.ToLower(host)
 	for _, o := range r.Overrides {
@@ -413,12 +681,36 @@ func (r ResolutionSettings) resolveHost(host string) (string, bool) {
 	return "", false
 }
 
-// dialAddress is the address a dial to host:port should actually use, after the override table.
+// dialAddress is dialAddressFor with no context, for the callers that have none — the override
+// table's own tests, and anywhere the family preference is already the system one and cannot need a
+// lookup. It resolves against a background context, so a real send should prefer dialAddressFor.
 func (n NetworkSettings) dialAddress(host string, port uint16) string {
-	if addr, ok := n.Resolution.resolveHost(host); ok {
-		return net.JoinHostPort(addr, strconv.Itoa(int(port)))
+	return n.dialAddressFor(context.Background(), host, port)
+}
+
+// dialAddressFor is the address a dial to host:port should actually use, after the override table and
+// then the family preference.
+//
+// The family filter needs a resolver answer, which needs a context, so this takes one. The system
+// preference — the default — does no lookup at all and returns the hostname unchanged, so the ordinary
+// send is not paying for a resolution the dialer is about to do anyway.
+// DialAddress is DialAddressFor, exported so another egress surface (the proxy listener) can
+// apply the same resolution overrides and address-family policy this package's own sends do
+// (burpsy-react-ui-o1eu). One implementation, so the two legs cannot resolve a host differently.
+func (n NetworkSettings) DialAddress(ctx context.Context, host string, port uint16) string {
+	return n.dialAddressFor(ctx, host, port)
+}
+
+func (n NetworkSettings) dialAddressFor(ctx context.Context, host string, port uint16) string {
+	addr, err := n.resolveForDial(ctx, host)
+	if err != nil || addr == "" {
+		// A family filter that matched nothing resolves to the HOSTNAME, which then fails at the dial
+		// with the operating system's own error. resolveForDial's message is the useful one, so it is
+		// logged by the caller that can see it; here the address is simply not a rewrite, because
+		// inventing one would dial an address nobody named.
+		return net.JoinHostPort(host, strconv.Itoa(int(port)))
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(port)))
+	return net.JoinHostPort(addr, strconv.Itoa(int(port)))
 }
 
 // overrideAddr rewrites a `host:port` string the way dialAddress rewrites a host and a port, for the
@@ -480,6 +772,31 @@ func normaliseResolver(raw string) (string, error) {
 			"of its own")
 	}
 	return net.JoinHostPort(trimmed, "53"), nil
+}
+
+// lookup answers one hostname, through the test seam when there is one and the configured resolver
+// otherwise.
+//
+// It returns STRING addresses rather than net.IPAddr because that is what the family filter and the
+// dialer both consume, and a net.IPAddr carries a zone name a filter would have to strip and a dialer
+// would have to put back.
+func (r ResolutionSettings) lookup(ctx context.Context, host string) ([]string, error) {
+	if r.Lookup != nil {
+		return r.Lookup(ctx, host)
+	}
+	resolver := r.resolver()
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	ips, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, ip.IP.String())
+	}
+	return out, nil
 }
 
 // resolver returns the *net.Resolver these settings ask for, or nil for the system one.

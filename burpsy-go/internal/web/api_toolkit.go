@@ -5,14 +5,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
+	"github.com/burpsy-go/burpsy/internal/organizer"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/tools"
@@ -28,9 +31,14 @@ type sitemapNodeView struct {
 	// the server that emitted it. The UI had already stopped trusting it and re-derived host+path
 	// itself, with a comment saying so; this makes the identity the UI actually uses the one the
 	// server states.
-	Key          string   `json:"key"`
-	Segment      string   `json:"segment"`
-	Path         string   `json:"path"`
+	Key     string `json:"key"`
+	Segment string `json:"segment"`
+	Path    string `json:"path"`
+	// Port and TLS repeat the host-node identity on every node, so a client acting on one row
+	// (DELETE /api/sitemap, burpsy-react-ui-10e) can name the exact (host, port, tls) tuple without
+	// parsing the composed `key` back into parts — a second grammar that can drift from the first.
+	Port         uint16   `json:"port"`
+	TLS          bool     `json:"tls"`
 	Depth        int      `json:"depth"`
 	Exchanges    int      `json:"exchanges"`
 	Requested    bool     `json:"requested"`
@@ -38,7 +46,11 @@ type sitemapNodeView struct {
 	ChildCount   int      `json:"child_count"`
 	Methods      []string `json:"methods"`
 	Statuses     []int    `json:"statuses"`
-	Params       []string `json:"params"`
+	// Mimes is the distinct media-type words (mimeLabel's vocabulary: "html", "json", "css", …)
+	// seen in the subtree, so the UI's MIME filter bucket works without reading a single response
+	// body — the same index-row rule the rest of the wire shape follows.
+	Mimes  []string `json:"mimes"`
+	Params []string `json:"params"`
 	// Issues is the findings recorded at this exact path; SubtreeIssues includes everything beneath
 	// it, and WorstSeverity is the worst of those. Burp marks a collapsed branch with what is inside
 	// it, which is the whole point of a tree over a flat list: it says where to look before it is
@@ -58,12 +70,28 @@ type sitemapNodeView struct {
 	// `exclude(h, "/admin")` must leave the host lit, and an `include(h).with_path_prefix("/v1/")`
 	// must also leave it lit even though `h`'s root is not itself in scope.
 	//
-	// Deliberately not MayContainHost: that is a pre-filter for attacks and is documented as
-	// permissive — only a whole-host exclude flips it, so with include rules present it calls every
-	// unlisted host in scope. Correct there, because the real gate is per-request; wrong here, where
-	// it would light up every third party the proxy ever saw. This value only decides what is greyed;
-	// authorisation stays on the bytes going out.
-	InScope      bool              `json:"in_scope"`
+	// Deliberately not MayContainHost: that is a pre-filter for attacks and answers a coarser question
+	// than the sitemap asks. It refuses a host no include rule names, agreeing with Contains on the
+	// "unlisted third party" case — but a path-scoped include (`include(h, "/v1/")`) still lights the
+	// whole host to it, because "may an attack invent a path here" has to stay open for the host whose
+	// /v1/ paths are authorised. The sitemap instead asks Contains per node, so it has the precision to
+	// light /v1/ and dim the host root. This value only decides what is greyed; authorisation stays on
+	// the bytes going out.
+	InScope bool `json:"in_scope"`
+	// HostName is the authority's host, carried on every node so the merge can group by it without
+	// parsing Key. Never serialised: Key already states the identity to a client, and a second
+	// spelling of the same fact on the wire is a second thing to keep right.
+	HostName string `json:"-"`
+	// Inserted marks a node the operator added themselves rather than one traffic was observed on
+	// (amu). The two are kept apart for the reason the decision recorded: a node on the map means
+	// either "we saw this" or "you wrote this down", and an operator reading the map needs to know
+	// which — the counts beside an inserted node are all zero precisely because nothing was
+	// requested, and saying so on the node is better than a node that looks observed and empty.
+	//
+	// Never omitempty: absent and false are the same JSON, and a client that read an absent
+	// `inserted` as "this is a stored fact" would label every observed node as added.
+	Inserted     bool              `json:"inserted"`
+	AddedAt      *int64            `json:"added_at,omitempty"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`
 	Children     []sitemapNodeView `json:"children,omitempty"`
@@ -79,14 +107,114 @@ type sitemapTreeResp struct {
 	Tree      []sitemapNodeView `json:"tree"`
 }
 
-// handleSitemap serves GET /api/sitemap?host=&path=&depth=. The Go sitemap aggregates hosts → paths
-// → methods/statuses from captured exchanges; this folds it into the same tree the UI renders,
-// treating each path segment as a node.
+// handleSitemap serves GET /api/sitemap?host=&path=&depth= and DELETE /api/sitemap
+// (burpsy-react-ui-10e). The Go sitemap aggregates hosts → paths → methods/statuses from captured
+// exchanges; this folds it into the same tree the UI renders, treating each path segment as a node.
+//
+// DELETE is Burp's "Delete host"/"Delete branch"/"Delete item". The body names the node the way
+// the tree identifies it — {"host","port","tls","path","kind"} — rather than a pre-built key
+// string: parsing a composed key back into its parts is a second grammar that can drift from the
+// first, and the fields are what the UI already holds in the row object. kind is "item" (that one
+// path node only) or "branch" (the path and everything beneath it); path "" means the whole host.
+// Removal is a SUPPRESSION (sitemap.SiteMap.Suppress): the projection drops the branch and keeps
+// it out across rebuilds and re-captures, while the exchanges themselves stay — HTTP history rows,
+// findings and audit references keep naming them. That decision is recorded on the issue and in
+// Suppress's doc comment; deleting store bytes from a map view would have broken every other
+// tool's currency.
 func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		s.sitemapGet(w, r)
+	// "Add to site map" (amu): an operator records a URL they know about without sending traffic to
+	// it. POST, because it adds to the map and DELETE suppresses — the same verbs the two halves of
+	// Burp's site-map context menu already use.
+	case http.MethodPost:
+		s.sitemapInsert(w, r)
+	case http.MethodDelete:
+		s.sitemapDelete(w, r)
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// sitemapInsert records one operator-added site-map node (amu).
+//
+// The response says which of the two things happened, because they are different facts an operator
+// needs to know: a node they added, or a node that was ALREADY on the map because traffic to it was
+// observed. Reporting the second as a success would tell an operator their URL was recorded when it
+// was on the map for a stronger reason, and the distinction is the whole point of keeping inserts
+// separate from observations.
+func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+		Port uint16 `json:"port"`
+		TLS  bool   `json:"tls"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"/p\"}",
+			http.StatusBadRequest)
 		return
 	}
+	req.Host = strings.TrimSpace(req.Host)
+	if req.Host == "" {
+		http.Error(w, "a host is required: the map is a tree of authorities, and a node with no host "+
+			"is not one", http.StatusBadRequest)
+		return
+	}
+	if req.Port == 0 {
+		http.Error(w, "a port is required: a map node names one authority, and app.test:0 is not one. "+
+			"The row menu takes the port from the exchange it was invoked on", http.StatusBadRequest)
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path != "" && !strings.HasPrefix(req.Path, "/") {
+		req.Path = "/" + req.Path
+	}
+	already := s.sitemap.Insert(req.Host, req.Port, req.TLS, req.Path, time.Now())
+	body := map[string]any{
+		"inserted":     req.Host + req.Path,
+		"already_seen": already,
+	}
+	if already {
+		body["note"] = "that host and path are already on the map because traffic to them was observed, " +
+			"which is a stronger fact than a note to self"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
+}
+
+// sitemapDelete validates the node fields the UI sent and suppresses that host, branch or item.
+// A wrong-verb answer is the mux's business; a body naming no host, or a path with no kind, is a
+// 400 saying what was wrong — not a silent success that removed nothing.
+func (s *Server) sitemapDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Host string `json:"host"`
+		Port uint16 `json:"port"`
+		TLS  bool   `json:"tls"`
+		Path string `json:"path"`
+		Kind string `json:"kind"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
+		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"\", \"kind\": \"host\"} (path \"\" = whole host) or {.., \"path\": \"/p\", \"kind\": \"item\"|\"branch\"}", http.StatusBadRequest)
+		return
+	}
+	// The literals match sitemap's suppressItem/suppressBranch values; they are spelled here rather
+	// than exported from sitemap because the wire vocabulary is this API's contract, not the map
+	// package's.
+	if req.Path != "" && req.Kind != "item" && req.Kind != "branch" {
+		http.Error(w, "kind must be \"item\" or \"branch\" when a path is given", http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		req.Kind = "host"
+	}
+	s.sitemap.Suppress(sitemap.HostKey(req.Host, req.Port, req.TLS), req.Path, req.Kind)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"suppressed": req.Host + req.Path, "kind": req.Kind})
+}
+
+func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	hostFilter := q.Get("host")
 	pathFilter := q.Get("path")
@@ -109,16 +237,22 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		children := s.foldPaths(host, pathFilter, &nodeCount, issues)
 		lastEx := lastExchangeID(exchanges, host.Host)
 		hostIssues, hostWorst := 0, -1
+		hostMimes := map[string]struct{}{}
 		for _, c := range children {
 			hostIssues += c.SubtreeIssues
 			if r := severityRankOf(c.WorstSeverity); r > hostWorst {
 				hostWorst = r
+			}
+			for _, m := range c.Mimes {
+				hostMimes[m] = struct{}{}
 			}
 		}
 		tree = append(tree, sitemapNodeView{
 			Key:           nodeKey(host.Host, host.Port, host.TLS, ""),
 			Segment:       host.Host,
 			Path:          host.Host,
+			Port:          host.Port,
+			TLS:           host.TLS,
 			Depth:         0,
 			Exchanges:     len(host.Paths),
 			Requested:     true,
@@ -126,6 +260,7 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 			ChildCount:    len(children),
 			Methods:       []string{},
 			Statuses:      []int{},
+			Mimes:         sortedSetKeys(hostMimes),
 			LastExchange:  lastEx,
 			Recent:        []core.ExchangeID{},
 			SubtreeIssues: hostIssues,
@@ -135,6 +270,41 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Operator-added nodes (amu), merged in after the observed tree so the fold above never has to
+	// know about them. An insert naming a path that was already observed is not emitted: the
+	// observation is the stronger fact, and the caller was told exactly that at insert time.
+	insertedPaths := make([]sitemapNodeView, 0)
+	for _, in := range s.sitemap.Inserts() {
+		if hostFilter != "" && in.Host != hostFilter {
+			continue
+		}
+		if pathFilter != "" && !strings.Contains(in.Path, pathFilter) {
+			continue
+		}
+		if in.Path != "" && observedPath(s.sitemap, in) {
+			continue
+		}
+		nodeCount++
+		added := in.Added.UnixMilli()
+		insertedPaths = append(insertedPaths, sitemapNodeView{
+			Key:      nodeKey(in.Host, in.Port, in.TLS, in.Path),
+			HostName: in.Host,
+			Segment:  pathSegment(in.Path),
+			Path:     in.Path,
+			Port:     in.Port,
+			TLS:      in.TLS,
+			Depth:    len(ancestorPaths(in.Path)),
+			Inserted: true,
+			AddedAt:  &added,
+			Methods:  []string{},
+			Statuses: []int{},
+			Mimes:    []string{},
+			Recent:   []core.ExchangeID{},
+			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
+		})
+	}
+	tree, nodeCount = mergeInsertedIntoTree(tree, insertedPaths, nodeCount)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(sitemapTreeResp{
 		Exchanges: len(exchanges),
@@ -143,6 +313,231 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 		InFlight:  0,
 		Tree:      tree,
 	})
+}
+
+// observedPath reports whether the observed tree already holds this exact path under its host. An
+// insert that names one is not a new node: the observation is the stronger fact about that URL.
+func observedPath(sm *sitemap.SiteMap, in *sitemap.InsertedNode) bool {
+	for _, host := range sm.Hosts() {
+		if host.Host != in.Host || host.Port != in.Port || host.TLS != in.TLS {
+			continue
+		}
+		clean, _ := splitPathQuery(in.Path)
+		if _, ok := host.Paths[clean]; ok {
+			return true
+		}
+		// A folder is observed when anything beneath it is: the fold synthesises ancestor folders, so
+		// an insert naming /api/ would otherwise produce a second /api/ node beside the synthesised one.
+		for _, pn := range host.Paths {
+			cleanPath, _ := splitPathQuery(pn.Path)
+			if clean == "/" || strings.HasPrefix(cleanPath, strings.TrimSuffix(clean, "/")+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathOrRoot is the path scope questions are asked about: an inserted host node has no path, and
+// Contains wants a real one.
+func pathOrRoot(p string) string {
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
+// mergeInsertedIntoTree grafts operator-added nodes onto the observed tree.
+//
+// The shape the map already has is host → path folders → leaves, and an insert can land anywhere in
+// it: under a host that was observed, under a host that was not, or at a folder level between two
+// observed nodes. Synthesising the missing ancestors is what keeps the tree a tree — an insert under
+// an unseen host needs a host row to sit under, and an insert of /api/v1/users needs /api and
+// /api/v1 above it or it would render as a root sibling of the host it belongs to.
+//
+// Returns the new tree and the node count, because synthesised folders are nodes and the count the
+// UI prints has to include them.
+func mergeInsertedIntoTree(tree []sitemapNodeView, inserts []sitemapNodeView, nodeCount int) ([]sitemapNodeView, int) {
+	if len(inserts) == 0 {
+		return tree, nodeCount
+	}
+	// Group the inserts by authority, then by path, so one place in the tree is touched once.
+	type group struct {
+		host  sitemapNodeView
+		paths map[string]sitemapNodeView
+	}
+	byHost := map[string]*group{}
+	var order []string
+	for _, in := range inserts {
+		key := nodeKey(in.HostName, in.Port, in.TLS, "")
+		g := byHost[key]
+		if g == nil {
+			g = &group{host: sitemapNodeView{
+				Key:      key,
+				Segment:  in.HostName,
+				Path:     in.HostName,
+				HostName: in.HostName,
+				Port:     in.Port,
+				TLS:      in.TLS,
+				Depth:    0,
+				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Recent: []core.ExchangeID{},
+			}, paths: map[string]sitemapNodeView{}}
+			byHost[key] = g
+			order = append(order, key)
+		}
+		g.paths[in.Path] = in
+	}
+
+	for _, key := range order {
+		g := byHost[key]
+		// Find the observed host row, if there is one: an insert under a host with traffic hangs on
+		// the host's own row, and its counts are the observed ones.
+		idx := -1
+		for i := range tree {
+			if tree[i].Key == key {
+				idx = i
+				break
+			}
+		}
+		var hostNode sitemapNodeView
+		if idx >= 0 {
+			hostNode = tree[idx]
+		} else {
+			hostNode = g.host
+			hostNode.Inserted = true
+			added := insertsAddedAt(inserts, hostNode.HostName, hostNode.Port, hostNode.TLS)
+			hostNode.AddedAt = added
+			nodeCount++
+		}
+		// Fold each inserted path into the host's children, synthesising the folders above it.
+		paths := make([]string, 0, len(g.paths))
+		for p := range g.paths {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			in := g.paths[p]
+			graftInserted(&hostNode, in, &nodeCount)
+		}
+		hostNode.SubtreeCount = hostNode.SubtreeCount + len(paths)
+		if idx >= 0 {
+			tree[idx] = hostNode
+		} else {
+			tree = append(tree, hostNode)
+		}
+	}
+	return tree, nodeCount
+}
+
+// insertsAddedAt is the earliest insert time under one authority, for the synthesised host row.
+func insertsAddedAt(inserts []sitemapNodeView, host string, port uint16, tls bool) *int64 {
+	var earliest *int64
+	for _, in := range inserts {
+		if in.HostName != host || in.Port != port || in.TLS != tls {
+			continue
+		}
+		if in.AddedAt == nil {
+			continue
+		}
+		if earliest == nil || *in.AddedAt < *earliest {
+			v := *in.AddedAt
+			earliest = &v
+		}
+	}
+	return earliest
+}
+
+// graftInserted puts one inserted node into a host's tree, creating the folders above it.
+//
+// Through a POINTER because the recursion walks a struct field: returning a modified slice from a
+// function whose parent was copied by value drops every append, which is how the first version of
+// this reported child_count 3 and rendered no children at all — a tree that counted what it did not
+// show.
+func graftInserted(host *sitemapNodeView, in sitemapNodeView, nodeCount *int) {
+	ancestors := ancestorPaths(in.Path)
+	current := &host.Children
+	for depth, anc := range ancestors {
+		found := -1
+		for i := range *current {
+			if (*current)[i].Path == anc {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			*nodeCount++
+			*current = append(*current, sitemapNodeView{
+				Key:        nodeKey(in.HostName, in.Port, in.TLS, anc),
+				Segment:    pathSegment(anc),
+				Path:       anc,
+				HostName:   in.HostName,
+				Port:       in.Port,
+				TLS:        in.TLS,
+				Depth:      depth,
+				Inserted:   true,
+				Methods:    []string{},
+				Statuses:   []int{},
+				Mimes:      []string{},
+				Recent:     []core.ExchangeID{},
+				ChildCount: len(ancestors) - depth - 1,
+			})
+			found = len(*current) - 1
+		}
+		current = &(*current)[found].Children
+	}
+	replaced := false
+	for i := range *current {
+		if (*current)[i].Path == in.Path {
+			(*current)[i] = in
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		*nodeCount++
+		*current = append(*current, in)
+	}
+	// The counts a parent reports must include what was grafted under it, or the row says it has
+	// three children and renders none.
+	for i := range host.Children {
+		countDescendants(&host.Children[i])
+	}
+	host.ChildCount = len(host.Children)
+	host.SubtreeCount = countLeaves(host.Children)
+}
+
+// countDescendants fills ChildCount and SubtreeCount for a grafted subtree, so every parent states
+// the same numbers the UI would count by walking it.
+func countDescendants(node *sitemapNodeView) {
+	node.ChildCount = len(node.Children)
+	leaves := 0
+	for i := range node.Children {
+		child := &node.Children[i]
+		if len(child.Children) > 0 {
+			countDescendants(child)
+		}
+		leaves += child.SubtreeCount
+	}
+	if leaves == 0 {
+		leaves = 1
+	}
+	node.SubtreeCount = leaves
+}
+
+// countLeaves is the number of leaf nodes in a children list.
+func countLeaves(children []sitemapNodeView) int {
+	if len(children) == 0 {
+		return 0
+	}
+	total := 0
+	for _, c := range children {
+		if len(c.Children) == 0 {
+			total++
+		} else {
+			total += countLeaves(c.Children)
+		}
+	}
+	return total
 }
 
 // anyInScope reports whether any node in these subtrees is in scope, so a host stays lit when only
@@ -170,6 +565,7 @@ type pathAgg struct {
 	requested bool
 	methods   map[string]int
 	statuses  map[int]int
+	mimes     map[string]struct{}
 	ids       []core.ExchangeID
 	params    map[string]struct{}
 }
@@ -182,7 +578,7 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 	ensure := func(p string) *pathAgg {
 		a := aggs[p]
 		if a == nil {
-			a = &pathAgg{methods: map[string]int{}, statuses: map[int]int{}, params: map[string]struct{}{}}
+			a = &pathAgg{methods: map[string]int{}, statuses: map[int]int{}, mimes: map[string]struct{}{}, params: map[string]struct{}{}}
 			aggs[p] = a
 		}
 		return a
@@ -202,6 +598,9 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 		}
 		for st, n := range pn.Statuses {
 			a.statuses[st] += n
+		}
+		for m := range pn.Mimes {
+			a.mimes[m] = struct{}{}
 		}
 		a.ids = append(a.ids, pn.ExchangeIDs...)
 		for _, name := range queryParamNames(rawQuery) {
@@ -237,11 +636,14 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			Key:           nodeKey(host.Host, host.Port, host.TLS, p),
 			Segment:       pathSegment(p),
 			Path:          p,
+			Port:          host.Port,
+			TLS:           host.TLS,
 			Depth:         strings.Count(p, "/"),
 			Exchanges:     len(a.ids),
 			Requested:     a.requested,
 			Methods:       sortedStringKeys(a.methods),
 			Statuses:      statusInts(a.statuses),
+			Mimes:         sortedSetKeys(a.mimes),
 			Params:        sortedSetKeys(a.params),
 			LastExchange:  lastExchangeForPath(host.Host, a.ids),
 			Recent:        lastN(a.ids, 20),
@@ -266,6 +668,12 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 		total := v.Exchanges
 		issueTotal := v.Issues
 		worst := severityRankOf(v.WorstSeverity)
+		// Mimes union up the tree like the counts do, so a folder's MIME filter bucket sees what its
+		// descendants serve. views[p].Mimes is the node's own set; the copy here is the union.
+		mimes := make(map[string]struct{}, len(v.Mimes))
+		for _, m := range v.Mimes {
+			mimes[m] = struct{}{}
+		}
 		for _, c := range childOf[p] {
 			cv := assemble(c)
 			total += cv.SubtreeCount
@@ -273,12 +681,16 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			if r := severityRankOf(cv.WorstSeverity); r > worst {
 				worst = r
 			}
+			for _, m := range cv.Mimes {
+				mimes[m] = struct{}{}
+			}
 			v.Children = append(v.Children, cv)
 		}
 		v.ChildCount = len(v.Children)
 		v.SubtreeCount = total
 		v.SubtreeIssues = issueTotal
 		v.WorstSeverity = severityName(worst)
+		v.Mimes = sortedSetKeys(mimes)
 		return v
 	}
 	out := make([]sitemapNodeView, 0, len(roots))
@@ -460,10 +872,19 @@ func (s *Server) issuesByNode() map[string]*issueAgg {
 		return out
 	}
 	for _, f := range s.findings.All() {
-		rank := int(f.Severity)
+		// core.Finding's own contract: a dismissed finding stays in the store but "the severity
+		// counts exclude it" — the Issues page honours that, and the site map's per-node counts
+		// are the same severity counts by another door. A node that kept counting what the
+		// operator dismissed would disagree with the page that triage happened on.
+		if f.FalsePositive {
+			continue
+		}
+		// EffectiveSeverity, not the engine's Severity: an override is the operator's call on
+		// how the finding reads, and the dot on the node paints that call.
+		rank := int(f.EffectiveSeverity())
 		// One finding seen at three places marks three nodes; that is what "where are my issues" means.
 		for _, occ := range f.Occurrences {
-			ex, err := s.store.ExchangeByRequest(occ.Request)
+			ex, err := s.store.ExchangeByRequest(core.MsgOrZero(occ.Request))
 			if err != nil {
 				continue // unresolvable: counted nowhere rather than blamed on a guess
 			}
@@ -533,7 +954,24 @@ func nodeKey(host string, port uint16, tls bool, path string) string {
 
 // ---- Match & Replace ---------------------------------------------------------------------------
 
-// matchReplaceRuleSpec mirrors matchreplace.ts's RuleSpec.
+// matchReplaceRuleSpec mirrors the UI's RuleSpec.
+//
+// # Why Scope and Query are declared only to be refused
+//
+// Both come from the Rust-era wire shape, which carried a per-rule scope and a query
+// condition. Burp's match/replace rule model has neither: its persisted rule is exactly
+// rule_type, enabled, category, string_match, string_replace and comment (see
+// Zho_/CoreComponent5145 in the decompiled build, and Ekijh's serializer, which write those
+// six and nothing else), its rule table has seven columns and none of them is a scope (see
+// CoreComponent5002), and its documentation's only scope control is the panel-wide "Only
+// apply to in-scope items" checkbox. So there is no per-rule scope to persist, and the old
+// behaviour — accept the field, drop it on save, warn in the UI — was the worst of the three
+// options: a rule that survives one save and not the next is a rule whose behaviour changed
+// without anyone editing it.
+//
+// Declared here rather than ignored so the refusal can name the field. `*any` and `*string`
+// are nil for an absent key and for an explicit null, and non-nil for anything a caller
+// actually meant to set, which is the distinction the refusal needs.
 type matchReplaceRuleSpec struct {
 	RuleType      string  `json:"rule_type"`
 	Enabled       bool    `json:"enabled"`
@@ -545,16 +983,28 @@ type matchReplaceRuleSpec struct {
 	Query         *string `json:"query,omitempty"`
 }
 
-// matchReplaceSetSpec mirrors matchreplace.ts's RuleSetSpec.
+// matchReplaceSetSpec mirrors the UI's RuleSetSpec.
+//
+// InScopeOnly is Burp's "Only apply to in-scope items"; its config key is
+// `proxy.match_replace_disable_out_of_scope` and this field is named after the checkbox,
+// for the reason matchreplace.RuleSet.SetInScopeOnly gives.
 type matchReplaceSetSpec struct {
 	Rules               []matchReplaceRuleSpec `json:"rules"`
 	UpdateContentLength bool                   `json:"update_content_length"`
+	InScopeOnly         bool                   `json:"in_scope_only"`
 }
 
-// matchReplaceGetResp mirrors matchreplace.ts's RulesGetResp.
+// matchReplaceGetResp mirrors the UI's RulesGetResp.
+//
+// ScopeSkipped is the live count of messages the rules declined to rewrite because they were
+// out of scope. It is on this response rather than on the proxy's options snapshot because
+// it is a property of the rule set and it is the only evidence an operator has that a rule
+// which stopped matching did so because scope was narrowed rather than because the site
+// changed — the same distinction proxy.Options draws with its Skipped* counters.
 type matchReplaceGetResp struct {
 	AffectsRequests  bool                `json:"affects_requests"`
 	AffectsResponses bool                `json:"affects_responses"`
+	ScopeSkipped     uint64              `json:"scope_skipped"`
 	Config           matchReplaceSetSpec `json:"config"`
 }
 
@@ -570,16 +1020,8 @@ var matchReplaceTargetNames = []string{
 	"response_body",
 	"websocket_to_server",
 	"websocket_to_client",
-}
-
-// matchReplaceUnappliedTargets are rule_types the engine declares but cannot apply.
-//
-// They are refused with their own message rather than being reported as unknown, because
-// "unknown rule_type" would be a lie: the Target exists, `targetsDir` routes it, and
-// `matchReplaceTargetName` can name it. What is missing is the applier.
-var matchReplaceUnappliedTargets = map[string]string{
-	"request_param_name":  "TargetRequestParamName",
-	"request_param_value": "TargetRequestParamValue",
+	"request_param_name",
+	"request_param_value",
 }
 
 // targetToCategory maps the UI's rule_type to the engine's Target.
@@ -597,23 +1039,12 @@ var matchReplaceUnappliedTargets = map[string]string{
 // was applied to real requests, not merely displayed. A rule the engine cannot express is
 // now a 400 that names what is accepted.
 //
-// # And why request_param_name / request_param_value are refused
-//
-// I added those two here in 4469cf1 and it was wrong. My justification was that "the engine
-// already matches on them (matchreplace.go:129)" — but that line is `targetsDir`, which says
-// which *direction* a target belongs to. The applier is `applyOne`, and it has no case for
-// either: both fell through to `default: return applyBody(...)`.
-//
-// So accepting them turned a parameter rule into a whole-body substring rewrite. A
-// param-name rule replacing "secret" with "harmless" against
-// `user=admin&secret=hunter2&nonsecret=keep` yielded `user=admin&harmless=hunter2&nonharmless=keep`
-// — it rewrote `nonsecret`, an unrelated parameter, and answered 200 with a compiled count.
-// I reintroduced the very defect the rest of this comment describes, by verifying against
-// one function and asserting about another.
-//
-// They are refused until the appliers exist, and refused *by name* rather than as unknown,
-// because the Target is real — what is missing is the code that applies it. A declined path
-// beats a plausible-looking wrong one.
+// request_param_name / request_param_value were refused here for months (see 4469cf1 and
+// the incident in applyOne's history): the engine declared the Targets but nothing applied
+// them, so accepting them silently rewrote whole bodies. The appliers now exist
+// (applyParamName / applyParamValue in internal/matchreplace) and are field-boundary-honest:
+// a literal name rule matches the whole name, so `secret` cannot rename `nonsecret`. They
+// are accepted again, with the boundary semantics pinned by tests in unapplied_target_test.go.
 func targetToCategory(ruleType string) (matchreplace.Target, error) {
 	switch ruleType {
 	case "request_first_line":
@@ -632,14 +1063,11 @@ func targetToCategory(ruleType string) (matchreplace.Target, error) {
 		return matchreplace.TargetWebSocketToClient, nil
 	case "":
 		return 0, fmt.Errorf("rule_type is required; accepted values are %s", strings.Join(matchReplaceTargetNames, ", "))
+	case "request_param_name":
+		return matchreplace.TargetRequestParamName, nil
+	case "request_param_value":
+		return matchreplace.TargetRequestParamValue, nil
 	default:
-		if engineName, unapplied := matchReplaceUnappliedTargets[ruleType]; unapplied {
-			return 0, fmt.Errorf(
-				"rule_type %q is declared by the engine as %s but has no applier yet, so a rule "+
-					"using it would be applied as a whole-body rewrite and could change unrelated "+
-					"parameters; refused until it is implemented. Accepted values are %s",
-				ruleType, engineName, strings.Join(matchReplaceTargetNames, ", "))
-		}
 		return 0, fmt.Errorf("unknown rule_type %q; accepted values are %s", ruleType, strings.Join(matchReplaceTargetNames, ", "))
 	}
 }
@@ -668,14 +1096,16 @@ func (s *Server) matchReplaceGet(w http.ResponseWriter, r *http.Request) {
 			Comment:       rule.Comment,
 		})
 	}
-	config := matchReplaceSetSpec{Rules: specs}
-	if s.matchReplace.UpdateContentLength() {
-		config.UpdateContentLength = true
+	config := matchReplaceSetSpec{
+		Rules:               specs,
+		UpdateContentLength: s.matchReplace.UpdateContentLength(),
+		InScopeOnly:         s.matchReplace.InScopeOnly(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(matchReplaceGetResp{
 		AffectsRequests:  s.matchReplace.Affects(matchreplace.DirRequest),
 		AffectsResponses: s.matchReplace.Affects(matchreplace.DirResponse),
+		ScopeSkipped:     s.matchReplace.ScopeSkipped(),
 		Config:           config,
 	})
 }
@@ -696,6 +1126,10 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("Rule %d: %s", i, err.Error()), http.StatusBadRequest)
 			return
 		}
+		if err := refuseUnrepresentableRuleFields(i, spec); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		cat := matchreplace.CategoryLiteral
 		if spec.Category == "regex" {
 			cat = matchreplace.CategoryRegex
@@ -710,6 +1144,7 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	}
 	s.matchReplace.SetRules(rules)
 	s.matchReplace.SetUpdateContentLength(set.UpdateContentLength)
+	s.matchReplace.SetInScopeOnly(set.InScopeOnly)
 	s.persistMatchReplace()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"compiled": len(rules)})
@@ -760,12 +1195,42 @@ func matchReplaceCategoryName(c matchreplace.Category) string {
 	return "literal"
 }
 
+// refuseUnrepresentableRuleFields rejects a rule carrying a field this build's model — which is
+// Burp's model — has no place for.
+//
+// # Why a refusal and not a silent drop
+//
+// The previous behaviour accepted `scope` and `query`, saved the rule without either, and
+// warned about it in the UI. That is the failure this project refuses everywhere else: the
+// operator's rule is stored, the next GET reads it back without the condition, and the rule
+// then applies to traffic the operator believed was excluded. A dropped condition is worse
+// than a rejected rule, because a rejected rule is a 400 they can act on and a dropped one is
+// a silent widening of what the rules touch.
+//
+// The message names the alternative rather than only the rejection: an operator who wanted
+// "only these items" has one control available, and it is the panel-wide toggle.
+func refuseUnrepresentableRuleFields(index int, spec matchReplaceRuleSpec) error {
+	if spec.Scope != nil {
+		return fmt.Errorf("Rule %d: per-rule scope is not part of Burp's match/replace model, and this build has no way to honour it; to limit the rules to in-scope traffic use the 'Only apply to in-scope items' setting", index)
+	}
+	if spec.Query != nil {
+		return fmt.Errorf("Rule %d: a per-rule query condition is not part of Burp's match/replace model, and this build has no way to honour it", index)
+	}
+	return nil
+}
+
 func (s *Server) handleMatchReplaceRules(w http.ResponseWriter, r *http.Request) {
 	s.matchReplaceRulesHandler(w, r)
 }
 
 // handleMatchReplaceTest compiles draft rules and applies them to an input, mirroring the UI's
 // "original vs auto-modified" test.
+//
+// It deliberately does not consult the set's "Only apply to in-scope items" restriction, and it takes
+// no target to consult it against: the box holds raw bytes someone pasted, which name no URL this
+// server can resolve. Burp's own rule test behaves the same way — it answers "what do these rules do
+// to this input", and scope is a question about an exchange. Reporting a rule as skipped here would
+// be inventing a verdict from a URL nobody supplied.
 func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -788,6 +1253,10 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		target, err := targetToCategory(spec.RuleType)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Draft rule %d: %s", i, err.Error()), http.StatusBadRequest)
+			return
+		}
+		if err := refuseUnrepresentableRuleFields(i, spec); err != nil {
+			http.Error(w, "Draft "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		cat := matchreplace.CategoryLiteral
@@ -860,6 +1329,16 @@ type toolLogEntry struct {
 	StartedMs  uint64  `json:"started_ms"`
 	DurationMs uint64  `json:"duration_ms"`
 	Error      *string `json:"error"`
+	// Comment is the operator's annotation, distinct from Error (the producer's note).
+	Comment string `json:"comment"`
+	// Highlight is the operator's colour tag, "" when unset. Same vocabulary as the
+	// organizer's (core.ValidHighlights) so the three surfaces agree on what red means.
+	Highlight string `json:"highlight"`
+	// Exchange is the traffic-store exchange this row's bytes live under, or null when the row has
+	// none to show — Logger's message viewer fetches request/response through it on demand. Null,
+	// never 0: the traffic store counts rows from zero, so 0 is a real exchange and a null-less zero
+	// would show the viewer the wrong message pair.
+	Exchange *uint64 `json:"exchange"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
@@ -882,6 +1361,32 @@ type toolLogResp struct {
 	// UncapturedTotal is the sum of Uncaptured, so a caller showing 20 of 4000
 	// can also say how many request-gone-forever the log is silent about.
 	UncapturedTotal uint64 `json:"uncaptured_total"`
+	// FilteredTotal counts what the capture filter refused, beside Dropped (evicted).
+	FilteredTotal uint64 `json:"filtered_total"`
+	// Capacity is the memory bound in rows.
+	Capacity int `json:"capacity"`
+	// ScopeAttached says whether ScopeOnly can filter: without a scope it is inert.
+	ScopeAttached bool `json:"scope_attached"`
+	// Filter echoes the capture filter in force, so the page renders what the server
+	// enforces rather than a second copy of it.
+	Filter toolLogFilterView `json:"filter"`
+}
+
+// toolLogFilterView mirrors toollog.CaptureFilter for the capture-filter surface.
+type toolLogFilterView struct {
+	Status    []int  `json:"status"`
+	Term      string `json:"term"`
+	Regex     bool   `json:"regex"`
+	Case      bool   `json:"case_sensitive"`
+	Negate    bool   `json:"negate"`
+	ScopeOnly bool   `json:"scope_only"`
+	// MIME is Burp's "Capture by MIME type" as an EXCLUSION list (burpsy-react-ui-73vm): each
+	// entry is a media type whose rows are refused, so an empty list captures everything — which
+	// is what every existing caller means by omitting it, and what the log did before this existed.
+	// Burp presents per-type checkboxes over a fixed category list; this is the open set of
+	// Content-Type essences core.MimeEssence actually produces, so a type Burp never listed can
+	// still be excluded. A row whose type was never measured is never judged by it.
+	MIME []string `json:"mime,omitempty"`
 }
 
 func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
@@ -897,12 +1402,14 @@ func (s *Server) handleToolLog(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// toolLogSetCaptureReq toggles the capture axis for one tool. The tool is a
-// name (from Tool.String()), never an ordinal: ordinals are the durable
-// mirror's stability contract, and the wire has always used names.
+// toolLogSetCaptureReq drives the capture surface. The historical {tool, on} toggle keeps
+// working; filter and capacity ride the same endpoint so the whole capture filter is one
+// round trip, and absent keys leave their axes untouched rather than resetting them.
 type toolLogSetCaptureReq struct {
-	Tool string `json:"tool"`
-	On   bool   `json:"on"`
+	Tool     string             `json:"tool"`
+	On       bool               `json:"on"`
+	Filter   *toolLogFilterView `json:"filter"`
+	Capacity *int               `json:"capacity"`
 }
 
 // toolLogSetCapture serves POST /api/tools/log — the destructive arm of the
@@ -914,14 +1421,42 @@ func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
 		return
 	}
-	tool, ok := toollog.ToolFromName(req.Tool)
-	if !ok {
-		http.Error(w, "unknown tool", http.StatusBadRequest)
+	if req.Filter != nil {
+		f := toollog.CaptureFilter{
+			Status:    req.Filter.Status,
+			ScopeOnly: req.Filter.ScopeOnly,
+			MIME:      req.Filter.MIME,
+		}
+		f.Search.Term = req.Filter.Term
+		f.Search.Regex = req.Filter.Regex
+		f.Search.CaseSensitive = req.Filter.Case
+		f.Search.Negate = req.Filter.Negate
+		if err := s.toolLog.SetFilter(f); err != nil {
+			http.Error(w, "Invalid filter: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.Capacity != nil {
+		if err := s.toolLog.SetCapacity(*req.Capacity); err != nil {
+			http.Error(w, "Invalid capacity: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// The legacy toggle: present only when the caller names a tool. A filter-only POST
+	// carries no tool and must not touch the axis.
+	if req.Tool != "" {
+		tool, ok := toollog.ToolFromName(req.Tool)
+		if !ok {
+			http.Error(w, "unknown tool", http.StatusBadRequest)
+			return
+		}
+		s.toolLog.SetCapturing(tool, req.On)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
 		return
 	}
-	s.toolLog.SetCapturing(tool, req.On)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{req.Tool + ".capturing": s.toolLog.Capturing(tool)})
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 // toolLogGet serves GET /api/tools/log?filter=&search=&limit=.
@@ -982,6 +1517,15 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		uncapturedTotal += n
 	}
 
+	f := s.toolLog.Filter()
+	// The filter echoes as wire shape, so its arrays must be arrays: a nil Status would
+	// marshal as null and every client reading filter.status.length crashes on a fresh
+	// server that has never had a capture filter set. "No classes accepted yet" is an
+	// empty list, not an absent one.
+	status := f.Status
+	if status == nil {
+		status = []int{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
 		Total:           len(matched),
@@ -992,7 +1536,94 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 		Capturing:       capturing,
 		Uncaptured:      uncaptured,
 		UncapturedTotal: uncapturedTotal,
+		FilteredTotal:   s.toolLog.Filtered(),
+		Capacity:        s.toolLog.Capacity(),
+		ScopeAttached:   s.toolLog.ScopeAttached(),
+		Filter: toolLogFilterView{
+			Status:    status,
+			Term:      f.Search.Term,
+			Regex:     f.Search.Regex,
+			Case:      f.Search.CaseSensitive,
+			Negate:    f.Search.Negate,
+			ScopeOnly: f.ScopeOnly,
+			// Read back so the choice survives a reload: the filter is server state, and a page
+			// that could set it but not see it would show an empty list over a live exclusion.
+			MIME: f.MIME,
+		},
 	})
+}
+
+// toolLogSetComment serves PATCH /api/tools/log/{id} — Burp's log comment
+// (burpsy-react-ui-5da). The body carries the whole comment; empty clears it. Unknown ids
+// 404 rather than succeeding quietly, so a note addressed at a trimmed row cannot read as saved.
+func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, "/api/tools/log/")
+	if !ok {
+		http.Error(w, "Usage: PATCH /api/tools/log/{id} with {comment}", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.ParseUint(strings.TrimSuffix(rest, "/"), 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid log entry id", http.StatusBadRequest)
+		return
+	}
+	// Comment and Highlight are *string, not string, for the reason toolLogSetCaptureReq's Filter and
+	// Capacity (above) are already pointers: a plain string cannot tell "the caller wrote {}" apart
+	// from "the caller wrote {comment: \"\"}", and burpsy-react-ui-iyb6 was exactly that collapse — a
+	// comment-only PATCH decoded the absent highlight key as "" and SetHighlight wrote it over
+	// whatever colour the row already had. A key that is absent from the body now leaves that axis
+	// alone; a key present with "" still clears it, same as before.
+	var req struct {
+		Comment   *string `json:"comment"`
+		Highlight *string `json:"highlight"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Highlight != nil && *req.Highlight != "" && !core.ValidHighlights[*req.Highlight] {
+		http.Error(w, "Invalid highlight; use one of red orange yellow green cyan blue pink magenta gray or empty", http.StatusBadRequest)
+		return
+	}
+	// SetComment and SetHighlight both refuse an unknown id on their own, and both look it up in the
+	// same entries slice — so for one id they can only ever agree on whether it exists. Each call here
+	// is gated on its own field being present, and 404s immediately rather than letting a later call
+	// paper over a bad id with an unrelated field's success.
+	if req.Comment != nil {
+		if !s.toolLog.SetComment(id, *req.Comment) {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
+	}
+	if req.Highlight != nil {
+		if !s.toolLog.SetHighlight(id, *req.Highlight) {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
+	}
+	if req.Comment == nil && req.Highlight == nil {
+		// Neither axis given: there is nothing to change, but a PATCH addressed at an id that does not
+		// exist must still 404 rather than silently succeed at doing nothing to nothing. ToolLog has no
+		// bare existence check — SetComment/SetHighlight fold theirs into a mutation — so this is the
+		// one path that has to look rather than set.
+		found := false
+		for _, e := range s.toolLog.All() {
+			if e.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			http.Error(w, "No such log entry", http.StatusNotFound)
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
 func (s *Server) toolLogClear(w http.ResponseWriter, r *http.Request) {
@@ -1367,9 +1998,14 @@ type compareOp struct {
 	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
-// handleToolsCompare mirrors comparer.ts's CompareResp. The engine produces a byte-level
-// comparison; this folds consecutive differences into equal/replace/insert/delete ops so the
-// UI can render unified columns.
+// handleToolsCompare mirrors comparer.ts's CompareResp. The engine aligns the two inputs —
+// byte-by-byte or word-by-word, the operator's choice — and this folds consecutive differences into
+// equal/replace/insert/delete ops so the UI can render unified columns.
+//
+// The response echoes the granularity that actually ran, so the console can label the result rather
+// than leave the operator guessing which mode produced it. An unknown value is refused instead of
+// silently defaulting: "I asked for words and got bytes" is exactly the kind of quiet substitution
+// this engine does not do.
 func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1382,13 +2018,28 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		// request list, which is empty unless the operator populated it — so an old client that
 		// does not send this field gets exactly the behaviour it had before the field existed.
 		Response bool `json:"response"`
+		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
+		Granularity string `json:"granularity"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
-	diff := diffBytes(a, b)
+	granularity := strings.ToLower(strings.TrimSpace(req.Granularity))
+	if granularity == "" {
+		granularity = "bytes"
+	}
+	var diff diffResult
+	switch granularity {
+	case "bytes":
+		diff = diffBytes(a, b)
+	case "words":
+		diff = diffWords(a, b)
+	default:
+		http.Error(w, `granularity must be "bytes" or "words", got `+strconv.Quote(req.Granularity), http.StatusBadRequest)
+		return
+	}
 	ops := diff.Ops
 
 	// Tag differences that fall inside a discounted header. Spans are computed per side because the
@@ -1397,7 +2048,25 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 	spansA := uninterestingSpansIn(a, s.uninteresting, req.Response)
 	spansB := uninterestingSpansIn(b, s.uninteresting, req.Response)
 
+	// The deleted/inserted counters are byte lengths when the comparison is byte-level, and token
+	// counts when it is word-level. Summing bytes under a field the console labels in tokens would
+	// report "12 tokens" for one changed word; the token starts let the count be exact instead.
 	deleted, inserted, discounted := 0, 0, 0
+	var startsA, startsB []int
+	if granularity == "words" {
+		for _, w := range tokeniseWords(a) {
+			startsA = append(startsA, w.start)
+		}
+		for _, w := range tokeniseWords(b) {
+			startsB = append(startsB, w.start)
+		}
+	}
+	countIn := func(starts []int, off, ln int) int {
+		if starts == nil {
+			return ln
+		}
+		return sort.SearchInts(starts, off+ln) - sort.SearchInts(starts, off)
+	}
 	for i := range ops {
 		op := &ops[i]
 		if op.Kind == "equal" {
@@ -1419,9 +2088,9 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 			discounted++
 		}
 		if op.Kind == "delete" {
-			deleted += op.ALen
+			deleted += countIn(startsA, op.AOffset, op.ALen)
 		} else if op.Kind == "insert" {
-			inserted += op.BLen
+			inserted += countIn(startsB, op.BOffset, op.BLen)
 		}
 	}
 
@@ -1445,11 +2114,13 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		"identical_ignoring_uninteresting": identicalIgnoring,
 		"uninteresting_ops":                discounted,
 		"uninteresting_headers_applied":    s.uninteresting.headers(req.Response),
-		"deleted_tokens":                   deleted,
-		"inserted_tokens":                  inserted,
-		"truncated":                        diff.Truncated,
-		"ops_omitted":                      0,
-		"ops":                              ops,
+		// Echoed so the console labels the result with the mode that produced it.
+		"granularity":     granularity,
+		"deleted_tokens":  deleted,
+		"inserted_tokens": inserted,
+		"truncated":       diff.Truncated,
+		"ops_omitted":     0,
+		"ops":             ops,
 	})
 }
 
@@ -1463,7 +2134,11 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 		// an organizer.Item does not have, and the resolution happens here because that is where the
 		// traffic store and the scope are. See api_organizer_view.go, particularly for what happens
 		// to an item whose exchange has been evicted.
-		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView()})
+		//
+		// Collections ride the same response: the page renders groups and items from one fetch, and
+		// a separate endpoint would let the two drift apart mid-triage (a group shown after its last
+		// member was moved out).
+		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView(), "collections": s.organizer.Collections()})
 	case http.MethodPost:
 		var req struct {
 			Exchange int `json:"exchange"`
@@ -1497,7 +2172,15 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/")
-	id, err := strconv.Atoi(strings.TrimSuffix(idStr, "/"))
+	idStr = strings.TrimSuffix(idStr, "/")
+	// The status write is a subpath, not the item id: /{id}/status must be split before the id is
+	// parsed, or Atoi("1/status") fails and every status PUT would be answered "Invalid item id".
+	// Same shape as the session-rule detail handler's /update-macro and /run suffix routes.
+	if statusStr, ok := strings.CutSuffix(idStr, "/status"); ok {
+		s.organizerItemStatus(w, r, statusStr)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
 	if err != nil {
 		http.Error(w, "Invalid item id", http.StatusBadRequest)
 		return
@@ -1519,6 +2202,11 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 		}
 		s.organizerChanged()
 		w.WriteHeader(http.StatusOK)
+	case http.MethodPut:
+		// PUT .../status is handled by organizerItemStatus below (a /{id}/status subpath, split off
+		// before the id parse). A PUT of the item resource itself is not implemented: title/note/
+		// highlight go through POST, and a bare PUT would otherwise reach the 405 with no handler.
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	case http.MethodDelete:
 		if !s.organizer.Remove(id) {
 			http.Error(w, "Item not found", http.StatusNotFound)
@@ -1529,4 +2217,306 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// organizerItemStatus serves PUT /api/tools/organizer/{id}/status — the workflow-status write
+// path, separate from the POST edit form for the same reason the store keeps SetStatus apart
+// from Update: setting a status is one deliberate operator decision (Burp applies it from the
+// item's status submenu), not a field on the annotate dialog. An unrepresentable value is
+// refused with the valid set named, rather than stored and later rendered as a state the UI
+// cannot set or filter on. 404 is an unknown item, so "the item is gone" and "the status does
+// not exist" stay distinguishable.
+func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idStr string) {
+	if r.Method != http.MethodPut {
+		w.Header().Set("Allow", http.MethodPut)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid item id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	status := organizer.Status(req.Status)
+	if !organizer.ValidStatus(status) {
+		http.Error(w, fmt.Sprintf("Unknown status %q; the valid statuses are new, in_progress, postponed, done, ignored", req.Status), http.StatusBadRequest)
+		return
+	}
+	if !s.organizer.SetStatus(id, status) {
+		http.Error(w, "Item not found", http.StatusNotFound)
+		return
+	}
+	s.organizerChanged()
+	w.WriteHeader(http.StatusOK)
+}
+
+// ---- Organizer collections ----------------------------------------------------------------------
+
+// handleOrganizerCollections serves the /api/tools/organizer/collections surface — Burp's
+// organizer collections (tools/organizer/collections.html): New / Rename / Duplicate / Delete,
+// the About note, and Move to… for the items inside. One handler, because the routes share one
+// subtree and one id space:
+//
+//	POST   /api/tools/organizer/collections                 {name} -> create
+//	PUT    /api/tools/organizer/collections/{id}            {name?, note?} -> rename / note
+//	POST   /api/tools/organizer/collections/{id}/duplicate  -> duplicate with its items
+//	DELETE /api/tools/organizer/collections/{id}?items=inbox|delete
+//	                                                        -> delete, items unlinked or deleted
+//	PUT    /api/tools/organizer/collections/inbox           {item_ids} -> move back to the inbox
+//	PUT    /api/tools/organizer/collections/{id}/items      {item_ids, copy} -> move / copy into it
+//
+// "inbox" as the literal id in the move path is deliberate: collection 0 is not a collection, and
+// making the UI mint a fake numeric id for it would be a second lie about the id space.
+func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/collections")
+	rest = strings.Trim(rest, "/")
+
+	if rest == "" {
+		switch r.Method {
+		case http.MethodPost:
+			var req struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			name := strings.TrimSpace(req.Name)
+			if name == "" {
+				http.Error(w, "A collection needs a name", http.StatusBadRequest)
+				return
+			}
+			c, ok := s.organizer.NewCollection(name)
+			if !ok {
+				http.Error(w, fmt.Sprintf("A collection named %q already exists", name), http.StatusBadRequest)
+				return
+			}
+			s.organizerChanged()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(c)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// Move-to-inbox: the literal "inbox" stands for collection 0.
+	if rest == "inbox" {
+		if r.Method != http.MethodPut {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			ItemIDs []int `json:"item_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		moved := s.organizer.MoveToCollection(req.ItemIDs, 0)
+		s.organizerChanged()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"moved": moved})
+		return
+	}
+
+	// {id}/duplicate and {id}/items have a subpath; plain {id} is rename/note/delete.
+	if dup, ok := strings.CutSuffix(rest, "/duplicate"); ok {
+		id, err := strconv.Atoi(dup)
+		if err != nil {
+			http.Error(w, "Invalid collection id", http.StatusBadRequest)
+			return
+		}
+		s.organizerCollectionDuplicate(w, r, id)
+		return
+	}
+	if items, ok := strings.CutSuffix(rest, "/items"); ok {
+		id, err := strconv.Atoi(items)
+		if err != nil {
+			http.Error(w, "Invalid collection id", http.StatusBadRequest)
+			return
+		}
+		s.organizerCollectionItems(w, r, id)
+		return
+	}
+
+	id, err := strconv.Atoi(rest)
+	if err != nil {
+		http.Error(w, "Invalid collection id", http.StatusBadRequest)
+		return
+	}
+	switch r.Method {
+	case http.MethodPut:
+		var req struct {
+			Name string  `json:"name"`
+			Note *string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.Name != "" {
+			if !s.organizer.RenameCollection(id, strings.TrimSpace(req.Name)) {
+				// Renaming an unknown collection and renaming onto a taken name are different
+				// faults; the store's own duplicate check would have refused either, so the
+				// distinction is made here before asking.
+				if s.collectionExists(id) {
+					http.Error(w, fmt.Sprintf("A collection named %q already exists", req.Name), http.StatusBadRequest)
+					return
+				}
+				http.Error(w, "Collection not found", http.StatusNotFound)
+				return
+			}
+		}
+		if req.Note != nil {
+			if !s.organizer.SetCollectionNote(id, *req.Note) {
+				http.Error(w, "Collection not found", http.StatusNotFound)
+				return
+			}
+		}
+		s.organizerChanged()
+		w.WriteHeader(http.StatusOK)
+	case http.MethodDelete:
+		// The delete dialog's choice, verbatim from the acceptance criteria: unlink the items back
+		// to the inbox (the default, losing nothing) or delete them with the collection. Anything
+		// else is refused rather than guessed at.
+		disposition := r.URL.Query().Get("items")
+		if disposition == "" {
+			disposition = "inbox"
+		}
+		if disposition != "inbox" && disposition != "delete" {
+			http.Error(w, fmt.Sprintf("Unknown items disposition %q; use inbox or delete", disposition), http.StatusBadRequest)
+			return
+		}
+		unlinked, ok := s.organizer.DeleteCollection(id, disposition == "delete")
+		if !ok {
+			http.Error(w, "Collection not found", http.StatusNotFound)
+			return
+		}
+		s.organizerChanged()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"unlinked": unlinked})
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) collectionExists(id int) bool {
+	for _, c := range s.organizer.Collections() {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// organizerCollectionDuplicate copies a collection with every item in it — Burp's "duplicate" —
+// giving the items fresh ids (a duplicate is a new copy of the work, not a second pointer to it)
+// and the copy a name that does not collide.
+func (s *Server) organizerCollectionDuplicate(w http.ResponseWriter, r *http.Request, id int) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var source *organizer.Collection
+	for _, c := range s.organizer.Collections() {
+		if c.ID == id {
+			copied := c
+			source = &copied
+			break
+		}
+	}
+	if source == nil {
+		http.Error(w, "Collection not found", http.StatusNotFound)
+		return
+	}
+	// Find a name: "name (copy)", then "(copy 2)", … — bounded by the count of collections plus
+	// one, so the loop cannot run away.
+	name := source.Name + " (copy)"
+	for attempt := 2; s.nameTaken(name); attempt++ {
+		name = fmt.Sprintf("%s (copy %d)", source.Name, attempt)
+	}
+	created, ok := s.organizer.NewCollection(name)
+	if !ok {
+		http.Error(w, "Could not create the copy", http.StatusBadRequest)
+		return
+	}
+	s.organizer.SetCollectionNote(created.ID, source.Note)
+	// Copy the membership: each item is duplicated into the new collection with a fresh id.
+	copied := 0
+	for _, it := range s.organizer.List() {
+		if it.Collection != id {
+			continue
+		}
+		item := s.organizer.Add(it.Exchange)
+		s.organizer.Update(item.ID, it.Title, it.Note, it.Highlight)
+		s.organizer.SetStatus(item.ID, it.Status)
+		s.organizer.MoveToCollection([]int{item.ID}, created.ID)
+		copied++
+	}
+	s.organizerChanged()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"collection": created, "items_copied": copied})
+}
+
+func (s *Server) nameTaken(name string) bool {
+	for _, c := range s.organizer.Collections() {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// organizerCollectionItems moves (or copies) a set of items into one collection. copy=true
+// duplicates each item first — the Copy Link analogue — so the source keeps its own entry.
+func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request, id int) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ItemIDs []int `json:"item_ids"`
+		Copy    bool  `json:"copy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !s.collectionExists(id) {
+		http.Error(w, "Collection not found", http.StatusNotFound)
+		return
+	}
+	moved := 0
+	if req.Copy {
+		for _, itemID := range req.ItemIDs {
+			for _, it := range s.organizer.List() {
+				if it.ID != itemID {
+					continue
+				}
+				fresh := s.organizer.Add(it.Exchange)
+				s.organizer.Update(fresh.ID, it.Title, it.Note, it.Highlight)
+				s.organizer.SetStatus(fresh.ID, it.Status)
+				s.organizer.MoveToCollection([]int{fresh.ID}, id)
+				moved++
+				break
+			}
+		}
+	} else {
+		moved = s.organizer.MoveToCollection(req.ItemIDs, id)
+		if moved < 0 {
+			http.Error(w, "Collection not found", http.StatusNotFound)
+			return
+		}
+	}
+	s.organizerChanged()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"moved": moved})
 }

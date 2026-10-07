@@ -10,6 +10,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/persist"
+	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
@@ -303,6 +304,102 @@ func TestNetworkSettingsPutRefusesAValueOfTheWrongShape(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "timeouts.read_ms") {
 		t.Errorf("refusal %q does not name the key", strings.TrimSpace(rec.Body.String()))
+	}
+}
+
+// burpsy-react-ui-609d: the three streaming response-handling switches are settable through the
+// endpoint and reach the proxy leg, which is where they take effect. Asserted through the proxy's own
+// accessors, not the struct: a wrong JSON tag or a field dropped on the way through would still pass a
+// struct comparison, and this repo's own lesson is to assert the surface the bytes travel over.
+func TestStreamingResponseSwitchesReachTheProxy(t *testing.T) {
+	s := newTestServer()
+	px := proxy.NewServer(proxy.NewProxyConfig(core.NewTrafficStore()).WithLogger(zap.NewNop()))
+	s.WithProxyServer(px)
+
+	rec := putNetworkSettings(t, s, `{"streaming":{"store":false,"strip_chunked_encoding_metadata":true,"use_text_event_stream_header":true}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if px.Streaming().Store() {
+		t.Error("store:false did not reach the proxy; the streamed body would still be recorded")
+	}
+	if !px.Streaming().StripChunkedMetadata() {
+		t.Error("strip_chunked_encoding_metadata did not reach the proxy")
+	}
+	if !px.Streaming().TreatEventStreamAsStreaming() {
+		t.Error("use_text_event_stream_header did not reach the proxy")
+	}
+
+	// The GET view carries them back too, so the console can render their state.
+	got := getNetworkSettings(t, s)
+	if got.Streaming.StoreStreamed() {
+		t.Error("the settings view reported store on after it was set off")
+	}
+	if !got.Streaming.UseTextEventStreamHeader {
+		t.Error("the settings view dropped use_text_event_stream_header")
+	}
+}
+
+// A PUT that touches an unrelated streaming field must not clobber the three switches: the patch is
+// merged onto the live document, so an omitted key keeps its value. This is the failure that would
+// turn any routine streaming edit into a silent reset of the switches.
+func TestAnUnrelatedStreamingEditLeavesTheSwitchesAlone(t *testing.T) {
+	s := newTestServer()
+	px := proxy.NewServer(proxy.NewProxyConfig(core.NewTrafficStore()).WithLogger(zap.NewNop()))
+	s.WithProxyServer(px)
+
+	if rec := putNetworkSettings(t, s, `{"streaming":{"store":false,"use_text_event_stream_header":true}}`); rec.Code != http.StatusOK {
+		t.Fatalf("first PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if rec := putNetworkSettings(t, s, `{"streaming":{"timeout_ms":12000}}`); rec.Code != http.StatusOK {
+		t.Fatalf("second PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if px.Streaming().Store() {
+		t.Error("an unrelated streaming edit turned store back on")
+	}
+	if !px.Streaming().TreatEventStreamAsStreaming() {
+		t.Error("an unrelated streaming edit cleared the text/event-stream switch")
+	}
+}
+
+// store is a pointer so a document that predates the switch reads as on, and an explicit false
+// survives a restart rather than decoding back to the zero-value false that a bare bool would give.
+func TestStreamingStoreSwitchSurvivesARestartAndDefaultsOn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "burpsy.db")
+	store, err := persist.Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	s := NewServer(core.NewTrafficStore(), core.NewScope()).WithLogger(zap.NewNop()).WithPersist(store)
+	if rec := putNetworkSettings(t, s, `{"streaming":{"store":false}}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, err := persist.Open(path, zap.NewNop())
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer reopened.Close()
+	restored, err := reopened.LoadNetworkSettings()
+	if err != nil {
+		t.Fatalf("load network settings: %v", err)
+	}
+	if restored == nil {
+		t.Fatal("no network settings persisted")
+	}
+	if restored.Streaming.StoreStreamed() {
+		t.Error("store:false did not survive the restart; the switch would silently turn back on")
+	}
+
+	// A streaming document that never set store reads as on — the shipped behaviour, and the reason the
+	// field is a pointer.
+	var fresh sender.StreamingSettings
+	if !fresh.StoreStreamed() {
+		t.Error("a streaming document with no store key should default to storing")
 	}
 }
 

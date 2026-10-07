@@ -86,7 +86,7 @@ func TestClassifyAccessControlAnonPartialContentIsNeitherFailureNorSuccess(t *te
 func TestAuthContextsFromWithNoCookiesMarksAuthedContextAsHavingNoCredentials(t *testing.T) {
 	coord := session.NewCoordinator(zap.NewNop())
 
-	authed, anon := AuthContextsFrom(coord, "app.test", 443, true)
+	authed, anon := AuthContextsFrom(coord, "app.test", 443, true, "/")
 
 	if authed.HasCredentials {
 		t.Fatalf("AuthContextsFrom on a coordinator with no cookies gave authed.HasCredentials = true, want false")
@@ -111,7 +111,7 @@ func TestAuthContextsFromWithACookieMarksAuthedContextAsHavingCredentials(t *tes
 	coord := session.NewCoordinator(zap.NewNop())
 	coord.HandleResponse("app.test", 443, true, 200, map[string]string{"Set-Cookie": "session=abc123"}, nil)
 
-	authed, anon := AuthContextsFrom(coord, "app.test", 443, true)
+	authed, anon := AuthContextsFrom(coord, "app.test", 443, true, "/")
 
 	if !authed.HasCredentials {
 		t.Fatalf("AuthContextsFrom after absorbing a cookie gave authed.HasCredentials = false, want true")
@@ -306,7 +306,7 @@ func (f *fakeDifferentialSender) SendWithAuth(_ context.Context, _ string, auth 
 func TestFakeDifferentialSenderDrivesClassifyAccessControlEndToEnd(t *testing.T) {
 	coord := session.NewCoordinator(zap.NewNop())
 	coord.HandleResponse("app.test", 443, true, 200, map[string]string{"Set-Cookie": "session=abc123"}, nil)
-	authed, anon := AuthContextsFrom(coord, "app.test", 443, true)
+	authed, anon := AuthContextsFrom(coord, "app.test", 443, true, "/")
 
 	sender := &fakeDifferentialSender{byLabel: map[string]struct {
 		status int

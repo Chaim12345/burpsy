@@ -65,11 +65,65 @@ type Link struct {
 }
 
 // Evidence is one place a finding was observed.
+//
+// The message ids are what turn this from a place into a reproduction. They are the two dense
+// counters the capture store already indexes, and every consumer here can resolve them back to
+// bytes with store.Raw — so a reader holding this file and the capture can rebuild the exact
+// request and response (burpsy-react-ui-exiu). They are reported rather than dereferenced because
+// the scan-wide exports run over every finding in the store and must not read a request body per
+// row; a single-finding report does read them, and that is the export the operator reaches for
+// when they want the evidence in the file rather than a reference to it.
 type Evidence struct {
 	Host   string `json:"host"`
 	Path   string `json:"path"`
 	Method string `json:"method"`
 	Status int    `json:"status,omitempty"`
+	// RequestMsgID and ResponseMsgID are message ids, not exchange ids. Both spaces count from
+	// zero and they are not interchangeable — the same mistake findingHosts and findingEvidence
+	// document, and the reason a reader must not resolve one against the other.
+	// No omitempty, deliberately. These ids count from zero, so 0 is the FIRST message the project
+	// ever captured and a real thing to name — and omitempty would drop it, leaving an evidence entry
+	// that says it has no request when it has the very first one. The id spaces are separate dense
+	// counters precisely so they need no "is this set" flag; that is the point of them.
+	RequestMsgID  uint64 `json:"request_msg_id"`
+	ResponseMsgID uint64 `json:"response_msg_id"`
+	// HasRequest and HasResponse say which halves exist, because a zero cannot. An occurrence with
+	// no response names one message and a nil response, and the reader needs to tell that from an
+	// occurrence whose response is message 0.
+	HasRequest  bool `json:"has_request"`
+	HasResponse bool `json:"has_response"`
+}
+
+// Message is the raw HTTP of one half of an evidence pair, carried by the single-finding report so
+// the artefact stands alone. "Relevant extract" versus "full messages" is Burp's
+// report-settings.html:98-111 choice, and this is the full-messages end of it — an assessor
+// handed a finding needs the request that produced it and the response that came back, not a
+// summary of them.
+type Message struct {
+	// ID is the message id, carried so a reader can match this against an Evidence entry.
+	ID   uint64 `json:"id"`
+	Raw  string `json:"raw"`
+	Note string `json:"note,omitempty"`
+}
+
+// FindingReport is one finding and the bytes behind it: the scan-wide report's Row plus the
+// messages its evidence names.
+//
+// Split from Row because the bulk exports must NOT carry this. A scan of a large project has
+// thousands of rows and their request bodies between them, and a report that inlined them would be
+// unusable as a document and enormous on disk. The single-finding report is the one that pays
+// that cost, because it is the one an operator opened deliberately for one issue.
+type FindingReport struct {
+	Row
+	// Messages are the request and response for each evidence entry, in the same order. Paired by
+	// position rather than by a foreign key because the list is short and a reader opening the file
+	// is looking at one finding — a cross-reference the reader has to resolve is a worse artefact
+	// than a short list they can read down.
+	Messages []Message `json:"messages,omitempty"`
+	// MessagesOmitted counts evidence entries whose bytes could not be read — the capture has been
+	// evicted, or the occurrence names a message that is gone. Reported rather than hidden, because
+	// a report that silently drops half its evidence reads as "there was no request".
+	MessagesOmitted int `json:"messages_omitted,omitempty"`
 }
 
 // JSON renders the plain-JSON report.

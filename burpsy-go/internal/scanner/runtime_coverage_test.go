@@ -593,7 +593,7 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 		t.Fatalf("store response for %s: %v", e.Path, err)
 	}
 	ex := &core.Exchange{
-		Request: reqID, Response: &respID,
+		Request: core.MsgPtr(reqID), Response: &respID,
 		Host: exHost, Port: exPort, TLS: exTLS,
 		Method: method, Path: e.Path,
 	}

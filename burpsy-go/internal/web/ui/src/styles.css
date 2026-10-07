@@ -27,6 +27,42 @@
    The composite/alpha values below have no Penpot token equivalent (rgba
    opacity, or a pure alias of another semantic token) and are hand-authored
    here rather than generated — see semantic.css's header comment. */
+/* The UI text scale (burpsy-react-ui-7bd): multiplies every fluid text token, so
+   Appearance's scale control resizes the chrome without touching the message editor,
+   which reads its own --editor-font-size. calc() over the clamp keeps the fluid
+   behaviour at each end. */
+/* --ui-scale is a UNITLESS factor (1, 1.1, 1.25, 1.5), never a percentage: calc(13px * 100%) is
+   not a valid product, so a percentage made every --fs-* token invalid at computed-value time and
+   every `font` shorthand that read one fell back to the browser default (Times New Roman) —
+   burpsy-react-ui-9nlz. app.tsx converts the stored "110%" to 1.1 through uiScaleFactor(). */
+:root {
+  --ui-scale: 1;
+  --editor-font-size: 12px; /* the runtime font picker overrides this on mount (7bd); defined here so the editor panes have a value before JS runs */
+  /* Remapped fluid type tokens (burpsy-react-ui-7bd): the generated --fs-* values
+     scaled by --ui-scale, so Appearance's text-size control resizes the chrome
+     without touching the message editor, which reads its own --editor-font-size.
+     calc() over the clamps keeps the fluid behaviour at each end; declared after the
+     token imports so these win by source order. calc over a clamp is valid CSS. */
+  --fs-xs: calc(clamp(11px, 0.6vw, 13px) * var(--ui-scale));
+  --fs-sm: calc(clamp(12px, 0.68vw, 14px) * var(--ui-scale));
+  --fs-md: calc(clamp(13px, 0.76vw, 15px) * var(--ui-scale));
+  --fs-lg: calc(clamp(14px, 0.85vw, 16px) * var(--ui-scale));
+  --fs-xl: calc(clamp(15px, 0.95vw, 18px) * var(--ui-scale));
+  --fs-2xl: calc(clamp(19px, 1.5vw, 26px) * var(--ui-scale));
+  --fs-3xl: calc(clamp(21px, 1.7vw, 30px) * var(--ui-scale));
+  /* The issue-severity family (burpsy-react-ui-axm9): Burp's five issue severities as one named,
+     themeable scale instead of a colour decided in each component. Pure aliases of the semantic
+     status roles — which is why they live here and not in Penpot (semantic.css's header: a pure alias
+     of another semantic token stays hand-authored). Theme-independent by construction: the roles
+     they alias already switch with [data-theme]. lib/severity.ts is the one reader; the JSON theme
+     import may override each slot. */
+  --severity-critical: var(--bad);
+  --severity-high: var(--bad);
+  --severity-medium: var(--warn);
+  --severity-low: var(--info);
+  --severity-informational: var(--muted);
+}
+
 :root,
 [data-theme="light"] {
   color-scheme: light;
@@ -57,12 +93,37 @@
   --editor-header-name: #0033b3;
   --editor-header-value: #067d17;
   --editor-body: #1e1e1e;
+  /* Body tokenisation (burpsy-react-ui-6fq), Burp's body colouring: JSON keys/values, HTML
+     tags/attributes, JS keywords/strings, CSS properties. Chosen against --editor-bg (white)
+     with real AA margin, mirroring common light-editor palettes; verified in the live pass. */
+  --editor-json-key: #790e0e;
+  --editor-json-string: #067d17;
+  --editor-json-number: #0b53c1;
+  --editor-json-constant: #790e0e;
+  --editor-html-tag: #0b53c1;
+  --editor-html-attr-name: #790e0e;
+  --editor-html-attr-value: #067d17;
+  --editor-js-keyword: #7f004f;
+  --editor-js-string: #067d17;
+  --editor-js-comment: #5f6368;
+  --editor-css-property: #0b53c1;
+  --editor-css-value: #7f004f;
+  --editor-url-param-name: #790e0e;
+  --editor-url-param-value: #067d17;
+  /* Cookie pairs (burpsy-react-ui-axm9; Burp's cookieName/cookieValue). The values reuse this block's
+     already-measured AA colours on --editor-bg (json-number's blue, header-value's green) rather than
+     introducing new hexes with no contrast record. */
+  --editor-cookie-name: #0b53c1;
+  --editor-cookie-value: #067d17;
   --editor-match: rgb(255 198 0 / 45%);
   --editor-match-border: rgb(150 96 10 / 60%);
   --editor-match-selected: rgb(255 168 0 / 65%);
 }
 
-/* --- dark: Burp's Darcula palette --------------------------------------- */
+/* --- dark: burpsy's own dark palette. NOT Burp's Darcula: grep -ri darcula /root/burp-re/out
+   returns 0 hits (the only org.jetbrains matches there are Vineflower decompiler stack
+   traces), and Burp's own dark editor palette is out/theme/resources/DarkTheme.json:264-313
+   (headerName #D1E8F9, literalString #93C763) — a different palette from a different vendor. */
 [data-theme="dark"] {
   color-scheme: dark;
 
@@ -83,14 +144,30 @@
      Found by the e2e a11y suite's first real run (axe-core). */
   --editor-active-line: rgb(255 102 51 / 2%);
   --editor-selection: #214283;
-  /* Syntax palette for the message viewer. Darcula's own purple (#9876aa) and green (#6a8759)
-     measure 3.71 and 3.52 against the editor background — below AA, on the request and response
-     bytes, which is the surface this whole tool exists to let someone read. Lifted within the same
-     hue family so the editor still reads as Darcula: 4.99 and 6.09. */
+  /* Syntax palette for the message viewer. Not Darcula (see the block header): these are
+     burpsy's own choices, lifted to real AA margin against --editor-bg (#2b2b2b) — the
+     measured values are in the comment each family carries. */
   --editor-start: #ff8659;
   --editor-header-name: #b08cc4;
   --editor-header-value: #8fb573;
   --editor-body: #a9b7c6;
+  /* Body tokenisation (6fq): every value below measures >= 4.5 against --editor-bg (#2b2b2b). */
+  --editor-json-key: #f5a4a4;
+  --editor-json-string: #8fb573;
+  --editor-json-number: #9ebeff;
+  --editor-json-constant: #f5a4a4;
+  --editor-html-tag: #9ebeff;
+  --editor-html-attr-name: #f5a4a4;
+  --editor-html-attr-value: #8fb573;
+  --editor-js-keyword: #f2979d;
+  --editor-js-string: #8fb573;
+  --editor-js-comment: #8c8c8c;
+  --editor-css-property: #9ebeff;
+  --editor-css-value: #f2979d;
+  --editor-url-param-name: #f5a4a4;
+  --editor-url-param-value: #8fb573;
+  --editor-cookie-name: #9ebeff;
+  --editor-cookie-value: #8fb573;
   --editor-match: rgb(187 181 41 / 35%);
   --editor-match-border: rgb(187 181 41 / 70%);
   --editor-match-selected: rgb(187 181 41 / 60%);
@@ -321,6 +398,19 @@ code {
   color: var(--text);
 }
 
+/* A tool's attention badge in the tab strip (burpsy-react-ui-xvo). Sized down from the standard
+   Badge because it sits inside a tab whose height is fixed by the chrome, and given tabular figures
+   so a count going 9 -> 10 does not shift the tab labels beside it — the strip is the one place in
+   the console where a width change moves everything to its right. The tone is Badge's warn, so the
+   colour means here what it means everywhere else; nothing animates, so a held request does not
+   pulse at someone using prefers-reduced-motion. */
+.tool-tab-attention {
+  min-height: calc(var(--control-h-sm) * 0.68);
+  padding: 0 var(--s1);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-tab-active {
   background: var(--paper);
   color: var(--text);
@@ -537,6 +627,17 @@ main {
 .section-heading h2,
 .detail-panel h3 {
   font-size: var(--fs-lg);
+}
+
+/* A sub-heading inside a card or dialog. It is an h3 because it sits under a section's h2, and the
+   heading ORDER is the structure a screen-reader user navigates by — axe's heading-order rule
+   flagged the h4 tags this replaced (burpsy-react-ui-pyj3).
+ *
+   The size is pinned to 1em on purpose. The user agent's h3 is 1.17em, which in this design is
+   LARGER than the 16px .section-heading h2 above it, so an unstyled h3 would have made every
+   sub-heading out-size its own section title. 1em is the size the h4 tags rendered. */
+.subheading {
+  font-size: 1em;
 }
 
 .section-heading p,
@@ -770,6 +871,40 @@ main {
   min-width: var(--w-sm);
 }
 
+/* Burp's "Show only" checkbox groups in the Issues filter bar (burpsy-react-ui-4d5c).
+   A labelled run of checkboxes reads as one control; without the baseline alignment the
+   labels sit at different heights than the toolbar's selects did. */
+.filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.filter-group-label {
+  font-size: var(--fs-sm);
+  color: var(--text-dim, var(--text));
+  white-space: nowrap;
+}
+
+/* burpsy-react-ui-72k9: the Logger's capture-filter panel. Same toolbar shape as the
+   capture axis it extends, but boxed and visibly separated: it is the destructive axis'
+   settings surface, not another display-filter row. */
+.capture-filter-panel {
+  align-items: center;
+  padding: var(--s2) var(--s2);
+  margin-top: var(--s1);
+  border: 1px solid var(--line);
+  background: var(--field-bg);
+}
+
+/* burpsy-react-ui-5da: the detail-pane comment editor rides under the DetailList. */
+.annotation-editor {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
 .search-field {
   flex: 1;
   min-width: min(100%, var(--w-lg));
@@ -780,6 +915,20 @@ main {
   background: var(--field-bg);
   padding-left:var(--s2);
   color: var(--muted);
+}
+
+/* The per-table filter above Intruder's result tables (burpsy-react-ui-4rd). */
+.results-filter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin: var(--s1) 0 var(--s2);
+}
+
+.results-filter .search-field {
+  flex: 0 1 var(--w-md, 260px);
+  min-width: 200px;
 }
 
 .search-field .input {
@@ -1283,6 +1432,39 @@ tbody td {
    instead of overlapping the pane divider. */
 /* Non-printing glyphs (Burp's \n toggle): control pictures and high bytes render in the
    accent colour so they read as markup about the bytes, not as message content. */
+/* Body tokenisation (burpsy-react-ui-6fq): the classes bodyTokens' TokenClass maps to.
+   One rule per class, resolved against the editor tokens above — the same contract the
+   header rules in the editorTheme follow. */
+/* The hover decode popup (6fq): a small dark bubble above the token, readable in both
+   themes. CodeMirror's tooltip chrome supplies the arrow and the positioning. */
+.cm-hover-decode {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs); /* token-exempt: the fs token's own fallback literal, already exempt elsewhere in this file */
+  padding: 2px 6px; /* token-exempt: CodeMirror's own tooltip chrome padding, not a design token */
+  background: var(--overlay);
+  color: var(--fg);
+  border-radius: 3px; /* token-exempt: CodeMirror tooltip chrome, not a token surface */
+  white-space: pre-wrap;
+  max-width: 480px; /* token-exempt: a popup wider than this is unreadable over the code it decodes */
+}
+
+.cm-tok-json-key { color: var(--editor-json-key); }
+.cm-tok-json-string { color: var(--editor-json-string); }
+.cm-tok-json-number { color: var(--editor-json-number); }
+.cm-tok-json-constant { color: var(--editor-json-constant); }
+.cm-tok-html-tag { color: var(--editor-html-tag); }
+.cm-tok-html-attr-name { color: var(--editor-html-attr-name); }
+.cm-tok-html-attr-value { color: var(--editor-html-attr-value); }
+.cm-tok-js-keyword { color: var(--editor-js-keyword); }
+.cm-tok-js-string { color: var(--editor-js-string); }
+.cm-tok-js-comment { color: var(--editor-js-comment); font-style: italic; }
+.cm-tok-css-property { color: var(--editor-css-property); }
+.cm-tok-css-value { color: var(--editor-css-value); }
+.cm-tok-url-param-name { color: var(--editor-url-param-name); font-weight: 700; }
+.cm-tok-url-param-value { color: var(--editor-url-param-value); }
+.cm-tok-cookie-name { color: var(--editor-cookie-name); font-weight: var(--weight-bold); }
+.cm-tok-cookie-value { color: var(--editor-cookie-value); }
+
 .cm-nonprinting {
   color: var(--accent-strong);
 }
@@ -1321,6 +1503,65 @@ tbody td {
 
 .editor-grid > * {
   min-width: 0;
+}
+
+/* The editor-area layout switcher (burpsy-react-ui-446): the two new
+   arrangements Burp's message-editor icons offer. Vertical is the base rule
+   above; horizontal puts the pair side by side, and combined collapses to one
+   pane — the combined Tabs render is the grid's single child, so the track
+   list just goes to one column. */
+.editor-grid-horizontal,
+.editor-grid-inspected.editor-grid-horizontal {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.editor-grid-horizontal > .editor-combined,
+.editor-grid-combined > .editor-combined,
+.editor-grid-inspected.editor-grid-combined {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.editor-combined {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* A message pane with a reading picker above it (burpsy-react-ui-c05): the wrapper exists only when
+   the row has an earlier reading to compare, so the common case keeps the editor grid's DOM and its
+   children count exactly as before. It fills its grid cell and lets the editor take the rest, which
+   is why it needs the min-height the pane's own children already rely on. */
+.reading-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.reading-pane > :last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.variant-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
+.layout-switch {
+  display: inline-flex;
+  gap: 2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
+  margin-left: auto;
+}
+
+.layout-switch button[aria-pressed="true"] {
+  background: var(--accent-soft, rgba(255, 102, 51, 0.14));
+  color: var(--accent);
 }
 
 /* ===========================================================================
@@ -1482,6 +1723,149 @@ tbody td {
   color: var(--muted);
   font-size: var(--fs-sm);
   margin-top:2px; /* token-exempt: sub-grid optical nudge, smaller than --s1; not part of the fluid spacing scale */
+}
+
+/* Burp's suite-wide Search dialog (vs9k). Three regions: the filters, the result table, and the
+   message the selected row matched in. The filters are a fixed-width column because they are a
+   form, and the two result regions share the remaining width so the preview is as wide as the
+   table it explains. */
+.search-dialog {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-rows: minmax(140px, auto) minmax(0, 1fr);
+  gap: var(--s3);
+  max-height: min(70vh, 720px);
+  min-height: 0;
+}
+
+.search-dialog-form {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  display: grid;
+  gap: var(--s3);
+  align-content: start;
+  overflow: auto;
+  min-width: 0;
+}
+
+.search-dialog-results {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
+.search-dialog-preview {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  overflow: auto;
+}
+
+.search-dialog-checks,
+.search-dialog-tools {
+  display: grid;
+  gap: var(--s1);
+}
+
+.search-dialog-axes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--s2);
+  align-items: start;
+}
+
+.search-dialog-actions {
+  display: grid;
+  gap: var(--s2);
+  align-content: start;
+}
+
+/* What the current options actually mean. Stated in words because the results below are only
+   interpretable against the filters that produced them, and the form can scroll out of view. */
+.search-dialog-scope {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+}
+
+.search-dialog-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s1);
+}
+
+/* The row whose message the preview is showing. Two signals, because the tint alone is invisible to
+   anyone who cannot see it: a left edge mark and the aria-selected state the table announces. */
+.search-row {
+  cursor: pointer;
+}
+
+.search-row-selected > td {
+  background: var(--paper-deep);
+}
+
+.search-row-selected > td:first-child {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.search-url {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.search-dialog-message {
+  background: var(--editor-bg);
+  color: var(--editor-fg);
+  border: 1px solid var(--line);
+  padding: var(--s2) var(--s3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 34vh;
+  overflow: auto;
+  margin: 0;
+}
+
+/* The matched bytes. The text colour is set explicitly to the editor's own foreground rather than
+   inherited, so the highlight cannot change the contrast the editor background was chosen for; the
+   underline is the signal that survives a theme where the tint is faint, and colour blindness. */
+.search-dialog-message mark {
+  background: color-mix(in srgb, var(--warn) 18%, var(--editor-bg));
+  color: var(--editor-fg);
+  box-shadow: inset 0 -2px 0 var(--warn);
+  padding: 0;
+}
+
+/* Whether the preview was cut off. A pane that silently showed the first few kilobytes of a
+   response would read as the whole response. */
+.search-dialog-cut {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-style: italic;
+}
+
+@media (max-width: 980px) {
+  .search-dialog {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(120px, auto) minmax(0, 1fr);
+  }
+  .search-dialog-form {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .search-dialog-results {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .search-dialog-preview {
+    grid-column: 1;
+    grid-row: 3;
+  }
 }
 
 .palette {
@@ -2227,6 +2611,14 @@ tbody td {
   scrollbar-width: thin;
 }
 
+/* The event log's own scroll (burpsy-react-ui-voc). The feed renders every row the server sends
+   rather than slicing to a literal, so the list needs a bound in HEIGHT instead of in rows — the
+   rows stay reachable, which a slice could not offer, and the card does not grow without end. */
+.event-list-scroll {
+ max-height: min(60vh, 34rem);
+ overflow-y: auto;
+}
+
 .event-row {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
@@ -2277,6 +2669,46 @@ tbody td {
   min-height: 28px;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+/* Burp's wrapped tab view (burpsy-react-ui-fkj): the strip's alternative to a scrollable row.
+   A single row with horizontal overflow costs no height and keeps the editor tall, which is why
+   scrolling is the default; wrapping trades that for every tab being visible at once, and an
+   engagement with forty tabs is where the trade starts to pay. */
+.tabs-list:has(.tabs-trigger-wrap) {
+  overflow-x: visible;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.tabs-trigger-wrap {
+  /* Wrapping only means anything if the tab may break internally, and a tab whose name is a URL
+     would otherwise force the row wider than the window — which is the horizontal scroll the wrapped
+     view exists to remove. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 22ch;
+  flex: 0 1 auto;
+}
+
+/* A tab's own colour, or its group's (fkj). `--tab-color` is set by the tab trigger and resolves
+   to a `--highlight-*` custom property, so a tab colour and a row highlight of the same name are
+   the same colour in either theme. A left rule rather than a background: the tab label stays
+   readable, and the strip reads as one row of tabs with markers rather than a stack of chips. */
+.tabs-trigger[style*="--tab-color"] {
+  box-shadow: inset 3px 0 0 0 var(--tab-color);
+}
+
+.tabs-trigger[data-drop-target] {
+  /* The row the dragged tab would land on. A box-shadow rather than a border or an outline: an
+     outline does not take the token system, a border would change the row's height, and the mark has
+     to sit INSIDE the row so the tab it is marking stays readable. */
+  box-shadow: inset 0 0 0 var(--border-strong) var(--accent-bright);
+}
+
+.tabs-trigger[data-dragging] {
+  opacity: 0.5;
 }
 
 .tabs-trigger {
@@ -2529,6 +2961,20 @@ tbody td {
   opacity: 0.55;
 }
 
+/* A false-positive finding (burpsy-react-ui-pwd) is worked, not gone: it stays in the tree so a
+   re-audit that re-raises it has somewhere to merge, and so the mark is auditable rather than
+   deleted evidence. Burp's convention is a struck label. The row also carries the letters "FP" in
+   its meta — the strikethrough is the glance signal, the text is the one that survives a screen
+   reader and a colour-blind operator alike. */
+.tree-row-false-positive .tree-row-label {
+  text-decoration: line-through;
+}
+
+.tree-row-false-positive .tree-row-label,
+.tree-row-false-positive .sev-dot {
+  opacity: 0.6;
+}
+
 /* Restored to full strength on hover and when selected: the moment an operator is actually looking
    at the row, dimming stops being a helpful filter and starts being an obstacle to reading it. */
 .tree-row-out-of-scope:hover,
@@ -2544,6 +2990,26 @@ tbody td {
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* An operator-added site-map node (amu). A dashed underline rather than a colour: the row is
+   marked as "you wrote this down, nothing was observed", which is a provenance fact, and a tint
+   would read as a severity. `outline` rather than `border-bottom` so the row's height does not
+   change by a pixel when a node is added to the map mid-session. */
+.tree-row-inserted {
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 2px;
+}
+
+/* The marker beside an inserted row, in the operator's own words rather than an icon: the whole
+   point is that a reader can tell what the node is without inferring it from a shape. */
+.tree-row-added {
+  color: var(--muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* One grid cell holding every trailing marker, so a row that gains a severity dot or a parameter
@@ -2625,11 +3091,11 @@ tbody td {
   background: var(--muted);
 }
 
-.sev-critical { background: var(--bad); outline: var(--border-strong) solid color-mix(in srgb, var(--bad) 35%, transparent); outline-offset: 1px; }
-.sev-high { background: var(--bad); }
-.sev-medium { background: var(--warn); }
-.sev-low { background: var(--info); }
-.sev-informational { background: var(--muted); }
+.sev-critical { background: var(--severity-critical); outline: var(--border-strong) solid color-mix(in srgb, var(--severity-critical) 35%, transparent); outline-offset: 1px; }
+.sev-high { background: var(--severity-high); }
+.sev-medium { background: var(--severity-medium); }
+.sev-low { background: var(--severity-low); }
+.sev-informational { background: var(--severity-informational); }
 
 /* The advisory prose scrolls; the request/response tabs hand their whole track to the editor. */
 .advisory-body {
@@ -2863,6 +3329,28 @@ tbody td {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto;
   gap:var(--s2);
   align-items: center;
+}
+
+/* A row in the history Extractor-columns manager (burpsy-react-ui-28n8): name, source, header
+   name, method, pattern, capture group, then the reorder/remove actions. One grid so the controls
+   line up down the list; it collapses to a single column on a narrow viewport (below). */
+.extractor-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1fr) auto minmax(0, 1.5fr) 5rem auto;
+  gap:var(--s2);
+  align-items: center;
+}
+
+.extractor-row-actions {
+  display: flex;
+  gap:var(--s1);
+  align-items: center;
+}
+
+@media (max-width: 720px) {
+  .extractor-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* One macro step in the session editor. */
@@ -3201,6 +3689,34 @@ tbody td {
   height: 100%;
   border: 0;
   background: #ffffff; /* token-exempt: deliberately theme-independent, see comment above */
+}
+
+/* An image response's Render view: same white, theme-independent stage as the iframe, with the
+   image centred and never upscaled past its natural size — a pixel-for-pixel CAPTCHA or QR code
+   is the evidence, and a stretched one is a different picture. */
+.render-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+.render-image img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+
+/* The read-only Convert-selection dialog's output: pre so whitespace and newlines in a
+   URL/HTML/base64 conversion are visible — a converted payload's shape IS information. */
+.conversion-result {
+  max-height: 50vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: var(--s2);
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  font-size: var(--fs-xs);
 }
 
 .editor-note {
@@ -3683,8 +4199,9 @@ tbody td {
    below it is a genuine component bug with no Penpot counterpart to fix — see its own comment.
 
    Both rules are meant to stay reviewable rather than permanent: --muted's is a stopgap, meant to be
-   DELETED once the Penpot value lands and is re-fetched; re-run e2e-ui.sh's axe checks afterward to
-   confirm the token fix alone still clears it. .brand-symbol's is a real fix, not a stopgap, and stays.
+   DELETED once the Penpot value lands and is re-fetched; re-run the live pass's axe check afterward
+   (burpsy-go/docs/UI-VERIFICATION.md — the same rule set the a11y spec used) to confirm the token fix
+   alone still clears it. .brand-symbol's is a real fix, not a stopgap, and stays.
 
    Both values carry real margin over 4.5:1, not a bare pass — the first attempt at .brand-symbol's fix
    scraped in at a computed 4.50 that rounded down to 4.49 in axe's own arithmetic, which is why margin
@@ -3966,6 +4483,68 @@ tbody td {
   background: color-mix(in srgb, var(--row-tint) var(--row-tint-alpha), var(--paper-raised));
 }
 
+/* --- Decoder encoding colour-coding (burpsy-react-ui-adrh) -------------------------------------
+   Burp's "The data is color-coded to indicate the type of encoding or decoding that is applied."
+   Each of the nine encoding families (see src/lib/decoder-colours.ts) borrows one colour from the
+   closed nine-colour highlight vocabulary above — already contrast-audited and theme-stable, and a
+   family means the same thing in both themes exactly as a row highlight does. The colour is a
+   supplementary cue: the step label and each detected badge already name the encoding in text, so
+   this carries no information that is only in the colour (WCAG 1.4.1). The span's faint background
+   reuses --row-tint-alpha (4% dark / 14% light), the same value proven to keep text at 4.5:1; the
+   underline sits below the glyphs and never touches text contrast. */
+[data-encoding="url"] {
+  --enc-tint: var(--highlight-blue);
+}
+[data-encoding="html"] {
+  --enc-tint: var(--highlight-green);
+}
+[data-encoding="base64"] {
+  --enc-tint: var(--highlight-orange);
+}
+[data-encoding="radix"] {
+  --enc-tint: var(--highlight-magenta);
+}
+[data-encoding="compress"] {
+  --enc-tint: var(--highlight-cyan);
+}
+[data-encoding="jwt"] {
+  --enc-tint: var(--highlight-pink);
+}
+[data-encoding="ascii"] {
+  --enc-tint: var(--highlight-yellow);
+}
+[data-encoding="rot13"] {
+  --enc-tint: var(--highlight-red);
+}
+[data-encoding="hash"] {
+  --enc-tint: var(--highlight-gray);
+}
+
+/* The transformed span in the Decoder output. Only the span carries the tint — any untouched
+   prefix/suffix from a per-selection transform stays plain, which is what makes the colour read
+   as "this part is <encoding>" rather than tinting the whole card. */
+.enc-span[data-encoding] {
+  background: color-mix(in srgb, var(--enc-tint) var(--row-tint-alpha), transparent);
+  border-bottom: var(--border-focus) solid var(--enc-tint);
+  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  padding: 0 1px;
+}
+
+/* The swatch on each detected-layer badge. A small square rather than the picker's circle so it
+   reads as a code marker, not a chooser. */
+.enc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px; /* token-exempt: fixed 4px swatch gap, matches .highlight-picker above */
+}
+.enc-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  background: var(--enc-tint, var(--highlight-gray));
+}
+
 /* --- highlight picker: design/jsx/highlight-picker-default.jsx --------------------------------- */
 
 .highlight-picker {
@@ -4182,4 +4761,368 @@ tbody td {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* A button styled as the text it carries — used where a row's name itself is the way into a view
+ * (Organizer collections): a bordered button would read as a second action column. Unaffected by
+ * the token checks: every property maps to a design token. */
+.text-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.text-button:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+/* Settings' section rail and its search (burpsy-react-ui-f6a). Burp's Settings is a dialog with a
+ * left-hand tree; this is the same affordance on a page — a sticky column of the page's own
+ * sections beside the cards, and a search that filters both. Two columns rather than the chips row
+ * Discover uses: Discover has nine short section names and Settings has seventeen long ones, which
+ * as a wrapping row would be four lines of chrome above the first setting. It collapses to one
+ * column at the same 980px the other two-column pages do, where the rail stops being sticky — a
+ * sticky block on a narrow screen is a block that eats the screen. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 232px) minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+  min-width: 0;
+}
+
+.settings-rail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: var(--s2);
+  align-content: start;
+  justify-items: start;
+  min-width: 0;
+}
+
+.settings-rail .search-field {
+  min-width: 0;
+  width: 100%;
+}
+
+.settings-nav {
+  display: grid;
+  gap: 1px; /* token-exempt: a hairline between adjacent list rows, not spacing between blocks */
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-nav-link {
+  border: 1px solid transparent;
+  border-left: var(--border-strong) solid transparent;
+  background: none;
+  color: var(--text-soft);
+  text-align: left;
+  padding: var(--s1) var(--s2);
+  font: var(--fs-xs) var(--font-sans);
+  cursor: pointer;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-nav-link:hover {
+  background: var(--chrome-hover);
+  color: var(--text);
+}
+
+/* The current section is marked with a bar and the body colour, not with colour alone: the
+ * difference has to survive a monochrome screen and a red-green reader. */
+.settings-nav-link.is-current {
+  border-left-color: var(--accent);
+  background: var(--paper-raised);
+  color: var(--text);
+  font-weight: var(--weight-bold);
+}
+
+.settings-sections {
+  display: grid;
+  align-content: start;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+/* The wrapper exists to be a scroll target and a focus target, so it must add no box of its own —
+ * no border, no padding — or every card would gain a second inset. Deliberately NOT display:
+ * contents, which would leave it with no box to scroll to and would also outrank the user agent's
+ * [hidden] rule, so a filtered-out section would stay on screen. */
+.settings-section {
+  display: grid;
+  gap: var(--gap);
+  min-width: 0;
+}
+
+.settings-section[hidden] {
+  display: none;
+}
+
+/* A jump moves focus here, and the landing has to be visible: the same ring the scrollable table
+ * uses, so arriving by keyboard looks like arriving anywhere else in the console. */
+.settings-section:focus-visible {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: 2px; /* token-exempt: an outline offset, not layout spacing */
+}
+
+@media (max-width: 980px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-rail {
+    position: static;
+  }
+}
+
+/* The control a settings search landed on, outlined for a moment (burpsy-react-ui-f6a). A card
+ * scrolled to its heading answers "somewhere in this section"; the operator asked which field.
+ * It fades rather than persists — a permanent mark would become chrome, and the next search
+ * would have to explain why two things are outlined. */
+[data-settings-hit] {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: var(--s1);
+  animation: settings-hit-fade 1600ms ease-out forwards;
+}
+
+@keyframes settings-hit-fade {
+  0%,
+  70% {
+    outline-color: var(--accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+/* ==== Message-editor tab settings (burpsy-react-ui-t94i) and the plugin tab (ww5) ==== */
+
+/* The settings disclosure on the editor bar. position: relative anchors the panel to the bar
+   itself, so the panel can be absolutely positioned without a portal — the strip is already
+   dense with Radix triggers, and a native disclosure cannot z-fight them. */
+.editor-tabs-settings {
+  position: relative;
+}
+
+.editor-tabs-settings > summary {
+  list-style: none;
+}
+
+.editor-tabs-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.editor-tabs-settings[open] > summary {
+  color: var(--accent, var(--muted));
+}
+
+.editor-tabs-settings-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--s2));
+  z-index: 30;
+  min-width: 280px;
+  max-height: 320px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s1);
+  padding: var(--s2);
+  background: var(--panel-bg, var(--bg));
+  border: 1px solid var(--border, var(--line));
+  border-radius: var(--radius-md, 4px);
+  box-shadow: var(--shadow-md, 0 4px 16px rgb(0 0 0 / 20%));
+}
+
+.editor-tabs-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.editor-tabs-settings-row label {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.editor-tabs-settings-move {
+  display: flex;
+  gap: 2px; /* token-exempt: a half-step between the up/down reorder buttons, deliberately below the 4px --s1 step of the fluid scale */
+}
+
+/* A plugin's editor-tab body (ww5): the same scroll+pre the typed views use, so every tab in
+   the strip reads as the same control. */
+.editor-plugin-tab {
+  overflow: auto;
+  height: 100%;
+  background: var(--panel-bg, var(--bg));
+}
+
+.editor-plugin-tab .editor-plugin-note,
+.editor-plugin-tab .notice {
+  margin: var(--s2);
+}
+
+.editor-plugin-text {
+  margin: 0;
+  padding: var(--s2);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--editor-font-size);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ==== Session-handling tracer (burpsy-react-ui-n29) ==== */
+
+.trace-entry {
+  border-left: var(--border-focus) solid var(--line);
+  padding: var(--s1) 0 var(--s1) var(--s2);
+}
+
+.trace-entry-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  flex-wrap: wrap;
+  font-size: var(--fs-xs);
+}
+
+.trace-actions {
+  margin: var(--s1) 0 0;
+  padding-left: var(--s3);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim, var(--muted));
+}
+
+/* ==== Comparer item tables (burpsy-react-ui-yy2) ==== */
+
+/* A listed item reads as a row: quiet until selected, and the selection must be obvious
+   because "which two am I about to compare" is the whole question the tables answer. */
+.comparer-item {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-xs);
+  padding: 2px var(--s1); /* token-exempt: the pill's 2px inner band is deliberately below the 4px --s1 step; --s1 carries the label's side padding */
+  cursor: pointer;
+  width: 100%;
+  border-radius: var(--radius-sm, 3px);
+}
+
+.comparer-item:hover {
+  background: var(--editor-active-line, rgb(0 0 0 / 5%));
+}
+
+.comparer-item-selected {
+  background: var(--accent-soft, rgb(0 0 0 / 10%));
+  color: var(--accent, var(--fg));
+  font-weight: var(--weight-bold, 600);
+}
+
+/* Project switcher (burpsy-react-ui-dlw2). One row per .db file beside the open project: icon,
+   name over path, named/file-name badge, and the Open action or the "open now" mark. Paths are
+   monospace and break anywhere, because they are long and the operator reads them to tell two
+   engagements apart. */
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+}
+
+.project-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-bottom: 1px solid var(--line);
+}
+
+.project-row:last-child {
+  border-bottom: 0;
+}
+
+.project-row-name {
+  display: grid;
+  min-width: 0;
+}
+
+.project-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-soft);
+  word-break: break-all;
+}
+
+.project-confirm {
+  color: var(--text);
+}
+
+/* Sequencer analysis settings (burpsy-react-ui-nm81): one switch per test, in columns so the nine
+   rows read as one panel rather than a long list. */
+.analysis-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--s1) var(--s3);
+}
+
+/* The pre-request script's reference (burpsy-react-ui-ydmj): names in monospace, what they are beside. */
+.script-reference {
+  display: grid;
+  gap: var(--s1);
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-soft);
+}
+
+.script-reference > div {
+  display: grid;
+  grid-template-columns: minmax(0, 16em) minmax(0, 1fr);
+  gap: var(--s2);
+}
+
+.script-reference dt {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.script-reference dd {
+  margin: 0;
+}
+
+/* A crawl's stops (burpsy-react-ui-j5j7): one line per bound the crawl hit, across the whole run row,
+   so a partial crawl's counts are never read without the reason they are partial. */
+.crawl-stops {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+}
+
+.crawl-stop {
+  border-left: var(--border-status) solid var(--line-strong);
+  padding-left: var(--s2);
+  color: var(--text-soft);
+}
+
+.crawl-stop-policy {
+  border-left-color: var(--warn);
+  color: var(--text);
 }

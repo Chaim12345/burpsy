@@ -1,0 +1,45 @@
+# burpsy bundled wordlist: common fuzzing strings
+# Source: the classic community fuzzing corpus (fuzzdb-inspired common strings, the
+#   Big List of Naughty Strings' core ASCII section).
+# Licence basis: public domain / permissively-licensed community content; nothing here is
+#   extracted from PortSwigger's shipped resources.
+../
+../../
+../../../
+../../../../
+../../../../../etc/passwd
+....//....//etc/passwd
+/etc/passwd
+C:\windows\win.ini
+%2e%2e%2f
+%252e%252e%252f
+..%2f
+..%5c
+%c0%af
+{{7*7}}
+${7*7}
+<%= 7*7 %>
+#{7*7}
+{{7*'7'}}
+${{7*7}}
+#set($x=7*7)${x}
+{{constructor.constructor('alert(1)')()}}
+<%= `alert(1)` %>
+%s%s%s%s%s%s%s%s
+%n%n%n%n%n%n%n%n
+{{ }}
+${ }
+%{( )}
+{{7*7}}
+[[${7*7}]]
+{{{7*7}}}
+{}
+[]
+()
+< >
+null
+NULL
+undefined
+NaN
+0x00
+\u0000

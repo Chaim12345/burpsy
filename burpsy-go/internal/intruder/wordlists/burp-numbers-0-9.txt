@@ -1,0 +1,18 @@
+# burpsy bundled wordlist: Single digits 0-9
+# Source: Burp Suite's own shipped Intruder payload resource (PayloadStrings), reproduced
+#   verbatim from the files PortSwigger bundles with Burp Suite itself.
+# Licence basis: these ARE PortSwigger's shipped payloads, carried over as-is; unlike
+#   burpsy's other starter lists, this content is not third-party OWASP/SecLists material —
+#   it is Burp's own bundled data, redistributed here as plain wordlist files.
+# Placeholders such as {base}, {domain}, {file} are Burp's template syntax and are
+#   preserved as-is; the attack engine substitutes them at send time.
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9

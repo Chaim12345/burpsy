@@ -300,6 +300,15 @@ func runHistogram(bits []byte) (zeros, ones [6]int, longest int) {
 type FipsTest struct {
 	// ID is "monobit" | "poker" | "runs" | "long_runs".
 	ID string `json:"id"`
+	// Disabled is true when the operator switched this test off rather than when it failed or could
+	// not run (burpsy-react-ui-nm81). Three states, and they must not collapse: a FAILED test is a
+	// finding, an UNTESTABLE one is a limit of the sample, and a DISABLED one is a decision by the
+	// reader. A report that dropped the row would make the third indistinguishable from a build that
+	// never had the test.
+	Disabled bool `json:"disabled,omitempty"`
+	// DisableReason is set alongside Disabled so the row is self-explaining — a consumer must not
+	// have to know this package's policy to render it.
+	DisableReason string `json:"disable_reason,omitempty"`
 	// Name is the human name of the test.
 	Name string `json:"name"`
 	// Spec is the spec section this comes from, so a reader can check the
@@ -334,6 +343,9 @@ type FipsReport struct {
 	// that case is "not tested", not a verdict computed from thresholds that do
 	// not apply. Marshals to JSON null, matching the UI's `tests: FipsTest[] | null`.
 	Tests []FipsTest `json:"tests"`
+	// SwitchedOff names the tests this run was told not to run (burpsy-react-ui-nm81), so a report
+	// says what it declined even when every other field looks like a battery that never had them.
+	SwitchedOff []string `json:"switched_off,omitempty"`
 }
 
 // Passed is true when every test in an applicable suite passed. Nil when the suite
@@ -462,7 +474,7 @@ func testBlock(block []byte) blockResult {
 }
 
 // AnalyseFipsBits runs the suite over bits, in whole 20,000-bit blocks.
-func AnalyseFipsBits(bits []byte) FipsReport {
+func AnalyseFipsBits(bits []byte, disabled ...[]string) FipsReport {
 	blockCount := len(bits) / BlockBits
 	blocks := make([]blockResult, 0, blockCount)
 	for i := 0; i < blockCount; i++ {
@@ -526,14 +538,41 @@ func AnalyseFipsBits(bits []byte) FipsReport {
 		func(b blockResult) string { return fmt.Sprintf("longest run %d bits", b.longestRun) },
 	)
 
-	report.Tests = []FipsTest{monobitTest, pokerTest, runsTest, longRunsTest}
+	// Every test is built and then FILTERED, not skipped before it runs — the same shape the
+	// extended battery uses (advanced.go). A switch that skipped the computation would make the
+	// battery's cost depend on the operator's choices with no way to see it, and would let a disabled
+	// test vanish from the report instead of appearing as not-run.
+	all := []FipsTest{monobitTest, pokerTest, runsTest, longRunsTest}
+	off := DisabledSet(firstDisableList(disabled))
+	tests := make([]FipsTest, 0, len(all))
+	turnedOff := make([]string, 0, len(off))
+	for _, test := range all {
+		if off[test.ID] {
+			// MARKED and kept, never dropped. A report that silently loses a row reads as a battery
+			// that never had the test, and an operator cannot tell a switched-off test from a build
+			// that lacks it — which is criterion 2 of the bead, and the failure this shape exists to
+			// avoid. The row keeps its identity and carries why it did not judge the sample.
+			test.Disabled = true
+			test.DisableReason = "switched off in the analysis settings"
+			// Its numbers are cleared as well as its verdict: a row reporting blocks_passed from a
+			// run this battery was told not to judge is a measurement of nothing.
+			test.Passed = false
+			test.BlocksPassed = 0
+			test.BlocksFailed = 0
+			test.Observed = ""
+			turnedOff = append(turnedOff, test.ID)
+		}
+		tests = append(tests, test)
+	}
+	report.Tests = tests
+	report.SwitchedOff = turnedOff
 	return report
 }
 
 // AnalyseFips is AnalyseFipsBits for a token list: the encoding is detected first, so
 // hex session ids are decoded to 4 bits a character rather than libelled as ASCII.
-func AnalyseFips(tokens []string) FipsReport {
-	return AnalyseFipsBits(BitsOf(tokens, DetectEncoding(tokens)))
+func AnalyseFips(tokens []string, disabled ...[]string) FipsReport {
+	return AnalyseFipsBits(BitsOf(tokens, DetectEncoding(tokens)), disabled...)
 }
 
 // aggregate collapses one test across blocks. It reports the first *failing* block's

@@ -629,6 +629,16 @@ func (c *JwtWeakSecretCheck) finding(t rawToken, secret string) *Finding {
 				"tokens for this application. Signing input: %s.",
 			t.whereFound, secret, c.wordlist.name, len(c.wordlist.entries), elideSigningInput(t.signingInput)),
 		Evidence: secret,
+		// Merge on the secret, not the target (burpsy-react-ui-7tc1). One weak key is one weakness
+		// however many endpoints issue tokens under it: Burp's merger compares a fingerprint for
+		// exactly this row (Zbvp.java:53-56), and keying on the target instead files the same proven
+		// fact as a separate High per endpoint — a session cookie on /login, /api/session and every
+		// other page that sets it, which is the shape a long crawl produces.
+		//
+		// The secret, not the signing input: two tokens signed with different keys can carry
+		// byte-identical claims, so claims do not identify which key is weak. Only the recovered
+		// secret does, and it is what the finding proved.
+		MergeKey: secret,
 		// Solution is left to EnrichFinding: Burp's catalogued definition for this exact issue name
 		// carries the real remediation text.
 		Timestamp: time.Now(),
@@ -654,7 +664,7 @@ func collectTokens(msg *core.StoredMessage, isRequest bool, out []rawToken) []ra
 		out = scanTextForTokens(msg.Text(h.Value), at, out)
 	}
 	if !isRequest {
-		out = scanTextForTokens(string(msg.Body()), tokenLocation{kind: locResponseBody}, out)
+		out = scanTextForTokens(string(readableBody(msg)), tokenLocation{kind: locResponseBody}, out)
 	}
 	return out
 }
