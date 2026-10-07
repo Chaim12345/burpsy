@@ -86,13 +86,15 @@ jobs:
       # from the release's own checksums file: that file only proves the download is intact, while
       # a hash in this workflow also proves the release is the one that was reviewed. nuclei is
       # v3.8.0, the version the extscan live tests are developed against locally.
-      - name: Install ffuf and nuclei (extscan live tests)
+      - name: Install ffuf, nuclei and interactsh-client (live tests)
         working-directory: ${{ runner.temp }}
         env:
           FFUF_VERSION: 2.1.0
           FFUF_SHA256: fc2c82736c14dcbea4daf3d3cf3878c1c4773008ba45c2bc0fceba7d17b40bb5
           NUCLEI_VERSION: 3.8.0
           NUCLEI_SHA256: cd4ea43c88b50af8ab96eb6ad3fb4debd8e9d51efaff4d4c2d99106041578943
+          INTERACTSH_VERSION: 1.3.1
+          INTERACTSH_SHA256: d553fb3dd4c2684c953aedeb555f13f0d1ca94bd75112c949a5fd975d385a903
         run: |
           set -euo pipefail
           bin="$HOME/.local/bin"
@@ -105,9 +107,17 @@ jobs:
             "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
           echo "${NUCLEI_SHA256}  nuclei.zip" | sha256sum -c -
           unzip -o -q nuclei.zip nuclei -d "$bin"
+          # interactsh-client: internal/web's batch-mint test registers against the real public
+          # interactsh pool through this binary (api_collaborator_batch_test.go). Without it the
+          # test fails the web package. v1.3.1 is the version the test was written against.
+          curl -fsSL -o interactsh.zip \
+            "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
+          echo "${INTERACTSH_SHA256}  interactsh.zip" | sha256sum -c -
+          unzip -o -q interactsh.zip interactsh-client -d "$bin"
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/ffuf" -V
           "$bin/nuclei" -version
+          "$bin/interactsh-client" -version
       # The corpus is a pinned release archive, not `nuclei -update-templates`. On a fresh runner
       # the updater printed "nuclei-templates are not installed, installing..." and exited within a
       # second having installed nothing and said nothing (an unauthenticated GitHub API call from a
