@@ -68,10 +68,49 @@ jobs:
       # own feet is not a gate. The template corpus is fetched with the binary it belongs to; the
       # test checks ~/.local/nuclei-templates/http directly, since a binary with no templates runs
       # and matches nothing, which would let an empty result pass for a real scan.
+      #
+      # WHAT BROKE (burpsy-react-ui-d4iu), so the next person does not re-derive it: this step used
+      # to be two `go install pkg@version` lines, and nuclei's failed at LINK time after 4m17s of
+      # compiling — before gofmt/build/vet/test ever ran, so every push was red while verifying
+      # nothing about the code:
+      #
+      #     # github.com/projectdiscovery/nuclei/v3/cmd/nuclei
+      #     link: github.com/bytedance/sonic/ast: invalid reference to encoding/json.unquoteBytes
+      #
+      # nuclei v3.3.9 pulls github.com/bytedance/sonic v1.12.8, and sonic reaches into the
+      # standard library with
+      # `//go:linkname unquoteBytes encoding/json.unquoteBytes` (ast/stubs.go:141). That
+      # linkname is not a symbol a newer toolchain exports to linkname callers, so the reference
+      # is undefined at link. Reproduced locally on go1.26 and go1.27 — it is not a runner-only
+      # quirk, and it is not caused by the toolchain this job selects.
+      #
+      # THE FIX, in two parts, because either alone is not enough:
+      #   1. Build from a temporary module instead of `go install pkg@version`, so the dependency
+      #      graph is resolved once into a go.mod this step can then override.
+      #   2. `go get github.com/bytedance/sonic@v1.15.4` in that module. sonic dropped the bad
+      #      linkname after v1.13.2; v1.14.2 and every later release build clean. Without this
+      #      bump the same link error reproduces from the temp module too — verified, not assumed.
+      #
+      # `|| { ... exit 1; }` on each build is deliberate: a bare failure here is an unexplained
+      # red X, and the whole point of this bead is that the gate must say what it verified rather
+      # than only that it did not. The `go get` of the override is allowed to fail loudly under
+      # `set -e` for the same reason.
       - name: Install ffuf and nuclei (extscan live tests)
         run: |
-          go install github.com/ffuf/ffuf/v2@v2.1.0
-          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.9
+          set -euo pipefail
+          tools_dir="$(mktemp -d)"
+          cd "$tools_dir"
+          go mod init burpsy-tools >/dev/null
+          # ffuf has no problematic transitive tree; it is built the pinned-module way anyway so
+          # that both tools fail the same way and neither is a special case to remember.
+          go get github.com/ffuf/ffuf/v2@v2.1.0
+          go get github.com/projectdiscovery/nuclei/v3/cmd/nuclei@v3.3.9
+          # The load-bearing override. See the comment above for why v1.12.8 cannot be linked.
+          go get github.com/bytedance/sonic@v1.15.4
+          go build -o "$HOME/go/bin/ffuf" github.com/ffuf/ffuf/v2 \
+            || { echo "::error::building pinned ffuf failed"; exit 1; }
+          go build -o "$HOME/go/bin/nuclei" github.com/projectdiscovery/nuclei/v3/cmd/nuclei \
+            || { echo "::error::building pinned nuclei failed (see the link/compile error above)"; exit 1; }
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Fetch nuclei template corpus
         run: |
