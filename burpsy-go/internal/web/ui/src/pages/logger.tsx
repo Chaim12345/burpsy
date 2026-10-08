@@ -749,6 +749,21 @@ export function LoggerPage(): JSX.Element {
         ],
        },
        {
+        // Burp: "You can directly add URLs to scope from the Target site map, Proxy history, and
+        // Logger" (desktop/testing-workflow/test-scope.html). History and the site map had it
+        // through the shared exchange menu; Logger builds its own menu and did not (pahd). The
+        // same handler as History's, so the rule written and the toast are the same.
+        id: "scope",
+        actions: [
+         {
+          id: "scope",
+          label: `Add ${row.host} to scope`,
+          icon: ShieldCheck,
+          onSelect: () => void addHostsToScope([row.host]),
+         },
+        ],
+       },
+       {
         id: "history",
         actions: [
          {
