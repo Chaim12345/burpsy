@@ -186,9 +186,35 @@ func headerHasToken(head []byte, name, token string) bool {
 	return false
 }
 
+// writeFailure is a request that could not be written at all, so the server cannot have acted on it.
+type writeFailure struct{ err error }
+
+func (w *writeFailure) Error() string { return "write failed: " + w.err.Error() }
+func (w *writeFailure) Unwrap() error { return w.err }
+
 // staleReuse reports whether err on a kept connection is the server's idle close rather than an
 // answer: the connection was gone before any response byte arrived.
 func staleReuse(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
 		errors.Is(err, net.ErrClosed)
+}
+
+// retryOnFresh reports whether a send that failed on a kept connection may be sent again on a fresh
+// one. A request that was never written may always be. One that was written and then met a closed
+// connection may have been acted on by the server, so it is resent only when its method is idempotent
+// (RFC 9110 §9.2.2): resending a POST the server already processed would do its work twice.
+func retryOnFresh(err error, request []byte) bool {
+	var wf *writeFailure
+	if errors.As(err, &wf) {
+		return true
+	}
+	if !staleReuse(err) {
+		return false
+	}
+	method, _, _ := bytes.Cut(request, []byte(" "))
+	switch string(method) {
+	case "GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE":
+		return true
+	}
+	return false
 }

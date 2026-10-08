@@ -944,7 +944,7 @@ func (s *Sender) SendRawOutcome(
 	if keep {
 		if ic := s.pool.take(key, plan.wantH2); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
-			if err == nil || !staleReuse(err) {
+			if err == nil || !retryOnFresh(err, plan.http1) {
 				down := plan.block
 				if down == nil {
 					down = &Downgrade{Reason: DowngradeNegotiatedHTTP11, Forced: plan.mustH2}
@@ -1018,7 +1018,7 @@ func (s *Sender) SendRawOutcome(
 		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
 		stop()
 		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
-		if err == nil && reusableAfter(plan.http1, resp) {
+		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
 			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
 		}
@@ -1032,7 +1032,7 @@ func (s *Sender) SendRawOutcome(
 // release returns a reused connection to the pool when its exchange left it reusable, and closes it
 // otherwise.
 func (s *Sender) release(key string, ic *idleConn, request, response []byte, err error) {
-	if err == nil && reusableAfter(request, response) {
+	if err == nil && reusableAfter(request, response) && ic.br.Buffered() == 0 {
 		s.pool.put(key, ic)
 		return
 	}
@@ -1192,7 +1192,7 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 	stop := watchCancel(ctx, conn)
 	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
 	stop()
-	if keep && err == nil && reusableAfter(raw, resp) {
+	if keep && err == nil && reusableAfter(raw, resp) && br.Buffered() == 0 {
 		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br})
 	} else {
 		conn.Close()
@@ -1215,7 +1215,7 @@ func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Rea
 	settings := s.Network()
 	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
-		return nil, fmt.Errorf("write failed: %w", explainCancellation(ctx, err))
+		return nil, &writeFailure{err: explainCancellation(ctx, err)}
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
@@ -1290,6 +1290,7 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 		s.net.Timeouts.ConnectMS = total
 	}
 	s.client = buildClient(s.config, s.net, s.carrier)
+	s.pool.closeAll()
 	return s
 }
 
@@ -1301,6 +1302,7 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
 	s.client = buildClient(s.config, s.net, s.carrier)
+	s.pool.closeAll()
 	return s
 }
 
@@ -1398,6 +1400,7 @@ func (s *Sender) WithUpstreamCarrier(carrier *upstream.Carrier) *Sender {
 	// carrier configured, every dial site read the field, and the connection still went out direct.
 	s.mu.Lock()
 	s.client = buildClient(s.config, s.net, carrier)
+	s.pool.closeAll()
 	s.mu.Unlock()
 	return s
 }

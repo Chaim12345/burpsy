@@ -3,11 +3,14 @@ package sender
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -217,5 +220,69 @@ func TestDefaultToHTTP2OffSendsHTTP1AndSaysWhy(t *testing.T) {
 	}
 	if got := srv.lastProto(t); got != "HTTP/2.0" {
 		t.Errorf("with the default settings the send arrived as %s, want h2", got)
+	}
+}
+
+// A response followed by bytes the request did not ask for — a desync probe's smuggled second
+// response, say — leaves the connection carrying another exchange's bytes. It is never kept: the next
+// send must read its own response, not those.
+func TestAConnectionWithBytesPastTheResponseIsNotKept(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var conns atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n := conns.Add(1)
+			go func(c net.Conn, n int64) {
+				defer c.Close()
+				buf := make([]byte, 4096)
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+					// Two responses in one write: the second is not an answer to anything sent.
+					c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nconn" + string(rune('0'+n)) +
+						"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nSTALE"))
+				}
+			}(c, n)
+		}
+	}()
+	host, port, _ := hostPort(ln.Addr().String())
+	s := senderWithHTTP(t, true, true)
+	for i := 0; i < 2; i++ {
+		resp, _, err := s.SendRawOutcome(context.Background(), host, port, false, rawGet(host, port), ProtocolPreferenceAuto)
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		if strings.Contains(string(resp), "STALE") {
+			t.Fatalf("send %d read the previous exchange's leftover bytes as its response: %q", i, resp)
+		}
+	}
+	if got := conns.Load(); got != 2 {
+		t.Errorf("%d connection(s) for 2 sends, want 2: a connection with buffered bytes must not be kept", got)
+	}
+}
+
+// A non-idempotent request whose kept connection died after it was written is not resent: the server
+// may already have acted on it.
+func TestRetryOnFreshIsLimitedToUnwrittenOrIdempotentRequests(t *testing.T) {
+	post := []byte("POST /pay HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n")
+	get := []byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+	readEOF := fmt.Errorf("read failed: %w", io.EOF)
+	if retryOnFresh(readEOF, post) {
+		t.Error("a POST that was written and then met EOF would be resent")
+	}
+	if !retryOnFresh(readEOF, get) {
+		t.Error("a GET that met EOF on a kept connection is not retried")
+	}
+	if !retryOnFresh(&writeFailure{err: syscall.EPIPE}, post) {
+		t.Error("a POST that could not be written at all is not retried")
 	}
 }
