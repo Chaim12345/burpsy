@@ -27,9 +27,10 @@ import { toast } from "sonner";
 import { openUrlInBrowser } from "./data.browser";
 import { useHotkeys } from "react-hotkeys-hook";
 import { editableBodyBase64 } from "./message";
+import { afterScopeAdd } from "./history-logging";
 import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
-import { useAnnotateExchange } from "./data";
+import { keys, useAnnotateExchange } from "./data";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
 import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
@@ -404,7 +405,10 @@ const addToSiteMap = async (exchange: Exchange) => {
    toast.success(`${exchange.host} added to scope`);
   } catch (error) {
    toast.error(`Could not scope ${exchange.host}: ${error instanceof Error ? error.message : String(error)}`);
+   return;
   }
+  // Burp's "Proxy history logging" prompt (z80e): stop, ask, or leave logging as it is.
+  await afterScopeAdd(() => void queryClient.invalidateQueries({ queryKey: keys.proxyOptions }));
  };
 
  const auditExchange = async (exchange: Exchange) => {

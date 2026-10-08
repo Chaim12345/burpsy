@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import type { CaExportKind } from "../lib/ca-export";
 import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
-import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
+import { useInterceptStartup, useProxyHistoryLogging, useSaveInterceptStartup, useSaveProxyHistoryLogging, useStats } from "../lib/data";
 import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
 import { DEFAULT_REDIRECT_TYPES, useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type {
@@ -459,7 +459,49 @@ function ProxySettingsSection(): JSX.Element {
     <Metric label="Stored on disk" value={stats.data ? formatBytes(stats.data.stored_bytes) : "—"} />
    </div>
    <InterceptStartupPreference />
+   <ProxyHistoryLoggingPreference />
   </Card>
+ );
+}
+
+/**
+ * Burp's "Proxy history logging" (configPanelProxyHistoryLogging, burpsy-react-ui-z80e): when hosts
+ * are added to the target scope, whether to stop sending out-of-scope items to Proxy history, ask
+ * each time, or do nothing. Saved immediately, like the interception preference beside it.
+ */
+function ProxyHistoryLoggingPreference(): JSX.Element {
+ const { data } = useProxyHistoryLogging();
+ const save = useSaveProxyHistoryLogging();
+ const mode = data?.mode ?? "ask";
+ const options: { value: string; label: string; hint: string }[] = [
+  { value: "stop", label: "Stop logging out-of-scope items", hint: "adding to scope turns on Don't send out-of-scope items to Proxy history" },
+  { value: "ask", label: "Ask me what to do each time", hint: "adding to scope offers to stop logging (the default)" },
+  { value: "nothing", label: "Do nothing", hint: "adding to scope leaves Proxy history logging alone" },
+ ];
+ return (
+  <div style={{ marginTop: "var(--s2)" }}>
+   <div className="field-hint">Proxy history logging — what adding hosts to the target scope does about out-of-scope items.</div>
+   <div role="radiogroup" aria-label="Proxy history logging">
+    {options.map((option) => (
+     <label key={option.value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+      <input
+       type="radio"
+       name="proxy-history-logging"
+       checked={mode === option.value}
+       onChange={() =>
+        save.mutate(option.value, {
+         onSuccess: () => toast.success(`Proxy history logging: ${option.label}`),
+         onError: (cause) => toast.error(cause instanceof Error ? cause.message : "Could not save the Proxy history logging choice"),
+        })
+       }
+      />
+      <span>
+       {option.label} <span className="field-hint">— {option.hint}</span>
+      </span>
+     </label>
+    ))}
+   </div>
+  </div>
  );
 }
 

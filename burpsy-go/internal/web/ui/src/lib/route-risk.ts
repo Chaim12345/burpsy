@@ -93,6 +93,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/proxy/ca/export": "riskDestructive",
  "/api/proxy/ca/import": "riskCredential",
  "/api/proxy/ca/regenerate": "riskDestructive",
+ "/api/proxy/history-logging": "riskLocal",
  "/api/proxy/listener": "riskLocal",
  "/api/proxy/options": "riskLocal",
  "/api/proxy/passthrough": "riskLocal",

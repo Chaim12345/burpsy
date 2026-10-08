@@ -644,6 +644,23 @@ export function useInterceptStartup(): UseQueryResult<{ mode: string }> {
  });
 }
 
+/** Burp's "Proxy history logging" (burpsy-react-ui-z80e): what Add to scope does about
+ * out-of-scope proxy logging — stop, ask, or nothing. */
+export function useProxyHistoryLogging(): UseQueryResult<{ mode: string }> {
+ return useQuery({
+  queryKey: ["proxy", "history-logging"],
+  queryFn: ({ signal }) => api<{ mode: string }>("/api/proxy/history-logging", { signal }),
+ });
+}
+
+export function useSaveProxyHistoryLogging() {
+ const invalidate = useInvalidate();
+ return useMutation<{ mode: string }, Error, string>({
+  mutationFn: (mode) => api<{ mode: string }>("/api/proxy/history-logging", json("POST", { mode })),
+  onSuccess: () => invalidate([["proxy", "history-logging"]]),
+ });
+}
+
 export function useSaveInterceptStartup() {
  const invalidate = useInvalidate();
  return useMutation<{ mode: string }, Error, string>({

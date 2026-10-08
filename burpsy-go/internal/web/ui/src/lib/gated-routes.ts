@@ -94,6 +94,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/proxy/ca/export": true,
  "/api/proxy/ca/import": true,
  "/api/proxy/ca/regenerate": true,
+ "/api/proxy/history-logging": false,
  "/api/proxy/listener": false,
  "/api/proxy/options": false,
  "/api/proxy/passthrough": false,

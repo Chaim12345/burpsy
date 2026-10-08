@@ -1155,6 +1155,7 @@ func (s *Server) setupRoutes() {
 	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
 	// startup preference would let a caller set one and silently send the other.
 	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
+	s.mux.HandleFunc("/api/proxy/history-logging", s.handleProxyHistoryLogging)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).

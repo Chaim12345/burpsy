@@ -1773,6 +1773,30 @@ func (s *Store) DeleteScanConfigLibrary(name string) (deleted bool, err error) {
 	return n > 0, nil
 }
 
+// ---- Proxy history logging ---------------------------------------------------------------------
+
+// SaveProxyHistoryLogging persists Burp's "Proxy history logging" choice (burpsy-react-ui-z80e): what
+// adding to scope does about out-of-scope items — "stop" logging them, "ask" each time, or "nothing".
+func (s *Store) SaveProxyHistoryLogging(mode string) {
+	if err := s.setSetting("proxy.history_logging", mode); err != nil {
+		s.log("proxy history logging", err)
+	}
+}
+
+// LoadProxyHistoryLogging reads the choice. Absent reads as "ask", the choice that changes nothing
+// without the operator's say and still tells them the option exists.
+func (s *Store) LoadProxyHistoryLogging() string {
+	v, err := s.getSetting("proxy.history_logging")
+	if err != nil {
+		return "ask"
+	}
+	switch v {
+	case "stop", "ask", "nothing":
+		return v
+	}
+	return "ask"
+}
+
 // ---- Interception startup state -----------------------------------------------------------------
 
 // SaveInterceptStartup persists Burp's "Default Proxy interception state"

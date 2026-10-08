@@ -419,6 +419,12 @@ var manifest = map[string]route{
 		pathValidatedFirst: true,
 		summary:            "the match rules deciding which messages are held, per direction",
 	},
+	"/api/proxy/history-logging": {
+		// Burp's "Proxy history logging" (burpsy-react-ui-z80e): a preference the console's Add to
+		// scope reads. Writes only the operator's own preference, so riskLocal.
+		methods: []string{"GET", "POST"}, risk: riskLocal,
+		summary: "read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing",
+	},
 	"/api/intercept/startup": {
 		// Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): a preference about
 		// the NEXT server start, not a live toggle — /enable stays the switch. Writes only the

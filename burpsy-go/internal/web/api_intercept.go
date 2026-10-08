@@ -216,6 +216,47 @@ func (s *Server) handleInterceptStartup(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// handleProxyHistoryLogging serves GET/POST /api/proxy/history-logging — Burp's "Proxy history
+// logging" (settings/tools/proxy.html, burpsy-react-ui-z80e): when hosts are added to the target scope,
+// whether the proxy stops sending out-of-scope items to history ("stop"), asks each time ("ask"), or
+// leaves logging alone ("nothing"). The console's Add to scope reads it; the switch it acts on is the
+// proxy option dont_log_out_of_scope. Same shape as /api/intercept/startup: GET answers, POST writes
+// and echoes, and without persistence a read answers the default while a write is refused.
+func (s *Server) handleProxyHistoryLogging(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		mode := "ask"
+		if s.persist != nil {
+			mode = s.persist.LoadProxyHistoryLogging()
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
+	case http.MethodPost:
+		if s.persist == nil {
+			http.Error(w, "No persistence is attached to this server, so the choice would not survive a restart", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		switch req.Mode {
+		case "stop", "ask", "nothing":
+		default:
+			http.Error(w, fmt.Sprintf("Unknown mode %q; the valid modes are stop (Stop logging out-of-scope items), "+
+				"ask (Ask me what to do each time) and nothing (Do nothing)", req.Mode), http.StatusBadRequest)
+			return
+		}
+		s.persist.SaveProxyHistoryLogging(req.Mode)
+		writeJSON(w, http.StatusOK, map[string]string{"mode": req.Mode})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleInterceptInScopeOnly serves POST /api/intercept/in-scope-only — Burp's "Only intercept
 // in-scope messages".
 //
