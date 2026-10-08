@@ -630,6 +630,10 @@ func main() {
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
+	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
+	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
+	// API-scan capture.
+	passiveScanner.WithRunConfigSource(activeScanner)
 
 	// Persisted scan-config overrides still apply last, after the flag chain — but through
 	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level

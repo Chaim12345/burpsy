@@ -1101,6 +1101,9 @@ type SessionOutcome struct {
 	Paused bool `json:"paused"`
 	// TimedOut is true when the time budget stopped at least one item.
 	TimedOut bool `json:"timed_out"`
+	// StartOrder is the order items were started in, by priority score (ftk2), with each item's score.
+	// Items is still in the order requested.
+	StartOrder []AuditPriority `json:"start_order"`
 }
 
 // Completed counts items that ran every check they were given.
@@ -1244,7 +1247,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 // regression dressed up as parity. The ledger and both breakers are therefore mutex-guarded, so the
 // resident set and the failure counts stay exact.
 //
-// Items are *started* in the order given — a fixed pool of workers pulls from an ordered queue,
+// Items are *started* in priority order (ftk2) — a fixed pool of workers pulls from an ordered queue,
 // rather than every item racing for a semaphore — so with one worker this is exactly the Rust
 // behaviour, and with more it is as close as concurrency allows. What is not deterministic above one
 // worker is which of two items covering the same dispatch unit gets admitted and which is refused as
@@ -1273,12 +1276,18 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 			workers = len(exchangeIDs)
 		}
 	}
+	// Started in priority order (burpsy-react-ui-ftk2, audit_priority.go): Burp's audit queue orders
+	// items by attack-surface exposure and interest, so a time-bounded run spends its budget on the
+	// items that expose the most, not on whatever was submitted first.
+	order, priorities := s.priorityOrder(exchangeIDs, cfg)
+	out.StartOrder = priorities
+
 	// Every item joins the queue as Pending before any worker starts, which is what makes the queue a
 	// queue rather than a log of finished work: a batch of 200 is 200 Pending rows the instant the
 	// sweep tick begins, and they move to Auditing and then to a terminal state as workers reach
-	// them. Enqueued in the order requested, so the queue's own order is the caller's order.
-	for _, id := range exchangeIDs {
-		cfg.Items.Enqueue(id, len(checks))
+	// them. Enqueued in start order, so the queue's own order is the order items will run.
+	for _, slot := range order {
+		cfg.Items.Enqueue(exchangeIDs[slot], len(checks))
 	}
 
 	queue := make(chan int)
@@ -1323,10 +1332,10 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 			}
 		}()
 	}
-	// Fed in order. A cancelled context is not a reason to stop feeding: an item nobody looked at
-	// must still come back with its check set attributed, and the refusals above are what do that.
-	for i := range exchangeIDs {
-		queue <- i
+	// Fed in priority order. A cancelled context is not a reason to stop feeding: an item nobody looked
+	// at must still come back with its check set attributed, and the refusals above are what do that.
+	for _, slot := range order {
+		queue <- slot
 	}
 	close(queue)
 	wg.Wait()

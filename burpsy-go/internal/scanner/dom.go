@@ -659,6 +659,12 @@ func (f DOMFlow) evidence(known bool) string {
 // a different check's outcome into it would corrupt the identities coverage.go exists to preserve.
 // DOMAnalysis carries its own skip vocabulary instead.
 func (s *PassiveScanner) ScanDOM(exchange *core.Exchange) DOMAnalysis {
+	return s.ScanDOMWithin(exchange, DOMBudget{})
+}
+
+// ScanDOMWithin is ScanDOM under a budget: capture passes the run's max_static_time_per_item
+// (saq3.3.3), so the proxy-time pass is bounded exactly as the audit's is.
+func (s *PassiveScanner) ScanDOMWithin(exchange *core.Exchange, budget DOMBudget) DOMAnalysis {
 	if exchange == nil {
 		return domSkipped(DOMSkipExchangeNotFound)
 	}
@@ -675,7 +681,7 @@ func (s *PassiveScanner) ScanDOM(exchange *core.Exchange) DOMAnalysis {
 	if err != nil {
 		return domSkipped(DOMSkipResponseNotFound)
 	}
-	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), DOMBudget{})
+	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), budget)
 	a.ExchangeID = exchange.ID
 	a.Method = exchange.Method
 	a.URL = domURL(exchange)

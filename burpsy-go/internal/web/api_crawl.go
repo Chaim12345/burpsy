@@ -1195,7 +1195,7 @@ func (f *crawlAuditFeed) finish(ctx context.Context) {
 	// task must not be cancellable and Handle.finish clears the cancel the re-fetch pass needs.
 	active := f.s.activeScanner()
 	if active.PendingCount() > 0 {
-		deferred, completion := active.FinishScan(ctx)
+		deferred, completion := active.FinishScan(ctx, f.cfg)
 		f.s.events.RecordFor(f.task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
 			"deferred phase of %s: %s (outstanding: %d)", f.target, completion.Pending, len(completion.Outstanding)))
 		for _, finding := range deferred {

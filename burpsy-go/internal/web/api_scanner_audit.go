@@ -249,7 +249,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	// second-pass traffic at all: a stored re-fetch is real traffic to the target, and paying it when
 	// no claim could settle would be a request the operator never got value from.
 	if s.scanner.PendingCount() > 0 {
-		deferred, completion := s.scanner.FinishScan(ctx)
+		deferred, completion := s.scanner.FinishScan(ctx, cfg)
 		body["deferred"] = completion
 		for _, f := range deferred {
 			s.findings.Add(s.activeFinding(f, task.ID()))
@@ -397,7 +397,7 @@ func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target str
 	// re-fetch pass mid-flight. The stored re-fetch needs the live context, so it runs first and
 	// its findings land on the same task row the audit's did.
 	if active.PendingCount() > 0 {
-		deferred, completion := active.FinishScan(ctx)
+		deferred, completion := active.FinishScan(ctx, cfg)
 		s.events.RecordFor(task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
 			"deferred phase of %s: %s (outstanding: %d)", target, completion.Pending, len(completion.Outstanding)))
 		for _, f := range deferred {

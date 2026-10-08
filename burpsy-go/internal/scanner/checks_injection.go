@@ -92,6 +92,7 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 			continue
 		}
 		pointStart := len(probes)
+		shapes := h.shapeMark()
 		probes = append(probes, perPoint(h, point)...)
 		// A point whose probes were all WITHHELD (their detection method is disabled, 2hze) asked
 		// the target nothing, so it is neither clean nor answered: recording it either way would
@@ -111,7 +112,12 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 					break
 				}
 			}
-			if clean {
+			// Clean is necessary but not sufficient (burpsy-react-ui-vjjs): the point's responses must
+			// also have been indistinguishable from the baseline. A point whose input changed the
+			// status, the page's size or what it echoed is behaving, not repeating, even when no rule
+			// called it a vulnerability, and counting it would skip later points of the type on a
+			// behaviour nobody observed.
+			if clean && h.inertSince(shapes) {
 				light.RecordCleanPoint(string(point.Kind), cc.Exchange.Host)
 			}
 		}

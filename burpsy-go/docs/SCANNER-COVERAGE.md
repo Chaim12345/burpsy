@@ -258,8 +258,17 @@ audit session) reads the same run configuration through the same `enabledChecksU
 deselected passive type, a disabled method, or `scan_type_passive` false stops it there too
 (saq3.3.2, `TestTheSweepPassivePassDoesNotRaiseAnIssueTypeTheRunConfigurationDeselected`). Before
 that fix the sweep's active half honoured the selection and its passive half, one loop earlier, did
-not. The proxy-capture pass (`Capture.ScanExchange`: BCheck passive checks and the static DOM pass)
-is not a configured run and still does not read it.
+not. The capture pass (`Capture.ScanExchange`, run for every proxied, crawled, Repeater and API-scan
+exchange) reads it too (saq3.3.3). The shared `PassiveScanner` carries the engagement's run configuration
+from the `ActiveScanner`, so capture honours the following:
+- `scan_type_passive` false skips the passive BChecks;
+- `use_static_analysis` false skips the static DOM pass, and `max_static_time_per_item` bounds it;
+- a deselected type, or a disabled "Passive checks" or "Javascript static analysis" method, drops the
+  finding (`Test_capture_honours_the_run_configuration`).
+
+A finding outside the catalogue cannot be filtered by type, as on the audit side. That covers a corpus
+BCheck's own issue, and the four no-corpus built-in header and cookie rows, whose names are not
+catalogue names.
 
 What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. The gap it shows
 is real coverage, not a configuration artefact: **SQL injection is error-based only** (no boolean,

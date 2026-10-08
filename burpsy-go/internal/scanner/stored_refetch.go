@@ -76,25 +76,43 @@ type ScanCompletion struct {
 // checks run, the re-fetch produces responses that postdate them, and only then can a claim be
 // answered. Calling this before the audit finishes would ask every question too early - which is
 // precisely the bug it exists to fix.
-func (s *ActiveScanner) FinishScan(ctx context.Context) ([]*Finding, ScanCompletion) {
+//
+// cfg is the run configuration the audit ran under, and the deferred phase runs under it too
+// (burpsy-react-ui-saq3.3.4). Its re-fetches leave through the run's derived sender (o2p3's per-run
+// timeouts), and the stored-DOM render refuses the browser when the run set use_dynamic_analysis
+// false (9mti). Before this, both stopped at the audit dispatch: the deferred phase ran under the
+// engagement's timeouts and could start the browser in a run that had turned dynamic analysis off.
+func (s *ActiveScanner) FinishScan(ctx context.Context, cfg AuditConfig) ([]*Finding, ScanCompletion) {
 	var c ScanCompletion
 	if s == nil {
 		return nil, c
 	}
-	if out, err := s.RefetchStoredTargets(ctx); err != nil {
-		// A missing capability is reported, never swallowed: without the second look the stored
-		// claims below are outstanding for a reason the reader needs to know.
-		c.RefetchError = err.Error()
+	snd, err := s.runSenderFor(cfg)
+	if err != nil {
+		// The run's timeouts cannot be applied, so its traffic is refused rather than sent under the
+		// engagement's: the same rule the audit dispatch follows. The claims are still asked once more
+		// below, against what the audit already saw, which sends nothing.
+		why := "the run's configuration could not be applied to the deferred phase, so it sent nothing: " + err.Error()
+		c.RefetchError, c.RenderError = why, why
 	} else {
-		c.Refetch = out
-	}
-	// The browser pass runs after the HTTP one and never instead of it: a canary the raw response
-	// already carried is cheaper to find there, and this pass exists only for the flows that pass
-	// cannot see at all.
-	if out, err := s.RenderStoredTargets(ctx); err != nil {
-		c.RenderError = err.Error()
-	} else {
-		c.Render = out
+		ctx = withRunConfig(withRunSender(ctx, snd), cfg)
+		if out, err := s.RefetchStoredTargets(ctx); err != nil {
+			// A missing capability is reported, never swallowed: without the second look the stored
+			// claims below are outstanding for a reason the reader needs to know.
+			c.RefetchError = err.Error()
+		} else {
+			c.Refetch = out
+		}
+		// The browser pass runs after the HTTP one and never instead of it: a canary the raw response
+		// already carried is cheaper to find there, and this pass exists only for the flows that pass
+		// cannot see at all.
+		if !cfg.dynamicJavaScriptOn() {
+			c.Render = s.renderDeclinedByRun()
+		} else if out, err := s.RenderStoredTargets(ctx); err != nil {
+			c.RenderError = err.Error()
+		} else {
+			c.Render = out
+		}
 	}
 	findings := s.Pending().Await(ctx)
 	c.Outstanding = s.Pending().Outstanding()

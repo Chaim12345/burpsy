@@ -1619,10 +1619,11 @@ Burp rather than wider:
 - **The hop budget and cookie replay of a followed chain are the engagement's network settings**
   (`redirects.max_hops`, default 5; `redirects.replay_cookies`), because Burp's scan configuration names
   neither.
-- **Timeout overrides apply to the probes a run sends while it runs.** The deferred phase
-  (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
-  engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
-  at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+- **Timeout overrides apply to every probe a run sends, its deferred phase included.** `FinishScan`
+  (stored re-fetch, then the stored-DOM render) takes the run's configuration and re-fetches through the
+  run's derived sender (saq3.3.4). Out-of-band polling sends nothing, so it has no timeout to apply. A
+  normal timeout plus a connect timeout above twenty minutes combined is capped at the sender's
+  ceiling; either one alone above twenty minutes is refused at import, naming the limit.
 
 ## JavaScript analysis keys: where burpsy differs from Burp (9mti — 2026-10-07)
 
@@ -1631,8 +1632,45 @@ Burp rather than wider:
 - **A limit keeps the partial result and counts the stop** (`javascript_analysis_skips`, and Skipped for
   a stopped DOM check). Burp "truncates analysis" and raises an alert naming the item; there is no
   separate alert channel here.
-- **Not reached by these keys:** the proxy-capture static pass (`Capture.ScanExchange`), which is not a
-  configured run; the deferred stored-DOM render in `FinishScan`, which is scan-level and starts the
-  browser when stored canaries were planted; and the crawl's rendered-location pass, which honours
-  `use_dynamic_analysis` but not `max_dynamic_time_per_item` (it has its own location cap).
+- **Reached by these keys since saq3.3.3 and saq3.3.4:**
+  - the capture-time static pass (`Capture.ScanExchange`) obeys `use_static_analysis` and
+    `max_static_time_per_item`, using the engagement's run configuration;
+  - the deferred stored-DOM render in `FinishScan` refuses the browser when the run sets
+    `use_dynamic_analysis` false, and counts the pages it declined (`Render.DeclinedByRun` in the deferred block).
+- **Still not reached:** the crawl's rendered-location pass honours `use_dynamic_analysis` but not
+  `max_dynamic_time_per_item`, because it has its own location cap.
 - **`fetch_out_of_scope_resources` and `request_missing_dependencies` remain unapplied**, as before.
+
+## Audit queue priority: Burp's documented rule, burpsy's constants (2026-10, burpsy-react-ui-ftk2)
+
+`AuditSession` starts items in priority order (`internal/scanner/audit_priority.go`). The score is
+0.8 × attack-surface exposure + 0.2 × interest level, the rule `scanner/auditing.html` documents.
+Outcomes still come back in the order requested, and `start_order` reports the order and each item's
+score. Where burpsy's version differs from Burp's:
+
+- **The constants are burpsy's.** The decompiled tree has no readable scoring class.
+  - Exposure is an item's new insertion points, identified by host, path, kind and name, as a share of
+    the most any remaining item adds.
+  - Interest is the mean of three factors: a state-changing method, structured content, and
+    authentication (an Authorization or Cookie header).
+- **Recalculation happens once per placement within a batch.** It is not repeated each time the crawl
+  adds an item. Above 2,000 items, scoring is a single pass.
+- **No cross-session memory.** Burp discounts points already audited in the current scan. burpsy does
+  so only within one session, so a later sweep tick does not discount what an earlier tick covered.
+
+## Light-audit tier: the response-shape half of "repetitive behaviour" (2026-10, burpsy-react-ui-vjjs)
+
+7bkj implemented the type-occurrence half of Burp's "Skipped due to repetitive behavior" (`Zq5`) and
+declined the content half, because the engine could not then say what it had compared. The probe
+harness now records each probe's response shape. A point raises its type's repetition prior only when
+both of these hold:
+- it was clean, meaning no probe found evidence;
+- every probe's response matched the baseline's status, with a body length within 2% or 32 bytes,
+  whichever is larger (`ProbeHarness.inertSince`).
+
+A point whose input changed the status or the page is behaving rather than repeating. It no longer
+counts toward skipping later points of its type (`TestAPointWhoseInputChangesTheResponseIsNotRepetitive`).
+Where this differs from Burp:
+- **Shape, not content.** Status and length are compared, not a structural diff. Echoing the input back
+  is repetition, the same behaviour for every point, so reflection alone does not break it.
+- **The constants are burpsy's.** Burp's similarity measure is not in the readable decompiled tree.

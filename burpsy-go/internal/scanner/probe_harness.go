@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -89,6 +90,58 @@ type ProbeHarness struct {
 	issue     string
 	disabled  map[string]bool
 	declines  *MethodDeclineLedger
+
+	// shapes records each probe's response shape in send order (burpsy-react-ui-vjjs), so the light
+	// tier can ask whether a point's input changed anything before it counts the point as repetitive.
+	shapesMu sync.Mutex
+	shapes   []probeShape
+}
+
+// probeShape is what the repetitive-behaviour rule compares a probe's response on: its shape, not its
+// content. An application that echoes every value back behaves the same way for every point of the
+// type, which is repetition, so reflection alone does not break it.
+type probeShape struct {
+	status  int
+	bodyLen int
+}
+
+// shapeMark is the position a caller reads probe shapes from.
+func (h *ProbeHarness) shapeMark() int {
+	h.shapesMu.Lock()
+	defer h.shapesMu.Unlock()
+	return len(h.shapes)
+}
+
+// inertSince reports whether every probe response since mark was indistinguishable from the baseline:
+// the same status and a body length within inertLengthTolerance. That is the response-shape half of
+// Burp's "Skipped due to repetitive behavior". A point whose input changed what
+// the application answered is not repetitive behaviour, whatever the evidence rules concluded. A point
+// with no recorded probe is not inert either, because nothing was compared.
+func (h *ProbeHarness) inertSince(mark int) bool {
+	h.shapesMu.Lock()
+	defer h.shapesMu.Unlock()
+	if mark >= len(h.shapes) {
+		return false
+	}
+	base := len(h.baseline.Body)
+	tol := inertLengthTolerance(base)
+	for _, sh := range h.shapes[mark:] {
+		d := sh.bodyLen - base
+		if d < 0 {
+			d = -d
+		}
+		if sh.status != h.baseline.Status || d > tol {
+			return false
+		}
+	}
+	return true
+}
+
+// inertLengthTolerance is how far a body length may move and still read as the same page: 2% of the
+// baseline or 32 bytes, whichever is larger. That is room for a timestamp or a CSRF token, not for an
+// error message or a different template.
+func inertLengthTolerance(baseLen int) int {
+	return max(32, baseLen/50)
 }
 
 // NewProbeHarness captures the baseline and enumerates insertion points.
@@ -298,6 +351,11 @@ func (h *ProbeHarness) guidedSend(point *bcheck.InsertionPoint, payload string, 
 // the ledgers (a zero ActiveScanner) is a no-op, not an error — the harness is
 // usable offline without the guidance machinery.
 func (h *ProbeHarness) recordCoverage(point *bcheck.InsertionPoint, payload string, resp ProbeResponse) {
+	if point != nil {
+		h.shapesMu.Lock()
+		h.shapes = append(h.shapes, probeShape{status: resp.Status, bodyLen: len(resp.Body)})
+		h.shapesMu.Unlock()
+	}
 	if h.scanner == nil || h.scanner.pathCov == nil {
 		return
 	}
