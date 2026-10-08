@@ -49,6 +49,21 @@ export interface CollaboratorInteractionDetail extends CollaboratorInteractionRo
   raw_response: string;
 }
 
+// Collaborator health check types (burpsy-react-ui-8e3n)
+export interface CollaboratorHealthResult {
+  dns?: CollaboratorHealthProtocol;
+  http?: CollaboratorHealthProtocol;
+  smtp?: CollaboratorHealthProtocol;
+  status: string;
+  message?: string;
+}
+
+export interface CollaboratorHealthProtocol {
+  reachable: boolean;
+  error?: string;
+  latency_ms?: number;
+}
+
 export function useCollaboratorStatus(): ReturnType<typeof useQuery<CollaboratorStatus>> {
   return useQuery({
     queryKey: keys.collaborator,
@@ -195,5 +210,16 @@ export function useMintBlindXSSPayload() {
   return useMutation<{ payload: BlindXSSPayload }, Error>({
     mutationFn: () => api<{ payload: BlindXSSPayload }>("/api/blindxss/payload", json("POST", {})),
     onSuccess: () => void client.invalidateQueries({ queryKey: keys.blindxss }),
+  });
+}
+
+// Collaborator health check hook (burpsy-react-ui-8e3n)
+export function useCollaboratorHealth() {
+  return useQuery({
+    queryKey: keys.collaboratorHealth,
+    queryFn: ({ signal }) => api<CollaboratorHealthResult>("/api/collaborator/health", { signal }),
+    // No auto-refresh: health check is on-demand
+    refetchInterval: false,
+    enabled: false, // Only fetch when explicitly called
   });
 }

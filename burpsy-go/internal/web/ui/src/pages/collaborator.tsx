@@ -18,6 +18,7 @@ import { SimpleTable } from "../ui/table";
 import { HIGHLIGHTS } from "../lib/types";
 import {
   useBlindXSS,
+  useCollaboratorHealth,
   useCollaboratorInteraction,
   useCollaboratorInteractions,
   useCollaboratorStatus,
@@ -25,6 +26,7 @@ import {
   useMintPayload,
   usePollNow,
   useSetCollaboratorServer,
+  type CollaboratorHealthResult,
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
 import { copyToClipboard } from "../lib/api";
@@ -33,6 +35,110 @@ import { toast } from "sonner";
 
 function formatTime(ms: number): string {
   return new Date(ms).toLocaleTimeString();
+}
+
+/**
+ * Collaborator health check card (burpsy-react-ui-8e3n)
+ * Tests DNS/HTTP/SMTP reachability of the OOB server
+ */
+function CollaboratorHealthCard(): JSX.Element {
+  const health = useCollaboratorHealth();
+  const [isChecking, setIsChecking] = useState(false);
+
+  const runHealthCheck = () => {
+    setIsChecking(true);
+    health.refetch().finally(() => setIsChecking(false));
+  };
+
+  const statusTone = (status: string): "good" | "bad" | "warn" | "info" => {
+    if (status === "healthy") return "good";
+    if (status === "not_configured") return "warn";
+    if (status === "partial") return "warn";
+    return "bad";
+  };
+
+  const protocolTone = (reachable: boolean): "good" | "bad" | "warn" => {
+    if (reachable) return "good";
+    return "bad";
+  };
+
+  return (
+    <Card>
+      <SectionHeading
+        title="Health check"
+        detail="Test DNS, HTTP, and SMTP connectivity to the collaborator server. Use this to confirm the OOB server is reachable before trusting a negative result."
+        actions={
+          <Button
+            size="small"
+            onClick={runHealthCheck}
+            disabled={isChecking || health.isFetching}
+          >
+            {isChecking || health.isFetching ? "Checking…" : "Run health check"}
+          </Button>
+        }
+      />
+      
+      {health.data ? (
+        <div className="stack">
+          <div className="metric-grid wide">
+            <Metric
+              label="Overall"
+              value={health.data.status.replace('_', ' ')}
+              tone={statusTone(health.data.status)}
+              detail={health.data.message}
+            />
+          </div>
+          
+          <div className="health-results">
+            <HealthResult
+              label="DNS"
+              result={health.data.dns}
+              tone={protocolTone(health.data.dns?.reachable ?? false)}
+            />
+            <HealthResult
+              label="HTTP"
+              result={health.data.http}
+              tone={protocolTone(health.data.http?.reachable ?? false)}
+            />
+            <HealthResult
+              label="SMTP"
+              result={health.data.smtp}
+              tone={protocolTone(health.data.smtp?.reachable ?? false)}
+            />
+          </div>
+          
+          {health.data.status === "not_configured" && (
+            <p className="cell-dim" style={{ margin: 0 }}>
+              No collaborator server is configured. Set one above to enable connectivity testing.
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="cell-dim" style={{ margin: 0 }}>
+          Run a health check to test collaborator server connectivity.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+function HealthResult({ label, result, tone }: { label: string; result?: CollaboratorHealthResult["dns"]; tone: "good" | "bad" | "warn" }): JSX.Element {
+  return (
+    <div className="health-result">
+      <span className="health-label">{label}:</span>
+      {result ? (
+        <>
+          <Badge tone={tone}>{result.reachable ? "Reachable" : "Unreachable"}</Badge>
+          {result.latency_ms && <span className="cell-dim">({result.latency_ms}ms)</span>}
+          {result.error && !result.reachable && (
+            <span className="cell-dim"> - {result.error}</span>
+          )}
+        </>
+      ) : (
+        <Badge tone="neutral">Not tested</Badge>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -150,6 +256,9 @@ export function CollaboratorPage(): JSX.Element {
           </div>
         ) : null}
       </Card>
+
+      {/* Collaborator health check (burpsy-react-ui-8e3n) */}
+      <CollaboratorHealthCard />
 
       <Card>
         <SectionHeading

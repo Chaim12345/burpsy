@@ -408,6 +408,9 @@ type Context struct {
 	// own entry. Always a fresh list per point and per `run for each` iteration — a later
 	// iteration must not see an earlier one's `{check.response}`.
 	sent []boundSend
+	// collaboratorDomain is the Burp Collaborator address for checks that call
+	// generate_collaborator_address(). Empty when no OOB channel is configured (ar8v).
+	collaboratorDomain string
 	// baseReq is the parsed base request, cached on first use.
 	baseReq *core.RequestEdit
 	// unresolved records `{…}` paths the check referenced that this context could not supply. A
@@ -448,6 +451,12 @@ func (ctx *Context) SetToolRunner(r ToolRunner) {
 // run with its own timeout alone.
 func (ctx *Context) SetToolContext(c context.Context) {
 	ctx.toolCtx = c
+}
+
+// SetCollaboratorDomain sets the Burp Collaborator domain for checks that call
+// generate_collaborator_address(). This is the shared OOB channel domain (ar8v).
+func (ctx *Context) SetCollaboratorDomain(domain string) {
+	ctx.collaboratorDomain = domain
 }
 
 // messageFields is the parsed view of a raw HTTP message, extracted once and
@@ -589,6 +598,10 @@ func (ctx *Context) resolveRef(name string) string {
 		}
 		ctx.ensureRNG()
 		return randomStr(&ctx.rng, n)
+	case name == "generate_collaborator_address()":
+		// BCheck's Collaborator address function. Returns the configured
+		// collaborator domain if available, empty otherwise (ar8v).
+		return ctx.collaboratorDomain
 	}
 	s, ok := ctx.resolvePathOpt(name)
 	if !ok {

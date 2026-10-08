@@ -997,7 +997,10 @@ export function OrganizerPage(): JSX.Element {
         </td>
         {/* The three resolved columns. An unresolved row says so once, spanning them, rather
                     than showing three em-dashes that would read as "no status, no type, no host" —
-                    which is a claim about the exchange instead of an admission about the store. */}
+                    which is a claim about the exchange instead of an admission about the store.
+                    
+                    Header order: #, Exchange, Tool, Request, Status, Workflow, Type, Title...
+                    So resolved cells must match: Request, Status, Workflow, Type */}
         {item.resolved ? (
          <>
           <td>
@@ -1021,6 +1024,12 @@ export function OrganizerPage(): JSX.Element {
            )}
           </td>
           <td>
+         {(() => {
+          const status = item.workflow_status ?? "new";
+          return <Badge tone={WORKFLOW_STATUS_TONE[status]}>{WORKFLOW_STATUS_LABEL[status]}</Badge>;
+         })()}
+          </td>
+          <td>
            <span className="cell-dim">
             {!item.has_response ? "—" : item.mime && item.mime !== "" ? item.mime : "none declared"}
            </span>
@@ -1033,15 +1042,7 @@ export function OrganizerPage(): JSX.Element {
           </Badge>
          </td>
         )}
-        {/* The operator's decision, not the server's — the Status column above is the HTTP code.
-            Both are shown because both are answered per row, and merging them is exactly the
-            collision the wire avoids by naming this field workflow_status. */}
-        <td>
-         {(() => {
-          const status = item.workflow_status ?? "new";
-          return <Badge tone={WORKFLOW_STATUS_TONE[status]}>{WORKFLOW_STATUS_LABEL[status]}</Badge>;
-         })()}
-        </td>
+        {/* Type cell moved after Workflow to match header order (burpsy-react-ui-tni8). */}
         <td>{item.title || <span className="cell-dim">untitled</span>}</td>
         <td>
          {item.highlight ? (

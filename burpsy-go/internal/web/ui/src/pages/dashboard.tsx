@@ -1014,6 +1014,7 @@ export function DashboardPage(): JSX.Element {
      selected ? (
       <TaskDetail
        task={selected}
+       tasks={tasks}
        liveFindings={liveFindings}
        liveEnabled={liveEnabled}
        issuesEnabled={issues.data?.enabled === true}
@@ -1046,11 +1047,169 @@ export function DashboardPage(): JSX.Element {
  );
 }
 
+/** Helper to get task name from task_id for Source column */
+function getTaskName(tasks: TaskRow[], taskId: number | undefined): string {
+ if (taskId === undefined || taskId === 0) return "System";
+ const task = tasks.find(t => t.id === taskId);
+ return task ? `${task.kind} (${task.target})` : `Task ${taskId}`;
+}
+
+/**
+ * Event log filtering panel (burpsy-react-ui-lxqq)
+ * Supports severity filtering (Info/Warn/Error), search by term, and Source column display
+ */
+function EventLogPanel({
+ events,
+ tasks,
+ eventWindow,
+ clearEvents,
+}: {
+ events: ToolEvent[];
+ tasks: TaskRow[];
+ eventWindow: { shown: number; total: number; dropped: number };
+ clearEvents: ReturnType<typeof useClearEventLog>;
+}): JSX.Element {
+ const [severityFilter, setSeverityFilter] = useState<string>("all");
+ const [searchTerm, setSearchTerm] = useState("");
+
+ // Severity options for filtering
+ const severityOptions = [
+  { value: "all", label: "All levels" },
+  { value: "info", label: "Info" },
+  { value: "warn", label: "Warning" },
+  { value: "error", label: "Error" },
+ ];
+
+ // Filter events based on severity and search term
+ const filteredEvents = useMemo(() => {
+  return events.filter((event) => {
+   // Filter by severity
+   if (severityFilter !== "all" && event.severity !== severityFilter) {
+    return false;
+   }
+   
+   // Filter by search term (case-insensitive search in kind, detail)
+   if (searchTerm) {
+    const searchLower = searchTerm.toLowerCase();
+    const kindMatch = event.kind.toLowerCase().includes(searchLower);
+    const detailMatch = event.detail.toLowerCase().includes(searchLower);
+    const sourceMatch = getTaskName(tasks, event.task_id)?.toLowerCase().includes(searchLower);
+    return kindMatch || detailMatch || sourceMatch;
+   }
+   
+   return true;
+  });
+ }, [events, severityFilter, searchTerm, tasks]);
+
+ return (
+  <>
+   <SectionHeading
+    title="Event log"
+    detail={
+     eventWindow.dropped > 0
+      ? `State changes that are not requests. Showing all ${eventWindow.shown} the log holds; ${eventWindow.dropped} older event(s) have been discarded as it filled.`
+      : "State changes that are not requests. The log shows key task events, such as start times, alerts, and progress updates."
+    }
+    actions={
+     <Button
+      variant="outline"
+      disabled={!events.length || clearEvents.isPending}
+      onClick={() => clearEvents.mutate()}
+     >
+      {clearEvents.isPending ? "Clearing…" : "Clear event log"}
+     </Button>
+    }
+   />
+   
+   {/* Filter controls */}
+   <div className="event-filters">
+    <div className="event-filter-group">
+     <label htmlFor="event-severity-filter" className="sr-only">
+      Filter by severity
+     </label>
+     <select
+      id="event-severity-filter"
+      value={severityFilter}
+      onChange={(e) => setSeverityFilter(e.target.value)}
+      className="event-filter-select"
+     >
+      {severityOptions.map((option) => (
+       <option key={option.value} value={option.value}>
+        {option.label}
+       </option>
+      ))}
+     </select>
+    </div>
+    
+    <div className="event-filter-group">
+     <Input
+      aria-label="Search events"
+      placeholder="Search events..."
+      value={searchTerm}
+      onChange={(e) => setSearchTerm(e.target.value)}
+      className="event-filter-search"
+     />
+     {searchTerm && (
+      <IconButton
+       label="Clear search"
+       size="small"
+       onClick={() => setSearchTerm("")}
+       className="event-filter-clear"
+      >
+       <Search size={13} />
+      </IconButton>
+     )}
+    </div>
+   </div>
+   
+   {filteredEvents.length ? (
+    <div className="event-list event-list-scroll">
+     <div className="event-row event-row-header">
+      <div className="event-severity-cell" />
+      <div className="event-kind-cell"><strong>Event</strong></div>
+      <div className="event-detail-cell"><strong>Details</strong></div>
+      <div className="event-source-cell"><strong>Source</strong></div>
+      <div className="event-time-cell"><strong>When</strong></div>
+     </div>
+     
+     {filteredEvents.map((event, index) => (
+      <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
+       <span className={`event-dot event-${event.severity}`} />
+       <div className="event-kind-cell">
+        <strong>{event.kind}</strong>
+       </div>
+       <div className="event-detail-cell">
+        <p>{event.detail}</p>
+       </div>
+       <div className="event-source-cell">
+        <span className="cell-dim">{getTaskName(tasks, event.task_id)}</span>
+       </div>
+       <time className="event-time-cell" title={new Date(event.at_ms).toLocaleString()}>
+        {relativeTime(event.at_ms)}
+       </time>
+      </div>
+     ))}
+    </div>
+   ) : (
+    <Empty
+     title={events.length ? "No matching events" : "No event log items to show"}
+     detail={
+      searchTerm || severityFilter !== "all"
+       ? `No events match the current filters. Try adjusting your search or severity filter.`
+       : "The event log shows key task events, such as start times, alerts, and progress updates."
+     }
+    />
+   )}
+  </>
+ );
+}
+
 /** One task's detail pane: header, Summary / Event log tabs, then the tab's content. Burp keeps
  * the task's own facts (configuration, progress) on Summary and everything the task produced
  * (issues, events) on the later tabs; the same split, with burpsy's equivalents in each. */
 function TaskDetail({
  task,
+ tasks,
  liveFindings,
  liveEnabled,
  issuesEnabled,
@@ -1062,6 +1221,7 @@ function TaskDetail({
  onFilterHistory,
 }: {
  task: TaskRow;
+ tasks: TaskRow[];
  liveFindings?: number;
  liveEnabled: boolean;
  issuesEnabled: boolean;
@@ -1350,6 +1510,10 @@ function TaskDetail({
            ),
          },
          { label: "Progress", value: task.progress },
+         { label: "Run state", value: run.data?.state ?? task.state },
+         { label: "Started", value: run.data?.started ? new Date(run.data.started).toLocaleString() : "—" },
+         { label: "Finished", value: run.data?.finished ? new Date(run.data.finished).toLocaleString() : "—" },
+         { label: "Seed count", value: run.data?.seeds ? run.data.seeds.length : "—" },
         ]}
        />
       </Card>
@@ -1409,43 +1573,15 @@ function TaskDetail({
         * stated from the server's own counters rather than re-derived here. The real bound is the
         * EventLog's, which already counts what it discarded — a second, silent cap in the browser
         * could only disagree with it.
+        *
+        * Event log filtering (burpsy-react-ui-lxqq): filter by severity, search by term, show Source column
         */}
-      <SectionHeading
-       title="Event log"
-       detail={
-        eventWindow.dropped > 0
-         ? `State changes that are not requests. Showing all ${eventWindow.shown} the log holds; ${eventWindow.dropped} older event(s) have been discarded as it filled.`
-         : "State changes that are not requests. The log shows key task events, such as start times, alerts, and progress updates."
-       }
-       actions={
-        <Button
-         variant="outline"
-         disabled={!events.length || clearEvents.isPending}
-         onClick={() => clearEvents.mutate()}
-        >
-         {clearEvents.isPending ? "Clearing…" : "Clear event log"}
-        </Button>
-       }
+      <EventLogPanel
+       events={events}
+       tasks={tasks}
+       eventWindow={eventWindow}
+       clearEvents={clearEvents}
       />
-      {events.length ? (
-       <div className="event-list event-list-scroll">
-        {events.map((event, index) => (
-         <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
-          <span className={`event-dot event-${event.severity}`} />
-          <div>
-           <strong>{event.kind}</strong>
-           <p>{event.detail}</p>
-          </div>
-          <time title={new Date(event.at_ms).toLocaleString()}>{relativeTime(event.at_ms)}</time>
-         </div>
-        ))}
-       </div>
-      ) : (
-       <Empty
-        title="No event log items to show"
-        detail="The event log shows key task events, such as start times, alerts, and progress updates."
-       />
-      )}
      </Card>
     </TabsContent>
 

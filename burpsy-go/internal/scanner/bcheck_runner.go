@@ -164,6 +164,11 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	if req, err := s.store.Get(core.MsgOrZero(ex.Request)); err == nil {
 		bctx.Request = req.Raw()
 	}
+	// Collaborator domain for checks that call generate_collaborator_address() (ar8v).
+	// Obtain the OOB channel if available and extract its domain.
+	if ch, err := s.OOBChannel(ctx); err == nil {
+		bctx.SetCollaboratorDomain(ch.Domain())
+	}
 	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s), check: check.Name}
 	// The tool runner rides the context like the sink: the evaluator asks for a
 	// named tool, this scanner resolves it through the allowlist. Nil keeps the

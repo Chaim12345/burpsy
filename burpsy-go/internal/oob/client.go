@@ -98,6 +98,9 @@ type Options struct {
 	// Timeout bounds how long NewClient waits for the client to announce its registered
 	// payload domain. Zero means 30s.
 	Timeout time.Duration
+	// Disabled, when true, disables the OOB channel entirely — no client is started and
+	// no addresses are handed out (burpsy-react-ui-8e3n).
+	Disabled bool
 }
 
 // Client owns one running interactsh-client subprocess and the temp file it appends
@@ -134,6 +137,12 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // client that yields no interactions — see the package doc comment on the honest-failure
 // contract.
 func NewClient(ctx context.Context, opts Options) (*Client, error) {
+	// Disable flag (burpsy-react-ui-8e3n): when disabled, return a nil client that counts as
+	// "not configured" everywhere else.
+	if opts.Disabled {
+		return nil, fmt.Errorf("out-of-band interaction channel is disabled")
+	}
+
 	bin := opts.BinaryPath
 	if bin == "" {
 		resolved, err := exec.LookPath(binaryName)

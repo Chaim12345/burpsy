@@ -77,6 +77,7 @@ export const keys = {
  auditItems: ["scanner", "audit-items"] as const,
  collaborator: ["collaborator"] as const,
  collaboratorInteractions: ["collaborator", "interactions"] as const,
+ collaboratorHealth: ["collaborator", "health"] as const,
  blindxss: ["blindxss"] as const,
  proxyOptions: ["proxy", "options"] as const,
  proxyListener: ["proxy", "listener"] as const,

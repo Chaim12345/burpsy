@@ -22,6 +22,7 @@ import { usePools } from "../lib/data.pools";
 import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
+import { messageDisplayText } from "../lib/message";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
 import { filterTableRows } from "../lib/table-filter";
@@ -2151,13 +2152,13 @@ export function IntruderPage(): JSX.Element {
                 // request Burp's Positions tab does. The editor is read-only here, so the display
                 // text cannot drift from the request the stored raw offsets were measured against.
                 value={
-                  baseMessage.data?.text
-                    ? displayText(baseMessage.data.text, manualSpans)
-                    : (baseMessage.isFetching
-                      ? "Loading the base request…"
-                      : baseMessage.error
-                        ? `Could not load message ${msgId}.`
-                        : "No bytes stored for this message.")
+                  baseMessage.isFetching
+                    ? "Loading the base request…"
+                    : baseMessage.error
+                      ? `Could not load message ${msgId}.`
+                      : baseMessage.data
+                        ? displayText(messageDisplayText(baseMessage.data, ""), manualSpans)
+                        : "No bytes stored for this message."
                 }
                 payloadMarks={{ onAdd: onAddManualSpan }}
                 bodyBase64={baseMessage.data?.body_base64}

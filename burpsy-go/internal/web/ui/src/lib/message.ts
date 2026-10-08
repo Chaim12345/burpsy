@@ -1101,3 +1101,36 @@ export function cookieHeaderTokens(line: string): { cls: "cookie-name" | "cookie
   }
   return out;
 }
+
+/**
+ * Return the display text for a message view, preferring decoded content when available.
+ * This addresses burpsy-react-ui-qpfy: compressed responses should display their decompressed
+ * content, not U+FFFD replacement characters.
+ *
+ * Priority:
+ * 1. decoded - when decompression succeeded
+ * 2. text - the raw message text (may contain replacement characters for compressed bodies)
+ * 3. fallback - when neither is available
+ *
+ * Note: decode_error is deliberately NOT used here. When decoding fails, the message still has
+ * its raw text (with non-UTF-8 bytes replaced by U+FFFD), and that is the correct thing to show —
+ * it is the honest state of the bytes on the wire. A decode error is a capability limitation
+ * (unsupported encoding, corrupt stream, or body over cap), not a data loss, and showing the
+ * raw bytes with a separate decode-error notice keeps the display honest (burpsy-react-ui-ar8v
+ * tracks the OOB-side capability gap that causes most decode errors for active checks).
+ */
+export function messageDisplayText(msg: { decoded?: string; text?: string; decode_error?: string }): string;
+export function messageDisplayText(msg: { decoded?: string; text?: string; decode_error?: string }, fallback: string): string;
+export function messageDisplayText(msg: { decoded?: string; text?: string; decode_error?: string }, fallback = ""): string {
+  return msg.decoded ?? msg.text ?? fallback;
+}
+
+/**
+ * Return whether a message failed to decode, for UI that wants to show a decode-error notice.
+ * This addresses burpsy-react-ui-ar8v: 27 corpus checks need Collaborator and are refused as
+ * ActiveUnsupported; their responses will have decode_error when they contain compressed bodies
+ * we cannot decompress without an interaction channel.
+ */
+export function messageDecodeFailed(msg: { decode_error?: string }): boolean {
+  return !!msg.decode_error;
+}

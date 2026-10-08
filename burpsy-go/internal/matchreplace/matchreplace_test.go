@@ -115,3 +115,77 @@ func TestApplyContentLengthLastHeaderLongerValueNoCorruption(t *testing.T) {
 		t.Fatalf("output tail does not match expectation")
 	}
 }
+
+// An empty match on a header rule adds the replacement as a new header, per Burp:
+// "If you leave this blank for an HTTP rule with the Request header or Response header
+// type, the replacement string is added as a new header" (burpsy-react-ui-wtm2).
+func TestEmptyMatchOnHeaderRuleAddsNewHeader(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	rs := NewRuleSet()
+	// Empty match, header rule
+	r, err := NewRule(TargetResponseHeader, CategoryLiteral, "", "X-Custom: value", "empty match adds header")
+	if err != nil {
+		t.Fatalf("NewRule failed: %v", err)
+	}
+	rs.SetRules([]*Rule{r})
+
+	out := rs.Apply(DirResponse, raw)
+	if !bytes.Contains(out, []byte("X-Custom: value")) {
+		t.Errorf("output %q does not contain the new header", out)
+	}
+	// The header should be added at the end of headers, before the blank line
+	if !bytes.Contains(out, []byte("\r\nX-Custom: value\r\n\r\n")) {
+		t.Errorf("new header not properly placed: got %q", out)
+	}
+	// Original headers should be intact
+	if !bytes.Contains(out, []byte("Host: example.com")) {
+		t.Errorf("original header corrupted: got %q", out)
+	}
+}
+
+// An empty match on a body rule does nothing (no match = no rewrite).
+func TestEmptyMatchOnBodyRuleReturnsUnchanged(t *testing.T) {
+	raw := []byte("POST / HTTP/1.1\r\n\r\nbody")
+	rs := NewRuleSet()
+	r, err := NewRule(TargetRequestBody, CategoryLiteral, "", "replacement", "empty body match")
+	if err != nil {
+		t.Fatalf("NewRule failed: %v", err)
+	}
+	rs.SetRules([]*Rule{r})
+	out := rs.Apply(DirRequest, raw)
+	if !bytes.Equal(out, raw) {
+		t.Errorf("expected unchanged for empty match on body, got %q", out)
+	}
+}
+
+// An empty match on a first-line rule does nothing (no match = no rewrite).
+func TestEmptyMatchOnFirstLineRuleReturnsUnchanged(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\n\r\n")
+	rs := NewRuleSet()
+	r, err := NewRule(TargetRequestFirstLine, CategoryLiteral, "", "replacement", "empty first-line match")
+	if err != nil {
+		t.Fatalf("NewRule failed: %v", err)
+	}
+	rs.SetRules([]*Rule{r})
+	out := rs.Apply(DirRequest, raw)
+	if !bytes.Equal(out, raw) {
+		t.Errorf("expected unchanged for empty match on first-line, got %q", out)
+	}
+}
+
+// An empty regex pattern on a header rule also adds the replacement as a new header.
+func TestEmptyRegexOnHeaderRuleAddsNewHeader(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	rs := NewRuleSet()
+	// Empty regex pattern, header rule
+	r, err := NewRule(TargetResponseHeader, CategoryRegex, "", "X-Custom: regex", "empty regex adds header")
+	if err != nil {
+		t.Fatalf("NewRule failed: %v", err)
+	}
+	rs.SetRules([]*Rule{r})
+
+	out := rs.Apply(DirResponse, raw)
+	if !bytes.Contains(out, []byte("X-Custom: regex")) {
+		t.Errorf("output %q does not contain the new header from empty regex", out)
+	}
+}

@@ -1089,6 +1089,7 @@ func (s *Server) setupRoutes() {
 	// has registered a domain — see handleCollaboratorServer.
 	s.mux.HandleFunc("/api/collaborator/server", s.handleCollaboratorServer)
 	s.mux.HandleFunc("/api/collaborator/status", s.handleCollaboratorStatus)
+	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealthCheck)
 
 	// Session
 	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)

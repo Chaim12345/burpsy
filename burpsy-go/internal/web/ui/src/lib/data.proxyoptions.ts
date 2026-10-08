@@ -17,6 +17,9 @@ export interface ProxyOptionsState {
     skipped_compressed: number;
     skipped_not_html: number;
     skipped_unframed: number;
+    skipped_unsupported_encoding: number;
+    unpacked_requests: number;
+    unpacked_responses: number;
     relayed_http2: number;
     accept_encoding_stripped: number;
     dechunked: number;

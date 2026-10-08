@@ -301,7 +301,12 @@ func (e *ActiveError) Error() string {
 // `insertion_point_base_value`.
 func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding, error) {
 	if check.NeedsCollaborator() {
-		return nil, &ActiveError{Kind: ActiveUnsupported, Detail: "needs a collaborator interaction server"}
+		// A check that needs a collaborator can run if a collaborator domain is configured.
+		// This addresses ar8v: the scanner now has an OOB channel, so checks that call
+		// generate_collaborator_address() should run rather than be refused.
+		if ctx.collaboratorDomain == "" {
+			return nil, &ActiveError{Kind: ActiveUnsupported, Detail: "needs a collaborator interaction server"}
+		}
 	}
 	// A check that invokes an external tool cannot run without the caller's
 	// allowlist runner. Refused up front, like the collaborator case: nothing
