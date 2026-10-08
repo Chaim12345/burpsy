@@ -47,19 +47,23 @@ import (
 )
 
 // checkSQLInjectionCore reports SQL injection confirmed by a database error the baseline did not
-// produce.
+// produce, a boolean differential, or a time-based response delay (saq3.2.1).
 //
-// Error evidence only, deliberately. Boolean and timing differentials for this row would duplicate
-// what the dedicated injection family already does with better classification; this row's job is
-// the case Burp reports as plain "SQL injection" — a quote that reaches a query and comes back as
-// a parser error.
+// The techniques were error-only before, and ProbeTiming had no production caller — meaning blind
+// SQLi (no error, no echo) was invisible. They run inside ONE insertion-point walk
+// (blindInjectionPointProbes in sqli_techniques.go) rather than as three checks of the same type,
+// because the audit's check set is one descriptor per catalog TypeIndex and a point's coverage,
+// effectiveness prior and light-audit record would otherwise be charged three times for probes
+// that answer the same question. Each technique still carries its own method gate at the probe:
+// a disabled family is withheld and counted, and the remaining techniques still run.
 func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-			return h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			probes := h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			return append(probes, blindInjectionPointProbes(ctx, h, p)...)
 		})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", sqlInjectionIssue, err)
@@ -326,6 +330,11 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // callers already set them; only the implementation behind each changed.
 func coreInjectionDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
+		// ONE SQL-injection descriptor, as the registry's one-per-catalog-type invariant demands.
+		// Its three techniques (error, boolean, timing; saq3.2.1) run inside the check and are
+		// gated per technique at the probe; the descriptor's declared method set comes from
+		// burpsyDetectionMethods, which lists all five implemented methods, and the dispatch rule
+		// (Zwy6) withholds the check only when every one of them is disabled.
 		nativeDescriptor(sqlInjectionIssue, DispatchScopePerUrl,
 			func(c *ScanConfig) bool { return c != nil && c.CheckSqli }, checkSQLInjectionCore),
 		nativeDescriptor(xssReflectedIssue, DispatchScopePerUrl,

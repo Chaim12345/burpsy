@@ -261,11 +261,15 @@ that fix the sweep's active half honoured the selection and its passive half, on
 not. The proxy-capture pass (`Capture.ScanExchange`: BCheck passive checks and the static DOM pass)
 is not a configured run and still does not read it.
 
-What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. The gap it shows
-is real coverage, not a configuration artefact: **SQL injection is error-based only** (no boolean,
-time-delay, Collaborator or database-specific variant), and **no native check sends a time-delay
-probe** — `ProbeTiming` has no production caller. Disabling "Time delays" therefore removes no traffic
-today; the harness gate is what keeps that true when a timing probe is added.
+What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. What that shows
+is real coverage, not a configuration artefact (saq3.2.1): SQL injection's one check sends three probe
+banks through three method gates — error signatures ("Error messages"), the boolean differential
+("Boolean conditions") and the timing bank ("Time delays", whose PostgreSQL and SQL Server forms are
+additionally gated by "PostgreSQL specific" / "SQL Server specific") — so blind SQLi is detectable,
+and a disabled method withholds exactly its own probes and names the decline. Still not implemented
+for SQL injection: "Burp Collaborator", and the MySQL/Oracle timing banks whose payload text sits
+inside ZKM string decoders this tree does not run; both are declined by name. No other native check
+sends a time-delay probe.
 
 Every shipped configuration that sets `issues_reported` is pinned to behaviour matching its name by
 `TestEveryShippedSelectionConfigurationBehavesAsItsNameSays`, over the 29 files vendored byte-for-byte

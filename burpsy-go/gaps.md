@@ -1593,14 +1593,28 @@ honest one and is the smaller.
 Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than
 Burp rather than wider:
 
-- **A check that declares a disabled method is withheld whole.** Burp keeps a check while any of its
-  (type, method) pairs is enabled and gates the rest inside the check (`Zwy6.java:170-184`). Every
-  burpsy check declares exactly one method today, where the two rules agree; a future check declaring
-  two will be withheld whole when either is disabled, until it can gate one alone.
+- **A check is withheld only when every (type, method) pair it registers is disabled.** FIXED
+  2026-10-08 (saq3.2.1): burpsy used to withhold a check on ANY declared-disabled method, which
+  agreed with Burp (`Zwy6.java:170-184`) only while every check declared one method. The
+  SQL-injection check now declares its five implemented methods on one descriptor, so the rule
+  is Burp's own — kept while any pair is enabled — and the disabled METHOD's granularity is the
+  probe gate (`ProbeHarness.withhold`), which declines it by name with the count of probes it
+  withheld.
 - **Detection methods burpsy does not implement cannot run**, whatever a configuration enables:
-  Burp Infiltrator everywhere; for SQL injection everything but Error messages; for OS command and PHP
-  code injection Time delays and Collaborator. They are declined by name
+  Burp Infiltrator everywhere; for SQL injection Collaborator plus the Oracle and MySQL timing
+  banks — their payload text is inside ZKM string decoders this tree does not run, so burpsy
+  sends none rather than a guess (2026-10-08, saq3.2.1: Error messages, Boolean conditions,
+  Time delays, PostgreSQL specific and SQL Server specific ARE implemented now, gated per
+  technique inside the one SQL-injection check). They are declined by name
   (`AuditConfig.DeclinedDetectionMethods`, `AuditOutcome.MethodsDeclined`), never silently ignored.
+- **SQL injection detection without a database**, by construction: the vulnapp blind endpoints
+  recognise the SHAPE of an injected condition or sleep directive, never burpsy's own payload
+  text, and the boolean differential the classifier needs is true-half-identical /
+  false-half-different. A finding on the timing bank is a delay against the baseline, so an
+  endpoint that sleeps for ANY reason can produce one; the confidence stays `firm` and the
+  detail names the exact request. Recovered Burp payload banks are limited to PostgreSQL
+  (`Zxpy`) and SQL Server (`Zuyg`) — see sqli_techniques.go's header for what is recovered
+  versus documented.
 - **Skip lists from a Burp file**: Burp's value is a list of match rules
   (`{parameter, item, match_type, expression}`). burpsy honours parameter NAMES set through
   `/api/scanner/configs`; a file's empty rule list is honoured and a non-empty one is reported unapplied.

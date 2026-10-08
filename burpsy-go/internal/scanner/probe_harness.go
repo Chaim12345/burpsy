@@ -429,6 +429,28 @@ func (h *ProbeHarness) ProbeTiming(ctx context.Context, point bcheck.InsertionPo
 		})
 }
 
+// ProbeTimingUnder sends a time-based probe gated by every method that governs it — the
+// generic Time delays switch plus the dialect-specific one when the payload is dialect-only
+// (burpsy-react-ui-saq3.2.1). A PostgreSQL pg_sleep probe is withheld when either PostgreSQL
+// specific or Time delays is disabled, because Burp's UI offers both switches over the same
+// request; withholding on the first disabled method found keeps the decline legible (one
+// reason, not a list) while the count still says how many requests did not leave.
+func (h *ProbeHarness) ProbeTimingUnder(ctx context.Context, point bcheck.InsertionPoint,
+	payload string, delay time.Duration, methods []string) InjectionProbe {
+
+	for _, method := range methods {
+		if h.withhold(method, 1) {
+			return withheldProbe(point, payload, method)
+		}
+	}
+	return h.probe(ctx, point, payload,
+		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
+			ev := ClassifyTimingEvidence(baseline.Duration, injected.Duration, delay)
+			return ev, fmt.Sprintf("baseline %s, injected %s, requested %s: %s",
+				baseline.Duration, injected.Duration, delay, ev)
+		})
+}
+
 // ProbeBoolean sends an always-true and an always-false payload and compares both against
 // the baseline. Both halves are required; see ClassifyBooleanDifferential.
 func (h *ProbeHarness) ProbeBoolean(ctx context.Context, point bcheck.InsertionPoint,

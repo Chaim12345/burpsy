@@ -861,6 +861,18 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				// "no cap stated" into "admit nothing", which is the one reading that is certainly
 				// wrong (burpsy-react-ui-iueb).
 				got, wantSet, wantUnset = optField(applied.MaxInsertionPointsPerRequest), uint64(k.Value), optField(base.MaxInsertionPointsPerRequest)
+			case "follow_redirections", "audit_connect_timeout", "audit_normal_timeout":
+				// The per-run overrides (burpsy-react-ui-o2p3). Each overlays a scalar the applied
+				// config holds as an OptUint32, checked the use_nested_insertion_points way: the
+				// VALUE lands, and an unset key leaves the base's own value alone.
+				field := map[string]func(a AuditConfig) uint64{
+					"follow_redirections":   func(a AuditConfig) uint64 { return optField(a.FollowRedirects) },
+					"audit_connect_timeout": func(a AuditConfig) uint64 { return optField(a.ConnectTimeout) },
+					"audit_normal_timeout":  func(a AuditConfig) uint64 { return optField(a.NormalTimeout) },
+				}[k.Name]
+				got = field(applied)
+				wantSet = uint64(k.Value)
+				wantUnset = uint64(field(base))
 			case "skip_ineffective_checks":
 				// A boolean-shaped gate (y4om), so the overlay is a scalar. Checked through the
 				// Set/Value pair rather than a resolved boolean because that is what the row writes,

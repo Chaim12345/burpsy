@@ -35,6 +35,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // injectionEndpoints returns this family's manifest entries.
@@ -79,6 +80,16 @@ func injectionEndpoints() []Endpoint {
 			Note: "runs snippet through a JavaScript template-literal evaluator"},
 		{Path: "/ij/safe/scripts/node?snippet=seed", Row: "Server-side JavaScript code injection", Safe: true,
 			Note: "reflects snippet without evaluating it"},
+
+		{Path: "/ij/books?sort_col=seed", Row: "SQL injection",
+			Note: "concatenates sort_col into a condition; an appended boolean comparison decides whether rows come back"},
+		{Path: "/ij/safe/books?sort_col=seed", Row: "SQL injection", Safe: true,
+			Note: "sorts by the named column only; no condition in the value is ever evaluated"},
+
+		{Path: "/ij/jobs?queue=seed", Row: "SQL injection",
+			Note: "concatenates queue into a job query; a sleep directive in the value executes and delays the response"},
+		{Path: "/ij/safe/jobs?queue=seed", Row: "SQL injection", Safe: true,
+			Note: "stores the parameter verbatim and returns immediately, the way a parameterised query does"},
 	}
 }
 
@@ -108,6 +119,11 @@ func registerInjection(mux *http.ServeMux) {
 	mux.HandleFunc("/ij/safe/scripts/python", pythonSafe)
 	mux.HandleFunc("/ij/scripts/node", nodeVuln)
 	mux.HandleFunc("/ij/safe/scripts/node", nodeSafe)
+
+	mux.HandleFunc("/ij/books", sortBookedByCondition)
+	mux.HandleFunc("/ij/safe/books", safeSortBookedByCondition)
+	mux.HandleFunc("/ij/jobs", queueJobWithDelay)
+	mux.HandleFunc("/ij/safe/jobs", safeQueueJobWithDelay)
 }
 
 // ---------------------------------------------------------------------------
@@ -277,4 +293,85 @@ func codeInjectionHandlers(re *regexp.Regexp) (vulnerable, safe http.HandlerFunc
 		fmt.Fprintf(w, "webhook output: %s\n", r.URL.Query().Get("snippet"))
 	}
 	return vulnerable, safe
+}
+
+// ---------------------------------------------------------------------------
+// SQL injection: the blind techniques (boolean conditions, time delays)
+// ---------------------------------------------------------------------------
+//
+// The two endpoints below demonstrate what internal/scanner's boolean and timing SQLi checks
+// (sqli_techniques.go) look for, without any database: a real application concatenates the
+// parameter into a query, and the injected condition or sleep call changes what the query does.
+// Each endpoint recognises the SHAPE generically - a comparison of two operands, a sleep
+// directive with a numeric argument - never the specific payload the check happens to send,
+// and the safe twin concatenates nothing and recognises nothing.
+
+// sqlBooleanCondition matches a comparison of two bare operands anywhere in the value: the
+// fragment `1=1` a boolean payload appends to the WHERE clause. Both operands are captured,
+// because the difference between always-true and always-false is the whole signal.
+var sqlBooleanCondition = regexp.MustCompile(`(\w+)\s*=\s*(\w+)`)
+
+// sortBookedByCondition approximates `ORDER BY`-style concatenation: the value lands in the
+// query, and a condition the attacker appends decides whether the row set comes back. An
+// always-true condition leaves the listing as the unmodified request had it — byte-identical,
+// because the differential classifier requires the true half to match the baseline and reads
+// any difference as "the payload was rejected, not interpreted" — and an always-false one
+// filters every row out, which is the only half allowed to differ.
+func sortBookedByCondition(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	v := r.URL.Query().Get("sort_col")
+	m := sqlBooleanCondition.FindStringSubmatch(v)
+	if m != nil && m[1] != m[2] {
+		// A condition that did not hold filtered every row: a materially different body,
+		// which is the false half of the differential the classifier needs.
+		fmt.Fprint(w, "Products: (no rows)")
+		return
+	}
+	// No condition, or one that held: the full listing, byte-identical in both cases so the
+	// always-true half of a boolean pair matches the baseline exactly.
+	fmt.Fprint(w, "Products: Widget, Gadget, Gizmo")
+}
+
+func safeSortBookedByCondition(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	// The safe twin treats the value as a column name only: no condition is ever evaluated,
+	// so `1=1` and `1=2` both sort and both return the full listing.
+	fmt.Fprintf(w, "Products sorted by %s: Widget, Gadget, Gizmo", r.URL.Query().Get("sort_col"))
+}
+
+// sqlSleepDirective matches a dialect's sleep call with a numeric argument - PostgreSQL's
+// pg_sleep(N) or SQL Server's waitfor delay'0:0:N' - and returns the seconds it asks for.
+// Which dialect fired is not distinguished, because the timing classifier only reads how long
+// the response took.
+var sqlSleepDirective = regexp.MustCompile(`pg_sleep\s*\(\s*(\d+)\s*\)|waitfor\s+delay\s*'0:0:(\d+)'`)
+
+// queueJobWithDelay approximates concatenation into a job-query parameter: a sleep directive
+// in the value is executed as part of the query, and the response takes as long as it asked.
+// The delay is capped so a test that sends a 5-second probe does not hold the suite hostage -
+// the classifier asks for InjectionTimingDelay and reads anything at or past the margin.
+func queueJobWithDelay(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	v := r.URL.Query().Get("queue")
+	m := sqlSleepDirective.FindStringSubmatch(v)
+	if m != nil {
+		secs := m[1]
+		if secs == "" {
+			secs = m[2]
+		}
+		n, err := strconv.Atoi(secs)
+		if err == nil && n > 0 {
+			if n > 5 {
+				n = 5
+			}
+			time.Sleep(time.Duration(n) * time.Second)
+		}
+	}
+	fmt.Fprintf(w, "Job queued: %s", v)
+}
+
+func safeQueueJobWithDelay(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	// The safe twin stores the parameter and returns immediately, the way an application
+	// that parameterises the query does: the sleep text is data, never a directive.
+	fmt.Fprintf(w, "Job queued: %s", r.URL.Query().Get("queue"))
 }

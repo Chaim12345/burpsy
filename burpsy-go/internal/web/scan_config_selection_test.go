@@ -164,20 +164,23 @@ func TestTheImportedTimeBasedExclusionPresetRunsEverythingExceptWhatItRemoves(t 
 	}
 	// Four of the five removed types are in the injection family this scanner runs (Perl, Ruby, Python,
 	// server-side JavaScript; unidentified code injection is a reflection-probe row): the run's check
-	// set is exactly four smaller, and nothing else moved.
+	// set is exactly four smaller, and nothing else moved. The SQL-injection check STAYS dispatched
+	// even with Time delays off — since saq3.2.1 it declares its five implemented methods and is
+	// withheld only when they are all disabled (Zwy6's per-pair rule) — so the preset's method
+	// removal is visible here in the timings not sent, not in the dispatch count.
 	for i := range imported {
 		if d := control[i].ActiveChecks - imported[i].ActiveChecks; d != 4 {
 			t.Errorf("item %d: the preset removed %d check(s) from the run, want the 4 enabled:false types in this family set", i, d)
 		}
 	}
-	// No time-delay probe reached the target. This is vacuous today and the report says so: no native
-	// burpsy check sends one (ProbeTiming has no production caller). It stays here so the day one is
-	// added, this preset is proved to withhold it end to end; the harness gate is unit-tested directly.
+	// No time-delay probe reached the target. Since saq3.2.1 this is no longer vacuous: the
+	// SQL-injection check runs in the imported run too, and its timing bank is real, so its
+	// absence here proves the preset withholds the timing probes end to end.
 	for _, q := range rt.received() {
 		l := strings.ToLower(q)
 		for _, marker := range []string{"sleep", "waitfor", "benchmark("} {
 			if strings.Contains(l, marker) {
-				t.Errorf("a time-delay probe reached the target: %q", q)
+				t.Errorf("a time-based probe reached the target: %q", q)
 			}
 		}
 	}

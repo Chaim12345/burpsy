@@ -131,9 +131,12 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 42, 3, 13
+	const wantApplied, wantPartial, wantReported = 45, 3, 10
 	// 42/3/13 since burpsy-react-ui-gmdk: skip_server_side_injection_for_parameters moved from
 	// reported to partial, the same reduced value shape as the skip-all list.
+	// 45 since burpsy-react-ui-o2p3 (commit 78d2126): follow_redirections,
+	// audit_project_option_overrides/connect_timeout and /normal_timeout became applied — the
+	// per-run overrides the run's own sender honours.
 	//
 	// 42/2/14 since burpsy-react-ui-saq3.1: select_individual_issues and scan_only_selected_issues
 	// moved from partial to applied. They are booleans that choose Burp's mode (Zmzw.java:80-87),
