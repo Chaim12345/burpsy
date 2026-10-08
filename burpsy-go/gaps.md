@@ -2432,3 +2432,24 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
   one-sided tail at N ≥ 100.
 - **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).
+
+## Repeater B: HTTP/2 kettled requests and Inspector CRLF injection (burpsy-react-ui-i9ti.2, 2026-10-08)
+
+### Inspector detail view and Shift+Return — how CR/LF is shown, and where it can be written (ln2a)
+- **Burp:** `desktop/tools/inspector/modify-requests.html` — "Copy name or Copy value from the context menu",
+  and the detail view where "Press Shift + Return. The carriage return and line feed characters are injected";
+  `desktop/http2/performing-http2-exclusive-attacks.html` — drill into a header with the chevron and press
+  Shift+Return in the Name or Value field "to enter the sequence \r\n".
+- **burpsy:** every Inspector row has a context menu (right-click, the Menu key or Shift+F10) with *Copy name*,
+  *Copy value* and *Open in detail view*, on read-only mounts too, and a chevron button opening the detail view
+  for that item. In the detail view Shift+Return inserts CR LF at the caret and Return applies.
+- **Divergence:** CR and LF are shown in the fields as the Control Pictures ␍ and ␊, not as the text `\r\n`: a
+  browser `<input>` strips CR and LF and a `<textarea>` folds CR LF to LF before any script sees it, and `\r`
+  as text would collide with a literal backslash-r in a value. An item that already contains ␍ or ␊ is shown but
+  not written back from the detail view (the mapping would invent a CR). Shift+Return is offered on request
+  *header* items only — a query, cookie or body parameter refuses it by name — and only where an HTTP/2 header
+  list can be sent as written: on an HTTP/1 request it is refused with "This would split the header: only HTTP/2
+  can carry CR/LF inside a header", and on the Proxy intercept, HTTP history and Target mounts it is refused with
+  the reason that only a Repeater tab sends a kettled request. Burp's Proxy supports kettled requests; burpsy's
+  intercept does not (it holds HTTP/1-shaped bytes). The detail view is a panel at the foot of the Inspector, not
+  a drill-down page that replaces the item list.

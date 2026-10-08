@@ -4164,6 +4164,27 @@ tbody td {
   border-top: 0;
 }
 
+/* ---- the detail view (ln2a): one item's name and value, CR/LF shown as glyphs ---- */
+
+.inspector-detail-field {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s1);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+}
+
+.inspector-detail .inspector-note {
+  padding-left: 0;
+}
+
+.inspector-refusal {
+  color: var(--ink);
+  border-left: var(--border-status) solid var(--warn);
+  padding-left: var(--s1);
+}
+
 /* History and Repeater put the Inspector beside the request/response pair. */
 .editor-grid-inspected {
   min-height: 0;
