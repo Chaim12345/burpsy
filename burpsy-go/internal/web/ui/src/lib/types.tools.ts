@@ -127,6 +127,8 @@ export interface ErrorBucket {
 
 export interface Attempt {
   ordinal: number;
+  /** Set by the console when "Request item again" replaced this row's result (2rw7). */
+  requested_again?: boolean;
   status: number | null;
   response_len: number;
   duration_ms: number;

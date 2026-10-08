@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, RotateCw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { ApiError, api, copyToClipboard, json, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
 import { fetchRaw } from "../lib/actions";
 import {
   intruderExportFilenames,
@@ -1457,9 +1457,50 @@ export function IntruderPage(): JSX.Element {
       }),
     [resultMenu, storedRun],
   );
+  // Burp's "Request item again" (burpsy-react-ui-2rw7): the attempt's stored request is re-sent
+  // and its row takes the new result, marked as requested again. The original attack's grep and
+  // capture settings are not re-applied, so the row's grep columns are cleared rather than kept stale.
+  const requestAgain = useCallback(
+    (attempt: Attempt) => {
+      if (attempt.request_id === null) return;
+      void api<{ rows: { status: number | null; response_len: number; duration_ms: number; request_id: number | null; response_id: number | null; error: string | null }[] }>(
+        "/api/intruder/again",
+        json("POST", { target, request_ids: [attempt.request_id] }),
+      ).then(
+        ({ rows }) => {
+          const row = rows[0];
+          if (!row) return;
+          if (row.error) {
+            toast.error(`Attempt ${attempt.ordinal} was not requested again: ${row.error}`);
+            return;
+          }
+          const current = useApp.getState().intruderRun;
+          const view = current?.view;
+          if (!current || !view) return;
+          setStoredRun({
+            ...current,
+            view: {
+              ...view,
+              report: {
+                ...view.report,
+                attempts: view.report.attempts.map((a) =>
+                  a.ordinal === attempt.ordinal
+                    ? { ...a, status: row.status, response_len: row.response_len, duration_ms: row.duration_ms, request_id: row.request_id, response_id: row.response_id, error: null, grep_matched: null, grep_extract: null, requested_again: true }
+                    : a,
+                ),
+              },
+            },
+          });
+          toast.success(`Attempt ${attempt.ordinal} requested again: ${row.status ?? "no status"}`);
+        },
+        (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The attempt could not be requested again"),
+      );
+    },
+    [target, setStoredRun],
+  );
   const attemptMenu = useCallback(
-    (attempt: Attempt) =>
-      resultMenu({
+    (attempt: Attempt): MenuGroup[] => [
+      ...resultMenu({
         requestId: attempt.request_id,
         responseId: attempt.response_id,
         label: `Intruder attempt ${attempt.ordinal}`,
@@ -1472,7 +1513,24 @@ export function IntruderPage(): JSX.Element {
           "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row.",
         ),
       }),
-    [resultMenu, storedRun],
+      {
+        id: "again",
+        actions: [
+          {
+            id: "request-again",
+            label: "Request item again",
+            icon: RotateCw,
+            disabled: attempt.request_id === null,
+            hint:
+              attempt.request_id === null
+                ? "No request was stored for this attempt, so there are no bytes to send again."
+                : "Re-sends this attempt's exact request through the scope gate; the row takes the new result.",
+            onSelect: () => requestAgain(attempt),
+          },
+        ],
+      },
+    ],
+    [resultMenu, storedRun, requestAgain],
   );
 
   // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL

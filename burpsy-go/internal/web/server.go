@@ -1039,6 +1039,7 @@ func (s *Server) setupRoutes() {
 	// resumed or stopped from anywhere — see api_intruder_control.go.
 	s.mux.HandleFunc("/api/intruder/attacks", s.handleIntruderAttacks)
 	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
+	s.mux.HandleFunc("/api/intruder/again", s.handleIntruderAgain)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
 	// The Custom scan checks leaf (burpsy-react-ui-kdqj): the corpus as rows, and the per-row switch
