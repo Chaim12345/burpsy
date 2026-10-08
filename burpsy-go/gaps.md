@@ -1960,6 +1960,14 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   the list, pseudo-headers included. Send carries `h2_headers`, and `sender.AuthorisedSender.SendH2Fields` writes it as
   literal HPACK fields (no indexing, no Huffman) on a fresh h2 connection, acknowledging SETTINGS and PING, pacing DATA
   by flow control, and reading stream 1 to END_STREAM/RST_STREAM/GOAWAY, whichever is named.
+- **How a tab becomes kettled:** from the Inspector's detail view, on an HTTP/2 draft with an https target —
+  applying a header name or value that contains CR/LF (Shift+Return), or renaming a header to a name with an
+  uppercase letter or a colon. Inline row edits on a draft that is still text keep writing the text (where an
+  HTTP/2 send lowercases names), as before; once the tab is kettled every Inspector header edit writes the list,
+  and Burp's remaining triggers (`:scheme`, a space in `:path`/`:method`, a duplicate pseudo-header) are reached by
+  editing the pseudo-header rows that then appear. Burp kettles from any Inspector edit.
+- **Paging back:** a kettled send's history entry keeps the list it sent; the request pane shows that list (CR/LF as
+  ␍␊) labelled "sent … as a kettled HTTP/2 field list", and the Inspector reads the list read-only.
 - **Decline — some of Burp's triggers are kettled but never sent.** A space (or CR/LF) in `:path`/`:method` and a
   duplicate pseudo-header are refused by the frame-program classifier (`http2/authorise.go`): the engagement-scope gate
   reads a request line, and a path with a space in it would be authorised up to the space and sent whole. A modified

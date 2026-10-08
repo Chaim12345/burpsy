@@ -2,7 +2,7 @@
 // the store chokepoint that drops the list when the text is edited. The chokepoint tests drive the real
 // store, so deleting or inverting the rule in updateRepeaterTab fails here.
 import { beforeEach, describe, expect, test } from "bun:test";
-import { kettleHeaderEdit, renderNormalised, requestBody, requestHeadChanged, seedH2Fields, type H2Field } from "./kettle";
+import { kettleHeaderEdit, kettledListText, renderNormalised, requestBody, requestHeadChanged, seedH2Fields, type H2Field } from "./kettle";
 import { useApp } from "./store";
 
 const DRAFT = "POST /a?b=1 HTTP/2\r\nHost: t.example\r\nX-Up: 1\r\nCookie: a=1\r\n\r\nbody";
@@ -93,5 +93,12 @@ describe("the store drops a kettled list the text no longer describes", () => {
     const next: H2Field[] = [...LIST, { name: "y", value: "1" }];
     useApp.getState().updateRepeaterTab(id, { request: renderNormalised(next, "body"), h2Headers: next });
     expect(listOf(id)).toEqual(next);
+  });
+});
+
+describe("kettledListText", () => {
+  test("a paged-back kettled send shows its own list, a CR/LF value on one line", () => {
+    const text = kettledListText([{ name: ":method", value: "GET" }, { name: "x", value: "a\r\nb" }], "body");
+    expect(text).toBe(":method: GET\r\nx: a␍␊b\r\n\r\nbody");
   });
 });

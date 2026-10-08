@@ -13,7 +13,7 @@ import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEnc
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { SendCancelled, useKettleAnswer, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
-import { renderNormalised, requestBody, seedH2Fields, type H2Field, type KettleAnswer } from "../lib/kettle";
+import { kettledListText, renderNormalised, requestBody, seedH2Fields, type H2Field, type KettleAnswer } from "../lib/kettle";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
 import { isIntrospectionAnswer } from "../lib/graphql-introspection";
 import { mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "../lib/send-settings";
@@ -319,6 +319,9 @@ export function RepeaterPage(): JSX.Element {
     // The exact draft text that goes on the wire, captured here so the history entry below records
     // what was sent rather than what the draft says later.
     const sentRequest = tab.request;
+    // A kettled tab's list, captured with the text: the entry has to say what went out, and for a
+    // kettled send that is the list, not the normalised text beside it (jae5).
+    const sentFields = tab.h2Headers;
     // A binary body (protobuf/gRPC) goes out as faithful bytes, not the lossy request string
     // (burpsy-react-ui-ytkk): the head is taken fresh from the current text, the body from the stored
     // exact octets, so editing headers still works and the body survives the JSON transport.
@@ -344,7 +347,7 @@ export function RepeaterPage(): JSX.Element {
         onSuccess: (result) => {
           setHistory((current) => ({
             ...current,
-            [tab.id]: [...(current[tab.id] ?? []), { ...result, request: sentRequest }],
+            [tab.id]: [...(current[tab.id] ?? []), { ...result, request: sentRequest, ...(sentFields ? { h2Headers: sentFields } : {}) }],
           }));
           // A new send always snaps the view forward: an operator who had paged back to compare is
           // still asking "what did this one do", and leaving them on an older entry would answer a
@@ -609,6 +612,8 @@ export function RepeaterPage(): JSX.Element {
    * so a non-null pin always means the operator is deliberately looking at a past send.
    */
   const viewedRequest = active && viewing[active.id] != null ? (result?.request ?? null) : null;
+  /** The field list a paged-back kettled send carried, or null (jae5). */
+  const viewedFields = viewedRequest != null && httpResult?.h2Headers ? httpResult.h2Headers : null;
 
   // The chain's hop selection, resolved to bytes. `lastFollowedHop` is the response the chain
   // landed on — the "final response" the toggle offers — and is null for a chain that followed
@@ -1850,8 +1855,16 @@ export function RepeaterPage(): JSX.Element {
           </div>
         ) : (
           <HttpEditor
-            label={viewedRequest != null ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written` : "Request"}
-            value={viewedRequest ?? active.request}
+            label={
+              viewedFields
+                ? `Request · sent ${viewIndex + 1}/${activeHistory.length} as a kettled HTTP/2 field list`
+                : viewedRequest != null
+                  ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written`
+                  : "Request"
+            }
+            // A kettled send's own list, CR/LF shown as ␍␊, then its body — never the normalised text,
+            // which is not what went out.
+            value={viewedFields ? kettledListText(viewedFields, requestBody(viewedRequest ?? "")) : (viewedRequest ?? active.request)}
             readOnly={viewedRequest != null}
             onChange={(value) => updateRepeaterTab(active.id, { request: value })}
             // The draft's faithful binary body, so a protobuf/gRPC request decodes in the Protobuf
@@ -1951,11 +1964,14 @@ export function RepeaterPage(): JSX.Element {
               raw={viewedRequest ?? active.request}
               label={viewedRequest != null ? "Inspector · request as sent" : "Inspector · request"}
               onChange={viewedRequest != null ? undefined : (next) => updateRepeaterTab(active.id, { request: next })}
-              // The one mount that can send an HTTP/2 header list as written (jae5): the live draft.
+              // The one mount that can send an HTTP/2 header list as written (jae5): the live draft. A
+              // paged-back kettled send shows its own list read-only (no onChange, a no-op sink).
               kettle={
-                viewedRequest != null || active.kind === "ws"
-                  ? undefined
-                  : { tls: activeTls, fields: active.h2Headers ?? null, onFields: (fields) => setKettledFields(active, fields) }
+                viewedFields
+                  ? { tls: activeTls, fields: viewedFields, onFields: () => undefined }
+                  : viewedRequest != null || active.kind === "ws"
+                    ? undefined
+                    : { tls: activeTls, fields: active.h2Headers ?? null, onFields: (fields) => setKettledFields(active, fields) }
               }
               readOnlyNote="This request has already been sent, so it is read-only here — step to the newest entry to edit the draft."
               onSwitch={result ? () => setInspecting("response") : undefined}

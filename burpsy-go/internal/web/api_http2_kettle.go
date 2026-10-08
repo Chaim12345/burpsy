@@ -278,7 +278,16 @@ func (s *Server) sendKettledRepeaterRequest(ctx context.Context, spec repeaterSe
 	if spec.Options.ProtocolPreference == "http1" {
 		return repeaterSendResp{}, http.StatusBadRequest, fmt.Errorf("%w: this tab pins HTTP/1, and a kettled request has no HTTP/1 form; downgrade it in the Inspector (which normalises it) or unpin the protocol", errKettledRefused)
 	}
-	fields, body, notes := kettledRequestFields(fields, body, spec.Options, s.cookieHeaderFor(spec.Host, spec.Port, spec.TLS, "/"))
+	// The jar's path-match (RFC 6265 §5.4) runs against the list's own :path, query cut, as the text
+	// path's runs against the target's path.
+	cookiePath := "/"
+	for _, f := range fields {
+		if strings.EqualFold(string(f.Name), ":path") {
+			cookiePath, _, _ = strings.Cut(string(f.Value), "?")
+			break
+		}
+	}
+	fields, body, notes := kettledRequestFields(fields, body, spec.Options, s.cookieHeaderFor(spec.Host, spec.Port, spec.TLS, cookiePath))
 
 	sendCtx := spec.sendContext(ctx)
 	authorised := sender.NewAuthorisedSender(s.scope, s.sender, spec.Host, spec.Port, spec.TLS)

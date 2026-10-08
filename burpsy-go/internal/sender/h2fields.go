@@ -215,6 +215,7 @@ type h2FieldsExchange struct {
 	block    []byte
 	blockEnd bool
 
+	interim  int
 	status   int
 	fields   []burpsyhttp2.HeaderField
 	trailers []burpsyhttp2.HeaderField
@@ -429,7 +430,12 @@ func (x *h2FieldsExchange) acceptBlock(fields []burpsyhttp2.HeaderField) error {
 			return errors.New("the server's response header block carries no :status")
 		}
 		if status >= 100 && status < 200 {
-			// An interim head (§8.1): the final response follows on the same stream.
+			// An interim head (§8.1): the final response follows on the same stream. Bounded the way the
+			// HTTP/1 read bounds them (maxInterimResponses), so a peer cannot keep the stream busy forever.
+			x.interim++
+			if x.interim > maxInterimResponses {
+				return fmt.Errorf("the server sent more than %d interim (1xx) heads without a final response", maxInterimResponses)
+			}
 			return nil
 		}
 		x.status, x.fields = status, fields

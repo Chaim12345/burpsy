@@ -23,6 +23,7 @@
  * Whether a list is kettled, and whether it would be refused, is the server's answer
  * (POST /api/http2/kettle, internal/http2's KettleReasons and Authorise) — never re-derived here.
  */
+import { showLineBreaks } from "./line-breaks";
 import { headerSpans, parseMessage, parseRequestLine } from "./message";
 
 export interface H2Field {
@@ -150,4 +151,12 @@ export function kettleHeaderEdit(raw: string, tls: boolean, row: number, origina
   const renamed = name !== originalName;
   fields[index] = { name: renamed ? name : seeded.name, value };
   return fields;
+}
+
+/**
+ * A field list as text for a read-only pane: one "name: value" line per field in order, pseudo-headers
+ * included, CR and LF shown as ␍ ␊ so a value never splits into a line it is not, then the body.
+ */
+export function kettledListText(fields: H2Field[], body: string): string {
+  return `${fields.map((field) => `${showLineBreaks(field.name)}: ${showLineBreaks(field.value)}`).join("\r\n")}\r\n\r\n${body}`;
 }

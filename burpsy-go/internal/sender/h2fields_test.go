@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
@@ -180,5 +181,38 @@ func TestSendH2FieldsInteroperatesWithNetHTTP(t *testing.T) {
 	}
 	if res.Status != 200 || string(res.Body) != "ok" || srv.lastProto(t) != "HTTP/2.0" {
 		t.Fatalf("status %d body %q", res.Status, res.Body)
+	}
+}
+
+// A stream the server opens and never ends — what a desync probe often provokes — returns at the read
+// bound with the head it got and the timeout named, never hangs.
+func TestSendH2FieldsReturnsAStalledStreamAtTheBound(t *testing.T) {
+	srv := h2test.Start(t, h2test.Options{Stall: true})
+	a := NewAuthorisedSender(pathScope(srv.Host, "/"), testSender(), srv.Host, srv.Port, true)
+	started := time.Now()
+	res, err := a.SendH2Fields(context.Background(), kettledFields(formatHostPort(srv.Host, srv.Port), "/"), nil)
+	if err != nil {
+		t.Fatalf("a stalled stream with a head is a response, got %v", err)
+	}
+	if res.Status != 200 || res.Ended != "the response timeout passed" {
+		t.Fatalf("status %d ended %q", res.Status, res.Ended)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("the read took %v against testSender's 500ms bound", elapsed)
+	}
+}
+
+// Interim heads are skipped up to the same cap the HTTP/1 read uses, and past it the send says why.
+func TestSendH2FieldsBoundsInterimHeads(t *testing.T) {
+	ok := h2test.Start(t, h2test.Options{Interim: 2})
+	a := NewAuthorisedSender(pathScope(ok.Host, "/"), testSender(), ok.Host, ok.Port, true)
+	if res, err := a.SendH2Fields(context.Background(), kettledFields(formatHostPort(ok.Host, ok.Port), "/"), nil); err != nil || res.Status != 200 {
+		t.Fatalf("two 103s then 200: status %d, %v", res.Status, err)
+	}
+	flood := h2test.Start(t, h2test.Options{Interim: maxInterimResponses + 1})
+	a = NewAuthorisedSender(pathScope(flood.Host, "/"), testSender(), flood.Host, flood.Port, true)
+	if _, err := a.SendH2Fields(context.Background(), kettledFields(formatHostPort(flood.Host, flood.Port), "/"), nil); err == nil ||
+		!strings.Contains(err.Error(), "interim (1xx) heads") {
+		t.Fatalf("an interim flood must be refused by name, got %v", err)
 	}
 }
