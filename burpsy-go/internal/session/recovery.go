@@ -86,6 +86,13 @@ const (
 	// Validity carries the rule's own check of the answer when it states one, Indeterminate
 	// otherwise — including for a rule whose actions never check, which has no verdict to report.
 	RecoveryRuleApplied
+	// RecoveryPromptDeclined: a "prompt for browser recovery" action ended without the session
+	// being recovered — the operator declined, the prompt timed out, or no console was attached to
+	// ask. The request was not sent. A kind of its own because the nearest existing one,
+	// AlreadyValid, is the opposite of what happened: the operator was asked whether the session
+	// is alive and the answer was no (or there was nobody to ask), which is not "the session was
+	// already fine". The action's trace carries which of the three it was.
+	RecoveryPromptDeclined
 )
 
 // RecoveryOutcome is what handling one observed response produced. Every variant is reachable and
@@ -507,7 +514,18 @@ func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, 
 	// login was performed for nothing. The pre-action flow resent on a successful login for exactly
 	// this reason, so leaving the jar out here would silently break every re-login.
 	macroSucceeded := res.MacroRan && res.MacroOutcome.Kind == LoginSucceeded
-	if !res.Changed && !macroSucceeded {
+	// A prompt that ended without recovery stops the walk before anything is sent, and is reported
+	// here rather than falling into AlreadyValid below: "the session was already fine" is precisely
+	// the opposite of what happened — the operator was asked whether it is, and the answer was no,
+	// or there was nobody to ask. The request is not re-sent, which is the action working as written.
+	if res.PromptDeclined {
+		return RecoveryOutcome{Kind: RecoveryPromptDeclined, Actions: res.Trace}
+	}
+	// A successful prompt is a third reason to re-send, alongside a changed request and a successful
+	// macro: the bytes are identical but the session is not, and the resend is the entire point of
+	// having asked. Without this a prompt-only rule would report AlreadyValid and drop the request
+	// the operator was asked to recover the session for.
+	if !res.Changed && !macroSucceeded && !res.PromptSucceeded {
 		return RecoveryOutcome{Kind: RecoveryAlreadyValid, Actions: res.Trace}
 	}
 

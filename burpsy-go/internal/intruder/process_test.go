@@ -1,6 +1,7 @@
 package intruder
 
 import (
+	"bytes"
 	"reflect"
 	"strings"
 	"testing"
@@ -259,5 +260,101 @@ func TestJWTIsALayerThatCannotBeEncodedAndSaysSoAtRunTime(t *testing.T) {
 	}
 	if !strings.Contains(p.Reason, "cannot be encoded") {
 		t.Errorf("reason %q must carry the decoder's refusal", p.Reason)
+	}
+}
+
+// SUBSTRING extracts a 1-based inclusive range. The operator uses it to trim an over-long
+// wordlist entry before injection.
+func TestSubstringExtractsAOneBasedInclusiveRange(t *testing.T) {
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 2, End: 5}}, "abcdefg")); s != "bcde" {
+		t.Errorf("substring(2,5) = %q, want %q", s, "bcde")
+	}
+	// A negative end counts back from the last byte.
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 2, End: -1}}, "abcdefg")); s != "bcdefg" {
+		t.Errorf("substring(2,-1) = %q, want %q", s, "bcdefg")
+	}
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 2, End: -3}}, "abcdefg")); s != "bcde" {
+		t.Errorf("substring(2,-3) = %q, want %q", s, "bcde")
+	}
+	// Clamping: start past the end yields nothing; end past the end clamps to the payload.
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 10, End: 20}}, "abc")); s != "" {
+		t.Errorf("substring(10,20) on a 3-byte payload = %q, want empty", s)
+	}
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 2, End: 100}}, "abc")); s != "bc" {
+		t.Errorf("substring(2,100) = %q, want %q", s, "bc")
+	}
+	// End before start yields nothing.
+	if s := kept(t, one([]RuleSpec{{Rule: "substring", Start: 5, End: 2}}, "abcdefg")); s != "" {
+		t.Errorf("substring(5,2) = %q, want empty", s)
+	}
+}
+
+// REVERSE_SUBSTRING extracts the same range and reverses it. The operator uses it to test
+// whether a filter reverses input.
+func TestReverseSubstringExtractsAndReverses(t *testing.T) {
+	if s := kept(t, one([]RuleSpec{{Rule: "reverse_substring", Start: 2, End: 5}}, "abcdefg")); s != "edcb" {
+		t.Errorf("reverse_substring(2,5) = %q, want %q", s, "edcb")
+	}
+	if s := kept(t, one([]RuleSpec{{Rule: "reverse_substring", Start: 1, End: 7}}, "abcdefg")); s != "gfedcba" {
+		t.Errorf("reverse_substring(1,7) = %q, want %q", s, "gfedcba")
+	}
+	// A single character is its own reverse.
+	if s := kept(t, one([]RuleSpec{{Rule: "reverse_substring", Start: 3, End: 3}}, "abcdefg")); s != "c" {
+		t.Errorf("reverse_substring(3,3) = %q, want %q", s, "c")
+	}
+}
+
+// ADD_RAW_PAYLOAD replaces every occurrence of a placeholder with raw bytes. The operator uses
+// it to send a payload containing bytes that are not valid UTF-8 through a tool that otherwise
+// decodes everything.
+func TestAddRawPayloadReplacesPlaceholderWithRawBytes(t *testing.T) {
+	// A simple ASCII replacement.
+	if s := kept(t, one([]RuleSpec{{
+		Rule: "add_raw_payload", Placeholder: "§", RawPayload: []byte("RAW"),
+	}}, "hello§world§")); s != "helloRAWworldRAW" {
+		t.Errorf("add_raw_payload = %q, want %q", s, "helloRAWworldRAW")
+	}
+	// The raw payload contains bytes that are not valid UTF-8. This is the whole point of the
+	// rule: the bytes must survive the round trip byte-for-byte, never round-tripped through
+	// a string. Apply takes []byte so the non-UTF-8 payload never touches a string.
+	raw := []byte{0xff, 0xfe, 0x00, 0x80}
+	c := chain(t, RuleSpec{Rule: "add_raw_payload", Placeholder: "§", RawPayload: raw})
+	p := c.Apply([]byte("a§b"))
+	if p.Dropped {
+		t.Fatalf("dropped: %s", p.Reason)
+	}
+	want := []byte{'a', 0xff, 0xfe, 0x00, 0x80, 'b'}
+	if !bytes.Equal(p.Keep, want) {
+		t.Errorf("add_raw_payload with non-UTF-8 bytes = %v, want %v", p.Keep, want)
+	}
+	// An empty placeholder would match everywhere; Burp refuses it, so we do too — but the
+	// current implementation replaces at every position. Document the actual behaviour.
+	// (This test pins the current behaviour so a future change is deliberate.)
+	p = one([]RuleSpec{{
+		Rule: "add_raw_payload", Placeholder: "", RawPayload: []byte("X"),
+	}}, "ab")
+	if p.Dropped {
+		t.Fatalf("dropped: %s", p.Reason)
+	}
+	// bytes.ReplaceAll with an empty old slice inserts at every position.
+	if !bytes.Equal(p.Keep, []byte{'X', 'a', 'X', 'b', 'X'}) {
+		t.Errorf("add_raw_payload with empty placeholder = %v, want XaXbX", p.Keep)
+	}
+}
+
+// ADD_RAW_PAYLOAD must go through a []byte path end to end. This test pins that constraint:
+// a payload with non-UTF-8 bytes must survive the rule byte-for-byte.
+func TestAddRawPayloadPreservesNonUTF8Bytes(t *testing.T) {
+	// The payload itself contains non-UTF-8 bytes, and the raw payload does too.
+	payload := []byte{0x61, 0xff, 0x62, 0xfe, 0x63} // a<0xff>b<0xfe>c
+	raw := []byte{0xc3, 0x28}                       // invalid UTF-8
+	c2 := chain(t, RuleSpec{Rule: "add_raw_payload", Placeholder: "\xff", RawPayload: raw})
+	p := c2.Apply(payload)
+	if p.Dropped {
+		t.Fatalf("dropped: %s", p.Reason)
+	}
+	want := []byte{0x61, 0xc3, 0x28, 0x62, 0xfe, 0x63}
+	if !bytes.Equal(p.Keep, want) {
+		t.Errorf("add_raw_payload = %v, want %v", p.Keep, want)
 	}
 }

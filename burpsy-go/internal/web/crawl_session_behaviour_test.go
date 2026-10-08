@@ -98,7 +98,7 @@ func TestACrawlFollowsTheSessionThroughAnExpiry(t *testing.T) {
 		Seeds:            []string{target.URL + "/"},
 		LoginPagePattern: "(?i)logged in",
 		Headers:          map[string]string{"Cookie": "sid=expired"},
-	}, []string{target.URL + "/"}, crawler.Limits{}, nil, nil)
+	}, []string{target.URL + "/"}, crawler.Limits{}, nil, nil, false, crawler.ErrorHandling{})
 
 	if cfg.SessionCoordinator == nil {
 		t.Fatal("the config a production crawl builds has no coordinator")

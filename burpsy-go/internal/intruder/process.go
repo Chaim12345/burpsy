@@ -48,9 +48,26 @@ const MaxDropReasons = 32
 // Split from the compiled Chain so patterns are validated once, at the edge. A single struct
 // rather than a tagged enum, because Go has no sealed variants; NewChain refuses a rule name it
 // does not know, which is where the Rust serde tagged enum would fail instead.
+//
+// # Burp parity: 12 of 14 rules
+//
+// Burp's Zp81.java enum (build 51467) lists fourteen payload-processing rules. This chain
+// compiles twelve of them. The two that remain are deliberately out of scope, recorded here so
+// the count is not quoted as if all five missing rules were owed:
+//
+//   - INVOKE_BURP_EXTENSION: hands the payload to a Java extension. burpsy has no Java runtime
+//     and no extension host for payload processing; the closest surface (internal/extension)
+//     is a child-process JSON-RPC host, not a Montoya callback, and wiring a rule to it would
+//     mean re-introducing the exact coupling the Go port exists to avoid.
+//   - REPLACE_PLACEHOLDER_BASE_VALUE / REPLACE_PLACEHOLDER_COLLABORATOR_PAYLOAD: both substitute
+//     a placeholder with a value that only exists at send time (the original request's value, or
+//     a fresh Collaborator address). The chain runs at resolve time, before the plan is built,
+//     so neither value is available when the rule would need it. Folding them in would mean
+//     moving processing into the send loop, which the resolve-time placement explicitly refuses
+//     (see the Chain doc above).
 type RuleSpec struct {
 	// Rule is the snake_case rule name: add_prefix, add_suffix, replace, uppercase, lowercase,
-	// encode, decode, hash, skip_if_matches.
+	// encode, decode, hash, skip_if_matches, substring, reverse_substring, add_raw_payload.
 	Rule string `json:"rule"`
 	// Text is the literal for add_prefix / add_suffix.
 	Text string `json:"text"`
@@ -65,6 +82,21 @@ type RuleSpec struct {
 	Layer string `json:"layer"`
 	// Algorithm is the digest for hash: md5 or sha256.
 	Algorithm string `json:"algorithm"`
+	// Start is the 1-based start position for substring / reverse_substring. A value less than
+	// 1 clamps to 1; a value past the end of the payload yields an empty result.
+	Start int `json:"start"`
+	// End is the 1-based end position for substring / reverse_substring, inclusive. A negative
+	// value counts back from the last byte (-1 is the final byte). A value past the end clamps
+	// to the payload length; a value before Start yields an empty result.
+	End int `json:"end"`
+	// Placeholder is the marker that add_raw_payload replaces. Every occurrence is replaced.
+	Placeholder string `json:"placeholder"`
+	// RawPayload is the bytes spliced in place of each placeholder occurrence. Carried as
+	// []byte (base64 on the wire) so a payload containing bytes that are not valid UTF-8
+	// survives the round trip — the same class of bug the URL-encode path had
+	// (burpsy-react-ui-8dli, U+FFFD corruption). The replacement is a byte-level splice,
+	// never a string round trip.
+	RawPayload []byte `json:"raw_payload"`
 }
 
 // RuleErrorKind distinguishes the ways a rule can refuse to build.
@@ -150,6 +182,14 @@ type step struct {
 	hasHash   bool
 	layerName string
 	pattern   string
+	// start and end are the 1-based positions for substring / reverse_substring.
+	start int
+	end   int
+	// placeholder and rawPayload are the marker and replacement bytes for add_raw_payload.
+	// Both are []byte so a payload containing bytes that are not valid UTF-8 is spliced
+	// byte-for-byte, never round-tripped through a string.
+	placeholder []byte
+	rawPayload  []byte
 }
 
 type stepKind int
@@ -164,6 +204,9 @@ const (
 	stepDecode
 	stepHash
 	stepSkipIfMatches
+	stepSubstring
+	stepReverseSubstring
+	stepAddRawPayload
 )
 
 // Chain is an ordered chain of processing rules, ready to run.
@@ -214,6 +257,12 @@ func NewChain(specs []RuleSpec) (*Chain, error) {
 				return nil, err
 			}
 			steps = append(steps, step{kind: stepSkipIfMatches, re: re, pattern: s.Pattern})
+		case "substring":
+			steps = append(steps, step{kind: stepSubstring, start: s.Start, end: s.End})
+		case "reverse_substring":
+			steps = append(steps, step{kind: stepReverseSubstring, start: s.Start, end: s.End})
+		case "add_raw_payload":
+			steps = append(steps, step{kind: stepAddRawPayload, placeholder: []byte(s.Placeholder), rawPayload: s.RawPayload})
 		default:
 			// The Rust tagged enum refuses this at deserialisation; the Go struct cannot,
 			// so the refusal lives here, at construction, where an operator typo is one
@@ -296,6 +345,13 @@ func (c *Chain) Apply(payload []byte) Processed {
 			if st.re.Match(cur) {
 				return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d: skipped, matches %s", i, st.pattern)}
 			}
+		case stepSubstring:
+			cur = substring(cur, st.start, st.end)
+		case stepReverseSubstring:
+			cur = substring(cur, st.start, st.end)
+			reverseBytes(cur)
+		case stepAddRawPayload:
+			cur = bytes.ReplaceAll(cur, st.placeholder, st.rawPayload)
 		}
 		if len(cur) > MaxItemLen {
 			return Processed{Dropped: true, Reason: fmt.Sprintf("rule %d: payload grew to %d bytes, over the %d-byte limit", i, len(cur), MaxItemLen)}
@@ -316,6 +372,41 @@ func replaceFirst(re *regexp.Regexp, src, repl []byte) []byte {
 	out = re.Expand(out, repl, src, loc)
 	out = append(out, src[loc[1]:]...)
 	return out
+}
+
+// substring extracts b[start-1:end] using Burp's 1-based positions. A negative end counts
+// back from the last byte, so end=-1 is the final byte. Positions outside the payload clamp
+// to its bounds; start past the end, or end before start, yields nothing.
+//
+// The result is a slice of b, not a copy: the caller owns the payload and the chain already
+// copied it on entry to Apply, so aliasing is safe and the copy would be pure waste.
+func substring(b []byte, start, end int) []byte {
+	if start < 1 {
+		start = 1
+	}
+	if start > len(b) {
+		return nil
+	}
+	if end < 0 {
+		end = len(b) + end + 1
+	}
+	if end > len(b) {
+		end = len(b)
+	}
+	if end < start {
+		return nil
+	}
+	return b[start-1 : end]
+}
+
+// reverseBytes reverses b in place. The bytes are reversed as bytes, not runes: a payload
+// is a byte string and may not be valid UTF-8 at all, so a Unicode-aware reversal would
+// have to decide what to do with the bytes that are not text. Byte reversal is total and
+// is what Burp's own reverse-substring rule does.
+func reverseBytes(b []byte) {
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
 }
 
 // asciiUpper folds a-z to A-Z in place. Rust uses make_ascii_uppercase: a payload is bytes and

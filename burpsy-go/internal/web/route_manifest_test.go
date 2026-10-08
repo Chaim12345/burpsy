@@ -409,7 +409,15 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// /api/dashboard/events joins because its DELETE clears the event log — scope.changed and
 	// crawl.refused are the record of what the engagement was allowed to touch and what the tool
 	// refused, so discarding them is discarding evidence, the same act as clearing the tool log.
-	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
+	// /api/proxy/ca/export joins the destructive class (burpsy-react-ui-j92x) because the act is
+	// irreversible in the one direction that matters: the signing key leaves the process, and every
+	// copy of it thereafter is a copy the operator cannot account for. A regenerated CA is also gone
+	// from disk, but it was never handed to anyone — regenerating reduces exposure, exporting
+	// increases it, and only one of those is something this class is for. The remediation for a
+	// leaked export is rotation, which is why the confirmation is per-call and one-time rather than a
+	// standing permission. It is a GET-shaped act served on POST, because a secret in a URL lands in
+	// proxy history and browser history.
+	equal("destructive", destructive, []string{"/api/backup", "/api/dashboard/events", "/api/issues/", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

@@ -3,6 +3,7 @@ package intruder
 import (
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -299,6 +300,153 @@ func TestFactorialSaturatingMatchesSmallValuesAndSaturatesLargeOnes(t *testing.T
 	if _, sat := factorialSaturating(25); !sat {
 		t.Fatal("25! overflows uint64 and must report saturated")
 	}
+}
+
+func TestCharacterSubstitutionEnumeratesEveryPermutationOfPeter(t *testing.T) {
+	s := mustResolve(t, `{"type":"character_substitution","words":["peter"],"subs":{"e":["3"],"t":["7"]}}`, 100)
+	got := strs(s)
+	want := map[string]bool{
+		"peter": true, "p3ter": true, "pe7er": true, "p37er": true,
+		"pet3r": true, "p3t3r": true, "pe73r": true, "p373r": true,
+	}
+	if len(got) != 8 {
+		t.Fatalf("got %d items, want 8 (3 substitutable positions -> 2^3 combos): %v", len(got), got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected combination %q, want one of %v", g, want)
+		}
+	}
+	if s.Total != 8 || !s.TotalExact {
+		t.Fatalf("total=%d exact=%v, want 8/true", s.Total, s.TotalExact)
+	}
+}
+
+func TestCharacterSubstitutionSupportsMultipleAlternativesPerCharacter(t *testing.T) {
+	s := mustResolve(t, `{"type":"character_substitution","words":["a"],"subs":{"a":["4","@"]}}`, 100)
+	got := strs(s)
+	want := map[string]bool{"a": true, "4": true, "@": true}
+	if len(got) != 3 {
+		t.Fatalf("got %d items, want 3 (original + 2 alternatives): %v", len(got), got)
+	}
+	for _, g := range got {
+		if !want[g] {
+			t.Errorf("unexpected combination %q, want one of %v", g, want)
+		}
+	}
+}
+
+func TestCharacterSubstitutionWordWithNothingSubstitutableStillYieldsTheBaseWord(t *testing.T) {
+	s := mustResolve(t, `{"type":"character_substitution","words":["xyz"],"subs":{"a":["4"]}}`, 100)
+	if got := strs(s); len(got) != 1 || got[0] != "xyz" {
+		t.Fatalf("got %v, want exactly [\"xyz\"]", got)
+	}
+}
+
+func TestCharacterSubstitutionMaxPerWordBoundsOneWordWithoutStarvingTheNext(t *testing.T) {
+	s := mustResolve(t,
+		`{"type":"character_substitution","words":["aaaa","b"],"subs":{"a":["4"],"b":["8"]},"max_per_word":2}`, 100)
+	got := strs(s)
+	if len(got) != 4 {
+		t.Fatalf("got %d items (2 from \"aaaa\", 2 from \"b\"), want 4: %v", len(got), got)
+	}
+	foundB := false
+	for _, g := range got[2:] {
+		if g == "b" || g == "8" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("the second word's combinations never appeared: %v", got)
+	}
+}
+
+func TestCharacterSubstitutionRefusesEmptyWordsOrSubs(t *testing.T) {
+	var src PayloadSource
+	if err := json.Unmarshal([]byte(`{"type":"character_substitution","words":[],"subs":{"a":["4"]}}`), &src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Resolve(10); err == nil {
+		t.Fatal("empty words must be refused")
+	}
+	if err := json.Unmarshal([]byte(`{"type":"character_substitution","words":["a"],"subs":{}}`), &src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Resolve(10); err == nil {
+		t.Fatal("empty subs must be refused")
+	}
+}
+
+func TestRuntimeFileReadsOnePayloadPerLine(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "runtime-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("alpha\nbeta\n\ngamma\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wire := `{"type":"runtime_file","path":` + toJSONString(f.Name()) + `}`
+	s := mustResolve(t, wire, 100)
+	got := strs(s)
+	want := []string{"alpha", "beta", "gamma"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("item %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if s.Total != 3 || !s.TotalExact {
+		t.Fatalf("total=%d exact=%v, want 3/true", s.Total, s.TotalExact)
+	}
+}
+
+func TestRuntimeFileTruncatesAtCapWithoutLosingTheHonestTotal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "runtime-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := f.WriteString("line\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wire := `{"type":"runtime_file","path":` + toJSONString(f.Name()) + `}`
+	s := mustResolve(t, wire, 3)
+	if len(s.Items) != 3 {
+		t.Fatalf("got %d items, want the cap of 3", len(s.Items))
+	}
+	if s.Total != 10 || !s.TotalExact {
+		t.Fatalf("total=%d exact=%v, want 10/true", s.Total, s.TotalExact)
+	}
+	if !s.Truncated {
+		t.Fatal("truncated must be true: 10 lines, only 3 taken")
+	}
+}
+
+func TestRuntimeFileRefusesAMissingFile(t *testing.T) {
+	var src PayloadSource
+	if err := json.Unmarshal([]byte(`{"type":"runtime_file","path":"/nonexistent/path/does-not-exist.txt"}`), &src); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.Resolve(10); err == nil {
+		t.Fatal("a missing file must be refused")
+	}
+}
+
+func toJSONString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
 func TestCopyOtherResolvedDirectlyRefusesRatherThanGeneratingSomething(t *testing.T) {

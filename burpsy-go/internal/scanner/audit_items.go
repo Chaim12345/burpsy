@@ -244,16 +244,6 @@ const (
 	// engagement, the other is a global audit configuration, and the operator reading the
 	// queue needs to know which setting to change.
 	AuditItemPointSkippedOperator
-	// AuditItemPointSkippedIneffective is Burp's skip_ineffective_checks gate
-	// (burpsy-react-ui-y4om): the engine judged this place does not respond to anything, so no
-	// payload was sent here.
-	//
-	// A fourth "deliberate" status beside SkippedNested and SkippedOperator because the
-	// question the operator has to answer to change it is a different one in each case: a
-	// setting (this key), a run-config toggle (nesting), a named parameter (the skip list), or
-	// the engine's own reading of the target (this one — which no setting turns off except
-	// the key itself).
-	AuditItemPointSkippedIneffective
 )
 
 // Label is the operator-facing label, using Burp's own string for the four statuses that have one.
@@ -281,8 +271,6 @@ func (s AuditItemPointStatus) Label() string {
 		return "Skipped as nested insertion points not enabled"
 	case AuditItemPointSkippedOperator:
 		return "Skipped by the operator's parameter skip list"
-	case AuditItemPointSkippedIneffective:
-		return "Skipped as ineffective (the target did not respond here)"
 	}
 	return "Unknown"
 }
@@ -291,8 +279,7 @@ func (s AuditItemPointStatus) Label() string {
 // statuses are properties of the place; the rest describe what the audit did with it.
 func (s AuditItemPointStatus) IsSkip() bool {
 	return s == AuditItemPointSkippedLimit || s == AuditItemPointSkippedDeclined ||
-		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator ||
-		s == AuditItemPointSkippedIneffective
+		s == AuditItemPointSkippedNested || s == AuditItemPointSkippedOperator
 }
 
 // MarshalJSON writes the label rather than the ordinal, matching DispatchScope and Disposition — the
@@ -554,13 +541,7 @@ func (l *AuditItemLedger) Begin(id core.ExchangeID, ex *core.Exchange, cfg Audit
 		switch {
 		case p.Status == AuditItemPointSkippedLimit:
 			row.PointsSkipped++
-		case p.Status == AuditItemPointSkippedDeclined, p.Status == AuditItemPointSkippedIneffective:
-			// Both are places the enumerator declined to build a point for, so both belong in
-			// the same bucket: the row's "places" total, which is the honest denominator for
-			// "how much of this request could not be tested at all". The effectiveness gate
-			// (y4om) joins the unbuildable set because from the queue's point of view the two
-			// are the same fact — no point was made for this place — while the two statuses
-			// keep the two reasons apart for an operator who has to change one of them.
+		case p.Status == AuditItemPointSkippedDeclined:
 			row.PointsPlaces++
 		default:
 			row.PointsEnumerated++
@@ -898,8 +879,6 @@ func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) (
 			status = AuditItemPointSkippedNested
 		case strings.HasPrefix(d.What, bcheck.DeclinedSkippedParamWhat):
 			status = AuditItemPointSkippedOperator
-		case strings.HasPrefix(d.What, bcheck.DeclinedIneffectiveWhat):
-			status = AuditItemPointSkippedIneffective
 		}
 		out = append(out, AuditItemPoint{Name: d.What, Status: status, Detail: d.Reason})
 	}
@@ -910,13 +889,65 @@ func auditItemPoints(raw []byte, kinds []string, opts bcheck.EnumerateOptions) (
 //
 // Built from the outcome rather than from the state alone, because two items in ItemStateBounded can
 // have stopped for different reasons and the threshold that stopped them is the actionable half.
+// phaseSummary names the phases that ran for an item, and — the half that matters — says which of
+// the item's checks belonged to phases that produced nothing.
+//
+// Burp tracks per-phase state because "this stage ran and found nothing" and "this stage never ran"
+// are different facts an operator diagnosing a thin result needs to separate. The counters alone
+// cannot say it: four skipped checks read identically whether they were all in the stored phase or
+// spread across three (burpsy-react-ui-0qhf).
+//
+// Returns "" for an audited item whose phases all ran, so the queue's note column stays empty for
+// the ordinary case rather than carrying a line that says nothing.
+func phaseSummary(o AuditOutcome) string {
+	if len(o.ByPhase) == 0 {
+		return ""
+	}
+	// Deterministic order: declaration order, so the same outcome always renders the same line.
+	var ran, quiet []string
+	for _, phase := range AllCheckPhases {
+		po, ok := o.ByPhase[phase.String()]
+		if !ok {
+			continue
+		}
+		name := phase.String()
+		if po.Ran > 0 {
+			ran = append(ran, name)
+			continue
+		}
+		// A phase with no check that ran: report its disposition so the line explains the absence.
+		switch {
+		case po.Skipped > 0:
+			quiet = append(quiet, fmt.Sprintf("%s skipped %d", name, po.Skipped))
+		case po.SendFailures > 0:
+			quiet = append(quiet, fmt.Sprintf("%s failed to send %d", name, po.SendFailures))
+		case po.NotRun > 0:
+			quiet = append(quiet, fmt.Sprintf("%s never ran %d", name, po.NotRun))
+		case po.AlreadyCovered > 0:
+			quiet = append(quiet, fmt.Sprintf("%s already covered %d", name, po.AlreadyCovered))
+		}
+	}
+	// The note exists to explain a phase that produced nothing. When every phase in the table ran,
+	// there is no absence to explain and reporting "ran: active" on every audited item would turn
+	// the column into noise an operator learns to skip.
+	if len(quiet) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 2)
+	if len(ran) > 0 {
+		parts = append(parts, "ran: "+strings.Join(ran, ", "))
+	}
+	parts = append(parts, "no check ran in "+strings.Join(quiet, "; "))
+	return strings.Join(parts, " · ")
+}
+
 func auditItemNote(o AuditOutcome, cfg AuditConfig) string {
 	if o.Error != "" {
 		return o.Error
 	}
 	switch o.State {
 	case ItemStateAudited:
-		return ""
+		return phaseSummary(o)
 	case ItemStateFailed:
 		return fmt.Sprintf("%d dispatch unit(s) were abandoned back to back, which is this run's limit of %d consecutive unit failures per item",
 			o.UnitsAbandoned, cfg.ConsecutiveUnitFailuresToFailItem)

@@ -553,6 +553,26 @@ var manifest = map[string]route{
 		summary: "regenerate the signing CA: mint a fresh self-signed CA, install it, and clear the " +
 			"leaf cache; the previous CA is discarded and every client must be re-given the new one",
 	},
+	"/api/proxy/ca/export": {
+		// riskDestructive, and the reason is the one this class exists for: the private key is the
+		// secret that makes interception possible, and exporting it is irreversible in a way no other
+		// route here is. A regenerated CA is gone from disk but was never handed to anyone; an exported
+		// key has left the process and every copy of it is a copy an operator cannot account for. Once
+		// it is out, the only remedy is rotation — which is why the confirmation is per-call and
+		// one-time rather than a standing permission.
+		//
+		// It is a GET-shaped act (nothing is changed) served on POST, because the gate gates mutating
+		// verbs and a secret must not travel in a URL: a GET would land in proxy history, in a browser's
+		// history, and in any log that records the request line. POST keeps the artifact in the body,
+		// where the operator's own tooling decides whether to keep it.
+		//
+		// The key is never logged. Not on success, not on refusal — the refusal says which kind was
+		// asked for and nothing about the key, and the success path writes the artifact to the response
+		// and returns. A log line naming the export is fine; a log line carrying the key is not.
+		methods: []string{"POST"}, risk: riskDestructive,
+		summary: "export the signing CA's certificate, private key, or a PKCS#12 pair, for pointing " +
+			"another tool at this proxy's interception; each kind is a separate confirmed call",
+	},
 	"/api/proxy/listener": {
 		methods: []string{"GET", "PUT", "POST", "DELETE"}, risk: riskLocal,
 		summary: "the proxy's listeners, Burp's list rather than one socket: GET answers every listener with its resolved address, redirect target, force-TLS and invisible-proxying setting; POST adds one, PUT ?id= replaces one's settings (bodied PUT with no id is the legacy re-bind of the boot listener), DELETE ?id= removes one. Every listed listener is a socket the accept loop is serving — a bind that fails is refused with the reason and nothing is added — and the new socket opens before the old closes, so a failed move leaves the listener serving. The boot listener (-proxy-bind) is re-bindable but not removable. Not persisted: -proxy-bind stays authoritative at boot",

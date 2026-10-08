@@ -56,6 +56,12 @@ var uiRouteExempt = map[string]string{
 		"registrations, so they need no entries of their own",
 	"/ca.crt": "downloaded by the operator's browser or curl, not fetched by the SPA; the console " +
 		"links to it as an href, which this test cannot distinguish from an unused route",
+	"/api/proxy/ca/export": "the SERVER half of the CA export ships without its UI half " +
+		"(burpsy-react-ui-j92x), the same shape as /api/repeater/browser-reissue below: the route is " +
+		"operator-facing by design — the point is to hand this CA to another tool — while the CA panel's " +
+		"three export buttons are a separate surface that names the literal path. The certificate half " +
+		"is not stranded in the meantime, because /ca.crt already serves it to the operator's browser " +
+		"today. Remove this exemption when the CA panel wires the buttons.",
 	"/api/repeater/browser-reissue": "the mint is the console's OWN right-click action, but the " +
 		"action ships without its UI half: the reachability floor demands the literal path in ui/src " +
 		"and the context-menu entry that calls it is the surface a future bead wires. Exempting the " +

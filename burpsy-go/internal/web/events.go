@@ -92,6 +92,11 @@ const (
 	changeIntercept
 	// changeOrganizer is a saved item added, edited or removed.
 	changeOrganizer
+	// changeSession is a session-rule event: a rule was added or edited, or — the one an operator
+	// is actively waiting on — a browser-recovery prompt became pending or was resolved. The
+	// console refetches the pending-prompt list on it, which is how the modal appears and
+	// dismisses without a poll.
+	changeSession
 	changeKindCount
 )
 
@@ -105,6 +110,7 @@ var changeKindNames = [changeKindCount]string{
 	changeWS:        "ws",
 	changeIntercept: "intercept",
 	changeOrganizer: "organizer",
+	changeSession:   "session",
 }
 
 func (k changeKind) String() string {

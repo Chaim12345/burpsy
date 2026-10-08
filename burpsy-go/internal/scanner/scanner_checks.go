@@ -63,6 +63,15 @@ func (s *ActiveScanner) JwtWeakCoverage() JwtCoverage {
 	return jwt.Coverage()
 }
 
+// PathCoverageReport returns an owned snapshot of the coverage-guided-mutation ledger
+// (burpsy-react-ui-6c90): how many distinct response cells the scan's probes have
+// observed, per exchange. It is the honest-counting half of the gofuzz-style loop —
+// the guide that prioritises payloads reads the same signal through payloadGuide, which
+// stays internal because it only influences probe order, never a verdict.
+func (s *ActiveScanner) PathCoverageReport() PathCoverageReport {
+	return s.pathCov.Snapshot()
+}
+
 // checkJWTWeak runs SCAN-02 over one captured exchange: every JWS-shaped string in the response's
 // headers and body, plus the request's headers, is attacked with the wordlist.
 //
