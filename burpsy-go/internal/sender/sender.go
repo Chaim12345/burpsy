@@ -405,6 +405,15 @@ func (s *Sender) userAgent() string {
 	return s.config.UserAgent
 }
 
+// UserAgent is the User-Agent this sender puts on a request that carries none — what a BCheck's
+// reserved {user_agent} names (bcheck u411).
+func (s *Sender) UserAgent() string {
+	if s == nil {
+		return ""
+	}
+	return s.userAgent()
+}
+
 // resolveUpstream turns the two proxy fields into the one policy every dial follows.
 //
 // Both set is refused rather than resolved by precedence: ProxyURL and Upstream are two answers to

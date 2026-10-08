@@ -165,6 +165,8 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 	bctx.Port = ex.Port
 	bctx.TLS = ex.TLS
 	bctx.Path = ex.Path
+	// {user_agent}: the User-Agent this scanner's sender adds to a request that has none (u411).
+	bctx.UserAgent = s.sender.UserAgent()
 	// The request is optional: a host-given check can run on the response
 	// alone, but an insertion-point or `send request` check needs the bytes and
 	// will refuse (SendFailed) rather than guess.

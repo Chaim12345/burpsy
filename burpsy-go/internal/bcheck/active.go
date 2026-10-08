@@ -159,6 +159,8 @@ func boundResponseField(f *messageFields, rest []string) (string, bool) {
 			return f.byName[strings.ToLower(rest[1])], true
 		}
 		return f.headers, true
+	case "http_version":
+		return firstField(f.first), true
 	}
 	return "", false
 }
@@ -192,6 +194,8 @@ func boundRequestField(r *core.RequestEdit, rest []string) (string, bool) {
 		return r.Query, true
 	case "path":
 		return r.Path, true
+	case "http_version":
+		return r.Version, true
 	}
 	return "", false
 }
