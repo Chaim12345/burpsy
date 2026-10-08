@@ -19,6 +19,9 @@ import {
   useWordlists,
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
+import { useCollaboratorInteractions } from "../lib/data.collab";
+import { hasCollaboratorAttempts, interactionsByAttempt } from "../lib/intruder-interactions";
+import { IntruderInteractionsDialog } from "../ui/intruder-interactions-dialog";
 import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
@@ -570,6 +573,15 @@ function AttackResult({
     () => intruderPayloadResolver({ report, sets, examples, snapshot }),
     [examples, report.kind, report.planned, sets, snapshot],
   );
+  // Burp's "Interactions" column (nib6): polled only while the attack carried Collaborator
+  // addresses, so a callback that lands after the attack still reaches its row.
+  const collabAttack = hasCollaboratorAttempts(report.attempts);
+  const collabRows = useCollaboratorInteractions({ enabled: collabAttack });
+  const interactions = useMemo(
+    () => interactionsByAttempt(report.attempts, collabRows.data ?? []),
+    [report.attempts, collabRows.data],
+  );
+  const [interactionsFor, setInteractionsFor] = useState<number | null>(null);
   /**
    * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
    *
@@ -915,6 +927,30 @@ function AttackResult({
         return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
       },
     })),
+    ...(collabAttack
+      ? [
+          {
+            accessorFn: (attempt: Attempt) => interactions.get(attempt.ordinal)?.length,
+            id: "interactions",
+            header: "Interactions",
+            sortUndefined: "last" as const,
+            cell: ({ row }: { row: { original: Attempt } }) => {
+              const hits = interactions.get(row.original.ordinal);
+              if (hits === undefined) return <span className="cell-dim">—</span>;
+              return (
+                <button
+                  type="button"
+                  className="button button-ghost button-sm"
+                  aria-label={`Collaborator interactions for attempt ${row.original.ordinal}: ${hits.length}`}
+                  onClick={() => setInteractionsFor(row.original.ordinal)}
+                >
+                  {hits.length > 0 ? <Badge tone="bad">{hits.length}</Badge> : <span className="cell-dim">0</span>}
+                </button>
+              );
+            },
+          },
+        ]
+      : []),
     {
       accessorFn: (attempt) => attempt.error ?? undefined,
       id: "error",
@@ -1236,6 +1272,14 @@ function AttackResult({
           ) : (
             <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
           )}
+          {collabAttack ? (
+            <IntruderInteractionsDialog
+              ordinal={interactionsFor}
+              addresses={report.attempts.find((attempt) => attempt.ordinal === interactionsFor)?.collaborator_payloads ?? []}
+              rows={interactionsFor === null ? [] : (interactions.get(interactionsFor) ?? [])}
+              onClose={() => setInteractionsFor(null)}
+            />
+          ) : null}
         </Card>
       ) : null}
     </>

@@ -45,6 +45,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -594,6 +595,23 @@ func (a *Attack) WithSetConnectionClose(b bool) *Attack {
 	return a
 }
 
+// collaboratorPayloads picks the Collaborator addresses out of one ordinal's slots, nil when none
+// of its sets is a Collaborator set.
+func (a *Attack) collaboratorPayloads(slots []Slot) []string {
+	var out []string
+	for _, sl := range slots {
+		if sl.Set < 0 || sl.Set >= len(a.Sets) || a.Sets[sl.Set].Kind != "collaborator" ||
+			sl.Payload < 0 || sl.Payload >= len(a.setBytes[sl.Set]) {
+			continue
+		}
+		v := string(a.setBytes[sl.Set][sl.Payload])
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // WithStorePayloads attaches Burp's "Store full payloads" setting. See Attack.StorePayloads for
 // what it costs and what it buys.
 func (a *Attack) WithStorePayloads(b bool) *Attack {
@@ -777,6 +795,10 @@ type Attempt struct {
 	// report rather than about the request. A reader that cannot tell them apart would label the
 	// baseline and every row of a frugal attack the same way.
 	Payloads []string `json:"payloads,omitempty"`
+	// CollaboratorPayloads are the Collaborator addresses this attempt sent (nib6), whatever
+	// StorePayloads says: they are what ties a later out-of-band interaction back to this row —
+	// Burp's "Interactions" results column. Absent when the attack had no Collaborator payload set.
+	CollaboratorPayloads []string `json:"collaborator_payloads,omitempty"`
 	// Cookies are the names Set-Cookie carried in this attempt's response — Burp: "any cookies
 	// received in the response". Names only, never values: an attack report is a document that gets
 	// pasted into tickets, and a session token belongs in the stored response (ResponseID above), not
@@ -919,6 +941,9 @@ type outcome struct {
 	// nothing per outcome. Set on refusals and guard failures too: the payload a container would
 	// not hold is exactly the one an operator needs named. See Attempt.Payloads.
 	payloads []string
+	// collab are the Collaborator addresses this ordinal carried (nib6). See
+	// Attempt.CollaboratorPayloads.
+	collab []string
 }
 
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
@@ -1038,6 +1063,7 @@ func (c *collector) absorb(o outcome) {
 				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
 				Cookies: []string{}, GrepMatchCounts: []int{}, ReflectedCounts: []int{}, Payloads: o.payloads,
+				CollaboratorPayloads: o.collab,
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -1139,6 +1165,7 @@ func (c *collector) absorb(o outcome) {
 			GrepMatchCounts: emptyCounts(h.grepCounts),
 			ReflectedCounts: emptyCounts(h.reflectedCounts),
 			TimeOfDay:       o.sentAt, Cookies: h.cookies, Payloads: o.payloads,
+			CollaboratorPayloads: o.collab,
 		})
 	}
 }
@@ -1377,16 +1404,17 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			// send, the refusal and the guard failure — so a report that names payloads names them
 			// on the rows where the operator most needs them. nil when the attack did not ask.
 			stored := a.storedPayloads(payloads)
+			collab := a.collaboratorPayloads(asg.Slots)
 			if len(refusals) > 0 {
 				permit.Release()
-				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored}
+				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored, collab: collab}
 				continue
 			}
 			req = a.egress(req)
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
-					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now(), payloads: stored}
+					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now(), payloads: stored, collab: collab}
 					continue
 				}
 			}
@@ -1401,14 +1429,14 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				sentAt := time.Now()
 				defer func() {
 					if r := recover(); r != nil {
-						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored}
+						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored, collab: collab}
 					}
 				}()
 				h, err := doSend(a, limiter, send, raw, probes, ctx)
 				if h != nil {
 					h.request = raw
 				}
-				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored}
+				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored, collab: collab}
 			}(baselineShift(a)+i, req, probes, stored, permit)
 		}
 		wg.Wait()

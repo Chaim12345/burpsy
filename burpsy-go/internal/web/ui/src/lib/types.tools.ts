@@ -169,6 +169,9 @@ export interface Attempt {
    *  rows with equal scores share a rank. 0 when the attack had fewer than two rows to compare;
    *  absent from an older server. */
   anomaly_rank?: number;
+  /** The Collaborator addresses this attempt sent (nib6) — what ties a later out-of-band
+   *  interaction back to this row. Absent when the attack had no Collaborator payload set. */
+  collaborator_payloads?: string[];
 }
 
 /** How an attack ended. "paused" only appears on a report built from a still-live attack. */
