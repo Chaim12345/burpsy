@@ -570,6 +570,7 @@ export function HistoryPage(): JSX.Element {
  const checkedExchanges = useApp((state) => state.checkedExchanges);
  const setCheckedExchanges = useApp((state) => state.setCheckedExchanges);
  const checkedRows = useMemo(() => new Set(checkedExchanges), [checkedExchanges]);
+ const selectedIdStrings = useMemo(() => checkedExchanges.map(String), [checkedExchanges]);
  const auditSelected = useAuditSelected();
 
  // Another page asked to filter here (for example "filter by this host").
@@ -1022,7 +1023,10 @@ export function HistoryPage(): JSX.Element {
     enableHiding: false,
     cell: (info) => {
      const id = info.row.original.id;
+     // The tick is the selection's mirror (fe16): ticking is a Ctrl-click on this row. The click is
+     // stopped here so the row's own click handler does not then collapse the selection to it.
      return (
+      <span className="tick-cell" onClick={(event) => event.stopPropagation()}>
       <Checkbox
        label={<span className="sr-only">{`Select row ${id}`}</span>}
        checked={checkedRows.has(id)}
@@ -1033,6 +1037,7 @@ export function HistoryPage(): JSX.Element {
         setCheckedExchanges([...next]);
        }}
       />
+      </span>
      );
     },
    },
@@ -1449,8 +1454,8 @@ export function HistoryPage(): JSX.Element {
         disabled={checkedRows.size === 0 || auditSelected.isPending}
         title={
          checkedRows.size === 0
-          ? "Tick rows to audit"
-          : `Audit ${checkedRows.size} ticked item${checkedRows.size === 1 ? "" : "s"} as one scan`
+          ? "Select rows to audit (click, Ctrl-click or Shift-click)"
+          : `Audit ${checkedRows.size} selected item${checkedRows.size === 1 ? "" : "s"} as one scan`
         }
        >
         <Crosshair size={14} />
@@ -1461,7 +1466,7 @@ export function HistoryPage(): JSX.Element {
         size="small"
         onClick={() => setConfirmDelete({ scope: "selected" })}
         disabled={checkedRows.size === 0}
-        title={checkedRows.size === 0 ? "Tick rows to delete" : `Delete ${checkedRows.size} ticked rows`}
+        title={checkedRows.size === 0 ? "Select rows to delete" : `Delete ${checkedRows.size} selected rows`}
        >
         <Trash2 size={14} />
         Delete items
@@ -1671,6 +1676,36 @@ export function HistoryPage(): JSX.Element {
       onColumnVisibilityChange={setColumnVisibility}
       selectedId={selectedId === null ? null : String(selectedId)}
       onSelect={(row) => setSelectedId(row.id)}
+      // Multi-row selection (fe16) IS the tick set: one list, in the store, that Delete items,
+      // Audit selected items and the dashboard's "Audit selected items" all read. A plain click
+      // therefore selects (and ticks) one row, as a Burp selection would; the tick column stays as
+      // a visible mirror and a mouse-only way to build a selection.
+      multiSelect
+      selectedIds={selectedIdStrings}
+      onSelectionChange={(ids) => setCheckedExchanges(ids.map(Number))}
+      menuGroupsMany={(rows) =>
+       actions.menuMany(rows, [
+        {
+         id: "selected",
+         actions: [
+          {
+           id: "audit-selected",
+           label: `Audit ${rows.length} selected items`,
+           icon: Crosshair,
+           disabled: auditSelected.isPending,
+           onSelect: launchSelectedAudit,
+          },
+          {
+           id: "delete-selected",
+           label: "Delete selected items",
+           icon: Trash2,
+           danger: true,
+           onSelect: () => setConfirmDelete({ scope: "selected" }),
+          },
+         ],
+        },
+       ])
+      }
       onActivate={(row) => void actions.sendToRepeater(row)}
       // Burp: "Double-click an item to open it in a pop-up window" (wvcl). A SEPARATE handler from
       // onActivate because that one is Enter-or-double-click and already means "send to Repeater" —
@@ -1914,10 +1949,10 @@ export function HistoryPage(): JSX.Element {
     onOpenChange={(open) => {
      if (!open) setConfirmDelete(undefined);
     }}
-    title={confirmDelete?.scope === "selected" ? "Delete the ticked items?" : "Clear the capture?"}
+    title={confirmDelete?.scope === "selected" ? "Delete the selected items?" : "Clear the capture?"}
     description={
      confirmDelete?.scope === "selected"
-      ? "The ticked rows leave the history view. The underlying capture is not renumbered, and this cannot be undone."
+      ? "The selected rows leave the history view. The underlying capture is not renumbered, and this cannot be undone."
       : "Every history row leaves the view. Message bytes stay on disk in a persisted store, and this cannot be undone."
     }
    >

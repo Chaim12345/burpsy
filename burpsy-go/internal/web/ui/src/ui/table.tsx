@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useApp } from "../lib/store";
+import { clickAction, contextKeepsSelection, reduceSelection, sameIds, type SelectionAction, type SelectionState } from "../lib/table-selection";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
 import { Spinner } from "./primitives";
@@ -219,6 +220,23 @@ export interface VirtualTableProps<T> {
    * this flag exists to avoid, so following is always opt-in per table (burpsy-react-ui-c13).
    */
   followNewRows?: boolean;
+  /**
+   * Multi-row selection (burpsy-react-ui-fe16): click, Ctrl/Cmd-click, Shift-click, Shift+arrows
+   * and Ctrl+A, as Burp's JTables do. Opt-in per table, because a table that turns it on changes
+   * what its right-click menu acts on. `selectedId` stays the focus row — the one the detail pane
+   * shows — and the selection is the set of rows a multi-row menu acts on.
+   */
+  multiSelect?: boolean;
+  /** Controlled selection, as row ids. Omit both to let the table hold the selection itself. */
+  selectedIds?: readonly string[];
+  onSelectionChange?: (ids: string[]) => void;
+  /**
+   * The menu for a right-click inside a selection of two or more rows, given those rows in
+   * displayed order. Burp builds a different menu for N rows (Zr2s.java: "Delete selected items",
+   * "Copy URLs", a multi "Send to Comparer"); a table without one falls back to `menuGroups` for
+   * the clicked row.
+   */
+  menuGroupsMany?: (rows: T[]) => MenuGroup[];
 }
 
 export function VirtualTable<T>({
@@ -241,6 +259,10 @@ export function VirtualTable<T>({
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
   followNewRows = false,
+  multiSelect = false,
+  selectedIds: controlledIds,
+  onSelectionChange,
+  menuGroupsMany,
 }: VirtualTableProps<T>): JSX.Element {
   // The operator's density preference is the default when a page does not name
   // one — the store is the single source of truth for it, so a table that never
@@ -388,31 +410,131 @@ export function VirtualTable<T>({
     [rows, onSelect, selectedIndex],
   );
 
+  // --- multi-row selection (fe16) ---------------------------------------------------------------
+  // The displayed order is the one every range is computed over (lib/table-selection.ts says why).
+  const order = useMemo(() => rows.map((row) => row.id), [rows]);
+  const rowById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
+  const [internalIds, setInternalIds] = useState<string[]>([]);
+  const selectionIds: readonly string[] = multiSelect ? (controlledIds ?? internalIds) : selectedId ? [selectedId] : [];
+  const selectedSet = useMemo(() => new Set(selectionIds), [selectionIds]);
+  const anchorRef = useRef<string | null>(null);
+  // The focus this table last asked the page to show, so an outside change to `selectedId` (a jump
+  // from another page, Go to entry) can be told apart from one the table made itself.
+  const ownFocusRef = useRef<string | null>(null);
+
+  const writeIds = useCallback(
+    (ids: string[]) => {
+      onSelectionChange?.(ids);
+      if (!controlledIds) setInternalIds(ids);
+    },
+    [controlledIds, onSelectionChange],
+  );
+
+  const dispatchSelection = (action: SelectionAction) => {
+    const current: SelectionState = { ids: [...selectionIds], anchor: anchorRef.current, focus: selectedId ?? null };
+    const next = reduceSelection(current, action, order);
+    anchorRef.current = next.anchor;
+    if (!sameIds(next.ids, selectionIds)) writeIds(next.ids);
+    if (next.focus !== null && next.focus !== selectedId) {
+      const row = rowById.get(next.focus);
+      if (row) {
+        ownFocusRef.current = next.focus;
+        onSelect?.(row.original);
+      }
+    }
+  };
+
+  // A row selected from outside becomes the selection, so the menu and the detail pane agree.
+  useEffect(() => {
+    if (!multiSelect || !selectedId || selectedId === ownFocusRef.current) return;
+    ownFocusRef.current = selectedId;
+    if (!(selectionIds.length === 1 && selectionIds[0] === selectedId) && order.includes(selectedId)) {
+      anchorRef.current = selectedId;
+      writeIds([selectedId]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, multiSelect]);
+
+  // Prune rows the filter no longer shows. Not while loading: an empty interim row model would
+  // otherwise clear a selection the reload is about to show again.
+  useEffect(() => {
+    if (!multiSelect || loading) return;
+    const kept = selectionIds.filter((id) => rowById.has(id));
+    if (kept.length !== selectionIds.length) writeIds(order.filter((id) => kept.includes(id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order, multiSelect, loading]);
+
+  const selectedRows = useMemo(
+    () => (multiSelect ? order.filter((id) => selectedSet.has(id)).map((id) => rowById.get(id)!.original) : []),
+    [multiSelect, order, selectedSet, rowById],
+  );
+  // Built once per render rather than per row: every selected row on screen shares one menu.
+  const manyGroups = useMemo(
+    () => (multiSelect && menuGroupsMany && selectedRows.length > 1 ? menuGroupsMany(selectedRows) : null),
+    [multiSelect, menuGroupsMany, selectedRows],
+  );
+  const menuFor = menuGroups || manyGroups
+    ? (row: Row<T>): MenuGroup[] =>
+        manyGroups && selectedSet.has(row.id) ? manyGroups : (menuGroups?.(row.original) ?? [])
+    : undefined;
+
+  const onRowClick = (row: Row<T>, event: React.MouseEvent) => {
+    if (!multiSelect) {
+      onSelect?.(row.original);
+      return;
+    }
+    dispatchSelection(clickAction(row.id, { shift: event.shiftKey, mod: event.ctrlKey || event.metaKey }));
+  };
+
+  const onRowContextMenu = (row: Row<T>) => {
+    if (!multiSelect) {
+      onSelect?.(row.original);
+      return;
+    }
+    const current: SelectionState = { ids: [...selectionIds], anchor: anchorRef.current, focus: selectedId ?? null };
+    if (!contextKeepsSelection(current, row.id)) dispatchSelection({ type: "only", id: row.id });
+  };
+
+  const step = (delta: number | "start" | "end", extend: boolean) => {
+    if (!multiSelect) {
+      move(delta);
+      return;
+    }
+    dispatchSelection(extend ? { type: "extend", delta } : { type: "move", delta });
+  };
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const extend = event.shiftKey;
+    // Ctrl/Cmd+A on the table itself only: inside a cell's own control it keeps its meaning.
+    if (multiSelect && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && event.target === event.currentTarget) {
+      event.preventDefault();
+      dispatchSelection({ type: "all" });
+      return;
+    }
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        move(1);
+        step(1, extend);
         break;
       case "ArrowUp":
         event.preventDefault();
-        move(-1);
+        step(-1, extend);
         break;
       case "PageDown":
         event.preventDefault();
-        move(12);
+        step(12, extend);
         break;
       case "PageUp":
         event.preventDefault();
-        move(-12);
+        step(-12, extend);
         break;
       case "Home":
         event.preventDefault();
-        move("start");
+        step("start", extend);
         break;
       case "End":
         event.preventDefault();
-        move("end");
+        step("end", extend);
         break;
       case "Enter": {
         const row = rows[selectedIndex];
@@ -477,7 +599,14 @@ export function VirtualTable<T>({
       >
         {/* Column sizes are the floor; with table-layout:fixed the browser shares any
             leftover width across them so the grid still spans the viewport. */}
-        <table style={{ width: "100%", minWidth: table.getCenterTotalSize() }}>
+        <table
+          style={{ width: "100%", minWidth: table.getCenterTotalSize() }}
+          // aria-multiselectable is only valid on a grid (or listbox/tree/tablist), not on a plain
+          // table or the group around it, so a multi-select table is announced as a grid.
+          role={multiSelect ? "grid" : undefined}
+          aria-multiselectable={multiSelect ? true : undefined}
+          aria-label={multiSelect ? ariaLabel : undefined}
+        >
           <thead>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
@@ -597,12 +726,17 @@ export function VirtualTable<T>({
                   key={row.id}
                   row={row}
                   height={rowHeight}
-                  selected={row.id === selectedId}
+                  selected={multiSelect ? selectedSet.has(row.id) : row.id === selectedId}
+                  focused={multiSelect && row.id === selectedId}
                   className={rowClassName?.(row.original)}
+                  clickable={Boolean(onSelect) || multiSelect}
+                  onRowClick={onRowClick}
+                  onRowContextMenu={onRowContextMenu}
+                  shiftSelects={multiSelect}
                   onSelect={onSelect}
                   onActivate={onActivate}
                   onDoubleActivate={onDoubleActivate}
-                  menuGroups={menuGroups}
+                  menuFor={menuFor}
                 />
               );
             })}
@@ -628,33 +762,49 @@ function TableRow<T>({
   row,
   height,
   selected,
+  focused,
   className,
+  clickable,
+  onRowClick,
+  onRowContextMenu,
+  shiftSelects,
   onSelect,
   onActivate,
   onDoubleActivate,
-  menuGroups,
+  menuFor,
 }: {
   row: Row<T>;
   height: number;
   selected: boolean;
+  focused: boolean;
   className?: string;
+  clickable: boolean;
+  onRowClick: (row: Row<T>, event: React.MouseEvent) => void;
+  onRowContextMenu: (row: Row<T>) => void;
+  shiftSelects: boolean;
   onSelect?: (row: T) => void;
   onActivate?: (row: T) => void;
   onDoubleActivate?: (row: T) => void;
-  menuGroups?: (row: T) => MenuGroup[];
+  menuFor?: (row: Row<T>) => MenuGroup[];
 }): JSX.Element {
   const element = (
     <tr
       style={{ height }}
       aria-selected={selected}
-      className={cn("data-row", selected && "selected-row", onSelect && "clickable", className)}
-      onClick={() => onSelect?.(row.original)}
+      className={cn("data-row", selected && "selected-row", focused && "focus-row", clickable && "clickable", className)}
+      // Shift-click is a range select here, not a text selection: without this the browser also
+      // paints a text selection across every row between the two clicks.
+      onMouseDown={(event) => {
+        if (shiftSelects && event.shiftKey) event.preventDefault();
+      }}
+      onClick={(event) => onRowClick(row, event)}
       // Double-click prefers the dedicated handler, then onActivate, then plain selection — so a
       // table that was not given one behaves exactly as it always did, and one that was gets the
       // gesture it asked for without losing the other two.
       onDoubleClick={() => (onDoubleActivate ?? onActivate ?? onSelect)?.(row.original)}
-      // Right-clicking a row should act on that row, matching desktop tools.
-      onContextMenu={() => onSelect?.(row.original)}
+      // Right-clicking a row should act on that row, matching desktop tools — or, inside a
+      // multi-row selection, on the whole selection (onRowContextMenu decides which).
+      onContextMenu={() => onRowContextMenu(row)}
     >
       {row.getVisibleCells().map((cell) => (
         <td key={cell.id} style={{ width: cell.column.getSize() }}>
@@ -663,8 +813,8 @@ function TableRow<T>({
       ))}
     </tr>
   );
-  if (!menuGroups) return element;
-  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
+  if (!menuFor) return element;
+  return <ContextMenu groups={menuFor(row)}>{element}</ContextMenu>;
 }
 
 /**

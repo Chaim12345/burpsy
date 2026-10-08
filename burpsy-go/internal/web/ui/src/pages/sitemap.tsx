@@ -1008,6 +1008,8 @@ export function SiteMapPage(): JSX.Element {
        onSelect={(row) => setSelectedExchange(row.id)}
        onActivate={(row) => void actions.sendToRepeater(row)}
        menuGroups={(row) => actions.menu(row, [exchangeEngagement(row)])}
+       multiSelect
+       menuGroupsMany={(rows) => actions.menuMany(rows)}
        rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
       />
      )

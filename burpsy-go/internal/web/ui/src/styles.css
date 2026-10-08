@@ -1269,9 +1269,37 @@ tbody td {
   background: color-mix(in srgb, var(--info) 7%, var(--paper-raised));
 }
 
+/* The surface a selected row's accent is mixed into (fe16). Dark mixes into --paper-sunken, not
+   --paper-raised: 13% accent over #414547 lifted the row to #5A4944, where body text (#BBBBBB)
+   measured 4.42:1 and muted cells (#B2B2B2) 4.0:1 — below 4.5:1, and multi-row selection made that
+   the common case rather than one row at a time. Over #2B2B2B the row is #473329: body text
+   6.2:1, muted 5.6:1. Light keeps --paper-raised, where body text clears 12:1. */
+:root {
+  --row-selected-base: var(--paper-sunken);
+}
+
+[data-theme="light"] {
+  --row-selected-base: var(--paper-raised);
+}
+
 .data-row.selected-row td {
-  background: color-mix(in srgb, var(--accent) 13%, var(--paper-raised));
+  background: color-mix(in srgb, var(--accent) 13%, var(--row-selected-base));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* Dimmed cells in a selected row read as body text: light-theme --muted (#6E6E6E) measures
+   4.27:1 on the light selected row, under 4.5:1. */
+.data-row.selected-row td .cell-dim {
+  color: var(--text);
+}
+
+/* The focus row of a multi-row selection: the one the detail pane shows and the keyboard moves
+   from. A heavier top and bottom rule, so it reads apart from the rest of the selection without
+   a second fill colour. */
+.data-row.focus-row td {
+  box-shadow:
+    inset 0 1px 0 var(--accent),
+    inset 0 -1px 0 var(--accent);
 }
 
 .row-muted td {
@@ -5137,4 +5165,10 @@ tbody td {
 .crawl-stop-policy {
   border-left-color: var(--warn);
   color: var(--text);
+}
+
+/* History's tick cell (fe16): a span only so the tick's click can stop before the row's handler. */
+.tick-cell {
+  display: inline-flex;
+  align-items: center;
 }

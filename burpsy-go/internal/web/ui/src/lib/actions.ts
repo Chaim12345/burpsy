@@ -31,6 +31,7 @@ import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
 import { useAnnotateExchange } from "./data";
 import { formDialog, promptDialog } from "./dialogs";
+import { manyMenuGroups } from "./actions-many";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
 import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
@@ -240,6 +241,10 @@ export function useExchangeActions(): {
   *  against this exchange (burpsy-react-ui-4qqz). */
  recordIssue: (exchange: Exchange) => void;
  menu: (exchange: Exchange, extra?: MenuGroup[]) => MenuGroup[];
+ /** The multi-row menu (fe16): what a right-click inside a selection of two or more rows offers. */
+ menuMany: (exchanges: Exchange[], extra?: MenuGroup[]) => MenuGroup[];
+ /** Add each host to scope as an include rule, one request per host, and say which failed. */
+ addHostsToScope: (hosts: string[]) => Promise<void>;
 } {
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const setRoute = useApp((state) => state.setRoute);
@@ -407,6 +412,69 @@ const addToSiteMap = async (exchange: Exchange) => {
    toast.error(`Could not scope ${exchange.host}: ${error instanceof Error ? error.message : String(error)}`);
   }
  };
+
+ const addHostsToScope = async (hosts: string[]) => {
+  const failed: string[] = [];
+  // Sequential, not parallel: the scope store is one ordered rule list, and N concurrent writes
+  // to it would race for the order an operator then reads back on the Scope page.
+  for (const host of hosts) {
+   try {
+    await api<unknown>("/api/scope", json("POST", { action: "include", pattern: host }));
+   } catch {
+    failed.push(host);
+   }
+  }
+  void queryClient.invalidateQueries({ queryKey: ["scope"] });
+  const added = hosts.length - failed.length;
+  if (failed.length === 0) toast.success(hosts.length === 1 ? `${hosts[0]} added to scope` : `${added} hosts added to scope: ${hosts.join(", ")}`);
+  else if (added === 0) toast.error(`Could not scope ${failed.join(", ")}`);
+  else toast.warning(`${added} of ${hosts.length} hosts added to scope; refused: ${failed.join(", ")}`);
+ };
+
+ const compareTwo = async (a: Exchange, b: Exchange) => {
+  try {
+   const [left, right] = await Promise.all([fetchRaw(a.request), fetchRaw(b.request)]);
+   setComparerSlot("a", left);
+   setComparerSlot("b", right);
+   setRoute("comparer");
+   toast.success(`#${a.id} loaded into A and #${b.id} into B`);
+  } catch (error) {
+   toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
+  }
+ };
+
+ const copyUrls = async (exchanges: Exchange[]) => {
+  await copyToClipboard(exchanges.map((exchange) => exchangeUrl(exchange)).join("\n"));
+  toast.success(`Copied ${exchanges.length} URL${exchanges.length === 1 ? "" : "s"}`);
+ };
+
+ const addAllToOrganizer = async (exchanges: Exchange[]) => {
+  let added = 0;
+  const failed: number[] = [];
+  for (const exchange of exchanges) {
+   try {
+    await api<unknown>("/api/tools/organizer", { method: "POST", body: JSON.stringify({ exchange: exchange.id }) });
+    added += 1;
+   } catch {
+    failed.push(exchange.id);
+   }
+  }
+  void queryClient.invalidateQueries({ queryKey: ["organizer"] });
+  if (failed.length === 0) toast.success(`${added} exchanges added to Organizer`);
+  else toast.warning(`${added} of ${exchanges.length} added to Organizer; refused: ${failed.map((id) => `#${id}`).join(", ")}`);
+ };
+
+ const menuMany = (exchanges: Exchange[], extra: MenuGroup[] = []): MenuGroup[] =>
+  manyMenuGroups(
+   exchanges,
+   {
+    compare: (a, b) => void compareTwo(a, b),
+    copyUrls: (list) => void copyUrls(list),
+    addHostsToScope: (hosts) => void addHostsToScope(hosts),
+    addAllToOrganizer: (list) => void addAllToOrganizer(list),
+   },
+   extra,
+  );
 
  const auditExchange = async (exchange: Exchange) => {
   try {
@@ -889,6 +957,8 @@ const showResponseInBrowser = (exchange: Exchange) => {
   setHighlight,
   addComment,
   menu,
+  menuMany,
+  addHostsToScope,
  };
 }
 

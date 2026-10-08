@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { FolderTree, Link2, MessageSquare, Search, Terminal, Trash2, X } from "lucide-react";
+import { FolderTree, Link2, MessageSquare, Search, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../lib/cn";
+import { useExchangeActions } from "../lib/actions";
+import { distinctHosts } from "../lib/actions-many";
 import { copyToClipboard, downloadText, formatBytes, formatDuration, relativeTime, statusTone, toolLogToCSV } from "../lib/api";
 import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
 import { useExchange } from "../lib/data.observe";
@@ -255,6 +257,9 @@ export function LoggerPage(): JSX.Element {
    },
   );
 
+ // Scope writes go through the same handler History's menu uses, so the toast and the scope-query
+ // refresh are the same wherever the operator adds a host from.
+ const { addHostsToScope } = useExchangeActions();
  const showInHistory = (expression: string) => {
   setHistoryQuery(expression);
   setRoute("history");
@@ -641,6 +646,37 @@ export function LoggerPage(): JSX.Element {
       getRowId={(row) => String(row.id)}
       selectedId={selectedId === null ? null : String(selectedId)}
       onSelect={(row) => setSelectedId(row.id)}
+      // Multi-row selection (fe16). Logger rows are log entries, not captured exchanges — many
+      // carry no exchange id at all — so the N-row menu is the part that needs only what the log
+      // holds: the URLs as logged, and their hosts for scope.
+      multiSelect
+      menuGroupsMany={(rows) => {
+       const hosts = distinctHosts(rows);
+       return [
+        {
+         id: "selection",
+         title: `${rows.length.toLocaleString()} selected items`,
+         actions: [
+          {
+           id: "copy-urls",
+           label: `Copy URLs as logged (${rows.length.toLocaleString()})`,
+           icon: Link2,
+           onSelect: () => {
+            void copyToClipboard(rows.map(rowUrl).join("\n"));
+            toast.success(`Copied ${rows.length} URLs`);
+           },
+          },
+          {
+           id: "scope",
+           label: hosts.length === 1 ? `Add ${hosts[0]} to scope` : `Add ${hosts.length} hosts to scope`,
+           icon: ShieldCheck,
+           hint: hosts.length > 1 ? hosts.join(", ") : undefined,
+           onSelect: () => void addHostsToScope(hosts),
+          },
+         ],
+        },
+       ];
+      }}
       enableColumnVisibility
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={setColumnVisibility}
