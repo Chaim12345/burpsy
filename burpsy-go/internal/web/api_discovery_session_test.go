@@ -322,17 +322,21 @@ func TestTheVariantAndDerivationPassesRunOverWhatWasDiscovered(t *testing.T) {
 	if run.Outcome != "completed" {
 		t.Fatalf("outcome = %q error = %q", run.Outcome, run.Error)
 	}
-	// Base sweep, then /admin/'s three: the sweep, the variant pass over the
-	// file stem it found (report), and the derivation pass (deep_old, deep.bak,
-	// DEEP, report.txt_old, ...).
+	// Base sweep and its derivation pass over what it found (admin → admin_old,
+	// ...; it found no file, so no variant pass), then /admin/'s three: the
+	// sweep, the variant pass over the file stem it found (report), and the
+	// derivation pass (deep_old, deep.bak, DEEP, report.txt_old, ...).
 	log := argvLog(t, dir)
-	if len(log) != 4 {
-		t.Fatalf("the variant and derivation passes issued %d run(s) total, want 4:\n%s", len(log), strings.Join(log, "\n"))
+	if len(log) != 5 {
+		t.Fatalf("the variant and derivation passes issued %d run(s) total, want 5:\n%s", len(log), strings.Join(log, "\n"))
 	}
-	if run.Levels[0].Runs != 3 {
-		t.Errorf("level 1 reports %d runs, want 3 (sweep + variant + derivation)", run.Levels[0].Runs)
+	if len(run.Levels) != 2 || run.Levels[0].Level != 0 || run.Levels[0].Runs != 1 || run.Levels[1].Runs != 3 {
+		t.Errorf("levels = %+v, want level 0 with the base derivation run and level 1 with 3 runs", run.Levels)
 	}
-	third, fourth := argvURL(log[2]), argvURL(log[3])
+	if second := argvURL(log[1]); strings.Contains(second, "/admin/") {
+		t.Errorf("the base derivation pass swept %q, want the target root", second)
+	}
+	third, fourth := argvURL(log[3]), argvURL(log[4])
 	if !strings.HasSuffix(third, "/admin/FUZZ") {
 		t.Errorf("the variant pass swept %q, want /admin/", third)
 	}
@@ -341,8 +345,8 @@ func TestTheVariantAndDerivationPassesRunOverWhatWasDiscovered(t *testing.T) {
 	}
 	// The variant pass asked for the .bak extension; the derivation pass's
 	// wordlist is the derived names. Both are visible in the recorded argv.
-	if !strings.Contains(log[2], "-e bak") {
-		t.Errorf("the variant pass did not carry the variant extensions: %q", log[2])
+	if !strings.Contains(log[3], "-e bak") {
+		t.Errorf("the variant pass did not carry the variant extensions: %q", log[3])
 	}
 }
 
@@ -352,6 +356,7 @@ func TestDiscoverySessionParameterValidation(t *testing.T) {
 	for _, body := range []map[string]any{
 		{"target": "https://target.test/", "lists": []string{"builtin-short-files", "builtin-made-up"}},
 		{"target": "https://target.test/", "recurse_depth": -1},
+		{"target": "https://target.test/", "lists": []string{"builtin-short-files"}, "recurse_depth": MaxDiscoveryRecurseDepth + 1},
 		{"target": "https://target.test/"},
 	} {
 		rec := postJSON(t, s, "/api/discovery", body)
@@ -361,5 +366,65 @@ func TestDiscoverySessionParameterValidation(t *testing.T) {
 	}
 	if n := len(s.tasks.Snapshot()); n != 0 {
 		t.Errorf("a malformed request registered %d task(s)", n)
+	}
+}
+
+// The passes run over the BASE sweep too (review finding): with no recursion, a file the base sweep
+// found is still variant-tested in the directory it was found in.
+func TestTheVariantPassRunsOverTheBaseSweepWithoutRecursion(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "origin") }))
+	t.Cleanup(origin.Close)
+	dir := t.TempDir()
+	s := newTestServer().WithExternalTools(map[string]string{extscan.ToolFFUF: fakeFFUF(t, dir)})
+	s.scope.AddInclude(mustHostname(t, origin.URL))
+	own := filepath.Join(t.TempDir(), "own.txt")
+	if err := os.WriteFile(own, []byte("report\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := postJSON(t, s, "/api/discovery", map[string]any{"target": origin.URL + "/admin/", "wordlist": own,
+		"variant_extensions": "bak", "threads": 1})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST = %d %s", rec.Code, rec.Body.String())
+	}
+	var start struct {
+		TaskID uint64 `json:"task_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &start)
+	run := waitForDiscovery(t, s, start.TaskID)
+	log := argvLog(t, dir)
+	if len(log) != 2 || !strings.Contains(log[1], "-e bak") || !strings.HasSuffix(argvURL(log[1]), "/admin/FUZZ") {
+		t.Fatalf("with recurse_depth 0 the runs were:\n%s\nwant the base sweep then a variant pass in /admin/", strings.Join(log, "\n"))
+	}
+	if len(run.Levels) != 1 || run.Levels[0].Level != 0 {
+		t.Errorf("levels = %+v, want the base level recording the variant pass", run.Levels)
+	}
+}
+
+// A directory found under a target with a path prefix is swept at its own path, not at the prefix
+// doubled (review finding: /app/ + /app/admin made /app/app/admin/).
+func TestSessionDirectoriesUseTheOriginNotTheParentPath(t *testing.T) {
+	got := sessionDirectories(extscan.Target{URL: "https://h.test/app/"}, []extscan.Discovery{{Path: "/app/admin/"}})
+	if len(got) != 1 || got[0].url != "https://h.test/app/admin/" {
+		t.Errorf("directories = %+v, want https://h.test/app/admin/", got)
+	}
+}
+
+// Observed names are path segments only: a query string is not a name, and an escape is decoded.
+func TestObservedNamesIgnoreQueryStrings(t *testing.T) {
+	s := newTestServer()
+	req, _ := s.store.Put([]byte("GET /search%20page/list.php?q=a/b HTTP/1.1\r\nHost: h.test\r\n\r\n"), core.DirectionRequest)
+	s.store.AddExchange(&core.Exchange{Request: core.MsgPtr(req), Host: "h.test", Port: 443, TLS: true, Method: "GET",
+		Path: "/search%20page/list.php?q=a/b"})
+	names := s.observedNames(extscan.Target{Host: "h.test"})
+	if strings.Join(names, ",") != "list,search page" {
+		t.Errorf("observed names = %q, want [list search page]", names)
+	}
+}
+
+// Derived numeric names keep their zero padding (review finding: report009 derived report0010).
+func TestDerivedNumbersKeepTheirWidth(t *testing.T) {
+	got := deriveDiscoveryNames(extscan.Discovery{Path: "/report009"})
+	if len(got) < 2 || got[0] != "report010" || got[1] != "report011" {
+		t.Errorf("derived = %q, want report010 and report011 first", got)
 	}
 }

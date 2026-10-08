@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -434,9 +433,9 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.RecurseDepth < 0 {
-		http.Error(w, fmt.Sprintf("recurse_depth %d is negative; subdirectory levels start at zero", req.RecurseDepth),
-			http.StatusBadRequest)
+	if req.RecurseDepth < 0 || req.RecurseDepth > MaxDiscoveryRecurseDepth {
+		http.Error(w, fmt.Sprintf("recurse_depth %d is out of range: subdirectory levels run from 0 to %d",
+			req.RecurseDepth, MaxDiscoveryRecurseDepth), http.StatusBadRequest)
 		return
 	}
 	if req.Wordlist == "" && len(req.Lists) == 0 {
@@ -495,7 +494,7 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := task.WithCancel(context.Background())
 		defer cancel()
-		defer os.Remove(mergedPath)
+		defer removeMergedWordlist(mergedPath)
 
 		if req.RecurseDepth > 0 || req.ObservedNames || req.Derivations || req.VariantExtensions != "" || len(req.Lists) > 0 {
 			task.SetNote(fmt.Sprintf("ffuf session on %s (%d merged words, %d recursion level(s))",
@@ -525,6 +524,13 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 // into a clean bill of health.
 func discoveryFinish(ctx context.Context, task *dash.Handle, res extscan.FFUFResult) string {
 	switch {
+	case ctx.Err() != nil:
+		// Checked first: a session stopped mid-recursion still carries the base sweep's completed
+		// outcome, and reporting it as done would say the whole session ran.
+		task.Stop(dash.Breakdown{Found: uint64(len(res.Discoveries)), Gated: 1},
+			fmt.Sprintf("stopped: %d path(s) discovered before the stop; the rest of the session did not run",
+				len(res.Discoveries)))
+		return "stopped"
 	case res.Outcome == extscan.OutcomeCompleted:
 		task.Advance(uint64(len(res.Discoveries)))
 		// OutOfScope lands in Gated: a scope rule refused work the tool had already done, which is
@@ -536,10 +542,6 @@ func discoveryFinish(ctx context.Context, task *dash.Handle, res extscan.FFUFRes
 		}, fmt.Sprintf("%d path(s) discovered, %d dropped as out of scope",
 			len(res.Discoveries), res.OutOfScope))
 		return "done"
-	case ctx.Err() != nil:
-		task.Stop(dash.Breakdown{Gated: 1},
-			"stopped before ffuf reported, so how much of the wordlist was swept is not known")
-		return "stopped"
 	case res.Outcome == extscan.OutcomeFailed:
 		task.Fail(res.Err)
 		return "failed"

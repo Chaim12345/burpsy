@@ -3,9 +3,11 @@ package web
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/extscan"
@@ -107,6 +109,11 @@ func (s *Server) discoveryWordlist(req discoveryStartReq, target extscan.Target)
 		add(words)
 	}
 	if req.Wordlist != "" {
+		// Bounded before it is read: the merged list is built in this process, and a wordlist path
+		// naming something huge (or a device that never ends) must not exhaust it.
+		if info, serr := os.Stat(req.Wordlist); serr == nil && (!info.Mode().IsRegular() || info.Size() > maxMergedWordlistBytes) {
+			return "", 0, fmt.Errorf("wordlist %q is not a regular file of at most %d MiB", req.Wordlist, maxMergedWordlistBytes>>20)
+		}
 		own, rerr := os.ReadFile(req.Wordlist)
 		if rerr != nil {
 			return "", 0, fmt.Errorf("wordlist %q is unreadable: %w", req.Wordlist, rerr)
@@ -126,9 +133,23 @@ func (s *Server) discoveryWordlist(req discoveryStartReq, target extscan.Target)
 	}
 	path = filepath.Join(dir, "merged.txt")
 	if werr := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); werr != nil {
+		os.RemoveAll(dir)
 		return "", 0, werr
 	}
 	return path, len(lines), nil
+}
+
+// removeMergedWordlist deletes the merged wordlist and the directory
+// discoveryWordlist made for it. The directory is removed only when it carries
+// that function's own prefix, so a path from anywhere else can never take a
+// shared directory with it.
+func removeMergedWordlist(path string) {
+	dir := filepath.Dir(path)
+	if strings.HasPrefix(filepath.Base(dir), "burpsy-discovery-") && filepath.Base(path) == "merged.txt" {
+		os.RemoveAll(dir)
+		return
+	}
+	os.Remove(path)
 }
 
 // observedNames lists the directory names and filename stems the capture store
@@ -152,10 +173,17 @@ func (s *Server) observedNames(target extscan.Target) []string {
 		if ex.Host != target.Host {
 			continue
 		}
-		segments := strings.Split(strings.Trim(ex.Path, "/"), "/")
+		// The path without its query or fragment: a query is not a name the site uses for a
+		// resource, and its '?', '=' and escapes would go out as request paths.
+		path, _, _ := strings.Cut(ex.Path, "?")
+		path, _, _ = strings.Cut(path, "#")
+		segments := strings.Split(strings.Trim(path, "/"), "/")
 		for i, seg := range segments {
 			if seg == "" {
 				continue
+			}
+			if decoded, err := url.PathUnescape(seg); err == nil {
+				seg = decoded
 			}
 			if i < len(segments)-1 {
 				// A directory this site really has is the strongest guess a
@@ -217,9 +245,10 @@ func deriveDiscoveryNames(d extscan.Discovery) []string {
 		return nil
 	}
 	var out []string
-	if n, ok := trailingNumber(seg); ok {
-		base := seg[:len(seg)-len(fmt.Sprint(n))]
-		out = append(out, fmt.Sprintf("%s%d", base, n+1), fmt.Sprintf("%s%d", base, n+2))
+	if n, digits, ok := trailingNumber(seg); ok {
+		// The digits' own width is kept, so report009 derives report010, not report0010.
+		base := seg[:len(seg)-digits]
+		out = append(out, fmt.Sprintf("%s%0*d", base, digits, n+1), fmt.Sprintf("%s%0*d", base, digits, n+2))
 	}
 	out = append(out, seg+"_old", seg+".bak")
 	if low := strings.ToLower(seg); low != seg {
@@ -231,20 +260,21 @@ func deriveDiscoveryNames(d extscan.Discovery) []string {
 	return out
 }
 
-// trailingNumber splits a trailing run of digits off name's end.
-func trailingNumber(name string) (int, bool) {
+// trailingNumber splits a trailing run of digits off name's end, returning the
+// value and how many digits spelled it.
+func trailingNumber(name string) (int, int, bool) {
 	i := len(name)
 	for i > 0 && name[i-1] >= '0' && name[i-1] <= '9' {
 		i--
 	}
-	if i == len(name) {
-		return 0, false
+	if i == len(name) || len(name)-i > 9 {
+		return 0, 0, false
 	}
-	var n int
-	if _, err := fmt.Sscanf(name[i:], "%d", &n); err != nil {
-		return 0, false
+	n, err := strconv.Atoi(name[i:])
+	if err != nil {
+		return 0, 0, false
 	}
-	return n, true
+	return n, len(name) - i, true
 }
 
 // discoverySession is the whole multi-run session's outcome: the aggregate a
@@ -261,40 +291,65 @@ type discoverySession struct {
 
 // discoveryLevel is one recursion depth's honest tally: what the depth's runs
 // discovered, what the post-run scope check dropped, which directories were
-// skipped because scope refused them before launch, and how many ffuf runs the
-// depth took. A level that was refused everywhere says so with Skipped and a
-// zero Discovered, which is a different sentence from an empty level that ran.
+// skipped because scope refused them before launch, how many ffuf runs the
+// depth took and how many of those failed. Level 0 is the base sweep's own
+// variant and derivation passes; it is recorded only when one ran. A level that
+// was refused everywhere says so with Skipped and a zero Discovered, which is a
+// different sentence from an empty level that ran.
 type discoveryLevel struct {
 	Level      int `json:"level"`
 	Discovered int `json:"discovered"`
 	// OutOfScope counts results the post-run filter dropped at this depth.
 	OutOfScope int `json:"out_of_scope"`
 	// Skipped counts directories this depth never swept: scope refused them
-	// before launch. Counted, not fetched — egress stays scope-checked per
-	// directory, which is the reason ffuf's own -recursion is not used.
+	// before launch, or a session bound (Capped) was reached. Counted, not
+	// fetched — egress stays scope-checked per directory, which is the reason
+	// ffuf's own -recursion is not used.
 	Skipped int `json:"skipped"`
 	// Runs is how many ffuf invocations this depth made (sweeps plus the
 	// variant and derivation passes that ran at it).
 	Runs int `json:"runs"`
+	// Failed is how many of those runs did not complete; their directories
+	// were not swept, and the level's counts are a floor.
+	Failed int `json:"failed"`
+	// Capped names the session bound that stopped this level early, empty when
+	// none did.
+	Capped string `json:"capped,omitempty"`
 }
 
-// runDiscoverySession drives the whole session: the base sweep, then recursion
-// to the requested depth, plus the variant and derivation passes asked for.
+// maxMergedWordlistBytes bounds the operator's own wordlist, read into this process to merge it.
+const maxMergedWordlistBytes = 64 << 20
+
+// The session's bounds. A target that answers every word with a directory
+// redirect (a catch-all) would otherwise multiply each level by the wordlist
+// and send traffic until stopped; the bounds turn that into a recorded stop.
+const (
+	// MaxDiscoveryRecurseDepth is the deepest recursion a request may ask for.
+	MaxDiscoveryRecurseDepth = 5
+	// maxDiscoveryDirsPerLevel bounds the directories swept at one depth.
+	maxDiscoveryDirsPerLevel = 50
+	// maxDiscoveryRuns bounds the ffuf invocations of one session.
+	maxDiscoveryRuns = 300
+)
+
+// runDiscoverySession drives the whole session: the base sweep, its variant and
+// derivation passes, then recursion to the requested depth with the same passes
+// in each directory swept.
 //
 // ctx cancellation stops between runs at the latest — each RunFFUF honours it
 // — so the dashboard's stop button ends the session at a run boundary, and the
 // levels that had already finished stand as recorded.
 func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, target extscan.Target, req discoveryStartReq, wordlist string) discoverySession {
 	session := discoverySession{}
+	runs := 0
+	sweep := func(t extscan.Target, opts extscan.FFUFOptions) extscan.FFUFResult {
+		runs++
+		opts.MatchCodes, opts.Threads, opts.Rate = req.MatchCodes, req.Threads, req.Rate
+		return extscan.RunFFUF(ctx, cfg, s.scope, t, opts)
+	}
 
 	// The base sweep: exactly the flat run, with the merged wordlist.
-	base := extscan.RunFFUF(ctx, cfg, s.scope, target, extscan.FFUFOptions{
-		Wordlist:   wordlist,
-		Extensions: req.Extensions,
-		MatchCodes: req.MatchCodes,
-		Threads:    req.Threads,
-		Rate:       req.Rate,
-	})
+	base := sweep(target, extscan.FFUFOptions{Wordlist: wordlist, Extensions: req.Extensions})
 	session.Result = base
 	if base.Outcome != extscan.OutcomeCompleted {
 		// Nothing was swept; there is nothing to recurse from and no honest
@@ -306,16 +361,96 @@ func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, ta
 	for _, d := range base.Discoveries {
 		seenURL[d.URL] = true
 	}
+	record := func(level *discoveryLevel, found []extscan.Discovery) []extscan.Discovery {
+		var fresh []extscan.Discovery
+		for _, d := range found {
+			if seenURL[d.URL] {
+				continue
+			}
+			seenURL[d.URL] = true
+			level.Discovered++
+			session.Result.Discoveries = append(session.Result.Discoveries, d)
+			fresh = append(fresh, d)
+		}
+		return fresh
+	}
+
+	// The variant-extension and derivation passes over one directory's
+	// discoveries, swept in that directory. Run for the base sweep and for every
+	// directory recursion reaches, so a file the base sweep found (config.php)
+	// is variant-tested (config.bak) whether or not recursion was asked for.
+	passes := func(level *discoveryLevel, dir extscan.Target, found []extscan.Discovery) {
+		if req.VariantExtensions != "" && ctx.Err() == nil && runs < maxDiscoveryRuns {
+			if stems := fileStems(found); len(stems) > 0 {
+				if stemsFile, werr := writeSessionWordlist(stems); werr == nil {
+					variant := sweep(dir, extscan.FFUFOptions{Wordlist: stemsFile, Extensions: req.VariantExtensions})
+					os.Remove(stemsFile)
+					level.Runs++
+					if variant.Outcome == extscan.OutcomeCompleted {
+						level.OutOfScope += variant.OutOfScope
+						record(level, variant.Discoveries)
+					} else {
+						level.Failed++
+					}
+				}
+			}
+		}
+		if req.Derivations && ctx.Err() == nil && runs < maxDiscoveryRuns {
+			var derived []string
+			seen := map[string]bool{}
+			for _, d := range found {
+				for _, name := range deriveDiscoveryNames(d) {
+					if !seen[name] {
+						seen[name] = true
+						derived = append(derived, name)
+					}
+				}
+			}
+			if len(derived) > 0 {
+				if derivedFile, werr := writeSessionWordlist(derived); werr == nil {
+					pass := sweep(dir, extscan.FFUFOptions{Wordlist: derivedFile})
+					os.Remove(derivedFile)
+					level.Runs++
+					if pass.Outcome == extscan.OutcomeCompleted {
+						level.OutOfScope += pass.OutOfScope
+						record(level, pass.Discoveries)
+					} else {
+						level.Failed++
+					}
+				}
+			}
+		}
+	}
+
+	baseLevel := discoveryLevel{Level: 0}
+	passes(&baseLevel, target, base.Discoveries)
+	if baseLevel.Runs > 0 {
+		session.Levels = append(session.Levels, baseLevel)
+	}
 
 	// Directories the base sweep found, for depth 1. Kept as URLs in the
 	// target's own form so the scope check and the sweep see the same string.
 	frontier := sessionDirectories(target, base.Discoveries)
+	depthLimit := min(req.RecurseDepth, MaxDiscoveryRecurseDepth)
 
-	for depth := 1; depth <= req.RecurseDepth && len(frontier) > 0 && ctx.Err() == nil; depth++ {
+	for depth := 1; depth <= depthLimit && len(frontier) > 0 && ctx.Err() == nil; depth++ {
 		level := discoveryLevel{Level: depth}
 		var next []discoveryDirectory
 
-		for _, dir := range frontier {
+		for i, dir := range frontier {
+			if ctx.Err() != nil {
+				level.Skipped += len(frontier) - i
+				break
+			}
+			if i >= maxDiscoveryDirsPerLevel || runs >= maxDiscoveryRuns {
+				level.Skipped += len(frontier) - i
+				if i >= maxDiscoveryDirsPerLevel {
+					level.Capped = fmt.Sprintf("%d directories per level", maxDiscoveryDirsPerLevel)
+				} else {
+					level.Capped = fmt.Sprintf("%d ffuf runs per session", maxDiscoveryRuns)
+				}
+				break
+			}
 			// Scope BEFORE launch: this is the one place a subdirectory can
 			// be refused without a single request reaching it, and the count
 			// is kept rather than the directory quietly dropped.
@@ -324,106 +459,25 @@ func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, ta
 				level.Skipped++
 				continue
 			}
-			res := extscan.RunFFUF(ctx, cfg, s.scope, sub, extscan.FFUFOptions{
-				Wordlist:   wordlist,
-				Extensions: req.Extensions,
-				MatchCodes: req.MatchCodes,
-				Threads:    req.Threads,
-				Rate:       req.Rate,
-			})
+			res := sweep(sub, extscan.FFUFOptions{Wordlist: wordlist, Extensions: req.Extensions})
 			level.Runs++
 			if res.Outcome != extscan.OutcomeCompleted {
-				// A failed subdirectory run does not end the session: the
-				// other directories at this depth are independent sweeps.
-				// The failure is folded into the discoveries the level
-				// reports and visible through the aggregate outcome only if
-				// the base itself failed.
+				// A failed subdirectory run does not end the session — the
+				// other directories at this depth are independent sweeps — but
+				// it is counted, so the level does not read as complete.
+				level.Failed++
 				continue
 			}
 			level.OutOfScope += res.OutOfScope
+			fresh := record(&level, res.Discoveries)
 			var newDirs []extscan.Discovery
-			for _, d := range res.Discoveries {
-				if seenURL[d.URL] {
-					continue
-				}
-				seenURL[d.URL] = true
-				level.Discovered++
-				session.Result.Discoveries = append(session.Result.Discoveries, d)
+			for _, d := range fresh {
 				if isDirectoryDiscovery(d) {
 					newDirs = append(newDirs, d)
 				}
 			}
 			next = append(next, sessionDirectories(sub, newDirs)...)
-
-			// The variant-extension pass: the stems of the files found in
-			// THIS directory, retested against it with the variant list —
-			// Burp's backup-copy check.
-			if req.VariantExtensions != "" {
-				if stems := fileStems(res.Discoveries); len(stems) > 0 {
-					stemsFile, werr := writeSessionWordlist(stems)
-					if werr == nil {
-						variant := extscan.RunFFUF(ctx, cfg, s.scope, sub, extscan.FFUFOptions{
-							Wordlist:   stemsFile,
-							Extensions: req.VariantExtensions,
-							MatchCodes: req.MatchCodes,
-							Threads:    req.Threads,
-							Rate:       req.Rate,
-						})
-						os.Remove(stemsFile)
-						level.Runs++
-						if variant.Outcome == extscan.OutcomeCompleted {
-							level.OutOfScope += variant.OutOfScope
-							for _, d := range variant.Discoveries {
-								if seenURL[d.URL] {
-									continue
-								}
-								seenURL[d.URL] = true
-								level.Discovered++
-								session.Result.Discoveries = append(session.Result.Discoveries, d)
-							}
-						}
-					}
-				}
-			}
-
-			// The derivation pass: the derived names of this directory's
-			// discoveries, swept in the directory they were made in.
-			if req.Derivations {
-				var derived []string
-				seen := map[string]bool{}
-				for _, d := range res.Discoveries {
-					for _, name := range deriveDiscoveryNames(d) {
-						if !seen[name] {
-							seen[name] = true
-							derived = append(derived, name)
-						}
-					}
-				}
-				if len(derived) > 0 {
-					derivedFile, werr := writeSessionWordlist(derived)
-					if werr == nil {
-						pass := extscan.RunFFUF(ctx, cfg, s.scope, sub, extscan.FFUFOptions{
-							Wordlist:   derivedFile,
-							MatchCodes: req.MatchCodes,
-							Threads:    req.Threads,
-							Rate:       req.Rate,
-						})
-						os.Remove(derivedFile)
-						level.Runs++
-						if pass.Outcome == extscan.OutcomeCompleted {
-							level.OutOfScope += pass.OutOfScope
-							for _, d := range pass.Discoveries {
-								if seenURL[d.URL] {
-									continue
-								}
-								seenURL[d.URL] = true
-								level.Discovered++
-								session.Result.Discoveries = append(session.Result.Discoveries, d)
-							}
-						}
-					}
-				}
-			}
+			passes(&level, sub, res.Discoveries)
 		}
 
 		session.Levels = append(session.Levels, level)
@@ -435,30 +489,32 @@ func (s *Server) runDiscoverySession(ctx context.Context, cfg extscan.Config, ta
 }
 
 // sessionDirectories turns one sweep's discoveries into the directory URLs to
-// sweep next: each directory discovery, as a URL under its own parent. ffuf
-// reports a redirect to the directory's canonical form; where it did not, the
-// parent's origin plus the path is the URL ffuf itself requested and is the
-// shape FUZZ appends to.
+// sweep next. ffuf reports each discovery's path from the host root, so the URL
+// is the parent's scheme and authority plus that path — never the parent's own
+// URL plus it, which doubles any path prefix the parent had (/app/ + /app/admin).
+// A redirect ffuf reported to the directory's canonical form on the same origin
+// is taken as given.
 func sessionDirectories(parent extscan.Target, discoveries []extscan.Discovery) []discoveryDirectory {
-	origin := strings.TrimSuffix(parent.URL, "/")
+	origin := parent.URL
+	if u, err := url.Parse(parent.URL); err == nil && u.Scheme != "" && u.Host != "" {
+		origin = u.Scheme + "://" + u.Host
+	}
 	var out []discoveryDirectory
 	seen := map[string]bool{}
 	for _, d := range discoveries {
 		if !isDirectoryDiscovery(d) {
 			continue
 		}
-		url := d.Redirect
-		if url == "" || !strings.HasPrefix(url, origin+"/") {
-			// ffuf reports absolute paths, and the parent's origin is the
-			// authority it dialled; TrimPrefix keeps one slash between them.
-			url = origin + "/" + strings.TrimPrefix(strings.TrimSuffix(d.Path, "/"), "/") + "/"
+		dirURL := d.Redirect
+		if dirURL == "" || !strings.HasPrefix(dirURL, origin+"/") {
+			dirURL = origin + "/" + strings.TrimPrefix(strings.TrimSuffix(d.Path, "/"), "/") + "/"
 		}
-		url = strings.TrimSuffix(url, "/") + "/"
-		if seen[url] {
+		dirURL = strings.TrimSuffix(dirURL, "/") + "/"
+		if seen[dirURL] {
 			continue
 		}
-		seen[url] = true
-		out = append(out, discoveryDirectory{url: url})
+		seen[dirURL] = true
+		out = append(out, discoveryDirectory{url: dirURL})
 	}
 	return out
 }
