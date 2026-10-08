@@ -263,6 +263,11 @@ var manifest = map[string]route{
 		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
 			"path space with a wordlist (Burp's \"Discover content\")",
 	},
+	"/api/target/analyze": {
+		// Burp's Target analyzer (burpsy-react-ui-dnvi): counts over captured content, nothing sent.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "Target analyzer: dynamic and static URLs, parameters and unique parameter names for a host or branch; format=html saves the report",
+	},
 	"/api/engagement/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
