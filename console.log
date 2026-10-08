@@ -1,0 +1,11 @@
+{"level":"info","ts":1790318381.3019042,"caller":"burpsy/main.go:478","msg":"Starting proxy","bind":"127.0.0.1:18571"}
+{"level":"info","ts":1790318381.3343906,"caller":"proxy/proxy.go:1002","msg":"proxy listening","addr":"127.0.0.1:18571"}
+{"level":"info","ts":1790318381.456821,"caller":"burpsy/main.go:708","msg":"Starting web UI","bind":"127.0.0.1:18570"}
+{"level":"info","ts":1790318381.45818,"caller":"web/server.go:1096","msg":"web server listening","addr":"127.0.0.1:18570"}
+{"level":"error","ts":1790319657.9527419,"caller":"proxy/proxy.go:1878","msg":"forward failed","error":"dial tcp 127.0.0.1:18572: connect: connection refused","stacktrace":"github.com/burpsy-go/burpsy/internal/proxy.(*Server).handleHTTP\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1878\ngithub.com/burpsy-go/burpsy/internal/proxy.(*Server).handleConnectionOn\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1064"}
+{"level":"error","ts":1790319670.675532,"caller":"proxy/proxy.go:1878","msg":"forward failed","error":"dial tcp 127.0.0.1:18572: connect: connection refused","stacktrace":"github.com/burpsy-go/burpsy/internal/proxy.(*Server).handleHTTP\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1878\ngithub.com/burpsy-go/burpsy/internal/proxy.(*Server).handleConnectionOn\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1064"}
+{"level":"info","ts":1790321404.51793,"caller":"proxy/listeners.go:253","msg":"proxy listener updated","id":"default","addr":"127.0.0.1:18571"}
+{"level":"error","ts":1790321415.2476661,"caller":"proxy/proxy.go:1878","msg":"forward failed","error":"dial tcp: lookup some-other-host.test: no such host","stacktrace":"github.com/burpsy-go/burpsy/internal/proxy.(*Server).handleHTTP\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1878\ngithub.com/burpsy-go/burpsy/internal/proxy.(*Server).handleConnectionOn\n\t/root/qa-live/burpsy-go/internal/proxy/proxy.go:1064"}
+{"level":"info","ts":1790321481.449475,"caller":"proxy/listeners.go:253","msg":"proxy listener updated","id":"default","addr":"127.0.0.1:18571"}
+{"level":"info","ts":1790321629.3757145,"caller":"proxy/listeners.go:253","msg":"proxy listener updated","id":"default","addr":"127.0.0.1:18571"}
+{"level":"info","ts":1790321653.4201849,"caller":"proxy/listeners.go:253","msg":"proxy listener updated","id":"default","addr":"127.0.0.1:18571"}
