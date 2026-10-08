@@ -81,6 +81,65 @@ type SiteMap struct {
 	// rebuild and would make reference.ts's disclosure ("a host on the map was observed at some
 	// point") false for every node on it. The two sets are merged on read, never on write.
 	inserted map[string]*InsertedNode
+	// unrequested is every URL the live passive crawl saw linked from proxied traffic and nobody has
+	// requested yet (burpsy-react-ui-t3zk), Burp's grey "unrequested items". Kept apart from the
+	// observed tree for the reason inserted is, and bounded by MaxUnrequested.
+	unrequested map[string]*UnrequestedNode
+}
+
+// MaxUnrequested bounds the unrequested set: a site that links to a calendar or a search with a fresh
+// query on every page would otherwise grow it without end.
+const MaxUnrequested = 20000
+
+// UnrequestedNode is a URL seen linked from proxied traffic but never requested (t3zk). From is the
+// page that linked to it.
+type UnrequestedNode struct {
+	Host string
+	Port uint16
+	TLS  bool
+	Path string
+	From string
+	Seen time.Time
+}
+
+// AddUnrequested records a linked-but-never-requested URL. It reports false when the URL is already
+// observed, inserted, suppressed, already known as unrequested, or the set is full.
+func (sm *SiteMap) AddUnrequested(host string, port uint16, tls bool, path, from string, seen time.Time) bool {
+	if host == "" || path == "" {
+		return false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if observedLocked(sm.hosts, host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
+		return false
+	}
+	key := insertKey(host, port, tls, path)
+	if _, ok := sm.inserted[key]; ok {
+		return false
+	}
+	if _, ok := sm.unrequested[key]; ok || len(sm.unrequested) >= MaxUnrequested {
+		return false
+	}
+	sm.unrequested[key] = &UnrequestedNode{Host: host, Port: port, TLS: tls, Path: path, From: from, Seen: seen}
+	return true
+}
+
+// Unrequested returns the unrequested set, sorted by host and path.
+func (sm *SiteMap) Unrequested() []*UnrequestedNode {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	out := make([]*UnrequestedNode, 0, len(sm.unrequested))
+	for _, n := range sm.unrequested {
+		c := *n
+		out = append(out, &c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
 }
 
 // InsertedNode is a host/path an operator put on the map without sending traffic to it.
@@ -101,6 +160,8 @@ func New() *SiteMap {
 		hosts:      make(map[string]*HostNode),
 		suppressed: make(map[string]struct{}),
 		inserted:   make(map[string]*InsertedNode),
+
+		unrequested: make(map[string]*UnrequestedNode),
 	}
 }
 

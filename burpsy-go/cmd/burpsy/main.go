@@ -733,6 +733,9 @@ func main() {
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
 		WithNetAuthRestoreNotes(netAuthNotes)
+	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
+	// site-map items. Set after the web server exists, on the same config the running proxy reads.
+	proxyConfig.WithPageObserver(webServer.ObserveProxiedPage)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.

@@ -1015,3 +1015,33 @@ func isAssetRel(n *html.Node) bool {
 	}
 	return false
 }
+
+// navigationalTags are the tags whose targets a person navigates to, as opposed to assets a page loads.
+var navigationalTags = map[string]bool{
+	"a": true, "area": true, "iframe": true, "frame": true, "math": true,
+	"button[formaction]": true, "input[formaction]": true, tagMetaRefresh: true,
+}
+
+// LinkTargets returns the absolute http(s) navigational targets an HTML body links to, resolved
+// against base, deduplicated, in document order (burpsy-react-ui-t3zk: the live passive crawl). It is
+// the crawler's own parse, so a link the proxy observes is the link a crawl would have followed.
+func LinkTargets(body []byte, base *url.URL) []*url.URL {
+	page := parsePage(body, base, DefaultLimits(), false)
+	seen := map[string]bool{}
+	var out []*url.URL
+	for _, l := range page.links {
+		if !navigationalTags[l.tag] {
+			continue
+		}
+		u, err := resolveAgainst(base, l.raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			continue
+		}
+		u.Fragment = ""
+		if k := u.String(); !seen[k] {
+			seen[k] = true
+			out = append(out, u)
+		}
+	}
+	return out
+}

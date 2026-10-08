@@ -706,6 +706,8 @@ type ProxyConfig struct {
 	// send. Set before NewServer rather than after: the field is read by every relay
 	// goroutine, so a later write would be a data race, not a late binding.
 	toolLog *toollog.ToolLog
+	// pageObserver sees each recorded exchange with its response bytes (t3zk).
+	pageObserver func(ex *core.Exchange, response []byte)
 	// cookieJar receives the Set-Cookie headers of every response this listener captures, so an
 	// operator who browses the target logged-in through the proxy has a jar the other tools can draw
 	// on. Nil absorbs nothing, which is what a proxy built without a session coordinator does. See
@@ -1007,6 +1009,15 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 // is that proxy traffic is a tool's traffic: it shares the capture axis (an operator can
 // stop recording it and the Uncaptured counter says how many requests that cost), the
 // capture filter, and the eviction counter with every other tool's rows.
+// WithPageObserver is called with every exchange the listener records and the response bytes the
+// listener holds (burpsy-react-ui-t3zk). The web server uses it for the live passive crawl, reading
+// links out of proxied pages without reaching back into the store from its append path. Called
+// synchronously after the record, so it must be quick.
+func (c *ProxyConfig) WithPageObserver(fn func(ex *core.Exchange, response []byte)) *ProxyConfig {
+	c.pageObserver = fn
+	return c
+}
+
 func (c *ProxyConfig) WithToolLog(tl *toollog.ToolLog) *ProxyConfig {
 	c.toolLog = tl
 	return c
@@ -2619,6 +2630,9 @@ func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
 		}
 		id := ex.ID
 		s.noteProxied(x, status, toollog.Bytes(len(x.Response)), &id, "")
+	}
+	if s.config.pageObserver != nil && len(x.Response) > 0 {
+		s.config.pageObserver(ex, x.Response)
 	}
 	return ex
 }

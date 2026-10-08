@@ -90,7 +90,11 @@ type sitemapNodeView struct {
 	//
 	// Never omitempty: absent and false are the same JSON, and a client that read an absent
 	// `inserted` as "this is a stored fact" would label every observed node as added.
-	Inserted     bool              `json:"inserted"`
+	Inserted bool `json:"inserted"`
+	// Unrequested marks a URL the live passive crawl saw linked from proxied traffic that nobody has
+	// requested (t3zk), Burp's grey item. LinkedFrom is the page that linked to it.
+	Unrequested  bool              `json:"unrequested,omitempty"`
+	LinkedFrom   string            `json:"linked_from,omitempty"`
 	AddedAt      *int64            `json:"added_at,omitempty"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`
@@ -301,6 +305,38 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Mimes:    []string{},
 			Recent:   []core.ExchangeID{},
 			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
+		})
+	}
+	// Unrequested items (t3zk), merged the same way and dropped once anything has requested them.
+	for _, un := range s.sitemap.Unrequested() {
+		if hostFilter != "" && un.Host != hostFilter {
+			continue
+		}
+		if pathFilter != "" && !strings.Contains(un.Path, pathFilter) {
+			continue
+		}
+		as := &sitemap.InsertedNode{Host: un.Host, Port: un.Port, TLS: un.TLS, Path: un.Path}
+		if observedPath(s.sitemap, as) {
+			continue
+		}
+		nodeCount++
+		seen := un.Seen.UnixMilli()
+		insertedPaths = append(insertedPaths, sitemapNodeView{
+			Key:         nodeKey(un.Host, un.Port, un.TLS, un.Path),
+			HostName:    un.Host,
+			Segment:     pathSegment(un.Path),
+			Path:        un.Path,
+			Port:        un.Port,
+			TLS:         un.TLS,
+			Depth:       len(ancestorPaths(un.Path)),
+			Unrequested: true,
+			LinkedFrom:  un.From,
+			AddedAt:     &seen,
+			Methods:     []string{},
+			Statuses:    []int{},
+			Mimes:       []string{},
+			Recent:      []core.ExchangeID{},
+			InScope:     s.scope.Contains(un.Host, un.Port, pathOrRoot(un.Path), un.TLS),
 		})
 	}
 	tree, nodeCount = mergeInsertedIntoTree(tree, insertedPaths, nodeCount)
