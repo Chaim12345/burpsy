@@ -23,6 +23,10 @@ export interface CollaboratorStatus {
   server?: string;
   default_pool: boolean;
   domain?: string;
+  /** The channel's identity is kept across restarts (d657): payloads minted here are still polled after one. */
+  identity_kept: boolean;
+  /** The open channel resumed an identity an earlier run saved. */
+  resumed: boolean;
   payloads: CollaboratorPayload[];
   interactions: { total: number; by_type: Record<string, number> } | null;
   last_read: { at_ms: number; ok: boolean; error?: string } | null;

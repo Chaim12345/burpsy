@@ -30,7 +30,8 @@ import {
   type CollaboratorHealthReport,
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
-import { copyToClipboard } from "../lib/api";
+import { api, copyToClipboard, downloadText } from "../lib/api";
+import { collaboratorToCSV, type CollaboratorExportRow } from "../lib/collaborator-csv";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 
@@ -214,7 +215,17 @@ export function CollaboratorPage(): JSX.Element {
       <Card>
         <SectionHeading
           title="Interaction channel"
-          detail={s.configured ? (s.default_pool ? "Using the interactsh public pool." : s.server ?? undefined) : s.hint}
+          detail={
+            s.configured
+              ? `${s.default_pool ? "Using the interactsh public pool." : s.server ?? ""}${
+                  s.identity_kept
+                    ? s.resumed
+                      ? " Resumed the identity saved by an earlier run, so payloads minted before the restart are still polled."
+                      : " The identity is kept across restarts, so payloads minted here stay polled after one."
+                    : " The identity is not kept: a restart orphans every payload minted here."
+                }`
+              : s.hint
+          }
           actions={
             <>
               <label
@@ -498,6 +509,28 @@ function InteractionsTable({
         >
           <Check size={13} />
           Mark all read
+        </Button>
+        {/* Burp's "Export as CSV" (aw2y): the rows this table shows now, with their bytes as Base64 and
+            this console's comments. The bytes are fetched on click rather than carried on every poll. */}
+        <Button
+          variant="outline"
+          size="small"
+          disabled={filtered.length === 0}
+          onClick={() => {
+            const shown = new Set(filtered.map((row) => row.id));
+            api<{ rows: CollaboratorExportRow[] }>("/api/collaborator/interactions?full=1")
+              .then((full) => {
+                const rows = (full?.rows ?? []).filter((row) => shown.has(row.id));
+                const comments = Object.fromEntries(rows.map((row) => [row.id, annotations[row.id]?.comment]));
+                downloadText("collaborator-interactions.csv", collaboratorToCSV(rows, comments), "text/csv");
+                toast.success(`Exported ${rows.length} interaction(s)`);
+              })
+              .catch((failure: unknown) =>
+                toast.error(failure instanceof Error ? failure.message : "Exporting the interactions failed"),
+              );
+          }}
+        >
+          Export shown as CSV
         </Button>
       </Toolbar>
       <SimpleTable headers={["#", "Type", "Client IP", "Payload", "Time", "Read", "Note", ""]}>

@@ -292,10 +292,32 @@ func Test_unsetting_the_collaborator_server(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"payloads":[]`) || strings.Contains(rec.Body.String(), "abc123") {
 		t.Errorf("a new channel after unset lists the closed domain's payloads: %s", rec.Body.String())
 	}
-	s.scanner.ClearOOBProvider()
+	s.scanner.ClearOOBProvider(false)
 
 	// Idempotent: unsetting nothing is not an error.
 	if rec := deleteCollaboratorServer(s, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"was_configured":false`) {
 		t.Errorf("second unset: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Burp's CSV export carries each interaction's bytes as Base64 (aw2y). ?full=1 adds them to the rows;
+// the table's polling read leaves them off.
+func Test_interaction_rows_carry_base64_bytes_only_when_asked(t *testing.T) {
+	s := newTestServerWithScanner(t)
+	ch := &healthChannel{domain: "abc123.oast.example"}
+	ch.log = []oob.Interaction{{Protocol: "http", RawRequest: "GET /x HTTP/1.1\r\n", RawResponse: "HTTP/1.1 200 OK\r\n"}}
+	s.scanner.WithOOBProvider(&healthProvider{ch: ch})
+	get := func(q string) string {
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/collaborator/interactions"+q, nil))
+		return rec.Body.String()
+	}
+	if plain := get(""); strings.Contains(plain, "raw_request_b64") {
+		t.Errorf("the polling read carries bytes: %s", plain)
+	}
+	full := get("?full=1")
+	if !strings.Contains(full, `"raw_request_b64":"R0VUIC94IEhUVFAvMS4xDQo="`) ||
+		!strings.Contains(full, `"raw_response_b64":"SFRUUC8xLjEgMjAwIE9LDQo="`) {
+		t.Errorf("?full=1 rows lack the Base64 bytes: %s", full)
 	}
 }

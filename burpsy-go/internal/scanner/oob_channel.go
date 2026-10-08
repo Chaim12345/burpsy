@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -73,6 +74,12 @@ type OOBRegistration struct {
 	// empty rather than filled in with a guess, because which of those a registration lands on is
 	// the client's choice and is not knowable until Domain exists.
 	Server string
+	// StateDir is where the channel's identity is kept across restarts (oob.Options.StateDir), or
+	// empty when it is not kept (burpsy-react-ui-d657).
+	StateDir string
+	// Resumed is true when the open channel took over a session an earlier run saved, so payloads
+	// minted before the restart are still polled.
+	Resumed bool
 }
 
 // OOBChannel is the part of the collaborator a check actually uses.
@@ -132,12 +139,27 @@ func (l *lazyOOB) Channel(ctx context.Context) (OOBChannel, error) {
 func (l *lazyOOB) Registration() OOBRegistration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	reg := OOBRegistration{Attempted: l.started, Err: l.err, Server: l.opts.ServerURL}
+	reg := OOBRegistration{Attempted: l.started, Err: l.err, Server: l.opts.ServerURL, StateDir: l.opts.StateDir}
 	if l.client != nil {
 		reg.Open = true
 		reg.Domain = l.client.Domain()
+		reg.Resumed = l.client.Resumed()
 	}
 	return reg
+}
+
+// Forget closes the channel and deletes its saved identity (d657), so nothing resumes it. It is
+// the discard half of "Don't use Collaborator".
+func (l *lazyOOB) Forget() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.client != nil {
+		return l.client.Forget()
+	}
+	if l.opts.StateDir != "" {
+		return os.RemoveAll(l.opts.StateDir)
+	}
+	return nil
 }
 
 func (l *lazyOOB) Close() error {
@@ -203,7 +225,10 @@ func (s *ActiveScanner) OOBRegistration() (OOBRegistration, bool) {
 // Collaborator" (burpsy-react-ui-8e3n). Afterwards the out-of-band rows report a missing capability, as
 // they do on an installation that never configured one, never zero interactions. It returns what
 // Registration reported just before the removal, so a caller can say which domain was given up.
-func (s *ActiveScanner) ClearOOBProvider() (OOBRegistration, bool, error) {
+//
+// forget also deletes the channel's saved identity when the provider keeps one (d657). Without it the
+// identity is kept, and configuring the same server again resumes it and its payloads.
+func (s *ActiveScanner) ClearOOBProvider(forget bool) (OOBRegistration, bool, error) {
 	if s == nil {
 		return OOBRegistration{}, false, nil
 	}
@@ -215,8 +240,16 @@ func (s *ActiveScanner) ClearOOBProvider() (OOBRegistration, bool, error) {
 		return OOBRegistration{}, false, nil
 	}
 	reg := p.Registration()
+	if f, ok := p.(interface{ Forget() error }); ok && forget {
+		return reg, true, f.Forget()
+	}
 	return reg, true, p.Close()
 }
+
+// CloseOOBChannel closes whichever collaborator channel is installed now, keeping the provider. A
+// process shutting down calls it: the installed provider may be one the console set after start-up,
+// and a channel that keeps its identity has to be stopped gracefully to save it.
+func (s *ActiveScanner) CloseOOBChannel() error { return s.closeOOB() }
 
 // closeOOB releases the channel at the end of a scan.
 func (s *ActiveScanner) closeOOB() error {
