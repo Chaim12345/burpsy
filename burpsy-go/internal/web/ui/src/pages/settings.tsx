@@ -3400,7 +3400,14 @@ export function SettingsPage(): JSX.Element {
    // Smooth scrolling is motion, and this one crosses most of the page. An operator who has
    // asked the system for reduced motion gets the jump instantly instead.
    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-   target.scrollIntoView({ block: centred ? "center" : "start", behavior: reduced ? "auto" : "smooth" });
+   // The settings pane is scrolled, and only it: scrollIntoView scrolls EVERY scrollable ancestor,
+   // which pulled the document root up and took the menubar and tool tabs off screen (us6r.2).
+   {
+    const rect = target.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    const want = centred ? box.top + Math.max(0, (container.clientHeight - rect.height) / 2) : box.top;
+    container.scrollBy({ top: rect.top - want, behavior: reduced ? "auto" : "smooth" });
+   }
    setActive(id);
 
    // How far the target is from where it should be: the top of the page for a whole card,
