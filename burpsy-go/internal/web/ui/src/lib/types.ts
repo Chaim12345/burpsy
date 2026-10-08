@@ -430,6 +430,12 @@ export interface RepeaterSendOptions {
   *  network read timeout; the server refuses zero or a negative value rather than reading it as
   *  "no bound". */
  response_timeout_ms?: number;
+ /** Burp's per-tab "Streaming response timeout", in ms (of0z). 0 is no cutoff; absent is the network
+  *  settings' streaming window and promotion rule. */
+ streaming_timeout_ms?: number;
+ /** Burp's "Unpack compressed responses" (of0z). Absent is Burp's default, on; only an explicit
+  *  false is ever sent, which shows the compressed bytes instead. */
+ unpack_responses?: boolean;
 }
 
 export interface RepeaterResult {
@@ -453,6 +459,13 @@ export interface RepeaterResult {
    * says which.
    */
  redirects?: RepeaterRedirects;
+ /** The response with its compressed body decoded, for display (of0z). `response` stays the bytes
+  *  that arrived, which is also what is stored. */
+ response_unpacked?: string;
+ response_unpacked_body_base64?: string;
+ /** The encoding that was decoded, or that could not be (see unpack_error). */
+ unpacked_from?: string;
+ unpack_error?: string;
 }
 
 /**

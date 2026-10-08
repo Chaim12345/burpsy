@@ -92,6 +92,18 @@ type repeaterSendResp struct {
 	// field means "not a redirect"; a field present with `followed: false` on every hop means the
 	// policy or the scope stopped it, which are different facts and are named differently.
 	Redirects *repeaterRedirects `json:"redirects,omitempty"`
+	// ResponseUnpacked is the response with its compressed body decoded for display, present only
+	// when the response declared a Content-Encoding this build decodes and the tab unpacks (Burp's
+	// default; of0z). `response` stays the bytes that arrived, which is also what is stored.
+	ResponseUnpacked string `json:"response_unpacked,omitempty"`
+	// ResponseUnpackedBodyBase64 is the unpacked body's exact octets when they are not UTF-8, by the
+	// same rule as response_body_base64.
+	ResponseUnpackedBodyBase64 string `json:"response_unpacked_body_base64,omitempty"`
+	// UnpackedFrom names the encoding that was decoded, or that could not be.
+	UnpackedFrom string `json:"unpacked_from,omitempty"`
+	// UnpackError says why a compressed response is shown packed: no decoder for its encoding, or a
+	// body that would not decode. Absent when there was nothing to unpack or it unpacked.
+	UnpackError string `json:"unpack_error,omitempty"`
 }
 
 // repeaterRedirects is the follow outcome as the panel reads it.
@@ -279,7 +291,7 @@ func (s *Server) recordRepeaterExchange(
 	s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, ex.Method, ex.Path, intOrZero(status),
 		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
-	return repeaterSendResp{
+	resp = repeaterSendResp{
 		Status:             intOrZero(status),
 		DurationMs:         ex.Duration.Millis(),
 		Response:           string(rawResp),
@@ -287,7 +299,20 @@ func (s *Server) recordRepeaterExchange(
 		ResponseMsgID:      uint64(respMsgID),
 		ExchangeID:         ex.ID,
 		ResponseBodyBase64: displayBodyBase64(rawResp),
-	}, ex
+	}
+	if spec.Options.unpack() {
+		// Display only (of0z): the stored response above is the bytes that arrived.
+		if unpacked, encoding, applies, uerr := unpackedResponse(rawResp); applies {
+			resp.UnpackedFrom = encoding
+			if uerr != nil {
+				resp.UnpackError = uerr.Error()
+			} else {
+				resp.ResponseUnpacked = string(unpacked)
+				resp.ResponseUnpackedBodyBase64 = displayBodyBase64(unpacked)
+			}
+		}
+	}
+	return resp, ex
 }
 
 // sendOneRepeaterRequest is one send on its own fresh connection, end to end: the wire, the stored

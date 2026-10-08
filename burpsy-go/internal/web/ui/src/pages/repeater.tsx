@@ -15,7 +15,7 @@ import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
 import { isIntrospectionAnswer } from "../lib/graphql-introspection";
-import { parseResponseTimeoutMS } from "../lib/send-settings";
+import { mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "../lib/send-settings";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
@@ -98,6 +98,12 @@ function sendOptionsFor(tab: RepeaterTab): RepeaterSendOptions | undefined {
 
 /** The tab's note as a send carries it (jva5): absent when blank, so a send with no note records no
  *  comment rather than an empty one. */
+/** The response the pane shows for an HTTP entry: the unpacked rendering when the send produced one
+ *  (of0z, Burp's default), else the bytes that arrived. */
+function shownResponse(entry: { response: string; response_unpacked?: string }): string {
+  return entry.response_unpacked ?? entry.response;
+}
+
 function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
   return tab.note && tab.note.trim() !== "" ? { note: tab.note } : {};
 }
@@ -616,15 +622,20 @@ export function RepeaterPage(): JSX.Element {
   const diffTooLarge =
     previousHttp !== null &&
     httpResult !== null &&
-    (new TextEncoder().encode(previousHttp.response).length > MAX_DIFF_BYTES ||
-      new TextEncoder().encode(httpResult.response).length > MAX_DIFF_BYTES);
-  const changes = useResponseChanges(previousHttp, httpResult, highlightChanges && !diffTooLarge && chainSide === "first");
+    (new TextEncoder().encode(shownResponse(previousHttp)).length > MAX_DIFF_BYTES ||
+      new TextEncoder().encode(shownResponse(httpResult)).length > MAX_DIFF_BYTES);
+  // Compared as shown: an unpacked response is diffed decoded, which is what the pane paints.
+  const changes = useResponseChanges(
+    previousHttp ? { exchange_id: previousHttp.exchange_id, response: shownResponse(previousHttp) } : null,
+    httpResult ? { exchange_id: httpResult.exchange_id, response: shownResponse(httpResult) } : null,
+    highlightChanges && !diffTooLarge && chainSide === "first",
+  );
   /**
    * GraphQL > Save GraphQL queries to site map (7v1e): enabled when the response on screen is an
    * introspection answer; the server reads the schema off that exchange and records one unsent
    * request per query and mutation.
    */
-  const introspected = httpResult != null && chainResponse == null && isIntrospectionAnswer(httpResult.response);
+  const introspected = httpResult != null && chainResponse == null && isIntrospectionAnswer(shownResponse(httpResult));
   const saveGraphQLToSiteMap = {
     enabled: introspected,
     run: () => {
@@ -644,7 +655,7 @@ export function RepeaterPage(): JSX.Element {
     },
   };
   const changeMarks = useMemo(
-    () => (changes.data && httpResult ? changeMarksFor(httpResult.response, changes.data.ops) : null),
+    () => (changes.data && httpResult ? changeMarksFor(shownResponse(httpResult), changes.data.ops) : null),
     [changes.data, httpResult],
   );
   const actions = usePluginExchangeActions();
@@ -889,12 +900,8 @@ export function RepeaterPage(): JSX.Element {
    */
   const applyOptions = (patch: Partial<RepeaterSendOptions>) => {
     if (!active) return;
-    const merged: RepeaterSendOptions = { ...(active.options ?? {}), ...patch };
-    for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
-      const value = merged[key];
-      if (value === undefined || value === "" || value === false) delete merged[key];
-    }
-    setRepeaterTabOptions(active.id, merged);
+    // The standing-value rules (unpack_responses defaults ON) live in lib/send-settings.ts.
+    setRepeaterTabOptions(active.id, mergeRepeaterOptions(active.options, patch));
     // Touching any option makes the tab an override of the global default (Burp's blue marker).
     if (active.inheritsGlobal !== false) updateRepeaterTab(active.id, { inheritsGlobal: false });
   };
@@ -1233,6 +1240,16 @@ export function RepeaterPage(): JSX.Element {
                     </Tooltip>
                   ) : null}
                   {httpResult.framing ? <Badge>framing: {httpResult.framing}</Badge> : null}
+                  {/* Unpack compressed responses (of0z): say which bytes the pane shows. */}
+                  {httpResult.response_unpacked != null ? (
+                    <Tooltip content={`The pane shows the ${httpResult.unpacked_from} body decoded. The stored response is the compressed bytes that arrived; turn off "Unpack compressed responses" in Config to see them.`}>
+                      <Badge tone="info">unpacked {httpResult.unpacked_from}</Badge>
+                    </Tooltip>
+                  ) : httpResult.unpack_error ? (
+                    <Tooltip content={`Shown as it arrived: ${httpResult.unpack_error}`}>
+                      <Badge tone="warn">{httpResult.unpacked_from} not unpacked</Badge>
+                    </Tooltip>
+                  ) : null}
                   {httpResult.response_complete === false ? (
                     <Tooltip content="The response was not read to a boundary burpsy is confident of — see the group send panel. On a shared socket that ambiguity is evidence, not a glitch.">
                       <Badge tone="warn">incomplete read</Badge>
@@ -1749,7 +1766,7 @@ export function RepeaterPage(): JSX.Element {
               readOnly
               value={
                     chainResponse ??
-                    httpResult?.response ??
+                    (httpResult ? shownResponse(httpResult) : undefined) ??
                     (send.isPending
                       ? "Waiting for the response…"
                       : send.error instanceof SendCancelled
@@ -1759,7 +1776,13 @@ export function RepeaterPage(): JSX.Element {
               // The reply's exact body when `response` cannot carry it, and the call path it answers, so
               // a gRPC reply decodes — and names its fields — in the Protobuf tab (burpsy-react-ui-3pco).
               // Only for the response itself: a redirect hop on screen is a different message.
-              bodyBase64={chainResponse == null ? httpResult?.response_body_base64 : undefined}
+              bodyBase64={
+                chainResponse != null
+                  ? undefined
+                  : httpResult?.response_unpacked != null
+                    ? httpResult.response_unpacked_body_base64
+                    : httpResult?.response_body_base64
+              }
               changeMarks={highlightChanges && chainResponse == null ? changeMarks?.marks : undefined}
               saveGraphQLToSiteMap={saveGraphQLToSiteMap}
               requestPath={requestTargetPath(viewedRequest ?? active.request)}
@@ -1786,7 +1809,7 @@ export function RepeaterPage(): JSX.Element {
             />
           ) : (
             <Inspector
-              raw={chainResponse ?? httpResult?.response ?? ""}
+              raw={chainResponse ?? (httpResult ? shownResponse(httpResult) : "")}
               label="Inspector · response"
               readOnlyNote="A response that has already arrived cannot be edited — change the request and send it again."
               onSwitch={() => setInspecting("request")}
@@ -1964,6 +1987,20 @@ function SendOptionsPanel({
             />
           )}
         </Field>
+        <Field label="Streaming response timeout (ms)">
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              style={{ width: 140 }}
+              value={options?.streaming_timeout_ms ?? ""}
+              placeholder="standing"
+              title="How long this tab reads a streaming response (an event stream, a held long-poll) before showing what arrived. 0 is no cutoff; blank uses the Network settings' streaming window."
+              onChange={(event) => onChange({ streaming_timeout_ms: parseStreamingTimeoutMS(event.target.value) })}
+            />
+          )}
+        </Field>
         <Button variant="outline" onClick={onRestoreGlobal} disabled={!overriding} title="Send this tab with the global defaults instead of its own overrides">
           <RotateCcw size={14} />
           Restore global default
@@ -1984,6 +2021,13 @@ function SendOptionsPanel({
           checked={!!options?.update_content_length}
           label="Update Content-Length from body"
           onCheckedChange={(checked) => onChange({ update_content_length: checked })}
+        />
+        {/* On unless turned off (Burp's default). Display only: the stored response is always the
+            bytes that arrived. */}
+        <Checkbox
+          checked={options?.unpack_responses !== false}
+          label="Unpack compressed responses"
+          onCheckedChange={(checked) => onChange({ unpack_responses: checked })}
         />
       </div>
       <p className="field-hint">

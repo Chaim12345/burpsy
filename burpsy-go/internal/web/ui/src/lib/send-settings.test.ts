@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, parseResponseTimeoutMS } from "./send-settings";
+import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "./send-settings";
 import { emptyIntruderConfig, mergePersistedWorkspace } from "./store";
 
 // ---- what the send-settings controls put on the wire (burpsy-react-ui-xixe.1, Phase 1) ------------
@@ -95,5 +95,30 @@ describe("a persisted attack from before a setting existed", () => {
     expect(merged.intruder.httpVersion).toBe("");
     expect(merged.intruder.updateHostHeader).toBe(true);
     expect(merged.other).toBe(1);
+  });
+});
+
+describe("Repeater tab overrides (burpsy-react-ui-of0z)", () => {
+  test("unpack_responses defaults ON: true is dropped from the wire, an explicit false is kept", () => {
+    expect(mergeRepeaterOptions({}, { unpack_responses: true })).toEqual({});
+    expect(mergeRepeaterOptions({}, { unpack_responses: false })).toEqual({ unpack_responses: false });
+    expect(mergeRepeaterOptions({ unpack_responses: false }, { unpack_responses: true })).toEqual({});
+  });
+
+  test("the other switches keep their false-is-default rule", () => {
+    expect(mergeRepeaterOptions({ strip_connection: true }, { strip_connection: false })).toEqual({});
+  });
+
+  test("a streaming window of 0 is kept (no cutoff), blank is dropped", () => {
+    expect(mergeRepeaterOptions({}, { streaming_timeout_ms: 0 })).toEqual({ streaming_timeout_ms: 0 });
+    expect(mergeRepeaterOptions({ streaming_timeout_ms: 500 }, { streaming_timeout_ms: undefined })).toEqual({});
+  });
+
+  test("parseStreamingTimeoutMS: blank unset, 0 allowed, negative and junk unset", () => {
+    expect(parseStreamingTimeoutMS("")).toBeUndefined();
+    expect(parseStreamingTimeoutMS("0")).toBe(0);
+    expect(parseStreamingTimeoutMS("1500.7")).toBe(1500);
+    expect(parseStreamingTimeoutMS("-1")).toBeUndefined();
+    expect(parseStreamingTimeoutMS("abc")).toBeUndefined();
   });
 });

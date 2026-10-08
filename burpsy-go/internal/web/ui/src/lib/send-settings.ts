@@ -1,4 +1,5 @@
 import type { IntruderConfig } from "./store";
+import type { RepeaterSendOptions } from "./types";
 
 /**
  * The send settings Intruder and Repeater put on the wire (burpsy-react-ui-xixe.1, Phase 1).
@@ -16,6 +17,35 @@ import type { IntruderConfig } from "./store";
  * response_timeout_ms (it cannot mean a bound), and a field that sent one would turn a cleared input
  * into a refused launch rather than into the standing behaviour the empty field shows.
  */
+/**
+ * A Repeater tab's streaming-response window as typed (of0z): blank is "not set" (the network
+ * settings' window applies), 0 is Burp's "no cutoff", a positive number is milliseconds. Anything
+ * else is "not set" rather than a value the server would refuse.
+ */
+export function parseStreamingTimeoutMS(text: string): number | undefined {
+  const trimmed = text.trim();
+  if (trimmed === "") return undefined;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return undefined;
+  return Math.floor(value);
+}
+
+/**
+ * A tab's send options with a patch applied and every "standing behaviour" value removed, so the
+ * wire carries only what the operator chose. Empty strings and false are the defaults for every
+ * field but one: unpack_responses defaults to ON (Burp's default), so it is `true` that is dropped
+ * and an explicit `false` that is kept. 0 is kept — for streaming_timeout_ms it means "no cutoff".
+ */
+export function mergeRepeaterOptions(current: RepeaterSendOptions | undefined, patch: Partial<RepeaterSendOptions>): RepeaterSendOptions {
+  const merged: RepeaterSendOptions = { ...(current ?? {}), ...patch };
+  for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
+    const value = merged[key];
+    const standing = key === "unpack_responses" ? value === true : value === false;
+    if (value === undefined || value === "" || standing) delete merged[key];
+  }
+  return merged;
+}
+
 export function parseResponseTimeoutMS(text: string): number | undefined {
   const trimmed = text.trim();
   if (trimmed === "") return undefined;

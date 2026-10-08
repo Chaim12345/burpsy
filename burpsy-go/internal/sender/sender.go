@@ -1138,11 +1138,17 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
+	promote := eventStreamPromoter(ctx, conn, settings)
+	if window, ok := streamingOverride(ctx); ok {
+		// The tab's own streaming window (of0z) replaces the network setting's promotion rule and
+		// window for this send.
+		promote = overridePromoter(ctx, conn, window)
+	}
 	response, err := readResponse(
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
-		eventStreamPromoter(ctx, conn, settings),
+		promote,
 	)
 	if err != nil {
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a
@@ -1163,6 +1169,11 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 // not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
 // read instantly.
 func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
+	// A per-send streaming window (of0z) bounds a declared streaming host's read for this send.
+	if window, ok := streamingOverride(ctx); ok && s.Network().Streaming.isStreaming(host) {
+		conn.SetDeadline(streamingDeadline(ctx, window))
+		return
+	}
 	// A per-send response timeout (sendopts.go) replaces the standing read bound for this send only,
 	// clamped to the context's deadline when that is earlier.
 	if deadline, ok := overrideDeadline(ctx); ok {

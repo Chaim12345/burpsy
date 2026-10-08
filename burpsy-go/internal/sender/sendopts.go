@@ -38,6 +38,16 @@ type SendOptions struct {
 	// applies exactly as before. A context deadline that falls earlier still wins — a caller that set
 	// one is describing the whole operation, which a response timeout is a part of.
 	ResponseTimeout time.Duration
+	// StreamingTimeout is this send's streaming-response window (burpsy-react-ui-of0z — Burp's
+	// per-tab "Streaming response timeout"), meaningful only when StreamingTimeoutSet. While set, a
+	// response this send treats as streaming is read for this long and what arrived is returned: a
+	// response from a host declared open-ended, a text/event-stream response that is chunked or
+	// unframed (whether or not the network setting promotes event streams), and an unframed
+	// read-until-close response such as a held long-poll. Zero means no cutoff — Burp's "To turn off
+	// the timeout, set it to 0" — and the read then ends when the peer closes, the operator cancels,
+	// or the streaming body cap is reached.
+	StreamingTimeout    time.Duration
+	StreamingTimeoutSet bool
 }
 
 type sendOptionsKey struct{}
@@ -116,6 +126,41 @@ func ValidateResponseTimeoutMS(field string, ms int64) error {
 	if ms <= 0 {
 		return fmt.Errorf("%s is %d; give a positive number of milliseconds, or omit it to use the "+
 			"standing read timeout", field, ms)
+	}
+	if ms > MaxTimeoutMS {
+		return fmt.Errorf("%s is %d, longer than the %d ms this tool will wait", field, ms, MaxTimeoutMS)
+	}
+	return nil
+}
+
+// streamingOverride is the per-send streaming window ctx carries, and whether it carries one.
+func streamingOverride(ctx context.Context) (time.Duration, bool) {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok || !opts.StreamingTimeoutSet {
+		return 0, false
+	}
+	return opts.StreamingTimeout, true
+}
+
+// streamingDeadline is the deadline a per-send streaming window imposes from now, clamped to the
+// context's own deadline when that is earlier. The zero time means "no deadline" (a window of 0 with
+// no context deadline), which is what SetReadDeadline takes to clear one.
+func streamingDeadline(ctx context.Context, window time.Duration) time.Time {
+	var deadline time.Time
+	if window > 0 {
+		deadline = time.Now().Add(window)
+	}
+	if ctxDeadline, has := ctx.Deadline(); has && (deadline.IsZero() || ctxDeadline.Before(deadline)) {
+		deadline = ctxDeadline
+	}
+	return deadline
+}
+
+// ValidateStreamingTimeoutMS refuses a per-send streaming window an API caller cannot mean: negative,
+// or longer than the longest bound the network settings accept. Zero is valid and means no cutoff.
+func ValidateStreamingTimeoutMS(field string, ms int64) error {
+	if ms < 0 {
+		return fmt.Errorf("%s is %d; give 0 for no cutoff or a positive number of milliseconds", field, ms)
 	}
 	if ms > MaxTimeoutMS {
 		return fmt.Errorf("%s is %d, longer than the %d ms this tool will wait", field, ms, MaxTimeoutMS)
