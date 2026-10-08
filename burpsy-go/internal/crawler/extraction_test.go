@@ -102,19 +102,21 @@ func TestAnInlineHandlerIsNotScrapedForURLs(t *testing.T) {
 	}
 }
 
-// The other deliberate non-addition: meta refresh is not followed, because redirect policy is
-// explicit elsewhere in the tree and following it here would make the fetch list disagree with it.
-func TestMetaRefreshIsNotFollowed(t *testing.T) {
+// Meta refresh is followed by default and not when the crawl is told not to (q0qr): Burp's
+// http.redirections.understand_meta_refresh_tag, default true, which Config.NoMetaRefresh turns off.
+func TestMetaRefreshIsFollowedUnlessTurnedOff(t *testing.T) {
 	srv := selfNamingTarget(t, func(base string) map[string]servedPage {
 		return map[string]servedPage{
 			"/":          {`<html><head><meta http-equiv="refresh" content="0; url=/refreshed"></head><body>x</body></html>`, "text/html"},
 			"/refreshed": {`<html><body>x</body></html>`, "text/html"},
 		}
 	})
-	rep := run(t, newHarness().config(srv.URL+"/"))
-	if fetchedAny(rep, "/refreshed") {
-		t.Errorf("a meta refresh was followed; redirect handling in this tree is explicit and "+
-			"burpsy does not implement understand_meta_refresh_tag, so following it here would "+
-			"make the crawl's fetch list disagree with the redirect policy (fetched: %v)", fetchLog(rep))
+	if rep := run(t, newHarness().config(srv.URL+"/")); !fetchedAny(rep, "/refreshed") {
+		t.Errorf("a meta refresh was not followed under Burp's default (fetched: %v)", fetchLog(rep))
+	}
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.NoMetaRefresh = true
+	if rep := run(t, cfg); fetchedAny(rep, "/refreshed") {
+		t.Errorf("understand_meta_refresh_tag false still followed the refresh (fetched: %v)", fetchLog(rep))
 	}
 }

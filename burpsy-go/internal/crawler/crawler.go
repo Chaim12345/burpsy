@@ -263,6 +263,13 @@ type Config struct {
 	// SubmitForms turns form submission on (CRAWL-03). The zero value is off, and that is the
 	// requirement, not a default: a crawl that submits forms writes to the application.
 	SubmitForms bool
+	// NoMetaRefresh and NoRefreshHeader turn off following a <meta http-equiv="refresh"> target and a
+	// Refresh response header (q0qr). They are Burp's project options
+	// http.redirections.understand_meta_refresh_tag and understand_refresh_header set false. Both
+	// default to true in Burp (Preferences/ProjectDefaults.json), so the zero value here follows them.
+	// Negative names keep the zero value equal to Burp's default.
+	NoMetaRefresh   bool
+	NoRefreshHeader bool
 	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
 	// candidate URLs are also mined from HTML comments and script bodies — the places
 	// single-page apps and comment-leaked admin paths live. Off by default is NOT a statement
@@ -651,6 +658,12 @@ type Report struct {
 	// rendered pass", and the numbers sum to the discovered total because an unrecognised tag is
 	// counted under PhaseNone rather than dropped.
 	Phases map[CrawlPhase]int `json:"phases,omitempty"`
+	// EdgeKinds counts discovered locations by the kind of edge that led to them, in Burp's crawl
+	// telemetry vocabulary (burpsy-react-ui-ylr1, EdgeKindsAll): anchor, form, frame, iframe, area,
+	// redirect, delayed redirect, origin, submit, clickable, speculative, API, SOAP and GraphQL. Counted
+	// at discovery, before any gate, like Phases. Burp's non-deterministic-location count is
+	// LocationFolds: a page that came back with its links moved under the same structure.
+	EdgeKinds map[string]int `json:"edge_kinds"`
 	// SitemapSeeded counts requests this crawl did not make because the site map already held that
 	// exact request (burpsy-react-ui-z8qf). Zero for a crawl seeded from nothing, which is the
 	// common case and the one that must not read as a failure.
@@ -1342,6 +1355,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// of it at Run time would report a seed it did not cause.
 		SitemapSeeded: c.sitemapSeeded,
 	}
+	// Every edge kind is on the wire from the start, zeros included (ylr1), so a crawl that found
+	// nothing reports {"anchor":0,...} rather than null.
+	seedEdgeKinds(&rep)
 	lim := LimitReport{Limits: c.limits}
 
 	if c.cfg.SeedsOnly {
@@ -1353,6 +1369,7 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		}
 	} else {
 		for _, u := range c.seedURLs {
+			c.countEdge(&rep, "origin")
 			c.admitSeed(u, &lim)
 		}
 		// One robots.txt per seed authority, queued behind the seeds so the operator's own starting
@@ -2034,12 +2051,15 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	page := parsePage(body, item.url, c.limits, c.cfg.RequestSpeculative)
+	if c.cfg.NoMetaRefresh {
+		page.links = withoutTag(page.links, tagMetaRefresh)
+	}
 	if page.truncated {
 		lim.record(StopParseBytes)
 	}
 	// The Refresh response header (q0qr), the header form of a meta refresh: a delayed redirect the
 	// body never mentions.
-	if msg != nil {
+	if msg != nil && !c.cfg.NoRefreshHeader {
 		if target, ok := refreshTarget(string(msg.Header("Refresh"))); ok {
 			page.links = append(page.links, discoveredLink{raw: target, tag: tagRefreshHeader})
 		}
@@ -2627,6 +2647,23 @@ func (c *Crawler) countPhase(rep *Report, phase CrawlPhase) {
 	rep.Phases[phase]++
 }
 
+// countEdge counts one discovered edge by kind (ylr1), seeding every kind at zero on first use.
+func (c *Crawler) countEdge(rep *Report, kind string) {
+	seedEdgeKinds(rep)
+	rep.EdgeKinds[kind]++
+}
+
+// seedEdgeKinds puts every kind in EdgeKindsAll on the report at zero, once.
+func seedEdgeKinds(rep *Report) {
+	if rep.EdgeKinds != nil {
+		return
+	}
+	rep.EdgeKinds = make(map[string]int, len(EdgeKindsAll)+1)
+	for _, k := range EdgeKindsAll {
+		rep.EdgeKinds[k] = 0
+	}
+}
+
 // admit runs one discovered link through the frontier's gates, in this order:
 //
 //  1. resolution — a href that cannot be resolved to a host is nothing to fetch;
@@ -2648,6 +2685,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 	// rather than discovery, and an operator asking "did this crawl ever reach the sitemap" would be
 	// answered by a number that says no when the answer is yes.
 	c.countPhase(rep, PhaseOfTag(l.tag))
+	c.countEdge(rep, EdgeKindOfTag(l.tag))
 	u, err := resolveAgainst(base, l.raw)
 	if err != nil {
 		c.skips.record(SkipRecord{
@@ -2697,6 +2735,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 // a GET form is still a form the application meant a user to fill in, and the operator's decision
 // was about forms, not about methods.
 func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Report, lim *LimitReport) {
+	c.countEdge(rep, "form")
 	target := f.action
 	if strings.TrimSpace(target) == "" {
 		// The HTML specification: an empty action submits to the document's own URL.
@@ -3272,4 +3311,15 @@ func isResourceTag(tag string) bool {
 	default:
 		return false
 	}
+}
+
+// withoutTag drops the links a page contributed through one tag, keeping the rest in order.
+func withoutTag(links []discoveredLink, tag string) []discoveredLink {
+	out := links[:0:0]
+	for _, l := range links {
+		if l.tag != tag {
+			out = append(out, l)
+		}
+	}
+	return out
 }

@@ -450,9 +450,6 @@ var structuralAttrs = [...]string{"name", "type", "method", "action", "rel"}
 //     and not others, on a heuristic this project cannot cite, is exactly the fabrication the
 //     refusal-first design exists to prevent. A handler-delivered link is found by the rendered
 //     pass instead (nx7b), which executes the page and reads the DOM a browser produced.
-//   - `<meta http-equiv="refresh">`. Redirect handling here is explicit (`understand_meta_refresh_tag`
-//     is a Burp config key burpsy does not implement), and following it would make the crawl's
-//     fetch list disagree with the redirect policy the rest of the tree enforces.
 //   - `classid`, `archive` and `codebase` on `<object>`. They name plugin binaries and Java
 //     archives, not web locations, and a crawl that fetched them would be requesting files the
 //     application never exposed as URLs.
