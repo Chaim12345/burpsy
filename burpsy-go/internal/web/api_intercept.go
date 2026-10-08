@@ -56,13 +56,15 @@ type heldView struct {
 	Direction string `json:"direction"`
 	Host      string `json:"host"`
 	Port      uint16 `json:"port"`
-	TLS       bool   `json:"tls"`
-	Method    string `json:"method"`
-	Path      string `json:"path"`
-	Status    *int   `json:"status"`
-	HeldMs    int64  `json:"held_ms"`
-	Len       int    `json:"len"`
-	Raw       string `json:"raw"`
+	// ClientIP is the client that sent the held message to the listener (3bkn), "" when unknown.
+	ClientIP string `json:"client_ip"`
+	TLS      bool   `json:"tls"`
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	Status   *int   `json:"status"`
+	HeldMs   int64  `json:"held_ms"`
+	Len      int    `json:"len"`
+	Raw      string `json:"raw"`
 	// RawBodyBase64 is the held message's body octets when `raw` cannot carry them (not UTF-8) and they
 	// are the plain wire body (burpsy-react-ui-3pco) — so the Protobuf tab can read and edit a held gRPC
 	// body, and the forward can send the edit back byte-exact as raw_base64.
@@ -116,6 +118,7 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 			Direction:     h.Direction.String(),
 			Host:          h.Host,
 			Port:          h.Port,
+			ClientIP:      h.ClientIP,
 			TLS:           h.TLS,
 			Method:        h.Method,
 			Path:          h.Path,

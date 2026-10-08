@@ -27,6 +27,8 @@ export interface HeldMessageDetail {
  held_ms: number;
  len: number;
  raw: string;
+ /** The client that sent this message to the listener (3bkn); "" when unknown. */
+ client_ip?: string;
  /** The held body's exact octets when `raw` cannot carry them (not UTF-8) and they are the plain wire
   *  body — so the Protobuf tab can read and edit a held gRPC body (burpsy-react-ui-3pco). */
  raw_body_base64?: string;

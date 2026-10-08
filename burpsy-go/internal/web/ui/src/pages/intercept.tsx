@@ -1141,6 +1141,17 @@ export function InterceptPage(): JSX.Element {
    },
    { accessorKey: "path", header: "Path", size: 260, cell: (info) => <code title={info.getValue<string>()}>{info.getValue<string>()}</code> },
    {
+    // Which browser or device sent the held message (3bkn), Burp's sourceIpAddress().
+    id: "client_ip",
+    header: "Client",
+    size: 110,
+    accessorFn: (row) => row.client_ip ?? "",
+    cell: (info) => {
+     const ip = info.getValue<string>();
+     return ip === "" ? <span className="cell-dim">—</span> : <span>{ip}</span>;
+    },
+   },
+   {
     accessorKey: "status",
     header: "Status",
     size: 70,

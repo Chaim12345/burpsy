@@ -202,6 +202,8 @@ func (s *Server) relayH2Stream(w http.ResponseWriter, r *http.Request, upstream 
 
 			ServerIP:     serverIP,
 			ListenerPort: listenerPort,
+			// The h2 server hands the stream the client connection's peer address (3bkn).
+			ClientIP: hostOfAddr(r.RemoteAddr),
 		})
 	} else {
 		s.config.options.NoteOutOfScopeDrop()

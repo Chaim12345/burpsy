@@ -1580,9 +1580,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		reqStages.auto = requestData
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
-			if held := s.config.intercept.Hold(intercept.ParseMessage(
+			if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
-			)); held != nil {
+			))); held != nil {
 				action, raw, edited, heldEdited := held.Wait()
 				requestEdited = heldEdited
 				if action == intercept.ActionDrop {
@@ -1741,6 +1741,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 
 					ServerIP:     serverIPOf(upstream),
 					ListenerPort: listenerPortOf(clientConn),
+					ClientIP:     clientIPOf(clientConn),
 
 					// A handshake the operator edited in the hold is "Edited" in history, by the same rule
 					// as every other row (burpsy-react-ui-sd0d).
@@ -1885,9 +1886,9 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// half this function was handed.
 	var responseEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
-		)); held != nil {
+		))); held != nil {
 			// A response has no destination of its own to retarget: the bytes already came back from
 			// one. The target is therefore ignored here rather than applied, and the engine only ever
 			// sets it on a forward.
@@ -1944,6 +1945,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			ServerIP:     serverIP,
 			ListenerPort: listenerPortOf(clientConn),
+			ClientIP:     clientIPOf(clientConn),
 
 			// Either direction being the operator's own work makes this row "Edited", which is Burp's
 			// reading of the flag (burpsy-react-ui-sd0d). Deliberately not a comparison of the recorded
@@ -2160,9 +2162,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// intercept.Held.userEdited for why it is read from the hold and not recomputed from the bytes.
 	var requestEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
-		)); held != nil {
+		))); held != nil {
 			action, raw, retarget, heldEdited := held.Wait()
 			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
@@ -2339,9 +2341,9 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// other half of the same flag.
 	var responseEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
-		)); held != nil {
+		))); held != nil {
 			// The destination is ignored for a response, by the same reasoning as
 			// handleTLSResponse's: it has already been reached.
 			action, raw, _, heldEdited := held.Wait()
@@ -2408,6 +2410,7 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 
 		ServerIP:     serverIP,
 		ListenerPort: listenerPortOf(clientConn),
+		ClientIP:     clientIPOf(clientConn),
 
 		// Either direction being the operator's own work makes this row "Edited" (burpsy-react-ui-sd0d).
 		UserEdited: requestEdited || responseEdited,
@@ -3059,6 +3062,33 @@ func serverIPOf(conn net.Conn) string {
 // construction — asking the Server for its configured bind would answer with whatever it is bound
 // to now, and a rebind (burpsy-react-ui-77m) makes that a different port from the one this request
 // arrived on.
+// withClientIP stamps the client's address on an intercept message (3bkn), so a held item says which
+// browser or device sent it.
+func withClientIP(conn net.Conn, m *intercept.Message) *intercept.Message {
+	if m != nil {
+		m.ClientIP = clientIPOf(conn)
+	}
+	return m
+}
+
+// clientIPOf is the peer address of the client connection a request arrived on (3bkn), or "" when the
+// connection has none. The address the listener saw, never a header: X-Forwarded-For is whatever the
+// client chose to send.
+func clientIPOf(conn net.Conn) string {
+	if conn == nil || conn.RemoteAddr() == nil {
+		return ""
+	}
+	return hostOfAddr(conn.RemoteAddr().String())
+}
+
+// hostOfAddr strips the port from a host:port address, returning the input when it has none.
+func hostOfAddr(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
 func listenerPortOf(conn net.Conn) uint16 {
 	if conn == nil {
 		return 0
