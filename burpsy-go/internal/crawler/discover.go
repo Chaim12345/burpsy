@@ -285,6 +285,20 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 						})
 					}
 				}
+			// <meta http-equiv="refresh" content="N; url=..."> (burpsy-react-ui-q0qr), Burp's
+			// DELAYED_REDIRECT edge. A landing page that only meta-refreshes into the app was a one-page
+			// crawl, because the target is in an attribute no navigational tag carries.
+			case "meta":
+				if equiv, ok := attr(n, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(equiv), "refresh") {
+					if content, ok := attr(n, "content"); ok {
+						if target, ok := refreshTarget(content); ok {
+							linkTargets = append(linkTargets, resolvedTarget(effective, target))
+							if admit() {
+								out.links = append(out.links, discoveredLink{raw: target, tag: tagMetaRefresh})
+							}
+						}
+					}
+				}
 			case "iframe", "frame":
 				if src, ok := attr(n, "src"); ok {
 					linkTargets = append(linkTargets, resolvedTarget(effective, src))
@@ -924,4 +938,49 @@ func sourceMapSourcesContent(body []byte) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// tagMetaRefresh and tagRefreshHeader name the two delayed-redirect sources (q0qr), Burp's
+// DELAYED_REDIRECT edge kind.
+const (
+	tagMetaRefresh   = "meta[refresh]"
+	tagRefreshHeader = "refresh-header"
+)
+
+// refreshTarget reads the URL out of a refresh value, the same grammar for the meta element's content
+// and the Refresh response header (HTML's "shared declarative refresh steps"): a delay, then a ';' or
+// ',', then an optional "url=", then the URL, optionally quoted. A value that is only a delay reloads
+// the page itself and names no new location.
+func refreshTarget(value string) (string, bool) {
+	v := strings.TrimSpace(value)
+	i := 0
+	for i < len(v) && (v[i] >= '0' && v[i] <= '9' || v[i] == '.') {
+		i++
+	}
+	if i == 0 {
+		return "", false
+	}
+	v = strings.TrimLeft(v[i:], " \t")
+	if v == "" || (v[0] != ';' && v[0] != ',') {
+		return "", false
+	}
+	v = strings.TrimLeft(v[1:], " \t")
+	if len(v) >= 3 && strings.EqualFold(v[:3], "url") {
+		rest := strings.TrimLeft(v[3:], " \t")
+		if strings.HasPrefix(rest, "=") {
+			v = strings.TrimLeft(rest[1:], " \t")
+		}
+	}
+	if v != "" && (v[0] == '\'' || v[0] == '"') {
+		q := v[0]
+		v = v[1:]
+		if j := strings.IndexByte(v, q); j >= 0 {
+			v = v[:j]
+		}
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	return v, true
 }

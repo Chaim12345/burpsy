@@ -2037,6 +2037,13 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	if page.truncated {
 		lim.record(StopParseBytes)
 	}
+	// The Refresh response header (q0qr), the header form of a meta refresh: a delayed redirect the
+	// body never mentions.
+	if msg != nil {
+		if target, ok := refreshTarget(string(msg.Header("Refresh"))); ok {
+			page.links = append(page.links, discoveredLink{raw: target, tag: tagRefreshHeader})
+		}
+	}
 	// A source map the page's scripts named (burpsy-react-ui-jwy5, criterion 2). Fetched through the
 	// ordinary perform() path rather than from a side channel, so the request is scope-authorised,
 	// rate-limited, captured and counted exactly like any other — which is what keeps the bead's
