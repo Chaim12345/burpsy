@@ -1348,6 +1348,204 @@ function wireSyntaxEditor(textarea, kind = "http") {
   refresh2();
 }
 
+// src/decode.ts
+function b64ToBytes(b64) {
+  const clean = b64.replace(/\s+/g, "");
+  const groups = clean.length + 3 >> 2;
+  const out = new Uint8Array(groups * 3);
+  let written = 0;
+  const chunk = 65536;
+  for (let i = 0;i < clean.length; i += chunk) {
+    const bin = atob(clean.slice(i, i + chunk));
+    for (let j = 0;j < bin.length; j++)
+      out[written++] = bin.charCodeAt(j);
+  }
+  return out.subarray(0, written);
+}
+function utf8Decode(bytes) {
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function splitMessage(bytes) {
+  const n = bytes.length;
+  for (let i = 0;i + 3 < n; i++) {
+    if (bytes[i] === 13 && bytes[i + 1] === 10 && bytes[i + 2] === 13 && bytes[i + 3] === 10) {
+      return { head: bytes.subarray(0, i), body: bytes.subarray(i + 4), headText: utf8Decode(bytes.subarray(0, i)) };
+    }
+  }
+  for (let i = 0;i + 1 < n; i++) {
+    if (bytes[i] === 10 && bytes[i + 1] === 10) {
+      return { head: bytes.subarray(0, i), body: bytes.subarray(i + 2), headText: utf8Decode(bytes.subarray(0, i)) };
+    }
+  }
+  return { head: bytes, body: new Uint8Array(0), headText: utf8Decode(bytes) };
+}
+function headerValue(headText, name) {
+  const want = name.toLowerCase();
+  for (const line of headText.split(/\r?\n/)) {
+    const at = line.indexOf(":");
+    if (at <= 0)
+      continue;
+    if (line.slice(0, at).toLowerCase() === want)
+      return line.slice(at + 1).trim();
+  }
+  return null;
+}
+function charsetFromContentType(contentType) {
+  if (!contentType)
+    return null;
+  const m = /charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
+  return m ? m[1].trim() : null;
+}
+function normalizeCharset(name) {
+  switch (name.trim().toLowerCase()) {
+    case "utf8":
+    case "unicode-1-1-utf-8":
+      return "utf-8";
+    case "latin1":
+    case "latin-1":
+    case "iso-8859-1":
+    case "iso8859-1":
+    case "iso_8859-1":
+      return "windows-1252";
+    default:
+      return name.trim();
+  }
+}
+function bomCharset(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191)
+    return "utf-8";
+  if (bytes.length >= 2 && bytes[0] === 255 && bytes[1] === 254)
+    return "utf-16le";
+  if (bytes.length >= 2 && bytes[0] === 254 && bytes[1] === 255)
+    return "utf-16be";
+  return null;
+}
+function validUtf8(bytes) {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function chooseCharset(bytes, hint) {
+  const bom = bomCharset(bytes);
+  if (bom)
+    return bom;
+  if (hint)
+    return normalizeCharset(hint);
+  return validUtf8(bytes) ? "utf-8" : "windows-1252";
+}
+function decodeBytes(bytes, charset) {
+  try {
+    return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+function isBinaryText(text) {
+  if (text.length === 0)
+    return false;
+  const n = Math.min(text.length, 512);
+  let controls = 0;
+  for (let i = 0;i < n; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 0 || c < 32 && c !== 9 && c !== 10 && c !== 13 || c === 127)
+      controls++;
+  }
+  return controls / n > 0.1;
+}
+function hexDump(bytes, limit = 8192) {
+  const n = Math.min(bytes.length, limit);
+  const rows = [];
+  for (let off = 0;off < n; off += 16) {
+    const slice = bytes.subarray(off, Math.min(off + 16, n));
+    const hex = Array.from(slice, (b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+    const ascii = Array.from(slice, (b) => b >= 32 && b < 127 ? String.fromCharCode(b) : ".").join("");
+    rows.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(47)}  |${ascii}|`);
+  }
+  if (bytes.length > limit)
+    rows.push(`… ${bytes.length - limit} more bytes`);
+  return rows.join(`
+`);
+}
+function normFormat(enc) {
+  switch (enc.trim().toLowerCase()) {
+    case "gzip":
+    case "x-gzip":
+      return "gzip";
+    case "deflate":
+      return "deflate";
+    case "br":
+    case "brotli":
+      return "brotli";
+    case "zstd":
+      return "zstd";
+    default:
+      return null;
+  }
+}
+async function decompressOne(body, enc) {
+  const fmt = normFormat(enc);
+  if (!fmt)
+    return { bytes: body, ok: false };
+  if (typeof DecompressionStream === "undefined")
+    return { bytes: body, ok: false };
+  try {
+    const stream2 = new Blob([body]).stream().pipeThrough(new DecompressionStream(fmt));
+    const buf = await new Response(stream2).arrayBuffer();
+    return { bytes: new Uint8Array(buf), ok: true };
+  } catch {
+    return { bytes: body, ok: false };
+  }
+}
+function decodeNote(d) {
+  const parts = [];
+  if (d.wasCompressed)
+    parts.push(`decompressed ${d.encoding}`);
+  if (d.failedEncodings.length)
+    parts.push(`could not decode ${d.failedEncodings.join(", ")}`);
+  if (d.charset !== "utf-8")
+    parts.push(`charset ${d.charset}`);
+  if (d.binary)
+    parts.push("binary — hex dump");
+  return parts.join(" · ");
+}
+async function decodeMessageB64(b64) {
+  const bytes = b64ToBytes(b64);
+  const { body, headText } = splitMessage(bytes);
+  const contentType = headerValue(headText, "Content-Type");
+  const encodingHeader = headerValue(headText, "Content-Encoding");
+  const encodings = (encodingHeader ?? "").split(",").map((s) => s.trim()).filter((s) => s !== "" && s.toLowerCase() !== "identity");
+  let bodyBytes = body;
+  const applied = [];
+  const failed = [];
+  for (let i = encodings.length - 1;i >= 0; i--) {
+    const enc = encodings[i];
+    const { bytes: out, ok } = await decompressOne(bodyBytes, enc);
+    if (ok) {
+      bodyBytes = out;
+      applied.unshift(enc);
+    } else {
+      failed.unshift(enc);
+    }
+  }
+  const charset = chooseCharset(bodyBytes, charsetFromContentType(contentType));
+  const decoded = decodeBytes(bodyBytes, charset);
+  const binary = isBinaryText(decoded);
+  const bodyText = binary ? hexDump(bodyBytes) : decoded;
+  return {
+    text: headText + `\r
+\r
+` + bodyText,
+    encoding: encodings.length ? encodings.join(", ") : null,
+    charset,
+    wasCompressed: applied.length > 0,
+    failedEncodings: failed,
+    binary
+  };
+}
+
 // src/history.ts
 var allRows = [];
 var cachedScope = null;
@@ -1389,8 +1587,8 @@ function initHistory() {
       </div>
     </div>
     <div class="split-workspace">
-      <article class="editor-pane"><div class="pane-label">Request</div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
-      <article class="editor-pane"><div class="pane-label">Response</div><pre id="hist-res">The response will appear here.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Request</div><div class="decode-note" id="hist-req-note"></div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><div class="decode-note" id="hist-res-note"></div><pre id="hist-res">The response will appear here.</pre></article>
     </div>
   `;
   $all(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
@@ -1553,20 +1751,33 @@ async function openExchange(ex) {
   const resEl = $("#hist-res");
   reqEl.textContent = "loading…";
   resEl.textContent = "";
+  $("#hist-req-note").textContent = "";
+  $("#hist-res-note").textContent = "";
   try {
     const req = await getJSON(`/api/message/${ex.request}`);
-    renderSyntax(reqEl, req.text, "http");
+    await renderMessage(reqEl, $("#hist-req-note"), req);
   } catch (e) {
     reqEl.textContent = e.message;
   }
   if (ex.response !== null) {
     try {
       const res = await getJSON(`/api/message/${ex.response}`);
-      renderSyntax(resEl, res.text, "http");
+      await renderMessage(resEl, $("#hist-res-note"), res);
     } catch (e) {
       resEl.textContent = e.message;
     }
   }
+}
+async function renderMessage(el, noteEl, m) {
+  if (m.b64) {
+    try {
+      const d = await decodeMessageB64(m.b64);
+      renderSyntax(el, d.text, "http");
+      noteEl.textContent = decodeNote(d);
+      return;
+    } catch {}
+  }
+  renderSyntax(el, m.text, "http");
 }
 
 // src/wshistory.ts
@@ -1953,6 +2164,12 @@ User-Agent: burpsy\r
 Connection: close\r
 \r
 `;
+function crlf(raw) {
+  return raw.replace(/\r\n/g, `
+`).replace(/\r/g, `
+`).replace(/\n/g, `\r
+`);
+}
 var tabs = [];
 var activeId = 0;
 var nextId = 1;
@@ -1970,6 +2187,7 @@ function initRepeater() {
       </select>
       <button class="go" id="rep-send">Send</button>
       <span id="rep-meta" class="hint"></span>
+      <span id="rep-decode" class="hint"></span>
     </div>
     <div class="split-workspace tall">
       <article class="editor-pane"><div class="pane-label">Request editor</div><textarea id="rep-raw" spellcheck="false"></textarea></article>
@@ -2023,7 +2241,21 @@ function loadActiveIntoEditor() {
   refreshSyntaxEditor($("#rep-raw"));
   $("#rep-protocol").value = tab.protocol;
   $("#rep-meta").innerHTML = tab.request_msg_id ? `${statusBadge(tab.status)} · ${tab.duration_ms} ms · req msg ${tab.request_msg_id}` : "";
-  renderSyntax($("#rep-res"), tab.response, "http");
+  renderResponse(tab);
+}
+async function renderResponse(tab) {
+  const el = $("#rep-res");
+  const note = $("#rep-decode");
+  if (tab.response_b64) {
+    try {
+      const d = await decodeMessageB64(tab.response_b64);
+      renderSyntax(el, d.text, "http");
+      note.textContent = decodeNote(d);
+      return;
+    } catch {}
+  }
+  note.textContent = "";
+  renderSyntax(el, tab.response, "http");
 }
 function addTab(opts) {
   if (tabs.length > 0)
@@ -2036,7 +2268,8 @@ function addTab(opts) {
     status: null,
     duration_ms: null,
     request_msg_id: null,
-    response: ""
+    response: "",
+    response_b64: ""
   };
   tabs.push(tab);
   activeId = tab.id;
@@ -2056,7 +2289,7 @@ function closeTab(id) {
   if (idx === -1)
     return;
   if (tabs.length === 1) {
-    tabs[0] = { id: tabs[0].id, target: "", raw: DEFAULT_RAW, protocol: "Http1", status: null, duration_ms: null, request_msg_id: null, response: "" };
+    tabs[0] = { id: tabs[0].id, target: "", raw: DEFAULT_RAW, protocol: "Http1", status: null, duration_ms: null, request_msg_id: null, response: "", response_b64: "" };
     activeId = tabs[0].id;
   } else {
     tabs.splice(idx, 1);
@@ -2076,16 +2309,17 @@ async function send() {
   try {
     const d = await postJSON("/api/repeater/send", {
       target: tab.target,
-      raw: tab.raw,
+      raw: crlf(tab.raw),
       protocol: tab.protocol
     });
     tab.status = d.status;
     tab.duration_ms = d.duration_ms;
     tab.request_msg_id = d.request_msg_id;
     tab.response = d.response;
+    tab.response_b64 = d.response_b64;
     if (activeId === sendingId) {
       $("#rep-meta").innerHTML = `${statusBadge(d.status)} · ${d.duration_ms} ms · req msg ${d.request_msg_id}`;
-      renderSyntax($("#rep-res"), d.response, "http");
+      renderResponse(tab);
     }
   } catch (e) {
     if (activeId === sendingId) {
@@ -3273,7 +3507,7 @@ function bytesLine(b) {
 }
 var HEX_COLS = 16;
 var MAX_HEX_BYTES = 8192;
-function hexDump(bytes) {
+function hexDump2(bytes) {
   const shown = bytes.subarray(0, MAX_HEX_BYTES);
   const lines = [];
   for (let off = 0;off < shown.length; off += HEX_COLS) {
@@ -3294,7 +3528,7 @@ function hexDump(bytes) {
 }
 function bytesHexBlock(b) {
   const bytes = new TextEncoder().encode(b.text);
-  return `${hexDump(bytes)}${flagNote([
+  return `${hexDump2(bytes)}${flagNote([
     b.utf8 ? "" : `not-utf8: dumped from lossy text, ${bytes.length} B here vs ${b.len} B decoded`,
     b.truncated ? "truncated" : ""
   ])}`;
@@ -3440,6 +3674,11 @@ async function resolveSideText(prefix) {
   const msgRaw = $(`#cmp-${prefix}-msg`).value.trim();
   if (msgRaw) {
     const m = await getJSON(`/api/message/${msgRaw}`);
+    if (m.b64) {
+      try {
+        return (await decodeMessageB64(m.b64)).text;
+      } catch {}
+    }
     return m.text;
   }
   return $(`#cmp-${prefix}-text`).value;

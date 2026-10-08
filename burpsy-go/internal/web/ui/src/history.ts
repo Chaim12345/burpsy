@@ -13,6 +13,7 @@ import { live } from "./live";
 import { registerRowTarget } from "./shortcuts";
 import { exchangeMenuItems } from "./sendto";
 import { renderSyntax } from "./syntax";
+import { decodeMessageB64, decodeNote } from "./decode";
 
 /** All rows from the last `load()`, before any filter is applied. */
 let allRows: Exchange[] = [];
@@ -62,8 +63,8 @@ export function initHistory(): void {
       </div>
     </div>
     <div class="split-workspace">
-      <article class="editor-pane"><div class="pane-label">Request</div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
-      <article class="editor-pane"><div class="pane-label">Response</div><pre id="hist-res">The response will appear here.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Request</div><div class="decode-note" id="hist-req-note"></div><pre id="hist-req">Select an exchange to inspect its request.</pre></article>
+      <article class="editor-pane"><div class="pane-label">Response</div><div class="decode-note" id="hist-res-note"></div><pre id="hist-res">The response will appear here.</pre></article>
     </div>
   `;
   $all<HTMLInputElement>(".hist-status").forEach((c) => c.addEventListener("change", () => applyFilter()));
@@ -258,18 +259,37 @@ async function openExchange(ex: Exchange): Promise<void> {
   const resEl = $("#hist-res")!;
   reqEl.textContent = "loading…";
   resEl.textContent = "";
+  $("#hist-req-note")!.textContent = "";
+  $("#hist-res-note")!.textContent = "";
   try {
     const req = await getJSON<MessageView>(`/api/message/${ex.request}`);
-    renderSyntax(reqEl, req.text, "http");
+    await renderMessage(reqEl, $("#hist-req-note")!, req);
   } catch (e) {
     reqEl.textContent = (e as Error).message;
   }
   if (ex.response !== null) {
     try {
       const res = await getJSON<MessageView>(`/api/message/${ex.response}`);
-      renderSyntax(resEl, res.text, "http");
+      await renderMessage(resEl, $("#hist-res-note")!, res);
     } catch (e) {
       resEl.textContent = (e as Error).message;
     }
   }
+}
+
+/** Render a stored message from its lossless bytes so a non-UTF-8 or compressed body shows its
+ * real characters, with the decode note beside it (see decode.ts). Falls back to the lossy text
+ * rendering — showing something honest beats an empty pane, and the note says which one it was. */
+async function renderMessage(el: HTMLElement, noteEl: HTMLElement, m: MessageView): Promise<void> {
+  if (m.b64) {
+    try {
+      const d = await decodeMessageB64(m.b64);
+      renderSyntax(el, d.text, "http");
+      noteEl.textContent = decodeNote(d);
+      return;
+    } catch {
+      // fall through to the lossy copy
+    }
+  }
+  renderSyntax(el, m.text, "http");
 }

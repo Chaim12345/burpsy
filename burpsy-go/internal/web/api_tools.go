@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,14 +29,17 @@ import (
 type repeaterSendReq struct {
 	Target   string `json:"target"`   // e.g. "http://host:port" or "host:port"
 	Protocol string `json:"protocol"` // optional "http" / "https"
-	Request  string `json:"raw"`  // raw request text
+	Request  string `json:"raw"`      // raw request text
 }
 
-// repeaterSendResp mirrors repeater.ts's SendResp.
+// repeaterSendResp mirrors repeater.ts's SendResp. `response` is the same lossy UTF-8 rendering
+// MessageView.text serves; `response_b64` is the exact bytes, so the UI can decompress and
+// charset-decode what the peer actually sent rather than the U+FFFD-replaced copy.
 type repeaterSendResp struct {
 	Status        int    `json:"status"`
 	DurationMs    uint64 `json:"duration_ms"`
 	Response      string `json:"response"`
+	ResponseB64   string `json:"response_b64"`
 	RequestMsgID  uint64 `json:"request_msg_id"`
 	ResponseMsgID uint64 `json:"response_msg_id"`
 	ExchangeID    uint64 `json:"exchange_id"`
@@ -51,6 +55,13 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
+	// A browser delivers a <textarea> value with LF-only line endings (CRLF is normalised away when
+	// .value is read), so a captured request replayed from the UI can arrive here without a single
+	// \r. The sender keys its h2 detection on "\r\n" and otherwise writes bytes verbatim, so an
+	// LF-only copy is misread as HTTP/1.1 and sent with line endings a peer reads as malformed —
+	// Wikipedia answers such a GET with 400. Restore CRLF before sending: this endpoint replays
+	// requests; deliberately malformed bytes have their own surface (SendFrameProgram).
+	req.Request = normalizeCRLF(req.Request)
 	host, port, tls, err := targetParts(req.Target)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -132,6 +143,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		Status:        intOrZero(status),
 		DurationMs:    ex.Duration.Millis(),
 		Response:      string(rawResp),
+		ResponseB64:   base64.StdEncoding.EncodeToString(rawResp),
 		RequestMsgID:  uint64(reqMsgID),
 		ResponseMsgID: uint64(respMsgID),
 		ExchangeID:    ex.ID,
@@ -762,6 +774,17 @@ func (s *Server) handleSequencerCapture(w http.ResponseWriter, r *http.Request) 
 }
 
 // helpers ----------------------------------------------------------------------------------------
+
+// normalizeCRLF converts every line ending to CRLF, idempotently: an existing CRLF stays CRLF, a
+// lone CR becomes CRLF, a lone LF becomes CRLF. Used where an operator-written or UI-delivered
+// request must go out as the HTTP the peer expects rather than the bytes an editor happened to
+// produce. Not applied to frame-program or other deliberate-malformation surfaces.
+func normalizeCRLF(raw string) string {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	raw = strings.ReplaceAll(raw, "\n", "\r\n")
+	return raw
+}
 
 func parseResponseStatus(raw []byte) *uint16 {
 	s := firstLineStatus(raw)

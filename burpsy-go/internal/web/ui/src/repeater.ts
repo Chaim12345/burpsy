@@ -7,6 +7,7 @@ import { $, esc, statusBadge, postJSON, on, toast } from "./common";
 import { EVT_SEND_TO_REPEATER } from "./types";
 import type { SendToRepeaterDetail } from "./types";
 import { renderSyntax, refreshSyntaxEditor, wireSyntaxEditor } from "./syntax";
+import { decodeMessageB64, decodeNote } from "./decode";
 
 type Protocol = "Http1" | "Http2";
 
@@ -14,6 +15,7 @@ interface SendResp {
   status: number | null;
   duration_ms: number;
   response: string;
+  response_b64: string;
   request_msg_id: number;
   response_msg_id: number;
   exchange_id: number;
@@ -28,9 +30,19 @@ interface RepeaterTab {
   duration_ms: number | null;
   request_msg_id: number | null;
   response: string;
+  response_b64: string;
 }
 
 const DEFAULT_RAW = "GET / HTTP/1.1\r\nHost: example.com\r\nUser-Agent: burpsy\r\nConnection: close\r\n\r\n";
+
+// Browsers normalise a <textarea> value to LF (CRLF -> LF) when .value is read, which silently
+// rewrites a captured CRLF request into bytes a peer reads as malformed: the sender's h2 detection
+// keys on "\r\n", so an LF-only copy is misread as HTTP/1.1 and the raw LF line endings go on the
+// wire where the peer expects CRLF. The operator's intent is the captured bytes, so send restores
+// CRLF before posting. Idempotent: CRLF stays CRLF, lone CR becomes CRLF, lone LF becomes CRLF.
+function crlf(raw: string): string {
+  return raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n/g, "\r\n");
+}
 
 const tabs: RepeaterTab[] = [];
 let activeId = 0;
@@ -49,6 +61,7 @@ export function initRepeater(): void {
       </select>
       <button class="go" id="rep-send">Send</button>
       <span id="rep-meta" class="hint"></span>
+      <span id="rep-decode" class="hint"></span>
     </div>
     <div class="split-workspace tall">
       <article class="editor-pane"><div class="pane-label">Request editor</div><textarea id="rep-raw" spellcheck="false"></textarea></article>
@@ -111,7 +124,28 @@ function loadActiveIntoEditor(): void {
   $("#rep-meta")!.innerHTML = tab.request_msg_id
     ? `${statusBadge(tab.status)} · ${tab.duration_ms} ms · req msg ${tab.request_msg_id}`
     : "";
-  renderSyntax($("#rep-res")!, tab.response, "http");
+  void renderResponse(tab);
+}
+
+/** Render the response pane from the lossless bytes when we have them, so a Windows-1252 or
+ * gzip body shows what the peer actually sent rather than the U+FFFD wall of the JSON text
+ * transport (see decode.ts). Falls back to the lossy rendering if anything fails — showing
+ * *something* beats showing nothing, and the note always says which one the operator got. */
+async function renderResponse(tab: RepeaterTab): Promise<void> {
+  const el = $("#rep-res")!;
+  const note = $("#rep-decode")!;
+  if (tab.response_b64) {
+    try {
+      const d = await decodeMessageB64(tab.response_b64);
+      renderSyntax(el, d.text, "http");
+      note.textContent = decodeNote(d);
+      return;
+    } catch {
+      // fall through to the lossy copy
+    }
+  }
+  note.textContent = "";
+  renderSyntax(el, tab.response, "http");
 }
 
 function addTab(opts?: { target?: string; raw?: string; protocol?: Protocol }): void {
@@ -127,6 +161,7 @@ function addTab(opts?: { target?: string; raw?: string; protocol?: Protocol }): 
     duration_ms: null,
     request_msg_id: null,
     response: "",
+    response_b64: "",
   };
   tabs.push(tab);
   activeId = tab.id;
@@ -147,7 +182,7 @@ function closeTab(id: number): void {
   if (idx === -1) return;
   if (tabs.length === 1) {
     // Always keep at least one tab open — reset it in place rather than removing it.
-    tabs[0] = { id: tabs[0]!.id, target: "", raw: DEFAULT_RAW, protocol: "Http1", status: null, duration_ms: null, request_msg_id: null, response: "" };
+    tabs[0] = { id: tabs[0]!.id, target: "", raw: DEFAULT_RAW, protocol: "Http1", status: null, duration_ms: null, request_msg_id: null, response: "", response_b64: "" };
     activeId = tabs[0]!.id;
   } else {
     tabs.splice(idx, 1);
@@ -166,16 +201,17 @@ async function send(): Promise<void> {
   try {
     const d = await postJSON<SendResp>("/api/repeater/send", {
       target: tab.target,
-      raw: tab.raw,
+      raw: crlf(tab.raw),
       protocol: tab.protocol,
     });
     tab.status = d.status;
     tab.duration_ms = d.duration_ms;
     tab.request_msg_id = d.request_msg_id;
     tab.response = d.response;
+    tab.response_b64 = d.response_b64;
     if (activeId === sendingId) {
       $("#rep-meta")!.innerHTML = `${statusBadge(d.status)} · ${d.duration_ms} ms · req msg ${d.request_msg_id}`;
-      renderSyntax($("#rep-res")!, d.response, "http");
+      void renderResponse(tab);
     }
   } catch (e) {
     if (activeId === sendingId) {

@@ -40,11 +40,20 @@ func (r LoadReport) Summary() string {
 	)
 }
 
-// LoadDir reads every `.bcheck` under dir, classifies them, and returns a
-// PassiveScanner ready to run the passive set on captured responses.
+// LoadDir reads every `.bcheck` under dir on the real filesystem, classifies
+// them, and returns a PassiveScanner ready to run the passive set on captured
+// responses. LoadFS is the general form; the embedded corpus is LoadEmbedded.
 func LoadDir(dir string, store *core.TrafficStore, scope *core.Scope, logger *zap.Logger) (*PassiveScanner, error) {
+	return LoadFS(os.DirFS(dir), store, scope, logger)
+}
+
+// LoadFS reads every `.bcheck` reachable from any fs.FS -- a real directory or
+// an embedded corpus alike. Paths in the load report use the FS's own slash
+// separators. fs.WalkDir already yields lexical order, so the result is the
+// same corpus regardless of source.
+func LoadFS(fsys fs.FS, store *core.TrafficStore, scope *core.Scope, logger *zap.Logger) (*PassiveScanner, error) {
 	var files []string
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -61,7 +70,7 @@ func LoadDir(dir string, store *core.TrafficStore, scope *core.Scope, logger *za
 	report := LoadReport{Files: len(files)}
 	var checks []*bcheck.Check
 	for _, path := range files {
-		src, err := os.ReadFile(path)
+		src, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			report.Errors = append(report.Errors, LoadError{File: path, Err: err.Error()})
 			continue

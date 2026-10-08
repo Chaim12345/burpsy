@@ -33,7 +33,7 @@ func main() {
 	interceptTLS := flag.Bool("intercept-tls", true, "enable TLS interception (disable with -intercept-tls=false)")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
-	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
+	bchecksDir := flag.String("bchecks", "", "replace the bundled PortSwigger BCheck corpus (the default) with BCheck files from this directory")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
 	// names and exits, because the names contain spaces and hyphens and guessing them is hopeless.
@@ -186,9 +186,9 @@ func main() {
 		findingStore.SetPersistenceSink(persistStore.SaveFinding)
 	}
 
-	// Passive scanning is opt-in via --bchecks, mirroring the Rust CLI. Without
-	// it the built-in header/cookie checks still run so existing tests keep their
-	// expectations.
+	// Passive scanning is on by default: --bchecks overrides the bundled
+	// PortSwigger corpus (264 files, embedded at build time) with a directory
+	// of the operator's own BChecks.
 	var passiveScanner *scanner.PassiveScanner
 	if *bchecksDir != "" {
 		ps, err := scanner.LoadDir(*bchecksDir, store, scope, logger)
@@ -205,7 +205,12 @@ func main() {
 			logger.Warn("unparsable bcheck", zap.String("file", e.File), zap.String("error", e.Err))
 		}
 	} else {
-		passiveScanner = scanner.NewPassiveScanner(store, logger)
+		ps, err := scanner.LoadEmbedded(store, scope, logger)
+		if err != nil {
+			log.Fatalf("Failed to load embedded BCheck corpus: %v", err)
+		}
+		passiveScanner = ps
+		logger.Info("embedded bchecks loaded", zap.String("report", ps.Report().Summary()))
 	}
 
 	// Create proxy config

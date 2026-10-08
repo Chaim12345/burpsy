@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
@@ -48,13 +49,24 @@ type ExchangeView struct {
 	Protocol    string  `json:"protocol"`
 }
 
-// MessageView is the wire shape for a stored message: id, byte length, and a lossy UTF-8 text
-// rendering. The UI's comparer and history viewer slice by byte offsets into this text, so `len`
-// is the raw byte count, not the string rune count.
+// MessageView is the wire shape for a stored message: id, byte length, a lossy UTF-8 text
+// rendering, and the exact raw bytes as base64. The UI's comparer and history viewer slice by byte
+// offsets into `text`, so `len` is the raw byte count, not the string rune count.
+//
+// # Why text and b64 both exist
+//
+// The Go->JSON->browser string transport is lossy by construction: encoding/json replaces any byte
+// that is not valid UTF-8 with U+FFFD, so a Windows-1252 body or a gzip-compressed body renders as
+// a run of replacement characters. `text` is that inevitable, lossy rendering (kept for every
+// consumer that predates this field and for byte-offset slicing). `b64` is the exact bytes, so the
+// UI can decompress Content-Encoding and decode the declared charset and show what is actually
+// there. The two are not equivalent views of the same data: decoding `text` back to bytes is
+// impossible, decoding `b64` is lossless.
 type MessageView struct {
 	ID   uint64 `json:"id"`
 	Len  int    `json:"len"`
 	Text string `json:"text"`
+	B64  string `json:"b64"`
 }
 
 // StatsView mirrors the UI's Stats interface.
@@ -108,10 +120,12 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 }
 
 func messageView(msg *core.StoredMessage) *MessageView {
+	raw := msg.Raw()
 	return &MessageView{
 		ID:   uint64(msg.ID),
 		Len:  msg.Len(),
-		Text: string(msg.Raw()),
+		Text: string(raw),
+		B64:  base64.StdEncoding.EncodeToString(raw),
 	}
 }
 

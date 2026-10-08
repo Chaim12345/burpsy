@@ -3,7 +3,8 @@
 
 import { $, $all, esc, getJSON, postJSON, on } from "./common";
 import { EVT_SEND_TO_COMPARER } from "./types";
-import type { SendToComparerDetail } from "./types";
+import type { SendToComparerDetail, MessageView } from "./types";
+import { decodeMessageB64 } from "./decode";
 
 interface OpView {
   kind: string;
@@ -99,7 +100,16 @@ function updateHunkNav(): void {
 async function resolveSideText(prefix: "a" | "b"): Promise<string> {
   const msgRaw = $<HTMLInputElement>(`#cmp-${prefix}-msg`)!.value.trim();
   if (msgRaw) {
-    const m = await getJSON<{ text: string }>(`/api/message/${msgRaw}`);
+    const m = await getJSON<MessageView>(`/api/message/${msgRaw}`);
+    // Compare the decoded rendering, not the lossy text copy: a latin-1 or gzip body would
+    // otherwise diff as a wall of U+FFFD against anything (see decode.ts).
+    if (m.b64) {
+      try {
+        return (await decodeMessageB64(m.b64)).text;
+      } catch {
+        // fall through to the lossy copy
+      }
+    }
     return m.text;
   }
   return $<HTMLTextAreaElement>(`#cmp-${prefix}-text`)!.value;

@@ -24,6 +24,9 @@ export interface MessageView {
   id: number;
   len: number;
   text: string;
+  /** Exact raw bytes as base64 — the lossless counterpart to `text`, which JSON transport makes
+   * lossy for anything not valid UTF-8. See decode.ts. */
+  b64: string;
 }
 
 export interface Stats {
