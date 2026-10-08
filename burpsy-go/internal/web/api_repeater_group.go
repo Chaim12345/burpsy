@@ -83,6 +83,8 @@ type repeaterGroupSendItem struct {
 	Request      string               `json:"request"`
 	FromExchange *core.ExchangeID     `json:"from_exchange,omitempty"`
 	Options      *repeaterSendOptions `json:"options,omitempty"`
+	// Note is the tab's note, recorded on this item's exchange exactly as a single send records it.
+	Note string `json:"note,omitempty"`
 }
 
 // repeaterGroupSendResp is the group's outcome: one result per item, in the order they were sent.
@@ -191,6 +193,10 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		seen[item.TabID] = struct{}{}
+		if err := validRepeaterNote("note", item.Note); err != nil {
+			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), http.StatusBadRequest)
+			return
+		}
 		spec, code, err := s.prepareRepeaterSend(item.Target, item.Protocol, item.Request, item.Options, item.FromExchange)
 		if err != nil {
 			// Named by tab, not by index: the operator is looking at a tab strip, and "item 2" is not
@@ -198,6 +204,7 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), code)
 			return
 		}
+		spec.Note = item.Note
 		specs[i] = spec
 	}
 

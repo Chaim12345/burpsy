@@ -110,6 +110,8 @@ export interface RepeaterSendBody {
   protocol: string;
   from_exchange?: number;
   options?: RepeaterSendOptions;
+  /** The tab's note, recorded as the sent exchange's comment so it travels to other tools (jva5). */
+  note?: string;
 }
 
 /**

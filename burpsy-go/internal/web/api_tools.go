@@ -49,6 +49,26 @@ type repeaterSendReq struct {
 	// standing behaviour in full — the zero options are the defaults, so an absent object and an
 	// empty one mean the same thing.
 	Options *repeaterSendOptions `json:"options,omitempty"`
+	// Note is the tab's Notes panel text (burpsy-react-ui-jva5), recorded as the new exchange's
+	// comment. Burp: "if you send a message from Repeater to another tool, your notes and
+	// highlights are copied across" — every tool that reads an exchange's notes (HTTP history's
+	// comment column, Organizer's add, Logger) then has it without a second channel. Empty records
+	// no comment rather than an empty one.
+	Note string `json:"note,omitempty"`
+}
+
+// maxRepeaterNoteBytes bounds a tab note carried on a send. A note is prose about one request, and
+// it is persisted with the exchange; a megabyte "note" is a paste into the wrong box, refused with
+// the limit named rather than silently stored or truncated.
+const maxRepeaterNoteBytes = 64 << 10
+
+// validRepeaterNote refuses a note over the bound. field names the request key so a group send can
+// say which item carried it.
+func validRepeaterNote(field, note string) error {
+	if len(note) > maxRepeaterNoteBytes {
+		return fmt.Errorf("refused: %s is %d bytes; a tab note is at most %d bytes", field, len(note), maxRepeaterNoteBytes)
+	}
+	return nil
 }
 
 // repeaterSendResp mirrors repeater.ts's SendResp.
@@ -127,6 +147,9 @@ type repeaterSendSpec struct {
 	AsWritten string
 	Options   repeaterSendOptions
 	From      *core.ExchangeID
+	// Note is the tab's note, written onto the exchange as its comment (jva5). Set by the handlers
+	// after prepareRepeaterSend, because it shapes the record, not the wire.
+	Note string
 }
 
 // prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
@@ -230,6 +253,12 @@ func (s *Server) recordRepeaterExchange(
 		// Burp keeps a Repeater send out of Proxy history.
 		Source: core.SourceRepeater,
 	}
+	if spec.Note != "" {
+		// A copy: the spec outlives this row only briefly, but a pointer into a struct field that a
+		// later caller reuses is the kind of aliasing that writes one tab's note onto another's row.
+		note := spec.Note
+		ex.Notes = &note
+	}
 	s.store.AddExchange(ex)
 
 	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
@@ -313,11 +342,16 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		}
 		request = string(b)
 	}
+	if err := validRepeaterNote("note", req.Note); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, request, req.Options, req.FromExchange)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
+	spec.Note = req.Note
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

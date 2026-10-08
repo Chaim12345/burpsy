@@ -281,6 +281,9 @@ export function useExchangeActions(): {
     // when the head describes no Content-Encoding or chunking (burpsy-react-ui-3pco).
     requestBodyBase64: editableBodyBase64(message),
     fromExchange: exchange.id,
+    // Burp copies notes into Repeater when a message is sent there from another tool (jva5): the
+    // exchange's comment becomes the tab's note.
+    ...(exchange.notes ? { note: exchange.notes } : {}),
    });
    setRoute("repeater");
    toast.success(`Exchange #${exchange.id} sent to Repeater`);

@@ -206,6 +206,14 @@ export interface RepeaterTab {
   * operator overrides again, exactly as Burp's toggle does.
   */
  inheritsGlobal?: boolean;
+ /**
+  * The tab's Notes panel (burpsy-react-ui-jva5): Burp's "If you find something interesting in a
+  * request or response, you can add notes to the Repeater tab". Persisted with the tab, carried by
+  * duplicate and reopen (both copy the whole tab), seeded from an exchange's comment when the tab
+  * is opened from one, and sent with every send so the new exchange carries it as its comment —
+  * which is how it reaches Organizer and every other tool that reads an exchange's notes.
+  */
+ note?: string;
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:
@@ -773,7 +781,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client"; note?: string }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;
@@ -954,7 +962,7 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection, note }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
@@ -980,6 +988,9 @@ export const useApp = create<AppState>()(
         ...(wsPayload !== undefined ? { wsPayload } : {}),
         ...(wsOpcode ? { wsOpcode } : {}),
         ...(wsDirection ? { wsDirection } : {}),
+        // A note the tab was opened with (an exchange's comment, or the source tab's note on a
+        // Send to Repeater) — absent rather than empty when there is none (jva5).
+        ...(note ? { note } : {}),
        },
       ],
       state.closedRepeaterTabs,

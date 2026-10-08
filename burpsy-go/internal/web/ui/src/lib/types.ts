@@ -516,6 +516,8 @@ export interface RepeaterGroupSendItem {
  request: string;
  from_exchange?: number;
  options?: RepeaterSendOptions;
+ /** The tab's note, recorded on this item's exchange (jva5). */
+ note?: string;
 }
 
 /**

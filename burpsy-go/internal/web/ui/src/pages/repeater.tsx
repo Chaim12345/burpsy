@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, StickyNote, X } from "lucide-react";
 import { TAB_COLOURS } from "../ui/highlight-icons";
 import { faithfulRequestBase64, requestTargetPath } from "../lib/message";
 import { cn } from "../lib/cn";
@@ -29,7 +29,7 @@ import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Textarea, Tooltip } from "../ui/primitives";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "../ui/menu";
 import { SimpleTable } from "../ui/table";
 
@@ -88,6 +88,12 @@ function schemeOf(target: string): "http" | "https" {
 // overrides.
 function sendOptionsFor(tab: RepeaterTab): RepeaterSendOptions | undefined {
   return tab.inheritsGlobal === false ? tab.options : undefined;
+}
+
+/** The tab's note as a send carries it (jva5): absent when blank, so a send with no note records no
+ *  comment rather than an empty one. */
+function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
+  return tab.note && tab.note.trim() !== "" ? { note: tab.note } : {};
 }
 
 export function RepeaterPage(): JSX.Element {
@@ -210,6 +216,8 @@ export function RepeaterPage(): JSX.Element {
   const [groupRenameValue, setGroupRenameValue] = useState("");
   /** Whether the config-override panel (U20) is open for the active tab. */
   const [configOpen, setConfigOpen] = useState(false);
+  /** Whether the Notes panel (jva5) is open. The note itself lives on the tab and persists. */
+  const [notesOpen, setNotesOpen] = useState(false);
 
   const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
 
@@ -272,6 +280,7 @@ export function RepeaterPage(): JSX.Element {
         // Absent options means "standing behaviour" — the backend validates and applies whatever
         // arrives, so an empty object is never sent when the operator set nothing.
         ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+        ...noteFor(tab),
       },
       {
         onSuccess: (result) => {
@@ -402,6 +411,7 @@ export function RepeaterPage(): JSX.Element {
           protocol: schemeOf(tab.target),
           ...(tab.fromExchange != null ? { from_exchange: tab.fromExchange } : {}),
           ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+          ...noteFor(tab),
         })),
       },
       {
@@ -468,6 +478,7 @@ export function RepeaterPage(): JSX.Element {
             request: tab.request,
             protocol: schemeOf(tab.target),
             ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+            ...noteFor(tab),
           }),
         );
         // Same pairing rule as a normal send: the entry this hand-off adds carries the draft it
@@ -614,6 +625,8 @@ export function RepeaterPage(): JSX.Element {
               target: active.target,
               protocol: active.protocol,
               request: draftRequest,
+              // Burp copies the tab's notes across with the message (jva5).
+              ...(active.note ? { note: active.note } : {}),
             });
             setRoute("repeater");
             toast.success(`Copied to a new Repeater tab (from ${active.name})`);
@@ -983,6 +996,9 @@ export function RepeaterPage(): JSX.Element {
               <span title="This tab overrides the global send settings" style={{ color: "var(--accent)", marginRight: 3 }}>●</span>
             ) : null}
             {tab.name}
+            {tab.note && tab.note.trim() !== "" ? (
+              <StickyNote size={10} aria-label="has notes" style={{ display: "inline", marginLeft: 4, verticalAlign: "-1px" }} />
+            ) : null}
           </span>
         )}
         <button
@@ -1141,6 +1157,12 @@ export function RepeaterPage(): JSX.Element {
               >
                 <Columns3 size={13} />
               </IconButton>
+              <Tooltip content={active.note ? "This tab's notes (they go with every send, into the exchange's comment)" : "Add notes to this tab"}>
+                <Button variant="outline" aria-pressed={notesOpen} onClick={() => setNotesOpen((open) => !open)}>
+                  <StickyNote size={14} />
+                  Notes{active.note && active.note.trim() !== "" ? " •" : ""}
+                </Button>
+              </Tooltip>
               <Tooltip content="Per-send overrides for this tab">
                 <Button variant="outline" aria-pressed={configOpen} onClick={() => setConfigOpen((open) => !open)}>
                   <SlidersHorizontal size={14} />
@@ -1388,6 +1410,25 @@ export function RepeaterPage(): JSX.Element {
             tabName={(id) => tabs.find((tab) => tab.id === id)?.name ?? id}
             onDismiss={() => setGroupOutcome(null)}
           />
+        ) : null}
+        {notesOpen ? (
+          <Card style={{ marginTop: 10, padding: 12, display: "grid", gap: 6 }}>
+            <Field label={`Notes · ${active.name}`}>
+              {(id) => (
+                <Textarea
+                  id={id}
+                  rows={4}
+                  value={active.note ?? ""}
+                  placeholder="What you found, what to try next. Saved with the tab."
+                  onChange={(event) => updateRepeaterTab(active.id, { note: event.target.value })}
+                />
+              )}
+            </Field>
+            <p className="field-hint">
+              Kept with this tab across reloads, duplicate and reopen. Every send records it as the new exchange's comment,
+              so it travels with the request — Add to Organizer copies it onto the item, and Send to Repeater onto the new tab.
+            </p>
+          </Card>
         ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} overriding={overriding} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} onRestoreGlobal={restoreGlobalDefault} /> : null}
         {httpResult?.redirects ? (
