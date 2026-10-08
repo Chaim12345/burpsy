@@ -260,11 +260,15 @@ const (
 	// within a tolerance, which is a different and weaker thing to rely on, and is the difference
 	// between a coverage claim and a claim about coverage.
 	SkipLocationFolded
+	// SkipSoftNotFound means the response was a 2xx whose page matched the shape this directory answers
+	// a request for a nonexistent sibling with (burpsy-react-ui-s92h), Burp's not-found-detection edge:
+	// a custom "page not found" served with 200. It is not a location, and its links were not walked.
+	SkipSoftNotFound
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [39]Skip{
+var SkipAll = [40]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -304,6 +308,7 @@ var SkipAll = [39]Skip{
 	SkipOutOfScopeResource,
 	SkipFormSubmissionCap,
 	SkipLocationFolded,
+	SkipSoftNotFound,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -389,6 +394,8 @@ func (s Skip) slot() int {
 		return 37
 	case SkipLocationFolded:
 		return 38
+	case SkipSoftNotFound:
+		return 39
 	}
 	panic("unknown Skip")
 }
@@ -474,6 +481,8 @@ func (s Skip) String() string {
 		return "form-submission-cap"
 	case SkipLocationFolded:
 		return "location-folded"
+	case SkipSoftNotFound:
+		return "soft-not-found"
 	}
 	return "unknown"
 }
@@ -560,6 +569,8 @@ func (s Skip) Explanation() string {
 		return "the page loads this from a host outside the engagement scope. Burp's crawler fetches such resources by default (allow_out_of_scope_resources); burpsy refuses them, so a page whose content lives on a CDN or a third-party API contributes no locations"
 	case SkipLocationFolded:
 		return "this page was recognised as one already seen within a tolerance: the same structure and the same set of link paths, with a few link values changed, so its links were not walked again. Counted apart from an exact duplicate because the location count it contributes rests on a tolerance rather than on identical contents"
+	case SkipSoftNotFound:
+		return "the server answered 200, but the page matched what it serves for a request for a nonexistent sibling: a custom \"page not found\". It is not a location, and its links were not walked"
 	}
 	return "unknown skip"
 }
@@ -631,7 +642,7 @@ func (s Skip) Category() SkipCategory {
 		return CategoryScope
 	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap:
 		return CategoryPolicy
-	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded:
+	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded, SkipSoftNotFound:
 		return CategoryDuplicate
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
 		SkipSpeculativeLimit, SkipGraphQLIntrospection:

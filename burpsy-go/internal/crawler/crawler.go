@@ -270,6 +270,10 @@ type Config struct {
 	// Negative names keep the zero value equal to Burp's default.
 	NoMetaRefresh   bool
 	NoRefreshHeader bool
+	// NoNotFoundProbe turns off not-found detection (s92h): the per-directory probe for a
+	// nonexistent sibling that teaches the crawl what a soft 404 looks like. On by default, as Burp's
+	// is.
+	NoNotFoundProbe bool
 	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
 	// candidate URLs are also mined from HTML comments and script bodies — the places
 	// single-page apps and comment-leaked admin paths live. Off by default is NOT a statement
@@ -506,8 +510,12 @@ type SeedRequest struct {
 // Fetch is one request the crawl actually sent, and what came back. The list of these is the "what
 // it did reach" half of the coverage story CRAWL-07 asks about; LimitReport.Unfetched is the other.
 type Fetch struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
+	// SoftNotFound marks a 2xx response that was its directory's custom "not found" page (s92h).
+	SoftNotFound bool `json:"soft_not_found,omitempty"`
+	// NotFoundProbe marks the request the crawl made itself to learn a directory's not-found page.
+	NotFoundProbe bool   `json:"not_found_probe,omitempty"`
+	URL           string `json:"url"`
+	Method        string `json:"method"`
 	// Status is the response status, or 0 when the response could not be parsed.
 	Status int `json:"status"`
 	// ExchangeID is the store id, so a caller can pull the request and response bytes out of history.
@@ -714,6 +722,10 @@ type Report struct {
 	// rather than a guess at one: a folded page's links were NOT queued again, so this is the
 	// number of pages the band kept out of the frontier.
 	LocationFolds int `json:"location_folds,omitempty"`
+	// SoftNotFound counts 2xx responses recognised as their directory's custom "not found" page (s92h).
+	SoftNotFound int `json:"soft_not_found"`
+	// NotFoundProbes counts the per-directory probes for a nonexistent name (s92h). Each is also a Fetch.
+	NotFoundProbes int `json:"not_found_probes"`
 	// RenderedAudit is the browser's second look over the crawl's locations (burpsy-react-ui-xuim):
 	// which distinct locations were rendered in a headless browser, and at how many of them the
 	// page's own script produced content the wire response never contained. Nil when the pass did
@@ -972,6 +984,10 @@ type Crawler struct {
 	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
 	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
 	locationShapes map[string][]string
+	// notFound is each probed directory's answer for a nonexistent name (s92h); nil marks a directory
+	// whose probe could not be read. notFoundProbes counts probes against maxNotFoundProbes.
+	notFound       map[string]*notFoundShape
+	notFoundProbes int
 	// templates counts fetches admitted per URL template, for the quota. Bounded by
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
@@ -1208,6 +1224,7 @@ func New(cfg Config) (*Crawler, error) {
 		queued:            make(map[string]bool),
 		locations:         make(map[string]locationEntry),
 		locationShapes:    make(map[string][]string),
+		notFound:          make(map[string]*notFoundShape),
 		templates:         make(map[string]int),
 		templateOK:        make(map[string]bool),
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
@@ -2082,6 +2099,19 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		})
 	}
 	fetch.Fingerprint = page.fingerprint
+	// A 2xx page that matches its directory's answer for a missing name is that directory's custom
+	// "not found" page, not a location (s92h): it is neither recorded as one nor walked.
+	if fetch.Status >= 200 && fetch.Status <= 299 && c.isSoftNotFound(ctx, item, page, rep) {
+		fetch.SoftNotFound = true
+		rep.SoftNotFound++
+		c.skips.record(SkipRecord{
+			Reason: SkipSoftNotFound, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Text: item.text,
+			Detail: "matched what " + notFoundKey(item.url) + " answers for a nonexistent name",
+		})
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
 	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
 		// Already seen at another URL, exactly or within the tolerance band: the links here are the
 		// links there, so descending again would spend budget re-walking a subtree already covered.

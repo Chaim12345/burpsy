@@ -23,8 +23,10 @@ func TestTheReportCountsDiscoveriesByEdgeKind(t *testing.T) {
 			</body></html>`))
 		case "/old":
 			http.Redirect(w, r, "/a1", http.StatusFound)
+		case "/a1", "/a2", "/frame", "/area", "/later":
+			w.Write([]byte(`<html><body><p>` + r.URL.Path + `</p><a href="/old">old</a></body></html>`))
 		default:
-			w.Write([]byte(`<html><body><a href="/old">old</a></body></html>`))
+			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(srv.Close)
