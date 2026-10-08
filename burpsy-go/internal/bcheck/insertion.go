@@ -2578,8 +2578,8 @@ func (p InsertionPoint) BodyWindow() (start, end int, code ContainerCode, ok boo
 // WireValue returns the full wire value the point carries once payload has been
 // spliced in: the payload escaped for its container (JSON string, XML text node
 // or attribute value, MIME quoted-string), or — for a nested point — the whole
-// outer wire value rebuilt from decode → splice → re-encode. appending is not
-// modelled: Intruder replaces the window rather than appending to the base value.
+// outer wire value rebuilt from decode → splice → re-encode. It replaces the
+// window; WireValueAppend is the "Append to base parameter value" form.
 //
 // A payload the container cannot represent is an error rather than a rewritten
 // payload, so Intruder refuses exactly what the scanner's Apply refuses.
@@ -2606,19 +2606,58 @@ func (p InsertionPoint) WireValue(payload string) (string, error) {
 		}
 		return payload, nil
 	case codingNested:
-		lvl1 := containerDecode(p.containerCoding, p.BaseValue)
-		inner, err := nestedDecode(p.nested, lvl1)
-		if err != nil {
-			return "", err
-		}
-		innerNew := spliceStr(inner, p.loc.innerStart, p.loc.innerEnd,
-			escapeForNested(p.nested, payload))
-		wire := containerEncode(p.containerCoding, nestedEncode(p.nested, innerNew))
-		if err := p.refuseValue(wire); err != nil {
-			return "", err
-		}
-		return wire, nil
+		return p.nestedWireValue(payload, false)
 	default:
 		return "", fmt.Errorf("intruder point: unsupported coding %d", p.coding)
 	}
+}
+
+// AppendRebuildsValue reports whether appending a payload to this point's base
+// value rebuilds the whole wire value. It does for a nested point only: the base
+// value there is decoded, extended in its inner buffer and re-encoded (base64
+// cannot be extended by concatenating onto its encoded text), so Intruder must
+// replace the full window with WireValueAppend. Every other container keeps its
+// base bytes exactly as captured, and appending is the escaped payload
+// (WireValue) spliced at the end of the window.
+func (p InsertionPoint) AppendRebuildsValue() bool { return p.coding == codingNested }
+
+// WireValueAppend is WireValue for Intruder's "Append to base parameter value"
+// (burpsy-react-ui-1krs): the full wire value the point carries once payload is
+// appended to its base value. For a nested point this is applyNested's
+// appending branch — the payload lands after the inner value, inside the
+// decoded buffer, and the outer value is re-encoded. For every other container
+// it is the base wire bytes followed by the escaped payload, which is
+// byte-for-byte what splicing WireValue(payload) at the end of the window
+// produces; the refusals are WireValue's own, so Intruder refuses exactly what
+// the scanner's Apply(…, appending=true) refuses.
+func (p InsertionPoint) WireValueAppend(payload string) (string, error) {
+	if p.coding == codingNested {
+		return p.nestedWireValue(payload, true)
+	}
+	escaped, err := p.WireValue(payload)
+	if err != nil {
+		return "", err
+	}
+	return p.BaseValue + escaped, nil
+}
+
+// nestedWireValue rebuilds a nested point's outer wire value with payload
+// spliced into the decoded inner buffer — over the inner value, or after it when
+// appending. The rebuilt value is what the refusal checks, as in applyNested.
+func (p InsertionPoint) nestedWireValue(payload string, appending bool) (string, error) {
+	lvl1 := containerDecode(p.containerCoding, p.BaseValue)
+	inner, err := nestedDecode(p.nested, lvl1)
+	if err != nil {
+		return "", err
+	}
+	innerNew := escapeForNested(p.nested, payload)
+	if appending {
+		innerNew = inner[p.loc.innerStart:p.loc.innerEnd] + innerNew
+	}
+	innerNew = spliceStr(inner, p.loc.innerStart, p.loc.innerEnd, innerNew)
+	wire := containerEncode(p.containerCoding, nestedEncode(p.nested, innerNew))
+	if err := p.refuseValue(wire); err != nil {
+		return "", err
+	}
+	return wire, nil
 }

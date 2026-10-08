@@ -93,6 +93,18 @@ there and the position is skipped rather than spliced. Adding a container means 
 in `internal/bcheck` — a parser here would be the second model of the same format, which
 is the drift this design exists to prevent (burpsy-react-ui-33t, 63jg).
 
+### Append placement is a zero-length span, and overlap has one definition
+
+`PointConfig.Placement` is Burp's "Automatic payload placement" (1krs). Under `PlacementAppend`
+every discovered parameter VALUE becomes a zero-length span at the end of the value (Burp's
+`Zswj(valueEnd, valueEnd)`), with `BaseSpan()` still naming the value; a nested container keeps its
+window and is rebuilt by `bcheck.InsertionPoint.WireValueAppend`, because base64 cannot be extended
+by concatenation. Names, paths, headers, multipart attributes and the entire body keep replacing.
+`SpansOverlap` is the one definition of "two positions compete": a zero-length span overlaps any
+span it touches, edges included. `ApplyAll`'s earliest-span-wins skip and the web layer's
+manual-vs-discovered refusal both use it — a second, strict-inequality copy is how a zero-length
+insertion slips past one of them.
+
 ### Grep is reported but is not part of the bucket key
 
 `Grep` holds two optional `regexp` patterns applied to every response. Matches and the extracted

@@ -24,6 +24,7 @@ import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
+import { PAYLOAD_PLACEMENTS, describePoint, placementFields, type PayloadPlacement } from "../lib/intruder-placement";
 import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
@@ -1144,6 +1145,7 @@ export function IntruderPage(): JSX.Element {
     label,
     mode,
     allPoints,
+    payloadPlacement,
     points,
     selected,
     manualSpans,
@@ -1188,6 +1190,7 @@ export function IntruderPage(): JSX.Element {
   const setTarget = field("target");
   const setMode = field("mode");
   const setAllPoints = field("allPoints");
+  const setPayloadPlacement = field("payloadPlacement");
   const setPoints = field("points");
   const setSelected = field("selected");
   const setManualSpans = field("manualSpans");
@@ -1528,7 +1531,7 @@ export function IntruderPage(): JSX.Element {
     setSelected([]);
     setPoints([]);
     discover.mutate(
-      { msg_id: Number(msgId), all: allPoints },
+      { msg_id: Number(msgId), all: allPoints, ...placementFields(payloadPlacement) },
       {
         onSuccess: (found) => {
           setPoints(found);
@@ -1562,8 +1565,12 @@ export function IntruderPage(): JSX.Element {
   const onAutoMark = () => {
     setManualSpans([]);
     setSelected([]);
+    // Auto § discovers the standard set, so the "every candidate" switch goes off with it: /run
+    // rebuilds the discovered list from `all`, and indices taken from the standard list would name
+    // different positions in the every-candidate one.
+    setAllPoints(false);
     discover.mutate(
-      { msg_id: Number(msgId), all: false },
+      { msg_id: Number(msgId), all: false, ...placementFields(payloadPlacement) },
       {
         onSuccess: (found) => {
           setPoints(found);
@@ -1577,6 +1584,32 @@ export function IntruderPage(): JSX.Element {
   };
 
   const onClearMarks = () => setManualSpans([]);
+
+  /**
+   * Automatic payload placement changed (1krs). The discovered spans were measured under the old
+   * placement, so they are dropped at once — never left on screen beside an attack that would splice
+   * differently — and, when there were some, discovered again under the new one. The discovery order
+   * does not depend on the placement, so the operator's selection carries over by index.
+   */
+  const onPlacementChange = (next: PayloadPlacement) => {
+    if (next === payloadPlacement) return;
+    setPayloadPlacement(next);
+    const hadPoints = points.length > 0;
+    const keep = selected;
+    setPoints([]);
+    setSelected([]);
+    if (!hadPoints || !canDiscover) return;
+    discover.mutate(
+      { msg_id: Number(msgId), all: allPoints, ...placementFields(next) },
+      {
+        onSuccess: (found) => {
+          setPoints(found);
+          setSelected(keep.filter((index) => index < found.length));
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      },
+    );
+  };
 
   /**
    * The payload text this browser can name, per set, at the moment of launch.
@@ -1626,6 +1659,9 @@ export function IntruderPage(): JSX.Element {
       all: allPoints,
       mode,
       points: selected,
+      // The placement the points were discovered with (1krs): /run rebuilds the discovered positions
+      // itself, and they must be the ones the list above shows.
+      ...placementFields(payloadPlacement),
       // Manual markers go as raw byte ranges; the server splices them alongside the discovered
       // points and refuses one that overruns the request or overlaps another position.
       ...(manualSpans.length ? { manual_points: manualSpans.map(({ start, end }) => ({ start, end })) } : {}),
@@ -2083,6 +2119,22 @@ export function IntruderPage(): JSX.Element {
                 />
                 <span>Every candidate position</span>
               </label>
+              <Field label="Automatic payload placement">
+                {(id) => (
+                  <Select
+                    id={id}
+                    value={payloadPlacement ?? "replace"}
+                    disabled={discover.isPending}
+                    onChange={(event) => onPlacementChange(event.target.value as PayloadPlacement)}
+                  >
+                    {PAYLOAD_PLACEMENTS.map((entry) => (
+                      <option key={entry.value} value={entry.value}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </Select>
+                )}
+              </Field>
               <Button variant="outline" onClick={onDiscover} disabled={!canDiscover || discover.isPending}>
                 <Search size={14} />
                 {discover.isPending ? "Scanning…" : "Find positions"}
@@ -2099,6 +2151,9 @@ export function IntruderPage(): JSX.Element {
               </Button>
             </div>
 
+            <p className="field-hint">
+              {PAYLOAD_PLACEMENTS.find((entry) => entry.value === (payloadPlacement ?? "replace"))?.detail}
+            </p>
             {discover.error ? <ErrorNotice error={discover.error} onRetry={onDiscover} /> : null}
 
             {manualSpans.length ? (
@@ -2146,9 +2201,7 @@ export function IntruderPage(): JSX.Element {
                       />
                       <span>
                         <strong>{point.label}</strong>
-                        <small>
-                          {point.kind} · offset {point.offset} · {point.current || "(empty)"}
-                        </small>
+                        <small>{describePoint(point)}</small>
                       </span>
                       {on && (mode === "pitchfork" || mode === "cluster_bomb") ? (
                         <Badge tone="accent">set {order + 1}</Badge>

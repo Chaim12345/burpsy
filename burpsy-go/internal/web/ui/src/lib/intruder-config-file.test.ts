@@ -27,8 +27,8 @@ function fullConfig(): IntruderConfig {
     mode: "cluster_bomb",
     allPoints: true,
     points: [
-      { index: 0, kind: "param_body", label: "user", offset: 120, len: 5, current: "admin" },
-      { index: 1, kind: "header", label: "X-Token", offset: 60, len: 8, current: "deadbeef" },
+      { index: 0, kind: "param_body", label: "user", offset: 125, len: 0, current: "admin", placement: "append" },
+      { index: 1, kind: "header", label: "X-Token", offset: 60, len: 8, current: "deadbeef", placement: "replace" },
     ],
     selected: [0, 1],
     payloadTexts: ["admin\nroot", "a\nb\nc"],
@@ -89,6 +89,7 @@ function fullConfig(): IntruderConfig {
   http1ConnectionReuse: false,
   httpVersion: "http1",
   updateHostHeader: false,
+  payloadPlacement: "append",
   };
 }
 

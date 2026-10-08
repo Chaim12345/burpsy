@@ -1654,3 +1654,31 @@ after the payload splice, where the session jar is applied, so no span offset mo
   rewrite would defeat).
 - A request a payload left with other than one Host header is sent as spliced and counted in
   `host_header_untouched`, rather than having one of two Host headers chosen for it.
+
+## Intruder payload placement, grep and capture (burpsy-react-ui-xixe.1, Phases 2-3, 2026-10-08)
+
+### Automatic payload placement: Append to base parameter value (1krs)
+
+**Burp:** Settings > Tools > Intruder, "Automatic payload placement" (`configPanelIntruderAutomaticPayloadPlacement`,
+`Zrv9`; the same radio pair in the Intruder tab menu, `Zcur`). Each automatic marker is built as
+`Zswj(append ? valueEnd : valueStart, valueEnd)` (`Zrw7.Zz`, and the form walk `Zrw7.ZD`): under append the
+marker is zero-length at the end of the value.
+**burpsy:** `payload_placement` (`""`/`"replace"`/`"append"`) on both `POST /api/intruder/points` and
+`POST /api/intruder/run`, which build the discovered list through one function so the positions shown are the
+positions spliced. `PointView` gains `placement`; `current` stays the base value.
+
+- **Per attack, not a user setting.** Burp stores the choice once for every tab; burpsy keeps it in the attack's
+  configuration (persisted and saved with it), like every other Intruder setting here. Changing it rediscovers
+  the positions so stale spans are never shown beside an attack that splices differently.
+- **Values only.** URL, body and cookie parameter values and the body-container values (JSON, XML, multipart
+  content, nested) append. burpsy's extra discovery families — parameter names, path segments, header values,
+  multipart `name`/`filename` attributes and the entire body — are not in Burp's automatic placement at all, and
+  keep replacing under either setting.
+- **Nested values rebuild.** A base64/JSON/XML value nested in a parameter cannot be extended by concatenating
+  onto its encoded text, so the payload is appended inside the decoded value and the outer value re-encoded
+  (`bcheck.InsertionPoint.WireValueAppend`, the scanner's own appending branch). Every other value keeps its
+  captured bytes exactly.
+- **Touching counts as overlapping.** A zero-length insertion touching another position's edge is an overlap
+  (`intruder.SpansOverlap`): the splice keeps the earlier-starting position, and a manual marker that touches an
+  appended position is refused by name. The same predicate now also applies to an empty value at the very end
+  of the entire body under replace, which used to splice both.

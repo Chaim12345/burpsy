@@ -257,6 +257,14 @@ export interface IntruderConfig {
  label: string;
  mode: AttackMode;
  allPoints: boolean;
+ /**
+  * Burp's "Automatic payload placement" (burpsy-react-ui-1krs): whether discovered parameter values are
+  * replaced by the payload or have it appended. Sent to /points and /run alike — the positions on screen
+  * must be the ones the attack splices — and changing it clears the discovered points, which were
+  * measured under the other placement. Burp keeps this as a user setting; here it travels with the
+  * attack, like every other setting on this page.
+  */
+ payloadPlacement: "replace" | "append";
  points: PointView[];
  selected: number[];
  /** Hand-marked payload positions (Burp's Add §), with the text they cover. */
@@ -434,6 +442,7 @@ export function emptyIntruderConfig(): IntruderConfig {
   label: "",
   mode: "sniper",
   allPoints: false,
+  payloadPlacement: "replace",
   points: [],
   selected: [],
   manualSpans: [],

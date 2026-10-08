@@ -62,7 +62,14 @@ export interface PointView {
   label: string;
   offset: number;
   len: number;
+  /** The position's base value: what a payload replaces, or — placement "append" — what it is added to. */
   current: string;
+  /**
+   * Burp's "Automatic payload placement" for this position (burpsy-react-ui-1krs). "append" means the
+   * payload goes after `current` (offset/len is then the zero-length point at its end, or the whole
+   * value for a nested container whose encoding is rebuilt); "replace" means it overwrites `current`.
+   */
+  placement: "replace" | "append";
 }
 
 export interface DropReason {

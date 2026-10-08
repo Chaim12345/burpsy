@@ -112,7 +112,7 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   mode: oneOf(ATTACK_MODE_VALUES),
   allPoints: bool,
   points: arrayOf(
-    shape({ index: int, kind: str, label: str, offset: int, len: int, current: str }),
+    shape({ index: int, kind: str, label: str, offset: int, len: int, current: str, placement: oneOf(["replace", "append"]) }),
   ),
   selected: arrayOf(int),
   payloadTexts: arrayOf(str),
@@ -170,6 +170,8 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   httpVersion: oneOf(["", "http1", "http2"]),
   // Update Host header to match target (ety8).
   updateHostHeader: bool,
+  // Automatic payload placement (1krs): the saved points were measured under it, so it is saved too.
+  payloadPlacement: oneOf(["replace", "append"]),
   // Burp's auto-pause (2cvk). The block is saved whole, enabled flag first, because a saved
   // configuration that dropped it would resume as a different attack that looks like the saved
   // one — the exact failure this file exists to prevent, and the one fmxv's settings had.

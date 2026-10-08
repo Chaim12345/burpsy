@@ -447,17 +447,43 @@ const (
 type intruderPointsReq struct {
 	MsgID uint64 `json:"msg_id"`
 	All   bool   `json:"all"`
+	// PayloadPlacement is Burp's "Automatic payload placement" (burpsy-react-ui-1krs): "" or
+	// "replace" (the default, what every request got before) or "append". The run request carries the
+	// same field, and the two must agree: these are the spans the UI shows, and /run builds its own.
+	PayloadPlacement string `json:"payload_placement,omitempty"`
 }
 
 // PointView is one discoverable insertion point. Index is the position in the returned slice —
 // that is the handle the UI echoes back in a run's `points`, not a byte offset.
+//
+// Offset and Len are the bytes a payload goes into: for an appending position (placement "append",
+// burpsy-react-ui-1krs) that is the zero-length point after the value — or, for a nested value whose
+// outer encoding is rebuilt, the whole value. Current is always the base value the position carries,
+// so an appended position still names the text its payloads are added to rather than "".
 type PointView struct {
-	Index   int    `json:"index"`
-	Kind    string `json:"kind"`
-	Label   string `json:"label"`
-	Offset  int    `json:"offset"`
-	Len     int    `json:"len"`
-	Current string `json:"current"`
+	Index     int    `json:"index"`
+	Kind      string `json:"kind"`
+	Label     string `json:"label"`
+	Offset    int    `json:"offset"`
+	Len       int    `json:"len"`
+	Current   string `json:"current"`
+	Placement string `json:"placement"`
+}
+
+// intruderPointConfig is the discovery configuration both /points and /run build from a request, so
+// the positions the UI shows are the positions the attack splices — the same family set and the same
+// placement, from one function.
+func intruderPointConfig(all bool, placement string) (*intruder.PointConfig, error) {
+	cfg := intruder.DefaultPointConfig()
+	if all {
+		cfg = intruder.AllPointConfig()
+	}
+	p, err := intruder.ParsePlacement(placement)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Placement = p
+	return cfg, nil
 }
 
 // handleIntruderPoints inspects a stored request for attack insertion points. The UI sends the
@@ -481,20 +507,26 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such message", http.StatusNotFound)
 		return
 	}
-	cfg := intruder.DefaultPointConfig()
-	if req.All {
-		cfg = intruder.AllPointConfig()
+	cfg, err := intruderPointConfig(req.All, req.PayloadPlacement)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	found := intruder.FindPoints(msg, cfg)
 	out := make([]PointView, 0, len(found))
 	for i, p := range found {
+		placement := intruder.PlacementReplace
+		if p.Append {
+			placement = intruder.PlacementAppend
+		}
 		out = append(out, PointView{
-			Index:   i,
-			Kind:    p.Kind.String(),
-			Label:   p.Label,
-			Offset:  p.Span.Offset,
-			Len:     p.Span.Len,
-			Current: msg.Text(p.Span),
+			Index:     i,
+			Kind:      p.Kind.String(),
+			Label:     p.Label,
+			Offset:    p.Span.Offset,
+			Len:       p.Span.Len,
+			Current:   msg.Text(p.BaseSpan()),
+			Placement: placement.String(),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -513,17 +545,21 @@ type autoPauseReq struct {
 }
 
 type intruderRunReq struct {
-	MsgID          uint64                    `json:"msg_id"`
-	Target         string                    `json:"target"`
-	All            bool                      `json:"all"`
-	PointIndex     *int                      `json:"point_index"`
-	ManualPoints   *[]intruder.ManualSpan    `json:"manual_points"`
-	Payloads       *[]string                 `json:"payloads"`
-	Mode           *string                   `json:"mode"`
-	Points         *[]int                    `json:"points"`
-	PayloadSets    *[][]string               `json:"payload_sets"`
-	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
-	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
+	MsgID      uint64 `json:"msg_id"`
+	Target     string `json:"target"`
+	All        bool   `json:"all"`
+	PointIndex *int   `json:"point_index"`
+	// PayloadPlacement is "Automatic payload placement" (1krs), the same field /points takes: the
+	// discovered positions `points` indexes are rebuilt here with it, so it must be what the UI
+	// discovered with. Manual points are never affected.
+	PayloadPlacement string                    `json:"payload_placement,omitempty"`
+	ManualPoints     *[]intruder.ManualSpan    `json:"manual_points"`
+	Payloads         *[]string                 `json:"payloads"`
+	Mode             *string                   `json:"mode"`
+	Points           *[]int                    `json:"points"`
+	PayloadSets      *[][]string               `json:"payload_sets"`
+	PayloadSources   *[]intruder.PayloadSource `json:"payload_sources"`
+	PayloadRules     *[]intruder.RuleSpec      `json:"payload_rules"`
 	// AutoPause is Burp's auto-pause (burpsy-react-ui-8f2): pause the attack when any listed
 	// expression appears in a response (or, with missing=true, when none does). Nil is
 	// unconfigured. Simple strings are case-folded unless case_sensitive; regex entries
@@ -916,9 +952,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		kind = k
 	}
 
-	cfg := intruder.DefaultPointConfig()
-	if req.All {
-		cfg = intruder.AllPointConfig()
+	cfg, err := intruderPointConfig(req.All, req.PayloadPlacement)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	discovered := intruder.FindPoints(msg, cfg)
 	wanted, err := selectPoints(req.Points, req.PointIndex, len(discovered))
@@ -941,10 +978,12 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		selected = append(selected, discovered[i])
 	}
 	// Manual-vs-discovered overlap is refused here, naming the marking, rather than left to the
-	// splice's earliest-span-wins rule, which would silently drop one of the two payloads.
+	// splice's earliest-span-wins rule, which would silently drop one of the two payloads. The splice's
+	// own predicate, so a zero-length appended position touching a manual marker's edge is refused
+	// here rather than dropped there (1krs).
 	for _, m := range manual {
 		for _, d := range selected {
-			if m.Span.Offset < d.Span.Offset+d.Span.Len && d.Span.Offset < m.Span.Offset+m.Span.Len {
+			if intruder.SpansOverlap(m.Span, d.Span) {
 				http.Error(w, fmt.Sprintf("manual point %q overlaps discovered point %q", m.Label, d.Label), http.StatusBadRequest)
 				return
 			}
