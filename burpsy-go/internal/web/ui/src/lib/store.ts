@@ -4,6 +4,7 @@ import type { RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
+import { requestHeadChanged, type H2Field } from "./kettle";
 import type { ImportedTheme } from "./theme-import";
 import type { MessageVariant } from "../ui/variant-picker";
 
@@ -221,6 +222,16 @@ export interface RepeaterTab {
   * ClientHello changes; the server refuses it on a plain-HTTP target.
   */
  sni?: string;
+ /**
+  * The kettled HTTP/2 header list (burpsy-react-ui-jae5), present only while the tab is kettled: an
+  * Inspector edit made the headers something HTTP/1 text cannot carry (a CR/LF in a value, an
+  * uppercase name), so this list — pseudo-headers, order, casing and all — is the request's header
+  * section, and the send carries it as `h2_headers`. `request` then holds the list's normalised HTTP/1
+  * rendering plus the body (lib/kettle.ts), so dropping the list falls back to text that says the same
+  * thing as near as HTTP/1 can. Cleared by updateRepeaterTab whenever the head of `request` changes in a
+  * patch that does not itself set this field — an edit to the text is an edit to the text.
+  */
+ h2Headers?: H2Field[];
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:
@@ -1035,6 +1046,19 @@ export const useApp = create<AppState>()(
        requestBodyChanged(tab.request, next.request)
       ) {
        next.requestBodyBase64 = undefined;
+      }
+      // The same rule for a kettled tab's header list (burpsy-react-ui-jae5): the list is a copy the
+      // send prefers over the text, so a patch that changes the text's head without supplying a list is
+      // an edit to the text — a raw-editor keystroke, a body-encoding transform rewriting
+      // Content-Length, a GraphQL action — and the list it no longer describes is dropped rather than
+      // sent in its place. A body-only edit keeps it: the body is the text's either way.
+      if (
+       patch.request !== undefined &&
+       !("h2Headers" in patch) &&
+       tab.h2Headers !== undefined &&
+       requestHeadChanged(tab.request, next.request)
+      ) {
+       next.h2Headers = undefined;
       }
       return next;
      }),

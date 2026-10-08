@@ -12,7 +12,8 @@ import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
-import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
+import { SendCancelled, useKettleAnswer, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
+import { renderNormalised, requestBody, seedH2Fields, type H2Field, type KettleAnswer } from "../lib/kettle";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
 import { isIntrospectionAnswer } from "../lib/graphql-introspection";
 import { mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "../lib/send-settings";
@@ -336,6 +337,8 @@ export function RepeaterPage(): JSX.Element {
         ...sniFor(tab),
         // Keys the tab's reused HTTP/2 connection when that override is on (adkx).
         tab_id: tab.id,
+        // A kettled tab's header list (jae5): the request's whole header section, sent as written.
+        ...(tab.h2Headers ? { h2_headers: tab.h2Headers } : {}),
       },
       {
         onSuccess: (result) => {
@@ -453,6 +456,14 @@ export function RepeaterPage(): JSX.Element {
       toast.info("This group has one tab, so a group send is just Send");
       return;
     }
+    // A group send carries request text, and a kettled tab's request is its HTTP/2 header list (jae5):
+    // sending the text instead would put the normalised request on the wire under the kettled tab's
+    // name. Refused by name rather than silently normalised.
+    const kettledMember = members.find((tab) => tab.h2Headers);
+    if (kettledMember) {
+      toast.error(`"${kettledMember.name}" is kettled, and a group send cannot carry an HTTP/2 header list as written — send it on its own, or downgrade it to HTTP/1 in the Inspector`);
+      return;
+    }
     // The exact drafts that go on the wire, captured before the request leaves, so each history entry
     // records what was sent rather than what that tab's draft says by the time the answer arrives.
     const sentRequests = new Map(members.map((tab) => [tab.id, tab.request]));
@@ -526,6 +537,17 @@ export function RepeaterPage(): JSX.Element {
       // A ws send's entry has no HTTP exchange to hand off (its handshake exchange is the reply's,
       // recorded for "view in WebSockets history"), so the hand-off resolves an HTTP entry's id.
       let exchangeId = last && "status" in last ? last.exchange_id : undefined;
+      if (tab.h2Headers) {
+        // Burp: "If you send a kettled request to a tool that doesn't support them, such as Intruder, it
+        // will be normalized". Intruder works from a stored message, and the stored form of a kettled
+        // send is its rendering, CR/LF written as \r\n — said, not hidden. With nothing stored yet,
+        // sending the normalised text here would put a request on the wire the operator never wrote.
+        if (!exchangeId) {
+          toast.error("This tab is kettled and has not been sent: send it once, and Intruder gets the stored rendering — or downgrade it to HTTP/1 in the Inspector first");
+          return;
+        }
+        toast.info("Intruder cannot carry a kettled request: it gets the stored rendering, where CR and LF inside a header are the text \\r\\n");
+      }
       if (!exchangeId) {
         const sent = await api<RepeaterResult>(
           "/api/repeater/send",
@@ -616,6 +638,38 @@ export function RepeaterPage(): JSX.Element {
    * store has never seen under an id it does not have.
    */
   const sentExchange = useExchange(httpResult?.exchange_id ?? null);
+
+  /**
+   * The kettled tab's two answers (jae5): why HTTP/1 cannot carry its header list, and whether a send
+   * would be refused — both from the server, which owns the rules (internal/http2).
+   */
+  const activeTls = active ? schemeOf(active.target) === "https" : false;
+  const activeKettle = active && active.kind !== "ws" ? (active.h2Headers ?? null) : null;
+  const kettleAnswer = useKettleAnswer(activeKettle, activeTls);
+  /**
+   * Burp: reverse the edits that kettled a request and it is unkettled — the editor shows HTTP/1 text
+   * again. Done only when HTTP/1 text provably carries the list unchanged (it re-seeds to exactly the same
+   * fields) and nothing would refuse it: "not kettled by Burp's rules" alone is not enough, because a
+   * list with no :path, say, is not kettled and still has no HTTP/1 form, and dropping it would send
+   * whatever the rendering made up instead.
+   */
+  const kettleCarriable =
+    activeKettle !== null &&
+    kettleAnswer.data !== undefined &&
+    !kettleAnswer.data.kettled &&
+    kettleAnswer.data.send_refusals.length === 0 &&
+    JSON.stringify(seedH2Fields(renderNormalised(activeKettle, ""), activeTls).fields) === JSON.stringify(activeKettle);
+  useEffect(() => {
+    if (active && kettleCarriable) updateRepeaterTab(active.id, { h2Headers: undefined });
+  }, [active, kettleCarriable, updateRepeaterTab]);
+  /** Hand the Inspector's list edits to the tab, keeping the text as the list's normalised rendering. */
+  const setKettledFields = (tab: RepeaterTab, fields: H2Field[] | null) => {
+    if (fields === null) {
+      updateRepeaterTab(tab.id, { h2Headers: undefined });
+      return;
+    }
+    updateRepeaterTab(tab.id, { h2Headers: fields, request: renderNormalised(fields, requestBody(tab.request)) });
+  };
 
   /**
    * Change highlighting (b4gt): the response on screen against the previous HTTP send in the same
@@ -1268,6 +1322,20 @@ export function RepeaterPage(): JSX.Element {
                       </Badge>
                     </Tooltip>
                   ) : null}
+                  {/* A kettled send (jae5): the header list went out as written, and any tab setting
+                      it could not honour is named rather than silently skipped. */}
+                  {httpResult.kettled ? (
+                    <Tooltip
+                      content={[
+                        `Sent as ${httpResult.kettled.fields} HTTP/2 header fields written exactly as listed; ${httpResult.kettled.ended}.`,
+                        ...httpResult.kettled.notes,
+                      ].join(" ")}
+                    >
+                      <Badge tone={httpResult.kettled.notes.length > 0 ? "warn" : "info"}>
+                        kettled{httpResult.kettled.notes.length > 0 ? ` · ${httpResult.kettled.notes.length} setting${httpResult.kettled.notes.length === 1 ? "" : "s"} not applied` : ""}
+                      </Badge>
+                    </Tooltip>
+                  ) : null}
                   {/* Unpack compressed responses (of0z): say which bytes the pane shows. */}
                   {httpResult.response_unpacked != null ? (
                     <Tooltip content={`The pane shows the ${httpResult.unpacked_from} body decoded. The stored response is the compressed bytes that arrived; turn off "Unpack compressed responses" in Config to see them.`}>
@@ -1750,6 +1818,36 @@ export function RepeaterPage(): JSX.Element {
             placeholder="A text frame's payload, or switch the opcode to binary and paste bytes"
             menuGroups={wsFrameMenu}
           />
+        ) : active.h2Headers && viewedRequest == null ? (
+          /* A kettled draft (jae5), as Burp shows one: the reasons in place of the headers, which are an
+           * HTTP/2 field list now and are edited in the Inspector, and the body still editable. */
+          <div className="stack kettled-request">
+            <KettledNote
+              answer={kettleAnswer.data}
+              pending={kettleAnswer.isPending}
+              error={kettleAnswer.error}
+              fields={active.h2Headers.length}
+              inspectorShown={inspector}
+              onShowInspector={() => {
+                setInspector(true);
+                setInspecting("request");
+              }}
+            />
+            <HttpEditor
+              label="Request body"
+              views={false}
+              value={requestBody(active.request)}
+              // The list rides along in the same patch, so a body edit is never read as a header edit.
+              onChange={(body) =>
+                updateRepeaterTab(active.id, {
+                  request: active.request.slice(0, active.request.length - requestBody(active.request).length) + body,
+                  h2Headers: active.h2Headers,
+                })
+              }
+              filename="repeater-request-body.txt"
+              placeholder="The body sent after the HTTP/2 header list"
+            />
+          </div>
         ) : (
           <HttpEditor
             label={viewedRequest != null ? `Request · sent ${viewIndex + 1}/${activeHistory.length}, as written` : "Request"}
@@ -1853,6 +1951,12 @@ export function RepeaterPage(): JSX.Element {
               raw={viewedRequest ?? active.request}
               label={viewedRequest != null ? "Inspector · request as sent" : "Inspector · request"}
               onChange={viewedRequest != null ? undefined : (next) => updateRepeaterTab(active.id, { request: next })}
+              // The one mount that can send an HTTP/2 header list as written (jae5): the live draft.
+              kettle={
+                viewedRequest != null || active.kind === "ws"
+                  ? undefined
+                  : { tls: activeTls, fields: active.h2Headers ?? null, onFields: (fields) => setKettledFields(active, fields) }
+              }
               readOnlyNote="This request has already been sent, so it is read-only here — step to the newest entry to edit the draft."
               onSwitch={result ? () => setInspecting("response") : undefined}
               switchLabel="Inspect the response"
@@ -1868,6 +1972,68 @@ export function RepeaterPage(): JSX.Element {
           )
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Burp's kettled-request note (jae5): "This request is kettled because:" and the reasons, shown in place
+ * of the headers. A list the classifier would refuse says so here, before Send, with the classifier's
+ * own words. Loading and failure are their own states — an empty reason list is never shown for a
+ * question that has not been answered.
+ */
+function KettledNote({
+  answer,
+  pending,
+  error,
+  fields,
+  inspectorShown,
+  onShowInspector,
+}: {
+  answer: KettleAnswer | undefined;
+  pending: boolean;
+  error: unknown;
+  fields: number;
+  inspectorShown: boolean;
+  onShowInspector: () => void;
+}): JSX.Element {
+  return (
+    <div className="notice kettled-note" role="region" aria-label="Kettled request">
+      {pending ? (
+        <p>Checking this HTTP/2 header list…</p>
+      ) : error ? (
+        <p>Could not check this header list: {error instanceof Error ? error.message : String(error)}. It is still sent as written.</p>
+      ) : answer && answer.kettled ? (
+        <>
+          <p className="kettled-title">This request is kettled because:</p>
+          <ul>
+            {answer.reasons.map((reason, index) => (
+              <li key={index}>{reason.text}</li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p>This HTTP/2 header list is not kettled by Burp's rules, but HTTP/1 text would still change it, so it stays a field list.</p>
+      )}
+      {answer && answer.send_refusals.length > 0 ? (
+        <>
+          <p className="kettled-title">Sending it will be refused:</p>
+          <ul>
+            {answer.send_refusals.map((refusal, index) => (
+              <li key={index}>{refusal}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      <p className="field-hint">
+        Its {fields} headers are an HTTP/2 field list, sent exactly as listed — edit them in the Inspector. Downgrading to
+        HTTP/1 there normalises it and discards what HTTP/1 cannot carry.
+      </p>
+      {inspectorShown ? null : (
+        <Button variant="outline" size="small" onClick={onShowInspector}>
+          Show Inspector
+        </Button>
+      )}
     </div>
   );
 }

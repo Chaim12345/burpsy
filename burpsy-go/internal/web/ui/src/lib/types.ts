@@ -472,6 +472,8 @@ export interface RepeaterResult {
  unpack_error?: string;
  /** With HTTP/2 connection reuse on (adkx): whether this request was the first on its connection. */
  h2_connection?: "new" | "reused" | "not-h2";
+ /** Present only on a kettled send (jae5): fields sent, the tab settings not honoured, what ended the read. */
+ kettled?: { fields: number; notes: string[]; ended: string };
 }
 
 /**
