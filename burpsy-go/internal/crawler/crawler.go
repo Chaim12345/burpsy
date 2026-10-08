@@ -1998,7 +1998,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// link walk, form submit, base-href resolution — and none of that applies here; admitting XML
 	// through that gate would hand every non-HTML response to the HTML extractor looking for anchors
 	// it will never find. A PDF below still records SkipNotHTML exactly as before.
-	if LooksLikeSitemap(contentType, body) {
+	// Not a document that sniffs as an API definition: LooksLikeSitemap claims every XML content type,
+	// so a WSDL served as text/xml or application/wsdl+xml was read as a sitemap and its operations
+	// never crawled (found by burpsy-react-ui-ai64; an existing WSDL test had been passing only because
+	// the HTML page linking to the WSDL was itself misread as one).
+	if LooksLikeSitemap(contentType, body) && sniffAPIDocument(contentType, body) == APIDocNone {
 		c.consumeSitemap(item, contentType, body, &fetch, rep, lim)
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
@@ -2501,6 +2505,23 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 		return false
 	}
 	rep.APIDocumentsRead++
+	if format == APIDocWSDL {
+		// Burp names WSDL failures apart from API-definition failures (ai64), and a WSDL that broke
+		// mid-document still names the operations read before the break, which are crawled below.
+		switch {
+		case failure != "":
+			c.skips.record(SkipRecord{
+				Reason: SkipWSDLInvalid, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt, Detail: failure,
+			})
+		case len(eps) == 0:
+			c.skips.record(SkipRecord{
+				Reason: SkipWSDLNoOperations, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt, Detail: "no wsdl:operation was declared",
+			})
+		}
+		failure = ""
+	}
 	if failure != "" {
 		// The acceptance criterion, and the reason this is a distinct skip: the target PUBLISHED an
 		// API definition and the crawl still cannot see it. Reporting zero endpoints here would tell
@@ -2926,7 +2947,14 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		// The refusal itself is unchanged. This records WHICH refusal happened, which is all the
 		// bead asks for: nothing here relaxes the chokepoint.
 		reason := SkipOutOfScope
-		if isResourceTag(item.tag) {
+		switch {
+		case hasTagPrefix(item.tag, "api:"):
+			reason = SkipAPILocationOutOfScope
+		case item.tag == "redirect" && item.depth == 1:
+			// A redirect admitted at depth 1 came from a depth-0 item, and only seeds are depth 0.
+			reason = SkipSeedRedirectedOutOfScope
+		}
+		if reason == SkipOutOfScope && isResourceTag(item.tag) {
 			reason = SkipOutOfScopeResource
 			// Counted on the LIMITS rather than only in the ledger, because the caveat a complete
 			// crawl prints is built from the limits and would otherwise never mention it.
