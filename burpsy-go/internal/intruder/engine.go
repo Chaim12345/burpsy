@@ -790,10 +790,17 @@ type Attempt struct {
 	// a pattern worth seeing at a glance, and folding it into free-text error strings buries it behind
 	// having to read every row.
 	Timeout bool `json:"timeout"`
+	// AnomalyRank is this row's place in the attack's anomaly ranking (pglp, anomaly.go): 1 is the
+	// most unusual response; equal scores share a rank. Zero when the attack had fewer than two
+	// detail rows to compare.
+	AnomalyRank int `json:"anomaly_rank"`
 }
 
 // AttackReport is the answer to "what happened".
 type AttackReport struct {
+	// VariantAttributes are the response attributes that varied across the attack's detail rows
+	// (Burp's variantAttributes, pglp); the anomaly ranking scores only these. Never null.
+	VariantAttributes []string   `json:"variant_attributes"`
 	Kind              AttackKind `json:"kind"`
 	Combinations      uint64     `json:"combinations"`
 	CombinationsExact bool       `json:"combinations_exact"`
@@ -917,6 +924,8 @@ type outcome struct {
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
 // accumulated: the count lives here and the exemplar is stored once, through the recorder.
 type collector struct {
+	// attrs are each detail row's response attributes, by ordinal, for the anomaly ranking.
+	attrs        map[int]map[string]string
 	record       RecordFn
 	request      func([]byte) uint64
 	recordDetail bool
@@ -969,6 +978,7 @@ func newCollector(a *Attack, record RecordFn) *collector {
 		errorIndex:      map[string]int{},
 		errors:          []ErrorBucket{},
 		attempts:        []Attempt{},
+		attrs:           map[int]map[string]string{},
 		detailLimit:     a.DetailLimit,
 		maxBuckets:      mb,
 		capture:         a.Capture,
@@ -1015,6 +1025,11 @@ func (c *collector) absorb(o outcome) {
 		c.captured++
 		if c.detailRow(o.ordinal) {
 			e := o.err.Error()
+			outcome := "error"
+			if isTimeout(o.err) {
+				outcome = "timeout"
+			}
+			c.attrs[o.ordinal] = map[string]string{"outcome": outcome}
 			c.attempts = append(c.attempts, Attempt{
 				// Cookies is []string{}, not nil: a failed send never reached a response, but the
 				// field's wire contract (types.tools.ts declares Attempt.cookies non-nullable) does
@@ -1116,6 +1131,7 @@ func (c *collector) absorb(o outcome) {
 		c.unbucketed++
 	}
 	if detailRow {
+		c.attrs[o.ordinal] = responseAttributes(h.raw, h.status, h.length, h.cookies)
 		c.attempts = append(c.attempts, Attempt{
 			Ordinal: o.ordinal, Status: h.status, ResponseLen: h.length, DurationMS: h.durationMS,
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
@@ -1177,6 +1193,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 	sort.SliceStable(c.attempts, func(i, j int) bool {
 		return c.attempts[i].Ordinal < c.attempts[j].Ordinal
 	})
+	variant := rankAnomalies(c.attempts, c.attrs)
 	var pool *string
 	if p := limiter.PoolName(); p != "" {
 		pool = &p
@@ -1188,7 +1205,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		Sent: c.sent, Failed: c.failed,
 		ElapsedMS: elapsed.Milliseconds(),
 		Buckets:   c.buckets, BucketsTruncated: c.unbucketed > 0, Unbucketed: c.unbucketed,
-		Errors: c.errors, Attempts: c.attempts,
+		Errors: c.errors, Attempts: c.attempts, VariantAttributes: variant,
 		DetailLimit: c.detailLimit, GrepMatched: c.grepMatched,
 		Pool: pool, AutoThrottleEngaged: limiter.AutoThrottleEngaged(),
 		AutoPaused: a.AutoPauseFired(),

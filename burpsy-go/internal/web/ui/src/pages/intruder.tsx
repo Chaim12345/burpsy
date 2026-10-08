@@ -824,6 +824,27 @@ function AttackResult({
       cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.ordinal)} ordinal={row.original.ordinal} />,
     },
     {
+      // Burp's anomaly ranking (pglp): sort ascending and the responses least like the rest come
+      // first. 0 (nothing to compare) and an older server's missing field sort last.
+      accessorFn: (attempt) => (attempt.anomaly_rank ? attempt.anomaly_rank : undefined),
+      id: "anomaly_rank",
+      header: "Anomaly rank",
+      sortUndefined: "last",
+      // One click shows rank 1 first: TanStack starts a numeric column descending.
+      sortDescFirst: false,
+      cell: ({ row }) => {
+        const rank = row.original.anomaly_rank;
+        if (!rank) return <span className="cell-dim">—</span>;
+        return rank === 1 && (view.report.variant_attributes?.length ?? 0) > 0 ? (
+          <span className="cell-num">
+            <Badge tone="warn">{rank}</Badge>
+          </span>
+        ) : (
+          <span className="cell-num">{rank}</span>
+        );
+      },
+    },
+    {
       accessorFn: (attempt) => attempt.status ?? undefined,
       id: "status",
       header: "Status",
@@ -1196,6 +1217,13 @@ function AttackResult({
             shown={attemptRows.length}
             total={report.attempts.length}
           />
+          {report.variant_attributes ? (
+            <p className="cell-dim" data-testid="variant-attributes">
+              {report.variant_attributes.length
+                ? `Anomaly rank scores the attributes that varied: ${report.variant_attributes.map((a) => a.replace(/_/g, " ")).join(", ")}.`
+                : "Every response looked alike: no attribute varied, so every row shares anomaly rank 1."}
+            </p>
+          ) : null}
           {attemptRows.length ? (
             <SortableTable
               data={attemptRows}
