@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
 	"github.com/burpsy-go/burpsy/internal/organizer"
@@ -2731,6 +2732,31 @@ func (s *Store) LoadSequencerSettings() (*sequencer.Settings, error) {
 	}
 	norm := out.Normalise()
 	return &norm, nil
+}
+
+// SaveFileLogging persists Burp's Project settings → Logging (burpsy-react-ui-nvfl).
+func (s *Store) SaveFileLogging(settings filelog.Settings) {
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		s.log("file logging", err)
+		return
+	}
+	if err := s.setSetting("project.file_logging", string(raw)); err != nil {
+		s.log("file logging", err)
+	}
+}
+
+// LoadFileLogging restores it: nil when nothing was saved, an error when what was saved does not parse.
+func (s *Store) LoadFileLogging() (*filelog.Settings, error) {
+	v, err := s.getSetting("project.file_logging")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	out := &filelog.Settings{}
+	if err := json.Unmarshal([]byte(v), out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // LoadNetworkSettings restores the persisted network settings.

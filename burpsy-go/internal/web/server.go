@@ -15,6 +15,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -36,6 +37,8 @@ import (
 
 // Server represents the web API server.
 type Server struct {
+	// fileLog is Burp's Project settings → Logging writer (nvfl); nil until attached.
+	fileLog *filelog.Logger
 	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
 	serverCerts *servercerts.Store
 	store       *core.TrafficStore
@@ -779,6 +782,13 @@ func (s *Server) WithNetAuth(credentials *netauth.Credentials, certs *netauth.Cl
 // the person who can fix it, and they are not reading the log.
 // WithServerCerts attaches the store of certificates target servers presented (t75m), the same one
 // the sender and the proxy record into.
+// WithFileLog attaches Burp's Project settings → Logging writer (nvfl), the one main observes the
+// traffic store with.
+func (s *Server) WithFileLog(l *filelog.Logger) *Server {
+	s.fileLog = l
+	return s
+}
+
 func (s *Server) WithServerCerts(store *servercerts.Store) *Server {
 	s.serverCerts = store
 	return s
@@ -1125,6 +1135,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
 	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
 	s.mux.HandleFunc("/api/network/server-certificates", s.handleServerCertificates)
+	s.mux.HandleFunc("/api/project/logging", s.handleFileLogging)
 	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)

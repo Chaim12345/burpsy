@@ -85,6 +85,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/pools": "riskScope",
  "/api/pools/": "riskScope",
  "/api/project": "riskRead",
+ "/api/project/logging": "riskCredential",
  "/api/project/name": "riskLocal",
  "/api/project/open": "riskDestructive",
  "/api/projects": "riskRead",

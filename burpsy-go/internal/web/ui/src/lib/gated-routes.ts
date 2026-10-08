@@ -86,6 +86,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/pools": true,
  "/api/pools/": true,
  "/api/project": false,
+ "/api/project/logging": true,
  "/api/project/name": false,
  "/api/project/open": true,
  "/api/projects": false,

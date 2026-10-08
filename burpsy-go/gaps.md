@@ -1727,3 +1727,14 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   jar.
 - **Divergence:** values in JSON, multipart bodies, or script are not derived or updated. The cookie
   choice applies to the re-sent current request; macro steps always carry the whole jar.
+
+## Logging: unattributed traffic is not logged, and a project switch keeps the running logger's files (2026-10-08, burpsy-react-ui-nvfl)
+- **Burp:** Project settings → Logging appends requests and/or responses from Proxy, Scanner, Repeater,
+  Intruder, Sequencer and Extender (or All tools) to files.
+- **burpsy:** `GET/PUT /api/project/logging` under Burp's keys (`requests` / `responses`, tool → absolute
+  path, blank off), persisted with the project and applied at startup; every exchange the traffic store
+  records is written by one background writer in Burp's log-file shape. The crawler counts as Scanner.
+- **Divergence:** traffic this build does not attribute to a tool (Sequencer captures and extension
+  sends among it) is not written, under All tools either. An in-console project switch does not re-apply
+  the opened project's logging settings until the next start. A full writer queue drops entries and
+  counts them (`stats.dropped`) rather than slowing the proxy.

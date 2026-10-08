@@ -62,6 +62,7 @@ import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/l
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
+import { FileLoggingSection } from "./settings.logging";
 
 const THEMES: { value: Theme; label: string }[] = [
  { value: "system", label: "Follow the system" },
@@ -3382,6 +3383,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  "platform-auth": PlatformAuthSection,
  "client-certificates": ClientCertificatesSection,
  "server-certificates": ServerCertificatesSection,
+ logging: FileLoggingSection,
  appearance: AppearanceSection,
  hotkeys: HotkeysSection,
  certificate: CertificateSection,

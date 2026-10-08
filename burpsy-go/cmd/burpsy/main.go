@@ -20,6 +20,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -289,6 +290,21 @@ func main() {
 		// finding deleted in the UI is restored on the next start. Installed through the web
 		// package so every durable write takes the project-switch lock from the first capture on.
 		web.InstallCaptureSinks(store, findingStore, persistStore)
+	}
+
+	// Burp's Project settings → Logging (burpsy-react-ui-nvfl): per-tool request/response log files.
+	// Observed after the restore, so the files receive new traffic only — never a replay of history.
+	fileLogger := filelog.New(store)
+	store.ObserveExchanges(fileLogger.Observe)
+	defer fileLogger.Close()
+	if persistStore != nil {
+		if saved, err := persistStore.LoadFileLogging(); err != nil {
+			log.Printf("file logging settings could not be read, so no log files are written: %v", err)
+		} else if saved != nil {
+			if err := fileLogger.Apply(*saved); err != nil {
+				log.Printf("file logging settings could not be applied, so no log files are written: %v", err)
+			}
+		}
 	}
 
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
@@ -739,7 +755,8 @@ func main() {
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
 		WithNetAuthRestoreNotes(netAuthNotes).
-		WithServerCerts(serverCertStore)
+		WithServerCerts(serverCertStore).
+		WithFileLog(fileLogger)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.

@@ -574,6 +574,13 @@ var manifest = map[string]route{
 		summary: "which project this instance is: the persisted project name (\"Unnamed\" when never set), " +
 			"the -db file it lives in, and whether anything is durable at all — the readout the Project menu shows",
 	},
+	"/api/project/logging": {
+		// Burp's Project settings → Logging (burpsy-react-ui-nvfl): which tools append their requests
+		// and responses to which files. riskCredential: the files receive the raw messages, cookies
+		// and Authorization headers included, at a path the caller names.
+		methods: []string{"GET", "PUT"}, risk: riskCredential,
+		summary: "per-tool request/response log files (Burp's Logging settings): read, or set the paths; empty is off",
+	},
 	"/api/project/name": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "read or rename the project; the name is stored with the database, so it travels with the " +

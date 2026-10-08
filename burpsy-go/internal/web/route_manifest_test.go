@@ -376,6 +376,9 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	wantCredential := []string{
 		"/api/blindxss",
 		"/api/network/auth", "/api/network/client-certs",
+		// The log files receive raw messages — cookies and Authorization headers included — at a
+		// path the caller names: a write that copies credentials to disk (burpsy-react-ui-nvfl).
+		"/api/project/logging",
 		"/api/proxy/ca/import",
 		"/api/session/cookies", "/api/session/login",
 		// Resolving a recovery prompt makes burpsy replay the stored login on the operator's behalf,
