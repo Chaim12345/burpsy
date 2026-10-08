@@ -38,6 +38,11 @@ type Options struct {
 	Reset bool
 	// ResponseBody is the body sent back; empty sends "ok".
 	ResponseBody []byte
+	// Stall sends the response head without END_STREAM and then nothing more, the way an endpoint held
+	// open by a desync probe behaves.
+	Stall bool
+	// Interim sends this many 103 heads before the response.
+	Interim int
 }
 
 // Request is one request as the origin decoded it.
@@ -54,6 +59,9 @@ type Server struct {
 	Port     uint16
 	Accepted atomic.Int64
 
+	sniMu sync.Mutex
+	snis  []string
+
 	mu       sync.Mutex
 	requests []Request
 }
@@ -63,6 +71,13 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// ServerNames is the SNI every ClientHello carried, in order.
+func (s *Server) ServerNames() []string {
+	s.sniMu.Lock()
+	defer s.sniMu.Unlock()
+	return append([]string(nil), s.snis...)
 }
 
 // Start runs an origin on 127.0.0.1 that negotiates h2 over TLS with httptest's certificate, so a
@@ -77,11 +92,20 @@ func Start(t testing.TB, opts Options) *Server {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	tlsLn := tls.NewListener(ln, &tls.Config{Certificates: cert, NextProtos: []string{"h2"}})
-	t.Cleanup(func() { tlsLn.Close() })
 	host, portText, _ := net.SplitHostPort(ln.Addr().String())
 	port, _ := strconv.Atoi(portText)
 	s := &Server{Host: host, Port: uint16(port)}
+	tlsLn := tls.NewListener(ln, &tls.Config{
+		Certificates: cert,
+		NextProtos:   []string{"h2"},
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			s.sniMu.Lock()
+			s.snis = append(s.snis, hello.ServerName)
+			s.sniMu.Unlock()
+			return nil, nil
+		},
+	})
+	t.Cleanup(func() { tlsLn.Close() })
 	go func() {
 		for {
 			conn, err := tlsLn.Accept()
@@ -206,6 +230,12 @@ func (s *Server) serve(conn net.Conn, opts Options) {
 			if len(body) == 0 {
 				body = []byte("ok")
 			}
+			for i := 0; i < opts.Interim; i++ {
+				early := burpsyhttp2.EncodeLiteral([]burpsyhttp2.HeaderField{burpsyhttp2.NewHeaderField(":status", "103")})
+				if writeFrame(conn, burpsyhttp2.TypeHeaders, burpsyhttp2.FlagEndHeaders, 1, early) != nil {
+					return
+				}
+			}
 			respBlock := burpsyhttp2.EncodeLiteral([]burpsyhttp2.HeaderField{
 				burpsyhttp2.NewHeaderField(":status", "200"),
 				burpsyhttp2.NewHeaderField("content-type", "text/plain"),
@@ -213,6 +243,9 @@ func (s *Server) serve(conn net.Conn, opts Options) {
 			})
 			if writeFrame(conn, burpsyhttp2.TypeHeaders, burpsyhttp2.FlagEndHeaders, 1, respBlock) != nil {
 				return
+			}
+			if opts.Stall {
+				continue
 			}
 			for len(body) > 0 {
 				n := min(len(body), 16384)

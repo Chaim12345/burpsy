@@ -12,6 +12,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/http2"
 	"github.com/burpsy-go/burpsy/internal/http2/h2test"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 )
 
 // ---- Kettled HTTP/2 requests (burpsy-react-ui-jae5) ---------------------------------------------
@@ -274,5 +275,58 @@ func TestKettledRenderingEscapesOnlyLineBreaks(t *testing.T) {
 	want := "GET / HTTP/2\r\nHost: a.test\r\nX-Up: v\\r\\nw\r\n\r\nb"
 	if got != want {
 		t.Fatalf("rendering %q, want %q", got, want)
+	}
+}
+
+// Override SNI reaches a kettled send's ClientHello, as it does a text send's (k011).
+func TestKettledRepeaterSendCarriesOverrideSNI(t *testing.T) {
+	origin := h2test.Start(t, h2test.Options{})
+	authority := fmt.Sprintf("%s:%d", origin.Host, origin.Port)
+	s, _ := kettledServer(origin.Host, "/")
+	rec := postJSON(t, s, "/api/repeater/send", map[string]any{
+		"target": "https://" + authority, "request": "GET /k HTTP/2\r\nHost: x\r\n\r\n",
+		"h2_headers": kettledList(authority, "/k"), "sni": "collab.oast.example",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("send = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if got := origin.ServerNames(); len(got) != 1 || got[0] != "collab.oast.example" {
+		t.Fatalf("the ClientHello carried %q, want the override", got)
+	}
+}
+
+// Process cookies path-matches the jar against the list's own :path, query cut, as the text path does
+// against the target's path: a Path=/k cookie rides a send to /k?x and not one to /other.
+func TestKettledRepeaterSendPathMatchesTheJar(t *testing.T) {
+	origin := h2test.Start(t, h2test.Options{})
+	authority := fmt.Sprintf("%s:%d", origin.Host, origin.Port)
+	s, _ := kettledServer(origin.Host, "/")
+	coordinator := session.NewCoordinator(nil)
+	s.WithSessionCoordinator(coordinator)
+	coordinator.AbsorbResponseCookies(session.SourceProxy, origin.Host, origin.Port, true,
+		[]byte("HTTP/1.1 200 OK\r\nSet-Cookie: scoped=1; Path=/k\r\nContent-Length: 0\r\n\r\n"))
+
+	cookieSent := func(path string) bool {
+		t.Helper()
+		rec := postJSON(t, s, "/api/repeater/send", map[string]any{
+			"target": "https://" + authority, "request": "GET " + path + " HTTP/2\r\nHost: x\r\n\r\n",
+			"h2_headers": kettledList(authority, path), "options": map[string]any{"process_cookies": true},
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("send %s = %d (%s)", path, rec.Code, rec.Body.String())
+		}
+		got := origin.Requests()
+		for _, f := range got[len(got)-1].Fields {
+			if string(f.Name) == "cookie" && string(f.Value) == "scoped=1" {
+				return true
+			}
+		}
+		return false
+	}
+	if !cookieSent("/k?x=1") {
+		t.Fatal("a Path=/k cookie did not ride a kettled send to /k?x=1")
+	}
+	if cookieSent("/other") {
+		t.Fatal("a Path=/k cookie rode a kettled send to /other")
 	}
 }

@@ -1346,9 +1346,12 @@ export function Inspector({
    */
   const applyDetail = (section: SectionModel, row: Row, name: string, value: string) => {
     const breaks = hasLineBreak(name) || hasLineBreak(value);
-    if (breaks && !kettled && kettle && section.headerFields && !section.commit) {
+    // Burp's other name triggers, from the same view: renaming a header to something with an uppercase
+    // letter or a colon in it, on an HTTP/2 request, is a name HTTP/2 text would lowercase or misread.
+    const h2OnlyName = http2 && name !== row.name && /[A-Z:]/.test(name);
+    if ((breaks || h2OnlyName) && !kettled && kettle && kettle.tls && section.headerFields && !section.commit) {
       kettle.onFields(kettleHeaderEdit(raw, kettle.tls, row.index, row.name, name, value));
-      setAnnouncement(`${row.name} now carries CR/LF: the request is kettled and its headers are an HTTP/2 field list`);
+      setAnnouncement(`${row.name} changed in a way HTTP/1 text cannot carry: the request is kettled and its headers are an HTTP/2 field list`);
       return;
     }
     (section.commit ?? commit)((current) => row.set!(current, name, value), `${section.title} · ${name} updated`);
