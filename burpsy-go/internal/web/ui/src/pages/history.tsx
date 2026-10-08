@@ -1828,6 +1828,7 @@ export function HistoryPage(): JSX.Element {
     master={
      <VirtualTable
       ariaLabel="Captured HTTP exchanges"
+      docTopic="proxy-history"
       data={rows}
       columns={columns}
       getRowId={(row) => String(row.id)}

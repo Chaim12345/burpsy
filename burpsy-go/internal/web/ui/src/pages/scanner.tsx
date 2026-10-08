@@ -579,7 +579,7 @@ export function ScannerPage(): JSX.Element {
             </div>
             {pathOpen
              ? path.leaves.map((leaf) => (
-              <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)}>
+              <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)} docTopic="issues">
                <div
                 role="treeitem"
                 aria-level={3}

@@ -1390,6 +1390,8 @@ function App(): JSX.Element {
         // cannot disagree about what is showing.
         <ContextMenu
          key={entry.id}
+         // A tool tab's menu is Burp's detach/hide trio, which carries no documentation entry.
+         docTopic={null}
          groups={[
           {
            id: "tab",

@@ -657,6 +657,7 @@ export function LoggerPage(): JSX.Element {
     master={
      <VirtualTable
       ariaLabel="Requests burpsy made or relayed"
+      docTopic="logger"
       data={filteredRows}
       columns={columns}
       getRowId={(row) => String(row.id)}

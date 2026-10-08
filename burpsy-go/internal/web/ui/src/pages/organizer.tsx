@@ -1018,6 +1018,7 @@ export function OrganizerPage(): JSX.Element {
      <SimpleTable headers={["#", "Exchange", "Tool", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
       {visible.map((item) => (
        <MenuRow
+        docTopic="organizer"
         key={item.id}
         groups={menuFor(item)}
         className={item.id === selectedId ? "data-row clickable selected-row" : "data-row clickable"}

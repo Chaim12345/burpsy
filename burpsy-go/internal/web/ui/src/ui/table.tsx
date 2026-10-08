@@ -20,6 +20,7 @@ import { canHideColumn, reconcileVisibility, visibilityStorageKey } from "../lib
 import { clickAction, contextKeepsSelection, reduceSelection, sameIds, type SelectionAction, type SelectionState } from "../lib/table-selection";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
+import type { DocTopic } from "../lib/docs";
 import { Spinner } from "./primitives";
 
 // Re-exported so a page wiring `columnVisibility`/`onColumnVisibilityChange` does
@@ -272,6 +273,11 @@ export interface VirtualTableProps<T> {
    * the clicked row.
    */
   menuGroupsMany?: (rows: T[]) => MenuGroup[];
+  /**
+   * The documentation topic the row menu's trailing "<Tool> documentation" entry opens (u9zz,
+   * lib/docs.ts). Defaults to the generic Tables panel; a tool's own table names its tool.
+   */
+  docTopic?: DocTopic;
 }
 
 export function VirtualTable<T>({
@@ -298,6 +304,7 @@ export function VirtualTable<T>({
   selectedIds: controlledIds,
   onSelectionChange,
   menuGroupsMany,
+  docTopic = "tables",
 }: VirtualTableProps<T>): JSX.Element {
   // The operator's density preference is the default when a page does not name
   // one — the store is the single source of truth for it, so a table that never
@@ -558,6 +565,13 @@ export function VirtualTable<T>({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // React bubbles events through the component tree, not the DOM, so a key pressed in a row's
+    // context menu — rendered in a portal, but a React child of the row — arrives here too. Enter
+    // on a menu item then also "activated" the selected row (History: sent it to Repeater), and
+    // arrows moving through the menu moved the table's selection behind it. Pre-existing; found
+    // in the u9zz live drive, where choosing "Proxy history documentation" with Enter opened a
+    // Repeater tab. Only keys aimed at the table itself are the table's.
+    if (!event.currentTarget.contains(event.target as Node)) return;
     const extend = event.shiftKey;
     // Ctrl/Cmd+A on the table itself only: inside a cell's own control it keeps its meaning.
     if (multiSelect && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && event.target === event.currentTarget) {
@@ -742,6 +756,7 @@ export function VirtualTable<T>({
                         <GripVertical size={11} />
                       </span>
                       <ContextMenu
+                        docTopic="tables"
                         groups={[
                           {
                             id: "column",
@@ -832,6 +847,7 @@ export function VirtualTable<T>({
                   onActivate={onActivate}
                   onDoubleActivate={onDoubleActivate}
                   menuFor={menuFor}
+                  docTopic={docTopic}
                 />
               );
             })}
@@ -867,6 +883,7 @@ function TableRow<T>({
   onActivate,
   onDoubleActivate,
   menuFor,
+  docTopic,
 }: {
   row: Row<T>;
   height: number;
@@ -881,6 +898,7 @@ function TableRow<T>({
   onActivate?: (row: T) => void;
   onDoubleActivate?: (row: T) => void;
   menuFor?: (row: Row<T>) => MenuGroup[];
+  docTopic: DocTopic;
 }): JSX.Element {
   const element = (
     <tr
@@ -909,7 +927,11 @@ function TableRow<T>({
     </tr>
   );
   if (!menuFor) return element;
-  return <ContextMenu groups={menuFor(row)}>{element}</ContextMenu>;
+  return (
+    <ContextMenu groups={menuFor(row)} docTopic={docTopic}>
+      {element}
+    </ContextMenu>
+  );
 }
 
 /**
@@ -930,11 +952,12 @@ function TableRow<T>({
  */
 export function MenuRow({
   groups,
+  docTopic = "tables",
   children,
   ...rowProps
-}: { groups: MenuGroup[]; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
+}: { groups: MenuGroup[]; docTopic?: DocTopic; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
   return (
-    <ContextMenu groups={groups}>
+    <ContextMenu groups={groups} docTopic={docTopic}>
       <tr {...rowProps}>{children}</tr>
     </ContextMenu>
   );
@@ -971,6 +994,7 @@ export function SortableTable<T>({
   rowClassName,
   menuGroups,
   density: densityProp,
+  docTopic = "tables",
 }: {
   data: T[];
   columns: Column<T>[];
@@ -980,6 +1004,8 @@ export function SortableTable<T>({
   rowClassName?: (row: T) => string | undefined;
   menuGroups?: (row: T) => MenuGroup[];
   density?: "comfortable" | "compact";
+  /** See VirtualTable's `docTopic`. */
+  docTopic?: DocTopic;
 }): JSX.Element {
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
@@ -1036,6 +1062,7 @@ export function SortableTable<T>({
                 row={row}
                 className={rowClassName?.(row.original)}
                 menuGroups={menuGroups}
+                docTopic={docTopic}
               />
             ))}
           </tbody>
@@ -1057,10 +1084,12 @@ function SortableRow<T>({
   row,
   className,
   menuGroups,
+  docTopic,
 }: {
   row: Row<T>;
   className?: string;
   menuGroups?: (row: T) => MenuGroup[];
+  docTopic: DocTopic;
 }): JSX.Element {
   const element = (
     <tr className={className}>
@@ -1070,7 +1099,11 @@ function SortableRow<T>({
     </tr>
   );
   if (!menuGroups) return element;
-  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
+  return (
+    <ContextMenu groups={menuGroups(row.original)} docTopic={docTopic}>
+      {element}
+    </ContextMenu>
+  );
 }
 
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */

@@ -728,6 +728,7 @@ export function ScopePage(): JSX.Element {
     />
     <VirtualTable
      ariaLabel="Scope rules"
+     docTopic="scope"
      data={rows}
      columns={columns}
      getRowId={rowKey}

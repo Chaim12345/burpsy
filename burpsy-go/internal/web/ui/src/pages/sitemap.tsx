@@ -215,7 +215,7 @@ function TreeRow({
  // too, and hosts — where the decision actually gets made — say it in visible text.
  const outOfScope = !node.in_scope;
  return (
-  <ContextMenu groups={getMenuGroups?.(row) ?? []}>
+  <ContextMenu groups={getMenuGroups?.(row) ?? []} docTopic="site-map">
    <div
     role="treeitem"
     aria-level={depth + 1}
@@ -452,6 +452,9 @@ export function SiteMapPage(): JSX.Element {
  };
 
  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  // A key in a node's context menu (a portal, but a React child of the tree) is not the tree's —
+  // see VirtualTable's onKeyDown for the bug this guards against.
+  if (!event.currentTarget.contains(event.target as Node)) return;
   const current = cursorIndex >= 0 ? rows[cursorIndex] : undefined;
   switch (event.key) {
    case "ArrowDown":
@@ -1036,6 +1039,7 @@ export function SiteMapPage(): JSX.Element {
      ) : (
       <VirtualTable
        ariaLabel={`Requests under ${selected.node.path}`}
+       docTopic="site-map"
        data={nodeExchanges}
        columns={columns}
        getRowId={(row) => String(row.id)}

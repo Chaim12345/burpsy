@@ -1591,7 +1591,7 @@ export function HttpEditor({
           controls keep the browser's menu, and the Render view keeps it too — that iframe is
           sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
-   <ContextMenu groups={active === "render" ? [] : allGroups}>
+   <ContextMenu groups={active === "render" ? [] : allGroups} docTopic="message-editor">
     <div className="editor-body" style={{ height }}>
      {pluginTabs.openKey !== null && pluginTabs.content ? (
       // A plugin's editor tab: read-only by contract (KindEditorTab is the read-only half of

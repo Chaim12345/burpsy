@@ -945,7 +945,7 @@ export function RepeaterPage(): JSX.Element {
     // Keyed here rather than at the .map call sites because the key must sit on the element the
     // function returns: a wrapper added without one makes every multi-tab strip render unkeyed
     // children, which React answers with a console error the e2e suite refuses to ship with.
-    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)}>
+    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)} docTopic="repeater">
       <div
         role="tab"
         aria-selected={tab.id === active.id}

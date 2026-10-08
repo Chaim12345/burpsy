@@ -1597,6 +1597,7 @@ export function InterceptPage(): JSX.Element {
       master={
        <VirtualTable
         ariaLabel="Held messages"
+        docTopic="intercept"
         data={held}
         columns={columns}
         getRowId={(row) => String(row.id)}
