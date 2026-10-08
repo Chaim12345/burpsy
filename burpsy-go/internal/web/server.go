@@ -1164,6 +1164,8 @@ func (s *Server) setupRoutes() {
 
 	// Site map
 	s.mux.HandleFunc("/api/sitemap", s.handleSitemap)
+	// Record a captured exchange into the map by id — Burp's add_to_sitemap (4bfp).
+	s.mux.HandleFunc("/api/sitemap/record", s.handleSitemapRecord)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
 	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is

@@ -939,6 +939,13 @@ var manifest = map[string]route{
 			"such. DELETE: suppress a host, branch or single node from the map — a view-level removal " +
 			"that keeps the underlying exchanges and stays out across rebuilds and re-captures",
 	},
+	"/api/sitemap/record": {
+		// riskLocal, following /api/issues/record rather than /api/sitemap's riskDestructive: recording
+		// an exchange by id adds to burpsy's own view and removes nothing (burpsy-react-ui-4bfp).
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "record a captured exchange into the site map by id (Burp's add_to_sitemap): already on " +
+			"the map, or pinned past the Delete host/branch/item suppression that hid it",
+	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",

@@ -109,11 +109,12 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
 
 	// ---- Scope & Sitemap ----------------------------------------------------------------------
-	"POST /api/scope":       {body: typeOf[ScopeRequest]()},
-	"GET /api/scope/check":  {query: []queryParam{{name: "url", kind: "string", desc: "an absolute http:// or https:// URL"}}},
-	"POST /api/scope/check": {body: typeOf[scopeCheckReq]()},
-	"POST /api/sitemap":     {body: typeOf[sitemapInsertReq]()},
-	"DELETE /api/sitemap":   {body: typeOf[sitemapDeleteReq]()},
+	"POST /api/scope":          {body: typeOf[ScopeRequest]()},
+	"GET /api/scope/check":     {query: []queryParam{{name: "url", kind: "string", desc: "an absolute http:// or https:// URL"}}},
+	"POST /api/scope/check":    {body: typeOf[scopeCheckReq]()},
+	"POST /api/sitemap":        {body: typeOf[sitemapInsertReq]()},
+	"DELETE /api/sitemap":      {body: typeOf[sitemapDeleteReq]()},
+	"POST /api/sitemap/record": {body: typeOf[sitemapRecordReq]()},
 
 	// ---- Issues -------------------------------------------------------------------------------
 	"PUT /api/issues/":              {body: typeOf[issueTriageReq](), optional: true},

@@ -123,6 +123,11 @@ var groupedTools = []groupSpec{
 		ops:   []string{"GET /api/scope/check", "POST /api/scope/check"},
 	},
 	{
+		name: "sitemap_record", group: groupScope,
+		short: "Records a captured request/response into the site map by exchange id.",
+		ops:   []string{"POST /api/sitemap/record"},
+	},
+	{
 		name: "sitemap", group: groupScope,
 		short: "Reads the site map, records a host/path into it, or suppresses a host, branch or node.",
 		ops:   []string{"GET /api/sitemap", "POST /api/sitemap", "DELETE /api/sitemap"},

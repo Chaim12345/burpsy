@@ -132,6 +132,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/session/trace/enable": "riskLocal",
  "/api/settings/triage": "riskCredential",
  "/api/sitemap": "riskDestructive",
+ "/api/sitemap/record": "riskLocal",
  "/api/stats": "riskRead",
  "/api/tasks/": "riskLocal",
  "/api/tools/compare": "riskRead",

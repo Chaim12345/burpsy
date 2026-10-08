@@ -133,6 +133,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/session/trace/enable": false,
  "/api/settings/triage": true,
  "/api/sitemap": true,
+ "/api/sitemap/record": false,
  "/api/stats": false,
  "/api/tasks/": false,
  "/api/tools/compare": false,
