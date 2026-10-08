@@ -206,6 +206,11 @@ func Test_every_listed_option_changes_something_when_enabled_alone(t *testing.T)
 			// else in this file's fixtures.
 			reqChanged = reqChanged || requestEgressFixture(t, key)
 
+			// The in-browser interface fixture (beof): http://burpsuite through a real proxy loop, once
+			// with the key enabled alone and once with everything off. Only the switch that disables the
+			// interface can make the welcome page disappear.
+			reqChanged = reqChanged || webInterfaceFixture(t, key)
+
 			if !respChanged && !reqChanged {
 				t.Fatalf("option %q is listed in OptionKeys but changed nothing in either "+
 					"direction. Either it has no applier — in which case the API is advertising "+
@@ -415,4 +420,26 @@ func requestEgressFixture(t *testing.T, key OptionKey) bool {
 			"Proxy-Authorization: Basic Zm9vOmJhcg==\r\n\r\n")))
 	}
 	return run(true) != run(false)
+}
+
+// webInterfaceFixture reports whether enabling key alone changes what http://burpsuite answers.
+func webInterfaceFixture(t *testing.T, key OptionKey) bool {
+	t.Helper()
+	answer := func(options *Options) bool {
+		srv := NewServer(NewProxyConfig(core.NewTrafficStore()).
+			WithOptions(options).
+			WithScope(testScope()).
+			WithLogger(zap.NewNop()))
+		addr := startProxy(t, srv)
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dial fixture proxy: %v", err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+		_, _ = conn.Write([]byte("GET http://burpsuite/ HTTP/1.1\r\nHost: burpsuite\r\n\r\n"))
+		got, _ := io.ReadAll(conn)
+		return strings.Contains(string(got), "burpsy proxy listener")
+	}
+	return answer(optionsWith(t, key)) != answer(NewOptions())
 }

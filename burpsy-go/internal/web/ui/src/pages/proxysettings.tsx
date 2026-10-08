@@ -256,6 +256,90 @@ export function ProxySettingsPage(): JSX.Element {
         )}
       />
      </label>
+     <label className="switch-row" htmlFor="proxy-opt-use_http10_to_server">
+      <span>
+       <span>Use HTTP/1.0 in requests to server</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Send every forwarded request with an HTTP/1.0 request line, for a legacy origin that mishandles HTTP/1.1. Only the version token changes. Applies from the next request.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-use_http10_to_server"
+       label="Use HTTP/1.0 in requests to server"
+       checked={d.options["use_http10_to_server"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { use_http10_to_server: on },
+         {
+          onSuccess: () => toast.success(`HTTP/1.0 to the server ${on ? "on" : "off"}`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+     <label className="switch-row" htmlFor="proxy-opt-use_http10_to_client">
+      <span>
+       <span>Use HTTP/1.0 in responses to client</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Answer the browser with an HTTP/1.0 status line. History records the response as the browser received it. Applies from the next response.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-use_http10_to_client"
+       label="Use HTTP/1.0 in responses to client"
+       checked={d.options["use_http10_to_client"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { use_http10_to_client: on },
+         {
+          onSuccess: () => toast.success(`HTTP/1.0 to the client ${on ? "on" : "off"}`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+     <label className="switch-row" htmlFor="proxy-opt-suppress_error_messages">
+      <span>
+       <span>Suppress burpsy error messages in browser</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Close the connection instead of sending burpsy's own explanatory error page (a refused scope, a failed CONNECT, an unattributable request). The event is still logged and counted.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-suppress_error_messages"
+       label="Suppress burpsy error messages in browser"
+       checked={d.options["suppress_error_messages"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { suppress_error_messages: on },
+         {
+          onSuccess: () => toast.success(`Error messages ${on ? "suppressed" : "shown"}`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
+     <label className="switch-row" htmlFor="proxy-opt-disable_web_interface">
+      <span>
+       <span>Disable web interface at http://burpsy</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Stop the listener answering http://burpsy, http://burpsuite and its own address with the welcome page and CA certificate. Useful on a listener bound to an unprotected interface.
+       </span>
+      </span>
+      <Switch
+       id="proxy-opt-disable_web_interface"
+       label="Disable web interface at http://burpsy"
+       checked={d.options["disable_web_interface"] === true}
+       onCheckedChange={(on) =>
+        setOptions.mutate(
+         { disable_web_interface: on },
+         {
+          onSuccess: () => toast.success(`Web interface ${on ? "disabled" : "enabled"}`),
+          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Setting the option failed"),
+         },
+        )}
+      />
+     </label>
      <SimpleTable headers={["Adjustment", "Count"]}>
       <tr>
        <td>Accept-Encoding stripped from requests</td>

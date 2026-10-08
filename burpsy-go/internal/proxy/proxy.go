@@ -1642,7 +1642,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// response to HTTPS client" — a TLS error, which is the one report that would send the
 		// operator looking at certificates instead of at their scope list.
 		if !s.config.scope.AuthoriseRequest(reqHost, reqPort, path, reqTLS) {
-			tlsClient.Write(scopeDropResponse(reqHost, reqPort, path, reqTLS, s.config.scope))
+			s.writeProxyError(tlsClient, scopeDropResponse(reqHost, reqPort, path, reqTLS, s.config.scope))
 			return
 		}
 
@@ -1661,7 +1661,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			if core.IsWsUpgradeRequest(requestData) {
 				s.config.logger.Warn("refused to retarget a WebSocket upgrade",
 					zap.String("host", reqHost), zap.Uint16("port", reqPort))
-				tlsClient.Write(wsRetargetRefusalResponse())
+				s.writeProxyError(tlsClient, wsRetargetRefusalResponse())
 				continue
 			}
 			responseData, serverIP, firstByte, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
@@ -1971,7 +1971,7 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 	// somewhere other than where the client asked.
 	upstreamConn, err := s.dialUpstreamAddr(context.Background(), target)
 	if err != nil {
-		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		s.writeProxyError(clientConn, []byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return
 	}
 	defer upstreamConn.Close()
@@ -2085,7 +2085,15 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	}
 
 	if host == "" {
-		clientConn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		s.writeProxyError(clientConn, []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
+
+	// The in-browser interface (beof): http://burpsuite, http://burpsy, or the listener's own address.
+	// Answered here, before the listener's redirect, the scope gate and the dial, because none of them
+	// apply to the proxy describing itself, and forwarding a request for the listener would loop.
+	if s.isWebInterfaceTarget(host, port, clientConn) {
+		s.serveWebInterface(clientConn, method, path)
 		return
 	}
 
@@ -2251,7 +2259,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// that branch forwards: a request refused at egress must not reach the origin by the
 	// retention path either.
 	if !s.config.scope.AuthoriseRequest(host, port, path, scheme) {
-		clientConn.Write(scopeDropResponse(host, port, path, scheme, s.config.scope))
+		s.writeProxyError(clientConn, scopeDropResponse(host, port, path, scheme, s.config.scope))
 		return
 	}
 
