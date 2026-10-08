@@ -4,6 +4,8 @@
  * internal/web/api_tools.go and internal/sequencer/{report,fips}.go.
  */
 
+import type { FipsPositionReport } from "./sequencer-fips-positions";
+
 /** The server's rendering of a byte string. `text` is lossy when `utf8` is false. */
 export interface BytesView {
  text: string;
@@ -296,6 +298,8 @@ export interface SequencerAnalysis {
  fips: FipsReport;
  /** The four further randomness tests, additive to the grade (burpsy-react-ui-d2g). */
  advanced: AdvancedReport;
+ /** The FIPS battery at each bit position, additive to the grade (burpsy-react-ui-c0k3). */
+ fips_positions: FipsPositionReport;
  grade: "insufficient" | "pass" | "fail";
  verdict: string;
  warnings: string[] | null;

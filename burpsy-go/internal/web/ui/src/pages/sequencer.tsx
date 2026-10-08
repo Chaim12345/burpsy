@@ -56,6 +56,7 @@ import {
 } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { analysisSettingRows } from "../lib/sequencer-settings";
+import { buildPositionChart, positionRanges, type FipsPositionReport } from "../lib/sequencer-fips-positions";
 
 /** The analyse report as this page reads it, with the effective-entropy curve
  *  (burpsy-react-ui-boq). The field is intersected on in data.workbench.ts rather
@@ -103,21 +104,15 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
  return (
   <Card>
    <SectionHeading title="FIPS 140-2 bit-level tests" detail={coverage} />
-   {/* 3f3: the disclosure the issue requires. Burp's docs describe its FIPS battery as running
-       "at each bit position", and its results tab names the failing bits — an operator who knows
-       Burp reads this heading the same way. It is not: the thresholds are defined on a 20,000-bit
-       SAMPLE, so the stream is cut into blocks and each verdict describes a block — the whole
-       stream when the sample spans one. The honest per-position answer lives in Character
-       positions above, which IS per bit position (per character position of the token). Saying
-       so here is the difference between a caveat an operator can act on and one they discover
-       after trusting the verdict. */}
-   <div className="notice notice-warn">
-    These verdicts describe the <strong>whole bit stream</strong>, not individual bit positions.
-    Every FIPS 140-2 threshold is defined on a {fips.block_bits}-bit sample, so the stream is cut
-    into {fips.block_bits}-bit blocks and each row reports over those blocks — it cannot name
-    which bit positions of the token are weak. For the per-position answer (a fixed prefix, a
-    low-entropy counter field), read the Character positions section: it breaks the token down
-    at each position explicitly.
+   {/* 3f3 / c0k3: this table is the stream view, cut into 20,000-bit blocks where the FIPS intervals
+       apply as written. Burp's bit-level view, the battery at each bit position, is the section below.
+       Say which one this is, so an operator who knows Burp does not read a block verdict as a
+       per-position one. */}
+   <div className="notice">
+    These verdicts describe the <strong>whole bit stream</strong>, cut into {fips.block_bits}-bit blocks. Every
+    FIPS 140-2 interval is defined on a {fips.block_bits}-bit sample, so each row reports over those blocks. The
+    same four tests at <strong>each bit position</strong>, which name the weak bits of the token, are in the
+    &ldquo;FIPS tests at each bit position&rdquo; section below.
    </div>
    {fips.tests === null ? (
     <div className="notice notice-warn">
@@ -167,6 +162,167 @@ function Fips({ report }: { report: SequencerAnalysis }): JSX.Element {
      { label: "Runs of ones", value: report.bits.runs_ones.join(" · ") || "—" },
     ]}
    />
+  </Card>
+ );
+}
+
+const POSITION_CHART_W = 640;
+const POSITION_CHART_H = 120;
+
+/**
+ * Burp's bit-level analysis (burpsy-react-ui-c0k3): the FIPS battery at each bit position across tokens.
+ * Each bar is a position's significance as 6 + log10(p), the scale Burp's chart uses, with Burp's "FIPS
+ * pass level" drawn at 6 + log10(threshold). A bar's colour is the server's verdict, never re-derived from
+ * the line, because at N = 20,000 the FIPS intervals decide instead of the threshold.
+ */
+function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.Element | null {
+ const tests = positions?.tests ?? [];
+ const [selected, setSelected] = useState<string>("monobit");
+ const test = tests.find((t) => t.id === selected && !t.disabled) ?? tests.find((t) => !t.disabled);
+ const chart = useMemo(() => (test ? buildPositionChart(test) : null), [test]);
+ if (!positions) return null;
+
+ const coverage = positions.computed
+  ? `${positions.tokens.toLocaleString()} token(s) per position · ${positions.positions_examined} bit position(s)` +
+    (positions.exact_intervals ? " · FIPS intervals (N = 20,000)" : " · significance thresholds (N ≠ 20,000)")
+  : "not computed";
+
+ return (
+  <Card>
+   <SectionHeading title="FIPS tests at each bit position" detail={coverage} />
+   {!positions.computed ? (
+    <div className="notice notice-warn">Not computed: {positions.reason}.</div>
+   ) : (
+    <>
+     <SimpleTable headers={["Test", "Positions failed", "Failing positions", "Requirement"]}>
+      {tests.map((t) =>
+       t.disabled ? (
+        <tr key={t.id}>
+         <td>{t.name}</td>
+         <td>
+          <Badge tone="neutral">not run — switched off</Badge>
+         </td>
+         <td className="cell-dim" colSpan={2}>
+          {t.disable_reason ?? "switched off in the analysis settings"}
+         </td>
+        </tr>
+       ) : (
+        <tr key={t.id}>
+         <td>{t.name}</td>
+         <td>
+          <Badge tone={t.positions_failed === 0 ? "good" : "bad"}>
+           {t.positions_failed} / {t.positions_passed + t.positions_failed}
+          </Badge>
+         </td>
+         <td className="cell-num">{t.failing_positions.length ? positionRanges(t.failing_positions) : "—"}</td>
+         <td className="cell-dim">{t.requirement}</td>
+        </tr>
+       ),
+      )}
+     </SimpleTable>
+     {test && chart ? (
+      <figure style={{ margin: 0 }}>
+       <Toolbar>
+        <Field label="Chart">
+         <Select
+          aria-label="Test to chart"
+          value={test.id}
+          onChange={(event) => setSelected(event.target.value)}
+         >
+          {tests
+           .filter((t) => !t.disabled)
+           .map((t) => (
+            <option key={t.id} value={t.id}>
+             {t.name}
+            </option>
+           ))}
+         </Select>
+        </Field>
+       </Toolbar>
+       <svg
+        viewBox={`0 0 ${POSITION_CHART_W + 48} ${POSITION_CHART_H + 28}`}
+        width="100%"
+        height="170"
+        role="img"
+        aria-label={`${test.name} significance at each of ${chart.bars.length} bit positions; ${test.positions_failed} failed`}
+        style={{ display: "block", overflow: "visible" }}
+       >
+        <g transform="translate(40, 8)">
+         <line x1={0} y1={POSITION_CHART_H} x2={POSITION_CHART_W} y2={POSITION_CHART_H} stroke="var(--line-strong)" />
+         <line x1={0} y1={0} x2={0} y2={POSITION_CHART_H} stroke="var(--line-strong)" />
+         {[0, 2, 4, 6].map((score) => (
+          <text
+           key={`y-${score}`}
+           x={-6}
+           y={POSITION_CHART_H - (score / 6) * POSITION_CHART_H + 4}
+           textAnchor="end"
+           fontSize="10"
+           fill="var(--muted)"
+          >
+           {score}
+          </text>
+         ))}
+         {chart.bars.map((bar) => (
+          <rect
+           key={bar.position}
+           x={bar.x * POSITION_CHART_W}
+           y={(1 - bar.height) * POSITION_CHART_H}
+           width={Math.max(bar.width * POSITION_CHART_W - (chart.bars.length > 160 ? 0 : 1), 0.5)}
+           height={Math.max(bar.height * POSITION_CHART_H, 1)}
+           fill={bar.passed ? "var(--accent)" : "var(--bad)"}
+          >
+           <title>
+            {`bit ${bar.position}: ${test.statistic_label} ${Number.isInteger(bar.statistic) ? bar.statistic : bar.statistic.toFixed(2)}, significance ${bar.significance.toExponential(2)}, ${bar.passed ? "pass" : "fail"}`}
+           </title>
+          </rect>
+         ))}
+         <line
+          x1={0}
+          y1={(1 - chart.passLine) * POSITION_CHART_H}
+          x2={POSITION_CHART_W}
+          y2={(1 - chart.passLine) * POSITION_CHART_H}
+          stroke="var(--ink)"
+          strokeDasharray="4 3"
+         />
+         <text
+          x={POSITION_CHART_W}
+          y={(1 - chart.passLine) * POSITION_CHART_H - 4}
+          textAnchor="end"
+          fontSize="10"
+          fill="var(--muted)"
+         >
+          FIPS pass level
+         </text>
+         <text x={0} y={POSITION_CHART_H + 16} fontSize="10" fill="var(--muted)">
+          bit 0
+         </text>
+         <text x={POSITION_CHART_W} y={POSITION_CHART_H + 16} textAnchor="end" fontSize="10" fill="var(--muted)">
+          bit {chart.bars.length - 1}
+         </text>
+        </g>
+       </svg>
+       <figcaption className="field-hint">
+        Each bar is one bit position&apos;s significance as 6 + log10(p): 6 is a perfectly ordinary position and 0 is
+        the 10⁻⁶ floor. The dashed line is the pass level, 6 + log10({test.threshold}). Red bars failed.
+        {positions.exact_intervals
+         ? " At N = 20,000 the FIPS intervals decide each verdict, so a bar's colour, not its height against the line, is the verdict."
+         : ""}
+       </figcaption>
+      </figure>
+     ) : null}
+     <p className="field-hint">
+      {positions.method}
+      {positions.positions_truncated ? ` Only the first ${positions.positions_examined} bit positions are examined.` : ""}
+      {positions.positions_skipped_variable > 0
+       ? ` ${positions.positions_skipped_variable} bit position(s) past the shortest token are not examined.`
+       : ""}
+      {positions.tokens_not_analysed > 0
+       ? ` ${positions.tokens_not_analysed.toLocaleString()} token(s) past the first ${positions.tokens.toLocaleString()} are not analysed here.`
+       : ""}{" "}
+      This section does not change the grade above.
+     </p>
+    </>
+   )}
   </Card>
  );
 }
@@ -551,6 +707,7 @@ function Report({ report }: { report: SequencerAnalysis }): JSX.Element {
    <EffectiveEntropy effective={report.effective_entropy} />
    <ExtraStats report={report} />
    <Fips report={report} />
+   <FipsPositions positions={report.fips_positions} />
    <Advanced report={report} />
    <Positions characters={characters} />
   </>
