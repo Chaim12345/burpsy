@@ -600,6 +600,12 @@ type intruderRunReq struct {
 	// on, case-sensitive, headers included, matched as sent), so a scripted attack's buckets do not
 	// change unless the request says so. The bundled UI always sends the object.
 	GrepPayloads *intruder.GrepPayloads `json:"grep_payloads,omitempty"`
+	// CaptureFilter is Burp's results capture filter (burpsy-react-ui-ip2b): {discard_no_response, term,
+	// regex, case_sensitive, negate, statuses}. Items it rejects are counted (sent/failed, buckets, the
+	// report's discarded) but leave no results row and no stored request or response. Nil captures
+	// everything, as every attack did before it existed. Distinct from the page's view filter, which only
+	// hides rows that were captured.
+	CaptureFilter *intruder.CaptureFilterSpec `json:"capture_filter,omitempty"`
 	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
 	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
 	// never thought about error handling is exactly the person Burp's default protects, and a
@@ -1194,6 +1200,15 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Compiled before any request is sent, like the grep patterns: a filter whose term does not compile
+	// would otherwise capture everything or nothing, and either is a filter the operator did not set.
+	var capture *intruder.CaptureFilter
+	if req.CaptureFilter != nil {
+		if capture, err = intruder.NewCaptureFilter(*req.CaptureFilter); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// A named pool and inline limits are two ways of saying the same thing, and an attack may use
 	// either — a pool is a resolution step in front of the inline form, not a replacement for it. What
 	// it may not do is say both: the operator would have typed two different sets of bounds and had
@@ -1222,16 +1237,17 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
 		id, _ := s.store.Put(raw, core.DirectionResponse)
-		// The jar's monitored-tool set (burpsy-react-ui-sn3j): the exemplar is one stored
-		// response per result bucket, so this offers the jar the Set-Cookie lines of each
-		// distinct behaviour the attack actually saw — not one per request, which would multiply
-		// the same lines by the bucket's count and is the same restraint the engine's memory
-		// contract already holds. Absorbing here, beside the store write, keeps the capture
-		// point the one place a response becomes observable.
+		return uint64(id)
+	}
+	// The jar's monitored-tool set (burpsy-react-ui-sn3j): the response opening each result bucket
+	// offers the jar its Set-Cookie lines — one per distinct behaviour the attack saw, not one per
+	// request, the restraint the engine's memory contract already holds. It is the engine's Observe
+	// hook rather than part of record, because a response the capture filter discards (ip2b) or an
+	// attack that does not store responses (nqww) must not silently stop the jar learning.
+	observe := func(raw []byte) {
 		if s.sessionCoordinator != nil {
 			s.sessionCoordinator.AbsorbResponseCookies(session.SourceIntruder, host, port, tls, raw)
 		}
-		return uint64(id)
 	}
 
 	control := intruder.NewControl()
@@ -1247,6 +1263,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	if req.GrepPayloads != nil {
 		attack.WithGrepPayloads(*req.GrepPayloads)
 	}
+	attack.WithCapture(capture)
+	attack.Observe = observe
 	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
 	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
 	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
@@ -1437,6 +1455,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			Payloads:     examplePayloads(b.FirstOrdinal),
 		})
 		seenOrdinal[b.FirstOrdinal] = true
+		// A bucket whose opening response the capture filter discarded keeps its exemplar from a later
+		// ordinal (ip2b); that ordinal's payloads are what its stored exchange carries.
+		if eo := b.ExampleOrdinal; eo != nil && !seenOrdinal[*eo] {
+			seenOrdinal[*eo] = true
+			if pl := examplePayloads(*eo); len(pl) > 0 {
+				examples = append(examples, BucketExample{FirstOrdinal: *eo, Payloads: pl})
+			}
+		}
 	}
 	for _, a := range report.Attempts {
 		if seenOrdinal[a.Ordinal] {

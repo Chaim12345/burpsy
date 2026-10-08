@@ -94,6 +94,13 @@ function fullConfig(): IntruderConfig {
   grepPayloadsCaseSensitive: true,
   grepPayloadsExcludeHeaders: true,
   grepPayloadsMatchPreEncoded: false,
+  captureFilterEnabled: true,
+  captureDiscardNoResponse: true,
+  captureTerm: "Welcome",
+  captureRegex: true,
+  captureCaseSensitive: true,
+  captureNegate: true,
+  captureStatuses: ["2xx", "5xx"],
   };
 }
 

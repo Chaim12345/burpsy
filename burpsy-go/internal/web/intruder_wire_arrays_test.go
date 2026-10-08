@@ -263,3 +263,47 @@ func TestGrepPayloadsCountArraysAreArraysOnEveryRow(t *testing.T) {
 		}
 	}
 }
+
+// A capture filter that discards every item leaves the row arrays empty — [] on the wire, not null —
+// while the counts still describe the whole attack (ip2b).
+func TestACaptureFilterThatDiscardsEverythingSendsEmptyArrays(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+	var body json.RawMessage
+	if code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id": id, "target": "http://" + addr, "mode": "sniper",
+		"manual_points":  []map[string]int{{"start": start, "end": start + 3}},
+		"payload_sets":   [][]string{{"xyz", "wxyz"}},
+		"capture_filter": map[string]any{"term": "this text is in no response"},
+		"rps":            1000,
+	}, &body); code != http.StatusOK {
+		t.Fatalf("run = %d: %s", code, body)
+	}
+	var view struct {
+		Report struct {
+			Sent      int             `json:"sent"`
+			Discarded int             `json:"discarded"`
+			Attempts  json.RawMessage `json:"attempts"`
+			Errors    json.RawMessage `json:"errors"`
+			Buckets   json.RawMessage `json:"buckets"`
+		} `json:"report"`
+	}
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Report.Sent != 2 || view.Report.Discarded != 2 {
+		t.Fatalf("sent=%d discarded=%d, want both sent and both discarded", view.Report.Sent, view.Report.Discarded)
+	}
+	if string(view.Report.Attempts) != "[]" || string(view.Report.Errors) != "[]" {
+		t.Fatalf("attempts=%s errors=%s, want [] for both", view.Report.Attempts, view.Report.Errors)
+	}
+	if len(view.Report.Buckets) == 0 || view.Report.Buckets[0] != '[' || string(view.Report.Buckets) == "[]" {
+		t.Fatalf("buckets = %s, want the discarded items still bucketed", view.Report.Buckets)
+	}
+}

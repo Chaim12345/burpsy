@@ -120,6 +120,16 @@ has one slot per payload SET, never per position (battering ram counts once). `N
 `LegacyGrepPayloads()`, the fixed check every attack ran before; the settings decide the key, so changing
 them can change the bucket count.
 
+### The capture filter drops rows and storage, never counts
+
+`Attack.Capture` (`capture.go`, ip2b) is Burp's results capture filter: the AND of discard-without-response,
+status classes and a search term. A discarded item still counts in Sent/Failed, its error group and its
+bucket, and in `AttackReport.Discarded`; it leaves no row and no stored bytes. A bucket whose opening
+response was discarded takes its exemplar from its first captured response (`ResultBucket.ExampleOrdinal`).
+With a filter, the DetailLimit row budget is spent on captured items, not on the first ordinals.
+`Attack.Observe` sees the opening response of every bucket regardless of capture or storage — the web
+layer's cookie jar learns there, so storing and learning stay independent.
+
 ### Payloads and rules resolve before the attack, never inside it
 
 `PayloadSource.Resolve` produces the set and `Chain` rewrites it in place before `Run`. `max_count`

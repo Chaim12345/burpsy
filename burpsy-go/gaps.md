@@ -1734,3 +1734,31 @@ and it is saved into the attack's Grep extract field.
   rows of an existing burpsy report keep what they extracted.
 - The preview runs on the response as text; a response whose bytes are not valid UTF-8 can preview
   differently from what the engine matches.
+
+### Results capture filter (ip2b)
+
+**Burp:** results/filtering-results.html "Capture filter — Choose which items Intruder captures during the
+attack to control resource usage": Discard items without responses, Capture by search term (regex, case
+sensitive, negative search), Capture by status code, Capture by annotation. The predicates combine with AND
+(`Zbjk.allMatch`): `Zpoo` (no response or a zero-length one), `Zht8` (2xx/3xx/4xx/5xx toggles; no response and
+statuses outside 200-599 pass), `Zs3t` (the term in the response; no response does not contain it; negative
+inverts), `Zefp` (annotation).
+**burpsy:** `capture_filter {discard_no_response, term, regex, case_sensitive, negate, statuses}` on the run
+request; the report carries `discarded` and echoes `capture_filter`; buckets gain `example_ordinal`.
+
+- **Counts never shrink.** A discarded item is counted in sent/failed, its error group and its bucket, and in
+  `discarded`; it leaves no results row and no stored request or response. Burp has no buckets; burpsy's are a
+  summary of everything sent, so they keep counting.
+- **A bucket's exemplar is its first captured response.** When the response that opened a bucket was
+  discarded, the first captured response landing in it later is stored as the exemplar, and `example_ordinal`
+  names it; a bucket with nothing captured has null example ids.
+- **The row budget follows the filter.** Without a filter the attempts table keeps ordinals below
+  `detail_limit`, as before. With one it keeps the first `detail_limit` captured items in completion order, so
+  a filtered attack spends its rows on what the filter keeps. Under concurrency, which captured items fill the
+  last rows can vary between runs.
+- **Capture by annotation is not offered.** A burpsy result has no comment or highlight at capture time (row
+  comments are typed in the browser afterwards), so the predicate could only ever discard everything.
+- **Applied from launch.** Burp's filter can be changed mid-attack and "only impacts items generated after it's
+  applied"; burpsy's is part of the attack's configuration.
+- The session cookie jar still learns from discarded responses: it is fed by the engine's `Observe` hook on
+  each bucket's opening response, not by the recorder.

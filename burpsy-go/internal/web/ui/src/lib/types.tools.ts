@@ -103,6 +103,12 @@ export interface ResultBucket {
    */
   example_request_id: number | null;
   example_response_id: number | null;
+  /**
+   * The ordinal whose request and response the example ids name (ip2b). Normally `first_ordinal`; a later
+   * ordinal when the capture filter discarded the bucket's opening response; `null` while nothing in the
+   * bucket was captured and stored. Absent from an older server — read it as `first_ordinal`.
+   */
+  example_ordinal?: number | null;
   grep_matches: number;
   grep_extract: string | null;
   /** Per-expression occurrence totals summed over this bucket's responses (irt), parallel to the
@@ -206,9 +212,25 @@ export interface AttackReport {
   baseline: boolean;
   pool: string | null;
   auto_throttle_engaged: number;
+  /** Items the capture filter dropped (ip2b): counted in sent/failed and the buckets, with no row and no
+   *  stored messages. Absent from an older server, which had no capture filter. */
+  discarded?: number;
+  /** The capture filter the attack ran with, or null when it captured everything. */
+  capture_filter?: CaptureFilterSpec | null;
   /** The Grep - Payloads settings the attack ran with (7qc3). Absent from an older server, whose
    *  reflection check was the fixed one: on, case-sensitive, headers included, matched as sent. */
   grep_payloads?: GrepPayloadsSettings;
+}
+
+/** Burp's results capture filter (ip2b), as the run request takes it and the report echoes it. */
+export interface CaptureFilterSpec {
+  discard_no_response: boolean;
+  term: string;
+  regex: boolean;
+  case_sensitive: boolean;
+  negate: boolean;
+  /** Status classes captured; absent captures all four. */
+  statuses?: ("2xx" | "3xx" | "4xx" | "5xx")[];
 }
 
 /** Burp's Grep - Payloads settings, as the run request takes them and the report echoes them. */

@@ -26,6 +26,7 @@ import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-
 import { delayVariationFields } from "../lib/intruder-variation";
 import { PAYLOAD_PLACEMENTS, describePoint, placementFields, type PayloadPlacement } from "../lib/intruder-placement";
 import { grepPayloadsField, reflectionColumnLabels } from "../lib/intruder-grep-payloads";
+import { STATUS_CLASSES, captureFilterField, describeCaptureFilter } from "../lib/intruder-capture";
 import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
@@ -323,14 +324,17 @@ function ResponseCell({
   id,
   label,
   onOpen,
+  missing = "No response was stored for this attempt.",
 }: {
   id: number | null;
   label: string;
   onOpen: (id: number, label: string) => void;
+  /** Why there is no response to open, as the cell's title. */
+  missing?: string;
 }): JSX.Element {
   if (id === null) {
     return (
-      <span className="cell-dim" title="No response was stored for this attempt.">
+      <span className="cell-dim" title={missing}>
         —
       </span>
     );
@@ -711,8 +715,15 @@ function AttackResult({
       cell: ({ row }) => (
         <ResponseCell
           id={row.original.example_response_id}
-          label={`Response to attempt ${row.original.first_ordinal}`}
+          // The stored exchange is the example ordinal's, which the capture filter can move off the
+          // bucket's first ordinal (ip2b).
+          label={`Response to attempt ${row.original.example_ordinal ?? row.original.first_ordinal}`}
           onOpen={onOpenMessage}
+          missing={
+            report.capture_filter && row.original.example_ordinal === null
+              ? "Not captured: the capture filter discarded every response in this bucket."
+              : "The engine stored no response for this bucket."
+          }
         />
       ),
     },
@@ -950,6 +961,13 @@ function AttackResult({
     // way to a full result set says so, the way Burp's own results mark retried requests.
     report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
     report.baseline ? "Item 0 is the unmodified baseline request (no payloads) — every other row is one ordinal higher than the payload set's arithmetic." : null,
+    // The capture filter (ip2b) is a bound like the others: what it dropped is gone, and the report
+    // says how much and by what rule rather than presenting the captured rows as the whole attack.
+    report.capture_filter
+      ? `Capture filter: ${describeCaptureFilter(report.capture_filter)}. ${formatCount(report.discarded ?? 0)} result${
+          (report.discarded ?? 0) === 1 ? "" : "s"
+        } discarded — counted in Sent, Failed and the buckets, with no row and no stored request or response.`
+      : null,
     ...hostHeaderCaveats(view),
   ].filter((value): value is string => value !== null);
 
@@ -1223,6 +1241,13 @@ export function IntruderPage(): JSX.Element {
     grepPayloadsCaseSensitive,
     grepPayloadsExcludeHeaders,
     grepPayloadsMatchPreEncoded,
+    captureFilterEnabled,
+    captureDiscardNoResponse,
+    captureTerm,
+    captureRegex,
+    captureCaseSensitive,
+    captureNegate,
+    captureStatuses,
     autoPauseEnabled,
     autoPauseMode,
     autoPauseExpressions,
@@ -1316,6 +1341,13 @@ export function IntruderPage(): JSX.Element {
   const setGrepPayloadsCaseSensitive = field("grepPayloadsCaseSensitive");
   const setGrepPayloadsExcludeHeaders = field("grepPayloadsExcludeHeaders");
   const setGrepPayloadsMatchPreEncoded = field("grepPayloadsMatchPreEncoded");
+  const setCaptureFilterEnabled = field("captureFilterEnabled");
+  const setCaptureDiscardNoResponse = field("captureDiscardNoResponse");
+  const setCaptureTerm = field("captureTerm");
+  const setCaptureRegex = field("captureRegex");
+  const setCaptureCaseSensitive = field("captureCaseSensitive");
+  const setCaptureNegate = field("captureNegate");
+  const setCaptureStatuses = field("captureStatuses");
   // Auto-pause is five draft fields, not one switch: the expressions and the mode are the attack's
   // own settings, so an operator who turns the switch off and on again must find their list intact
   // rather than retyping it. The switch decides only whether the block is SENT (burpsy-react-ui-2cvk).
@@ -1373,7 +1405,7 @@ export function IntruderPage(): JSX.Element {
       resultMenu({
         requestId: bucket.example_request_id,
         responseId: bucket.example_response_id,
-        label: `Intruder attempt ${bucket.first_ordinal}`,
+        label: `Intruder attempt ${bucket.example_ordinal ?? bucket.first_ordinal}`,
       }),
     [resultMenu],
   );
@@ -1754,6 +1786,8 @@ export function IntruderPage(): JSX.Element {
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
       // Grep - Payloads (7qc3): always the whole object — see grepPayloadsField for why.
       ...grepPayloadsField(config),
+      // The results capture filter (ip2b): only when switched on.
+      ...captureFilterField(config),
       // Auto-pause (burpsy-react-ui-2cvk). The block is sent only when the switch is on, and only
       // with expressions in it, for the same reason every other optional field here is omitted
       // rather than sent empty: an absent field and an empty expression list must not be two wire
@@ -3182,6 +3216,68 @@ export function IntruderPage(): JSX.Element {
                   ? "Off: no response is flagged as reflected, and the result buckets no longer split on reflection."
                   : "Reflection is part of how results are bucketed, so these settings can change the bucket count. Pre-URL-encoded matching looks for each payload as it was before \"URL-encode these characters\" rewrote it — the form an application that decodes its input echoes back."}
               </p>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Capture filter"
+              detail="Burp's results capture filter: decide while the attack runs which results are kept at all. Unlike the Results tab's filter, which only hides rows, a discarded result leaves no row and no stored request or response, and cannot be brought back. Its counts survive in Sent, Failed and the buckets."
+            />
+            <div className="form-grid">
+              <Checkbox
+                checked={captureFilterEnabled === true}
+                onCheckedChange={(v) => setCaptureFilterEnabled(v)}
+                label="Apply capture filter"
+              />
+              {captureFilterEnabled ? (
+                <>
+                  <div className="notice notice-warn">
+                    <AlertTriangle size={15} />
+                    <div>Results this filter discards are not stored and cannot be recovered after the attack.</div>
+                  </div>
+                  <Checkbox
+                    checked={captureDiscardNoResponse === true}
+                    onCheckedChange={(v) => setCaptureDiscardNoResponse(v)}
+                    label="Discard items without responses"
+                  />
+                  <Field
+                    label="Capture by search term"
+                    hint="Only results whose response contains this are captured (or, with negative search, only those whose response does not). Empty captures regardless of content."
+                  >
+                    {(id) => <Input id={id} value={captureTerm ?? ""} onChange={(event) => setCaptureTerm(event.target.value)} />}
+                  </Field>
+                  <div className="row-list">
+                    <Checkbox checked={captureRegex === true} onCheckedChange={(v) => setCaptureRegex(v)} label="Regex" />
+                    <Checkbox
+                      checked={captureCaseSensitive === true}
+                      onCheckedChange={(v) => setCaptureCaseSensitive(v)}
+                      label="Case sensitive"
+                    />
+                    <Checkbox checked={captureNegate === true} onCheckedChange={(v) => setCaptureNegate(v)} label="Negative search" />
+                  </div>
+                  <Field label="Capture by status code" hint="Results whose status is in an unticked class are discarded. A result with no response, or a status outside these classes, is not affected.">
+                    <div className="row-list">
+                      {STATUS_CLASSES.map((cls) => (
+                        <Checkbox
+                          key={cls}
+                          checked={(captureStatuses ?? [...STATUS_CLASSES]).includes(cls)}
+                          onCheckedChange={(v) =>
+                            setCaptureStatuses((current) => {
+                              const base = current ?? [...STATUS_CLASSES];
+                              return v ? [...new Set([...base, cls])] : base.filter((c) => c !== cls);
+                            })
+                          }
+                          label={cls}
+                        />
+                      ))}
+                    </div>
+                  </Field>
+                  <p className="field-hint">
+                    {describeCaptureFilter(captureFilterField(config).capture_filter)}. Capture by annotation is not offered: a burpsy result has no comment or highlight until after it is captured.
+                  </p>
+                </>
+              ) : null}
             </div>
           </Card>
 

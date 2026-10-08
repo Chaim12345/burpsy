@@ -298,6 +298,18 @@ export interface IntruderConfig {
  grepPayloadsCaseSensitive: boolean;
  grepPayloadsExcludeHeaders: boolean;
  grepPayloadsMatchPreEncoded: boolean;
+ /**
+  * Burp's results capture filter (burpsy-react-ui-ip2b). Off by default — Burp captures everything until a
+  * filter is applied. Discarded items leave no row and no stored messages, and cannot be recovered; their
+  * counts survive. Statuses are the classes captured.
+  */
+ captureFilterEnabled: boolean;
+ captureDiscardNoResponse: boolean;
+ captureTerm: string;
+ captureRegex: boolean;
+ captureCaseSensitive: boolean;
+ captureNegate: boolean;
+ captureStatuses: ("2xx" | "3xx" | "4xx" | "5xx")[];
  /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
   *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
   *  two different requests rather than one request that means both. */
@@ -475,6 +487,13 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepPayloadsCaseSensitive: false,
   grepPayloadsExcludeHeaders: false,
   grepPayloadsMatchPreEncoded: true,
+  captureFilterEnabled: false,
+  captureDiscardNoResponse: false,
+  captureTerm: "",
+  captureRegex: false,
+  captureCaseSensitive: false,
+  captureNegate: false,
+  captureStatuses: ["2xx", "3xx", "4xx", "5xx"],
  autoPauseEnabled: false,
  autoPauseMode: "appears",
  autoPauseExpressions: [],

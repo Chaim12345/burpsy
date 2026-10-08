@@ -155,6 +155,14 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   grepPayloadsCaseSensitive: bool,
   grepPayloadsExcludeHeaders: bool,
   grepPayloadsMatchPreEncoded: bool,
+  // The results capture filter (ip2b).
+  captureFilterEnabled: bool,
+  captureDiscardNoResponse: bool,
+  captureTerm: str,
+  captureRegex: bool,
+  captureCaseSensitive: bool,
+  captureNegate: bool,
+  captureStatuses: arrayOf(oneOf(["2xx", "3xx", "4xx", "5xx"])),
   // The resource pool's delay variation (burpsy-react-ui-nn0n). Held as text by the page, so saved
   // as text: "" is "not set", which is not the same attack as an explicit 0.
   delayJitterPct: str,

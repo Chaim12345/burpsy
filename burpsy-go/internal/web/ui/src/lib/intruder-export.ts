@@ -12,6 +12,7 @@
  * export always matches what the operator is looking at.
  */
 import { csvCell } from "./api";
+import { describeCaptureFilter } from "./intruder-capture";
 import {
   assignmentAt,
   planSetLengths,
@@ -121,6 +122,12 @@ export function intruderReportToCSV(
     capped
       ? `# detail_limit: ${report.detail_limit} — per-attempt rows beyond this were not kept`
       : `# detail_limit: ${report.detail_limit}`,
+    // The capture filter (ip2b): the rows below are the captured items only, and this says so.
+    ...(report.capture_filter
+      ? [
+          `# capture_filter: ${describeCaptureFilter(report.capture_filter)}; discarded: ${report.discarded ?? 0} — counted in sent/failed, not written below`,
+        ]
+      : []),
   ];
   const headers = [
     "Ordinal",
