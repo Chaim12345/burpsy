@@ -4137,6 +4137,71 @@ tbody td {
   outline-offset: 2px;
 }
 
+/* --- the in-toolbar bucket filter (BucketMenu) ---------------------------- */
+
+/* A bucket filter is a control *in* a filter row, not an overlay on a sticky table header, so it
+   takes part in that row's layout and is sized to its content. It used to borrow
+   `.column-menu-anchor` / `.column-menu-trigger` above, which are the header overlay's: absolute
+   at the header's top-right, `width: var(--row-h)` because that one holds an icon.
+
+   A labelled chip in a toolbar has no positioned ancestor, so `position: absolute; right: 0`
+   resolved against the initial containing block and pinned every chip to the window's top-right
+   corner. On #sitemap and #history the two chips landed on the same 24×24 square on top of the
+   menubar, one of them therefore unreachable by mouse; on #logger the same happened once its
+   capture panel opened. The label (up to 46px for "Status") then overflowed the icon-sized 24px
+   box, and those 22px escaped the toolbar entirely — `document.scrollWidth` measured 1302 against
+   a 1280 viewport, so the whole console scrolled sideways at a common laptop width.
+
+   Geometry follows `.filter-toggle` below, the pill it sits beside in the same row. */
+.bucket-menu {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.bucket-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s1);
+  height: 18px; /* token-exempt: .filter-toggle's fixed pill height, below the 24px row-height scale */
+  padding: 3px 10px; /* token-exempt: .filter-toggle's fixed pill padding */
+  border-radius: 10px; /* token-exempt: DESIGN.md's pill radius, used only by toggle chips */
+  border: 1px solid var(--line-strong);
+  background: var(--paper-sunken);
+  color: var(--text);
+  font-size: 11px; /* token-exempt: below --fs-2xs's fluid floor; matches the design's fixed 11px pill label */
+  line-height: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bucket-menu-trigger:hover,
+.bucket-menu-trigger[aria-expanded="true"] {
+  background: var(--paper-deep);
+  color: var(--text);
+}
+
+/* Same accent-on treatment as `.filter-toggle-on`, including the reason for its fixed near-black
+   label: `--accent-bright` is #FF6633 in both themes, so the theme-varying `--accent-contrast`
+   would fail on it in light mode. See that rule's comment. */
+.bucket-menu-trigger[data-active="true"] {
+  border-color: transparent;
+  background: var(--accent-bright);
+  color: var(--grey-900);
+  font-weight: var(--weight-bold);
+}
+
+.bucket-menu-trigger:focus-visible {
+  outline: var(--border-strong) solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The popover hangs off the chip rather than the header row, and stays right-aligned to it so a
+   chip at the end of a long filter row cannot open a panel off the right edge. */
+.bucket-menu .column-menu-panel {
+  top: calc(100% + var(--s1));
+}
+
 /* ===========================================================================
    Task 4 — loading / skeleton states (src/ui/states.tsx), plus the small
    alignment `Empty`/`ErrorNotice` needed against `design/jsx/*`.

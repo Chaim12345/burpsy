@@ -269,7 +269,12 @@ export function Metric({
     <div className={cn("card", "metric", accent && "metric-accent", tone && `metric-${tone}`)}>
       <span>{label}</span>
       <strong>{value}</strong>
-      {detail ? <small>{detail}</small> : null}
+      {/* `.metric > small` is a single clamped line (nowrap + ellipsis) because the row is dense,
+          which is right — but a caption that is cut off with no way to read the rest is
+          information the operator cannot get, and on a narrow card that happens to real copy
+          ("whole-task average"). `title` restores it on hover and costs nothing when the text
+          already fits. Only for a string: a ReactNode detail has no meaningful tooltip. */}
+      {detail ? <small title={typeof detail === "string" ? detail : undefined}>{detail}</small> : null}
     </div>
   );
 }

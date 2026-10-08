@@ -433,7 +433,6 @@ export function VirtualTable<T>({
             ref={columnMenuTriggerRef}
             type="button"
             className="column-menu-trigger"
-            aria-haspopup="menu"
             aria-expanded={columnMenuOpen}
             aria-label="Show or hide columns"
             title="Show or hide columns"
