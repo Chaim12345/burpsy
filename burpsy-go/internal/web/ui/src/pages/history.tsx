@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, Hash, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
-import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
+import { api, downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useImportHar, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
@@ -16,7 +16,9 @@ import { HttpEditor } from "../ui/editor";
 import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
 import { useCommandHandler } from "../lib/commands";
-import { FILTER_DEFAULTS, HISTORY_POPOVER_KEYS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
+import { confirmDialog, promptDialog } from "../lib/dialogs";
+import { classifyEntry, parseEntryNumber } from "../lib/go-to-entry";
+import { differsFromDefaults, FILTER_DEFAULTS, HISTORY_POPOVER_KEYS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
 import { FilterPresetsMenu } from "../ui/filter-presets";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
@@ -870,6 +872,93 @@ export function HistoryPage(): JSX.Element {
   );
  }, [baseRows, filterOn, activeExtractorFilters, extractValuesMap]);
 
+ // Burp's TABLE_GO_TO_ENTRY (vfu2): jump to a row by its # number. lib/go-to-entry.ts names the
+ // four outcomes; each is said out loud rather than leaving the table looking unchanged.
+ const pendingGoTo = useRef<number | null>(null);
+ const showEntry = (id: number) => {
+  setSelectedId(id);
+  toast.success(`Entry #${id}`);
+ };
+ const goToEntry = async () => {
+  const raw = await promptDialog({
+   title: "Go to entry",
+   description: "The number in the # column. The row is selected and scrolled into view.",
+   label: "Entry number",
+   placeholder: "1843",
+   confirmLabel: "Go",
+  });
+  if (raw === null) return;
+  const id = parseEntryNumber(raw);
+  if (id === null) {
+   toast.error(`Not an entry number: ${raw.trim() || "(empty)"}`);
+   return;
+  }
+  const displayed = new Set(rows.map((row) => row.id));
+  let exchange: Exchange | null = null;
+  if (!displayed.has(id)) {
+   try {
+    exchange = await api<Exchange>(`/api/exchange/${id}`);
+   } catch {
+    exchange = null;
+   }
+  }
+  const filtered =
+   filterOn &&
+   (differsFromDefaults("history", { ...filterSnapshot, limit: FILTER_DEFAULTS.history.limit!, filterOn: true }) ||
+    Object.values(extractorFilters).some((value) => value.trim() !== ""));
+  const outcome = classifyEntry({ id, displayed, exists: exchange !== null, filtered });
+  if (outcome === "shown") {
+   showEntry(id);
+   return;
+  }
+  if (outcome === "missing") {
+   toast.error(`There is no entry #${id} — it was deleted, or the capture never reached it`);
+   return;
+  }
+  if (outcome === "filtered") {
+   const clear = await confirmDialog({
+    title: `Entry #${id} is hidden by the current filter`,
+    description: "Clear every filter (the row limit stays) and show it?",
+    confirmLabel: "Clear filters and show it",
+    cancelLabel: "Keep the filter",
+   });
+   if (!clear) return;
+   applyFilterSettings({ ...structuredClone(FILTER_DEFAULTS.history), limit });
+   setExtractorFilters({});
+   pendingGoTo.current = id;
+   return;
+  }
+  await offerOlderEntry(exchange!);
+ };
+ const offerOlderEntry = async (exchange: Exchange) => {
+  const open = await confirmDialog({
+   title: `Entry #${exchange.id} is older than the newest ${limit} rows loaded`,
+   description: `${exchange.method} ${exchange.host}${exchange.path}. Raise the row limit to load further back, or open this one on its own.`,
+   confirmLabel: "Open it in a new window",
+   cancelLabel: "Not now",
+  });
+  if (open) openDetailWindow(exchange);
+ };
+ // After "Clear filters and show it": select the entry once the unfiltered rows arrive, or, if it is
+ // still not among them, say it is beyond the row limit rather than leaving the jump unanswered.
+ useEffect(() => {
+  const id = pendingGoTo.current;
+  // Wait for the cleared filter to be the one the rows reflect: the query box is debounced, so for
+  // a moment after clearing, nothing is fetching and the rows are still the filtered ones — judging
+  // then reported a 219-row capture's #4 as "older than the newest 500 rows" (live drive).
+  if (id === null || isFetching || debouncedTerm !== term) return;
+  pendingGoTo.current = null;
+  if (rows.some((row) => row.id === id)) {
+   showEntry(id);
+   return;
+  }
+  void api<Exchange>(`/api/exchange/${id}`)
+   .then((exchange) => offerOlderEntry(exchange))
+   .catch(() => toast.error(`Entry #${id} is no longer in the capture`));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [rows, isFetching, debouncedTerm, term]);
+ useCommandHandler("table.goToEntry", () => void goToEntry());
+
  // The extractor filters join the page's one honest list of what is narrowing the view, so the empty
  // state and the status bar name them like any other filter rather than reporting "no traffic".
  const allAppliedFilterNames = useMemo(
@@ -1577,6 +1666,10 @@ export function HistoryPage(): JSX.Element {
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
      </Button>
      <FilterPresetsMenu table="history" current={filterSnapshot} apply={applyFilterSettings} allowed={HISTORY_FILTER_ALLOWED} />
+     <Button variant="quiet" size="small" onClick={() => void goToEntry()} title="Burp's Go to entry: jump to a row by its # number">
+      <Hash size={13} />
+      Go to entry
+     </Button>
      {/* Burp/Caido's custom extractor columns (burpsy-react-ui-28n8): define a named regex-group,
          JSON-path or whole-value extractor and read its capture as a column across history rows. */}
      <Button

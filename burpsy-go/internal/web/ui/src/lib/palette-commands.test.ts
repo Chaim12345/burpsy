@@ -221,7 +221,7 @@ describe("catalogueCommands (2czi)", () => {
       "intruder.startAttack",
       "editor.togglePretty", "editor.toggleWrap", "editor.toggleNonPrinting", "editor.toggleHideHeaders",
       "editor.toggleSidebar", "editor.cycleLayout", "editor.insertCollaborator",
-      "nav.search", "nav.settings", "tasks.toggle",
+      "nav.search", "nav.settings", "tasks.toggle", "table.goToEntry",
     ]) {
       expect(ids.has(id), id).toBe(true);
     }

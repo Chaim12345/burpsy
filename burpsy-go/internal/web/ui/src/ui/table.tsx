@@ -393,11 +393,29 @@ export function VirtualTable<T>({
   const rows = table.getRowModel().rows;
   const [rowHeight, setProbe] = useFluidRowHeight(density);
 
+  // The sticky header sits inside the scroll element, above row 0, and the virtualizer knows nothing
+  // of it: its row offsets start at 0 while the real rows start a header's height lower. Scrolling a
+  // row into view from below therefore stopped one header short and left the row hidden under the
+  // bottom edge — found when Go to entry (vfu2) "selected" #30 out of sight. Telling the virtualizer
+  // the header's height as end padding makes "in view" mean in view.
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  useEffect(() => {
+    const head = theadRef.current;
+    if (!head) return;
+    const measure = () => setHeaderHeight(Math.round(head.getBoundingClientRect().height));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
     overscan: 14,
+    scrollPaddingEnd: headerHeight,
   });
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -643,7 +661,7 @@ export function VirtualTable<T>({
           aria-multiselectable={multiSelect ? true : undefined}
           aria-label={multiSelect ? ariaLabel : undefined}
         >
-          <thead>
+          <thead ref={theadRef}>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
                 {group.headers.map((header) => {

@@ -173,6 +173,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "nav.search", group: "Navigation", label: "Search across tools", defaultChord: null, rebindable: true, burp: "OPEN_SEARCH", palette: true, where: "anywhere" },
   { id: "nav.settings", group: "Navigation", label: "Show settings", defaultChord: null, rebindable: true, burp: "SHOW_SETTINGS", palette: true, where: "anywhere" },
   { id: "tasks.toggle", group: "Navigation", label: "Pause or resume task execution", defaultChord: null, rebindable: true, burp: "TOGGLE_TASK_EXECUTION", palette: true, where: "anywhere" },
+  { id: "table.goToEntry", group: "Navigation", label: "Go to entry (by # number)", defaultChord: null, rebindable: true, burp: "TABLE_GO_TO_ENTRY", palette: true, where: "Proxy › HTTP history" },
   { id: "nav.tableMove", group: "Navigation", label: "Move through the table (shift extends the selection)", defaultChord: null, display: ["↑", "↓"], rebindable: false, note: "Listbox keys" },
   { id: "nav.tablePage", group: "Navigation", label: "Move a page through the table", defaultChord: null, display: ["PgUp", "PgDn"], rebindable: false, note: "Listbox keys" },
   { id: "nav.tableEnds", group: "Navigation", label: "First or last row", defaultChord: null, display: ["Home", "End"], rebindable: false, note: "Listbox keys; Burp's TABLE_GO_TO_TOP and TABLE_GO_TO_BOTTOM" },

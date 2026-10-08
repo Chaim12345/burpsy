@@ -254,6 +254,7 @@ function CatalogueHotkeys(): null {
  useCommandChord("editor.insertCollaborator");
  useCommandChord("editor.toggleSidebar");
  useCommandChord("editor.cycleLayout");
+ useCommandChord("table.goToEntry");
  return null;
 }
 
