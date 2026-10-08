@@ -32,6 +32,7 @@ import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody
 import { useAnnotateExchange } from "./data";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
+import { useCsrfPoc } from "./csrf-poc";
 import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { MenuGroup } from "../ui/menu";
@@ -614,17 +615,13 @@ const showResponseInBrowser = (exchange: Exchange) => {
   }
  };
 
- const generateCSRF = async (exchange: Exchange) => {
-  try {
-   const view = await api<{ html: string; notes: string[] }>(`/api/exchange/${exchange.id}/csrf`);
-   // Opened as a blob page rather than copied to the clipboard: the PoC IS an auto-submitting
-   // page, so rendering it is both the review surface and the proof.
-   const blob = new Blob([view.html], { type: "text/html" });
-   window.open(URL.createObjectURL(blob), "_blank", "noopener");
-   for (const note of view.notes ?? []) toast.info(note);
-  } catch (error) {
-   toast.error(`Could not generate the CSRF PoC: ${error instanceof Error ? error.message : String(error)}`);
-  }
+ const generateCSRF = (exchange: Exchange) => {
+  // Opens the PoC dialog (burpsy-react-ui-0z10) instead of a blob page: a blob URL inherits
+  // the console's origin, and a generated PoC — attacker-shaped HTML built from captured
+  // bytes — is the one thing that must never run there. The dialog shows the HTML and the
+  // technique choice, and its "Test in browser" opens the one-shot URL the server mints on
+  // the PoC host's own port.
+  useCsrfPoc.getState().open(exchange);
  };
 
  /**

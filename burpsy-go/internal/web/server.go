@@ -121,6 +121,13 @@ type Server struct {
 	// webAddr is the address ListenAndServe bound, so the DOM auditor can tell its extension where to
 	// report. Empty in tests, which never serve.
 	webAddr string
+	// poc is the one-shot PoC page host for "Test in browser" (burpsy-react-ui-0z10): a
+	// listener on its own loopback port, deliberately NOT part of s.mux or the route
+	// manifest, because its whole reason to exist is that generated PoCs are served off
+	// the console origin. Nil until the first PoC URL is minted; pocMu guards that
+	// lazy start.
+	poc   *pocHost
+	pocMu sync.Mutex
 	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
 	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
 	scanBaseline *scanner.ScanConfig

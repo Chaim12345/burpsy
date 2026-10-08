@@ -62,6 +62,7 @@ import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
 import { SearchDialog } from "./ui/search-dialog";
+import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
@@ -1420,6 +1421,7 @@ function App(): JSX.Element {
 
    <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <CsrfPocDialog />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
    {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the

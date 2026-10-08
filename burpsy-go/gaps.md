@@ -1745,3 +1745,38 @@ where burpsy's data model cannot fill a field the divergence is recorded here, n
 - **"Affected parameters" is always printed, not a section.** Burp prints an issue's location and
   entry point beside the issue header, not under a detail section; burpsy's params list follows
   that, so it survives an all-off report the way the finding's name does.
+
+## CSRF PoC techniques: the generator's four ways to replay one request (2026-10-08, burpsy-react-ui-0z10)
+
+Burp's generator (generate-csrf-poc.html) is the ground truth for the technique set; where its
+exact behaviour is not recoverable from the documentation, the divergence is recorded here.
+
+- **Auto's choice is burpsy's reading of "most appropriate technique capable of generating the
+  required request".** urlencoded gives the form; multipart gives the multipart form; anything
+  else with an equals character gives the plain-text form (the exact-body technique that needs no
+  CORS); anything else gives the cross-domain XHR. The docs say only that Auto picks the most
+  appropriate technique, and that JSON/XML bodies "can only be generated using either a form with
+  plain text encoding, or a cross-domain XHR" — which of the two Auto prefers for a given body is
+  not stated, so burpsy prefers the one with no CORS dependency whenever the body splits at an
+  equals.
+- **"Test in browser" is one-shot.** Burp's URL keeps serving "the currently displayed HTML"; the
+  epic's acceptance (and the security reading behind it) is that a token that keeps replaying an
+  attack page outlives its purpose, so burpsy's PoC host spends the token on the first fetch and
+  answers 410 after. Regenerating is one click.
+- **The PoC page moved off the console origin.** burpsy's previous generator opened the PoC as a
+  blob URL, which inherits the console's origin — the one surface attacker-shaped HTML must never
+  run on. The dialog now shows the HTML, and Test in browser opens the PoC host's URL on its own
+  port, which has no console routes and no console cookies.
+- **No request editing.** Burp's panel lets the operator edit the request and Regenerate from the
+  edit; burpsy's dialog generates from the captured exchange. The generated HTML is copyable and
+  downloadable, which is the same capability by another path. Re-open: an editable request pane in
+  the dialog.
+- **The XHR technique sets withCredentials and every header the browser allows scripts to set.**
+  The fetch specification's forbidden headers (Host, Cookie, Content-Length and kin) are omitted
+  rather than set-and-ignored — a setRequestHeader the browser silently ignores is a PoC that lies
+  about what the victim's browser will send. The docs' warnings (the CORS dependency, the
+  application/json preflight, the no-reflected-XSS limit) are carried as notes verbatim in intent.
+- **The plain-text form's trailing CRLF is accounted for.** The browser's text/plain submission
+  appends a CRLF after every entry, so a captured body ending in CRLF reproduces byte-exactly
+  (it is cut from the value and the browser puts it back) and one that does not gets a note saying
+  the sent body is the captured one plus two bytes.
