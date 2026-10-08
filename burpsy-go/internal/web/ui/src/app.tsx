@@ -558,6 +558,10 @@ function App(): JSX.Element {
  const setIntruderConfig = useApp((state) => state.setIntruder);
  const setIntruderRun = useApp((state) => state.setIntruderRun);
  const intruderStatus = useApp((state) => state.intruderStatus);
+ const openIntruderTab = useApp((state) => state.openIntruderTab);
+ const closeAllIntruderTabs = useApp((state) => state.closeAllIntruderTabs);
+ const reopenIntruderTab = useApp((state) => state.reopenIntruderTab);
+ const closedIntruderTabs = useApp((state) => state.closedIntruderTabs);
  const requestIntruderCommand = useApp((state) => state.requestIntruderCommand);
  const attackInputRef = useRef<HTMLInputElement>(null);
  const [attackLoadError, setAttackLoadError] = useState<string | null>(null);
@@ -652,6 +656,40 @@ function App(): JSX.Element {
    : "The running attack has not been identified yet — its controls appear in the Intruder header once it is named.";
 
  const INTRUDER_MENU: MenuGroup[] = [
+  {
+   // Attack tabs (9bv2): Burp's managing-tabs actions, on the menu as well as the strip's own.
+   id: "tabs",
+   actions: [
+    {
+     id: "new-tab",
+     label: "New attack tab",
+     icon: Plus,
+     hint: "Open an empty attack tab; the attacks in the other tabs are kept as they are.",
+     onSelect: () => {
+      openIntruderTab();
+      navigate("intruder");
+     },
+    },
+    {
+     id: "close-all-tabs",
+     label: "Close all tabs",
+     disabled: attackRunning,
+     hint: attackRunning ? "An attack is running; its report needs its tab to land in." : "Close every attack tab. Reopen closed tab brings them back one at a time.",
+     onSelect: closeAllIntruderTabs,
+    },
+    {
+     id: "reopen-tab",
+     label: closedIntruderTabs.length ? `Reopen closed tab (${closedIntruderTabs.length})` : "Reopen closed tab",
+     icon: RotateCcw,
+     disabled: closedIntruderTabs.length === 0,
+     hint: closedIntruderTabs.length ? "Bring back the most recently closed attack tab with its configuration and results." : "No attack tab has been closed this session.",
+     onSelect: () => {
+      reopenIntruderTab();
+      navigate("intruder");
+     },
+    },
+   ],
+  },
   {
    id: "attack",
    actions: [

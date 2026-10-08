@@ -22,6 +22,8 @@ import { usePools } from "../lib/data.pools";
 import { useCollaboratorInteractions } from "../lib/data.collab";
 import { hasCollaboratorAttempts, interactionsByAttempt } from "../lib/intruder-interactions";
 import { IntruderInteractionsDialog } from "../ui/intruder-interactions-dialog";
+import { IntruderTabStrip } from "../ui/intruder-tab-strip";
+import { runOf } from "../lib/intruder-tabs";
 import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
@@ -1302,6 +1304,11 @@ export function IntruderPage(): JSX.Element {
   const setStoredRun = useApp((state) => state.setIntruderRun);
   const tab = useApp((state) => state.intruderTab);
   const setTab = useApp((state) => state.setIntruderTab);
+  // Attack tabs (9bv2): the fields above are the active tab's. A report is written back to the tab
+  // that launched its attack, which need not be the one on screen when it finishes.
+  const openAttackTab = useApp((state) => state.openIntruderTab);
+  const setRunFor = useApp((state) => state.setIntruderRunFor);
+  const setTabRunning = useApp((state) => state.setIntruderTabRunning);
 
   // The menubar's Intruder menu talks to this page rather than launching attacks of its own: a
   // second copy of `onRun` in app.tsx would be a second launcher, and the two would drift. The menu
@@ -1535,6 +1542,9 @@ export function IntruderPage(): JSX.Element {
   const requestAgain = useCallback(
     (attempt: Attempt) => {
       if (attempt.request_id === null) return;
+      // The row belongs to the tab on screen now; the answer is written there even if the operator
+      // switches tabs before it arrives.
+      const againTab = useApp.getState().activeIntruderTabId;
       void api<{ rows: { status: number | null; response_len: number; duration_ms: number; request_id: number | null; response_id: number | null; error: string | null }[] }>(
         "/api/intruder/again",
         json("POST", { target, request_ids: [attempt.request_id] }),
@@ -1546,10 +1556,10 @@ export function IntruderPage(): JSX.Element {
             toast.error(`Attempt ${attempt.ordinal} was not requested again: ${row.error}`);
             return;
           }
-          const current = useApp.getState().intruderRun;
+          const current = runOf(useApp.getState(), againTab);
           const view = current?.view;
           if (!current || !view) return;
-          setStoredRun({
+          setRunFor(againTab, {
             ...current,
             view: {
               ...view,
@@ -1568,7 +1578,7 @@ export function IntruderPage(): JSX.Element {
         (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The attempt could not be requested again"),
       );
     },
-    [target, setStoredRun],
+    [target, setRunFor],
   );
   const attemptMenu = useCallback(
     (attempt: Attempt): MenuGroup[] => [
@@ -1666,13 +1676,16 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
-  // A send-to handoff from History or Repeater arrives through the store. It replaces only what is
-  // tied to the specific request — the base message, the target, the discovered positions — and the
-  // report, which belongs to the request that produced it. Payload sets, processing rules, grep and
-  // limits are kept: they are the operator's typed work, and a send-to is not consent to discard it.
-  // "New attack" in the header is the deliberate full reset, and it asks first.
+  // A send-to handoff from History or Repeater arrives through the store. Burp: "When you send a
+  // request to Burp Intruder, this creates a new attack tab" (9bv2) — so a tab that already holds an
+  // attack keeps it, and the request opens a tab of its own. A tab with no request and no report is
+  // a placeholder and takes the request itself. Within the receiving tab only what is tied to the
+  // specific request is replaced — the base message, the target, the discovered positions — and the
+  // report, which belongs to the request that produced it.
   useEffect(() => {
     if (!seed) return;
+    const live = useApp.getState();
+    if (live.intruder.msgId !== "" || live.intruderRun !== null) openAttackTab();
     setConfig((current) => ({
       ...current,
       msgId: seed.msgId !== null ? String(seed.msgId) : current.msgId,
@@ -1684,7 +1697,7 @@ export function IntruderPage(): JSX.Element {
     }));
     setStoredRun(null);
     setIntruderSeed(null);
-  }, [seed, setConfig, setIntruderSeed, setStoredRun]);
+  }, [seed, setConfig, setIntruderSeed, setStoredRun, openAttackTab]);
 
   // Manual markers take a payload slot exactly like a discovered point does — Burp counts every
   // mark on the request, however it was made.
@@ -1922,6 +1935,7 @@ export function IntruderPage(): JSX.Element {
   const [autoPauseError, setAutoPauseError] = useState<string | null>(null);
 
   const onRun = async () => {
+    const launchTab = useApp.getState().activeIntruderTabId;
     setStoredRun(null);
     setAutoPauseError(null);
     setMyTaskId(null);
@@ -2122,19 +2136,27 @@ export function IntruderPage(): JSX.Element {
     } else {
       body.payload_sets = payloadTexts.map(payloadList);
     }
+    setTabRunning(launchTab, true);
     run.mutate(body as unknown as IntruderRunRequest, {
+      onSettled: () => setTabRunning(launchTab, false),
       onSuccess: (payload) => {
+        // The report goes to the tab that launched the attack. If the operator has moved to another
+        // tab meanwhile, it waits there, and the toast says where.
+        const state = useApp.getState();
+        const here = state.activeIntruderTabId === launchTab;
+        const tabName = state.intruderTabs.find((t) => t.id === launchTab)?.name ?? launchTab;
+        const where = here ? "" : ` — results are in attack tab ${tabName}`;
         // Naming a mode always selects the full report shape, but stay defensive:
         // an older server could still answer with the flat legacy array.
         if (payload && typeof payload === "object" && "report" in payload) {
           const view = payload as RunView;
-          setStoredRun({ view, legacy: null, snapshot: snapshotAtLaunch });
-          setTab("results");
-          toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}`);
+          setRunFor(launchTab, { view, legacy: null, snapshot: snapshotAtLaunch });
+          if (here) setTab("results");
+          toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}${where}`);
         } else {
-          setStoredRun({ view: null, legacy: payload, snapshot: snapshotAtLaunch });
-          setTab("results");
-          toast.success("Attack finished");
+          setRunFor(launchTab, { view: null, legacy: payload, snapshot: snapshotAtLaunch });
+          if (here) setTab("results");
+          toast.success(`Attack finished${where}`);
         }
       },
       onError: (error) => {
@@ -2314,6 +2336,7 @@ export function IntruderPage(): JSX.Element {
             </>
           }
         />
+        <IntruderTabStrip />
 
         {overBudget ? (
           <div className="notice notice-warn" style={{ marginTop: "var(--s2)" }}>
