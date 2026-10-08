@@ -150,6 +150,11 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   grepMatchList: arrayOf(str),
   grepMatchCaseSensitive: bool,
   grepMatchExcludeHeaders: bool,
+  // Grep - Payloads (7qc3).
+  grepPayloadsEnabled: bool,
+  grepPayloadsCaseSensitive: bool,
+  grepPayloadsExcludeHeaders: bool,
+  grepPayloadsMatchPreEncoded: bool,
   // The resource pool's delay variation (burpsy-react-ui-nn0n). Held as text by the page, so saved
   // as text: "" is "not set", which is not the same attack as an explicit 0.
   delayJitterPct: str,

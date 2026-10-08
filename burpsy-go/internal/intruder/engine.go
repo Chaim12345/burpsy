@@ -372,6 +372,12 @@ type Attack struct {
 	Plan *AttackPlan
 	// setBytes is Sets re-encoded as bytes, so the per-request splice does not allocate.
 	setBytes [][][]byte
+	// GrepPayloads is Burp's Grep - Payloads (7qc3): whether and how each response is searched for
+	// the payloads that produced it. NewAttack sets LegacyGrepPayloads. See grep_payloads.go.
+	GrepPayloads GrepPayloads
+	// setPreBytes is the pre-URL-encoding form of each set that has one, built by prepareReflection
+	// only when pre-encoded matching will read it; nil otherwise.
+	setPreBytes [][][]byte
 	// Limits bound how hard the attack may hit the target.
 	Limits RateLimit
 	// DetailLimit is how many per-request rows to keep. Beyond this only bucket counts survive.
@@ -493,14 +499,16 @@ func NewAttack(base []byte, points []InsertionPoint, sets []PayloadSet, plan *At
 		}
 	}
 	return &Attack{
-		Base:        base,
-		Points:      points,
-		Sets:        sets,
-		setBytes:    setBytes,
-		Plan:        plan,
-		Limits:      DefaultRateLimit(),
-		DetailLimit: 500,
-		MaxBuckets:  2_000,
+		Base:     base,
+		Points:   points,
+		Sets:     sets,
+		setBytes: setBytes,
+		Plan:     plan,
+		// The reflection check every attack ran before Grep - Payloads had settings (7qc3).
+		GrepPayloads: LegacyGrepPayloads(),
+		Limits:       DefaultRateLimit(),
+		DetailLimit:  500,
+		MaxBuckets:   2_000,
 	}
 }
 
@@ -674,6 +682,10 @@ type ResultBucket struct {
 	Reflected    bool `json:"reflected"`
 	Count        int  `json:"count"`
 	FirstOrdinal int  `json:"first_ordinal"`
+	// ReflectedCountTotals is Grep - Payloads' per-set occurrence count summed over this bucket's
+	// responses (7qc3), one slot per payload set — the bucket-table counterpart of an attempt's
+	// ReflectedCounts, as GrepMatchTotals is of GrepMatchCounts. Empty when Grep - Payloads is off.
+	ReflectedCountTotals []int `json:"reflected_count_totals"`
 	// ExampleRequestID and ExampleResponseID name the one stored exchange kept for this bucket —
 	// the bytes of FirstOrdinal's send and the response it produced. One per bucket, not one per
 	// request: a 100k-request attack that lands in four buckets stores four exchanges.
@@ -706,16 +718,21 @@ type ErrorBucket struct {
 // bucketing matches on status, length and reflection, which is not a claim that two bodies are
 // equal, and handing a row someone else's response would make the results table lie.
 type Attempt struct {
-	Ordinal     int     `json:"ordinal"`
-	Status      *int    `json:"status"`
-	ResponseLen int     `json:"response_len"`
-	DurationMS  int64   `json:"duration_ms"`
-	Reflected   bool    `json:"reflected"`
-	RequestID   *uint64 `json:"request_id"`
-	ResponseID  *uint64 `json:"response_id"`
-	Error       *string `json:"error"`
-	GrepMatched *bool   `json:"grep_matched"`
-	GrepExtract *string `json:"grep_extract"`
+	Ordinal     int   `json:"ordinal"`
+	Status      *int  `json:"status"`
+	ResponseLen int   `json:"response_len"`
+	DurationMS  int64 `json:"duration_ms"`
+	Reflected   bool  `json:"reflected"`
+	// ReflectedCounts is Grep - Payloads' column per payload set (7qc3): "the number of times the
+	// payload is found in the response … If more than one payload set is used, a separate column is
+	// added for each payload set." One slot per set, in set order; the baseline row has zeros. Empty
+	// (never null) when Grep - Payloads is off, and for an attempt that produced no response.
+	ReflectedCounts []int   `json:"reflected_counts"`
+	RequestID       *uint64 `json:"request_id"`
+	ResponseID      *uint64 `json:"response_id"`
+	Error           *string `json:"error"`
+	GrepMatched     *bool   `json:"grep_matched"`
+	GrepExtract     *string `json:"grep_extract"`
 	// GrepMatchCounts is the Grep - Match list's per-expression occurrence count for this
 	// response (irt), parallel to the attack's expression list. Empty (not nil) when no list
 	// was configured, so the wire shape never varies (the nil-slice note on newCollector).
@@ -809,6 +826,10 @@ type AttackReport struct {
 	// 0's row is "Baseline request (no payloads)" — the base response the attack responses hang
 	// against. The wire view reads this to shift payloadsAt's plan arithmetic.
 	Baseline bool `json:"baseline"`
+	// GrepPayloads is the Grep - Payloads configuration this attack ran with (7qc3) — always present,
+	// so the report says whether reflected and its count columns were asked at all, and how, rather
+	// than leaving a reader to infer it from an all-false column.
+	GrepPayloads GrepPayloads `json:"grep_payloads"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -824,12 +845,14 @@ type bucketKey struct {
 // request bytes only while they are needed to attach their stored id to this attempt's report row;
 // the collector does not retain them after absorb returns.
 type hit struct {
-	status      *int
-	length      int
-	durationMS  int64
-	reflected   bool
-	grepMatched *bool
-	grepExtract *string
+	status     *int
+	length     int
+	durationMS int64
+	reflected  bool
+	// reflectedCounts is Grep - Payloads' per-set count (7qc3); [] when it is off.
+	reflectedCounts []int
+	grepMatched     *bool
+	grepExtract     *string
 	// grepCounts is the match list's per-expression occurrence count (irt), one slot per
 	// item, in list order. Nil when no list was configured.
 	grepCounts []int
@@ -925,7 +948,7 @@ func (c *collector) absorb(o outcome) {
 				// match-count array holds to the same contract: [] for a send that never produced
 				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
-				Cookies: []string{}, GrepMatchCounts: []int{}, Payloads: o.payloads,
+				Cookies: []string{}, GrepMatchCounts: []int{}, ReflectedCounts: []int{}, Payloads: o.payloads,
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -963,6 +986,11 @@ func (c *collector) absorb(o outcome) {
 				c.buckets[i].GrepMatchTotals[j] += v
 			}
 		}
+		for j, v := range h.reflectedCounts {
+			if j < len(c.buckets[i].ReflectedCountTotals) {
+				c.buckets[i].ReflectedCountTotals[j] += v
+			}
+		}
 	} else if newBucket {
 		if c.record != nil {
 			id := c.record(h.raw)
@@ -978,6 +1006,9 @@ func (c *collector) absorb(o outcome) {
 			FirstOrdinal: o.ordinal, ExampleRequestID: requestID, ExampleResponseID: responseID,
 			GrepMatches: gm, GrepExtract: h.grepExtract,
 			GrepMatchTotals: emptyCounts(h.grepCounts),
+			// A copy: the bucket's totals grow with every later response, and the opening attempt's
+			// row keeps its own counts.
+			ReflectedCountTotals: append([]int{}, h.reflectedCounts...),
 		})
 	} else {
 		c.unbucketed++
@@ -988,6 +1019,7 @@ func (c *collector) absorb(o outcome) {
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
 			GrepMatchCounts: emptyCounts(h.grepCounts),
+			ReflectedCounts: emptyCounts(h.reflectedCounts),
 			TimeOfDay:       o.sentAt, Cookies: h.cookies, Payloads: o.payloads,
 		})
 	}
@@ -1069,6 +1101,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		GrepMatchLabels: a.Grep.MatchList.labelsOrEmpty(),
 		RetriesUsed:     a.RetriesUsed(),
 		Baseline:        a.Baseline,
+		GrepPayloads:    a.GrepPayloads,
 	}
 }
 
@@ -1094,6 +1127,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	// Nil Evasion returns the caller's SendFn unchanged, so an attack that configured none is
 	// byte-for-byte and timing-for-timing what it was.
 	send = a.Evasion.wrapOrIdentity(send)
+	a.prepareReflection()
 	limiter := NewRateLimiter(&a.Limits)
 	col := newCollector(a, record)
 
@@ -1196,6 +1230,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			enumerated++
 			places := make([]ApplyPlace, 0, len(asg.Slots))
 			payloads := make([][]byte, 0, len(asg.Slots))
+			probes := make([]reflectProbe, 0, len(asg.Slots))
 			for _, s := range asg.Slots {
 				if s.Point < 0 || s.Point >= len(a.Points) ||
 					s.Set < 0 || s.Set >= len(a.setBytes) ||
@@ -1205,6 +1240,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				payload := a.setBytes[s.Set][s.Payload]
 				places = append(places, ApplyPlace{Point: &a.Points[s.Point], Payload: payload})
 				payloads = append(payloads, payload)
+				probes = append(probes, a.probe(s.Set, s.Payload))
 			}
 
 			// applyAllChecked, not ApplyAll: a payload its container cannot hold is dropped from
@@ -1232,7 +1268,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				}
 			}
 			wg.Add(1)
-			go func(ordinal int, raw []byte, payloads [][]byte, stored []string, permit *Permit) {
+			go func(ordinal int, raw []byte, probes []reflectProbe, stored []string, permit *Permit) {
 				defer wg.Done()
 				defer permit.Release()
 				// Captured here, not before the permit or the guard: this is the closest point to the
@@ -1245,12 +1281,12 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored}
 					}
 				}()
-				h, err := doSend(a, limiter, send, raw, payloads, ctx)
+				h, err := doSend(a, limiter, send, raw, probes, ctx)
 				if h != nil {
 					h.request = raw
 				}
 				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored}
-			}(baselineShift(a)+i, req, payloads, stored, permit)
+			}(baselineShift(a)+i, req, probes, stored, permit)
 		}
 		wg.Wait()
 	}()
@@ -1348,7 +1384,9 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			}
 		}
 		sentAt := time.Now()
-		h, err := doSend(a, limiter, send, req, payloads, ctx)
+		// The chain's one payload set: response-derived, never URL-encoded, so both forms are the bytes
+		// that were sent.
+		h, err := doSend(a, limiter, send, req, []reflectProbe{{set: 0, sent: current, pre: current}}, ctx)
 		// Released immediately after the send, matching the plan loop's defer-permit in its
 		// goroutine (which releases the moment doSend returns): the serial driver holds one
 		// permit across exactly one request, and holding it across the extraction would
@@ -1410,7 +1448,7 @@ func baselineShift(a *Attack) int {
 //
 // A send error whose context is already done is not a failure to retry — it is the attack (or
 // the operator) giving up — so ctx.Err() short-circuits before the loop.
-func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [][]byte, ctx context.Context) (*hit, error) {
+func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, probes []reflectProbe, ctx context.Context) (*hit, error) {
 	sent, err := send(raw)
 	for attempt := 0; err != nil && attempt < a.Retries && ctx.Err() == nil; attempt++ {
 		if !a.retryWait(ctx) {
@@ -1423,13 +1461,9 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 		return nil, err
 	}
 	limiter.Observe(sent.Status)
-	reflected := false
-	for _, p := range payloads {
-		if containsBytes(sent.Raw, p) {
-			reflected = true
-			break
-		}
-	}
+	// Grep - Payloads (7qc3), with the attack's settings; the legacy settings ask exactly the old
+	// question — any payload, as sent, case-sensitive, anywhere in the response.
+	reflected, reflectedCounts := a.reflection(sent.Raw, probes)
 	grepMatched, grepExtract := a.Grep.run(sent.Raw)
 	grepCounts := a.Grep.MatchList.counts(sent.Raw)
 	// Auto-pause, evaluated on the same bytes grep just read (burpsy-react-ui-8f2). The
@@ -1454,7 +1488,7 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 	}
 	return &hit{
 		status: sent.Status, length: len(sent.Raw), durationMS: sent.Duration.Milliseconds(),
-		reflected: reflected, grepMatched: grepMatched, grepExtract: grepExtract,
+		reflected: reflected, reflectedCounts: reflectedCounts, grepMatched: grepMatched, grepExtract: grepExtract,
 		grepCounts: grepCounts, raw: sent.Raw, cookies: cookies,
 	}, nil
 }

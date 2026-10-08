@@ -1682,3 +1682,28 @@ positions spliced. `PointView` gains `placement`; `current` stays the base value
   (`intruder.SpansOverlap`): the splice keeps the earlier-starting position, and a manual marker that touches an
   appended position is refused by name. The same predicate now also applies to an empty value at the very end
   of the entire body under replace, which used to splice both.
+
+### Grep - Payloads (7qc3)
+
+**Burp:** configure-attack/settings.html "Grep - payloads": Case sensitive match, Exclude HTTP headers,
+Match against pre-URL-encoded payloads, and "a separate column … for each payload set". The panel (`Zruj`)
+persists `payloadgrep.dogrep/casesensitive/excludeheaders/matchpreencoded`, reset off/off/off/**on**
+(`Zruj.Zc5`). The engine (`Zu8d.Zb`) counts, per payload set, either the pre-encoding payload or the sent
+one (`Zw_x.Zl(…, !matchpreencoded)`) — one form, not both — from the body offset when excluding headers.
+**burpsy:** `grep_payloads {enabled, case_sensitive, exclude_headers, match_pre_url_encoded}` on the run
+request; `reflected_counts` (one slot per set) on every attempt, `reflected_count_totals` on every bucket,
+and the effective settings echoed as `report.grep_payloads`.
+
+- **Default differs by surface, and from Burp.** Burp's search is off by default. burpsy's reflection check
+  has always been on — it is a third of the result-bucket key — so the bundled UI sends it on, with Burp's
+  other three defaults (case-insensitive, headers included, pre-URL-encoded). An API request that omits
+  `grep_payloads` keeps the fixed check it always had: on, case-sensitive, headers included, matched as sent.
+- **The settings change the buckets.** `reflected` stays the bucket key and is computed with the configured
+  options, so turning the search off, or loosening it, can merge or split buckets. The per-set counts are
+  reported, never keyed on.
+- Case-insensitive matching folds ASCII letters only: a payload is a byte string, and Unicode folding can
+  change a sequence's length. Counts are non-overlapping and capped at 10,000 per payload per response.
+- "Pre-URL-encoded" means before Intruder's final "URL-encode these characters" pass, i.e. after the payload
+  processing rules — the same point Burp takes it. Recursive-grep and Collaborator payloads are never
+  URL-encoded, so both forms are the same bytes.
+- Not exported to the CSV; the JSON report carries the counts.

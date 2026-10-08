@@ -108,6 +108,9 @@ export interface ResultBucket {
   /** Per-expression occurrence totals summed over this bucket's responses (irt), parallel to the
    *  expression list. Empty when no list was configured. */
   grep_match_totals: number[];
+  /** Grep - Payloads' per-set occurrence totals over this bucket's responses (7qc3), one slot per
+   *  payload set. `[]` when Grep - Payloads was off; absent from an older server. */
+  reflected_count_totals?: number[];
 }
 
 export interface ErrorBucket {
@@ -122,6 +125,10 @@ export interface Attempt {
   response_len: number;
   duration_ms: number;
   reflected: boolean;
+  /** Grep - Payloads' count per payload set (7qc3): how many times that set's payload occurs in the
+   *  response, one slot per set in set order; zeros on the baseline row. `[]` when Grep - Payloads was
+   *  off or the send produced no response; absent from an older server. */
+  reflected_counts?: number[];
   /** The exact bytes this attempt sent, once the server stored them. `null` for a send that
    *  failed or was refused, and for every row on an older server. */
   request_id: number | null;
@@ -199,6 +206,17 @@ export interface AttackReport {
   baseline: boolean;
   pool: string | null;
   auto_throttle_engaged: number;
+  /** The Grep - Payloads settings the attack ran with (7qc3). Absent from an older server, whose
+   *  reflection check was the fixed one: on, case-sensitive, headers included, matched as sent. */
+  grep_payloads?: GrepPayloadsSettings;
+}
+
+/** Burp's Grep - Payloads settings, as the run request takes them and the report echoes them. */
+export interface GrepPayloadsSettings {
+  enabled: boolean;
+  case_sensitive: boolean;
+  exclude_headers: boolean;
+  match_pre_url_encoded: boolean;
 }
 
 export interface BucketExample {

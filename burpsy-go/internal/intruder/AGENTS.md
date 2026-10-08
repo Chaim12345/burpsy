@@ -113,6 +113,13 @@ capture are reported per attempt and per bucket (as an exemplar), but the key st
 for any attack that turned a pattern on. `MAX_EXTRACT` (256) bounds the reported capture and a
 truncated value is marked as such.
 
+Reflection — the key's third slot — is Grep - Payloads (`grep_payloads.go`, 7qc3): enabled, case
+sensitivity (ASCII folding, no allocation), exclude headers, and matching the pre-URL-encoding form
+(`PayloadSet.Unencoded`, kept by `URLEncodeSet` only when it changed something). `Attempt.ReflectedCounts`
+has one slot per payload SET, never per position (battering ram counts once). `NewAttack` defaults to
+`LegacyGrepPayloads()`, the fixed check every attack ran before; the settings decide the key, so changing
+them can change the bucket count.
+
 ### Payloads and rules resolve before the attack, never inside it
 
 `PayloadSource.Resolve` produces the set and `Chain` rewrites it in place before `Run`. `max_count`

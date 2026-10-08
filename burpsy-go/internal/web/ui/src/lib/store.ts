@@ -288,6 +288,16 @@ export interface IntruderConfig {
  grepMatchCaseSensitive: boolean;
  /** Burp's "Exclude HTTP headers" — the list searches the response body only. */
  grepMatchExcludeHeaders: boolean;
+ /**
+  * Burp's Grep - Payloads (burpsy-react-ui-7qc3): search each response for the payloads that produced
+  * it, with a count column per payload set. Burp's own defaults are off / case-insensitive / headers
+  * included / match pre-URL-encoded ON; burpsy keeps the search ON by default, because reflection has
+  * always been a third of its result-bucket key (gaps.md). The other three are Burp's.
+  */
+ grepPayloadsEnabled: boolean;
+ grepPayloadsCaseSensitive: boolean;
+ grepPayloadsExcludeHeaders: boolean;
+ grepPayloadsMatchPreEncoded: boolean;
  /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
   *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
   *  two different requests rather than one request that means both. */
@@ -461,6 +471,10 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepMatchList: [],
   grepMatchCaseSensitive: false,
   grepMatchExcludeHeaders: false,
+  grepPayloadsEnabled: true,
+  grepPayloadsCaseSensitive: false,
+  grepPayloadsExcludeHeaders: false,
+  grepPayloadsMatchPreEncoded: true,
  autoPauseEnabled: false,
  autoPauseMode: "appears",
  autoPauseExpressions: [],

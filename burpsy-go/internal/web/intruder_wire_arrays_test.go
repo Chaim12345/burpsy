@@ -192,3 +192,74 @@ func TestIntruderSendSettingsFieldsAreOnTheWireWithTheirTypes(t *testing.T) {
 		}
 	}
 }
+
+// Grep - Payloads' count arrays (burpsy-react-ui-7qc3) are arrays on every row the page reads —
+// attempts and buckets, with the setting on, off, and on a row whose send failed — and the report
+// carries the settings it ran with as an object. types.tools.ts declares the arrays non-nullable.
+func TestGrepPayloadsCountArraysAreArraysOnEveryRow(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+
+	type row struct {
+		Error           *string         `json:"error"`
+		ReflectedCounts json.RawMessage `json:"reflected_counts"`
+	}
+	type bucket struct {
+		ReflectedCountTotals json.RawMessage `json:"reflected_count_totals"`
+	}
+	for _, tc := range []struct {
+		name   string
+		target string
+		grep   any
+		want   string // the attempt rows' reflected_counts
+	}{
+		{"absent (legacy, on)", "http://" + addr, nil, "[1]"},
+		{"off", "http://" + addr, map[string]any{"enabled": false}, "[]"},
+		{"on, send failed", "http://127.0.0.1:1", map[string]any{"enabled": true}, "[]"},
+	} {
+		body := map[string]any{
+			"msg_id": id, "target": tc.target, "mode": "sniper",
+			"manual_points": []map[string]int{{"start": start, "end": start + 3}},
+			"payload_sets":  [][]string{{"xyz", "wxyz"}}, "rps": 1000, "retries": 0,
+		}
+		if tc.grep != nil {
+			body["grep_payloads"] = tc.grep
+		}
+		var out json.RawMessage
+		if code := postJSONInto(t, srv, "/api/intruder/run", body, &out); code != http.StatusOK {
+			t.Fatalf("%s: run = %d: %s", tc.name, code, out)
+		}
+		var view struct {
+			Report struct {
+				Attempts     []row           `json:"attempts"`
+				Buckets      []bucket        `json:"buckets"`
+				GrepPayloads json.RawMessage `json:"grep_payloads"`
+			} `json:"report"`
+		}
+		if err := json.Unmarshal(out, &view); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(view.Report.Attempts) != 2 {
+			t.Fatalf("%s: %d attempt rows, want 2: %s", tc.name, len(view.Report.Attempts), out)
+		}
+		for i, a := range view.Report.Attempts {
+			if string(a.ReflectedCounts) != tc.want {
+				t.Fatalf("%s: attempts[%d].reflected_counts = %s, want %s", tc.name, i, a.ReflectedCounts, tc.want)
+			}
+		}
+		for i, b := range view.Report.Buckets {
+			if len(b.ReflectedCountTotals) == 0 || b.ReflectedCountTotals[0] != '[' {
+				t.Fatalf("%s: buckets[%d].reflected_count_totals = %s, want an array", tc.name, i, b.ReflectedCountTotals)
+			}
+		}
+		if len(view.Report.GrepPayloads) == 0 || view.Report.GrepPayloads[0] != '{' {
+			t.Fatalf("%s: report.grep_payloads = %s, want the settings object", tc.name, view.Report.GrepPayloads)
+		}
+	}
+}

@@ -90,6 +90,10 @@ function fullConfig(): IntruderConfig {
   httpVersion: "http1",
   updateHostHeader: false,
   payloadPlacement: "append",
+  grepPayloadsEnabled: false,
+  grepPayloadsCaseSensitive: true,
+  grepPayloadsExcludeHeaders: true,
+  grepPayloadsMatchPreEncoded: false,
   };
 }
 

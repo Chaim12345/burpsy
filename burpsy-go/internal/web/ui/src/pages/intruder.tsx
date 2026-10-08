@@ -25,6 +25,7 @@ import { useMessage } from "../lib/data";
 import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-marks";
 import { delayVariationFields } from "../lib/intruder-variation";
 import { PAYLOAD_PLACEMENTS, describePoint, placementFields, type PayloadPlacement } from "../lib/intruder-placement";
+import { grepPayloadsField, reflectionColumnLabels } from "../lib/intruder-grep-payloads";
 import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
@@ -514,6 +515,8 @@ function AttackResult({
 }): JSX.Element {
   const { report, payload_sets: sets, redirects_followed: redirectsFollowed } = view;
   const connections = connectionReuseSummary(view);
+  // Grep - Payloads' per-set count columns (7qc3), one per payload set when the check ran.
+  const reflectionLabels = reflectionColumnLabels(report, sets.length);
 
   // Ordinal → payload combination, shared with the CSV export so the sheet and the
   // table can never disagree about what a row's payloads were (lib/intruder-export.ts
@@ -625,6 +628,17 @@ function AttackResult({
       cell: ({ row }) =>
         row.original.reflected ? <Badge tone="warn">reflected</Badge> : <span className="cell-dim">no</span>,
     },
+    // Grep - Payloads' totals per set (7qc3): the occurrences summed over every response in the bucket.
+    ...reflectionLabels.map((label, si) => ({
+      accessorFn: (bucket: ResultBucket) => bucket.reflected_count_totals?.[si],
+      id: `bucket_reflections_${si}`,
+      header: label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: ResultBucket } }) => {
+        const v = row.original.reflected_count_totals?.[si];
+        return v === undefined ? <span className="cell-dim">—</span> : v > 0 ? <Badge tone="warn">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
     { accessorKey: "count", header: "Count", cell: ({ getValue }) => <span className="cell-num">{formatCount(getValue<number>())}</span> },
     // Per-expression totals for the bucket table (irt): the slot-wise sum over every response
     // the bucket holds, so a bucket can be sorted by how often a given error string appeared.
@@ -784,6 +798,19 @@ function AttackResult({
       header: "Reflected",
       cell: ({ row }) => (row.original.reflected ? <Badge tone="warn">yes</Badge> : <span className="cell-dim">no</span>),
     },
+    // Grep - Payloads (7qc3): "a results column that records the number of times the payload is found
+    // in the response … a separate column … for each payload set". A row with no response has no
+    // count, and shows "—" rather than a 0 it never measured.
+    ...reflectionLabels.map((label, si) => ({
+      accessorFn: (attempt: Attempt) => attempt.reflected_counts?.[si],
+      id: `reflections_${si}`,
+      header: label,
+      sortUndefined: "last" as const,
+      cell: ({ row }: { row: { original: Attempt } }) => {
+        const v = row.original.reflected_counts?.[si];
+        return v === undefined ? <span className="cell-dim">—</span> : v > 0 ? <Badge tone="warn">{v}</Badge> : <span className="cell-dim">0</span>;
+      },
+    })),
     {
       accessorFn: (attempt) => (attempt.grep_matched ? "match" : undefined),
       id: "grep",
@@ -1164,6 +1191,10 @@ export function IntruderPage(): JSX.Element {
     grepMatchList,
     grepMatchCaseSensitive,
     grepMatchExcludeHeaders,
+    grepPayloadsEnabled,
+    grepPayloadsCaseSensitive,
+    grepPayloadsExcludeHeaders,
+    grepPayloadsMatchPreEncoded,
     autoPauseEnabled,
     autoPauseMode,
     autoPauseExpressions,
@@ -1253,6 +1284,10 @@ export function IntruderPage(): JSX.Element {
   const setGrepMatchList = field("grepMatchList");
   const setGrepMatchCaseSensitive = field("grepMatchCaseSensitive");
   const setGrepMatchExcludeHeaders = field("grepMatchExcludeHeaders");
+  const setGrepPayloadsEnabled = field("grepPayloadsEnabled");
+  const setGrepPayloadsCaseSensitive = field("grepPayloadsCaseSensitive");
+  const setGrepPayloadsExcludeHeaders = field("grepPayloadsExcludeHeaders");
+  const setGrepPayloadsMatchPreEncoded = field("grepPayloadsMatchPreEncoded");
   // Auto-pause is five draft fields, not one switch: the expressions and the mode are the attack's
   // own settings, so an operator who turns the switch off and on again must find their list intact
   // rather than retyping it. The switch decides only whether the block is SENT (burpsy-react-ui-2cvk).
@@ -1686,6 +1721,8 @@ export function IntruderPage(): JSX.Element {
         ? { grep_match: grepMatchMode === "simple" ? quoteRegex(grepMatch.trim()) : grepMatch.trim() }
         : {}),
       ...(grepExtract.trim() ? { grep_extract: grepExtract.trim() } : {}),
+      // Grep - Payloads (7qc3): always the whole object — see grepPayloadsField for why.
+      ...grepPayloadsField(config),
       // Auto-pause (burpsy-react-ui-2cvk). The block is sent only when the switch is on, and only
       // with expressions in it, for the same reason every other optional field here is omitted
       // rather than sent empty: an absent field and an empty expression list must not be two wire
@@ -3075,6 +3112,45 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+            </div>
+          </Card>
+
+          <Card>
+            <SectionHeading
+              title="Grep — payloads"
+              detail="Flag results whose response contains the payload that produced them, with a count column per payload set — the reflection check behind cross-site scripting and other response injection."
+            />
+            <div className="form-grid">
+              <div className="row-list">
+                <Checkbox
+                  checked={grepPayloadsEnabled !== false}
+                  onCheckedChange={(v) => setGrepPayloadsEnabled(v)}
+                  label="Search responses for payload strings"
+                />
+                <Checkbox
+                  checked={grepPayloadsCaseSensitive === true}
+                  onCheckedChange={(v) => setGrepPayloadsCaseSensitive(v)}
+                  label="Case sensitive match"
+                  disabled={grepPayloadsEnabled === false}
+                />
+                <Checkbox
+                  checked={grepPayloadsExcludeHeaders === true}
+                  onCheckedChange={(v) => setGrepPayloadsExcludeHeaders(v)}
+                  label="Exclude HTTP headers"
+                  disabled={grepPayloadsEnabled === false}
+                />
+                <Checkbox
+                  checked={grepPayloadsMatchPreEncoded !== false}
+                  onCheckedChange={(v) => setGrepPayloadsMatchPreEncoded(v)}
+                  label="Match against pre-URL-encoded payloads"
+                  disabled={grepPayloadsEnabled === false}
+                />
+              </div>
+              <p className="field-hint">
+                {grepPayloadsEnabled === false
+                  ? "Off: no response is flagged as reflected, and the result buckets no longer split on reflection."
+                  : "Reflection is part of how results are bucketed, so these settings can change the bucket count. Pre-URL-encoded matching looks for each payload as it was before \"URL-encode these characters\" rewrote it — the form an application that decodes its input echoes back."}
+              </p>
             </div>
           </Card>
 

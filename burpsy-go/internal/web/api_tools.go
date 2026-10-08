@@ -594,6 +594,12 @@ type intruderRunReq struct {
 	GrepMatchCaseSensitive *bool `json:"grep_match_case_sensitive"`
 	// GrepMatchExcludeHeaders searches the response body only — Burp's "Exclude HTTP headers".
 	GrepMatchExcludeHeaders *bool `json:"grep_match_exclude_headers"`
+	// GrepPayloads is Burp's Grep - Payloads (burpsy-react-ui-7qc3): {enabled, case_sensitive,
+	// exclude_headers, match_pre_url_encoded}, each false when omitted from the object. Nil — the field
+	// absent — is the reflection check every attack ran before it existed (intruder.LegacyGrepPayloads:
+	// on, case-sensitive, headers included, matched as sent), so a scripted attack's buckets do not
+	// change unless the request says so. The bundled UI always sends the object.
+	GrepPayloads *intruder.GrepPayloads `json:"grep_payloads,omitempty"`
 	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
 	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
 	// never thought about error handling is exactly the person Burp's default protects, and a
@@ -1238,6 +1244,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		// "off" at the engine, which is the same thing — the fields exist so the UI can ask.
 		WithSetConnectionClose(req.SetConnectionClose != nil && *req.SetConnectionClose).
 		WithStorePayloads(req.StorePayloads != nil && *req.StorePayloads)
+	if req.GrepPayloads != nil {
+		attack.WithGrepPayloads(*req.GrepPayloads)
+	}
 	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
 	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
 	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
