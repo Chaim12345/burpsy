@@ -408,10 +408,15 @@ type Settings struct {
 }
 
 // sectionOn says whether one issue-detail section is printed under these
-// settings. With no Sections list every section prints; an explicit list is a
-// keep-if-match, the same semantics the severity filter on the route uses.
+// settings. A nil Sections list prints every section — the report without a
+// settings step carries everything — and an explicit list is a keep-if-match,
+// the same semantics the severity filter on the route uses. The empty
+// non-nil list ("sections=" on the route) prints none of them: Burp's wizard
+// lets an operator untick every detail option, and a report that is a bare
+// list of names and evidence is a real choice, not a state to silently coerce
+// back to "everything". The nil/empty split is what carries that.
 func (s Settings) sectionOn(name string) bool {
-	if len(s.Sections) == 0 {
+	if s.Sections == nil {
 		return true
 	}
 	for _, want := range s.Sections {

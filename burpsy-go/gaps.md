@@ -1727,3 +1727,21 @@ where burpsy's data model cannot fill a field the divergence is recorded here, n
   `core.Occurrence.Span` — so those locations cannot be recovered. The header block (through the
   blank line) is the deterministic substitute, labelled "[relevant extract — body omitted]" in the
   HTML and carried as bytes in the XML. Re-open: populate Occurrence.Span at finding production.
+
+### Report settings: query-string shape and the TOC clamp (burpsy-react-ui-a9qy)
+
+- **The wizard is a query string, not a saved profile.** Burp's report settings are chosen in a
+  wizard per export; burpsy's are parameters on `/api/report/html` and `/api/report/xml`
+  (`title`, `organise_by`, `toc_depth`, `sections`, `message_mode`, `max_message_len`), so an
+  export link carries its own configuration. There is no persisted settings store — each export is
+  configured for itself, which is what Burp's wizard does too.
+- **`toc_depth` is clamped to 2, not 3+.** Burp's wizard offers more levels; in burpsy's report the
+  third level would repeat the same rows (groups, then findings, then the same findings again), so
+  asking for more is clamped rather than rendered as fake depth.
+- **`sections=` present but empty means every detail section is off.** Burp's wizard allows
+  unticking all five detail options; a query string cannot otherwise distinguish "all off" from
+  "parameter absent" (all on). The nil-vs-empty list split carries the two states; the renderer's
+  `sectionOn` documents it.
+- **"Affected parameters" is always printed, not a section.** Burp prints an issue's location and
+  entry point beside the issue header, not under a detail section; burpsy's params list follows
+  that, so it survives an all-off report the way the finding's name does.

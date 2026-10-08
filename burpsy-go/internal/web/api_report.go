@@ -3,7 +3,9 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -67,18 +69,104 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	filter.host = strings.TrimSpace(query.Get("host"))
 	filter.hideFalsePositives = query.Get("exclude_false_positives") == "true"
 
+	// Parsed and validated for every format, consumed by the two that render
+	// settings (html, xml): a typo in message_mode is a 400 whichever format
+	// the operator asked for, not a parameter that quietly does nothing
+	// because the URL happened to end in /json.
+	settings, err := parseReportSettings(query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	switch format {
 	case "json":
 		s.reportJSON(w, filter)
 	case "sarif":
 		s.reportSARIF(w, filter)
 	case "html":
-		s.reportHTML(w, filter)
+		s.reportHTML(w, filter, settings)
 	case "xml":
-		s.reportXML(w, filter)
+		s.reportXML(w, filter, settings)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// parseReportSettings decodes Burp's report-settings choices
+// (burpsy-react-ui-a9qy) from the query string: report-settings.html's
+// "Report details" (title, organisation, TOC depth — HTML-only in Burp and
+// consumed by the HTML renderer here), the issue-detail sections, and the
+// "HTTP messages" mode and length that both message-carrying formats honour.
+//
+// Every unknown value is refused with a message naming the parameter and the
+// accepted values, the same rule the severity filter already follows: a
+// settings parameter that silently does nothing would produce a report
+// claiming to be the configured one while carrying something else.
+func parseReportSettings(query url.Values) (report.Settings, error) {
+	var st report.Settings
+	st.Title = strings.TrimSpace(query.Get("title"))
+	if len(st.Title) > 200 {
+		return st, fmt.Errorf("title is %d characters; the report title is capped at 200", len(st.Title))
+	}
+	if raw := query.Get("organise_by"); raw != "" {
+		switch raw {
+		case "severity", "type", "url":
+			st.OrganiseBy = raw
+		default:
+			return st, fmt.Errorf("unknown organise_by %q; the accepted values are severity, type, url", raw)
+		}
+	}
+	if raw := query.Get("toc_depth"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return st, fmt.Errorf("toc_depth %q is not a non-negative number", raw)
+		}
+		// Clamped, not refused: depth 1 lists the groups, depth 2 also lists
+		// each finding beneath them, and a deeper value has no further level
+		// to invent — the TOC would repeat the same rows. The renderer is
+		// written to be correct for any depth anyway; this keeps the document
+		// honest about what a level means.
+		if n > 2 {
+			n = 2
+		}
+		st.TOCDepth = n
+	}
+	// Has, not Get: "sections=" present but empty means every detail section
+	// is off (Burp's wizard allows unticking all of them), which is not the
+	// same state as the parameter being absent (every section on). The
+	// renderer distinguishes the two through the nil/empty slice split.
+	if query.Has("sections") {
+		raw := strings.TrimSpace(query.Get("sections"))
+		if raw == "" {
+			st.Sections = []string{}
+		} else {
+			valid := map[string]bool{"background": true, "remediation": true, "detail": true, "classifications": true}
+			for _, name := range strings.Split(raw, ",") {
+				name = strings.TrimSpace(name)
+				if !valid[name] {
+					return st, fmt.Errorf("unknown section %q; the accepted values are background, remediation, detail, classifications", name)
+				}
+				st.Sections = append(st.Sections, name)
+			}
+		}
+	}
+	if raw := query.Get("message_mode"); raw != "" {
+		switch raw {
+		case "none", "relevant", "full":
+			st.MessageMode = raw
+		default:
+			return st, fmt.Errorf("unknown message_mode %q; the accepted values are none, relevant, full", raw)
+		}
+	}
+	if raw := query.Get("max_message_len"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return st, fmt.Errorf("max_message_len %q is not a non-negative number of bytes", raw)
+		}
+		st.MaxMessageLen = n
+	}
+	return st, nil
 }
 
 // reportOneFinding writes one finding as a self-contained report: the same row the scan-wide export
@@ -367,10 +455,20 @@ func (s *Server) reportSARIF(w http.ResponseWriter, filter reportFilter) {
 	w.Write(doc)
 }
 
-func (s *Server) reportHTML(w http.ResponseWriter, filter reportFilter) {
+// reportHTML renders the report under the settings: the bulk export stays
+// message-free unless the operator asked for them ("Do not include" is Burp's
+// default for a reason — a scan-wide report that inlined every request body
+// would be unusable as a document), and every other choice is the wizard's:
+// title, organisation, TOC depth, issue-detail sections, message mode and
+// length.
+func (s *Server) reportHTML(w http.ResponseWriter, filter reportFilter, st report.Settings) {
+	rows := s.reportRows(filter)
+	if st.MessageMode == "relevant" || st.MessageMode == "full" {
+		s.attachEvidenceMessages(rows, st.MessageMode, st.MaxMessageLen)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-report.html"`)
-	w.Write(report.HTML(s.reportRows(filter)))
+	w.Write(report.HTMLWithSettings(rows, st))
 }
 
 // reportXML is the Burp-XML issue export (burpsy-react-ui-m7dk): the document
@@ -384,12 +482,21 @@ func (s *Server) reportHTML(w http.ResponseWriter, filter reportFilter) {
 // to hold them, so an XML export with no messages would be the one Burp-shaped
 // file that cannot do the job it is opened for. The settings (a9qy) can still
 // say none or bound the length once they arrive.
-func (s *Server) reportXML(w http.ResponseWriter, filter reportFilter) {
+func (s *Server) reportXML(w http.ResponseWriter, filter reportFilter, st report.Settings) {
+	// The XML export opts into full messages when the operator said nothing:
+	// its requestresponse elements are the reason the format exists, and an
+	// XML export with no messages is the one Burp-shaped file that cannot do
+	// the job it is opened for. An explicit none or relevant is honoured.
+	if st.MessageMode == "" {
+		st.MessageMode = "full"
+	}
 	rows := s.reportRows(filter)
-	s.attachEvidenceMessages(rows, "full", 0)
+	if st.MessageMode == "relevant" || st.MessageMode == "full" {
+		s.attachEvidenceMessages(rows, st.MessageMode, st.MaxMessageLen)
+	}
 	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Content-Disposition", `attachment; filename="burpsy-report.xml"`)
-	w.Write(report.BurpXML(rows, report.Settings{MessageMode: "full"}, time.Now()))
+	w.Write(report.BurpXML(rows, st, time.Now()))
 }
 
 // attachEvidenceMessages loads each evidence entry's request and response

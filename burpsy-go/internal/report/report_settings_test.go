@@ -188,6 +188,40 @@ func TestBackgroundAndClassificationsAreSelectedIndependentlyAndPrintOnce(t *tes
 	}
 }
 
+// "sections=" with nothing on it is Burp's untick-everything report — a bare
+// list of names and evidence — and must not be coerced back to "everything".
+// The nil/empty slice split is what carries the two states apart.
+func TestAnEmptySectionsListPrintsNoDetailAtAll(t *testing.T) {
+	// A row carrying everything the sections gate: its own detail and
+	// remediation, the params list, and a catalogue entry behind it.
+	rows := []Row{{
+		ID: 1, Name: "SQL injection", Severity: "High",
+		Description: "The q parameter is injectable.", Remediation: "Use parameterised queries.",
+		Params:   []string{"q"},
+		Hosts:    []string{"shop.test"},
+		Evidence: []Evidence{{Method: "POST", Host: "shop.test", Path: "/login"}},
+		Advisory: &Advisory{Name: "SQL injection", TypeIndex: "00100200", DescriptionHTML: "<p>Injected SQL is executed.</p>", RemediationHTML: "<p>Use parameterised queries.</p>"},
+	}}
+	all := string(HTMLWithSettings(rows, Settings{}))
+	none := string(HTMLWithSettings(rows, Settings{Sections: []string{}}))
+	for _, gone := range []string{"Detail</div>", "Remediation</div>", "Issue definition"} {
+		if strings.Contains(none, gone) {
+			t.Errorf("the all-off report still prints %q", gone)
+		}
+		if !strings.Contains(all, gone) {
+			t.Errorf("the nil-list report lost %q — nil must mean every section", gone)
+		}
+	}
+	// The always-printed core survives: the finding is still named, graded and
+	// located. The params list is location metadata — Burp prints it beside
+	// the issue header, not under a detail section — so it stays too.
+	for _, kept := range []string{"SQL injection", "sev-high", "shop.test", "Affected parameters"} {
+		if !strings.Contains(none, kept) {
+			t.Errorf("the all-off report lost the core %q", kept)
+		}
+	}
+}
+
 // The title replaces "burpsy scan report" in both the h1 and the <title>, so a
 // client-facing copy carries the engagement's own name.
 func TestTheSettingsTitleReplacesTheDefaultHeading(t *testing.T) {

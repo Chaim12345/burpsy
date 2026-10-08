@@ -204,13 +204,21 @@ func writeBurpIssue(b *strings.Builder, f *Row, st Settings) {
 	// (Zb2g passes every text element through net.portswigger.Zhs.Zq); the
 	// fragments burpsy holds are already SanitisedHTML output, so the tag
 	// strip below recovers the plain text.
-	if f.Advisory != nil {
+	//
+	// The sections gate these the same way Burp's wizard does — its XML
+	// writer reads the same issue-details settings (Zb2g's Zxcm flags) —
+	// with burpsy's four names mapping onto Burp's toggles: background is
+	// the catalogue block, classifications the link lists, detail and
+	// remediation the finding's own text.
+	if f.Advisory != nil && st.sectionOn("background") {
 		if text := sanitisedHTMLToText(f.Advisory.DescriptionHTML); text != "" {
 			writeXMLElement(b, "issueBackground", text)
 		}
 		if text := sanitisedHTMLToText(f.Advisory.RemediationHTML); text != "" {
 			writeXMLElement(b, "remediationBackground", text)
 		}
+	}
+	if f.Advisory != nil && st.sectionOn("classifications") {
 		if lines := linkLines(f.Advisory.References); lines != "" {
 			writeXMLElement(b, "references", lines)
 		}
@@ -221,10 +229,10 @@ func writeBurpIssue(b *strings.Builder, f *Row, st Settings) {
 	// The finding's own text is the per-instance detail — Burp's "Issue
 	// detail" is "specific information about the issue", distinct from the
 	// standard background above.
-	if f.Description != "" {
+	if st.sectionOn("detail") && f.Description != "" {
 		writeXMLElement(b, "issueDetail", f.Description)
 	}
-	if f.Remediation != "" {
+	if st.sectionOn("remediation") && f.Remediation != "" {
 		writeXMLElement(b, "remediationDetail", f.Remediation)
 	}
 
