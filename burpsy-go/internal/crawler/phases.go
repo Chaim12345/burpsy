@@ -76,7 +76,8 @@ func PhaseOfTag(tag string) CrawlPhase {
 		return PhaseFrontierWalk
 	case "iframe", "frame", "redirect", tagMetaRefresh, tagRefreshHeader:
 		return PhaseRedirect
-	case "object", "embed":
+	case "object", "embed", "img", "source", "audio", "track", "video", "link":
+		// Subresources (4ocj) are embedded content the page loads, the same phase as object/embed.
 		return PhaseEmbeddedObject
 	case "rendered":
 		return PhaseRendered
@@ -131,7 +132,7 @@ func hasTagPrefix(tag, prefix string) bool {
 var EdgeKindsAll = []string{
 	"anchor", "form", "frame", "iframe", "area", "redirect", "delayed_redirect", "origin", "submit",
 	"clickable", "speculative", "api", "soap", "graphql",
-	"embedded", "robots", "sitemap", "well_known", "script", "json",
+	"embedded", "subresource", "robots", "sitemap", "well_known", "script", "json",
 }
 
 // EdgeKindOfTag maps a discovered link's tag onto Burp's edge vocabulary.
@@ -151,6 +152,8 @@ func EdgeKindOfTag(tag string) string {
 		return "anchor"
 	case "object", "embed":
 		return "embedded"
+	case "img", "source", "audio", "track", "video", "link":
+		return "subresource"
 	case "robots":
 		return "robots"
 	case "robots-sitemap", "sitemap":

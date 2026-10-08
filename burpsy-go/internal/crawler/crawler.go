@@ -274,6 +274,10 @@ type Config struct {
 	// nonexistent sibling that teaches the crawl what a soft 404 looks like. On by default, as Burp's
 	// is.
 	NoNotFoundProbe bool
+	// NoSubresources stops the crawl fetching images, stylesheets, icons and media (4ocj). Burp's
+	// crawler fetches them, which is the default here. Scripts and embedded objects are fetched
+	// regardless, because their contents are read for locations.
+	NoSubresources bool
 	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
 	// candidate URLs are also mined from HTML comments and script bodies — the places
 	// single-page apps and comment-leaked admin paths live. Off by default is NOT a statement
@@ -2068,6 +2072,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	page := parsePage(body, item.url, c.limits, c.cfg.RequestSpeculative)
+	if c.cfg.NoSubresources {
+		for tag := range subresourceTags {
+			page.links = withoutTag(page.links, tag)
+		}
+	}
 	if c.cfg.NoMetaRefresh {
 		page.links = withoutTag(page.links, tagMetaRefresh)
 	}
@@ -3339,7 +3348,9 @@ func isResourceTag(tag string) bool {
 	case "iframe", "frame", "object", "embed":
 		return true
 	default:
-		return false
+		// The subresources the crawl now fetches (4ocj): an out-of-scope image or stylesheet is a
+		// refused resource, not a refused link.
+		return subresourceTags[tag]
 	}
 }
 

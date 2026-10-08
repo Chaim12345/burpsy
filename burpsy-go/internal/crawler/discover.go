@@ -21,12 +21,13 @@
 //
 // Discovered and queued: `a[href]`, `area[href]`, `iframe[src]`, `frame[src]`, and every `form`.
 //
-// Neither queued nor fingerprinted: `img`, `script`, `link`, `source`, `embed`, `video`, `audio`.
-// These are subresources. Burp's crawler does fetch them; this slice does not, because fetching them
-// spends the request budget on bytes no application logic is behind. Their `src` values are also kept
-// out of the location skeleton, because a rebuilt asset hash in a bundle filename would otherwise
-// make every page a new location on every deploy. Two named consequences: a crawl of this application
-// will not tell you that `/static/app.js` returned 500, and two pages differing only in their images
+// Queued but not fingerprinted: the subresources `img`, `link` (stylesheets, icons, preloads, the
+// manifest), `source`, `video` and `audio` (burpsy-react-ui-4ocj), plus `script` (jwy5) and
+// `object`/`embed` (u967). Burp's crawler fetches them, so a crawl can report that `/static/app.js`
+// returned 500 or that a page loads an asset from outside scope, and the site map shows the assets.
+// Config.NoSubresources turns the media and stylesheet ones off to save request budget. Their URLs
+// are kept out of the location skeleton, because a rebuilt asset hash in a bundle filename would
+// otherwise make every page a new location on every deploy: two pages differing only in their images
 // are one location.
 //
 // Not discovered at all: URLs built by script, URLs in CSS, `srcset` candidate lists, `<meta
@@ -342,6 +343,22 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 					if admit() {
 						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: "embed"})
 					}
+				}
+			// Subresources (4ocj): fetched like any discovered link, but kept out of linkTargets so asset
+			// hashes cannot split a location. srcset is not read: it names alternatives of one image.
+			case "img", "source", "audio", "track":
+				if src, ok := attr(n, "src"); ok && strings.TrimSpace(src) != "" && admit() {
+					out.links = append(out.links, discoveredLink{raw: src, tag: n.Data})
+				}
+			case "video":
+				for _, a := range []string{"src", "poster"} {
+					if v, ok := attr(n, a); ok && strings.TrimSpace(v) != "" && admit() {
+						out.links = append(out.links, discoveredLink{raw: v, tag: "video"})
+					}
+				}
+			case "link":
+				if href, ok := attr(n, "href"); ok && strings.TrimSpace(href) != "" && isAssetRel(n) && admit() {
+					out.links = append(out.links, discoveredLink{raw: href, tag: "link"})
 				}
 			case "script":
 				// An EXTERNAL script is fetched so its contents can be read for locations
@@ -980,4 +997,21 @@ func refreshTarget(value string) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// subresourceTags are the tags whose targets a page loads rather than links to (4ocj).
+var subresourceTags = map[string]bool{"img": true, "source": true, "audio": true, "track": true, "video": true, "link": true}
+
+// isAssetRel reports whether a <link> loads an asset the page needs: a stylesheet, an icon, a preload
+// or module preload, or the web app manifest. A rel=alternate, canonical or next link names another
+// document and is not fetched as a subresource.
+func isAssetRel(n *html.Node) bool {
+	rel, _ := attr(n, "rel")
+	for _, r := range strings.Fields(strings.ToLower(rel)) {
+		switch r {
+		case "stylesheet", "icon", "apple-touch-icon", "preload", "modulepreload", "manifest", "mask-icon":
+			return true
+		}
+	}
+	return false
 }
