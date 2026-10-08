@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Network, Type , Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
+import { messageDisplayText } from "../lib/message";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
 import { useCrawls } from "../lib/data.observe";
 import { useCompareSitemaps } from "../lib/data.observe";
@@ -419,8 +420,8 @@ export function ComparerPage(): JSX.Element {
     }
     loadMessage.mutate(id, {
       onSuccess: (message) => {
-        if (slot === "a") setA(message.text ?? "");
-        else setB(message.text ?? "");
+        if (slot === "a") setA(messageDisplayText(message, ""));
+        else setB(messageDisplayText(message, ""));
         toast.success(`Message ${id} loaded into slot ${slot.toUpperCase()}`);
       },
       onError: (cause) => toast.error(`Could not load message ${id}: ${cause.message}`),

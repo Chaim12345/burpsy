@@ -2642,6 +2642,114 @@ tbody td {
   white-space: nowrap;
 }
 
+/* Event log filtering (burpsy-react-ui-lxqq) */
+.event-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  align-items: center;
+}
+
+.event-filter-group {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+.event-filter-select {
+  padding: var(--s1) var(--s2);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--r1);
+  font-size: var(--fs-sm);
+  min-width: 120px;
+}
+
+.event-filter-search {
+  min-width: 200px;
+}
+
+.event-filter-clear {
+  flex-shrink: 0;
+}
+
+/* Event log table layout */
+.event-row-header {
+  display: grid;
+  grid-template-columns: 8px 120px minmax(0, 1fr) 120px auto;
+  gap: var(--s2);
+  padding: var(--s1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: 8px 120px minmax(0, 1fr) 120px auto;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line);
+  align-items: start;
+  font-size: var(--fs-md);
+}
+
+.event-kind-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-detail-cell {
+  overflow: hidden;
+}
+
+.event-detail-cell p {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  margin-top: 1px;
+  word-break: break-word;
+}
+
+.event-source-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-source-cell span {
+  font-size: var(--fs-sm);
+}
+
+.event-time-cell {
+  color: var(--muted);
+  font: var(--fs-xs) var(--font-mono);
+  white-space: nowrap;
+}
+
+/* Collaborator health check (burpsy-react-ui-8e3n) */
+.health-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+.health-result {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  font-size: var(--fs-sm);
+}
+
+.health-label {
+  color: var(--fg-dim);
+  min-width: 60px;
+}
+
 .event-dot {
   width: 7px;
   height: 7px;

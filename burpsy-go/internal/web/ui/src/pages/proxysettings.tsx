@@ -80,7 +80,17 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
  {
   key: "strip_accept_encoding",
   label: "Strip Accept-Encoding from requests",
-  detail: "Ask the origin for plaintext: with no decompressor on the proxy path, compressed responses are exactly the ones these rules cannot rewrite.",
+  detail: "Ask the origin for plaintext: the proxy now supports gzip and deflate decompression, so compressed responses are readable. Turn this on only to stop an origin from sending unsupported encodings like br or zstd.",
+ },
+ {
+  key: "unpack_compressed_requests",
+  label: "Unpack compressed requests",
+  detail: "Decompress a gzip or deflate request body so the response modification rules can reach it, dropping its Content-Encoding and fixing Content-Length. Only applies when the client sent the compressed body — most browsers do not.",
+ },
+ {
+  key: "unpack_compressed_responses",
+  label: "Unpack compressed responses",
+  detail: "Decompress a gzip or deflate response body so the response modification rules can reach it, dropping its Content-Encoding and fixing Content-Length.",
  },
 ];
 
@@ -140,9 +150,12 @@ export function ProxySettingsPage(): JSX.Element {
      <Metric label="Considered" value={c.responses_considered} />
      <Metric label="Modified" value={c.responses_modified} tone={c.responses_modified > 0 ? "good" : undefined} />
      <Metric label="Unchanged" value={c.responses_unchanged} />
-     <Metric label="Skipped: compressed" value={c.skipped_compressed} detail="turn on strip-Accept-Encoding to reach these" />
+     <Metric label="Skipped: compressed" value={c.skipped_compressed} detail="turn on unpack_compressed_responses to reach these" />
+     <Metric label="Skipped: unsupported encoding" value={c.skipped_unsupported_encoding} detail="br/zstd not supported" />
      <Metric label="Skipped: not HTML" value={c.skipped_not_html} />
      <Metric label="Skipped: unframed" value={c.skipped_unframed} />
+     <Metric label="Unpacked: requests" value={c.unpacked_requests} tone={c.unpacked_requests > 0 ? "good" : undefined} />
+     <Metric label="Unpacked: responses" value={c.unpacked_responses} tone={c.unpacked_responses > 0 ? "good" : undefined} />
     </div>
     {c.responses_considered > 0 && c.responses_modified === 0 ? (
      <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>

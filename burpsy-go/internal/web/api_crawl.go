@@ -23,6 +23,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// LoginCredential represents one set of login credentials for application authentication.
+// Mirrors the crawler.LoginCredential type for API wire format.
+type LoginCredential struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 // ---- Crawl ---------------------------------------------------------------------------------------
 //
 // The crawl engine in internal/crawler was complete, tested and unreachable: nothing outside its own
@@ -349,6 +356,15 @@ type crawlStartReq struct {
 	RequestsPerSecond float64           `json:"requests_per_second"`
 	UserAgent         string            `json:"user_agent"`
 	Headers           map[string]string `json:"headers"`
+	// LoginCredentials are username/password pairs for the crawler to use when it identifies
+	// login forms during crawling (burpsy-react-ui-uzil).
+	LoginCredentials []LoginCredential `json:"login_credentials,omitempty"`
+	// AuthenticatedCrawlOnly restricts the crawl to only authenticated areas of the application.
+	AuthenticatedCrawlOnly bool `json:"authenticated_crawl_only,omitempty"`
+	// AttemptSelfRegister enables self-registration of new user accounts during crawling.
+	AttemptSelfRegister bool `json:"attempt_self_register,omitempty"`
+	// UseInvalidUsernames tests login with invalid usernames to help identify login forms.
+	UseInvalidUsernames bool `json:"use_invalid_usernames,omitempty"`
 }
 
 // validateCrawlBounds refuses a bound that is not a bound.
@@ -653,6 +669,10 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	var eh crawler.ErrorHandling
 	var configSpeculative bool
 	var configSpeculativeLinks int
+	// The form-submission optimization threshold (burpsy-react-ui-ddln). Declared here with the other
+	// configuration-carried fields so the named-configuration overlay below is the one place that
+	// decides it, and a request that names no configuration gets the engine's own zero (off).
+	var configFormOptThreshold int
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.
@@ -666,6 +686,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		eh = whole.ErrorHandling
 		configSpeculative = whole.RequestSpeculative
 		configSpeculativeLinks = whole.Limits.MaxSpeculativeLinks
+		configFormOptThreshold = whole.FormSubmissionOptimizationThreshold
 	}
 	// The error-handling keys overlay the named configuration the same way the limits do: a field the
 	// operator typed on this request wins over the file they also named (o0c5).
@@ -754,7 +775,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
-	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh))
+	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh, configFormOptThreshold))
 	if err != nil {
 		return 0, nil, 0, nil, err
 	}
@@ -1296,7 +1317,7 @@ func availablePools(reg *pool.Registry) string {
 // that the session had been lost, and reported whatever the public pages yielded. A field missing
 // from a struct literal nobody inspects is invisible, and that is the same shape as the Params
 // field's own note about the wire dropping what the store kept.
-func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling) crawler.Config {
+func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling, formOptThreshold int) crawler.Config {
 	// The fetch hook for the crawl→audit bridge, built before the task is registered so a
 	// configuration mistake is a 400 the operator can fix, not a task that appears in the dashboard
 	// only to fail immediately. Declared here rather than at the call site so this method is the
@@ -1317,15 +1338,20 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		RetentionQuery:     req.RetentionQuery,
 		SubmitForms:        req.SubmitForms,
 		RequestSpeculative: speculative,
-		Limits:             limits,
-		ErrorHandling:      eh,
-		RequestWellKnown:   req.RequestWellKnown,
-		RequestsPerSecond:  req.RequestsPerSecond,
-		Pool:               poolLimit,
-		UserAgent:          req.UserAgent,
-		Headers:            req.Headers,
-		OnFetch:            onFetch,
-		Render:             nil,
+		// The form-submission optimization threshold (burpsy-react-ui-ddln), carried from the named
+		// configuration rather than from the request: Burp exposes it only in a scan configuration, so
+		// there is no per-request field to overlay it with. A 0 (no configuration named, or one that
+		// does not set the key) leaves the bound off.
+		FormSubmissionOptimizationThreshold: formOptThreshold,
+		Limits:                              limits,
+		ErrorHandling:                       eh,
+		RequestWellKnown:                    req.RequestWellKnown,
+		RequestsPerSecond:                   req.RequestsPerSecond,
+		Pool:                                poolLimit,
+		UserAgent:                           req.UserAgent,
+		Headers:                             req.Headers,
+		OnFetch:                             onFetch,
+		Render:                              nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
 		Logger:            s.logger,
@@ -1341,6 +1367,23 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		//
 		SessionCoordinator: s.crawlSessionCoordinator(),
 		LoginPagePattern:   req.LoginPagePattern,
+		// Login credentials support (burpsy-react-ui-uzil): map API credentials to crawler type
+		LoginCredentials: func() []crawler.LoginCredential {
+			if len(req.LoginCredentials) == 0 {
+				return nil
+			}
+			creds := make([]crawler.LoginCredential, len(req.LoginCredentials))
+			for i, apiCred := range req.LoginCredentials {
+				creds[i] = crawler.LoginCredential{
+					Username: apiCred.Username,
+					Password: apiCred.Password,
+				}
+			}
+			return creds
+		}(),
+		AuthenticatedCrawlOnly: req.AuthenticatedCrawlOnly,
+		AttemptSelfRegister:    req.AttemptSelfRegister,
+		UseInvalidUsernames:    req.UseInvalidUsernames,
 	}
 }
 

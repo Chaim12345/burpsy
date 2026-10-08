@@ -424,6 +424,11 @@ func applyOne(r *Rule, raw []byte) []byte {
 }
 
 func applyBody(r *Rule, raw []byte) []byte {
+	// Guard against empty match string: bytes.Contains(b, []byte("")) is always true,
+	// and bytes.ReplaceAll would insert the replacement between every byte (wtm2).
+	if r.StringMatch == "" {
+		return nil
+	}
 	if r.Category == CategoryLiteral {
 		if !bytes.Contains(raw, []byte(r.StringMatch)) {
 			return nil
@@ -440,6 +445,25 @@ func applyBody(r *Rule, raw []byte) []byte {
 }
 
 func applyHeaders(r *Rule, raw []byte) []byte {
+	// Burp behaviour: if StringMatch is empty for a header rule, add the replacement
+	// as a new header rather than matching the empty string everywhere (which
+	// inserts the replacement between every byte). This is the Burp doc:
+	// "If you leave this blank for an HTTP rule with the Request header or Response header
+	// type, the replacement string is added as a new header" (burpsy-react-ui-wtm2).
+	if r.StringMatch == "" {
+		// Find the end of the headers section
+		idx := bytes.Index(raw, []byte("\r\n\r\n"))
+		if idx >= 0 {
+			// Insert new header before the blank line
+			return bytes.Replace(raw, []byte("\r\n\r\n"), []byte("\r\n"+r.StringReplace+"\r\n\r\n"), 1)
+		}
+		// No body: append to the end
+		if len(raw) > 0 && !bytes.HasSuffix(raw, []byte("\r\n")) {
+			return append(raw, []byte("\r\n"+r.StringReplace+"\r\n")...)
+		}
+		return append(raw, []byte(r.StringReplace+"\r\n")...)
+	}
+
 	// Split at the first blank line: headers end, body starts.
 	idx := bytes.Index(raw, []byte("\r\n\r\n"))
 	var headers, body []byte
@@ -601,6 +625,11 @@ func rewriteParams(query []byte, r *Rule, matchName bool) ([]byte, bool) {
 }
 
 func applyFirstLine(r *Rule, raw []byte) []byte {
+	// Guard against empty match string: bytes.Contains(b, []byte("")) is always true,
+	// and bytes.ReplaceAll would insert the replacement between every byte (wtm2).
+	if r.StringMatch == "" {
+		return nil
+	}
 	idx := bytes.Index(raw, []byte("\r\n"))
 	if idx < 0 {
 		return nil

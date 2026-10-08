@@ -1,0 +1,55 @@
+bun install v1.3.14 (0d9b296a)
+
+$ node scripts/setup.js || exit 0
+
+Checked 52 installs across 144 packages (no changes) [410.00ms]
+Starting server (bun /root/qwen-gate/src/index.tsx)...
+c[3J[2J[H[31m
+████████▄    ▄█     █▄     ▄████████ ███▄▄▄▄
+███    ███  ███     ███   ███    ███ ███▀▀▀██▄
+███    ███  ███     ███   ███    █▀  ███   ███
+███    ███  ███     ███  ▄███▄▄▄     ███   ███
+███    ███  ███     ███ ▀▀███▀▀▀     ███   ███
+███    ███  ███     ███   ███    █▄  ███   ███
+███  ▀ ███  ███ ▄█▄ ███   ███    ███ ███   ███
+ ▀██████▀▄█  ▀███▀███▀    ██████████  ▀█   █▀
+
+   ▄██████▄     ▄████████     ███        ▄████████
+  ███    ███   ███    ███ ▀█████████▄   ███    ███
+  ███    █▀    ███    ███    ▀███▀▀██   ███    █▀
+ ▄███          ███    ███     ███   ▀  ▄███▄▄▄
+▀▀███ ████▄  ▀███████████     ███     ▀▀███▀▀▀
+  ███    ███   ███    ███     ███       ███    █▄
+  ███    ███   ███    ███     ███       ███    ███
+  ████████▀    ███    █▀     ▄████▀     ██████████
+
+  [0m[32m●[0m Host: localhost
+  [32m●[0m Port: 26405
+  [32m●[0m API: localhost:26405/v1
+  [32m●[0m Dashboard: http://localhost:26405/dashboard (Ctrl+Click)[0m
+  {"id":"sys-1","timestamp":"2026-10-07T13:25:20.745Z","level":"info","category":"server","message":"Server started on localhost:26405","logger":"qwen-gate"}
+{"id":"sys-2","timestamp":"2026-10-07T13:25:20.745Z","level":"info","category":"boot","message":"Dashboard live — starting background initialization...","logger":"qwen-gate"}
+{"id":"sys-3","timestamp":"2026-10-07T13:25:20.749Z","level":"info","category":"boot","message":"[1/5] Authenticating accounts...","logger":"qwen-gate"}
+{"id":"sys-4","timestamp":"2026-10-07T13:25:20.754Z","level":"info","category":"auth","message":"Loading token from profile for awayt3005@proton.me...","logger":"qwen-gate"}
+{"id":"sys-5","timestamp":"2026-10-07T13:25:20.754Z","level":"info","category":"auth","message":"Loading token from profile for awayt3005+q2@proton.me...","logger":"qwen-gate"}
+{"id":"sys-6","timestamp":"2026-10-07T13:25:20.754Z","level":"info","category":"auth","message":"Loading token from profile for awayt3005+2@proton.me...","logger":"qwen-gate"}
+[cloakbrowser] Update available: 0.4.3 → 0.5.12. Run: npm install cloakbrowser@latest
+{"id":"sys-7","timestamp":"2026-10-07T13:25:21.392Z","level":"warn","category":"system","message":"[cloakbrowser] Update available: 0.4.3 → 0.5.12. Run: npm install cloakbrowser@latest","logger":"qwen-gate"}
+{"id":"sys-8","timestamp":"2026-10-07T13:25:21.830Z","level":"info","category":"auth","message":"Authorizing profile for awayt3005@proton.me...","logger":"qwen-gate"}
+{"id":"sys-9","timestamp":"2026-10-07T13:25:21.871Z","level":"info","category":"auth","message":"Authorizing profile for awayt3005+q2@proton.me...","logger":"qwen-gate"}
+{"id":"sys-10","timestamp":"2026-10-07T13:25:21.906Z","level":"info","category":"auth","message":"Authorizing profile for awayt3005+2@proton.me...","logger":"qwen-gate"}
+{"id":"sys-11","timestamp":"2026-10-07T13:25:22.028Z","level":"info","category":"browser","message":"Opening profile for awayt3005@proton.me (headless: true)...","logger":"qwen-gate"}
+{"id":"sys-12","timestamp":"2026-10-07T13:25:22.074Z","level":"info","category":"browser","message":"Opening profile for awayt3005+q2@proton.me (headless: true)...","logger":"qwen-gate"}
+{"id":"sys-13","timestamp":"2026-10-07T13:25:22.108Z","level":"info","category":"browser","message":"Opening profile for awayt3005+2@proton.me (headless: true)...","logger":"qwen-gate"}
+{"id":"sys-14","timestamp":"2026-10-07T13:25:22.880Z","level":"info","category":"browser","message":"Navigating to auth page for awayt3005@proton.me...","logger":"qwen-gate"}
+{"id":"sys-15","timestamp":"2026-10-07T13:25:22.929Z","level":"info","category":"browser","message":"Navigating to auth page for awayt3005+q2@proton.me...","logger":"qwen-gate"}
+{"id":"sys-16","timestamp":"2026-10-07T13:25:22.963Z","level":"info","category":"browser","message":"Navigating to auth page for awayt3005+2@proton.me...","logger":"qwen-gate"}
+{"id":"sys-17","timestamp":"2026-10-07T13:25:23.196Z","level":"error","category":"browser","message":"Error for awayt3005+2@proton.me: goto: net::ERR_NETWORK_CHANGED at https://chat.qwen.ai/auth\nCall log:\n\u001b[2m  - navigating to \"https://chat.qwen.ai/auth\", waiting until \"domcontentloaded\"\u001b[22m\n","logger":"qwen-gate"}
+{"id":"sys-18","timestamp":"2026-10-07T13:25:23.197Z","level":"error","category":"browser","message":"Error for awayt3005+q2@proton.me: goto: net::ERR_NETWORK_CHANGED at https://chat.qwen.ai/auth\nCall log:\n\u001b[2m  - navigating to \"https://chat.qwen.ai/auth\", waiting until \"domcontentloaded\"\u001b[22m\n","logger":"qwen-gate"}
+{"id":"sys-19","timestamp":"2026-10-07T13:25:23.235Z","level":"error","category":"browser","message":"Error for awayt3005@proton.me: goto: net::ERR_NETWORK_CHANGED at https://chat.qwen.ai/auth\nCall log:\n\u001b[2m  - navigating to \"https://chat.qwen.ai/auth\", waiting until \"domcontentloaded\"\u001b[22m\n","logger":"qwen-gate"}
+{"id":"sys-20","timestamp":"2026-10-07T13:25:23.420Z","level":"warn","category":"auth","message":"Profile authorization failed for awayt3005+q2@proton.me: error","logger":"qwen-gate"}
+{"id":"sys-21","timestamp":"2026-10-07T13:25:23.429Z","level":"warn","category":"auth","message":"Profile authorization failed for awayt3005@proton.me: error","logger":"qwen-gate"}
+{"id":"sys-22","timestamp":"2026-10-07T13:25:23.441Z","level":"warn","category":"auth","message":"Profile authorization failed for awayt3005+2@proton.me: error","logger":"qwen-gate"}
+{"id":"sys-23","timestamp":"2026-10-07T13:25:23.442Z","level":"warn","category":"auth","message":"No profile dir for awayt3005+q3@proton.me — creating via browser login...","logger":"qwen-gate"}
+{"id":"sys-24","timestamp":"2026-10-07T13:25:23.443Z","level":"info","category":"browser","message":"Opening profile for awayt3005+q3@proton.me (headless: true)...","logger":"qwen-gate"}
+{"id":"sys-25","timestamp":"2026-10-07T13:25:24.043Z","level":"info","category":"browser","message":"Navigating to auth page for awayt3005+q3@proton.me...","logger":"qwen-gate"}

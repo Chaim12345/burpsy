@@ -257,6 +257,15 @@ export interface MessageView {
  /** The message's Content-Encoding, when it has one. body_base64 is the body with it undone, so a
   *  surface that resends head + body_base64 must not do so under an encoding head (3pco). */
  content_encoding?: string;
+ /** The decoded body text when Content-Encoding was successfully undone (gzip, deflate).
+  *  Present only when the message had a supported encoding and decompression succeeded.
+  *  Preferred over `text` for display when present: `text` contains the compressed bytes
+  *  (which render as U+FFFD replacement characters for non-UTF-8 data). */
+ decoded?: string;
+ /** Why a compressed message could not be decoded: unsupported encoding (br, zstd),
+  *  corrupt stream, or body over the decompression cap. Present rather than silent so
+  *  the UI can report "decoding failed: {decode_error}" instead of showing broken characters. */
+ decode_error?: string;
 }
 
 export interface CoverageBreakdown {
@@ -310,6 +319,7 @@ export interface ToolEvent {
  severity: string;
  detail: string;
  at_ms: number;
+ task_id?: number;
 }
 
 export interface Dashboard {
