@@ -41,8 +41,15 @@ export function FilterPresetsMenu({
   current,
   apply,
   allowed = {},
+  outsidePreset,
 }: {
   table: FilterTable;
+  /**
+   * Filters the page applies that a preset does not carry, named, when any are active ("extractor-
+   * column filters"). Restore defaults and loading a preset clear them; naming them here keeps
+   * Restore defaults enabled while they narrow the table, and the toast says they went too.
+   */
+  outsidePreset?: string;
   /** Closed option sets for the page's selects, so a loaded preset cannot pick a value none offers. */
   allowed?: AllowedValues;
   /** The table's filter settings as they stand now. */
@@ -94,11 +101,12 @@ export function FilterPresetsMenu({
     if (parsed.skipped.length > 0) {
       toast.warning(`Loaded "${parsed.name}" — ${parsed.skipped.join(", ")} had the wrong type and stayed at the default`);
     } else {
-      toast.success(`Loaded the filter "${parsed.name}"`);
+      toast.success(`Loaded the filter "${parsed.name}"${outsidePreset ? `; cleared the ${outsidePreset}, which presets do not carry` : ""}`);
     }
   };
 
-  const changed = differsFromDefaults(table, current);
+  const changed = differsFromDefaults(table, current) || outsidePreset !== undefined;
+  const alsoCleared = outsidePreset ? ` (and the ${outsidePreset})` : "";
 
   return (
     <>
@@ -122,7 +130,7 @@ export function FilterPresetsMenu({
                 hint: changed ? `Every ${label} filter back to its shipped value` : "The filter is already at its defaults",
                 onSelect: () => {
                   apply(structuredClone(FILTER_DEFAULTS[table]));
-                  toast.success(`${label} filter restored to defaults`);
+                  toast.success(`${label} filter restored to defaults${alsoCleared}`);
                 },
               },
             ],
@@ -145,7 +153,7 @@ export function FilterPresetsMenu({
                       hint: preset.saved_at ? `Saved ${new Date(preset.saved_at).toLocaleString()}` : undefined,
                       onSelect: () => {
                         apply(preset.settings);
-                        toast.success(`Loaded the filter "${preset.name}"`);
+                        toast.success(`Loaded the filter "${preset.name}"${alsoCleared ? `; cleared the ${outsidePreset}, which presets do not carry` : ""}`);
                       },
                     })),
                   },

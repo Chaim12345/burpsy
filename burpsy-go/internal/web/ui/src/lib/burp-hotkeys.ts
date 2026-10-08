@@ -13,12 +13,16 @@
  *     desktop shell (no browser in the way) binds Burp's own via the registry's `desktopChord`.
  *   - "declined": burpsy does not have the feature. No chord.
  *
- * Browser tiers are stated per row in `reason`. Where a row says a chord is reserved, that is the
- * browser's own accelerator table, which a page's keydown never reaches: Chromium's reserved set is
- * new tab/window/incognito, close tab/window, reopen closed tab and tab switching
- * (BrowserCommandController::IsReservedCommandOrKey); Firefox marks the same family `reserved="true"`
- * and adds Ctrl+Shift+P (private window). A synthetic keypress in a test cannot observe this layer,
- * so the live drive records only "the page receives it and can prevent it".
+ * Browser tiers are stated per row in `reason`, and the Chromium ones are MEASURED: real X key
+ * events (xdotool over XTEST) into headed Chromium under Xvfb, 2026-10-08, with a probe page that
+ * preventDefaults every keydown. Of the 24 chords probed, only Ctrl+T never reached the page (a new
+ * tab opened). Ctrl+Shift+T reached it too, but only because no closed tab existed to reopen; it is
+ * Chromium's reopen-closed-tab command and is not relied on. Ctrl+Minus/Equals and Ctrl+Shift+I
+ * reached the page and were preventable — declining them is policy (text zoom, DevTools), not
+ * feasibility. CDP-dispatched keys (Playwright's keyboard.press) skip the browser's accelerator
+ * layer entirely, which is why the probe used X events. Firefox was not measured with real keys:
+ * its window never mapped under Xvfb with the available build. Its rows cite Firefox's own
+ * reserved-key list instead and say so.
  */
 import type { Chord } from "./shortcuts";
 
@@ -47,17 +51,17 @@ export const BURP_HOTKEYS: BurpHotkey[] = [
   { action: "send_to_intruder", burpChord: "Ctrl+I", disposition: "same", burpsyId: "send.intruder", chord: "mod+i", reason: "Claimed on every table page" },
   { action: "send_to_organizer", burpChord: "Ctrl+O", disposition: "same", burpsyId: "send.organizer", chord: "mod+o", reason: "Claimed on every table page; the browser's Open file is not reserved" },
   { action: "forward_intercepted_proxy_message", burpChord: "Ctrl+F", disposition: "same", burpsyId: "proxy.forward", chord: "mod+f", reason: "Claimed on Proxy › Intercept while a message is held; find-in-page works everywhere else" },
-  { action: "toggle_proxy_interception", burpChord: "Ctrl+T", disposition: "alternative", burpsyId: "proxy.toggleIntercept", chord: "alt+t", reason: "Ctrl+T is a reserved browser key (new tab): the page never receives it. The desktop shell binds Ctrl+T" },
+  { action: "toggle_proxy_interception", burpChord: "Ctrl+T", disposition: "alternative", burpsyId: "proxy.toggleIntercept", chord: "alt+t", reason: "Ctrl+T is reserved by the browser: measured in Chromium with real key events, a new tab opened and the page never received the key. The desktop shell binds Ctrl+T" },
   { action: "issue_repeater_request", burpChord: "Ctrl+Space", disposition: "same", burpsyId: "repeater.send", chord: "ctrl+space", reason: "A literal Ctrl on every platform — ⌘+Space is Spotlight on macOS. mod+Enter stays as a second binding" },
   { action: "switch_to_dashboard", burpChord: "Ctrl+Shift+D", disposition: "same", burpsyId: "nav.switchDashboard", chord: "mod+shift+d", reason: "Claimed from the browser's bookmark-all-tabs, which is not reserved" },
-  { action: "switch_to_target", burpChord: "Ctrl+Shift+T", disposition: "alternative", burpsyId: "nav.tools", chord: "alt+2", reason: "Ctrl+Shift+T is a reserved browser key (reopen closed tab). alt+2 switches to Target; the desktop shell binds Ctrl+Shift+T" },
-  { action: "switch_to_proxy", burpChord: "Ctrl+Shift+P", disposition: "same", burpsyId: "nav.switchProxy", chord: "mod+shift+p", reason: "Claimable in Chromium. Firefox reserves it (private window), so Firefox users have alt+3" },
-  { action: "switch_to_intruder", burpChord: "Ctrl+Shift+I", disposition: "alternative", burpsyId: "nav.tools", chord: "alt+4", reason: "Claimable, but it opens the browser's developer tools and claiming it would take DevTools away. alt+4 switches to Intruder; the desktop shell binds Ctrl+Shift+I" },
+  { action: "switch_to_target", burpChord: "Ctrl+Shift+T", disposition: "alternative", burpsyId: "nav.tools", chord: "alt+2", reason: "Ctrl+Shift+T is the browser's reopen-closed-tab command. Chromium let the probe page have it only because no closed tab existed, so it is not relied on. alt+2 switches to Target; the desktop shell binds Ctrl+Shift+T" },
+  { action: "switch_to_proxy", burpChord: "Ctrl+Shift+P", disposition: "same", burpsyId: "nav.switchProxy", chord: "mod+shift+p", reason: "Measured claimable in Chromium. Firefox's reserved-key list includes it (private window; not measured here), so Firefox users have alt+3" },
+  { action: "switch_to_intruder", burpChord: "Ctrl+Shift+I", disposition: "alternative", burpsyId: "nav.tools", chord: "alt+4", reason: "Measured claimable in Chromium, but it is the developer-tools key and claiming it would take DevTools away. alt+4 switches to Intruder; the desktop shell binds Ctrl+Shift+I" },
   { action: "switch_to_repeater", burpChord: "Ctrl+Shift+R", disposition: "same", burpsyId: "nav.switchRepeater", chord: "mod+shift+r", reason: "Claimed from the browser's hard reload, which is not reserved" },
   { action: "switch_to_logger", burpChord: "Ctrl+Shift+L", disposition: "same", burpsyId: "nav.switchLogger", chord: "mod+shift+l", reason: "Was burpsy's theme toggle; the theme moved to the palette, since Burp ships no theme chord" },
   { action: "switch_to_organizer", burpChord: "Ctrl+Shift+O", disposition: "same", burpsyId: "nav.switchOrganizer", chord: "mod+shift+o", reason: "Claimed from the browser's bookmark manager, which is not reserved" },
-  { action: "go_to_previous_tab", burpChord: "Ctrl+Minus", disposition: "alternative", burpsyId: "nav.prevTool", chord: "mod+alt+left", reason: "Ctrl+Minus is the browser's zoom out; claiming it would take away text resize (WCAG 1.4.4). The desktop shell binds Ctrl+Minus" },
-  { action: "go_to_next_tab", burpChord: "Ctrl+Equals", disposition: "alternative", burpsyId: "nav.nextTool", chord: "mod+alt+right", reason: "Ctrl+Equals is the browser's zoom in; claiming it would take away text resize (WCAG 1.4.4). The desktop shell binds Ctrl+Equals" },
+  { action: "go_to_previous_tab", burpChord: "Ctrl+Minus", disposition: "alternative", burpsyId: "nav.prevTool", chord: "mod+alt+left", reason: "Measured claimable in Chromium, but it is the browser's zoom out and claiming it would take away text resize (WCAG 1.4.4). The desktop shell binds Ctrl+Minus" },
+  { action: "go_to_next_tab", burpChord: "Ctrl+Equals", disposition: "alternative", burpsyId: "nav.nextTool", chord: "mod+alt+right", reason: "Measured claimable in Chromium, but it is the browser's zoom in and claiming it would take away text resize (WCAG 1.4.4). The desktop shell binds Ctrl+Equals" },
   { action: "open_command_palette", burpChord: "Ctrl+K", disposition: "same", burpsyId: "nav.palette", chord: "mod+k", reason: "Claimed everywhere, including inside the editor" },
   { action: "editor_cut", burpChord: "Ctrl+X", disposition: "same", burpsyId: "native", chord: "mod+x", reason: CM },
   { action: "editor_copy", burpChord: "Ctrl+C", disposition: "same", burpsyId: "native", chord: "mod+c", reason: CM },

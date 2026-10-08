@@ -151,7 +151,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "nav.switchOrganizer", group: "Navigation", label: "Switch to Organizer", defaultChord: "mod+shift+o", rebindable: true, burp: "SHOW_ORGANIZER" },
   {
     id: "nav.switchTarget", group: "Navigation", label: "Switch to Target", defaultChord: null, desktopChord: "mod+shift+t", rebindable: true, burp: "SHOW_TARGET",
-    note: "Burp uses mod+shift+T, which browsers reserve to reopen a closed tab — alt+2 is the browser binding. The desktop shell uses Burp's chord",
+    note: "Burp uses mod+shift+T, the browser's reopen-closed-tab command — alt+2 is the browser binding. The desktop shell uses Burp's chord",
   },
   {
     id: "nav.switchIntruder", group: "Navigation", label: "Switch to Intruder", defaultChord: null, desktopChord: "mod+shift+i", rebindable: true, burp: "SHOW_INTRUDER",

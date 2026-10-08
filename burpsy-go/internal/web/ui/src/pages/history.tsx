@@ -662,7 +662,12 @@ export function HistoryPage(): JSX.Element {
   searchNegate,
   columnFilters,
  };
- const applyFilterSettings = (next: FilterSettings) => {
+ // Extractor-column filters (28n8) are not part of a preset: they name this project's extractor
+ // columns, which another project's preset cannot know. So applying a preset, or the defaults,
+ // clears them — otherwise "Restore defaults" would report success while they still narrowed the
+ // table. History's own "Show all" (the More filters popover) keeps them, as it always did.
+ const applyFilterSettings = (next: FilterSettings, options: { keepExtractorFilters?: boolean } = {}) => {
+  if (!options.keepExtractorFilters) setExtractorFilters({});
   const v = sanitizeSettings("history", next, HISTORY_FILTER_ALLOWED).settings;
   const fragment = v.scopeOnly === true ? scopeFragment : null;
   injectedFragment.current = fragment;
@@ -1665,7 +1670,13 @@ export function HistoryPage(): JSX.Element {
      >
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
      </Button>
-     <FilterPresetsMenu table="history" current={filterSnapshot} apply={applyFilterSettings} allowed={HISTORY_FILTER_ALLOWED} />
+     <FilterPresetsMenu
+      table="history"
+      current={filterSnapshot}
+      apply={(settings) => applyFilterSettings(settings)}
+      allowed={HISTORY_FILTER_ALLOWED}
+      outsidePreset={Object.values(extractorFilters).some((value) => value.trim() !== "") ? "extractor-column filters" : undefined}
+     />
      <Button variant="quiet" size="small" onClick={() => void goToEntry()} title="Burp's Go to entry: jump to a row by its # number">
       <Hash size={13} />
       Go to entry
@@ -2091,7 +2102,7 @@ export function HistoryPage(): JSX.Element {
         // filter menu's Restore defaults uses, so the two cannot disagree about "nothing hidden".
         const reset: FilterSettings = { ...filterSnapshot };
         for (const key of HISTORY_POPOVER_KEYS) reset[key] = structuredClone(FILTER_DEFAULTS.history[key]!);
-        applyFilterSettings(reset);
+        applyFilterSettings(reset, { keepExtractorFilters: true });
        }}
       >
        Show all
