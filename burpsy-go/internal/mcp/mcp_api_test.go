@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -80,5 +83,61 @@ func TestSitemapRecordThroughTheMCPTool(t *testing.T) {
 	res = callGrouped(t, base, "sitemap_record", map[string]any{"body": map[string]any{"exchange_id": 4242}})
 	if !res.IsError || !strings.Contains(textOf(res), "HTTP 404") {
 		t.Fatalf("an unknown id was not a 404: %s", textOf(res))
+	}
+}
+
+// yahm: a body over the 1 MiB result cap is read to its last byte through windowed reads over
+// tools/call — the whole-message read is cut, the windows are not.
+func TestA3MiBBodyIsReadPastTheResultCapThroughWindows(t *testing.T) {
+	store := core.NewTrafficStore()
+	base := consoleOver(t, store)
+	body := make([]byte, 3<<20)
+	for i := range body {
+		body[i] = byte(i*13 + i/509)
+	}
+	raw := append([]byte("HTTP/1.1 200 OK\r\nContent-Length: 3145728\r\n\r\n"), body...)
+	mid, err := store.Put(raw, core.DirectionResponse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprint(uint64(mid))
+
+	whole := callGrouped(t, base, "history", map[string]any{"op": "GET /api/message/", "id": id})
+	if !strings.Contains(textOf(whole), "truncated at") {
+		t.Fatal("a 3 MiB message read whole was not cut at the cap; this test's premise is gone")
+	}
+
+	var got []byte
+	offset := 0
+	for calls := 0; ; calls++ {
+		if calls > 60 {
+			t.Fatal("more windows than a 3 MiB body can need")
+		}
+		res := callGrouped(t, base, "history", map[string]any{
+			"op": "GET /api/message/", "id": id,
+			"query": map[string]string{"byte_offset": fmt.Sprint(offset), "max_bytes": "65536"},
+		})
+		if res.IsError || strings.Contains(textOf(res), "truncated at") {
+			t.Fatalf("window at %d: %.300s", offset, textOf(res))
+		}
+		var w struct {
+			WindowBase64 string `json:"window_base64"`
+			NextOffset   *int   `json:"next_offset"`
+		}
+		if err := json.Unmarshal([]byte(bodyLine(t, textOf(res))), &w); err != nil {
+			t.Fatalf("window at %d is not the window view: %v", offset, err)
+		}
+		chunk, err := base64.StdEncoding.DecodeString(w.WindowBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, chunk...)
+		if w.NextOffset == nil {
+			break
+		}
+		offset = *w.NextOffset
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("reassembled %d bytes, stored body is %d; they differ", len(got), len(body))
 	}
 }

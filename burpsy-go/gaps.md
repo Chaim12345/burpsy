@@ -1694,3 +1694,16 @@ the two differ. Burp evidence is the decompiled agent registry
   60 s sits well inside every client timeout on that path, where 300 s does not. A caller that needs
   longer polls again. burpsy also answers a fourth status, `unavailable`, when no channel is open or
   the log cannot be read, instead of waiting out the timer and reporting `empty`.
+
+### Message windows: regex dialect and body source (burpsy-react-ui-yahm)
+- **Burp:** `inspect_http_message` takes `pattern` as a **Java** regex and `case_insensitive` as Java's
+  ASCII-only `CASE_INSENSITIVE` (`toolargs/InspectHttpMessageArgs.java`); it returns only the first
+  match.
+- **burpsy:** `GET /api/message/{id}?pattern=` compiles **RE2** (Go `regexp`): no backreferences or
+  lookaround, linear time; `case_insensitive` prefixes `(?i)`, which is Unicode-aware. It returns the
+  first match as the anchor and also lists up to 100 match offsets (`matches`) for paging. The window
+  is over the wire bytes unless `decoded=true` asks for the body with chunking and Content-Encoding
+  undone; a decode that is impossible is a 400, never a silent fall-back.
+- **Divergence:** RE2 is the regex engine every other burpsy search uses (suite search, history search,
+  scope `regex:` arms), and its linear time matters on a multi-megabyte body an agent chose the
+  pattern for. A Java-only construct is refused with the compile error rather than approximated.

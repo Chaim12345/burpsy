@@ -82,7 +82,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/history` | read | Proxy history, filtered by the typed query DSL. |
-| GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. |
+| GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. With any of `byte_offset`, `max_bytes` (1–65536, default 2048), `pattern` (RE2; anchors the window at the first match, `byte_offset` then relative to it), `case_insensitive`, `decoded`: a **window** of the body instead — `head` in full, `window_base64` (exact) and `window_text` (+ `window_utf8`), `next_offset` (null at the end), `anchor`, `matches` (≤100, always an array). Reads a body of any size to its last byte. |
 | GET | `/api/exchange/{id}` | read | One exchange row by id. |
 | GET | `/api/exchanges/{id}` | read | Legacy alias for `/api/exchange/`. |
 | GET | `/api/stats` | read | Exchange, message and stored-byte counts. |

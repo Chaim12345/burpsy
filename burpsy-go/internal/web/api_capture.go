@@ -167,6 +167,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Message not found", http.StatusNotFound)
 		return
 	}
+	// byte_offset / max_bytes / pattern / decoded read a window of the body instead of the whole
+	// message (burpsy-react-ui-yahm, api_message_window.go). Without them the reply is unchanged.
+	if wantsWindow(r) {
+		s.messageWindow(w, r, id, msg.Raw())
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(messageView(msg))
 }

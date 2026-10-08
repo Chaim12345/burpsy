@@ -46,6 +46,13 @@ var routeSchemas = map[string]opSchema{
 		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
 		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
 	}},
+	"GET /api/message/": {query: []queryParam{
+		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
+		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},
+		{name: "pattern", kind: "string", desc: "an RE2 regular expression: anchor the window at its first match; matches lists up to 100 match offsets"},
+		{name: "case_insensitive", kind: "boolean", desc: "compile pattern case-insensitively"},
+		{name: "decoded", kind: "boolean", desc: "window the body with chunking and Content-Encoding undone instead of the wire bytes"},
+	}},
 	"GET /api/network/auth":         {query: []queryParam{{name: "host", kind: "string"}, {name: "scheme", kind: "string"}}},
 	"GET /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string"}}},
 	"GET /api/report/": {query: []queryParam{
