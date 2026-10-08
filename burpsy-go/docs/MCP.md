@@ -22,7 +22,8 @@ MCP on **stdin/stdout** and does not start a second console.
 |---|---|---|
 | `-web` | `http://127.0.0.1:8081` | base URL of the running console. A bare `host:port` is accepted and assumed `http`. |
 | `-timeout` | `10m` | how long one tool call may take before the transport gives up. Generous because an audit runs synchronously and a large one takes minutes. |
-| `-list` | off | print the tool surface this binary would expose and exit, without speaking stdio. The manifest is compiled in, so this works with no console running. |
+| `-surface` | `grouped` | which tool list to publish: `grouped` (capability-grouped tools, below) or `routes` (one tool per manifest route — the pre-cvzq surface, kept for debugging and for clients bound to its names). |
+| `-list` | off | print the tool surface this binary would expose (surface, route count, tool names) and exit, without speaking stdio. The manifest is compiled in, so this works with no console running. |
 | `-version` | off | print the version and exit. |
 
 Everything diagnostic goes to **stderr**; stdout carries JSON-RPC and nothing else, because a stray
@@ -42,11 +43,54 @@ Implemented methods:
 |---|---|
 | `initialize` | reports the protocol revision (echoing the client's when it is one this server knows: `2024-11-05`, `2025-03-26`, `2025-06-18`), `capabilities.tools`, and an `instructions` block that explains the risk classes and the confirmation flow before a client calls anything. |
 | `notifications/initialized` | ignored, like every notification. A notification gets **no** reply — answering one makes a client that reuses ids mis-attribute the reply. |
-| `tools/list` | one tool per route in the manifest, plus `burpsy_confirm`. |
+| `tools/list` | the grouped surface (59 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
 | `tools/call` | forwards the call to the console and returns its answer. |
 | `ping` | an empty result. |
 
-## The tool list
+## The tool list (default: capability-grouped)
+
+> **Changed by burpsy-react-ui-cvzq.** The default `tools/list` is no longer one tool per route. A
+> client pinned to the old names (`api_history`, `api_audit`, `api_pools_subtree`, …) runs
+> `burpsy-mcp -surface routes`, which still publishes exactly that list; the section after this one
+> describes it.
+
+The grouped surface is a curated table (`internal/mcp/groups.go`) of capability tools — `history`,
+`send`, `scope`, `sitemap`, `scan`, `issues`, `intruder`, `collaborator`, `organizer`, … — each
+carrying one of Burp's own agent tool-group labels (*Requests & Responses*, *Scope & Sitemap*,
+*Scanning & Auditing*, *Issues*, *Fuzzing*, *Collaborator*, *Datasets*, *Configuration*, *Scan Checks*,
+*Utilities*, *Scripting*) and a one-line short description. A tool fronts a few **operations**, and an
+operation is exactly one `(verb, route pattern)` of the manifest, spelled that way:
+
+```json
+{"name": "history", "arguments": {"op": "GET /api/message/", "id": "12"}}
+{"name": "scan",    "arguments": {"op": "POST /api/audit/", "id": "3", "confirm": "<token>"}}
+```
+
+- `op` is required when the tool fronts more than one operation, and is an enum of exactly those.
+- A subtree operation (pattern ending in `/`) takes `path` (`/api/message/12`) or the shortcut `id`
+  (`12` → the pattern plus `12`). The path must resolve to the operation's own route, by the gate's
+  own resolver — an op cannot be pointed at another route.
+- `query`, `body` and `confirm` mean what they mean on the route surface.
+
+Two rules are enforced by tests rather than by review:
+
+1. **Coverage.** Every manifest route-verb is reachable from exactly one grouped tool, or sits on
+   `notExposed` with a reason (`TestEveryRouteVerbIsReachableFromExactlyOneGroupedTool`). Not exposed:
+   `GET /` and `GET /ca.crt` (assets), `GET /reissue/` (a one-shot URL for the operator's browser),
+   `GET /api/events` (the never-ending SSE stream), and the legacy aliases `GET /api/exchanges/`,
+   `GET /api/findings`, `POST /api/scanner/audit`.
+2. **One risk class per tool** (`TestNoGroupedToolSpansTwoRiskClasses`), so the tool-level
+   annotations — `riskClass`, `requiresConfirmation`, the four MCP hints — are true of every
+   operation the tool reaches. The class is always read from the manifest; the table only says which
+   operations sit together. `readOnlyHint` is additionally false for any tool that can PUT, PATCH or
+   DELETE: that is why `DELETE /api/history`, which the manifest classes `read`
+   (burpsy-react-ui-gf68), is its own `history_delete` tool rather than an op of `history`.
+
+Each grouped descriptor's annotations carry `group`, `shortDescription` and `operations` beside the
+risk keys. The server refuses to start if the table names a route or verb the manifest does not
+have, rather than publishing a tool that can only fail.
+
+## The route surface (`-surface routes`)
 
 **One tool per manifest route.** The manifest (`internal/web/route_manifest.go`) is the single source:
 the tool count, each tool's risk class and whether a call needs confirmation are read from the same
@@ -121,8 +165,9 @@ longest-prefix resolver, so the binding and the gate cannot disagree about which
   `POST /api/audit//confirm` — one slash too many. The transport prints the path it will actually
   POST to (`/api/audit/confirm`) and says why the two differ; it does not edit the gate's message,
   which is evidence.
-- `tools/list` returns every manifest route including static assets (`/` and the SPA catch-all). That
-  is honest — they are routes — but a model calling them gets the console's own HTML.
+- On `-surface routes` only, `tools/list` returns every manifest route including static assets (`/`
+  and the SPA catch-all). That is honest — they are routes — but a model calling them gets the
+  console's own HTML. The default grouped surface does not publish them.
 
 ## Verifying a change here
 

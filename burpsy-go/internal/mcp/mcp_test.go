@@ -88,9 +88,13 @@ func askWith(t *testing.T, opts Options, lines ...string) []rpcReply {
 	return replies
 }
 
+// ask runs a session on the ROUTE surface (-surface routes): one tool per manifest pattern. The
+// tests in this file predate the grouped surface and pin the route surface's own contract, which is
+// still served for debugging and for clients bound to those names. The grouped surface's tests are in
+// mcp_grouped_test.go and use askGrouped.
 func ask(t *testing.T, base string, lines ...string) []rpcReply {
 	t.Helper()
-	return askWith(t, Options{BaseURL: base}, lines...)
+	return askWith(t, Options{BaseURL: base, Surface: SurfaceRoutes}, lines...)
 }
 
 // request builds one JSON-RPC request line.
@@ -632,7 +636,7 @@ func TestAnOversizedResultIsTruncatedAndSaysSo(t *testing.T) {
 	// A REAL manifest route, with the console faked: the tool-to-route binding resolves against the
 	// manifest, so a fabricated route name would be refused for reaching somewhere else — which is
 	// the property TestAToolCannotReachARouteItDoesNotName covers on purpose.
-	replies := askWith(t, Options{BaseURL: big.URL},
+	replies := askWith(t, Options{BaseURL: big.URL, Surface: SurfaceRoutes},
 		rpcRequest(t, 1, "tools/call", map[string]any{"name": "api_advisories"}))
 	var res callResult
 	if err := json.Unmarshal(replies[0].Result, &res); err != nil {
@@ -660,7 +664,7 @@ func TestAStreamingRouteIsRefusedRatherThanAllowedToHang(t *testing.T) {
 	}))
 	t.Cleanup(stream.Close)
 
-	replies := askWith(t, Options{BaseURL: stream.URL},
+	replies := askWith(t, Options{BaseURL: stream.URL, Surface: SurfaceRoutes},
 		rpcRequest(t, 1, "tools/call", map[string]any{"name": "api_advisories"}))
 	var res callResult
 	if err := json.Unmarshal(replies[0].Result, &res); err != nil {

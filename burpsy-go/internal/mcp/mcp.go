@@ -136,7 +136,22 @@ type Options struct {
 	// In and Out are the stdio ends. Nil means os.Stdin / os.Stdout.
 	In  io.Reader
 	Out io.Writer
+	// Surface picks the tool list: SurfaceGrouped (the default) or SurfaceRoutes.
+	Surface Surface
 }
+
+// Surface is which tool list tools/list publishes.
+type Surface string
+
+const (
+	// SurfaceGrouped is the default: capability-grouped tools (groups.go), each fronting a few
+	// operations of one risk class, with no asset routes and no subtree spellings.
+	SurfaceGrouped Surface = "grouped"
+	// SurfaceRoutes is one tool per manifest pattern, named by normalising the pattern
+	// ("/api/history" -> "api_history"). Kept for debugging and for clients pinned to those names;
+	// it lists every route, the console's own assets included.
+	SurfaceRoutes Surface = "routes"
+)
 
 // Server is a stdio MCP server over one burpsy console.
 type Server struct {
@@ -144,6 +159,7 @@ type Server struct {
 	http    *http.Client
 	in      io.Reader
 	out     io.Writer
+	surface Surface
 
 	// routes is the exposed manifest, in the order it will be listed.
 	routes []web.MCPRouteInfo
@@ -200,11 +216,21 @@ func New(opts Options) (*Server, error) {
 		out = os.Stdout
 	}
 
+	surface := opts.Surface
+	switch surface {
+	case "":
+		surface = SurfaceGrouped
+	case SurfaceGrouped, SurfaceRoutes:
+	default:
+		return nil, fmt.Errorf("mcp: unknown tool surface %q (want %q or %q)", surface, SurfaceGrouped, SurfaceRoutes)
+	}
+
 	s := &Server{
 		baseURL:   base,
 		http:      client,
 		in:        in,
 		out:       out,
+		surface:   surface,
 		routes:    routes,
 		byName:    make(map[string]tool, len(routes)+1),
 		byPattern: make(map[string]web.MCPRouteInfo, len(routes)),
@@ -212,7 +238,11 @@ func New(opts Options) (*Server, error) {
 	for _, r := range routes {
 		s.byPattern[r.Pattern] = r
 	}
-	s.tools = s.buildTools()
+	tools, err := s.buildTools()
+	if err != nil {
+		return nil, err
+	}
+	s.tools = tools
 	return s, nil
 }
 
@@ -222,6 +252,21 @@ func (s *Server) BaseURL() string { return s.baseURL }
 // RouteCount is how many manifest routes are exposed. Used by tests and by the caller's startup
 // banner so an operator can see the surface is the real one.
 func (s *Server) RouteCount() int { return len(s.routes) }
+
+// ToolCount is how many tools tools/list publishes on this server's surface, burpsy_confirm included.
+func (s *Server) ToolCount() int { return len(s.tools) }
+
+// ToolNames lists the published tool names in tools/list order.
+func (s *Server) ToolNames() []string {
+	out := make([]string, 0, len(s.tools))
+	for _, t := range s.tools {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+// Surface is the tool surface this server publishes.
+func (s *Server) Surface() Surface { return s.surface }
 
 // Serve reads newline-delimited JSON-RPC from in and writes replies to out until the input closes
 // or ctx is cancelled. It returns the read error, if any.
@@ -353,7 +398,7 @@ type initializeParams struct {
 // told how the risk classes and the confirmation flow work before it calls anything, so it says
 // what the classes mean and what a refusal means — and it says plainly that minting a confirmation
 // is the caller's own act.
-const instructions = `burpsy is an HTTP testing proxy with a risk-gated API. Every tool is one route of that API and carries the route's risk class: read, local-write, egress, attack, scope, credential, destructive, asset, execute.
+const instructions = `burpsy is an HTTP testing proxy with a risk-gated API. Every tool reaches routes of that API and carries their risk class: read, local-write, egress, attack, scope, credential, destructive, asset, execute. A grouped tool fronts several operations of ONE risk class; pick one with "op", spelled "VERB /route" exactly as the tool lists it, and give a subtree operation (route ending in "/") its "id" or "path".
 
 Calling a tool is calling the route. Nothing here is simulated: an "attack" tool sends real traffic to the engagement target, and a "destructive" tool discards evidence.
 

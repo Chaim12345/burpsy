@@ -28,9 +28,26 @@ type tool struct {
 	InputSchema map[string]any   `json:"inputSchema"`
 	Annotations map[string]any   `json:"annotations,omitempty"`
 	route       web.MCPRouteInfo `json:"-"`
+	// ops is set for a grouped tool and nil for a route tool. Each op is exactly one (pattern, verb)
+	// of the manifest; byOp is the same list keyed by op name.
+	ops  []op          `json:"-"`
+	byOp map[string]op `json:"-"`
+}
+
+// op is one operation of a grouped tool: one manifest route and one of its verbs.
+type op struct {
+	name   string
+	route  web.MCPRouteInfo
+	method string
 }
 
 type callArgs struct {
+	// Op names the operation of a grouped tool, spelled "VERB /pattern" exactly as the tool's enum
+	// lists it. Ignored by route tools.
+	Op string `json:"op,omitempty"`
+	// ID is a shortcut for Path on a subtree operation: the path becomes the pattern plus ID, so
+	// {"op":"GET /api/message/","id":"12"} requests /api/message/12.
+	ID     string            `json:"id,omitempty"`
 	Method string            `json:"method,omitempty"`
 	Path   string            `json:"path,omitempty"`
 	Query  map[string]string `json:"query,omitempty"`
@@ -60,9 +77,18 @@ func errResult(text string) callResult {
 
 // ---- descriptors --------------------------------------------------------------------------------
 
-// buildTools turns the exposed manifest into descriptors, in stable order, and fills the lookup
-// maps. Called once from New.
-func (s *Server) buildTools() []tool {
+// buildTools builds the descriptor list for the configured surface and fills the lookup maps.
+// Called once from New.
+func (s *Server) buildTools() ([]tool, error) {
+	if s.surface == SurfaceRoutes {
+		return s.buildRouteTools(), nil
+	}
+	return s.buildGroupedTools()
+}
+
+// buildRouteTools turns the exposed manifest into one descriptor per route, in stable order. This is
+// the -surface routes debugging view: every manifest pattern, assets and subtree spellings included.
+func (s *Server) buildRouteTools() []tool {
 	routes := append([]web.MCPRouteInfo(nil), s.routes...)
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Pattern < routes[j].Pattern })
 
@@ -312,6 +338,218 @@ route must be the exact pattern %s, not a concrete path — the refusal message 
 	}
 }
 
+// ---- the grouped surface ------------------------------------------------------------------------
+
+// buildGroupedTools builds the capability-grouped surface from groupedTools (groups.go).
+//
+// It refuses to build a surface whose table names an operation the manifest does not have — a
+// pattern that is not registered, or a verb the route does not answer — because that tool would
+// advertise a call that can only fail. The tests catch the same mismatch at build time; this is what
+// keeps a stale table from shipping as a server that starts and then 404s.
+func (s *Server) buildGroupedTools() ([]tool, error) {
+	out := make([]tool, 0, len(groupedTools)+1)
+	for _, g := range groupedTools {
+		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName {
+			return nil, fmt.Errorf("mcp: grouped tool name %q is used twice", g.name)
+		}
+		t := tool{Name: g.name, byOp: make(map[string]op, len(g.ops))}
+		for _, name := range g.ops {
+			o, err := s.resolveOpSpec(name)
+			if err != nil {
+				return nil, fmt.Errorf("mcp: grouped tool %s: %w", g.name, err)
+			}
+			if _, dup := t.byOp[o.name]; dup {
+				return nil, fmt.Errorf("mcp: grouped tool %s lists %s twice", g.name, o.name)
+			}
+			t.ops = append(t.ops, o)
+			t.byOp[o.name] = o
+		}
+		if len(t.ops) == 0 {
+			return nil, fmt.Errorf("mcp: grouped tool %s fronts no operation", g.name)
+		}
+		// One risk class per tool, so the tool-level annotations are true of every op it reaches.
+		risk := t.ops[0].route.Risk
+		for _, o := range t.ops[1:] {
+			if o.route.Risk != risk {
+				return nil, fmt.Errorf("mcp: grouped tool %s spans two risk classes (%s is %s, %s is %s)",
+					g.name, t.ops[0].name, risk, o.name, o.route.Risk)
+			}
+		}
+		t.route = t.ops[0].route
+		t.Description = describeGrouped(g, t.ops)
+		t.InputSchema = schemaForGrouped(t.ops)
+		t.Annotations = annotationsForGrouped(g, t.ops)
+		out = append(out, t)
+		s.byName[t.Name] = t
+	}
+
+	confirm := s.confirmToolDescriptor(s.routes)
+	out = append(out, confirm)
+	s.byName[confirm.Name] = confirm
+	return out, nil
+}
+
+// resolveOpSpec turns a table entry "VERB /pattern" into an op bound to the exposed manifest.
+func (s *Server) resolveOpSpec(spec string) (op, error) {
+	verb, pattern, ok := strings.Cut(strings.TrimSpace(spec), " ")
+	if !ok || verb == "" || pattern == "" {
+		return op{}, fmt.Errorf("operation %q is not spelled \"VERB /pattern\"", spec)
+	}
+	verb = strings.ToUpper(verb)
+	r, ok := s.byPattern[pattern]
+	if !ok {
+		return op{}, fmt.Errorf("operation %q names %s, which is not a manifest route", spec, pattern)
+	}
+	for _, m := range r.Methods {
+		if strings.EqualFold(m, verb) {
+			return op{name: verb + " " + pattern, route: r, method: verb}, nil
+		}
+	}
+	return op{}, fmt.Errorf("operation %q: %s answers %s, not %s", spec, pattern, strings.Join(r.Methods, "/"), verb)
+}
+
+// describeGrouped writes the grouped tool's description: the one-line short description, then what
+// the tool costs and whether it is refused, then each operation with the manifest's own summary.
+// Everything after the first line is derived, so it cannot drift from the routes.
+func describeGrouped(g groupSpec, ops []op) string {
+	r := ops[0].route
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n", g.short)
+	fmt.Fprintf(&b, "Group: %s. Risk class: %s (%s). Escalation tier: %s.\n", g.group, r.Risk, r.Safety, r.Tier)
+	gated := []string{}
+	if r.NeedsConfirm {
+		for _, o := range ops {
+			if web.MCPMethodMutates(o.method) {
+				gated = append(gated, o.name)
+			}
+		}
+	}
+	if len(gated) > 0 {
+		fmt.Fprintf(&b, "Confirmation: REQUIRED for %s — the server refuses those with HTTP 428 unless a one-time token from %s is supplied as \"confirm\". A GET is a read and is not gated.\n",
+			strings.Join(gated, ", "), confirmToolName)
+	} else {
+		b.WriteString("Confirmation: not required.\n")
+	}
+	b.WriteString("Operations (pass one as \"op\"):")
+	for _, o := range ops {
+		fmt.Fprintf(&b, "\n- %s — %s", o.name, o.route.Summary)
+		if strings.HasSuffix(o.route.Pattern, "/") {
+			fmt.Fprintf(&b, " [subtree: pass \"path\" (e.g. %s) or \"id\"]", pathExample(o.route))
+		}
+	}
+	return b.String()
+}
+
+// annotationsForGrouped carries the shared risk class and MCP's four standard hints.
+//
+// The hints come from the manifest's risk class exactly as for a route tool, with one derivation on
+// top: readOnlyHint is false for a tool that can PUT, PATCH or DELETE, whatever its class says. That
+// is not a re-judgement of the class — a verb that replaces or removes state is not read-only by
+// definition — and it is what keeps a riskRead DELETE (burpsy-react-ui-gf68) from being published
+// as a read.
+func annotationsForGrouped(g groupSpec, ops []op) map[string]any {
+	r := ops[0].route
+	readOnly := hasHint(r.Hints, "READ_ONLY")
+	names := make([]string, 0, len(ops))
+	for _, o := range ops {
+		names = append(names, o.name)
+		switch o.method {
+		case http.MethodPut, http.MethodPatch, http.MethodDelete:
+			readOnly = false
+		}
+	}
+	return map[string]any{
+		"readOnlyHint":         readOnly,
+		"idempotentHint":       hasHint(r.Hints, "IDEMPOTENT"),
+		"destructiveHint":      hasHint(r.Hints, "DESTRUCTIVE"),
+		"openWorldHint":        hasHint(r.Hints, "OPEN_WORLD"),
+		"riskClass":            r.Risk,
+		"escalationTier":       r.Tier,
+		"requiresConfirmation": r.NeedsConfirm,
+		"group":                g.group,
+		"shortDescription":     g.short,
+		"operations":           names,
+	}
+}
+
+// schemaForGrouped is a grouped tool's input schema: which operation, and that operation's path,
+// query and body.
+func schemaForGrouped(ops []op) map[string]any {
+	names := make([]string, 0, len(ops))
+	subtree := false
+	for _, o := range ops {
+		names = append(names, o.name)
+		if strings.HasSuffix(o.route.Pattern, "/") {
+			subtree = true
+		}
+	}
+	props := map[string]any{
+		"op": map[string]any{
+			"type": "string", "enum": names,
+			"description": "The operation: one HTTP verb and route of the burpsy console, exactly as listed.",
+		},
+		"query": map[string]any{
+			"type":                 "object",
+			"additionalProperties": map[string]any{"type": "string"},
+			"description":          "Query string parameters.",
+		},
+		"body": map[string]any{
+			"description": "JSON request body, sent verbatim as application/json.",
+		},
+		"confirm": map[string]any{
+			"type":        "string",
+			"description": "One-time confirmation token minted by " + confirmToolName + ". The server refuses a mutating call to a confirmation-worthy route without it (HTTP 428).",
+		},
+	}
+	if subtree {
+		props["path"] = map[string]any{
+			"type":        "string",
+			"description": "Concrete request path for a subtree operation (one whose pattern ends in \"/\"), e.g. /api/message/12. It must resolve to the operation's own route.",
+		}
+		props["id"] = map[string]any{
+			"type":        "string",
+			"description": "Shortcut for path on a subtree operation: the path becomes the pattern followed by id.",
+		}
+	}
+	required := []string{}
+	if len(ops) > 1 {
+		required = append(required, "op")
+	}
+	return map[string]any{"type": "object", "properties": props, "required": required}
+}
+
+// resolveOp picks the operation a grouped-tool call names.
+func resolveOp(t tool, args callArgs) (op, error) {
+	name := strings.TrimSpace(args.Op)
+	if name == "" {
+		if len(t.ops) == 1 {
+			name = t.ops[0].name
+		} else {
+			return op{}, fmt.Errorf("the %s tool fronts %d operations: state one as \"op\" (%s)",
+				t.Name, len(t.ops), strings.Join(opNames(t.ops), ", "))
+		}
+	}
+	if verb, pattern, ok := strings.Cut(name, " "); ok {
+		name = strings.ToUpper(verb) + " " + strings.TrimSpace(pattern)
+	}
+	o, ok := t.byOp[name]
+	if !ok {
+		return op{}, fmt.Errorf("%q is not an operation of the %s tool; it fronts %s", args.Op, t.Name, strings.Join(opNames(t.ops), ", "))
+	}
+	if m := strings.ToUpper(strings.TrimSpace(args.Method)); m != "" && m != o.method {
+		return op{}, fmt.Errorf("method %s contradicts the operation %s; the operation names its own verb", m, o.name)
+	}
+	return o, nil
+}
+
+func opNames(ops []op) []string {
+	out := make([]string, 0, len(ops))
+	for _, o := range ops {
+		out = append(out, o.name)
+	}
+	return out
+}
+
 // listTools answers tools/list.
 func (s *Server) listTools(req request) response {
 	return s.ok(req, map[string]any{"tools": s.tools})
@@ -364,13 +602,26 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 // It makes no authorisation decision. Whether the call is permitted is the running console's
 // answer, and the only thing this function does with a confirmation is relay the caller's token.
 func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
-	path, err := s.resolvePath(t, args)
+	route := t.route
+	var method string
+	if t.ops != nil {
+		o, err := resolveOp(t, args)
+		if err != nil {
+			return errResult(err.Error())
+		}
+		route, method = o.route, o.method
+		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" && strings.HasSuffix(route.Pattern, "/") {
+			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+		}
+	}
+	path, err := s.resolvePath(t.Name, route, args)
 	if err != nil {
 		return errResult(err.Error())
 	}
-	method, err := chooseMethod(t.route, args)
-	if err != nil {
-		return errResult(err.Error())
+	if method == "" {
+		if method, err = chooseMethod(route, args); err != nil {
+			return errResult(err.Error())
+		}
 	}
 
 	target := s.baseURL + path
@@ -428,7 +679,7 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 	text := b.String()
 
 	if resp.StatusCode == http.StatusPreconditionRequired {
-		return errResult(refusalText(t, text))
+		return errResult(refusalText(route, text))
 	}
 	if resp.StatusCode >= 400 {
 		return errResult(text)
@@ -444,8 +695,7 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 // descriptor whose published risk class describes a route other than the one it reaches. The
 // resolution itself is web.MCPRouteForPath, which is the gate's own longest-prefix rule, so the
 // binding and the gate cannot disagree about which route a path names.
-func (s *Server) resolvePath(t tool, args callArgs) (string, error) {
-	r := t.route
+func (s *Server) resolvePath(name string, r web.MCPRouteInfo, args callArgs) (string, error) {
 	raw := strings.TrimSpace(args.Path)
 
 	if raw != "" {
@@ -465,7 +715,7 @@ func (s *Server) resolvePath(t tool, args callArgs) (string, error) {
 			raw = r.Pattern
 		}
 		if raw != r.Pattern {
-			return "", fmt.Errorf("the %s tool calls %s and nothing else; %q is a different route — call its own tool", t.Name, r.Pattern, raw)
+			return "", fmt.Errorf("the %s tool calls %s and nothing else; %q is a different route — call its own tool", name, r.Pattern, raw)
 		}
 	} else if raw == "" {
 		return "", fmt.Errorf("%s is a subtree pattern and is not itself a URL: supply \"path\", for example %s", r.Pattern, pathExample(r))
@@ -517,14 +767,14 @@ func chooseMethod(r web.MCPRouteInfo, args callArgs) (string, error) {
 // the MANIFEST pattern, so a subtree route renders as "POST /api/audit//confirm" — one slash too
 // many. This layer prints the path it will actually POST to, and a test mints through the console
 // for every confirmation-worthy route so the derivation cannot drift from the registered endpoint.
-func refusalText(t tool, gate string) string {
+func refusalText(r web.MCPRouteInfo, gate string) string {
 	return fmt.Sprintf(`%s
 burpsy refused this call: a mutating call to a route whose risk class is %q needs a one-time confirmation.
 Next step, as its own visible action: call the %s tool with {"route":%q}. It returns a token.
 Then re-issue this call with "confirm" set to that token. The token is single-use, expires in %d seconds, and is bound to %s.
 Minting is a POST to %s. (The console's own message above prints the route pattern, so a subtree route reads with a doubled slash; the path here is the one this transport will use.)
 Only do this when a human has asked for this specific action.`,
-		gate, t.route.Risk, confirmToolName, t.route.Pattern, web.MCPConfirmTTLSeconds(), t.route.Pattern, web.MCPConfirmEndpoint(t.route.Pattern))
+		gate, r.Risk, confirmToolName, r.Pattern, web.MCPConfirmTTLSeconds(), r.Pattern, web.MCPConfirmEndpoint(r.Pattern))
 }
 
 // callConfirm mints a confirmation through the console's own endpoint.

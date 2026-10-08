@@ -36,6 +36,8 @@ func main() {
 		"how long one tool call may take before the transport gives up on the console")
 	list := flag.Bool("list", false,
 		"print the tool surface this binary would expose and exit (does not speak stdio)")
+	surface := flag.String("surface", string(mcp.SurfaceGrouped),
+		"tool surface to publish: \"grouped\" (capability-grouped tools, the default) or \"routes\" (one tool per manifest route, for debugging)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -50,6 +52,7 @@ func main() {
 	srv, err := mcp.New(mcp.Options{
 		BaseURL: *webAddr,
 		Timeout: *timeout,
+		Surface: mcp.Surface(*surface),
 	})
 	if err != nil {
 		fatal(err)
@@ -58,7 +61,10 @@ func main() {
 	if *list {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		if err := enc.Encode(map[string]any{"console": srv.BaseURL(), "routes": srv.RouteCount()}); err != nil {
+		if err := enc.Encode(map[string]any{
+			"console": srv.BaseURL(), "surface": srv.Surface(), "routes": srv.RouteCount(),
+			"tools": srv.ToolNames(),
+		}); err != nil {
 			fatal(err)
 		}
 		return
@@ -67,7 +73,8 @@ func main() {
 	// A best-effort reachability note on stderr. Not fatal: an MCP host may start this before the
 	// console, and a transport that refused to start would be a host configuration problem
 	// reported as a crash.
-	fmt.Fprintf(os.Stderr, "burpsy-mcp %s: console %s, %d routes exposed\n", version(), srv.BaseURL(), srv.RouteCount())
+	fmt.Fprintf(os.Stderr, "burpsy-mcp %s: console %s, %s surface: %d tools over %d manifest routes\n",
+		version(), srv.BaseURL(), srv.Surface(), srv.ToolCount(), srv.RouteCount())
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
