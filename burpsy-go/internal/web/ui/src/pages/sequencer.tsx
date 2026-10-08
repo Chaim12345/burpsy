@@ -240,7 +240,7 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
         </Field>
        </Toolbar>
        <svg
-        viewBox={`0 0 ${POSITION_CHART_W + 48} ${POSITION_CHART_H + 28}`}
+        viewBox={`0 0 ${POSITION_CHART_W + 140} ${POSITION_CHART_H + 34}`}
         width="100%"
         height="170"
         role="img"
@@ -269,13 +269,27 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
            y={(1 - bar.height) * POSITION_CHART_H}
            width={Math.max(bar.width * POSITION_CHART_W - (chart.bars.length > 160 ? 0 : 1), 0.5)}
            height={Math.max(bar.height * POSITION_CHART_H, 1)}
-           fill={bar.passed ? "var(--accent)" : "var(--bad)"}
+           fill={bar.passed ? "var(--good)" : "var(--bad)"}
           >
            <title>
             {`bit ${bar.position}: ${test.statistic_label} ${Number.isInteger(bar.statistic) ? bar.statistic : bar.statistic.toFixed(2)}, significance ${bar.significance.toExponential(2)}, ${bar.passed ? "pass" : "fail"}`}
            </title>
           </rect>
          ))}
+         {/* A failing position usually sits at the floor, where its bar has no height to see. Mark
+             each one under the axis as well, so a stuck field is visible at a glance. */}
+         {chart.bars
+          .filter((bar) => !bar.passed)
+          .map((bar) => (
+           <rect
+            key={`fail-${bar.position}`}
+            x={bar.x * POSITION_CHART_W}
+            y={POSITION_CHART_H + 2}
+            width={Math.max(bar.width * POSITION_CHART_W, 2)}
+            height={5}
+            fill="var(--bad)"
+           />
+          ))}
          <line
           x1={0}
           y1={(1 - chart.passLine) * POSITION_CHART_H}
@@ -285,25 +299,25 @@ function FipsPositions({ positions }: { positions?: FipsPositionReport }): JSX.E
           strokeDasharray="4 3"
          />
          <text
-          x={POSITION_CHART_W}
-          y={(1 - chart.passLine) * POSITION_CHART_H - 4}
-          textAnchor="end"
+          x={POSITION_CHART_W + 6}
+          y={(1 - chart.passLine) * POSITION_CHART_H + 3}
           fontSize="10"
           fill="var(--muted)"
          >
           FIPS pass level
          </text>
-         <text x={0} y={POSITION_CHART_H + 16} fontSize="10" fill="var(--muted)">
+         <text x={0} y={POSITION_CHART_H + 20} fontSize="10" fill="var(--muted)">
           bit 0
          </text>
-         <text x={POSITION_CHART_W} y={POSITION_CHART_H + 16} textAnchor="end" fontSize="10" fill="var(--muted)">
+         <text x={POSITION_CHART_W} y={POSITION_CHART_H + 20} textAnchor="end" fontSize="10" fill="var(--muted)">
           bit {chart.bars.length - 1}
          </text>
         </g>
        </svg>
        <figcaption className="field-hint">
         Each bar is one bit position&apos;s significance as 6 + log10(p): 6 is a perfectly ordinary position and 0 is
-        the 10⁻⁶ floor. The dashed line is the pass level, 6 + log10({test.threshold}). Red bars failed.
+        the 10⁻⁶ floor. The dashed line is the pass level, 6 + log10({test.threshold}). Green passed and red failed, and a
+        red mark under the axis flags every failing position, including those whose bar sits at the floor.
         {positions.exact_intervals
          ? " At N = 20,000 the FIPS intervals decide each verdict, so a bar's colour, not its height against the line, is the verdict."
          : ""}
