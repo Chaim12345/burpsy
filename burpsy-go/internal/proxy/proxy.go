@@ -1027,6 +1027,9 @@ type CookieAbsorber interface {
 	// AbsorbResponseCookies folds every Set-Cookie header in `response` into the jar for this
 	// authority, returning how many it found.
 	AbsorbResponseCookies(src session.AbsorptionSource, host string, port uint16, tls bool, response []byte) int
+	// AbsorbRequestCookies folds the browser's own request Cookie headers into the jar (sm1k), Burp's
+	// "the Proxy also inspects incoming requests from the browser".
+	AbsorbRequestCookies(src session.AbsorptionSource, host string, port uint16, tls bool, request []byte) int
 	// AttachAbsorptionSource records that this surface feeds the jar, so an empty jar can be told
 	// apart from a jar nothing is watching.
 	AttachAbsorptionSource(src session.AbsorptionSource)
@@ -2590,6 +2593,11 @@ func withDowngradeNote(existing *string, downgrade string) *string {
 // host no tool will ever address is inert; refusing to absorb it would instead mean an operator who
 // narrowed scope mid-engagement silently stops accumulating the session they are logged in to.
 func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
+	// The browser's cookies first, then the origin's: a Set-Cookie in this response is newer than the
+	// value the browser sent with the request, so it must be the one the jar keeps (sm1k).
+	if s.config.cookieJar != nil && len(x.Request) > 0 {
+		s.config.cookieJar.AbsorbRequestCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Request)
+	}
 	if s.config.cookieJar != nil && len(x.Response) > 0 {
 		s.config.cookieJar.AbsorbResponseCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Response)
 	}
