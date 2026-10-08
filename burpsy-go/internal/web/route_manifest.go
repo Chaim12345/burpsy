@@ -683,7 +683,7 @@ var manifest = map[string]route{
 	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
-		summary: "export findings as json, sarif or html",
+		summary: "export findings as json, sarif, html or Burp-XML (m7dk)",
 	},
 	"/api/scanner/audit": {
 		methods: []string{"POST"}, risk: riskAttack,

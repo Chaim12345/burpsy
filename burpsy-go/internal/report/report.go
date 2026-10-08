@@ -1,7 +1,8 @@
-// Package report renders scan findings in the three downloadable formats the
+// Package report renders scan findings in the four downloadable formats the
 // web UI links to (scanner.ts) and the CLI can emit: plain JSON, SARIF 2.1.0,
-// and a self-contained HTML page. The package depends only on core so both the
-// web layer and the CLI share one implementation instead of drifting.
+// a self-contained HTML page, and Burp's issue-data XML. The package depends
+// only on core so both the web layer and the CLI share one implementation
+// instead of drifting.
 package report
 
 import (

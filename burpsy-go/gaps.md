@@ -1678,3 +1678,52 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Burp-XML issue export: deliberate divergences (2026-10-08, burpsy-react-ui-m7dk)
+
+The XML export reproduces Burp's grammar — the internal DTD verbatim from the decompiled writer
+`burp.Zb2g.ZI`, the element sequence from `Zb2g.Zk`, the requestresponse shape from `Zpa6` — and
+where burpsy's data model cannot fill a field the divergence is recorded here, not papered over.
+
+- **burpVersion says "burpsy", not a Burp version number.** The attribute is CDATA and undocumented
+  beyond its name; writing "2026.7.1" would be a false claim about which tool produced the file, and
+  the DTD — the thing a consumer actually validates — is identical either way.
+- **Messages are always `base64="true"`; the `base64="false"` variant is not offered.** Burp's own
+  export notes that the raw variant leaves NULL bytes that "strictly break the XML syntax"
+  (report-settings.html) and recommends Base64 for strict parsers; raw bytes also cannot round-trip
+  through the text-node control-character mapping `Zfkt.ZG` applies (control chars become '.').
+  Byte-identical decode is this bead's acceptance bar, and only base64 can meet it.
+- **`host ip=""` is always empty.** Burp writes the resolved IP (`Zb2g.Zk`: `var1.ZDe().ZLo()`).
+  burpsy's capture store records the host name, not the dialled address, per exchange; inventing an
+  IP is worse than the attribute's own documented default. Re-open: record the remote address on
+  `core.Exchange` at capture time.
+- **No `responseRedirected` element.** Optional in the DTD; Burp writes the pair's redirect flag
+  (`Zpa6.Zh`). burpsy does not track whether a stored response was redirect-followed, so the
+  element is omitted rather than written with a guessed value.
+- **Severity and confidence use burpsy's own grade names.** Burp's XML vocabulary is
+  Information/Low/Medium/High/Undefined/False positive (`Ze1r.ZX`) and Undefined/Tentative/Firm/
+  Certain (`Zeue.ZZ`). burpsy additionally has Critical (which Burp's enum lacks entirely) and
+  Suppressed-negative, and says "Informational" where Burp says "Information". Remapping Critical
+  down to High would understate a finding; emitting burpsy's real grade is the honest option.
+- **Merged findings export as one `issue` element.** Burp holds one issue per host; burpsy's store
+  merges same-issue observations across hosts into one `Row`. The first host leads the `host`
+  element, and every occurrence's `requestresponse` still carries its bytes, so no evidence is lost
+  — but a consumer tallying issues per host sees one row where Burp would show several.
+- **`serialNumber` is the burpsy finding id.** Unique per finding instance for the life of the
+  store, which is the property Burp documents ("unique to that individual issue instance"); it is
+  not Burp's serial space and a consumer must not read burp-specific ranges into it.
+- **`location` is synthesized.** Burp's issue classes build their own location strings
+  (`Zco9.Zxy`); burpsy's rows carry the evidence host/path and the parameter set, so location is
+  `host + path [param, …]` in Burp's own "[parameter]" shape. The path element (documented as
+  query-excluded) and the location element (the entry point, query included) deliberately differ.
+- **Advisory text arrives as plain text via a tag scanner, not an HTML parser.**
+  `sanitisedHTMLToText` mirrors Burp's HTML strip (`net.portswigger.Zhs.Zq`) over input that is
+  already `advisory.SanitisedHTML` output — allowed elements only, no attributes — which is what
+  makes a scanner safe. Its contract is stated in its doc comment; widening the input would need a
+  real parser.
+- **The "relevant extract" message mode is the header block, not Burp's highlight window.** Burp
+  extracts "the parts of the message that are highlighted in the in-tool results" plus context
+  (report-settings.html); burpsy's findings carry no highlight spans — no producer populates
+  `core.Occurrence.Span` — so those locations cannot be recovered. The header block (through the
+  blank line) is the deterministic substitute, labelled "[relevant extract — body omitted]" in the
+  HTML and carried as bytes in the XML. Re-open: populate Occurrence.Span at finding production.
