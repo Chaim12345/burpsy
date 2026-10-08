@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { scopeBadge } from "../lib/scope-state";
 import { Download, KeyRound, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
@@ -141,7 +142,7 @@ export function ScopeSection(): JSX.Element {
     detail="What the proxy is allowed to touch. Every change here is persisted immediately."
     actions={
      <>
-      {data ? <Badge tone={data.allow_all ? "warn" : "good"}>{data.allow_all ? "everything in scope" : "restricted"}</Badge> : null}
+      {data ? <Badge tone={scopeBadge(data).tone}>{scopeBadge(data).label}</Badge> : null}
       <Button variant="outline" size="small" onClick={() => setConfirmClear(true)} disabled={!data || data.empty}>
        <Trash2 size={13} />
        Clear scope
