@@ -5163,3 +5163,23 @@ tbody td {
 .login-steps-table td:nth-child(3) {
   width: 55%;
 }
+
+/* The live crawl view (burpsy-react-ui-1l3x): the frame is shown at its own size up to the pane. */
+.crawl-live-frame {
+  margin: 0;
+}
+
+.crawl-live-frame img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+
+.crawl-live-preview {
+  display: block;
+  width: 100%;
+  height: 24rem;
+}
+
+.crawl-live-current code {
+  word-break: break-all;
+}

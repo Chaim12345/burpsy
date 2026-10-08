@@ -297,10 +297,11 @@ func (s *Session) Cookies(ctx context.Context) ([]*network.Cookie, error) {
 func (s *Session) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
 	opts = opts.withDefaults()
 	started := time.Now()
+	var shot []byte
 	html, reqs, dropped, err := s.b.renderedDOMIn(ctx, func(ctx context.Context) (context.Context, context.CancelFunc, error) {
 		return s.newTab(ctx, s.b.opts.resolvedTimeout())
-	}, targetURL, opts)
-	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped}
+	}, targetURL, opts, &shot)
+	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped, Screenshot: shot}
 	if err != nil {
 		return "", outcome, err
 	}

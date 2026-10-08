@@ -243,6 +243,10 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "GET: the last crawl's coverage report. POST: crawl from a seed URL under stated bounds",
 	},
+	"/api/crawl/live": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the live crawl view for ?task=N: the request in flight, the phase, the last 50 fetches, and a throttled frame from the render pass (null with a stated reason when there is no browser)",
+	},
 	"/api/crawl/logins": {
 		// riskCredential: a sequence carries typed passwords and TOTP secrets. GET is the redacted
 		// library (no secret on the wire); POST imports or edits one; DELETE removes one.

@@ -1727,3 +1727,26 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   content. The crawl's own render pass (link discovery) does run inside the login's browser context.
 - **Burp's "Browser settings" on a TOTP step** (three switches in Zrsc) are not represented; their meaning
   is not recoverable from the decompiled panel.
+
+### Live crawl view (burpsy-react-ui-1l3x) — built, with these differences from Burp
+
+- **Burp:** `desktop/running-scans/results/live-crawl-view.html` — "a rendered view of the page that Burp
+  Scanner is currently crawling, as it would normally appear in a browser."
+- **burpsy:** the crawl task's "Live crawl view" tab, fed by `GET /api/crawl/live?task=N` (riskRead):
+  the phase (starting, logging in, fetching, rendering, finished), the request in flight (a new
+  `crawler.Config.OnSend` hook — `OnFetch` fires only after capture), the last 50 fetches newest first,
+  and a viewport JPEG taken by the render pass in the same tab that read the DOM.
+- **Difference — a frame exists only when the crawl renders.** Burp's crawler is browser-driven, so every
+  page has a picture. burpsy fetches over HTTP and renders only with `-dom`; frames come from that pass,
+  throttled to one a second at the source (a render is not asked for a picture it would throw away).
+  Without a browser `frame` is `null` and `frame_note` says why, and the console shows the last HTML
+  page's WIRE bytes in a sandboxed iframe behind a deny-all Content-Security-Policy — labelled as wire
+  HTML, not as what a browser would show, and loading nothing from the target.
+- **Difference — polled, not streamed.** The console polls once a second while the crawl runs; there is
+  no SSE/WebSocket route for frames.
+- **No frame while a recorded login replays**, by design: the page on screen is credentials being typed.
+- **Frames are not retained:** the one latest frame is dropped when the crawl finishes or is evicted; the
+  fetch list stays with the run.
+- **Measured fix recorded:** in this Chromium (147, headless) `Page.captureScreenshot` in a non-front tab
+  hung until the 30 s tab timeout and failed the render; the capture now brings the tab to the front and
+  is bounded at 3 s (`domexec.captureFrame`, `TestEveryRenderThatAsksForAFrameGetsOneQuickly`).

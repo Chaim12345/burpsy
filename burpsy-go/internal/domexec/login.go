@@ -19,7 +19,6 @@ import (
 
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 )
@@ -124,14 +123,12 @@ func (s *Session) ReplayLogin(ctx context.Context, actions []LoginAction, check 
 	}
 
 	shoot := func() {
-		var buf []byte
-		if err := chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			buf, err = page.CaptureScreenshot().WithFormat(page.CaptureScreenshotFormatJpeg).WithQuality(60).Do(ctx)
-			return err
-		})); err == nil {
-			out.Screenshot = buf
-		}
+		_ = chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			if buf := captureFrame(ctx); buf != nil {
+				out.Screenshot = buf
+			}
+			return nil
+		}))
 	}
 
 	for i, a := range actions {

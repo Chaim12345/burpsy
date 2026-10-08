@@ -339,6 +339,11 @@ type Config struct {
 	// detected as lost, within Limits.MaxRelogins. nil is a crawl with no recorded login. See
 	// recorded_login.go.
 	BrowserLogin BrowserLogin
+	// OnSend, when set, is called with each request's method and URL immediately before it is sent
+	// — the "page the crawler is on now" half of the live crawl view (burpsy-react-ui-1l3x), which
+	// OnFetch cannot answer because it fires only after the response is captured. Synchronous on the
+	// crawl goroutine, like OnFetch, so it must return at once.
+	OnSend func(method, url string)
 	// LoginPagePattern is a regex, matched against a response body, that identifies the
 	// application's login page — the second signal (besides a 200→non-200 template flip)
 	// that the session is gone. Empty (the default) disables this signal and keeps the
@@ -1786,6 +1791,9 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// hosts that were behaving.
 	global := c.limiter.Acquire()
 	host := c.limiterFor(item.url).Acquire()
+	if c.cfg.OnSend != nil {
+		c.cfg.OnSend(item.method, item.url.String())
+	}
 	res, err := as.Send(ctx, raw)
 	host.Release()
 	global.Release()

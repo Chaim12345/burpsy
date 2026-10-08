@@ -1173,6 +1173,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
 	// Recorded login sequences (burpsy-react-ui-xhtk): the library, and Burp's "Replay".
+	// The live crawl view (burpsy-react-ui-1l3x): what the crawl is fetching now, its recent fetches,
+	// and a throttled frame from the render pass.
+	s.mux.HandleFunc("/api/crawl/live", s.handleCrawlLive)
 	s.mux.HandleFunc("/api/crawl/logins", s.handleRecordedLogins)
 	s.mux.HandleFunc("/api/crawl/logins/replay", s.handleRecordedLoginReplay)
 	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is

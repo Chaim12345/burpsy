@@ -19,6 +19,7 @@ import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { RecordedLoginPicker } from "../ui/recorded-logins";
+import { CrawlLiveView } from "../ui/crawl-live";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 import { severityTone } from "../lib/severity";
 
@@ -1152,6 +1153,9 @@ function TaskDetail({
   setRoute("scanner");
  };
  const title = task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`;
+ // Burp's "Live crawl view" tab, on a crawl's own detail (burpsy-react-ui-1l3x). An API-only scan
+ // shares the run registry but does not crawl, so it gets no tab.
+ const isCrawlRun = run.data !== undefined && run.data.kind !== "api-scan";
 
  return (
   <div className="task-detail">
@@ -1177,7 +1181,13 @@ function TaskDetail({
      <TabsTrigger value="issue-activity">Issue activity</TabsTrigger>
      <TabsTrigger value="events">Event log</TabsTrigger>
      <TabsTrigger value="activity">Activity</TabsTrigger>
+     {isCrawlRun ? <TabsTrigger value="live-crawl">Live crawl view</TabsTrigger> : null}
     </TabsList>
+    {isCrawlRun ? (
+     <TabsContent value="live-crawl">
+      <CrawlLiveView taskId={task.id} />
+     </TabsContent>
+    ) : null}
 
     <TabsContent value="issue-activity">
      <Card>

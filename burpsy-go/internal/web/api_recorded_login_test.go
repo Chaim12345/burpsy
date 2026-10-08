@@ -303,6 +303,31 @@ func TestARecordedTOTPLoginReplaysAndAuthenticatesACrawlThroughTheRoutes(t *test
 	}
 	var start crawlStartResp
 	_ = json.Unmarshal(rec.Body.Bytes(), &start)
+	// The live crawl view (burpsy-react-ui-1l3x) says the crawl is logging in while the replay runs,
+	// and takes no frame of the login page.
+	sawLoggingIn := false
+	for i := 0; i < 400 && !sawLoggingIn; i++ {
+		lv := get(t, s, "/api/crawl/live?task="+jsonNumber(start.TaskID))
+		var view struct {
+			Phase     string          `json:"phase"`
+			Frame     json.RawMessage `json:"frame"`
+			FrameNote string          `json:"frame_note"`
+		}
+		_ = json.Unmarshal(lv.Body.Bytes(), &view)
+		if view.Phase == "logging-in" {
+			sawLoggingIn = true
+			if string(view.Frame) != "null" {
+				t.Fatalf("a frame was taken while logging in: %s", lv.Body.String())
+			}
+		}
+		if view.Phase == "fetching" || view.Phase == "finished" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawLoggingIn {
+		t.Fatal("the live view never reported the crawl logging in")
+	}
 	deadline := time.Now().Add(90 * time.Second)
 	var run map[string]any
 	for time.Now().Before(deadline) {

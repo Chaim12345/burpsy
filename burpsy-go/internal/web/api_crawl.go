@@ -48,6 +48,8 @@ type crawlRuns struct {
 	mu    sync.RWMutex
 	byID  map[uint64]*crawlRun
 	order []uint64
+	// live is each retained run's live view (burpsy-react-ui-1l3x), evicted with the run.
+	live map[uint64]*crawlLive
 }
 
 // crawlRun is one crawl: its request, its state, and its report once there is one.
@@ -136,6 +138,7 @@ func (c *crawlRuns) start(taskID uint64, seeds []string, kind string, limits cra
 	c.order = append(c.order, taskID)
 	for len(c.order) > crawlRunsKept {
 		delete(c.byID, c.order[0])
+		delete(c.live, c.order[0])
 		c.order = c.order[1:]
 	}
 	return run
@@ -581,13 +584,16 @@ func scanKind(requested string) (string, error) {
 // the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
 // wire parse was the whole story.
 func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
-	return s.crawlRendererIn(nil)
+	return s.crawlRendererIn(nil, nil)
 }
 
 // crawlRendererIn is crawlRenderer inside a recorded login's session (burpsy-react-ui-xhtk), so an
 // authenticated crawl's rendered pass sees the logged-in application rather than its login page. A
 // nil session is the ordinary renderer.
-func (s *Server) crawlRendererIn(sess *domexec.Session) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
+//
+// live, when set, is the crawl's live view (burpsy-react-ui-1l3x): the render marks its page as the one
+// being looked at and, at most once a second, brings back a viewport frame from the same tab.
+func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
 	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
 		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
 		// function that returns "" would be a render that always produced nothing -- which the engine
@@ -600,6 +606,9 @@ func (s *Server) crawlRendererIn(sess *domexec.Session) func(ctx context.Context
 			DOMQuiet:    domexec.DefaultDOMQuiet,
 			NetworkIdle: domexec.DefaultNetworkIdle,
 			MaxWait:     domexec.DefaultMaxRenderWait,
+		}
+		if live != nil {
+			opts.Screenshot = live.rendering(targetURL)
 		}
 		var html string
 		var outcome domexec.RenderOutcome
@@ -618,6 +627,9 @@ func (s *Server) crawlRendererIn(sess *domexec.Session) func(ctx context.Context
 		// (burpsy-react-ui-efra): a client-rendered route populating after load contributed no links
 		// and the crawl reported the application as having almost no locations, which is a confident
 		// wrong answer rather than a missing feature.
+		if live != nil {
+			live.setFrame(targetURL, outcome.Screenshot)
+		}
 		reqs := make([]crawler.RenderedRequest, 0, len(outcome.Requests))
 		for _, r := range outcome.Requests {
 			reqs = append(reqs, crawler.RenderedRequest{URL: r.URL, Method: r.Method})
@@ -770,7 +782,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// indistinguishable from a hung one. The hook is bound to the task once it exists (see
 	// progress.bind below); it fires only during Run, which starts after the bind.
 	progress := &crawlProgress{}
-	onFetch := progress.hook(auditOffer)
+	// The live crawl view (burpsy-react-ui-1l3x) sits first on the fetch hook and on its own send hook.
+	live := newCrawlLive(s.scanner != nil && s.scanner.DOMCapabilityConfigured())
+	onFetch := live.hook(progress.hook(auditOffer))
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
@@ -790,9 +804,12 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		loginSess, loginRunner = sess, newBrowserLoginRunner(login, sess)
 	}
 	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh)
+	cfg.OnSend = live.onSend
+	if cfg.RenderWithOutcome != nil {
+		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
+	}
 	if loginRunner != nil {
-		cfg.BrowserLogin = loginRunner
-		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess)
+		cfg.BrowserLogin = liveLogin{inner: loginRunner, live: live}
 	}
 	c, err := crawler.New(cfg)
 	if err != nil {
@@ -815,6 +832,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
 	s.crawls.start(task.ID(), seeds, kind, limits)
+	s.crawls.attachLive(task.ID(), live)
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser
@@ -835,6 +853,8 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		// The login's browser context lives exactly as long as the crawl: its cookies are the
 		// operator's session on the target and are not kept a moment longer.
 		defer loginSess.Close()
+		// The frame is dropped when the crawl ends; the fetch list stays for the run's lifetime.
+		defer live.finish()
 		// Started before Run, not after it: from here on every completed fetch is audited while the
 		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
 		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two

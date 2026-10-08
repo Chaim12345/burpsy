@@ -719,6 +719,10 @@ type RenderOptions struct {
 	// wait forever. Capping and REPORTING the cap is the difference between a truncated render and a
 	// hung crawl.
 	MaxWait time.Duration
+	// Screenshot asks for a JPEG of the page as it was when the DOM was read (burpsy-react-ui-1l3x,
+	// the live crawl view). Off by default: a capture costs a round trip and an encode, and only a
+	// caller watching the crawl wants one — that caller throttles how often it asks.
+	Screenshot bool
 }
 
 // The defaults, and the reason they are non-zero: the floor of this feature is the 300 ms the
@@ -768,6 +772,9 @@ type RenderOutcome struct {
 	// served byte and no rendered link. Capped at MaxRenderedRequests; RequestsDropped counts the rest.
 	Requests        []RenderedRequest
 	RequestsDropped int
+	// Screenshot is the JPEG RenderOptions.Screenshot asked for; nil when not asked, or when the
+	// capture failed (a render that succeeded is not failed for want of a picture).
+	Screenshot []byte
 }
 
 // RenderedRequest is one request a page issued at run time.
@@ -787,8 +794,9 @@ const MaxRenderedRequests = 200
 func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
 	opts = opts.withDefaults()
 	started := time.Now()
-	html, reqs, dropped, err := b.renderedDOMIn(ctx, b.newTab, targetURL, opts)
-	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped}
+	var shot []byte
+	html, reqs, dropped, err := b.renderedDOMIn(ctx, b.newTab, targetURL, opts, &shot)
+	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped, Screenshot: shot}
 	if err != nil {
 		return "", outcome, err
 	}
@@ -807,7 +815,7 @@ func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, er
 
 // renderedDOMIn renders in a tab newTab opens: the Browser's default context for an ordinary render,
 // or an isolated Session's for an authenticated one (Session.RenderedDOMWithOptions).
-func (b *Browser) renderedDOMIn(ctx context.Context, newTab func(context.Context) (context.Context, context.CancelFunc, error), targetURL string, opts RenderOptions) (string, []RenderedRequest, int, error) {
+func (b *Browser) renderedDOMIn(ctx context.Context, newTab func(context.Context) (context.Context, context.CancelFunc, error), targetURL string, opts RenderOptions, shot *[]byte) (string, []RenderedRequest, int, error) {
 	tabCtx, cancel, err := newTab(ctx)
 	if err != nil {
 		return "", nil, 0, err
@@ -850,6 +858,15 @@ func (b *Browser) renderedDOMIn(ctx context.Context, newTab func(context.Context
 			waitForSettle(ctx, opts)
 			return nil
 		}),
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			if !opts.Screenshot || shot == nil {
+				return nil
+			}
+			// Viewport only, JPEG at 50: a live view is a glance at what the crawler is on, and a
+			// full-page PNG of a long page is megabytes per frame.
+			*shot = captureFrame(ctx)
+			return nil
+		}),
 		chromedp.Evaluate(`document.documentElement.outerHTML`, &html),
 	)
 	mu.Lock()
@@ -859,6 +876,25 @@ func (b *Browser) renderedDOMIn(ctx context.Context, newTab func(context.Context
 		return "", out, gone, fmt.Errorf("domexec: render %q: %w", targetURL, err)
 	}
 	return html, out, gone, nil
+}
+
+// captureFrame takes a viewport JPEG of the tab, or returns nil.
+//
+// Bounded by its own short deadline, because a capture is a nice-to-have riding on a render that is
+// not: measured against this build's Chromium (147, headless), Page.captureScreenshot in a tab that is
+// not the browser's front tab waits for a compositor frame that never comes, and without a bound it
+// held the render until the whole tab timed out — 30 s per page, and the render then failed. The
+// tab is brought to the front first, which is what makes the frame arrive; the bound is what keeps a
+// capture that still does not from costing the render anything but itself.
+func captureFrame(ctx context.Context) []byte {
+	capCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_ = page.BringToFront().Do(capCtx)
+	buf, err := page.CaptureScreenshot().WithFormat(page.CaptureScreenshotFormatJpeg).WithQuality(50).Do(capCtx)
+	if err != nil {
+		return nil
+	}
+	return buf
 }
 
 // waitForSettle blocks until the page is quiet in either the DOM or the network, or MaxWait elapses.
