@@ -363,7 +363,15 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 // language's emitters across all three quoting contexts.
 func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		res, err := runInjection(ctx, cc, "OSCommandInjection", cc.ProbeInsertionKinds(),
+		// The effectiveness prior keys on the CHECK's name as well as the place (y4om:
+		// runInjection writes this name onto cc.PointEffectiveCheck, and the ledger records
+		// per (check, kind, name, host)), so every language must probe under its own row name.
+		// All five used to pass "OSCommandInjection" — the OS command check's own id — which
+		// made five checks' silence one prior: the Python check's two silent probes at a place
+		// retired the Ruby check there too, a gate dropping a check on the strength of probes
+		// it never sent. The row name is unique per row, which is the granularity the key
+		// exists for; the OS command check keeps its own id below.
+		res, err := runInjection(ctx, cc, rowName, cc.ProbeInsertionKinds(),
 			func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 				var probes []InjectionProbe
 				for _, probe := range CodeInjectionProbeSet(language) {
