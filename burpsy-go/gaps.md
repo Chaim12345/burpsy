@@ -1780,3 +1780,94 @@ nothing came back.
   session cookie jar still learns from the responses (the engine's `Observe` hook, independent of the recorder).
 - Burp greys "Store responses" while denial-of-service mode is on; burpsy has no denial-of-service mode (see
   the fmxv note in the UI), so the two never interact.
+
+## Platform decisions: Burp capability families mapped and declined (2026-10, burpsy-react-ui-4ep5)
+
+This section is a **Burp-parity** ledger, not a Rust-parity one: it records Burp Suite capability
+families that burpsy does not implement **by decision**, so the parity map has no silent holes and a
+reader can tell "absent on purpose" from "not yet noticed". Burp evidence cites the decompiled tree
+(Burp 2026.7.1, build 51467) unless stated; the installed Burp is 2026.7.3 (build 52685) — see
+`/root/burp-re/SOURCE-OF-TRUTH.md` §1. Doc paths are relative to
+`/root/burp-re/in/extract/resources/Documentation/burp/documentation/`. burpsy evidence is as of
+master `b0f8ed2`; every "absent" below is a grep **and** a read of each hit, because a grep miss alone
+is weak evidence.
+
+The shared reason for most entries: burpsy is open source and single-operator. It has no vendor
+backend, no licence, no PortSwigger account and no credit meter, so a capability whose substance is
+"talk to PortSwigger's service" has nothing to talk to.
+
+### Licensing and licence activation (burpsy-react-ui-9g5y)
+- **Burp:** 14 licensing controls in the decompiled UI inventory
+  (`out/ui_report/setname_inventory.tsv`: `licensingWizardActivateLicensePanel`,
+  `licensingWizardActivateLicenseProxyCheckbox`, `wizardPanelProject1EnterLicenseAnchor`, …).
+- **burpsy:** no licence or activation code. `grep -rliE 'licen[cs]e' burpsy-go/internal burpsy-go/cmd`
+  hits only wordlists, vulnapp fixtures and unrelated prose; `grep -rniE 'activat'` hits UI
+  row-activation handlers (`ui/table.tsx`), nothing licence-related.
+- **Reason:** there is nothing to license. **Re-open:** never, unless burpsy acquires a paid tier.
+
+### Update channel, early adopter, performance feedback (burpsy-react-ui-9g5y)
+- **Burp:** `desktop/settings/suite/updates.html` ("The Updates settings enable you to control how
+  often Burp updates"), `early-adopter.html` ("There are two release channels for Burp Suite: Early
+  Adopter and Stable"), `performance.html` ("…share feedback to help improve performance").
+- **burpsy:** already declined, with reasons, on the Suite settings page by
+  **burpsy-react-ui-fyua** — `internal/web/ui/src/pages/settings.tsx:3134` (Performance feedback) and
+  `:3147` (Early adopter channel: "there is one build, not a stable/early split"). Not restated here.
+- **Re-open:** a release channel or telemetry endpoint exists for burpsy.
+
+### PortSwigger account sign-in, Burp AI and AI credits (burpsy-react-ui-9g5y)
+- **Burp:** `desktop/burp-ai/index.html` ("Using them requires AI credits"),
+  `desktop/burp-ai/ai-credits.html` ("AI credits give you access to Burp Suite's AI-powered features
+  and to Burp AT"), `desktop/burp-at/*`. The shipped default hotkeys include three Burp AI rows —
+  `explain_this` Ctrl+E, `send_to_burp_at` Ctrl+G, `open_burp_at` Ctrl+Shift+G
+  (`/root/burp-re/in/extract/resources/Preferences/UserDefaults.json`; no decompiled `.java` names
+  them, the JSON is the citable source).
+- **burpsy:** no sign-in and no credit meter. The **self-hosted** equivalents are tracked, not
+  declined: the operator-configured LLM endpoint (burpsy-react-ui-ei0v, closed;
+  `internal/scanner/triage.go`, `internal/web/api_triage.go` — "Burp AI's 'second look' shape"), the
+  MCP server (q31t), and the open epics burpsy-react-ui-riw8 (Explainer, Explore Issue, agent
+  workflows) and burpsy-react-ui-wiwh (`ai.prompt` for plugins).
+- **Declined:** the PortSwigger account, the credit system, and the three hotkeys bound to Burp AI as a
+  hosted service. ga7i/2czi cites this entry for those three rows.
+- **Re-open:** the AI features themselves re-open through riw8 on the operator's endpoint; the account
+  and credits never do.
+
+### Enterprise / CI integration (burpsy-react-ui-9g5y)
+- **Burp:** `out/clean/jdt_src/burp/Zeqc.java:945` — `"Names are not supported in the desktop
+  product - this is an Enterprise-only feature"`.
+- **burpsy:** already declined in `ROADMAP.md` "Deliberately out of scope" (row "Enterprise/CI
+  features", ROADMAP.md:194). Not restated here.
+
+### BApp Store account-side sharing (burpsy-react-ui-9g5y)
+- **Burp:** BApp Store submission and the account-bound parts of extension distribution
+  (`desktop/extend-burp/extensions/*`).
+- **burpsy:** the BApp Store and the Java/Python/Ruby (Montoya) extension model are already declined by
+  **burpsy-react-ui-wkkz** and ROADMAP.md "Loading Burp extensions — no JVM". burpsy's plugins are local
+  JSON-RPC executables named on the command line, so there is no store to share through.
+
+### Burp Infiltrator (burpsy-react-ui-azbh)
+- **Burp:** `desktop/tools/infiltrator.html` — "Burp Infiltrator makes non-reversible changes to
+  application bytecode"; "The application developer or administrator installs the Burp Infiltrator tool
+  by running it on the machine containing the application bytecode"; its reports reach Burp through
+  Collaborator ("Any Burp payloads containing Burp Collaborator domains are fingerprinted based on their
+  unique structure").
+- **burpsy:** `grep -rni infiltrator burpsy-go/internal burpsy-go/cmd` hits only the intruder wordlists
+  (`burp-words-11-letter.txt`, `burp-words-12-letter.txt`) — no implementation.
+- **Reasons:** it needs an agent installed into the target's JVM/.NET runtime, and burpsy has no JVM and
+  no bytecode tooling (ROADMAP "Loading Burp extensions — no JVM"); its findings flow through a
+  Collaborator server burpsy does not host (ROADMAP "Hosting a Collaborator server"); and instrumenting
+  a client's runtime is outside what a black-box proxy engagement normally authorises.
+- **Re-open:** a burpsy-hosted interaction server plus an operator-supplied agent contract.
+
+### Shared Organizer collections (burpsy-react-ui-rzqc)
+- **Burp:** `desktop/tools/organizer/collections.html` — "You can also share collections with other
+  Burp users"; Swing controls `organiserCollectionShareButton`, `organiserCollectionSharedStatusLabel`
+  (`ViewComponent0135`), `organiserCollectionShareMenuItem`, `organiserCollectionCopyLinkMenuItem`,
+  `organiserCollectionUnlinkMenuItem` (`BurpClass5926`).
+- **burpsy:** no sharing (`grep -rniE 'shared collection|unshare' burpsy-go/internal` hits only
+  wordlists).
+- **Decision: declined.** Sharing rides on PortSwigger accounts. burpsy is a single-operator local
+  process whose console is deliberately loopback-only behind the same-origin gate
+  (`internal/web/api_sameorigin.go`); multi-operator sharing would first need console authentication,
+  a different and much larger design.
+- **Near-term substitute:** export a collection to a file and import it elsewhere —
+  **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
