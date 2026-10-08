@@ -45,17 +45,35 @@ type burpCrawlConfigFile struct {
 // each becomes. Exactly as the scanner's table, every section Burp's own files use is listed rather
 // than only the ones with fields behind them: an unlisted section is reported as one opaque name,
 // which hides WHICH keys an operator's file set and did nothing with.
+//
+// These seven are the whole of it, verified against
+// /root/burp-re/in/extract/resources/Preferences/CrawlDefaults.json,
+// .../Preferences/LivePassiveCrawlDefaults.json, and every crawler.* leaf across the 29
+// BuiltInConfigs/*.json files (burpsy-react-ui-8xhy). The table this replaced named five sections —
+// optimization, crawl_scope, exclusions, inclusions, crawl_optimisation — that Burp does not ship at
+// all, which meant 43 of the 46 real shipped keys reported as UNREPRESENTABLE for the wrong reason:
+// not "burpsy has no field for this" but "this loader never recognised the section it lives in".
 var burpCrawlConfigSections = map[string]string{
 	"crawl_limits": "crawler/crawl_limits/",
-	// Sections Burp's own configurations carry alongside the limits. Listed with no keys behind them
-	// so their presence is reported rather than ignored — the same treatment the scanner's table gives
-	// an unlisted section, and the reason a "nothing to apply" line is ever emitted.
-	"optimization":       "crawler/optimization/",
-	"crawl_scope":        "crawler/crawl_scope/",
-	"exclusions":         "crawler/exclusions/",
-	"inclusions":         "crawler/inclusions/",
-	"crawl_optimisation": "crawler/crawl_optimisation/",
+	// The other six sections Burp's own configurations carry alongside the limits. Listed with no
+	// keys behind them so their presence is reported rather than ignored — the same treatment the
+	// scanner's table gives an unlisted section, and the reason a "nothing to apply" line is ever
+	// emitted.
+	"crawl_optimization":             "crawler/crawl_optimization/",
+	"error_handling":                 "crawler/error_handling/",
+	"login_functions":                "crawler/login_functions/",
+	"customization":                  "crawler/customization/",
+	"crawl_project_option_overrides": "crawler/crawl_project_option_overrides/",
+	"live_passive_crawl":             "crawler/live_passive_crawl/",
 }
+
+// burpShippedCrawlKeyCount is the total number of distinct `crawler/*` leaf keys across every key
+// Burp ships: the seven sections above, transcribed on 2026-09-27 from
+// /root/burp-re/in/extract/resources (Preferences/CrawlDefaults.json,
+// Preferences/LivePassiveCrawlDefaults.json, and BuiltInConfigs/*.json). It is the denominator a
+// report divides by, so "3 of 46 applied" is a fixed, checked claim rather than a per-file count that
+// happens to look complete when a file only carries the three limits.
+const burpShippedCrawlKeyCount = 46
 
 // burpCrawlConfigKey is one row of the crawler's key table: the Burp key as shipped, the Limits
 // field it lands on, and whether the value is a count or a duration.
@@ -67,6 +85,13 @@ type burpCrawlConfigKey struct {
 	// isDuration distinguishes a count from a wall-clock length. Burp's maximum_crawl_time is in
 	// SECONDS in its own configurations, which is a fact this table has to carry rather than guess.
 	isDuration bool
+	// errorField names the ErrorHandling field this key lands on, when it is a `crawler/
+	// error_handling/*` key. Set by the error_handling rows registered in errorhandling.go rather than
+	// written here, because that family is a different SHAPE from a Limits field — every member is a
+	// pointer, since a 0 threshold is the operator saying "never pause" — and keeping its rows in
+	// their own file is what makes that difference visible instead of hiding it behind an empty
+	// `field`. See ErrorHandling.
+	errorField string
 }
 
 // burpCrawlConfigKeys is the whole of Burp's shipped crawl-key vocabulary, as read today.
@@ -80,6 +105,18 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	{burpKey: "crawler/crawl_limits/maximum_request_count", field: "MaxRequests"},
 }
 
+// registerBurpCrawlKey adds a row to the crawl-key table from outside this file.
+//
+// Exists because the `crawler/error_handling/*` rows live in errorhandling.go rather than here, and
+// the alternative — a second table with a second loop and a second report — would mean a key could
+// be applied by one and unreported by the other. This is the whole of the cross-file surface: one
+// append, called from an init, so the table is complete before the first parse and no runtime order
+// matters. (The 8xhy worker owns this file; keeping the new family's rows out of it is why that
+// collision costs two lines rather than a merge.)
+func registerBurpCrawlKey(k burpCrawlConfigKey) {
+	burpCrawlConfigKeys = append(burpCrawlConfigKeys, k)
+}
+
 // CrawlConfig is what a Burp crawl configuration contributes: the limits to overlay, the keys that
 // named a value this engine has nowhere to put, and the keys this engine has that Burp's file never
 // mentioned.
@@ -91,6 +128,10 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 type CrawlConfig struct {
 	// Limits are the overlaid values. A field left at its zero value was not named by the file.
 	Limits Limits
+	// ErrorHandling is the `crawler/error_handling/*` family as the file set it, every field a POINTER
+	// so a 0 the operator wrote is distinguishable from a key the file never mentioned
+	// (burpsy-react-ui-o0c5). See errorhandling.go for why that distinction is the whole feature.
+	ErrorHandling ErrorHandling
 	// UnrepresentableKeys are `crawler/*` keys the file carried that this engine cannot apply,
 	// without the section prefix, so the name is what an operator recognises from their file.
 	UnrepresentableKeys []string
@@ -100,8 +141,13 @@ type CrawlConfig struct {
 	// to know which it is.
 	UnknownSections []string
 	// AppliedKeys are the `crawler/*` keys that landed, in file order. Present so a report can say
-	// "3 of 3 applied" rather than leaving the operator to infer it from a count.
+	// "3 of 46 applied" rather than leaving the operator to infer it from a count.
 	AppliedKeys []string
+	// ShippedKeyCount is the fixed denominator for that figure: the total number of distinct
+	// `crawler/*` leaf keys across every key Burp ships (burpShippedCrawlKeyCount), not the count for
+	// this one file. A per-file denominator would let a file that only ever carries the three limits
+	// read as "3 of 3 applied" — complete — when 43 keys Burp ships are simply absent from it.
+	ShippedKeyCount int
 }
 
 // ParseBurpCrawlConfig reads the `crawler` object of a Burp configuration into limits and a report.
@@ -116,6 +162,7 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 		return CrawlConfig{}, fmt.Errorf("burp crawl configuration: %w", err)
 	}
 	var out CrawlConfig
+	out.ShippedKeyCount = burpShippedCrawlKeyCount
 
 	byBurpKey := make(map[string]burpCrawlConfigKey, len(burpCrawlConfigKeys))
 	for _, k := range burpCrawlConfigKeys {
@@ -154,8 +201,13 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 	return out, nil
 }
 
-// applyCrawlKey decodes one value onto the Limits field its row names.
+// applyCrawlKey decodes one value onto the Limits field its row names, or — for the four
+// `crawler/error_handling/*` keys — onto the ErrorHandling block, which is a different shape and
+// lives in errorhandling.go.
 func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage) error {
+	if row.errorField != "" {
+		return c.applyErrorKey(row, raw)
+	}
 	if row.isDuration {
 		// Burp's shipped files spell maximum_crawl_time in SECONDS. A value read as nanoseconds
 		// would be a crawl whose time budget is effectively zero, which looks like "the crawl did

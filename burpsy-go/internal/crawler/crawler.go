@@ -262,6 +262,12 @@ type Config struct {
 	SubmitForms bool
 	// Limits bounds the crawl. See Limits and DefaultLimits.
 	Limits Limits
+	// ErrorHandling is what the crawl does about requests that FAIL, rather than only counting
+	// them (burpsy-react-ui-o0c5). The zero value means "the caller named none of these" and the
+	// engine's documented defaults apply — which is a DIFFERENT state from a family whose
+	// thresholds are all zero, which means never pause. That distinction is why every field is a
+	// pointer; see ErrorHandling.
+	ErrorHandling ErrorHandling
 	// RequestsPerSecond caps the request rate. Zero takes DefaultRequestsPerSecond.
 	RequestsPerSecond float64
 	// Pool is a resolved named resource pool's limits, or nil for this package's own defaults.
@@ -714,6 +720,21 @@ type Crawler struct {
 	// business knowing what a task row is, and the caller that owns both can hand the two together.
 	// Nil means unpaced, which is what every caller outside the web layer is.
 	suiteGate func(context.Context)
+	// eh is the resolved error-handling policy: what this crawl does about requests that fail rather
+	// than only counting them (burpsy-react-ui-o0c5). Resolved once in New, so every reader sees the
+	// same set and a threshold cannot differ between the pass that trips it and the report that
+	// names it.
+	eh ErrorHandling
+	// followUp is the set of requests that ended in a transport failure, kept for the follow-up pass.
+	// Per-crawl, not per-run, and drained pass by pass so a request that fails twice is retried on
+	// the NEXT pass rather than twice in the same one.
+	followUp []frontierItem
+	// The three running counters the pause thresholds read (o0c5). Per-crawl, and reset by any
+	// success — a threshold is about CONSECUTIVE failures, and a counter that only ever went up would
+	// be a lifetime total, which is a different policy and a much more trigger-happy one.
+	consecutiveTimeouts     int
+	consecutiveAuthFailures int
+	timeouts                int
 	// query is the parsed crawl-scope query (DSL-03), nil when the operator gave none. Parsed once in
 	// New, so a malformed query is a construction error and never a per-URL surprise.
 	query *query.Expr
@@ -986,7 +1007,11 @@ func New(cfg Config) (*Crawler, error) {
 	c := &Crawler{
 		cfg:    cfg,
 		limits: cfg.Limits.normalise(),
-		query:  expr,
+		// Resolved ONCE, here, so the pass that trips a threshold and the report that names it read
+		// the same numbers. A zero ErrorHandling is filled from the defaults; a family the caller
+		// populated — including one it filled with zeros, meaning never pause — is left alone.
+		eh:    cfg.ErrorHandling.resolved(),
+		query: expr,
 		// MaxInFlight of 1 states the sequential loop as a bound rather than accepting an in-flight
 		// count the loop would ignore. Burst of 1 is strict spacing, which is what politeness means
 		// for an unattended traversal. No AutoThrottle on the aggregate limiter: a 429 belongs to the
@@ -1181,6 +1206,15 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		c.visit(ctx, item, &rep, &lim)
 	}
 
+	// The follow-up pass, run after the main loop and before the report is assembled, so the counts
+	// it produces are the counts the report carries (o0c5).
+	//
+	// AFTER, not during: a follow-up pass is defined as re-issuing what the crawl FAILED to fetch,
+	// and the crawl does not know which requests those are until it has tried them all. Retrying
+	// inside the loop would also spend the request budget twice per request, which is the one thing a
+	// bound on cost must not do.
+	c.runFollowUpPasses(ctx, &rep, &lim)
+
 	lim.FrontierRemaining = len(c.frontier)
 	lim.Templates = len(c.templates)
 	// Reported whether or not the bound was reached: these two tables are what the crawl holds in RAM for
@@ -1195,6 +1229,113 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	rep.Limits = lim
 	rep.Skips = c.skips.Snapshot()
 	return rep
+}
+
+// runFollowUpPasses re-issues the requests that ended in a transport failure, up to the configured
+// count (burpsy-react-ui-o0c5).
+//
+// Through the ordinary perform path, deliberately: a retried request is captured, scanned and
+// traversed exactly like a first attempt, so a flaky endpoint that answers on the second try
+// contributes its links like any other. A retry that bypassed perform would re-send the bytes and
+// discard the answer, which recovers a status code and no coverage — the opposite of the point.
+//
+// Bounded twice, and the second bound is the one that matters: at most FollowUpPasses extra attempts
+// per request, and never more than MaxRequests sends in total, because a follow-up pass spends the
+// SAME request budget the main pass spent. A crawl that retried without that second bound would send
+// up to 2x its stated maximum, which is the one way a retry feature can make a tool cost more than
+// the operator agreed to.
+//
+// A request that fails again stays in the set, so a later pass retries it again — a target that is
+// down for the whole crawl ends with a report naming every one of its failures rather than a single
+// mention per pass.
+func (c *Crawler) runFollowUpPasses(ctx context.Context, rep *Report, lim *LimitReport) {
+	passes := c.eh.followUpPasses()
+	if passes <= 0 || len(c.followUp) == 0 {
+		return
+	}
+	sending := lim.Requests
+	for pass := 0; pass < passes; pass++ {
+		if len(c.followUp) == 0 {
+			break
+		}
+		// Cancellation is honoured between passes, and a cancelled retry stops the whole family:
+		// a caller who pressed stop is not asking for the requests that already failed either.
+		if ctx.Err() != nil {
+			lim.record(StopFollowUpCancelled)
+			return
+		}
+		// The request budget, checked BEFORE the pass rather than per request, so the report's
+		// Requests figure and the stop that ended it cannot disagree about what the crawl was allowed.
+		if budget := c.limits.MaxRequests - (sending - lim.Requests); budget <= 0 {
+			lim.record(StopFollowUpBudget)
+			return
+		}
+		remaining := c.followUp
+		c.followUp = c.followUp[:0]
+		for _, item := range remaining {
+			if ctx.Err() != nil {
+				lim.record(StopFollowUpCancelled)
+				return
+			}
+			if lim.Requests-sending >= c.limits.MaxRequests {
+				// The request is put BACK rather than dropped: it failed and this crawl was not
+				// allowed to try again, so it belongs in the report as an untried request rather
+				// than vanish.
+				c.followUp = append(c.followUp, item)
+				lim.record(StopFollowUpBudget)
+				continue
+			}
+			c.perform(ctx, item, c.buildRequest(item), rep, lim)
+		}
+	}
+}
+
+// noteFailure records a transport failure for the follow-up pass, and trips the failure counters
+// the pause thresholds read.
+//
+// The two are the same function because they happen at the same moment: a failure is both something
+// to retry and something that counts toward "this target keeps refusing". Splitting them would let a
+// caller wire one without the other, and the half that retries is the half an operator notices.
+func (c *Crawler) noteFailure(rep *Report, item frontierItem, timedOut, authFailed bool) {
+	c.followUp = append(c.followUp, item)
+	if timedOut {
+		c.consecutiveTimeouts++
+	} else {
+		c.consecutiveTimeouts = 0
+	}
+	if authFailed {
+		c.consecutiveAuthFailures++
+	} else {
+		c.consecutiveAuthFailures = 0
+	}
+}
+
+// checkPauseThresholds trips the crawl's pause policy, returning true when the crawl must stop.
+//
+// A DISTINCT stop per threshold rather than one "paused" reason, because an operator reading
+// "paused" cannot tell whether the target is slow, refusing, or rejecting their credentials, and
+// those three call for three different responses.
+func (c *Crawler) checkPauseThresholds(rep *Report, lim *LimitReport) bool {
+	// A family with every threshold at 0 is a crawl that never pauses — the shape of Burp's shipped
+	// "Never stop crawl due to application errors". Checked as a whole, because a 0 threshold must
+	// not read as "unbounded": `armed` is what makes 0 mean disarmed rather than unset.
+	if !c.eh.PauseConfigured() {
+		return false
+	}
+	if n, want := c.consecutiveTimeouts, c.eh.timeoutCount(); armed(&n) && want > 0 && c.consecutiveTimeouts >= want {
+		lim.record(StopPausedTimeouts)
+		return true
+	}
+	if want := c.eh.timeoutPercent(); want > 0 && lim.Requests > 0 &&
+		100*c.timeouts/lim.Requests >= want {
+		lim.record(StopPausedTimeoutPercentage)
+		return true
+	}
+	if n, want := c.consecutiveAuthFailures, c.eh.authFailures(); armed(&n) && want > 0 && c.consecutiveAuthFailures >= want {
+		lim.record(StopPausedAuthFailures)
+		return true
+	}
+	return false
 }
 
 // visit sends one frontier item, captures and scans the response through the shared seam, and folds

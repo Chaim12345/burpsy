@@ -251,6 +251,31 @@ const (
 	// application no longer honours, and the rest of the crawl is unauthenticated whether it knows
 	// it or not.
 	StopReloginBudget
+	// StopPausedTimeouts means the crawl stopped because PAUSED BY POLICY: this many CONSECUTIVE
+	// requests timed out. Distinct from StopDuration and StopRequestBudget because the crawl did not
+	// run out of anything — it was told to stop by the operator's own error_handling configuration,
+	// which is a different fact and a different response. An operator who set 5 to spare a slow
+	// target needs the report to say the crawl honoured that, not that it finished.
+	StopPausedTimeouts
+	// StopPausedTimeoutPercentage means the same, on the PERCENTAGE axis: this share of the crawl's
+	// requests timed out. Separate from the count because the two answer different questions — a
+	// count is about a streak, a percentage about a host that is broadly slow — and an operator
+	// reading "paused" cannot choose between them.
+	StopPausedTimeoutPercentage
+	// StopPausedAuthFailures means the crawl stopped because this many consecutive requests were
+	// REJECTED for authentication. The most actionable of the three: every page from here on would
+	// have been a 401 page, so continuing would have filled the report with coverage of a login form.
+	StopPausedAuthFailures
+	// StopFollowUpBudget means a follow-up pass wanted to retry and the request budget was spent.
+	// A distinct stop because the failure is not "the target is broken" — it is "this crawl was not
+	// allowed to try again", which is a coverage hole of a different kind and one an operator can fix
+	// by raising a bound rather than by waiting.
+	StopFollowUpBudget
+	// StopFollowUpCancelled means a follow-up pass was abandoned because the caller's context ended.
+	// Recorded rather than folded into StopCancelled because the two cancel different amounts of
+	// work: StopCancelled is a crawl that stopped mid-frontier, this is one that finished its main
+	// pass and then ran out of time on the retries.
+	StopFollowUpCancelled
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
