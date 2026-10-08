@@ -1617,6 +1617,10 @@ type liveAuditEnableReq struct {
 	// never means "retry" — but a plain {enabled} POST already carries the current switch,
 	// so the two compose without a second route.
 	RetryStalled *bool `json:"retry_stalled"`
+	// Config and Pool set the live task's own scan configuration and resource pool (chct): a name,
+	// or "" for the server default. Omitted leaves the current setting. An unknown name is refused.
+	Config *string `json:"config"`
+	Pool   *string `json:"pool"`
 }
 
 // handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
@@ -1633,6 +1637,25 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			// Resolved before anything changes: a refused name leaves the task as it was.
+			if req.Config != nil && *req.Config != "" {
+				if _, _, _, err := s.resolveAuditConfig(*req.Config); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+			if req.Pool != nil && *req.Pool != "" {
+				if _, err := s.poolLimiter(*req.Pool); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+			if req.Config != nil || req.Pool != nil {
+				s.liveAudit.SetRunSettings(req.Config, req.Pool)
+				cfgName, poolName := s.liveAudit.RunSettings()
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo, fmt.Sprintf(
+					"the live audit now runs scan configuration %q under resource pool %q (empty is the default)", cfgName, poolName))
+			}
 			if req.TrafficSource != nil {
 				if err := s.liveAudit.SetTrafficSource(LiveAuditTrafficSource(*req.TrafficSource)); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
