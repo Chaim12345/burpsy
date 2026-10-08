@@ -1637,3 +1637,13 @@ Burp rather than wider:
   (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
   engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
   at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## AMF bodies are not parsed — declined (2026-10-08, burpsy-react-ui-6v4d)
+- **Burp:** classes `ContentType.AMF` / `MimeType.LEGACY_SER_AMF` and audits `PARAM_AMF` insertion
+  points inside Action Message Format bodies (BlazeDS / GraniteDS, Flash and Flex remoting).
+- **burpsy:** no AMF codec; an AMF body is opaque, and gets no parameter-level audit — only the
+  entire-body point, which carries the scanner's payloads as raw bytes.
+- **Decision: declined.** Flash reached end of life in 2020 and AMF remoting endpoints are now rare
+  enough that an AMF0/AMF3 codec (object graphs, references, externalizable types) is not worth its
+  maintenance. **Re-open** when an engagement brings a live AMF endpoint; the codec would slot in as a
+  nested-point container beside JSON and XML in `bcheck/insertion.go`.

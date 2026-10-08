@@ -62,6 +62,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -171,6 +172,9 @@ const (
 	// locSyntheticHeader appends a fresh header named by InsertionPoint.Name
 	// rather than splicing an existing range (Java addNewReferHeaderInsertionPoint).
 	locSyntheticHeader
+	// locSyntheticQueryName appends a bare query parameter name — `?1`, no `=` — Burp's
+	// addPhpFileRequestInsertionPoint (burpsy-react-ui-i7i5).
+	locSyntheticQueryName
 	// locRelocateBodyToQuery removes the body clause [start,end) and appends it
 	// to the query as name=<payload> — the parameter now lives in the query ONLY.
 	locRelocateBodyToQuery
@@ -633,6 +637,20 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 				coding:    codingForm,
 			})
 		}
+	}
+
+	// Burp's PHP file-request point (Zuq.addPhpFileRequestInsertionPoint, called from the
+	// new-parameter-name stage when the URL's file extension is php): a bare parameter NAME "1"
+	// after the path, `/page.php?1`. PHP reads a bare name as a key with an empty value, so the
+	// name is where a payload reaches code that iterates $_GET's keys (burpsy-react-ui-i7i5).
+	if want(IpParamNameURL) && strings.EqualFold(path.Ext(e.Path), ".php") {
+		out = append(out, InsertionPoint{
+			Kind:      IpParamNameURL,
+			Name:      "1",
+			BaseValue: "1",
+			loc:       loc{kind: locSyntheticQueryName},
+			coding:    codingForm,
+		})
 	}
 
 	if want(IpParamNameBody) {
@@ -1847,6 +1865,8 @@ func (p *InsertionPoint) ApplyOpts(req []byte, payload string, appending bool, o
 		b = append(b, newVal...)
 		b = append(b, e.Body[end:]...)
 		e.Body = b
+	case locSyntheticQueryName:
+		e.AddQuery(newVal)
 	case locSyntheticHeader:
 		// The header does not exist on the base request, so there is nothing to
 		// splice — a fresh header of the point's name is appended after every
