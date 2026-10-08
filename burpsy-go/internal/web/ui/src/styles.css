@@ -3967,6 +3967,12 @@ tbody td {
   color: var(--muted);
 }
 
+/* The row the Inspector's arrow buttons move (ybmd). A left rule rather than a fill, so the
+   row's own inputs keep their contrast. */
+.inspector-row-selected dt {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .inspector-actions {
   display: flex;
   align-items: center;
