@@ -6,6 +6,7 @@ import { describeLaunch, openUrlInBrowser, useLaunchBrowser } from "../lib/data.
 import { api, copyToClipboard, downloadText, formatBytes, formatDuration, json } from "../lib/api";
 import { exchangeUrl, rawToCurl } from "../lib/actions";
 import { useChord } from "../lib/keymap";
+import { useCommandHandler } from "../lib/commands";
 import { useApp } from "../lib/store";
 import { useInterceptControls } from "../lib/data";
 import {
@@ -1102,6 +1103,36 @@ export function InterceptPage(): JSX.Element {
   [toggleChord, data],
  );
 
+ const forwardAllHeld = () => {
+  const expected = held.length;
+  controls.forwardAll.mutate(undefined, {
+   onSuccess: (result) => {
+    setSelectedId(null);
+    const forwarded = result.forwarded;
+    if (forwarded === expected) {
+     toast.success(`Forwarded ${forwarded} held message${forwarded === 1 ? "" : "s"}`);
+    } else {
+     toast.success(
+      `Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
+     );
+    }
+   },
+   onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
+  });
+ };
+
+ // Burp's queue actions as catalogue entries (2czi), registered for the palette and their chords.
+ // Drop all opens the same confirmation the toolbar button does: a chord is a faster way to ask,
+ // never a way past the question. Intercept-response is the held request's own menu entry.
+ useCommandHandler("proxy.forwardAll", held.length > 0 && !controls.forwardAll.isPending ? forwardAllHeld : "Nothing is held");
+ useCommandHandler("proxy.dropAll", held.length > 0 && !controls.dropAll.isPending ? () => setConfirmDropAll(true) : "Nothing is held");
+ useCommandHandler(
+  "proxy.interceptResponse",
+  selected && selected.direction === "request"
+   ? () => forwardMessage(selected.id, selected.raw, fixContentLength, true, targetFor(selected))
+   : "Select a held request first",
+ );
+
  const columns = useMemo<Column<HeldMessageDetail>[]>(
   () => [
    {
@@ -1357,23 +1388,7 @@ export function InterceptPage(): JSX.Element {
               missing feature, and an operator who used it once will look for it again. */}
      <Button
       variant="outline"
-      onClick={() => {
-       const expected = held.length;
-       controls.forwardAll.mutate(undefined, {
-        onSuccess: (result) => {
-         setSelectedId(null);
-         const forwarded = result.forwarded;
-         if (forwarded === expected) {
-          toast.success(`Forwarded ${forwarded} held message${forwarded === 1 ? "" : "s"}`);
-         } else {
-          toast.success(
-           `Forwarded ${forwarded} of the ${expected} shown — the rest resolved elsewhere before this request arrived`,
-          );
-         }
-        },
-        onError: (err) => toast.error(err instanceof Error ? err.message : String(err)),
-       });
-      }}
+      onClick={forwardAllHeld}
       disabled={held.length === 0 || controls.forwardAll.isPending}
       title={held.length === 0 ? "Nothing is held" : `Forward all ${held.length} held messages unmodified`}
      >
@@ -1396,6 +1411,42 @@ export function InterceptPage(): JSX.Element {
      </Button>
     </Toolbar>
 
+
+    {/* Burp's "Edit target" editor. A dialog rather than an editable authority in the header bar:
+        the header is a display, and making it hold a three-part destination would leave a Forward
+        one keystroke away from a half-typed host. Nothing is sent until Forward, so the
+        operator can look at the new destination and change their mind without the message having
+        moved. */}
+    <Modal
+     open={targetEditorOpen}
+     onOpenChange={setTargetEditorOpen}
+     title={`Send held #${selected.id} somewhere else`}
+     description={`Applies to this one request. The client's connection stays where it is, and the next request on it goes to ${selected.host}:${selected.port} again.`}
+    >
+     <TargetEditor
+      original={targetOf(selected)}
+      onApply={(target) => {
+       setTargetDraft(target);
+       setTargetEditorOpen(false);
+      }}
+      onRevert={() => {
+       setTargetDraft(targetOf(selected));
+       setTargetEditorOpen(false);
+      }}
+     />
+    </Modal>
+   </div>
+  </div>
+ ) : (
+  <Empty title="Nothing selected" detail="Select a held message to view and edit its exact bytes before forwarding or dropping it." />
+ );
+
+ return (
+  <div className="page-fill">
+   {/* Drop all's confirmation lives at the page root, not inside the selected message's pane where
+       its toolbar button is: Drop all is a queue-wide action, and the catalogue chord and palette
+       entry (2czi) must reach the same confirmation with nothing selected. Inside the pane it was
+       not mounted then, so the palette's Drop all set state no dialog read. */}
     <Modal
      open={confirmDropAll}
      onOpenChange={(open) => {
@@ -1440,38 +1491,6 @@ export function InterceptPage(): JSX.Element {
       </Button>
      </div>
     </Modal>
-
-    {/* Burp's "Edit target" editor. A dialog rather than an editable authority in the header bar:
-        the header is a display, and making it hold a three-part destination would leave a Forward
-        one keystroke away from a half-typed host. Nothing is sent until Forward, so the
-        operator can look at the new destination and change their mind without the message having
-        moved. */}
-    <Modal
-     open={targetEditorOpen}
-     onOpenChange={setTargetEditorOpen}
-     title={`Send held #${selected.id} somewhere else`}
-     description={`Applies to this one request. The client's connection stays where it is, and the next request on it goes to ${selected.host}:${selected.port} again.`}
-    >
-     <TargetEditor
-      original={targetOf(selected)}
-      onApply={(target) => {
-       setTargetDraft(target);
-       setTargetEditorOpen(false);
-      }}
-      onRevert={() => {
-       setTargetDraft(targetOf(selected));
-       setTargetEditorOpen(false);
-      }}
-     />
-    </Modal>
-   </div>
-  </div>
- ) : (
-  <Empty title="Nothing selected" detail="Select a held message to view and edit its exact bytes before forwarding or dropping it." />
- );
-
- return (
-  <div className="page-fill">
    <div>
     <PageHeader
      title="Intercept"

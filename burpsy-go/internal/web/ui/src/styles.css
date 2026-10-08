@@ -5172,3 +5172,22 @@ tbody td {
   display: inline-flex;
   align-items: center;
 }
+
+/* Settings › Hotkeys, Burp's default table (2czi): the reason is a sentence, so it wraps. */
+.burp-hotkeys {
+  display: grid;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+/* Sized to content rather than the shared fixed layout: the reason is the column worth reading,
+   and five equal columns left it a quarter of the width. */
+.burp-hotkeys table {
+  table-layout: auto;
+}
+
+tbody td.burp-hotkeys-reason {
+  white-space: normal;
+  line-height: 1.35;
+  width: 50%;
+}

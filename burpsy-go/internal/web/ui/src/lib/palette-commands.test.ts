@@ -9,6 +9,8 @@ import { describe, expect, test } from "bun:test";
 import { RECENTS_GROUP, codecCommands, extensionCommands, recentCommands } from "./palette-commands";
 import { SELECTION_CODECS } from "./selection-codecs";
 import type { ExtensionList, ExtensionView, Registration } from "./types.extensions";
+import { catalogueCommands } from "./palette-commands";
+import { SHORTCUT_ACTIONS } from "./shortcuts";
 
 const noop = () => {};
 
@@ -203,5 +205,45 @@ describe("the extension-registered commands", () => {
       extensionCommands(list, noop)[0]?.hint,
       "without the plugin's name the row is an unattributed command, and an operator cannot tell which extension is about to run",
     ).toBe("registered by demo");
+  });
+});
+
+describe("catalogueCommands (2czi)", () => {
+  const build = catalogueCommands;
+
+  test("every catalogue action named in the acceptance criteria is a palette row", () => {
+    const rows = build(SHORTCUT_ACTIONS, {}, () => false, () => undefined);
+    const ids = new Set(rows.map((row) => row.id.replace(/^action:/, "")));
+    for (const id of [
+      "tab.close", "tab.reopen", "tab.duplicate", "tab.next", "tab.prev", "tab.rename",
+      "repeater.historyBack", "repeater.historyForward",
+      "proxy.forwardAll", "proxy.dropAll", "proxy.interceptResponse",
+      "intruder.startAttack",
+      "editor.togglePretty", "editor.toggleWrap", "editor.toggleNonPrinting", "editor.toggleHideHeaders",
+      "editor.toggleSidebar", "editor.cycleLayout", "editor.insertCollaborator",
+      "nav.search", "nav.settings", "tasks.toggle",
+    ]) {
+      expect(ids.has(id), id).toBe(true);
+    }
+    // Every row flagged `palette` is emitted, and only those.
+    expect(rows.length).toBe(SHORTCUT_ACTIONS.filter((action) => action.palette).length);
+  });
+
+  test("a row with no mounted handler is disabled with where it lives; one with a handler runs it", () => {
+    const ran: string[] = [];
+    const rows = build(SHORTCUT_ACTIONS, {}, (id) => id === "tab.close", (id) => ran.push(id));
+    const close = rows.find((row) => row.id === "action:tab.close")!;
+    const dropAll = rows.find((row) => row.id === "action:proxy.dropAll")!;
+    expect(close.disabled).toBe(false);
+    close.run();
+    expect(ran).toEqual(["tab.close"]);
+    expect(dropAll.disabled).toBe(true);
+    expect(dropAll.disabledReason).toBe("Available in Proxy › Intercept");
+  });
+
+  test("the shortcut column shows the operator's binding, not the default", () => {
+    const rows = build(SHORTCUT_ACTIONS, { "tab.close": "alt+w" }, () => true, () => undefined);
+    expect(rows.find((row) => row.id === "action:tab.close")!.shortcut).toBe("alt+w");
+    expect(rows.find((row) => row.id === "action:tab.reopen")!.shortcut).toBeUndefined();
   });
 });

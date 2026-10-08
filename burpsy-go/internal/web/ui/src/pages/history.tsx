@@ -15,6 +15,7 @@ import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
+import { useCommandHandler } from "../lib/commands";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
@@ -428,6 +429,13 @@ export function HistoryPage(): JSX.Element {
  // persisted per surface. History's pre-switcher arrangement was stacked, so that is the
  // fallback a first visitor gets.
  const [messageLayout, setMessageLayout] = useMessageLayout("history", "vertical");
+ // Burp's EDITOR_CYCLE_REQUEST_RESPONSE_LAYOUT (2czi): the three-icon switch's own order.
+ useCommandHandler("editor.cycleLayout", () => {
+  const order = ["horizontal", "vertical", "combined"] as const;
+  const next = order[(order.indexOf(messageLayout) + 1) % order.length]!;
+  setMessageLayout(next);
+  toast.info(`Message layout: ${next}`);
+ });
  const [scopeOnly, setScopeOnly] = useState(false);
  const [hideNoResponse, setHideNoResponse] = useState(false);
  // Burp's remaining row-type filters (proxyHttpShowOnly*Checkbox). Each is "show only", so all
