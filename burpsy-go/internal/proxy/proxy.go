@@ -1454,7 +1454,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	}
 
 	intercepting := s.config.intercept != nil && s.config.intercept.Enabled()
-	offer := AlpnOffer(clientOffer, intercepting)
+	// A listener with "Support HTTP/2" off (34rd) narrows the offer exactly as interception does: the
+	// client is answered over HTTP/1.1 whatever it asked for.
+	offer := AlpnOffer(clientOffer, intercepting || !spec.http2Allowed())
 	if len(clientOffer) > 0 && len(offer) == 0 {
 		s.config.logger.Warn("client ALPN offer cannot be carried",
 			zap.String("host", host),
@@ -1484,6 +1486,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// operator scrolling history must not have to infer the downgrade from one row and assume the
 	// rest share it.
 	downgrade := DowngradeNote(clientOffer, negotiated)
+	if downgrade != "" && !intercepting && !spec.http2Allowed() {
+		downgrade = "client offered HTTP/2; this listener's Support HTTP/2 switch is off, so it was carried over HTTP/1.1"
+	}
 	if downgrade != "" {
 		s.config.logger.Info("interception carried an HTTP/2 client over HTTP/1.1",
 			zap.String("host", host), zap.Strings("offered", clientOffer))

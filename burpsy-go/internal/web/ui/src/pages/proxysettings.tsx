@@ -533,6 +533,22 @@ function ProxyListenerSection(): JSX.Element {
        onCheckedChange={(on) => setDraft({ ...draft, forceTLS: on })}
       />
      </label>
+     <label className="switch-row" htmlFor="proxy-listener-http2">
+      <span>
+       <span>Support HTTP/2</span>
+       <span className="cell-dim" style={{ display: "block" }}>
+        Offer HTTP/2 to clients on this listener. Turn it off to hold a client with a broken HTTP/2 stack to HTTP/1.1
+        without turning interception on. It changes the browser leg only; each affected row says the request was carried
+        over HTTP/1.1 and why.
+       </span>
+      </span>
+      <Switch
+       id="proxy-listener-http2"
+       label="Support HTTP/2"
+       checked={draft.supportHTTP2}
+       onCheckedChange={(on) => setDraft({ ...draft, supportHTTP2: on })}
+      />
+     </label>
      <div className="toolbar">
       <Button onClick={submit} disabled={add.isPending || update.isPending}>
        {submitLabel}

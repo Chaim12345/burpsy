@@ -101,3 +101,19 @@ describe("describeListener", () => {
     expect(describeListener(row({ invisible: true }), false)).toContain("accepts origin-form requests");
   });
 });
+
+describe("Support HTTP/2 (34rd)", () => {
+  test("a fresh listener keeps HTTP/2 and sends no field; turning it off sends false", () => {
+    const draft = { ...emptyListenerDraft(), bind: "127.0.0.1:8081" };
+    const on = listenerDraftToBody(draft);
+    expect(on.ok && "support_http2" in on.body).toBe(false);
+    const off = listenerDraftToBody({ ...draft, supportHTTP2: false });
+    expect(off.ok && off.body.support_http2).toBe(false);
+  });
+
+  test("a listener with HTTP/2 off says so", () => {
+    const row = { id: "l1", bind: "127.0.0.1:8081", bound_addr: "", redirect_host: "", redirect_port: 0, force_tls: false, invisible: null, support_http2: false, removable: true };
+    expect(draftFromListener(row).supportHTTP2).toBe(false);
+    expect(describeListener(row, true)).toContain("HTTP/1.1");
+  });
+});
