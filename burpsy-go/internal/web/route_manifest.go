@@ -489,14 +489,21 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/auth/failures": {
+		// Burp's "Prompt for credentials on platform authentication failure" (burpsy-react-ui-3xnt):
+		// the hosts whose challenge failed, for the console to ask about. Names hosts and schemes,
+		// never a credential; DELETE only dismisses one. riskLocal: it changes no egress.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "platform-authentication failures waiting for credentials: list them, or dismiss one by host",
+	},
 	"/api/network/auth": {
 		// riskCredential, and not riskLocal, because that is what these rows are: an
 		// operator's account on the target. A GET cannot disclose the password — the wire
 		// shape has no field for it — but it does enumerate which accounts are configured
 		// against which hosts, and a POST arms every subsequent send to replay one. Both
 		// are things an unattended caller should have to ask about.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
-		summary: "platform authentication: per-host HTTP credentials (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
+		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskCredential,
+		summary: "platform authentication: per-host HTTP credentials, and (PUT) whether a failure prompts for them (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
 	},
 	"/api/network/client-certs": {
 		// Same class for the same reason: a TLS client identity is a credential, and DELETE

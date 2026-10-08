@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { api, json, query } from "./api";
 import { keys, useResource } from "./data";
 
@@ -42,6 +42,39 @@ export interface PlatformAuthResponse {
    * watching would be the defect burpsy-react-ui-trcy records.
    */
   presented_on_proxy: boolean;
+  /** Burp's "Prompt for credentials on platform authentication failure". Off by default. */
+  prompt_on_authentication_failure?: boolean;
+}
+
+/** One host whose platform-authentication challenge failed while the prompt was on. */
+export interface PlatformAuthFailure {
+  host: string;
+  /** The scheme the host challenged with: Basic, Digest, NTLM or Negotiate. */
+  scheme: string;
+  realm?: string;
+  reason: "no_credential" | "rejected";
+  count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface PlatformAuthFailuresResponse {
+  prompt_on_authentication_failure: boolean;
+  failures: PlatformAuthFailure[];
+}
+
+/** The rule scheme a challenged scheme maps to, or null when this build cannot answer it. */
+export function ruleSchemeFor(challenged: string): "basic" | "digest" | "ntlmv2" | null {
+  switch (challenged.toLowerCase()) {
+    case "basic":
+      return "basic";
+    case "digest":
+      return "digest";
+    case "ntlm":
+      return "ntlmv2";
+    default:
+      return null;
+  }
 }
 
 /** One client-certificate binding: metadata read off the leaf, no key material. */
@@ -88,7 +121,40 @@ export const usePlatformAuth = (): UseQueryResult<PlatformAuthResponse> =>
 export const useClientCerts = (): UseQueryResult<ClientCertsResponse> =>
   useResource<ClientCertsResponse>(keys.networkClientCerts, "/api/network/client-certs");
 
+/**
+ * The failures waiting for credentials. Polled only while the prompt is on, so a console that
+ * never turned it on asks the server nothing.
+ */
+export function usePlatformAuthFailures(enabled: boolean): UseQueryResult<PlatformAuthFailuresResponse> {
+  return useQuery({
+    queryKey: [...keys.networkAuth, "failures"],
+    queryFn: ({ signal }) => api<PlatformAuthFailuresResponse>("/api/network/auth/failures", { signal }),
+    enabled,
+    refetchInterval: enabled ? 4_000 : false,
+  });
+}
+
 /* --- writes -------------------------------------------------------------- */
+
+export function useSetPlatformAuthPrompt() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (on: boolean) =>
+      api<{ prompt_on_authentication_failure: boolean }>(
+        "/api/network/auth",
+        json("PUT", { prompt_on_authentication_failure: on }),
+      ),
+    onSuccess: () => invalidate([keys.networkAuth]),
+  });
+}
+
+export function useDismissPlatformAuthFailure() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (host: string) => api<unknown>(`/api/network/auth/failures${query({ host })}`, { method: "DELETE" }),
+    onSuccess: () => invalidate([keys.networkAuth]),
+  });
+}
 
 function useInvalidate(): (prefixes: readonly (readonly unknown[])[]) => void {
   const client = useQueryClient();

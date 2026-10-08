@@ -1132,6 +1132,10 @@ func restoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Cred
 		}
 	}
 
+	// Burp's "Prompt for credentials on platform authentication failure" (3xnt) survives a restart
+	// whether or not the rules themselves could be read.
+	credentials.SetPromptOnFailure(store.LoadPlatformAuthPrompt())
+
 	if rows, err := store.LoadClientCerts(); err != nil {
 		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))
 	} else {

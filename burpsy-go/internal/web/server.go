@@ -1113,6 +1113,7 @@ func (s *Server) setupRoutes() {
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
 	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
+	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
 	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)

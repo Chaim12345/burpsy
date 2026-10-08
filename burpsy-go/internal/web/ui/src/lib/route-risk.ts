@@ -77,6 +77,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/issues/triage": "riskLocal",
  "/api/message/": "riskRead",
  "/api/network/auth": "riskCredential",
+ "/api/network/auth/failures": "riskLocal",
  "/api/network/client-certs": "riskCredential",
  "/api/network/proxy": "riskLocal",
  "/api/network/settings": "riskScope",

@@ -1973,6 +1973,20 @@ func (s *Store) loadFlag(key string) bool {
 // rather than burpsy holding a second copy with a second lifetime that survives the
 // revocation.
 
+// SavePlatformAuthPrompt persists Burp's "Prompt for credentials on platform authentication failure"
+// (burpsy-react-ui-3xnt).
+func (s *Store) SavePlatformAuthPrompt(on bool) {
+	if err := s.setSetting("netauth.prompt_on_failure", fmt.Sprint(on)); err != nil {
+		s.log("platform auth prompt", err)
+	}
+}
+
+// LoadPlatformAuthPrompt restores it. Absent reads as off, Burp's default.
+func (s *Store) LoadPlatformAuthPrompt() bool {
+	v, err := s.getSetting("netauth.prompt_on_failure")
+	return err == nil && v == "true"
+}
+
 // SavePlatformAuth replaces the platform-authentication rule set.
 //
 // Order is preserved because it is semantic: netauth.Credentials is first-match-wins,

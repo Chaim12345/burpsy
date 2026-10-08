@@ -9,9 +9,10 @@ import {
   usePlatformAuth,
   useSaveClientCert,
   useSavePlatformAuth,
+  useSetPlatformAuthPrompt,
 } from "../lib/data.netauth";
 import { LoadingPanel, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /**
@@ -45,6 +46,7 @@ export function PlatformAuthSection(): JSX.Element {
   const { data, error, isFetching, isLoading, refetch } = usePlatformAuth();
   const save = useSavePlatformAuth();
   const remove = useDeletePlatformAuth();
+  const setPrompt = useSetPlatformAuthPrompt();
 
   const [host, setHost] = useState("");
   const [scheme, setScheme] = useState("basic");
@@ -89,6 +91,29 @@ export function PlatformAuthSection(): JSX.Element {
       />
       {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       {isLoading ? <LoadingPanel label="Loading platform authentication" /> : null}
+
+      {data ? (
+        <label className="switch-row" htmlFor="platform-auth-prompt">
+          <span>
+            <span>Prompt for credentials on platform authentication failure</span>
+            <span className="cell-dim" style={{ display: "block" }}>
+              Off by default. On, a host that challenges for Basic, Digest or NTLM credentials and gets none it
+              accepts opens a prompt here to enter them; they apply from that host&apos;s next request.
+            </span>
+          </span>
+          <Switch
+            id="platform-auth-prompt"
+            label="Prompt for credentials on platform authentication failure"
+            checked={data.prompt_on_authentication_failure === true}
+            onCheckedChange={(on) =>
+              setPrompt.mutate(on, {
+                onSuccess: () => toast.success(on ? "Platform authentication failures will prompt for credentials" : "No prompt on platform authentication failure"),
+                onError: (failure) => toast.error(failureText(failure, "The setting was not saved")),
+              })
+            }
+          />
+        </label>
+      ) : null}
 
       {data && !data.presented_on_egress ? (
         <div className="notice">

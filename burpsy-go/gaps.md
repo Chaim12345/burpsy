@@ -1702,3 +1702,15 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   says, because that transport also carries h2 and disabling keep-alive there would close h2
   connections too. The proxy's upstream leg is unaffected. Repeater's and Intruder's per-tool reuse
   overrides are not offered.
+
+## Platform-authentication prompt does not replay the failed request (2026-10-08, burpsy-react-ui-3xnt)
+- **Burp:** "Prompt for credentials on platform authentication failure" displays an interactive popup
+  when a host challenges, and the request goes on with the credentials entered.
+- **burpsy:** with `prompt_on_authentication_failure` on, every Basic/Digest/NTLM/Negotiate challenge
+  that no rule answers (or that refuses the rule's credential) is recorded in netauth, where the sender
+  and the proxy already report challenges; the console shows a prompt for the most recent one and saves
+  the answer as a platform-authentication rule for that host.
+- **Divergence:** the request that failed has already returned its 401 to its client and is not held or
+  resent; the credential applies from the host's next request. A raw Repeater/Intruder send never
+  consults platform authentication (the raw path sends the bytes as written), so it never prompts.
+  Negotiate is recorded but cannot be answered by this build.

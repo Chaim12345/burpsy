@@ -78,6 +78,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/issues/triage": false,
  "/api/message/": false,
  "/api/network/auth": true,
+ "/api/network/auth/failures": false,
  "/api/network/client-certs": true,
  "/api/network/proxy": false,
  "/api/network/settings": true,
