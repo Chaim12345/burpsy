@@ -77,6 +77,11 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "editor.b64Decode", group: "Message editor", label: "Base64-decode the selection", defaultChord: null, display: ["mod", "shift", "B"], rebindable: false, note: "Editor keymap" },
   { id: "editor.search", group: "Message editor", label: "Search in the editor", defaultChord: null, display: ["mod", "S"], rebindable: false, note: "Editor keymap" },
   { id: "repeater.send", group: "Message editor", label: "Send the request in Repeater", defaultChord: "mod+enter", rebindable: true, note: "Burp also binds Ctrl+Space" },
+  {
+    id: "repeater.tabSearch", group: "Navigation", label: "Open tab search (Repeater)",
+    defaultChord: "mod+shift+f", rebindable: true,
+    note: "Burp's OPEN_TAB_SEARCH palette action; the decompiled catalogue carries no default binding, so this one is burpsy's",
+  },
 
   // ---- Navigation ------------------------------------------------------------------
   { id: "nav.palette", group: "Navigation", label: "Command palette", defaultChord: "mod+k", rebindable: true, note: "Burp's documented default is also Ctrl+K, so this matches Burp exactly" },

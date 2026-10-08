@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, StickyNote, X } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Search, Send, SlidersHorizontal, StickyNote, X } from "lucide-react";
 import { TAB_COLOURS } from "../ui/highlight-icons";
 import { faithfulRequestBase64, requestTargetPath } from "../lib/message";
 import { cn } from "../lib/cn";
-import { reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
+import { filterTabs, reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { api, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
@@ -71,6 +71,9 @@ function groupModeLabel(mode: RepeaterGroupSendMode): string {
 }
 
 const DEFAULT_TARGET = "https://example.com:443";
+
+/** The last palette tab-search request this page has acted on (qqcn). See the effect that reads it. */
+let consumedTabSearchNonce = 0;
 
 /** The transport is read off the target URL rather than tracked separately. */
 function schemeOf(target: string): "http" | "https" {
@@ -218,6 +221,40 @@ export function RepeaterPage(): JSX.Element {
   const [configOpen, setConfigOpen] = useState(false);
   /** Whether the Notes panel (jva5) is open. The note itself lives on the tab and persists. */
   const [notesOpen, setNotesOpen] = useState(false);
+  /**
+   * Burp's "Open tab search" (qqcn): null while closed, the query while open. With the tab cap
+   * raised, finding one of forty named tabs by scrolling the strip is the gap this closes.
+   */
+  const [tabSearch, setTabSearch] = useState<string | null>(null);
+  /** Which match Enter activates; arrow keys move it. */
+  const [searchCursor, setSearchCursor] = useState(0);
+  const tabSearchNonce = useApp((state) => state.repeaterTabSearchNonce);
+  // The palette's "Open tab search" bumps the nonce; a page that is already mounted opens the search
+  // on the bump, and a page mounted BY that navigation opens it on mount. The consumed value lives at
+  // module scope so a later, unrelated visit to Repeater does not reopen a search nobody asked for.
+  useEffect(() => {
+    if (tabSearchNonce > consumedTabSearchNonce) {
+      consumedTabSearchNonce = tabSearchNonce;
+      setTabSearch("");
+      setSearchCursor(0);
+    }
+  }, [tabSearchNonce]);
+  const tabSearchChord = useChord("repeater.tabSearch");
+  useHotkeys(
+    tabSearchChord,
+    (event) => {
+      event.preventDefault();
+      setTabSearch("");
+      setSearchCursor(0);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [tabSearchChord],
+  );
+  const searchMatches = tabSearch === null ? [] : filterTabs(tabs, tabSearch);
+  const openFromSearch = (id: string) => {
+    setActiveRepeaterTab(id);
+    setTabSearch(null);
+  };
 
   const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
 
@@ -1150,6 +1187,17 @@ export function RepeaterPage(): JSX.Element {
                 </span>
               ) : null}
               <IconButton
+                label={`Search tabs${tabSearchChord ? ` (${tabSearchChord})` : ""}`}
+                size="small"
+                aria-pressed={tabSearch !== null}
+                onClick={() => {
+                  setTabSearch((current) => (current === null ? "" : null));
+                  setSearchCursor(0);
+                }}
+              >
+                <Search size={13} />
+              </IconButton>
+              <IconButton
                 label={inspector ? "Hide Inspector" : "Show Inspector"}
                 size="small"
                 aria-pressed={inspector}
@@ -1247,6 +1295,63 @@ export function RepeaterPage(): JSX.Element {
           }
         />
 
+        {tabSearch !== null ? (
+          <div className="repeater-tab-search">
+            <Input
+              aria-label="Search Repeater tabs by name or target"
+              role="combobox"
+              aria-expanded
+              aria-controls="repeater-tab-search-results"
+              aria-activedescendant={searchMatches[searchCursor] ? `tab-search-${searchMatches[searchCursor]!.id}` : undefined}
+              autoFocus
+              value={tabSearch}
+              placeholder={`Search ${tabs.length} tab${tabs.length === 1 ? "" : "s"} by name or target — every word must match`}
+              onChange={(event) => {
+                setTabSearch(event.target.value);
+                setSearchCursor(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setTabSearch(null);
+                } else if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSearchCursor((at) => Math.min(at + 1, Math.max(0, searchMatches.length - 1)));
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSearchCursor((at) => Math.max(0, at - 1));
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  const chosen = searchMatches[searchCursor];
+                  if (chosen) openFromSearch(chosen.id);
+                }
+              }}
+            />
+            {searchMatches.length === 0 ? (
+              <p className="field-hint" role="status">
+                No tab's name or target contains every word of “{tabSearch}”.
+              </p>
+            ) : (
+              <ul id="repeater-tab-search-results" role="listbox" aria-label="Matching Repeater tabs" className="repeater-tab-search-results">
+                {searchMatches.map((tab, index) => (
+                  <li
+                    key={tab.id}
+                    id={`tab-search-${tab.id}`}
+                    role="option"
+                    aria-selected={index === searchCursor}
+                    data-active={index === searchCursor ? true : undefined}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => openFromSearch(tab.id)}
+                  >
+                    <span>{tab.name}</span>
+                    <span className="cell-dim">{tab.target}</span>
+                    {tab.id === active.id ? <Badge>open</Badge> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
           <div className="tabs-list" role="tablist" aria-label="Ungrouped Repeater requests">
             {ungrouped.map(renderTabTrigger)}

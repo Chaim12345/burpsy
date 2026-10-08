@@ -709,6 +709,13 @@ interface AppState {
 
  repeaterTabs: RepeaterTab[];
  activeRepeaterTab: string | null;
+ /**
+  * Bumped by the palette's "Open tab search" (qqcn) so the Repeater page opens its tab search even
+  * when it is already mounted. A counter, not a boolean: the page cannot reset a flag it did not set
+  * without racing the palette, and a second request must open the search again. Not persisted.
+  */
+ repeaterTabSearchNonce: number;
+ requestRepeaterTabSearch: () => void;
  /** Reopen-closed stack, most recent last. Session-only by design (see partialize). */
  closedRepeaterTabs: RepeaterTab[];
  repeaterGroups: RepeaterGroup[];
@@ -921,6 +928,7 @@ export const useApp = create<AppState>()(
   setHideHeadersByDefault: (hideHeadersByDefault) => set({ hideHeadersByDefault }),
    repeaterTabs: [],
    activeRepeaterTab: null,
+   repeaterTabSearchNonce: 0,
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
@@ -1093,6 +1101,7 @@ export const useApp = create<AppState>()(
      };
     }),
    setActiveRepeaterTab: (activeRepeaterTab) => set({ activeRepeaterTab }),
+   requestRepeaterTabSearch: () => set((state) => ({ repeaterTabSearchNonce: state.repeaterTabSearchNonce + 1 })),
 
    createRepeaterGroup: () => {
     // Palette order is stable, so group colours cycle predictably rather than looking random.
