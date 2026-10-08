@@ -118,6 +118,11 @@ var groupedTools = []groupSpec{
 		ops:   []string{"GET /api/scope", "POST /api/scope"},
 	},
 	{
+		name: "scope_check", group: groupScope,
+		short: "Answers whether URLs are in scope — retained and sendable by the tools — and which rule decided.",
+		ops:   []string{"GET /api/scope/check", "POST /api/scope/check"},
+	},
+	{
 		name: "sitemap", group: groupScope,
 		short: "Reads the site map, records a host/path into it, or suppresses a host, branch or node.",
 		ops:   []string{"GET /api/sitemap", "POST /api/sitemap", "DELETE /api/sitemap"},

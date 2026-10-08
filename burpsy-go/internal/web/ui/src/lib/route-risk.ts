@@ -115,6 +115,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/schedules": "riskAttack",
  "/api/schedules/": "riskAttack",
  "/api/scope": "riskScope",
+ "/api/scope/check": "riskRead",
  "/api/search": "riskRead",
  "/api/sequencer/analyse": "riskRead",
  "/api/sequencer/capture": "riskAttack",

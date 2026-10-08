@@ -116,6 +116,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/schedules": true,
  "/api/schedules/": true,
  "/api/scope": true,
+ "/api/scope/check": false,
  "/api/search": false,
  "/api/sequencer/analyse": false,
  "/api/sequencer/capture": true,

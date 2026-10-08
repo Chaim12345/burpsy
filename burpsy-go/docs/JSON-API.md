@@ -102,6 +102,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET, POST | `/api/scope` | scope | The engagement scope: what every sender is allowed to reach. GET reads it, POST replaces it. |
+| GET, POST | `/api/scope/check` | read | Is a URL in scope? `GET ?url=` or `POST {"urls":[…]}` (≤1000) answers per URL `in_scope` (retained, and sendable by the tools), `proxy_forwards`, the `reason`, and the `matched_rule` that decided (null when none did). Decided by `core.Scope.Decide`, which a test holds to `Contains`' answer. |
 
 ## Scanner (passive coverage, audits, configs)
 

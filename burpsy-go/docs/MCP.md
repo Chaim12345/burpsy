@@ -43,7 +43,7 @@ Implemented methods:
 |---|---|
 | `initialize` | reports the protocol revision (echoing the client's when it is one this server knows: `2024-11-05`, `2025-03-26`, `2025-06-18`), `capabilities.tools`, and an `instructions` block that explains the risk classes and the confirmation flow before a client calls anything. |
 | `notifications/initialized` | ignored, like every notification. A notification gets **no** reply — answering one makes a client that reuses ids mis-attribute the reply. |
-| `tools/list` | the grouped surface (59 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
+| `tools/list` | the grouped surface (60 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
 | `tools/call` | forwards the call to the console and returns its answer. |
 | `ping` | an empty result. |
 

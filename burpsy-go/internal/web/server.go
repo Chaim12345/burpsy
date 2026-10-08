@@ -961,6 +961,8 @@ func (s *Server) setupRoutes() {
 	// can intercept with the same CA. Behind the confirmation gate: see api_ca_export.go.
 	s.mux.HandleFunc("/api/proxy/ca/export", s.handleCAExport)
 	s.mux.HandleFunc("/api/scope", s.handleScope)
+	// "Is this URL in scope?" — Burp's Scope.isInScope, with the rule that decided (z5z3).
+	s.mux.HandleFunc("/api/scope/check", s.handleScopeCheck)
 	s.mux.HandleFunc("/api/scanner/config", s.handleScannerConfig)
 	s.mux.HandleFunc("/api/config/export", s.handleConfigExport)
 	s.mux.HandleFunc("/api/config/import", s.handleConfigImport)

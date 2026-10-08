@@ -809,6 +809,14 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskScope,
 		summary: "the engagement scope: what every sender is allowed to reach",
 	},
+	"/api/scope/check": {
+		// riskRead, and deliberately not riskScope like /api/scope beside it: this reads the rules and
+		// answers a question about a URL; it changes nothing and sends nothing. POST takes a list, which
+		// is the only reason it is not GET alone (burpsy-react-ui-z5z3).
+		methods: []string{"GET", "POST"}, risk: riskRead,
+		summary: "is a URL in scope: GET ?url= or POST {urls:[…]} answers in_scope (retained, and sendable " +
+			"by the tools), proxy_forwards, and the rule that decided",
+	},
 	"/api/search": {
 		// riskRead, and it stays riskRead however much it scans. It sends nothing, changes nothing, and
 		// returns only offsets into messages every other read route already serves — the rows it walks

@@ -74,6 +74,9 @@ var uiRouteExempt = map[string]string{
 		"it. A compatibility shim has no business gaining a caller in this console — the current " +
 		"path is the one to use, and a second caller would make the alias load-bearing",
 	"/api/findings": "legacy alias for /api/issues, same reasoning as /api/exchanges/",
+	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
+		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
+		"in_scope verdict on every history row and edits the rules through /api/scope",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each
