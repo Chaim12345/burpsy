@@ -49,6 +49,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/extensions/order": "riskLocal",
  "/api/extensions/unload": "riskLocal",
  "/api/findings": "riskRead",
+ "/api/graphql/sitemap": "riskLocal",
  "/api/headers/uninteresting": "riskLocal",
  "/api/history": "riskRead",
  "/api/history/extract": "riskLocal",

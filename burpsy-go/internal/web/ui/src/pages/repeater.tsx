@@ -14,6 +14,7 @@ import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
+import { isIntrospectionAnswer } from "../lib/graphql-introspection";
 import { parseResponseTimeoutMS } from "../lib/send-settings";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
@@ -618,6 +619,30 @@ export function RepeaterPage(): JSX.Element {
     (new TextEncoder().encode(previousHttp.response).length > MAX_DIFF_BYTES ||
       new TextEncoder().encode(httpResult.response).length > MAX_DIFF_BYTES);
   const changes = useResponseChanges(previousHttp, httpResult, highlightChanges && !diffTooLarge && chainSide === "first");
+  /**
+   * GraphQL > Save GraphQL queries to site map (7v1e): enabled when the response on screen is an
+   * introspection answer; the server reads the schema off that exchange and records one unsent
+   * request per query and mutation.
+   */
+  const introspected = httpResult != null && chainResponse == null && isIntrospectionAnswer(httpResult.response);
+  const saveGraphQLToSiteMap = {
+    enabled: introspected,
+    run: () => {
+      if (!httpResult) return;
+      void api<{ operations: unknown[]; truncated: boolean; limit: number; endpoint: string; placement: string }>(
+        "/api/graphql/sitemap",
+        json("POST", { exchange_id: httpResult.exchange_id }),
+      )
+        .then((out) => {
+          const count = out.operations.length;
+          const where = out.placement === "body" ? "in the JSON body" : "in the query parameter";
+          if (count === 0) toast.info(`The schema declares no queries or mutations — nothing was added for ${out.endpoint}`);
+          else if (out.truncated) toast.warning(`${count} operations saved to the site map under ${out.endpoint} (${where}); the schema has more than the ${out.limit} limit`);
+          else toast.success(`${count} GraphQL operation${count === 1 ? "" : "s"} saved to the site map under ${out.endpoint} (${where}), not sent`);
+        })
+        .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+    },
+  };
   const changeMarks = useMemo(
     () => (changes.data && httpResult ? changeMarksFor(httpResult.response, changes.data.ops) : null),
     [changes.data, httpResult],
@@ -1672,6 +1697,7 @@ export function RepeaterPage(): JSX.Element {
             filename="repeater-request.txt"
             placeholder="GET / HTTP/1.1"
             menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
+            saveGraphQLToSiteMap={saveGraphQLToSiteMap}
             auditSelection={sentExchange.data && viewedRequest != null ? (span) => void actions.auditSelection(sentExchange.data!, [span]) : undefined}
           />
         )}
@@ -1735,6 +1761,7 @@ export function RepeaterPage(): JSX.Element {
               // Only for the response itself: a redirect hop on screen is a different message.
               bodyBase64={chainResponse == null ? httpResult?.response_body_base64 : undefined}
               changeMarks={highlightChanges && chainResponse == null ? changeMarks?.marks : undefined}
+              saveGraphQLToSiteMap={saveGraphQLToSiteMap}
               requestPath={requestTargetPath(viewedRequest ?? active.request)}
               filename="repeater-response.txt"
               menuGroups={messageMenu}

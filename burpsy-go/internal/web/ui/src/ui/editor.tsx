@@ -42,6 +42,7 @@ import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { extraEditorTabs } from "../lib/editor-extra-tabs";
 import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
+import { INTROSPECTION_QUERY, LEGACY_INTROSPECTION_QUERY, setGraphQLQuery } from "../lib/graphql-introspection";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
 import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { useMintPayload } from "../lib/data.collab";
@@ -558,6 +559,7 @@ export function HttpEditor({
  menuGroups,
  payloadMarks,
  changeMarks,
+ saveGraphQLToSiteMap,
  auditSelection,
  onBodyBytesChange,
  messageId,
@@ -605,6 +607,12 @@ export function HttpEditor({
   * the wrong thing there.
   */
  changeMarks?: ChangeMark[];
+ /**
+  * Burp's GraphQL > "Save GraphQL queries to site map" (7v1e). Given by a surface that knows the
+  * exchange behind the message (Repeater); `enabled` says whether that exchange's response is an
+  * introspection answer. Absent, the item is shown disabled with the reason.
+  */
+ saveGraphQLToSiteMap?: { enabled: boolean; run: () => void };
  /**
   * Actively audit a selected byte range (burpsy-react-ui-c6oq). When given, the Raw view's
   * context menu gains an "Actively audit this selection" entry that converts the CodeMirror
@@ -1181,6 +1189,62 @@ export function HttpEditor({
     ],
    });
   }
+  // Burp's GraphQL submenu (7v1e, burp.Zu6): the two introspection documents replace the query of
+  // an editable REQUEST — on a response they carry Burp's own " [Request only]" and stay disabled —
+  // and Save GraphQL queries to site map acts on an introspection answer the surface can name.
+  if (views) {
+   const requestOnly = isResponse(value) ? " [Request only]" : "";
+   const canSet = editable && !isResponse(value) && Boolean(onChange);
+   const setQuery = (query: string, label: string) => () => {
+    if (!canSet) return;
+    onChange?.(setGraphQLQuery(value, query));
+    toast.success(`${label}: the request now carries it`);
+   };
+   groups.push({
+    id: "graphql",
+    actions: [
+     {
+      id: "graphql",
+      label: "GraphQL",
+      onSelect: () => {},
+      submenu: [
+       {
+        id: "graphql-introspection",
+        actions: [
+         {
+          id: "set-introspection",
+          label: `Set introspection query${requestOnly}`,
+          disabled: !canSet,
+          onSelect: setQuery(INTROSPECTION_QUERY, "Introspection query set"),
+         },
+         {
+          id: "set-legacy-introspection",
+          label: `Set legacy introspection query${requestOnly}`,
+          disabled: !canSet,
+          onSelect: setQuery(LEGACY_INTROSPECTION_QUERY, "Legacy introspection query set"),
+         },
+        ],
+       },
+       {
+        id: "graphql-sitemap",
+        actions: [
+         {
+          id: "save-to-sitemap",
+          label: saveGraphQLToSiteMap
+           ? saveGraphQLToSiteMap.enabled
+             ? "Save GraphQL queries to site map"
+             : "Save GraphQL queries to site map (send an introspection query first)"
+           : "Save GraphQL queries to site map (not available here — use Repeater)",
+          disabled: !saveGraphQLToSiteMap?.enabled,
+          onSelect: () => saveGraphQLToSiteMap?.run(),
+         },
+        ],
+       },
+      ],
+     },
+    ],
+   });
+  }
   if (active !== "raw") return groups;
   if (payloadMarks) {
    groups.push({
@@ -1284,7 +1348,7 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value]);
+ }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value, views, onChange, saveGraphQLToSiteMap]);
 
  const allGroups = useMemo<MenuGroup[]>(
   () => [...(menuGroups ?? []), ...selectionGroups],

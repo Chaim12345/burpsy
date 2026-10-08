@@ -324,6 +324,12 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "legacy alias for /api/issues",
 	},
+	"/api/graphql/sitemap": {
+		// riskLocal: it writes generated requests into burpsy's own store and site map and sends
+		// nothing — every item it adds is unrequested (Source "schema").
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "Save GraphQL queries to site map: one unsent request per query/mutation an introspection answer declares",
+	},
 	"/api/headers/uninteresting": {
 		// riskLocal, and this one genuinely is: it changes how burpsy *presents* a comparison and
 		// nothing else. No traffic, no credentials, and it cannot widen what the engagement may
