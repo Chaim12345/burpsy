@@ -1687,7 +1687,7 @@ var builtInConfigKeys = []struct {
 		name:    "skip_all_tests_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_all_tests_for_parameters",
 		// PARTLY applied, and saying "not applied" was a false statement in an operator-facing table
-		// (burpsy-react-ui-86le). The control IS honoured: /api/scanner/config accepts
+		// (burpsy-react-ui-86le). The control IS honoured: /api/scanner/configs accepts
 		// skip_all_tests_for_parameters as a list of parameter names, AuditConfig carries it, and
 		// the enumerator drops a matching point from every kind as a bcheck.Declined. What is not
 		// ported is Burp's VALUE SHAPE — a list of match rules ({enabled, parameter, item,

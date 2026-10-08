@@ -1046,6 +1046,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
 	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
+	// The catalogue the per-issue selection is chosen from, by name, with each type's detection
+	// methods and which of them burpsy runs (burpsy-react-ui-saq3.3.1).
+	s.mux.HandleFunc("/api/scanner/issue-types", s.handleScannerIssueTypes)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two
 	// operations on two shapes: the exact path lists the queue, the subtree acts on one item. Note the

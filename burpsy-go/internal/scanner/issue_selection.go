@@ -339,6 +339,27 @@ func BurpDetectionMethods(typeIndex uint32) []string {
 	return append([]string(nil), burpIssueDetectionMethods[typeIndex]...)
 }
 
+// BurpDefinesDetectionMethod reports whether Burp resolves name as a detection method of this type —
+// the check a written deny entry is validated with, so the API refuses exactly what an imported
+// file's entry would have been declined for (burpsy-react-ui-saq3.3.1).
+func BurpDefinesDetectionMethod(typeIndex uint32, name string) bool {
+	return burpDefinesMethod(typeIndex, name)
+}
+
+// ImplementedDetectionMethods is the subset of BurpDetectionMethods(typeIndex) burpsy actually runs
+// for the type — its check's own methods and the engine-level ones (the static DOM pass) — in Burp's
+// declaration order. Empty, never nil, for a type burpsy implements none of; the console shows it
+// beside each method so "turned on" and "runs here" are not confused.
+func ImplementedDetectionMethods(typeIndex uint32) []string {
+	out := []string{}
+	for _, m := range burpIssueDetectionMethods[typeIndex] {
+		if burpsyImplements(typeIndex, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // burpDefinesMethod reports whether Burp resolves name for this type (Zwx_.Zm is a per-type lookup).
 func burpDefinesMethod(typeIndex uint32, name string) bool {
 	for _, m := range burpIssueDetectionMethods[typeIndex] {

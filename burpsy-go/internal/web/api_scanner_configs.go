@@ -82,8 +82,10 @@ type auditConfigView struct {
 	// it — and always read back as an array, [] when empty.
 	SkipServerSideInjectionForParameters []string `json:"skip_server_side_injection_for_parameters"`
 	// The deny half of Burp's per-issue selection and what it could not act on (saq3.1, 2hze).
-	// Read-only here: an imported configuration fills them. Each is always an array, [] when empty,
-	// so a console never reads an absent list as "nothing removed".
+	// An imported configuration fills them, and since burpsy-react-ui-saq3.3.1 the first two are
+	// also written through the library's settings block (see applyTo); the declines are a derived
+	// report and never accepted as input. Each is always an array, [] when empty, so a console never
+	// reads an absent list as "nothing removed".
 	DisabledIssueTypes       []uint32                       `json:"disabled_issue_types"`
 	DisabledDetectionMethods []scanner.IssueDetectionMethod `json:"disabled_detection_methods"`
 	DeclinedDetectionMethods scanner.MethodDeclines         `json:"declined_detection_methods"`
@@ -111,7 +113,12 @@ type auditConfigView struct {
 	PerHostThrottleMs *uint32 `json:"per_host_throttle_ms"`
 	// PerHostThrottleRandom enables Burp's throttle_random_enabled: jitter the per-host
 	// interval by up to 50% so a fixed cadence is not fingerprintable.
-	PerHostThrottleRandom bool `json:"per_host_throttle_random"`
+	//
+	// Always written on the read side (true or false, never null) and a pointer only for the write
+	// side (burpsy-react-ui-saq3.3.1): as a plain bool, a settings block that did not mention it
+	// decoded to false and applyTo stored that, so the first partial save — one that only edited the
+	// issue selection — silently switched a saved configuration's jitter off.
+	PerHostThrottleRandom *bool `json:"per_host_throttle_random"`
 	// PerHostMaxInFlight is Burp's resource-pool concurrent_request_limit: the ceiling on
 	// probes in flight to ONE host at a time. Null means no per-host cap.
 	PerHostMaxInFlight *uint32 `json:"per_host_max_in_flight"`
@@ -192,7 +199,8 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 		n := cfg.PerHostThrottleMs.Value
 		v.PerHostThrottleMs = &n
 	}
-	v.PerHostThrottleRandom = cfg.PerHostThrottleRandom
+	jitter := cfg.PerHostThrottleRandom
+	v.PerHostThrottleRandom = &jitter
 	if cfg.PerHostMaxInFlight.Set {
 		n := cfg.PerHostMaxInFlight.Value
 		v.PerHostMaxInFlight = &n
@@ -229,8 +237,9 @@ func newAuditConfigView(cfg scanner.AuditConfig) auditConfigView {
 // with a zero time budget and every breaker disabled, under the operator's name.
 //
 // Writable here: the two misc_insertion_point_options keys, the operator's parameter skip list (v9cg)
-// and its server-side-injection sibling (gmdk), among the fields applyTo reads below. The rest of the view is still read-only and says so at the
-// endpoint, rather than accepting a field and storing nothing.
+// and its server-side-injection sibling (gmdk), the per-issue allow list and its deny half — disabled
+// types and per-type disabled detection methods (saq3.3.1) — among the fields applyTo reads below.
+// The rest of the view is still read-only.
 func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, error) {
 	if v.MaxInsertionPointsPerRequest != nil {
 		n := *v.MaxInsertionPointsPerRequest
@@ -269,8 +278,57 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 					"containing it would match no check at all — the run would audit nothing while the " +
 					"configuration read as a restriction")
 			}
+			// Any other index outside the catalogue is refused for the same reason (saq3.3.1): an
+			// import drops such an entry into the declines and never into this list, so a write must
+			// not be able to put one here either.
+			if _, ok := scanner.ByTypeIndex(t); !ok {
+				return cfg, fmt.Errorf("issue_types: 0x%08x is not an issue type in the catalogue, so selecting it "+
+					"would select no check", t)
+			}
 		}
 		cfg.IssueTypes = append([]uint32(nil), v.IssueTypes...)
+	}
+	// The deny half (burpsy-react-ui-saq3.3.1), written like the allow list: nil leaves the base
+	// alone, [] clears it. Validated against the same two tables the import resolves against — the
+	// catalogue for a type, and Burp's per-type method set for a method, because Burp resolves a
+	// method name INSIDE its type ("Time delays" is a SQL injection method and not a reflected XSS
+	// one). An entry that names nothing is refused by name rather than stored: a deny entry that
+	// matches no check reads as "I turned this off" while turning nothing off.
+	denyTouched := false
+	if v.DisabledIssueTypes != nil {
+		types := make([]uint32, 0, len(v.DisabledIssueTypes))
+		for _, t := range v.DisabledIssueTypes {
+			if _, ok := scanner.ByTypeIndex(t); !ok {
+				return cfg, fmt.Errorf("disabled_issue_types: 0x%08x is not an issue type in the catalogue", t)
+			}
+			types = append(types, t)
+		}
+		cfg.DisabledIssueTypes = types
+		denyTouched = true
+	}
+	if v.DisabledDetectionMethods != nil {
+		methods := make([]scanner.IssueDetectionMethod, 0, len(v.DisabledDetectionMethods))
+		for _, m := range v.DisabledDetectionMethods {
+			def, ok := scanner.ByTypeIndex(m.TypeIndex)
+			if !ok {
+				return cfg, fmt.Errorf("disabled_detection_methods: 0x%08x is not an issue type in the catalogue", m.TypeIndex)
+			}
+			if !scanner.BurpDefinesDetectionMethod(m.TypeIndex, m.Method) {
+				defined := scanner.BurpDetectionMethods(m.TypeIndex)
+				if len(defined) == 0 {
+					return cfg, fmt.Errorf("disabled_detection_methods: %s (0x%08x) has no detection methods — it is "+
+						"selected by type alone, so disable the type instead", def.Name, m.TypeIndex)
+				}
+				return cfg, fmt.Errorf("disabled_detection_methods: %s is not a detection method of %s (0x%08x); "+
+					"its methods are %s", strconv.Quote(m.Method), def.Name, m.TypeIndex, strings.Join(defined, ", "))
+			}
+			methods = append(methods, m)
+		}
+		cfg.DisabledDetectionMethods = methods
+		denyTouched = true
+	}
+	if denyTouched {
+		cfg.DeclinedDetectionMethods = pruneCoveredDeclines(cfg)
 	}
 	if v.FollowUpPasses != nil {
 		cfg.FollowUpPasses = scanner.SomeUint32(*v.FollowUpPasses)
@@ -278,7 +336,9 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 	if v.PerHostThrottleMs != nil {
 		cfg.PerHostThrottleMs = scanner.SomeUint32(*v.PerHostThrottleMs)
 	}
-	cfg.PerHostThrottleRandom = v.PerHostThrottleRandom
+	if v.PerHostThrottleRandom != nil {
+		cfg.PerHostThrottleRandom = *v.PerHostThrottleRandom
+	}
 	if v.PerHostMaxInFlight != nil {
 		cfg.PerHostMaxInFlight = scanner.SomeUint32(*v.PerHostMaxInFlight)
 	}
@@ -307,6 +367,43 @@ func (v auditConfigView) applyTo(cfg scanner.AuditConfig) (scanner.AuditConfig, 
 		cfg.SkipServerSideInjectionForParameters = names
 	}
 	return cfg, nil
+}
+
+// pruneCoveredDeclines drops the declines a written deny list has made untrue.
+//
+// An imported selection records "enabled, but burpsy's check cannot do it" for a method only while
+// the method and its type are both enabled (applyIssueSelection), and the audit re-records those rows
+// on every item the check runs on (audit_engine.go). Once the operator disables that method or its
+// type, the row would go on telling every item the method was skipped for want of an implementation
+// when it is now skipped because they turned it off — so it goes. Only that kind is touched: a decline
+// with no method (a type the catalogue does not know) or with a name Burp does not define for the
+// type stays true whatever the deny list says, and is kept.
+//
+// Nothing is ADDED for a method the write re-enables. An import accounts only for the methods its
+// file names, and the console shows, for every Burp method of every type, whether burpsy implements
+// it — so that answer is visible without a decline row.
+func pruneCoveredDeclines(cfg scanner.AuditConfig) scanner.MethodDeclines {
+	if len(cfg.DeclinedDetectionMethods) == 0 {
+		return cfg.DeclinedDetectionMethods
+	}
+	disabledType := make(map[uint32]bool, len(cfg.DisabledIssueTypes))
+	for _, t := range cfg.DisabledIssueTypes {
+		disabledType[t] = true
+	}
+	disabledMethod := make(map[scanner.IssueDetectionMethod]bool, len(cfg.DisabledDetectionMethods))
+	for _, m := range cfg.DisabledDetectionMethods {
+		disabledMethod[m] = true
+	}
+	kept := make(scanner.MethodDeclines, 0, len(cfg.DeclinedDetectionMethods))
+	for _, d := range cfg.DeclinedDetectionMethods {
+		enabledButUnimplemented := d.Method != "" && scanner.BurpDefinesDetectionMethod(d.TypeIndex, d.Method)
+		if enabledButUnimplemented && (disabledType[d.TypeIndex] ||
+			disabledMethod[scanner.IssueDetectionMethod{TypeIndex: d.TypeIndex, Method: d.Method}]) {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept
 }
 
 // b2u32 is the bool spelling OptUint32 stores.
@@ -510,11 +607,15 @@ func (s *Server) savedScanConfigs() []builtInConfigView {
 			// resolved to the default. Dropping it would leave the operator looking for a
 			// configuration they saved; resolving it to the default would run an audit under
 			// settings they never chose, under a name that says otherwise.
-			out = append(out, builtInConfigView{Name: e.Name, Shipped: false, Damaged: true})
+			out = append(out, builtInConfigView{Name: e.Name, Keys: []scanner.BuiltInConfigKey{}, Shipped: false, Damaged: true})
 			continue
 		}
+		// Keys is [] rather than nil: a saved configuration is a resolved config, not an overlay of
+		// preset keys, and a null here crashed the console's library table, which read .length off it
+		// (found by the saq3.3.1 live drive: the Settings page went blank the moment one was saved).
 		out = append(out, builtInConfigView{
 			Name:     e.Name,
+			Keys:     []scanner.BuiltInConfigKey{},
 			Resolved: newAuditConfigView(cfg),
 			Shipped:  false,
 		})
