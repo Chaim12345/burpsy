@@ -141,3 +141,55 @@ func TestA3MiBBodyIsReadPastTheResultCapThroughWindows(t *testing.T) {
 		t.Fatalf("reassembled %d bytes, stored body is %d; they differ", len(got), len(body))
 	}
 }
+
+// co88: a long history is paged to its last row through the datasets tool, past where a whole-list
+// read is cut at the result cap.
+func TestALongHistoryIsPagedToItsLastRowThroughTheDatasetsTool(t *testing.T) {
+	store := core.NewTrafficStore()
+	base := consoleOver(t, store)
+	long := "/" + strings.Repeat("p", 900)
+	const n = 1500
+	for i := 0; i < n; i++ {
+		putExchange(t, store, "long.test", fmt.Sprintf("%s/%d", long, i))
+	}
+	whole := callGrouped(t, base, "history", map[string]any{"op": "GET /api/history", "query": map[string]string{"limit": "100000"}})
+	if !strings.Contains(textOf(whole), "truncated at") {
+		t.Fatal("the whole history fits in one result; this test's premise is gone")
+	}
+	seen := 0
+	offset := 0
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatal("too many pages")
+		}
+		res := callGrouped(t, base, "datasets", map[string]any{
+			"op": "GET /api/datasets/", "id": "history",
+			"query": map[string]string{"limit": "500", "offset": fmt.Sprint(offset), "return_columns": "id"},
+		})
+		if res.IsError || strings.Contains(textOf(res), "truncated at") {
+			t.Fatalf("page at %d: %.300s", offset, textOf(res))
+		}
+		var view struct {
+			Rows []struct {
+				ID int `json:"id"`
+			} `json:"rows"`
+			NextOffset *int `json:"next_offset"`
+		}
+		if err := json.Unmarshal([]byte(bodyLine(t, textOf(res))), &view); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range view.Rows {
+			if r.ID != seen {
+				t.Fatalf("row %d has id %d", seen, r.ID)
+			}
+			seen++
+		}
+		if view.NextOffset == nil {
+			break
+		}
+		offset = *view.NextOffset
+	}
+	if seen != n {
+		t.Fatalf("paged %d rows of %d", seen, n)
+	}
+}

@@ -254,6 +254,13 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskDestructive,
 		summary: "clears the dashboard's event log (Burp's \"Clear event log\"); the SSE stream at /api/events is a different resource",
 	},
+	"/api/datasets/": {
+		// riskRead: a read-only table view over lists other read routes already serve
+		// (burpsy-react-ui-co88). No credential-class list is offered as a source.
+		methods: []string{"GET"}, risk: riskRead, subPath: "history",
+		summary: "one table view over a list — history, issues, sitemap, tool-log, ws-history, intruder/{task}: " +
+			"regex over columns, sort, offset/limit paging, facet counts, and a long-poll for new rows",
+	},
 	"/api/discovery": {
 		// riskAttack for the same reason /api/crawl is: a POST hands a wordlist to ffuf, which then
 		// sends one request per word — unbounded traffic at the target, chosen by a file rather than by

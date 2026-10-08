@@ -32,6 +32,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/crawl": true,
  "/api/dashboard": false,
  "/api/dashboard/events": true,
+ "/api/datasets/": false,
  "/api/discovery": true,
  "/api/dominvader": false,
  "/api/dominvader/hit": false,

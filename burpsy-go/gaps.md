@@ -1707,3 +1707,17 @@ the two differ. Burp evidence is the decompiled agent registry
 - **Divergence:** RE2 is the regex engine every other burpsy search uses (suite search, history search,
   scope `regex:` arms), and its linear time matters on a multi-megabyte body an agent chose the
   pattern for. A Java-only construct is refused with the compile error rather than approximated.
+
+### Datasets: one route over burpsy's lists (burpsy-react-ui-co88)
+- **Burp:** `search_dataset` / `summarize_dataset` work on a `dataset_id` that every `get_*`/`list_*` tool
+  returns, with `pages` (1–10) × `page_size` (1–100), `wait_seconds` 1–300 and a Java regex
+  (`toolargs/SearchDatasetArgs.java`, `InspectDatasetArgs.java`).
+- **burpsy:** `GET /api/datasets/{source}` names the source directly (history, issues, sitemap,
+  tool-log, ws-history, intruder/{task_id}) instead of a dataset id minted by an earlier call; one
+  page of `limit` ≤ 500 per call; `wait_seconds` ≤ 60; RE2 regex; facets are top-20 values per column
+  with `distinct` and `other` counts.
+- **Divergence:** burpsy's lists are live views of the store, not snapshots, so there is no dataset to
+  mint and expire — the source name is the handle, and `since` gives an incremental read instead.
+  Organizer items, scan configurations and Burp's bulk-send results are not sources yet: the organizer
+  route is riskLocal and carries operator notes, and burpsy has no bulk-send engine (its scripts
+  arrive with burpsy-react-ui-wiwh). The wait bound is the one the collaborator poll states.

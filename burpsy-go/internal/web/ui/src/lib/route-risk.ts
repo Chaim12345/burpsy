@@ -31,6 +31,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/crawl": "riskAttack",
  "/api/dashboard": "riskRead",
  "/api/dashboard/events": "riskDestructive",
+ "/api/datasets/": "riskRead",
  "/api/discovery": "riskAttack",
  "/api/dominvader": "riskLocal",
  "/api/dominvader/hit": "riskLocal",

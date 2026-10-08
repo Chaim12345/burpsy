@@ -187,6 +187,11 @@ var groupedTools = []groupSpec{
 		ops:   []string{"POST /api/tasks/", "DELETE /api/tasks/"},
 	},
 	{
+		name: "datasets", group: groupDatasets,
+		short: "Searches, filters, sorts, pages and summarises any list — history, issues, site map, logger, WebSockets, an attack's requests.",
+		ops:   []string{"GET /api/datasets/"},
+	},
+	{
 		name: "dashboard", group: groupDatasets,
 		short: "Reads the dashboard: running tasks, the activity log, and every coverage summary.",
 		ops:   []string{"GET /api/dashboard", "GET /api/events/stats"},

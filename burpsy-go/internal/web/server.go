@@ -939,6 +939,8 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
 	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
 	s.mux.HandleFunc("/api/stats", s.handleStats)
+	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
+	s.mux.HandleFunc("/api/datasets/", s.handleDatasets)
 	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
 	// Matches the Rust route (crates/web/src/lib.rs) so the shipped frontend's CA link works unchanged.
 	s.mux.HandleFunc("/ca.crt", s.handleCACert)

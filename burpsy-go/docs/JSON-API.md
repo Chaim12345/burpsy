@@ -83,6 +83,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 |---|---|---|---|
 | GET | `/api/history` | read | Proxy history, filtered by the typed query DSL. |
 | GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. With any of `byte_offset`, `max_bytes` (1–65536, default 2048), `pattern` (RE2; anchors the window at the first match, `byte_offset` then relative to it), `case_insensitive`, `decoded`: a **window** of the body instead — `head` in full, `window_base64` (exact) and `window_text` (+ `window_utf8`), `next_offset` (null at the end), `anchor`, `matches` (≤100, always an array). Reads a body of any size to its last byte. |
+| GET | `/api/datasets/{source}` | read | One table view over a list: `history`, `issues`, `sitemap`, `tool-log`, `ws-history`, `intruder/{task_id}` (`/api/datasets/` lists them). Rows are each source's own view flattened to scalar columns. `pattern` (RE2) + `columns`, `sort_by`/`sort_order`, `offset`/`limit` (≤500) with `next_offset` (null on the last page), `return_columns`, `facets` (`true` or a column list; `facets` is null unless asked), `since` (rows with a greater id), and `wait_seconds` (≤60) + `min_rows` to long-poll for new rows. `rows` is always an array. |
 | GET | `/api/exchange/{id}` | read | One exchange row by id. |
 | GET | `/api/exchanges/{id}` | read | Legacy alias for `/api/exchange/`. |
 | GET | `/api/stats` | read | Exchange, message and stored-byte counts. |
