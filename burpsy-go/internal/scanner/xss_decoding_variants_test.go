@@ -320,3 +320,22 @@ func TestTheVulnappDecodingEndpointsAreDeclared(t *testing.T) {
 		}
 	}
 }
+
+// Burp's file-upload HTML variant (burpsy-react-ui-kzt7), through the real audit: the preview
+// endpoint serves an upload by its extension, so only the file re-sent as .html renders, and the
+// finding says the upload carried it. The safe twin serves every upload as text and stays silent.
+func TestAnUploadServedAsHTMLIsFoundAndItsSafeTwinIsNot(t *testing.T) {
+	rt := startRuntimeTarget(t)
+	got := rt.findingsFor(t, "/ij/upload/preview", false)
+	f, fired := got[xssReflectedIssue]
+	if !fired {
+		t.Fatalf("the upload preview reported no XSS; rows: %s", strings.Join(rowNames(got), ", "))
+	}
+	if !strings.Contains(strings.Join(f.DecodingVariants, ","), "file upload as notes.txt") ||
+		!strings.Contains(strings.Join(f.DecodingVariants, ","), ".html") {
+		t.Errorf("the finding names %v, want the .html upload that carried it", f.DecodingVariants)
+	}
+	if _, fired := rt.findingsFor(t, "/ij/safe/upload/preview", false)[xssReflectedIssue]; fired {
+		t.Error("the safe twin, which serves every upload as text/plain, reported XSS")
+	}
+}

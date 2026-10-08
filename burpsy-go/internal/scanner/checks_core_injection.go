@@ -39,6 +39,7 @@ package scanner
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
@@ -300,6 +301,36 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			}
 		}
 
+		// Burp's file-upload HTML variant (FILE_UPLOAD_FILE_EXTENSION_HTML, burpsy-react-ui-kzt7): a
+		// file part whose name is not already .html is re-sent as an HTML document — filename
+		// <original><3 random chars>.html, Content-Type text/html, the payload as its content — so an
+		// upload the application serves back by its extension is tested as the page a victim would
+		// open. Only when the plain bank and the variants did not already break out at this point.
+		if !xssBreakoutConfirmed(evidence) && len(bank) > 0 {
+			if name, ok := point.UploadFilename(h.reqBytes); ok && !strings.HasSuffix(strings.ToLower(name), ".html") {
+				// The uploaded file IS the document, so its content is parsed as page content: the
+				// text-node breakout is the payload, whatever context the plain probes guessed.
+				primary := xssPayloadsForContexts([]xssContext{{Kind: xssCtxText}})[0]
+				canary := newXSSCanary()
+				newName := name + randomLetters(3) + ".html"
+				if sent, err := h.SendHTMLUpload(ctx, point, primary.build(canary), newName); err == nil {
+					res := sent
+					contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+					if strings.Contains(res.Body, canary) {
+						evidence |= XSSEvidenceReflected
+						if rendersAsMarkup(contentType) && primary.confirm != nil && primary.confirm(res.Body, canary) {
+							bit := primary.bit
+							if bit == 0 {
+								bit = XSSEvidenceHTMLBreakout
+							}
+							evidence |= bit
+							viaDecoding = append(viaDecoding, "file upload as "+newName)
+						}
+					}
+				}
+			}
+		}
+
 		if len(decodedOnly) > 0 {
 			// "Suspicious input transformation (reflected)" is a catalogue row with its own
 			// descriptor (checks_final.go); the finding is filed under THAT row rather than a
@@ -423,4 +454,17 @@ func coreInjectionDescriptors() []CheckDescriptor {
 		nativeDescriptor("File path traversal", DispatchScopePerUrl,
 			func(c *ScanConfig) bool { return c != nil && c.CheckPathTraversal }, checkFilePathTraversalCore),
 	}
+}
+
+// randomLetters returns n random lowercase letters, for the upload variant's filename.
+func randomLetters(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return strings.Repeat("x", n)
+	}
+	for i := range b {
+		b[i] = letters[int(b[i])%len(letters)]
+	}
+	return string(b)
 }

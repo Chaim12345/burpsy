@@ -281,6 +281,21 @@ func (h *ProbeHarness) Send(ctx context.Context, point bcheck.InsertionPoint, pa
 	return h.guidedSend(&point, payload, ctx)
 }
 
+// SendHTMLUpload re-sends a multipart file part as an HTML document — filename newName,
+// Content-Type text/html, content the payload — Burp's file-upload HTML variant (kzt7).
+func (h *ProbeHarness) SendHTMLUpload(ctx context.Context, point bcheck.InsertionPoint, payload, newName string) (ProbeResponse, error) {
+	mutated, err := point.ApplyHTMLUpload(h.reqBytes, payload, newName)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	resp, err := h.send(ctx, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	return resp, nil
+}
+
 // SendAppending is Send with the payload appended to the point's original value rather than
 // replacing it — the blind SQL probes' placement: a condition or a sleep only parses in the
 // statement when it follows the value the application put there (`5 and 1=1`, `seed' and '1'='1`).

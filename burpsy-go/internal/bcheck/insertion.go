@@ -146,6 +146,15 @@ type InsertionPoint struct {
 	// refuse is set for containers with no escape: the payload is spliced raw and
 	// refused outright when it carries the sequence that would end the container.
 	refuse refusal
+	// upload is set on a multipart file part's CONTENT point (kzt7): the spans the
+	// upload-as-HTML rewrite needs. Nil on every other point.
+	upload *multipartUpload
+}
+
+// multipartUpload is where a file part's filename and header block sit in the body.
+type multipartUpload struct {
+	head     [2]int
+	fileSpan [2]int
 }
 
 // locKind enumerates which component of the base request a point addresses.
@@ -1120,14 +1129,18 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		if label == "" {
 			label = "part[" + strconv.Itoa(i) + "]"
 		}
-		*out = append(*out, InsertionPoint{
+		content := InsertionPoint{
 			Kind:      IpBody,
 			Name:      label,
 			BaseValue: body[part.content[0]:part.content[1]],
 			loc:       loc{kind: locBody, start: part.content[0], end: part.content[1]},
 			coding:    codingRawSafe,
 			refuse:    refusal{seq: delim},
-		})
+		}
+		if part.hasFile {
+			content.upload = &multipartUpload{head: part.headSpan, fileSpan: part.fileSpan}
+		}
+		*out = append(*out, content)
 		if part.hasName {
 			*out = append(*out, InsertionPoint{
 				Kind:      IpMultipartAttr,
@@ -1179,6 +1192,9 @@ type multipartPart struct {
 	fileSpan [2]int
 	hasFile  bool
 	content  [2]int
+	// headSpan is the part's header block (no trailing blank line), for the upload-as-HTML
+	// rewrite that replaces its Content-Type (burpsy-react-ui-kzt7).
+	headSpan [2]int
 }
 
 // multipartParts splits a multipart body into its parts. ok is false when the
@@ -1242,7 +1258,7 @@ func multipartParts(body, boundary string) ([]multipartPart, bool) {
 		if next < 0 {
 			return nil, false
 		}
-		part := multipartPart{content: [2]int{contentStart, contentStart + next}}
+		part := multipartPart{content: [2]int{contentStart, contentStart + next}, headSpan: [2]int{headStart, headEnd}}
 		readDisposition(body[headStart:headEnd], headStart, &part)
 		parts = append(parts, part)
 		cursor = contentStart + next + skip
@@ -2716,4 +2732,71 @@ func (p InsertionPoint) WireValue(payload string) (string, error) {
 	default:
 		return "", fmt.Errorf("intruder point: unsupported coding %d", p.coding)
 	}
+}
+
+// UploadFilename returns the filename of the multipart file part this content point belongs to,
+// and whether it is one (burpsy-react-ui-kzt7).
+func (p *InsertionPoint) UploadFilename(req []byte) (string, bool) {
+	if p.upload == nil {
+		return "", false
+	}
+	e, err := core.ParseRequestEdit(req)
+	if err != nil {
+		return "", false
+	}
+	start, end := clampOffsets(p.upload.fileSpan[0], p.upload.fileSpan[1], len(e.Body))
+	return string(e.Body[start:end]), true
+}
+
+// ApplyHTMLUpload is Burp's file-upload HTML variant (FILE_UPLOAD_FILE_EXTENSION_HTML_*,
+// burp.Zc3y): the file part is re-sent as an HTML document — its filename becomes newName, its
+// Content-Type text/html, and its content the payload — so an upload the application stores and
+// serves back is tested as the HTML page a victim would be sent to. Only a file part's content
+// point carries the spans; any other point is refused.
+func (p *InsertionPoint) ApplyHTMLUpload(req []byte, payload, newName string) ([]byte, error) {
+	if p.upload == nil {
+		return nil, fmt.Errorf("%s %q is not a multipart file part", p.Kind, p.Name)
+	}
+	if err := p.refuseValue(payload); err != nil {
+		return nil, err
+	}
+	if strings.ContainsAny(newName, "\"\r\n\x00") {
+		return nil, fmt.Errorf("filename %q cannot be written into a Content-Disposition header", newName)
+	}
+	e, err := core.ParseRequestEdit(req)
+	if err != nil {
+		return nil, err
+	}
+	body := string(e.Body)
+	hs, he := clampOffsets(p.upload.head[0], p.upload.head[1], len(body))
+	fs, fe := clampOffsets(p.upload.fileSpan[0], p.upload.fileSpan[1], len(body))
+	cs, ce := clampOffsets(p.loc.start, p.loc.end, len(body))
+	if !(hs <= fs && fe <= he && he <= cs && cs <= ce) {
+		return nil, fmt.Errorf("multipart part spans are out of order")
+	}
+	// The header block with the filename swapped, and its Content-Type replaced (or added).
+	head := body[hs:fs] + newName + body[fe:he]
+	lines := strings.Split(head, "\n")
+	replaced := false
+	for i, line := range lines {
+		if name, _, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(name), "content-type") {
+			lines[i] = "Content-Type: text/html" + func() string {
+				if strings.HasSuffix(line, "\r") {
+					return "\r"
+				}
+				return ""
+			}()
+			replaced = true
+		}
+	}
+	head = strings.Join(lines, "\n")
+	if !replaced {
+		eol := "\r\n"
+		if !strings.Contains(head, "\r\n") {
+			eol = "\n"
+		}
+		head += eol + "Content-Type: text/html"
+	}
+	e.Body = []byte(body[:hs] + head + body[he:cs] + payload + body[ce:])
+	return e.ToRaw(), nil
 }

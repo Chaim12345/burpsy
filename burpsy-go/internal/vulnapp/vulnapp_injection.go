@@ -98,6 +98,17 @@ func injectionEndpoints() []Endpoint {
 		// spelling its markup in the endpoint's own encoding walks through the strip and is
 		// decoded into live markup; the plain payload never can. The safe twins keep the
 		// strip and add the output encoding a real fix would have, and never decode.
+		// The upload preview (burpsy-react-ui-kzt7): the stored file is served back with the
+		// Content-Type its extension implies, so only an upload NAMED .html renders as a page —
+		// the plain payload in a .txt upload comes back as text.
+		{Path: "/ij/upload/preview", Method: "POST", Row: "Cross-site scripting (reflected)",
+			ContentType: "multipart/form-data; boundary=burpsyUpload",
+			Body:        "--burpsyUpload\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--burpsyUpload--\r\n",
+			Note:        "serves the uploaded file back with the Content-Type its filename's extension implies"},
+		{Path: "/ij/safe/upload/preview", Method: "POST", Row: "Cross-site scripting (reflected)", Safe: true,
+			ContentType: "multipart/form-data; boundary=burpsyUpload",
+			Body:        "--burpsyUpload\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhello\r\n--burpsyUpload--\r\n",
+			Note:        "serves every uploaded file as text/plain with nosniff, whatever its name"},
 		{Path: "/ij/xss/decode/url?term=seed", Row: "Cross-site scripting (reflected)",
 			Note: "strips literal angle brackets, then URL-decodes the value before reflecting it raw"},
 		{Path: "/ij/xss/safe/decode/url?term=seed", Row: "Cross-site scripting (reflected)", Safe: true,
@@ -160,6 +171,8 @@ func registerInjection(mux *http.ServeMux) {
 	mux.HandleFunc("/ij/jobs", queueJobWithDelay)
 	mux.HandleFunc("/ij/safe/jobs", safeQueueJobWithDelay)
 
+	mux.HandleFunc("/ij/upload/preview", uploadPreview)
+	mux.HandleFunc("/ij/safe/upload/preview", safeUploadPreview)
 	mux.HandleFunc("/ij/xss/decode/url", xssDecodeURL)
 	mux.HandleFunc("/ij/xss/safe/decode/url", xssSafeDecodeURL)
 	mux.HandleFunc("/ij/xss/decode/html", xssDecodeHTML)
@@ -647,4 +660,53 @@ func xssDecodeURLEscaped(w http.ResponseWriter, r *http.Request) {
 		v = out
 	}
 	fmt.Fprintf(w, "<p>Results for: %s</p>", htmlEscape(v))
+}
+
+// uploadPreview stores nothing and serves the first uploaded file straight back, typed by its
+// filename's extension — the upload-then-view bug where an .html upload is a page on the site's
+// own origin (burpsy-react-ui-kzt7).
+func uploadPreview(w http.ResponseWriter, r *http.Request) {
+	file, header, err := firstUpload(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ext := strings.ToLower(path.Ext(header))
+	if ext == ".html" || ext == ".htm" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Write(file)
+}
+
+func safeUploadPreview(w http.ResponseWriter, r *http.Request) {
+	file, _, err := firstUpload(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write(file)
+}
+
+// firstUpload reads the first file part of a multipart request: its bytes and its filename.
+func firstUpload(r *http.Request) ([]byte, string, error) {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		return nil, "", fmt.Errorf("not a multipart upload: %w", err)
+	}
+	defer r.MultipartForm.RemoveAll()
+	for _, files := range r.MultipartForm.File {
+		for _, fh := range files {
+			f, err := fh.Open()
+			if err != nil {
+				return nil, "", err
+			}
+			defer f.Close()
+			b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+			return b, fh.Filename, err
+		}
+	}
+	return nil, "", fmt.Errorf("no file part")
 }
