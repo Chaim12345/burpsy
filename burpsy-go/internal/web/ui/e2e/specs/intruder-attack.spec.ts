@@ -5,6 +5,7 @@
 // render of fixture JSON.
 
 import { request as httpRequest } from "node:http";
+import AxeBuilder from "@axe-core/playwright";
 import { expect, gotoRoute, pinTheme, test } from "../harness/fixtures";
 import { ROUTES } from "../harness/routes";
 import { readHarness } from "../harness/server";
@@ -40,6 +41,23 @@ function postJson<T>(webPort: number, path: string, body: unknown): Promise<T> {
     request.once("error", reject);
     request.end(payload);
   });
+}
+
+/**
+ * axe-core over what is on screen now, with a11y.spec.ts's tags and its zero-violation bar. a11y.spec
+ * covers each route's first view; the surfaces these tests open — Settings with every card expanded, the
+ * results with their added columns, the extract dialog — are reachable only through an attack.
+ */
+async function expectNoAxeViolations(page: import("@playwright/test").Page, where: string): Promise<void> {
+  // A toast mid-way through its exit animation is a half-transparent fade that axe measures as a
+  // contrast failure of whatever it happens to be over. It belongs to no surface under test here, so
+  // the scan waits for the toasts to leave rather than excluding them.
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, { timeout: 15_000 });
+  const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+  const detail = results.violations
+    .map((v) => `${v.id} (${v.impact}): ${v.help}\n${v.nodes.slice(0, 4).map((n) => `      ${n.target.join(" ")}`).join("\n")}`)
+    .join("\n    ");
+  expect(results.violations, `${where}:\n    ${detail}`).toEqual([]);
 }
 
 /**
@@ -119,6 +137,7 @@ test.describe("intruder attack results", () => {
     await expect(dialog.getByText("the highlighted text", { exact: true })).toBeVisible();
     await expect(dialog.locator("code").first()).toHaveText("admin");
     await expect(save).toBeEnabled();
+    await expectNoAxeViolations(page, "the extract grep dialog");
     const regex = await rule.inputValue();
     await save.click();
     await expect(dialog).toBeHidden();
@@ -139,6 +158,7 @@ test.describe("intruder attack results", () => {
       await p.getByRole("checkbox", { name: "Apply capture filter" }).check();
       // The origin echoes the request target, so only the row whose payload is "admin" contains it.
       await p.getByLabel("Capture by search term").fill("q=admin");
+      await expectNoAxeViolations(p, "Settings with the capture filter expanded");
       // The attack-results switches sit with retries and the baseline request.
       await p.getByRole("tab", { name: /^Resource pool/ }).click();
       await p.getByRole("checkbox", { name: "Store responses" }).uncheck();
@@ -160,6 +180,7 @@ test.describe("intruder attack results", () => {
 
     // The row's response was not stored, and the cell says it was the setting.
     await expect(attempts.locator('tbody tr [title^="Not stored (attack setting)"]').first()).toBeVisible();
+    await expectNoAxeViolations(page, "the results of a filtered, unstored attack");
 
     expect(consoleErrors).toEqual([]);
   });
