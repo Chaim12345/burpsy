@@ -28,6 +28,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
@@ -471,6 +472,9 @@ func main() {
 	// later, and the restore below would write into a holder the server never reads
 	// (burpsy-react-ui-o1eu).
 	proxyNetwork := proxy.NewNetworkSettings()
+	// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): one store the proxy's upstream leg,
+	// the sender and the panel share, so the panel lists what any leg was shown.
+	serverCertStore := servercerts.New()
 
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithNetworkSettings(proxyNetwork).
@@ -505,6 +509,7 @@ func main() {
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
 		WithClientCerts(clientCerts).
+		WithServerCerts(serverCertStore).
 		// What the listener relayed for the operator's browser is logged beside what burpsy's
 		// own tools sent — Logger's coverage, not just the tools' (burpsy-react-ui-6dt).
 		WithToolLog(toolLog)
@@ -545,6 +550,7 @@ func main() {
 	// connection still went out direct.
 	senderConfig := egressSenderConfig(upstreamPolicy, platformAuth, clientCerts)
 	senderConfig.UpstreamCarrier = upstreamCarrier
+	senderConfig.ServerCerts = serverCertStore
 	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
@@ -732,7 +738,8 @@ func main() {
 		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
-		WithNetAuthRestoreNotes(netAuthNotes)
+		WithNetAuthRestoreNotes(netAuthNotes).
+		WithServerCerts(serverCertStore)
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.

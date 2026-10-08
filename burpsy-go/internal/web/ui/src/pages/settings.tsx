@@ -61,7 +61,7 @@ import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
-import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
+import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
 
 const THEMES: { value: Theme; label: string }[] = [
  { value: "system", label: "Follow the system" },
@@ -3381,6 +3381,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  "upstream-proxy": UpstreamProxySection,
  "platform-auth": PlatformAuthSection,
  "client-certificates": ClientCertificatesSection,
+ "server-certificates": ServerCertificatesSection,
  appearance: AppearanceSection,
  hotkeys: HotkeysSection,
  certificate: CertificateSection,

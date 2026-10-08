@@ -3,6 +3,7 @@ package sender
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -284,5 +285,39 @@ func TestRetryOnFreshIsLimitedToUnwrittenOrIdempotentRequests(t *testing.T) {
 	}
 	if !retryOnFresh(&writeFailure{err: syscall.EPIPE}, post) {
 		t.Error("a POST that could not be written at all is not retried")
+	}
+}
+
+type certRecorder struct {
+	hosts  []string
+	chains [][]*x509.Certificate
+}
+
+func (r *certRecorder) Record(host string, port uint16, chain []*x509.Certificate) {
+	r.hosts = append(r.hosts, formatHostPort(host, port))
+	r.chains = append(r.chains, chain)
+}
+
+// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): the chain a TLS target presents is handed
+// to the recorder on the raw path and on the typed path.
+func TestTheSenderRecordsTheCertificateATargetPresents(t *testing.T) {
+	srv := startALPNServer(t, []string{alpn.HTTP11}, false)
+	rec := &certRecorder{}
+	cfg := DefaultSenderConfig()
+	cfg.TLSVerify = false
+	cfg.ServerCerts = rec
+	s := NewSender(cfg)
+	if _, _, err := s.SendRawOutcome(context.Background(), srv.host, srv.port, true, rawGet(srv.host, srv.port), ProtocolPreferenceHTTP1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Send(context.Background(), &Request{Method: "GET", URL: "https://" + formatHostPort(srv.host, srv.port) + "/typed",
+		Host: srv.host, Port: srv.port, TLS: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.chains) != 2 || len(rec.chains[0]) == 0 || len(rec.chains[1]) == 0 {
+		t.Fatalf("recorded %d chain(s) for 2 TLS sends: %v", len(rec.chains), rec.hosts)
+	}
+	if rec.hosts[0] != formatHostPort(srv.host, srv.port) || !rec.chains[0][0].Equal(rec.chains[1][0]) {
+		t.Errorf("hosts %v; the raw and typed paths must record the same leaf", rec.hosts)
 	}
 }

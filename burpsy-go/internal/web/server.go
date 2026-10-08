@@ -26,6 +26,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -35,9 +36,11 @@ import (
 
 // Server represents the web API server.
 type Server struct {
-	store  *core.TrafficStore
-	scope  *core.Scope
-	logger *zap.Logger
+	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
+	serverCerts *servercerts.Store
+	store       *core.TrafficStore
+	scope       *core.Scope
+	logger      *zap.Logger
 	// proxyBind and webBind are the -proxy and -web flag values the binary was
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
@@ -774,6 +777,13 @@ func (s *Server) WithNetAuth(credentials *netauth.Credentials, certs *netauth.Cl
 // leaves a binding that was on the panel yesterday and will never be presented again.
 // Carried here rather than logged and forgotten because the operator reading the panel is
 // the person who can fix it, and they are not reading the log.
+// WithServerCerts attaches the store of certificates target servers presented (t75m), the same one
+// the sender and the proxy record into.
+func (s *Server) WithServerCerts(store *servercerts.Store) *Server {
+	s.serverCerts = store
+	return s
+}
+
 func (s *Server) WithNetAuthRestoreNotes(notes []string) *Server {
 	s.netAuthRestoreNotes = notes
 	return s
@@ -1114,6 +1124,7 @@ func (s *Server) setupRoutes() {
 	// serves a secret — see api_network.go.
 	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
 	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
+	s.mux.HandleFunc("/api/network/server-certificates", s.handleServerCertificates)
 	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)

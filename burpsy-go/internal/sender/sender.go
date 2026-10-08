@@ -126,6 +126,15 @@ type SenderConfig struct {
 	// probe is measuring. A raw caller that wants a credential presented sets the header itself, which
 	// it is already constructing the request line by hand to do.
 	PlatformAuth PlatformAuth
+	// ServerCerts, when set, is handed the certificate chain every TLS server this sender connects to
+	// presents — Burp's "Server TLS certificates" panel (burpsy-react-ui-t75m). Satisfied by
+	// *servercerts.Store.
+	ServerCerts ServerCertRecorder
+}
+
+// ServerCertRecorder records the chain a TLS server presented on host:port.
+type ServerCertRecorder interface {
+	Record(host string, port uint16, chain []*x509.Certificate)
 }
 
 // PlatformAuth is the per-host credential lookup the typed send path consults.
@@ -555,7 +564,11 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 			Base:    settings.dialer(),
 		}.DialContext
 	}
-	return dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
+	conn, negotiated, err := dialer.Dial(ctx, host, settings.dialAddressFor(ctx, host, port), offer)
+	if err == nil && s.config.ServerCerts != nil {
+		s.config.ServerCerts.Record(host, port, conn.ConnectionState().PeerCertificates)
+	}
+	return conn, negotiated, err
 }
 
 // Request represents a raw HTTP request.
@@ -803,6 +816,11 @@ func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*
 		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer httpResp.Body.Close()
+	if httpResp.TLS != nil && s.config.ServerCerts != nil {
+		if host, port, _, aerr := authorityOf(target.String()); aerr == nil {
+			s.config.ServerCerts.Record(host, port, httpResp.TLS.PeerCertificates)
+		}
+	}
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {

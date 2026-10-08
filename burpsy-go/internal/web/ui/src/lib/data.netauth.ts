@@ -134,7 +134,48 @@ export function usePlatformAuthFailures(enabled: boolean): UseQueryResult<Platfo
   });
 }
 
+/** One certificate a target server presented (burpsy-react-ui-t75m). */
+export interface ServerCertificate {
+  subject: string;
+  issuer: string;
+  serial_number: string;
+  dns_names: string[];
+  ip_addresses: string[];
+  not_before: string;
+  not_after: string;
+  sha256: string;
+  /** Presented as the server's own certificate on at least one connection. */
+  leaf: boolean;
+  seen_on: string[];
+  count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface ServerCertificatesResponse {
+  /** Whether a store is wired, so an empty list from a server without one does not read as "none seen". */
+  attached: boolean;
+  max: number;
+  certificates: ServerCertificate[];
+}
+
+export function useServerCertificates(): UseQueryResult<ServerCertificatesResponse> {
+  return useQuery({
+    queryKey: [...keys.networkAuth, "server-certificates"],
+    queryFn: ({ signal }) => api<ServerCertificatesResponse>("/api/network/server-certificates", { signal }),
+    refetchInterval: 10_000,
+  });
+}
+
 /* --- writes -------------------------------------------------------------- */
+
+export function useClearServerCertificates() {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: () => api<unknown>("/api/network/server-certificates", { method: "DELETE" }),
+    onSuccess: () => invalidate([[...keys.networkAuth, "server-certificates"]]),
+  });
+}
 
 export function useSetPlatformAuthPrompt() {
   const invalidate = useInvalidate();

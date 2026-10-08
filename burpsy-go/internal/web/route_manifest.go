@@ -489,6 +489,13 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/server-certificates": {
+		// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): an information-only list of the
+		// certificates target servers presented. DELETE clears the list. riskLocal: public
+		// certificates, no egress.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears",
+	},
 	"/api/network/auth/failures": {
 		// Burp's "Prompt for credentials on platform authentication failure" (burpsy-react-ui-3xnt):
 		// the hosts whose challenge failed, for the console to ask about. Names hosts and schemes,
