@@ -41,6 +41,7 @@ import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
 import { extraEditorTabs } from "../lib/editor-extra-tabs";
+import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
 import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { useMintPayload } from "../lib/data.collab";
@@ -304,6 +305,38 @@ const nonPrintingGlyphs = highlightSpecialChars({
  * the smuggling-relevant case). Widgets are not document text: copying, saving and
  * sending are byte-identical with the toggle on or off.
  */
+/**
+ * Where a deletion happened in a changed response (b4gt): the old text is gone, so there is no span
+ * to paint, and a zero-width marker at the point is the honest way to show that something was there.
+ */
+class DeletedMarker extends WidgetType {
+ override eq(): boolean {
+  return true;
+ }
+ override toDOM(): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "cm-diff-deleted";
+  span.title = "Text the previous response had here is gone";
+  span.setAttribute("aria-label", "deleted text");
+  return span;
+ }
+}
+
+/** The change marks as a CodeMirror decoration set, mapped from message positions to the document. */
+function changeDecorations(value: string, docLength: number, marks: ChangeMark[]): Extension {
+ const ranges = [];
+ for (const mark of marks) {
+  const from = Math.min(valuePosToDocPos(value, mark.from), docLength);
+  const to = Math.min(valuePosToDocPos(value, mark.to), docLength);
+  if (mark.kind === "deleted" || to <= from) {
+   ranges.push(Decoration.widget({ widget: new DeletedMarker(), side: 1 }).range(from));
+  } else {
+   ranges.push(Decoration.mark({ class: "cm-diff-changed" }).range(from, to));
+  }
+ }
+ return EditorView.decorations.of(Decoration.set(ranges, true));
+}
+
 class EOLMarker extends WidgetType {
  constructor(readonly glyph: string) {
   super();
@@ -524,6 +557,7 @@ export function HttpEditor({
  views = true,
  menuGroups,
  payloadMarks,
+ changeMarks,
  auditSelection,
  onBodyBytesChange,
  messageId,
@@ -564,6 +598,13 @@ export function HttpEditor({
  payloadMarks?: {
   onAdd: (span: { start: number; end: number; text: string }) => void;
  };
+ /**
+  * Spans to highlight as changed (b4gt — Repeater's "highlights any changes between the new and
+  * original responses"), in UTF-16 positions of `value`. Painted on the Raw view only: Pretty
+  * reformats the text and a charset override shows other characters, so the positions would name
+  * the wrong thing there.
+  */
+ changeMarks?: ChangeMark[];
  /**
   * Actively audit a selected byte range (burpsy-react-ui-c6oq). When given, the Raw view's
   * context menu gains an "Actively audit this selection" entry that converts the CodeMirror
@@ -1023,6 +1064,13 @@ export function HttpEditor({
  // hexDump did not go away when the view became editable. Raw under a charset override copies
  // what is actually on screen, matching every other "what you see is what exports" surface in
  // this codebase (History and Organizer's CSV exports both follow the same rule).
+ // The change marks join the extensions only on the unconverted Raw text, where `value` and the
+ // document are the same characters (CRLF aside, which changeDecorations maps).
+ const markedExtensions = useMemo(() => {
+  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return extensions;
+  const docLength = value.length - (value.match(/\r\n/g)?.length ?? 0);
+  return [...extensions, changeDecorations(value, docLength, changeMarks)];
+ }, [extensions, changeMarks, active, charsetActive, value]);
  const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
@@ -1612,7 +1660,7 @@ export function HttpEditor({
        readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}
        height="100%"
        theme={editorTheme}
-       extensions={extensions}
+       extensions={markedExtensions}
        placeholder={placeholder}
        onCreateEditor={(view) => {
         // The reveal effect below needs the mounted view to exist; the epoch bump

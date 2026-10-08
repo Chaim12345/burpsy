@@ -12,7 +12,8 @@ import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
-import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useSendRepeaterGroup } from "../lib/data.tools";
+import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
+import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
 import { parseResponseTimeoutMS } from "../lib/send-settings";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
@@ -597,6 +598,30 @@ export function RepeaterPage(): JSX.Element {
    * store has never seen under an id it does not have.
    */
   const sentExchange = useExchange(httpResult?.exchange_id ?? null);
+
+  /**
+   * Change highlighting (b4gt): the response on screen against the previous HTTP send in the same
+   * tab. Only when the pane shows that send's own response — a redirect hop on screen is a different
+   * message, and painting the first response's diff over it would mark the wrong bytes.
+   */
+  const [highlightChanges, setHighlightChanges] = useState(true);
+  const previousHttp = (() => {
+    for (let index = viewIndex - 1; index >= 0; index--) {
+      const entry = activeHistory[index];
+      if (entry && "status" in entry) return entry;
+    }
+    return null;
+  })();
+  const diffTooLarge =
+    previousHttp !== null &&
+    httpResult !== null &&
+    (new TextEncoder().encode(previousHttp.response).length > MAX_DIFF_BYTES ||
+      new TextEncoder().encode(httpResult.response).length > MAX_DIFF_BYTES);
+  const changes = useResponseChanges(previousHttp, httpResult, highlightChanges && !diffTooLarge && chainSide === "first");
+  const changeMarks = useMemo(
+    () => (changes.data && httpResult ? changeMarksFor(httpResult.response, changes.data.ops) : null),
+    [changes.data, httpResult],
+  );
   const actions = usePluginExchangeActions();
   const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
 
@@ -1190,6 +1215,40 @@ export function RepeaterPage(): JSX.Element {
                   ) : null}
                 </>
               ) : null}
+              {httpResult && previousHttp ? (
+                <Tooltip
+                  content={
+                    !highlightChanges
+                      ? "Highlight what changed against the previous send's response (Raw view)"
+                      : diffTooLarge
+                        ? `Not compared: a response is over ${formatBytes(MAX_DIFF_BYTES)}. Use Comparer for large bodies.`
+                        : changes.isError
+                          ? `The comparison failed: ${changes.error instanceof Error ? changes.error.message : String(changes.error)}`
+                          : "Changes against the previous send's response, highlighted in the Raw view. Click to turn off."
+                  }
+                >
+                  <Button
+                    variant="outline"
+                    size="small"
+                    aria-pressed={highlightChanges}
+                    onClick={() => setHighlightChanges((on) => !on)}
+                  >
+                    {!highlightChanges
+                      ? "Highlight changes"
+                      : diffTooLarge
+                        ? "Changes: too large to diff"
+                        : changes.isPending
+                          ? "Comparing…"
+                          : changes.isError
+                            ? "Changes: comparison failed"
+                            : changes.data?.identical
+                              ? "Identical to previous"
+                              : `${changeMarks?.marks.length ?? 0} change${(changeMarks?.marks.length ?? 0) === 1 ? "" : "s"} vs previous` +
+                                (changeMarks?.discounted ? ` (+${changeMarks.discounted} ignored)` : "") +
+                                (changes.data?.truncated ? " (diff truncated)" : "")}
+                  </Button>
+                </Tooltip>
+              ) : null}
               {/* Labelled "send" rather than "response" because stepping moves both panes: the
                   request that was sent and the response it got, together. */}
               {activeHistory.length > 1 ? (
@@ -1675,6 +1734,7 @@ export function RepeaterPage(): JSX.Element {
               // a gRPC reply decodes — and names its fields — in the Protobuf tab (burpsy-react-ui-3pco).
               // Only for the response itself: a redirect hop on screen is a different message.
               bodyBase64={chainResponse == null ? httpResult?.response_body_base64 : undefined}
+              changeMarks={highlightChanges && chainResponse == null ? changeMarks?.marks : undefined}
               requestPath={requestTargetPath(viewedRequest ?? active.request)}
               filename="repeater-response.txt"
               menuGroups={messageMenu}

@@ -4363,7 +4363,7 @@ tbody td {
 .skeleton-bar {
   display: block;
   height: 10px;
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless ("2", not "2px") in primitives.css, so var(--radius-sm) is invalid here; no other rule in this file consumes it either. Matches radius.sm = 2px per DESIGN.md. */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless ("2", not "2px") in primitives.css, so var(--radius-sm) is invalid here; no other rule in this file consumes it either. Matches radius.sm = 2px per DESIGN.md. */
   background: var(--row-skeleton, var(--skeleton-1));
 }
 
@@ -4532,7 +4532,7 @@ tbody td {
 .enc-span[data-encoding] {
   background: color-mix(in srgb, var(--enc-tint) var(--row-tint-alpha), transparent);
   border-bottom: var(--border-focus) solid var(--enc-tint);
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
   padding: 0 1px;
 }
 
@@ -4547,7 +4547,7 @@ tbody td {
   width: 8px;
   height: 8px;
   flex: none;
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
   background: var(--enc-tint, var(--highlight-gray));
 }
 
@@ -4601,7 +4601,7 @@ tbody td {
   width: 14px;
   height: 10px;
   margin-inline-start: var(--s1);
-  border-radius: 2px; /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
   background: #52565a; /* token-exempt: fixed literal badge, see the block comment above — not a themed role */
   color: #e8e8e8; /* token-exempt: fixed literal badge text, same rationale */
   font-size: 8px; /* token-exempt: fixed badge glyph, below the fluid floor */
@@ -4697,14 +4697,14 @@ tbody td {
    across the full track so a growing frontier never reads as stalled or as complete. */
 .progress-track {
   height: 4px;
-  border-radius: 2px; /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
   background: var(--line);
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  border-radius: 2px; /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
   background: var(--accent);
   transition: width var(--t-fast) ease;
 }
@@ -5172,4 +5172,19 @@ tbody td {
 
 .repeater-tab-search-results li[data-active] {
   background: var(--accent-soft, rgba(255, 102, 51, 0.14));
+}
+
+/* Repeater's change highlighting against the previous response (b4gt). */
+.cm-diff-changed {
+  background: var(--accent-soft, rgba(255, 102, 51, 0.22));
+  outline: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.cm-diff-deleted {
+  display: inline-block;
+  width: 0;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  border-left: var(--border-strong) solid var(--accent);
 }

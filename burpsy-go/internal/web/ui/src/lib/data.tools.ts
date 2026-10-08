@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
+import type { CompareOp } from "./response-diff";
 import type { WsRepeaterSendResult } from "./types";
 import type {
   RepeaterGroupSendItem,
@@ -385,4 +386,27 @@ export function useWordlists() {
   queryFn: ({ signal }) => api<WordlistsResponse>("/api/wordlists", { signal }),
   staleTime: 30_000,
  });
+}
+
+/**
+ * Repeater's change highlighting (burpsy-react-ui-b4gt): the word diff between the previous response
+ * in a tab and the one on screen, through the Comparer's own engine. Keyed by the two exchange ids,
+ * so paging back and forth reuses a diff instead of recomputing it, and disabled (no request at all)
+ * when there is no pair to compare or either side is past MAX_DIFF_BYTES — the caller says which.
+ */
+export function useResponseChanges(
+  previous: { exchange_id: number; response: string } | null,
+  current: { exchange_id: number; response: string } | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["repeater-response-changes", previous?.exchange_id, current?.exchange_id],
+    enabled: enabled && previous !== null && current !== null,
+    staleTime: Infinity,
+    queryFn: () =>
+      api<{ identical: boolean; truncated: boolean; ops: CompareOp[] }>(
+        "/api/tools/compare",
+        json("POST", { a: previous!.response, b: current!.response, granularity: "words", response: true }),
+      ),
+  });
 }
