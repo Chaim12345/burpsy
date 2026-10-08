@@ -223,6 +223,9 @@ type crawlStartReq struct {
 	// host; "specified" (or empty, what every caller predating the field sends) is "Scan using my
 	// specified protocols" — each seed as written, and a seed with no scheme is refused by name.
 	Protocols string `json:"protocols,omitempty"`
+	// Scope narrows this crawl within the engagement scope (burpsy-react-ui-501u). Omitted is the
+	// engagement scope alone — every caller predating the field. See crawlScopeReq.
+	Scope *crawlScopeReq `json:"scope,omitempty"`
 	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
 	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
 	// request may name its own origins as well. Taking the set consumes it — a second crawl
@@ -631,6 +634,10 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		}
 	}
 	if seeds, err = expandSeedProtocols(seeds, req.Protocols); err != nil {
+		return 0, nil, 0, nil, err
+	}
+	// Validated before the task registers, so a bad prefix is a 400 rather than a failed row.
+	if _, err = s.crawlScope(req.Scope, seeds); err != nil {
 		return 0, nil, 0, nil, err
 	}
 	// The live passive crawl's seed set (tqug): the sweep's captured URLs, taken (consumed) so
@@ -1315,7 +1322,7 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 	_ = onFetch
 	return crawler.Config{
 		Seeds:  seeds,
-		Scope:  s.scope,
+		Scope:  s.mustCrawlScope(req.Scope, seeds),
 		Sender: s.sender,
 		Capture: scanner.Capture{
 			Store:    s.store,
@@ -1512,4 +1519,77 @@ func expandSeedProtocols(seeds []string, mode string) ([]string, error) {
 		add("https://" + rest)
 	}
 	return out, nil
+}
+
+// crawlScopeReq is Burp's crawl scope (burpsy-react-ui-501u). Mode "seed_directories" is Burp's
+// default — each seed's final directory; "prefixes" is its "Detailed scope configuration" — Include
+// and Exclude URL prefixes; "engagement" (or empty) is the engagement scope alone. Every mode only
+// narrows the engagement scope.
+type crawlScopeReq struct {
+	Mode    string   `json:"mode"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// crawlScope builds the scope a crawl runs under.
+func (s *Server) crawlScope(req *crawlScopeReq, seeds []string) (crawler.Scope, error) {
+	if req == nil || req.Mode == "" || req.Mode == "engagement" {
+		if req != nil && (len(req.Include) > 0 || len(req.Exclude) > 0) {
+			return nil, errors.New("scope prefixes need mode \"prefixes\"")
+		}
+		return s.scope, nil
+	}
+	p := &crawler.PrefixScope{Base: s.scope}
+	norm := func(list []string) ([]string, error) {
+		out := make([]string, 0, len(list))
+		for _, raw := range list {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			n, err := crawler.NormalisePrefix(raw)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, n)
+		}
+		return out, nil
+	}
+	var err error
+	switch req.Mode {
+	case "seed_directories":
+		for _, seed := range seeds {
+			dir, derr := crawler.SeedDirectoryPrefix(seed)
+			if derr != nil {
+				return nil, derr
+			}
+			p.Include = append(p.Include, dir)
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+	case "prefixes":
+		if p.Include, err = norm(req.Include); err != nil {
+			return nil, err
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+		if len(p.Include) == 0 {
+			return nil, errors.New("scope mode \"prefixes\" needs at least one include prefix")
+		}
+	default:
+		return nil, fmt.Errorf("unknown scope mode %q: expected engagement, seed_directories or prefixes", req.Mode)
+	}
+	return p, nil
+}
+
+// mustCrawlScope is crawlScope for the config builder. startCrawl validated the same request with the
+// same function first, so the error branch is unreachable from the route; a direct caller that skips
+// that validation gets the engagement scope, the crawl's behaviour before 501u.
+func (s *Server) mustCrawlScope(req *crawlScopeReq, seeds []string) crawler.Scope {
+	sc, err := s.crawlScope(req, seeds)
+	if err != nil {
+		return s.scope
+	}
+	return sc
 }
