@@ -36,6 +36,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/dominvader/hit": "riskLocal",
  "/api/dominvader/hits": "riskLocal",
  "/api/engagement/": "riskRead",
+ "/api/engagement/clickbandit.js": "riskAsset",
  "/api/events": "riskRead",
  "/api/events/stats": "riskRead",
  "/api/exchange/": "riskLocal",

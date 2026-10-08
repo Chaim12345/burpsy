@@ -1812,3 +1812,15 @@ algorithms are not in the documentation, burpsy's stated rules are recorded here
   status chips the first time an e2e sweep rendered a running run (the tool had never been
   allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:
   the server initialises the counts and the page tolerates an older server's null.
+
+## Clickbandit is burpsy's own script (2026-10-08, burpsy-react-ui-g67w)
+- **Burp:** top-level Burp Clickbandit copies a script to paste into the target page's console:
+  Start, record clicks, Finish, then review (toggle transparency, reset, zoom, arrow keys) and Save
+  the overlay as HTML; options Disable click actions and Sandbox iframe.
+- **burpsy:** burpsy → Clickbandit offers the same workflow and options with its own script
+  (`internal/web/clickbandit/clickbandit.js`, served at `/api/engagement/clickbandit.js`). PortSwigger's
+  script is not reused. The saved proof of concept frames the target transparently and shows one decoy
+  per recorded click, advancing when a click on the frame blurs the page.
+- **Divergence:** recording needs the page to be same-origin with itself in a frame; a target that
+  refuses framing (X-Frame-Options / frame-ancestors) cannot be recorded, which is itself the
+  clickjacking defence working.

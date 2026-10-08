@@ -268,6 +268,11 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "Target analyzer: dynamic and static URLs, parameters and unique parameter names for a host or branch; format=html saves the report",
 	},
+	"/api/engagement/clickbandit.js": {
+		// burpsy's Clickbandit script (burpsy-react-ui-g67w), served as text for the console to copy.
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
+	},
 	"/api/engagement/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",

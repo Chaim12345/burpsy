@@ -1005,6 +1005,7 @@ func (s *Server) setupRoutes() {
 	// and Find references, Burp's three site-map searches, computed over stored responses.
 	// One subtree pattern because the kind IS the path's last segment.
 	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
+	s.mux.HandleFunc("/api/engagement/clickbandit.js", s.handleClickbandit)
 	s.mux.HandleFunc("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
 	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
