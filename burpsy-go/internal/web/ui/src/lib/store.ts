@@ -608,6 +608,9 @@ interface AppState {
  /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
   *  page on mount (fhp). Session-only: a seed from yesterday is a request from yesterday. */
  sequencerSeed: SequencerSeed | null;
+ /** Exchanges sent to the custom scan check editor (kbu1) — the messages its Run test uses, as Burp's
+  *  "Send to Custom scan checks editor" collects them. Session-only. */
+ customCheckTestIds: number[];
  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
  intruder: IntruderConfig;
  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
@@ -702,6 +705,8 @@ interface AppState {
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
  setSequencerSeed: (seed: SequencerSeed | null) => void;
+ addCustomCheckTestId: (id: number) => void;
+ setCustomCheckTestIds: (ids: number[]) => void;
  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
@@ -821,6 +826,7 @@ export const useApp = create<AppState>()(
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
+  customCheckTestIds: [],
   sequencerSeed: null,
    intruder: emptyIntruderConfig(),
    intruderRun: null,
@@ -1059,6 +1065,9 @@ export const useApp = create<AppState>()(
 
    setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
    setSequencerSeed: (sequencerSeed) => set({ sequencerSeed }),
+   addCustomCheckTestId: (id) =>
+    set((state) => ({ customCheckTestIds: state.customCheckTestIds.includes(id) ? state.customCheckTestIds : [...state.customCheckTestIds, id].slice(-20) })),
+   setCustomCheckTestIds: (customCheckTestIds) => set({ customCheckTestIds }),
    setIntruder: (next) =>
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),

@@ -1702,3 +1702,16 @@ Burp rather than wider:
   path `/` and keeps the query. `removing method` sends a request line with no method.
 - The same pass fixed two mis-sends: `appending query_string` replaced the query, and `replacing queries`
   appended a duplicate instead of replacing the named parameter's value.
+
+### Console authoring of custom scan checks (kbu1)
+- **Burp:** `desktop/extend-burp/custom-scan-checks/` — Import, New (from templates), Validate, Format BCheck,
+  Send to Custom scan checks editor + Run test, Export, Delete.
+- **burpsy:** the Custom scan checks page gains New (three templates), Import .bcheck…, Validate (with the
+  parse error's line and column), Run test against exchanges sent with "Send to custom scan check editor"
+  (active drafts send through the audit sender's scope gate; nothing is filed), Save, Export, Delete, and
+  Reload for the `--bchecks` directory. Console checks persist with the project (`scanner.custom_checks`).
+- **Differences:** a check loaded from the directory is read-only in the console (edit the file and Reload),
+  and Delete applies only to console checks, because the file would load it again. Format BCheck is not
+  offered: burpsy has no canonical BCheck printer, and a formatter that re-wrote a working check is a risk
+  the operator did not ask for. A test run against a Collaborator check needs a configured channel, like an
+  audit.

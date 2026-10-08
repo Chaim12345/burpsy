@@ -338,6 +338,9 @@ export interface CorpusCheckView {
   severity?: string;
   author?: string;
   description?: string;
+  /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks. */
+  origin?: "console" | "file";
+  file?: string;
 }
 
 export interface CorpusChecks {

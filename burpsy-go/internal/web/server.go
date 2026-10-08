@@ -1048,6 +1048,12 @@ func (s *Server) setupRoutes() {
 	// the audit engine reads.
 	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
 	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
+	// Console authoring of custom scan checks (kbu1): Validate, Import, source (Export/Delete), Reload, Run test.
+	s.mux.HandleFunc("/api/scanner/checks/validate", s.handleCheckValidate)
+	s.mux.HandleFunc("/api/scanner/checks/import", s.handleCheckImport)
+	s.mux.HandleFunc("/api/scanner/checks/source", s.handleCheckSource)
+	s.mux.HandleFunc("/api/scanner/checks/reload", s.handleCheckReload)
+	s.mux.HandleFunc("/api/scanner/checks/test", s.handleCheckTest)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two

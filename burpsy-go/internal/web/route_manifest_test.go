@@ -339,6 +339,9 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission
 		// ledger precisely so that it is not.
 		"/api/scanner/audit-items/",
+		// A custom scan check's Run test sends an active draft's probes to each chosen exchange's target
+		// through the audit sender — the same traffic an audit sends, so gated like one (kbu1).
+		"/api/scanner/checks/test",
 		"/api/scanner/live",
 		// The two schedule routes arm a crawl or an audit to run unattended at a wall-clock time. See
 		// their manifest entries: deferring an attack does not make arming it a lesser act than

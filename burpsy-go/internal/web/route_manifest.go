@@ -736,6 +736,37 @@ var manifest = map[string]route{
 		summary: "the loaded BCheck corpus as rows: each custom check's name, enablement and run count, " +
 			"so what the corpus covers is inspectable rather than only counted (burpsy-react-ui-kdqj)",
 	},
+	"/api/scanner/checks/validate": {
+		// riskRead: parses a draft and answers whether it would load; nothing changes, nothing is sent.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "Burp's Validate for a custom scan check: parse a BCheck draft and report its name, kind and " +
+			"the parse error with its line and column (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/import": {
+		// riskLocal: adds a check to the corpus the next audit and the passive scanner dispatch.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "Burp's Import / Save for a custom scan check: load a BCheck from the console into the corpus, " +
+			"persisted with the project (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/source": {
+		// GET is a read (Export, the editor); DELETE removes a console check — local-write, the stricter.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "a loaded check's BCheck source for Export and editing, and Delete for a console-imported " +
+			"check (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/reload": {
+		// riskLocal: re-reads the --bchecks directory into the corpus.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "re-read the --bchecks directory, keeping console-imported checks (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/test": {
+		// riskAttack: an active draft sends its probes to each chosen exchange's target, through the same
+		// scope-gated sender an audit uses.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "Burp's Run test for a custom scan check: run a BCheck draft against chosen captured exchanges " +
+			"and report its findings, probes sent and refused, and unresolved references, filing nothing " +
+			"(burpsy-react-ui-kbu1)",
+	},
 	"/api/scanner/checks/enable": {
 		// riskLocal, not riskRead: this changes what the NEXT audit dispatches. Not riskAttack —
 		// nothing leaves the process — and not riskCredential — no secret is involved. The honest

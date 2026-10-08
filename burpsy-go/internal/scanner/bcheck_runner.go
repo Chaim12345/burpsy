@@ -52,6 +52,8 @@ type bcheckSink struct {
 	// it lands in is recorded per check name so the coverage report can say which
 	// corpus checks opened new ground.
 	check string
+	// sent and refused count this sink's probes, for a console test run's report (kbu1).
+	sent, refused int
 }
 
 // Send writes raw request bytes to the bound target through the same gate every
@@ -70,6 +72,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 	gate := k.sc.probeGate(k.ctx, k.ex)
 	resp, err := sendProbe(k.ctx, gate, raw, k.probeBudget)
 	if gate.Refused() > 0 {
+		k.refused++
 		// A refusal counts as a failure too: nothing left the process, so the
 		// check saw no probe response either way. (probeMeter.refusal already
 		// also increments the failure count.)
@@ -80,6 +83,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 		k.meter.failure()
 		return nil, err
 	}
+	k.sent++
 	k.meter.succeeded()
 	// Coverage guidance (burpsy-react-ui-6c90): a corpus check's probe reached a
 	// path of the target, and the cell it landed in is recorded per exchange and
@@ -151,12 +155,40 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 // runBCheckCorpus evaluates one loaded corpus check against one exchange,
 // sending its probes through the meter and the chokepoint.
 func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, check *bcheck.Check) ([]*Finding, error) {
+	t := s.trialBCheck(ctx, ex, check)
+	return t.Findings, t.err
+}
+
+// CheckTrial is one active corpus check's run against one exchange, with everything a console test
+// run reports (kbu1): the findings, the probes sent and refused, and the paths the check referenced
+// that this engine could not supply.
+type CheckTrial struct {
+	Findings   []*Finding
+	Sent       int
+	Refused    int
+	Unresolved []string
+	Declined   []string
+	// Unsupported is the evaluator's reason when it refused the check (a needed collaborator or tool).
+	Unsupported string
+	err         error
+}
+
+// Err is the run's failure, nil when it completed.
+func (t CheckTrial) Err() error { return t.err }
+
+// TrialCorpusCheck runs one active check against one captured exchange exactly as an audit would —
+// the same sink, scope gate, tool runner and conversion — and reports the run (kbu1's "Run test").
+func (s *ActiveScanner) TrialCorpusCheck(ctx context.Context, ex *core.Exchange, check *bcheck.Check) CheckTrial {
+	return s.trialBCheck(ctx, ex, check)
+}
+
+func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, check *bcheck.Check) (trial CheckTrial) {
 	if ex == nil || ex.Response == nil {
-		return nil, errCheckUnsupported
+		return CheckTrial{err: errCheckUnsupported, Unsupported: "the exchange has no stored response"}
 	}
 	resp, err := s.store.Get(*ex.Response)
 	if err != nil {
-		return nil, errCheckUnsupported
+		return CheckTrial{err: errCheckUnsupported, Unsupported: "the exchange's response could not be read"}
 	}
 	bctx := bcheck.NewContext()
 	// Readable, like the probe responses sendProbe hands the check (s68u).
@@ -174,6 +206,10 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 		bctx.Request = req.Raw()
 	}
 	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s), check: check.Name}
+	defer func() {
+		trial.Sent, trial.Refused = sink.sent, sink.refused
+		trial.Unresolved, trial.Declined = bctx.Unresolved(), bctx.Declined()
+	}()
 	// The tool runner rides the context like the sink: the evaluator asks for a
 	// named tool, this scanner resolves it through the allowlist. Nil keeps the
 	// pre-tool behaviour — a check that somehow reaches `run tool` without one
@@ -193,7 +229,7 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 					zap.Uint64("exchange_id", uint64(ex.ID)),
 					zap.String("reason", ae.Error()))
 			}
-			return nil, errCheckUnsupported
+			return CheckTrial{err: errCheckUnsupported, Unsupported: ae.Error()}
 		}
 		if s.logger != nil {
 			s.logger.Warn("active bcheck failed",
@@ -201,7 +237,7 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 				zap.Uint64("exchange_id", uint64(ex.ID)),
 				zap.Error(rerr))
 		}
-		return nil, rerr
+		return CheckTrial{err: rerr}
 	}
 	if decl := bctx.Declined(); len(decl) > 0 && s.logger != nil {
 		s.logger.Warn("active bcheck declined insertion places",
@@ -224,5 +260,5 @@ func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, 
 		EnrichFinding(converted)
 		out = append(out, converted)
 	}
-	return out, nil
+	return CheckTrial{Findings: out}
 }
