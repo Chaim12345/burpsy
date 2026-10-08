@@ -218,6 +218,11 @@ const (
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
+	// Protocols is Burp's "Protocol settings" (burpsy-react-ui-in8j): "both" is "Scan using HTTP &
+	// HTTPS" — every seed is crawled over both schemes, and a seed with no scheme is accepted as a
+	// host; "specified" (or empty, what every caller predating the field sends) is "Scan using my
+	// specified protocols" — each seed as written, and a seed with no scheme is refused by name.
+	Protocols string `json:"protocols,omitempty"`
 	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
 	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
 	// request may name its own origins as well. Taking the set consumes it — a second crawl
@@ -624,6 +629,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		if t := strings.TrimSpace(seed); t != "" {
 			seeds = append(seeds, t)
 		}
+	}
+	if seeds, err = expandSeedProtocols(seeds, req.Protocols); err != nil {
+		return 0, nil, 0, nil, err
 	}
 	// The live passive crawl's seed set (tqug): the sweep's captured URLs, taken (consumed) so
 	// a second crawl cannot silently re-walk the same harvest. Union with the named seeds; the
@@ -1460,4 +1468,48 @@ func (s *Server) crawlSessionCoordinator() crawler.SessionCoordinator {
 		return nil
 	}
 	return s.sessionCoordinator
+}
+
+// expandSeedProtocols applies the scan's protocol setting to its seeds (burpsy-react-ui-in8j).
+//
+// "both" crawls every seed over http and https: a seed written with either scheme gains its twin on
+// the other, and a schemeless seed ("shop.test/app") becomes both. An explicit port is kept on both
+// twins — Burp's option is about schemes, and inventing a port mapping (8080 to 8443?) would be a
+// guess. "specified" keeps each seed as written and refuses a schemeless one, naming the option that
+// would accept it. Order is kept and duplicates are dropped, so the task's target reads as typed.
+func expandSeedProtocols(seeds []string, mode string) ([]string, error) {
+	switch mode {
+	case "", "specified":
+		for _, s := range seeds {
+			if !strings.Contains(s, "://") {
+				return nil, fmt.Errorf("seed %q has no scheme: write http:// or https://, or choose \"Scan using HTTP & HTTPS\" to crawl it over both", s)
+			}
+		}
+		return seeds, nil
+	case "both":
+	default:
+		return nil, fmt.Errorf("unknown protocols %q: expected \"both\" or \"specified\"", mode)
+	}
+	out := make([]string, 0, 2*len(seeds))
+	seen := map[string]bool{}
+	add := func(u string) {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, s := range seeds {
+		rest := s
+		if i := strings.Index(s, "://"); i >= 0 {
+			scheme := strings.ToLower(s[:i])
+			if scheme != "http" && scheme != "https" {
+				add(s) // the crawler refuses it with its own reason
+				continue
+			}
+			rest = s[i+3:]
+		}
+		add("http://" + rest)
+		add("https://" + rest)
+	}
+	return out, nil
 }

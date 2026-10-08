@@ -591,6 +591,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // (Burp: "Define the URLs to scan. Burp will begin crawling from these URLs"). The wire has
  // taken an array all along; only the input was single.
  const seeds = parseSeeds(seed);
+ // Burp's Protocol settings (in8j): "Scan using HTTP & HTTPS" is its default, and is what lets a seed
+ // be written as a bare host.
+ const [protocols, setProtocols] = useState<"both" | "specified">("both");
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
@@ -676,6 +679,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
    {
     seeds,
     kind: chosen.wire,
+    protocols,
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
@@ -908,6 +912,21 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         />
        )}
       </Field>
+      <div role="radiogroup" aria-label="Protocol settings">
+       {(
+        [
+         ["both", "Scan using HTTP & HTTPS", "each URL is crawled over both schemes; a URL may be written as a bare host"],
+         ["specified", "Scan using my specified protocols", "each URL over the scheme it names"],
+        ] as const
+       ).map(([value, label, hint]) => (
+        <label key={value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+         <input type="radio" name="scan-protocols" checked={protocols === value} onChange={() => setProtocols(value)} />
+         <span>
+          {label} <span className="field-hint">— {hint}</span>
+         </span>
+        </label>
+       ))}
+      </div>
       {chosen.id === "crawl-audit" ? (
        <p className="cell-dim" style={{ margin: 0 }}>
         Two tasks appear below: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the
