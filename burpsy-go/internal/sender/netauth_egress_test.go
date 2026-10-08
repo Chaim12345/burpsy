@@ -26,7 +26,9 @@ import (
 
 func mustCredentials(t *testing.T, host string, scheme netauth.Scheme, user, password, realm string) *netauth.Credentials {
 	t.Helper()
-	rule, err := netauth.NewCredential(host, scheme, user, password, realm)
+	rule, err := netauth.NewCredential(netauth.CredentialSpec{
+		Host: host, Scheme: scheme, Username: user, Password: password, Realm: realm,
+	})
 	if err != nil {
 		t.Fatalf("NewCredential: %v", err)
 	}

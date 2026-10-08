@@ -50,7 +50,9 @@ func Test_netauth_host_patterns_agree_with_the_proxys(t *testing.T) {
 			// the only path that matters: a divergence only harms an operator by way of a
 			// credential being or not being presented.
 			store := netauth.NewCredentials()
-			rule, err := netauth.NewCredential(pattern, netauth.SchemeBasic, "u", "p", "")
+			rule, err := netauth.NewCredential(netauth.CredentialSpec{
+				Host: pattern, Scheme: netauth.SchemeBasic, Username: "u", Password: "p",
+			})
 			if err != nil {
 				// NewCredential refuses a blank host pattern, which matchPattern has no opinion
 				// about. That is netauth being stricter at the door rather than a matcher

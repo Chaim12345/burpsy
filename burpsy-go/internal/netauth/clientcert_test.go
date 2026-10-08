@@ -301,20 +301,73 @@ func Test_restore_returns_what_it_loaded_and_names_what_it_could_not(t *testing.
 // A persisted row whose scheme this build does not implement is dropped and named, never
 // coerced. Coercing it to Basic would send the operator's password to a host under a scheme
 // they never chose.
+//
+// ntlmv1 rather than ntlmv2 as the refused row: NTLMv2 is implemented now, so this test
+// would otherwise be asserting a refusal the build no longer makes. NTLMv1 is the scheme
+// that is still refused, and for a reason worth keeping under test — a row that was
+// written by some other tool, or by a future build, must be dropped and named rather than
+// coerced into v2, because "the operator chose v1" and "the operator got v2" are different
+// credentials on the wire.
 func Test_restoring_credentials_refuses_an_unknown_scheme_rather_than_coercing_it(t *testing.T) {
 	store, failures := RestoreCredentials([]CredentialRow{
 		{Host: "ok.example.com", Scheme: "basic", Username: "admin", Password: testPassword},
-		{Host: "ntlm.example.com", Scheme: "ntlmv2", Username: "admin", Password: testPassword},
+		{Host: "ntlm1.example.com", Scheme: "ntlmv1", Username: "admin", Password: testPassword},
 		{Host: "", Scheme: "basic", Username: "admin", Password: testPassword},
 	})
 	if store.Len() != 1 {
 		t.Fatalf("expected one restored rule, got %d", store.Len())
 	}
-	if _, ok := store.Match("ntlm.example.com"); ok {
-		t.Error("the NTLM row was restored under some other scheme; a credential must never be " +
-			"presented under a scheme the operator did not choose")
+	if _, ok := store.Match("ntlm1.example.com"); ok {
+		t.Error("the NTLMv1 row was restored under some other scheme; a credential must never be " +
+			"presented under a scheme the operator did not choose, and an upgrade to v2 is still a " +
+			"different credential than the one on the panel")
 	}
 	if len(failures) != 2 {
-		t.Fatalf("expected the NTLM row and the hostless row to be named, got %d: %v", len(failures), failures)
+		t.Fatalf("expected the NTLMv1 row and the hostless row to be named, got %d: %v", len(failures), failures)
+	}
+}
+
+// A restored NTLMv2 row must come back as a working NTLMv2 rule, domain and all. The
+// migration that added the columns defaults them to empty, so a row that carries a domain
+// and loses it on restore would look identical to one that never had one — and would
+// authenticate as a different account.
+func Test_restoring_an_ntlmv2_row_keeps_its_domain_and_workstation(t *testing.T) {
+	store, failures := RestoreCredentials([]CredentialRow{
+		{Host: "dc.example.com", Scheme: "ntlmv2", Username: "alice", Password: testPassword,
+			Domain: "CORP", Workstation: "LAPTOP"},
+	})
+	if len(failures) != 0 {
+		t.Fatalf("an NTLMv2 row failed to restore: %v", failures)
+	}
+	rule, ok := store.Match("dc.example.com")
+	if !ok {
+		t.Fatal("the NTLMv2 row did not restore into a matchable rule")
+	}
+	if rule.Scheme != SchemeNTLMv2 {
+		t.Errorf("the restored rule's scheme is %q, not ntlmv2", rule.Scheme)
+	}
+	if rule.Domain != "CORP" {
+		t.Errorf("the restored rule's domain is %q, not CORP; NTOWFv2 hashes the domain, so losing it "+
+			"across a restart authenticates as a different account with no error saying so", rule.Domain)
+	}
+	if rule.Workstation != "LAPTOP" {
+		t.Errorf("the restored rule's workstation is %q, not LAPTOP", rule.Workstation)
+	}
+}
+
+// A row written before the domain column existed reads back with empty strings. For Basic
+// and Digest that is correct and must not be refused — otherwise upgrading the binary
+// would silently drop every credential the operator had.
+func Test_restoring_a_pre_migration_row_with_no_domain_still_works(t *testing.T) {
+	store, failures := RestoreCredentials([]CredentialRow{
+		{Host: "old.example.com", Scheme: "basic", Username: "admin", Password: testPassword},
+		{Host: "olddigest.example.com", Scheme: "digest", Username: "admin", Password: testPassword, Realm: "r"},
+	})
+	if len(failures) != 0 {
+		t.Fatalf("rows written before the domain column existed were refused on restore, which would "+
+			"drop every credential an operator had when they upgraded: %v", failures)
+	}
+	if store.Len() != 2 {
+		t.Fatalf("expected both pre-migration rows to restore, got %d", store.Len())
 	}
 }

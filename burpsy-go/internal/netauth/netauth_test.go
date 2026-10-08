@@ -16,7 +16,7 @@ const testPassphrase = "p12-pass-DO-NOT-LEAK"
 
 func mustCredential(t *testing.T, host string, scheme Scheme, user, password, realm string) Credential {
 	t.Helper()
-	rule, err := NewCredential(host, scheme, user, password, realm)
+	rule, err := NewCredential(CredentialSpec{Host: host, Scheme: scheme, Username: user, Password: password, Realm: realm})
 	if err != nil {
 		t.Fatalf("NewCredential(%q): %v", host, err)
 	}
@@ -124,16 +124,29 @@ func Test_secrets_are_readable_by_the_persistence_hole_and_round_trip(t *testing
 
 // The unsupported schemes must be refused by name, not silently coerced. Coercion to
 // Basic would put the operator's password in a header the target never asked for.
+//
+// This list shrank when NTLMv2 was implemented: "ntlm" and "ntlmv2" used to be here and
+// now resolve to SchemeNTLMv2. Leaving them would have made this test assert a limitation
+// that no longer exists — a stale test is a false claim about the build, and this tree
+// treats it the same as any other. What each NTLM spelling now does is pinned by
+// Test_ntlm_version_aliases_resolve_to_v2_and_v1_stays_refused.
 func Test_unsupported_schemes_are_refused_and_named(t *testing.T) {
-	for _, raw := range []string{"ntlm", "NTLMv1", "ntlmv2", "Negotiate", "kerberos"} {
+	for _, raw := range []string{"NTLMv1", "Negotiate", "kerberos"} {
 		scheme, err := ParseScheme(raw)
 		if err == nil {
 			t.Errorf("ParseScheme(%q) returned %q instead of refusing; a selector option that does "+
 				"nothing is the defect this is meant to prevent", raw, scheme)
 			continue
 		}
-		if !strings.Contains(err.Error(), "not supported by this build") {
-			t.Errorf("ParseScheme(%q) error does not say it is unsupported, so it reads like a typo: %v", raw, err)
+		// The error must carry the reason, not just the verdict. "NTLMv1 is not supported"
+		// leaves an operator to guess whether it is an oversight they should report or a
+		// decision they should work around; naming the cause answers that.
+		if !strings.Contains(err.Error(), "refused") && !strings.Contains(err.Error(), "not implemented") {
+			t.Errorf("ParseScheme(%q) error does not say it is a refusal, so it reads like a typo: %v", raw, err)
+		}
+		if len(err.Error()) < 60 {
+			t.Errorf("ParseScheme(%q) refuses without explaining why (%q); the operator cannot act on a "+
+				"verdict with no reason", raw, err.Error())
 		}
 	}
 	if _, err := ParseScheme("bogus"); err == nil {
@@ -158,27 +171,76 @@ func Test_the_advertised_scheme_lists_agree_with_the_parser(t *testing.T) {
 			t.Errorf("SupportedSchemes() offers %q but ParseScheme refuses it: %v", scheme, err)
 		}
 	}
-	for _, name := range UnsupportedSchemes() {
-		if _, err := ParseScheme(name); err == nil {
-			t.Errorf("UnsupportedSchemes() names %q but ParseScheme accepts it", name)
+	for _, unsupported := range UnsupportedSchemes() {
+		if _, err := ParseScheme(unsupported.Name); err == nil {
+			t.Errorf("UnsupportedSchemes() names %q but ParseScheme accepts it", unsupported.Name)
+		}
+		// A refused scheme without a reason is the failure this list exists to prevent: the
+		// operator reads an absence and cannot tell a deliberate refusal from an oversight.
+		if strings.TrimSpace(unsupported.Reason) == "" {
+			t.Errorf("UnsupportedSchemes() refuses %q with no reason attached, so the panel can only "+
+				"show the operator that it is missing, not why", unsupported.Name)
 		}
 	}
 	if len(UnsupportedSchemes()) == 0 {
 		t.Error("UnsupportedSchemes() is empty, so the panel has nothing to tell the operator " +
-			"about NTLM and Negotiate and they are left to infer it from an absence")
+			"about NTLMv1 and Negotiate and they are left to infer it from an absence")
+	}
+}
+
+// NTLMv2 is implemented and NTLMv1 is not, so the two must never collapse into one
+// another. A bare "ntlm" resolving to v1, or "ntlmv1" being quietly upgraded to v2, would
+// both mean the operator gets a scheme they did not ask for — in one direction a
+// credential weaker than they chose, in the other a refusal they did not earn.
+func Test_ntlm_version_aliases_resolve_to_v2_and_v1_stays_refused(t *testing.T) {
+	for _, raw := range []string{"ntlm", "NTLMv2", " ntlmv2 ", "NTLM2"} {
+		scheme, err := ParseScheme(raw)
+		if err != nil {
+			t.Errorf("ParseScheme(%q) was refused, but NTLMv2 is implemented: %v", raw, err)
+			continue
+		}
+		if scheme != SchemeNTLMv2 {
+			t.Errorf("ParseScheme(%q) returned %q; every NTLM spelling this build accepts must resolve "+
+				"to the one NTLM it speaks", raw, scheme)
+		}
+	}
+	for _, raw := range []string{"ntlmv1", "NTLMv1", "ntlm1"} {
+		if _, err := ParseScheme(raw); err == nil {
+			t.Errorf("ParseScheme(%q) was accepted; NTLMv1 has no client entropy and must stay refused, "+
+				"not be silently upgraded to v2 — the operator would not know which went on the wire", raw)
+		} else if !strings.Contains(err.Error(), "ntlmv2") {
+			t.Errorf("the NTLMv1 refusal does not point the operator at ntlmv2, which is the thing they "+
+				"can actually do about it: %v", err)
+		}
+	}
+	for _, raw := range []string{"negotiate", "Kerberos", "spnego"} {
+		err := func() error { _, e := ParseScheme(raw); return e }()
+		if err == nil {
+			t.Errorf("ParseScheme(%q) was accepted; SPNEGO/Kerberos is not implemented and offering it "+
+				"would make a failing handshake look like the target's fault", raw)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ccache") && !strings.Contains(err.Error(), "keytab") {
+			t.Errorf("the Negotiate refusal does not name what it would require (a ccache or keytab), so "+
+				"the operator cannot tell whether it is a gap or an impossibility: %v", err)
+		}
 	}
 }
 
 // ---- rule list semantics ------------------------------------------------------------
 
 func Test_a_rule_needs_a_host_and_a_username(t *testing.T) {
-	if _, err := NewCredential("  ", SchemeBasic, "admin", testPassword, ""); err == nil {
+	if _, err := NewCredential(CredentialSpec{Host: "  ", Scheme: SchemeBasic, Username: "admin", Password: testPassword}); err == nil {
 		t.Error("a blank host pattern must be refused: the rule could never match anything")
 	}
-	if _, err := NewCredential("example.com", SchemeBasic, " ", testPassword, ""); err == nil {
+	if _, err := NewCredential(CredentialSpec{Host: "example.com", Scheme: SchemeBasic, Username: " ", Password: testPassword}); err == nil {
 		t.Error("a blank username must be refused: the rule names no account")
 	}
-	if _, err := NewCredential("example.com", Scheme("ntlm"), "admin", testPassword, ""); err == nil {
+	// "ntlm" is what ParseScheme accepts on the wire as an alias for NTLMv2, but it is not
+	// a Scheme value. Handing it to NewCredential directly must still be refused: the
+	// canonical value is SchemeNTLMv2, and a rule stored under a non-canonical scheme would
+	// never be found by Match, Remove or the DELETE route, all of which compare exactly.
+	if _, err := NewCredential(CredentialSpec{Host: "example.com", Scheme: Scheme("ntlm"), Username: "admin", Password: testPassword}); err == nil {
 		t.Error("NewCredential must refuse a scheme it does not implement even when handed one directly")
 	}
 }

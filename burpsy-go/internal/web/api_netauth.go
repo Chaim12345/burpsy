@@ -60,10 +60,11 @@ type platformAuthResponse struct {
 	// Schemes is what a selector may offer, read from the engine rather than hard-coded
 	// in the browser, so a scheme cannot appear in the panel without being implemented.
 	Schemes []string `json:"schemes"`
-	// Unsupported names the schemes Burp has and this build does not, so the panel can
-	// say so out loud. An operator told "NTLM is not supported" has an answer; one who
-	// finds no NTLM option does not know whether they are looking in the wrong place.
-	Unsupported []string `json:"unsupported"`
+	// Unsupported names the schemes Burp has and this build refuses, each with its reason.
+	// A name alone was not enough: "NTLMv1 is not supported" reads as a gap somebody
+	// forgot, when it is in fact a refusal with a security argument behind it. The reason
+	// travels to the panel so the argument is where the decision is made.
+	Unsupported []netauth.UnsupportedScheme `json:"unsupported"`
 	// PresentedOnEgress reports whether the sender these rules are supposed to reach was
 	// actually built with the credential store attached. See sender.CarriesPlatformAuth:
 	// this can be false in a Server assembled without it, and a rule that is stored but
@@ -136,6 +137,12 @@ func (s *Server) postNetworkAuth(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Realm    string `json:"realm"`
+		// Domain and Workstation are NTLMv2's, Burp's "Domain" and "Domain hostname".
+		// NewCredential refuses either on a Basic or Digest rule rather than storing and
+		// ignoring it, so a panel that leaves a stale domain in the form gets a 400 that
+		// names the problem instead of a rule that quietly does something else.
+		Domain      string `json:"domain"`
+		Workstation string `json:"workstation"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -152,7 +159,15 @@ func (s *Server) postNetworkAuth(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	rule, err := netauth.NewCredential(req.Host, scheme, req.Username, req.Password, req.Realm)
+	rule, err := netauth.NewCredential(netauth.CredentialSpec{
+		Host:        req.Host,
+		Scheme:      scheme,
+		Username:    req.Username,
+		Password:    req.Password,
+		Realm:       req.Realm,
+		Domain:      req.Domain,
+		Workstation: req.Workstation,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

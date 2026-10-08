@@ -230,12 +230,14 @@ CREATE TABLE IF NOT EXISTS organizer_collections (
 	note TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS platform_auth (
-	ord      INTEGER PRIMARY KEY,
-	host     TEXT NOT NULL,
-	scheme   TEXT NOT NULL,
-	username TEXT NOT NULL,
-	password TEXT NOT NULL,
-	realm    TEXT NOT NULL
+	ord         INTEGER PRIMARY KEY,
+	host        TEXT NOT NULL,
+	scheme      TEXT NOT NULL,
+	username    TEXT NOT NULL,
+	password    TEXT NOT NULL,
+	realm       TEXT NOT NULL,
+	domain      TEXT NOT NULL DEFAULT '',
+	workstation TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS client_certs (
 	ord        INTEGER PRIMARY KEY,
@@ -520,6 +522,17 @@ CREATE TABLE IF NOT EXISTS tool_log (
 	// active rule, and reading one back as disabled would silently shrink an engagement's
 	// scope across a restart.
 	if err := s.addColumn("scope_rules_v3", "enabled", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	// platform_auth gained domain and workstation when NTLMv2 landed (burpsy-react-ui-sel6).
+	// Empty string is the right default for both: every row written before this column
+	// existed was Basic or Digest, and neither has a domain. Defaulting an NTLM rule's
+	// domain to anything guessed — the host name, say — would change which account the
+	// credential authenticates as, because NTOWFv2 hashes the domain.
+	if err := s.addColumn("platform_auth", "domain", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumn("platform_auth", "workstation", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	return nil
@@ -1732,9 +1745,9 @@ func (s *Store) SavePlatformAuth(rows []netauth.CredentialRow) {
 	}
 	for i, row := range rows {
 		if _, err := s.db.Exec(
-			`INSERT OR REPLACE INTO platform_auth (ord, host, scheme, username, password, realm)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			i, row.Host, row.Scheme, row.Username, row.Password, row.Realm); err != nil {
+			`INSERT OR REPLACE INTO platform_auth (ord, host, scheme, username, password, realm, domain, workstation)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			i, row.Host, row.Scheme, row.Username, row.Password, row.Realm, row.Domain, row.Workstation); err != nil {
 			// The op name carries the host but never the password. Every error path in this
 			// file goes through s.log to zap, which is exactly the sink a secret must not
 			// reach — a logged credential outlives the session in a file nobody redacts.
@@ -1754,7 +1767,7 @@ func (s *Store) SavePlatformAuth(rows []netauth.CredentialRow) {
 // An empty database yields an empty slice and a nil error. "Nothing stored" is not a
 // failure — it is what a first run looks like.
 func (s *Store) LoadPlatformAuth() ([]netauth.CredentialRow, error) {
-	rows, err := s.db.Query(`SELECT host, scheme, username, password, realm FROM platform_auth ORDER BY ord`)
+	rows, err := s.db.Query(`SELECT host, scheme, username, password, realm, domain, workstation FROM platform_auth ORDER BY ord`)
 	if err != nil {
 		return nil, err
 	}
@@ -1762,7 +1775,8 @@ func (s *Store) LoadPlatformAuth() ([]netauth.CredentialRow, error) {
 	var out []netauth.CredentialRow
 	for rows.Next() {
 		var row netauth.CredentialRow
-		if err := rows.Scan(&row.Host, &row.Scheme, &row.Username, &row.Password, &row.Realm); err != nil {
+		if err := rows.Scan(&row.Host, &row.Scheme, &row.Username, &row.Password, &row.Realm,
+			&row.Domain, &row.Workstation); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

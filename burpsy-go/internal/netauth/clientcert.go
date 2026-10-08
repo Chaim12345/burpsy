@@ -182,7 +182,19 @@ func RestoreCredentials(rows []CredentialRow) (*Credentials, []error) {
 			failures = append(failures, fmt.Errorf("platform-authentication rule for %s: %w", row.Host, err))
 			continue
 		}
-		rule, err := NewCredential(row.Host, scheme, row.Username, row.Password, row.Realm)
+		rule, err := NewCredential(CredentialSpec{
+			Host:     row.Host,
+			Scheme:   scheme,
+			Username: row.Username,
+			Password: row.Password,
+			Realm:    row.Realm,
+			// Empty for every row written before the migration that added the columns, and
+			// for every Basic or Digest rule. NewCredential refuses a non-empty domain on a
+			// non-NTLM rule, so a database that somehow carries one surfaces as a named
+			// restore failure rather than as a rule that quietly ignores it.
+			Domain:      row.Domain,
+			Workstation: row.Workstation,
+		})
 		if err != nil {
 			failures = append(failures, fmt.Errorf("platform-authentication rule for %s: %w", row.Host, err))
 			continue
