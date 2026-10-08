@@ -232,6 +232,8 @@ export function useStartCrawl() {
    kind?: string;
    /** Burp's Protocol settings (in8j): "both" crawls every seed over http and https. */
    protocols?: "both" | "specified";
+   /** The crawl's own scope inside the engagement scope (501u). */
+   scope?: { mode: "seed_directories" | "engagement" | "prefixes"; include?: string[]; exclude?: string[] };
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;

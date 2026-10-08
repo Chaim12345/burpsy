@@ -1678,3 +1678,14 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Scan launch, API scans and task control (burpsy-react-ui-cmx5, 2026-10-08)
+
+### Crawl scope (501u)
+- **Burp:** `desktop/running-scans/setting-pro-scope.html` — the crawl is restricted to the configured URLs'
+  final directory by default; "Detailed scope configuration" takes URL prefixes or advanced matching rules.
+- **burpsy:** seed directories (the New scan dialog's default), the engagement scope, or include/exclude URL
+  prefixes — always inside the engagement scope, at the frontier and at the send gate. Burp's "advanced
+  matching rules" (per-field host/port/file regexes) are not offered: the engagement scope already has that
+  rule shape, and a second rule editor scoped to one crawl would duplicate it. An API caller that omits
+  `scope` keeps the engagement scope alone, as before.

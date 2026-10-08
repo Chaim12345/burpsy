@@ -594,6 +594,11 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // Burp's Protocol settings (in8j): "Scan using HTTP & HTTPS" is its default, and is what lets a seed
  // be written as a bare host.
  const [protocols, setProtocols] = useState<"both" | "specified">("both");
+ // Burp's crawl scope (501u): by default "restricted to the configured URLs, ending with the final
+ // directory"; the detailed configuration takes URL prefixes. Always inside the engagement scope.
+ const [scopeMode, setScopeMode] = useState<"seed_directories" | "engagement" | "prefixes">("seed_directories");
+ const [scopeInclude, setScopeInclude] = useState("");
+ const [scopeExclude, setScopeExclude] = useState("");
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
@@ -680,6 +685,11 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     seeds,
     kind: chosen.wire,
     protocols,
+    scope: {
+     mode: scopeMode,
+     include: scopeMode === "prefixes" ? parseSeeds(scopeInclude) : undefined,
+     exclude: scopeMode !== "engagement" ? parseSeeds(scopeExclude) : undefined,
+    },
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
@@ -912,6 +922,32 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         />
        )}
       </Field>
+      <div role="radiogroup" aria-label="Crawl scope">
+       {(
+        [
+         ["seed_directories", "Restrict to the URLs' directories", "Burp's default: each URL's final directory"],
+         ["engagement", "Use the engagement scope", "everything the project scope allows"],
+         ["prefixes", "Detailed scope configuration", "URL prefixes to include and exclude"],
+        ] as const
+       ).map(([value, label, hint]) => (
+        <label key={value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+         <input type="radio" name="crawl-scope" checked={scopeMode === value} onChange={() => setScopeMode(value)} />
+         <span>
+          {label} <span className="field-hint">— {hint}</span>
+         </span>
+        </label>
+       ))}
+      </div>
+      {scopeMode === "prefixes" ? (
+       <Field label="Include URL prefixes" hint="One per line; the crawl stays under these.">
+        {(id) => <Input id={id} value={scopeInclude} onChange={(event) => setScopeInclude(event.target.value)} placeholder="https://demo.local/app/" />}
+       </Field>
+      ) : null}
+      {scopeMode !== "engagement" ? (
+       <Field label="Exclude URL prefixes" hint="Optional; never requested even when included.">
+        {(id) => <Input id={id} value={scopeExclude} onChange={(event) => setScopeExclude(event.target.value)} placeholder="https://demo.local/app/logout" />}
+       </Field>
+      ) : null}
       <div role="radiogroup" aria-label="Protocol settings">
        {(
         [
