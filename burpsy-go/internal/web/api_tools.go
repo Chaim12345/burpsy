@@ -543,6 +543,38 @@ type intruderRunReq struct {
 	// sender.FollowRedirectsAfterPolicy, which does not replay cookies, and a checkbox for a
 	// feature that does not exist would lie.
 	FollowRedirects *string `json:"follow_redirects"`
+	// SetConnectionClose is Burp's "Set Connection header" attack setting (burpsy-react-ui-fmxv):
+	// "Add or update the Connection header with the value close." Off unless asked — Burp's own
+	// default — so a template's own Connection header, whatever it says, reaches the wire
+	// untouched for every attack that never mentions this. See internal/intruder/connection.go.
+	SetConnectionClose *bool `json:"set_connection_close"`
+	// StoreFullPayloads is Burp's "Store full payloads" (burpsy-react-ui-fmxv): each attempt row
+	// names the payload values behind it, rather than only its ordinal. Off unless asked, which is
+	// both Burp's default and the behaviour every attack had before this existed.
+	//
+	// What it costs is documented on intruder.Attack.StorePayloads and is worth repeating at the
+	// wire, because this is the field an operator actually sets: the payload sets are materialised
+	// either way, so this does not decide whether payloads live in memory during the attack — it
+	// decides whether the REPORT can name them afterwards without the plan and the resolved sets
+	// in hand. The per-row cost is a slice header plus one string header per payload, bounded by
+	// the report's detail limit.
+	StoreFullPayloads *bool `json:"store_full_payloads"`
+	// DenialOfService is Burp's "Use denial-of-service mode" (burpsy-react-ui-fmxv): issue each
+	// request and close the TCP connection without processing the response.
+	//
+	// burpsy does not ship it, and this field exists so that saying so is possible. An operator who
+	// sends it gets a 400 naming the reason; without the field the same request would run an
+	// ORDINARY attack and report full responses, and the operator would have no way to tell that
+	// the mode they asked for never happened. That is the difference between a refusal and a
+	// no-op, and this repo treats a silent no-op as the defect.
+	//
+	// Why it is refused rather than built: Burp documents the mode's purpose as "application-layer
+	// denial-of-service attacks", and shipping a mode whose stated purpose is denial of service is
+	// a product decision about what this tool is for, not an implementation detail for the engine
+	// to settle. It also cannot be built inside the intruder at all — "do not read the response" is
+	// a property of the socket, which lives behind sender.AuthorisedSender, so the capability would
+	// have to be added to the send chokepoint every tool shares. See burpsy-react-ui-fmxv.
+	DenialOfService *bool `json:"denial_of_service"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -787,6 +819,20 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "refused: "+s.scope.Explain(host, port, "/", tls), http.StatusForbidden)
 		return
 	}
+	// Burp's "Use denial-of-service mode" is refused here, before anything is sent, and the
+	// refusal names what is missing and why. Running the attack without the mode would send the
+	// same requests and report full responses, and nothing in the result would tell the operator
+	// that the setting they ticked did nothing — see intruderRunReq.DenialOfService.
+	//
+	// Only an explicit true is refused: `"denial_of_service": false` is an operator (or a UI
+	// serialising its whole settings panel) saying they do not want it, and refusing that would
+	// make the honest answer the one that fails.
+	if req.DenialOfService != nil && *req.DenialOfService {
+		http.Error(w, "refused: denial-of-service mode is not implemented in burpsy. Burp's setting issues each request and closes the TCP connection without reading the response, for the purpose its own documentation gives — application-layer denial-of-service attacks. burpsy does not ship that mode. Send denial_of_service=false or omit it; the attack will read every response and the report will count only responses it actually received.",
+			http.StatusBadRequest)
+		return
+	}
+
 	// Naming a generator or a mode is as clear a statement that the operator wants the full
 	// report as anything else, so both select the report shape.
 	legacy := req.Mode == nil && req.PayloadSets == nil && req.PayloadSources == nil
@@ -1116,7 +1162,13 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	attack := intruder.NewAttack(msg.Raw(), selected, resolved, plan).
 		WithLimits(limits).
 		WithGrep(grep).
-		WithControl(control)
+		WithControl(control).
+		// Burp's two attack settings that shape the wire and the report respectively
+		// (burpsy-react-ui-fmxv). Both default off, which is Burp's default and the behaviour every
+		// attack had before they existed, so an attack that never mentions them is byte-for-byte
+		// the attack it always was.
+		WithSetConnectionClose(derefBool(req.SetConnectionClose, false)).
+		WithStorePayloads(derefBool(req.StoreFullPayloads, false))
 	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
 	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
 	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
@@ -1352,6 +1404,16 @@ func selectPoints(points *[]int, pointIndex *int, found int) ([]int, error) {
 }
 
 // derefManual normalises the optional manual-points field: an absent field marks nothing.
+// derefBool reads an optional wire bool, using def for an absent one. Absent and present-and-false
+// are deliberately the same answer for the settings that use it here: both mean "not asked for",
+// and a UI that serialises its whole panel sends the explicit false.
+func derefBool(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
 func derefManual(spans *[]intruder.ManualSpan) []intruder.ManualSpan {
 	if spans == nil {
 		return nil
