@@ -16,6 +16,8 @@ import { HttpEditor } from "../ui/editor";
 import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
 import { useCommandHandler } from "../lib/commands";
+import { FILTER_DEFAULTS, HISTORY_POPOVER_KEYS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
+import { FilterPresetsMenu } from "../ui/filter-presets";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
@@ -46,6 +48,13 @@ const MIME_TYPES = [
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/** The status, MIME and method selects' closed values, for saved presets (mntt). */
+const HISTORY_FILTER_ALLOWED = {
+ statusSet: STATUS_BUCKETS.map((bucket) => bucket.value),
+ mimeSet: MIME_TYPES.map((mime) => mime.value),
+ method: ["all", ...METHODS],
+};
 
 /**
  * Whether one MIME bucket matches a row (burpsy-react-ui-9my). The single-select memo below
@@ -625,6 +634,56 @@ export function HistoryPage(): JSX.Element {
   });
   injectedFragment.current = wanted;
  }, [scopeOnly, scopeFragment]);
+
+ // Saved filters (mntt): everything a filter preset carries, as it stands, and the one function
+ // that puts a preset back. The query box is saved without the scope fragment "In scope only"
+ // splices into it, and the fragment is re-spliced on apply from the scope as it is NOW — a preset
+ // saved under last week's scope must not resurrect last week's hosts as typed text.
+ const filterSnapshot: FilterSettings = {
+  term: injectedFragment.current ? stripFragment(term, injectedFragment.current) : term,
+  statusSet,
+  mimeSet,
+  filterOn,
+  method,
+  limit,
+  scopeOnly,
+  hideNoResponse,
+  onlyParameterized,
+  listenerPorts,
+  onlyCommented,
+  onlyHighlighted,
+  showExtensions,
+  hideExtensions,
+  searchText,
+  searchCase,
+  searchRegex,
+  searchNegate,
+  columnFilters,
+ };
+ const applyFilterSettings = (next: FilterSettings) => {
+  const v = sanitizeSettings("history", next, HISTORY_FILTER_ALLOWED).settings;
+  const fragment = v.scopeOnly === true ? scopeFragment : null;
+  injectedFragment.current = fragment;
+  setTerm(fragment ? combineQuery(v.term as string, fragment) : (v.term as string));
+  setStatusSet(v.statusSet as string[]);
+  setMimeSet(v.mimeSet as string[]);
+  setFilterOn(v.filterOn as boolean);
+  setMethod(v.method as string);
+  setLimit(v.limit as number);
+  setScopeOnly(v.scopeOnly as boolean);
+  setHideNoResponse(v.hideNoResponse as boolean);
+  setOnlyParameterized(v.onlyParameterized as boolean);
+  setListenerPorts(v.listenerPorts as string);
+  setOnlyCommented(v.onlyCommented as boolean);
+  setOnlyHighlighted(v.onlyHighlighted as boolean);
+  setShowExtensions(v.showExtensions as string);
+  setHideExtensions(v.hideExtensions as string);
+  setSearchText(v.searchText as string);
+  setSearchCase(v.searchCase as boolean);
+  setSearchRegex(v.searchRegex as boolean);
+  setSearchNegate(v.searchNegate as boolean);
+  setColumnFilters(v.columnFilters as Record<ColumnFilterField, string>);
+ };
 
  // Extension lists, normalised once: lower-cased, dot-stripped, blanks dropped, so "PNG", ".png"
  // and " png " are one entry.
@@ -1517,6 +1576,7 @@ export function HistoryPage(): JSX.Element {
      >
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
      </Button>
+     <FilterPresetsMenu table="history" current={filterSnapshot} apply={applyFilterSettings} allowed={HISTORY_FILTER_ALLOWED} />
      {/* Burp/Caido's custom extractor columns (burpsy-react-ui-28n8): define a named regex-group,
          JSON-path or whole-value extractor and read its capture as a column across history rows. */}
      <Button
@@ -1933,15 +1993,11 @@ export function HistoryPage(): JSX.Element {
        variant="quiet"
        size="small"
        onClick={() => {
-        setOnlyParameterized(false);
-        setOnlyCommented(false);
-        setOnlyHighlighted(false);
-        setShowExtensions("");
-        setHideExtensions("");
-        setSearchText("");
-        setSearchCase(false);
-        setSearchRegex(false);
-        setSearchNegate(false);
+        // The popover's own keys back to their defaults — from the same table of defaults the
+        // filter menu's Restore defaults uses, so the two cannot disagree about "nothing hidden".
+        const reset: FilterSettings = { ...filterSnapshot };
+        for (const key of HISTORY_POPOVER_KEYS) reset[key] = structuredClone(FILTER_DEFAULTS.history[key]!);
+        applyFilterSettings(reset);
        }}
       >
        Show all

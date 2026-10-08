@@ -5,6 +5,8 @@ import { copyToClipboard, downloadText, organizerToCSV } from "../lib/api";
 import { useMessage, useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
 import { promptDialog } from "../lib/dialogs";
+import { FILTER_DEFAULTS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
+import { FilterPresetsMenu } from "../ui/filter-presets";
 import {
  HIGHLIGHTS,
  HIGHLIGHT_TONE,
@@ -82,6 +84,12 @@ const STATUS_CLASSES = [
 ] as const;
 
 type StatusClass = (typeof STATUS_CLASSES)[number]["value"];
+
+/** The organizer filter selects' closed option sets, for saved presets (mntt). */
+const ORGANIZER_FILTER_ALLOWED = {
+ statusClass: STATUS_CLASSES.map((entry) => entry.value),
+ workflowFilter: ["all", ...WORKFLOW_STATUSES],
+};
 
 function matchesStatusClass(item: OrganizerItem, want: StatusClass): boolean {
  if (want === "all") return true;
@@ -245,6 +253,36 @@ export function OrganizerPage(): JSX.Element {
  /** The collection delete dialog: its choice is the items' fate, so it is asked, never defaulted silently. */
  const [confirmDeleteCollection, setConfirmDeleteCollection] = useState<OrganizerCollection | null>(null);
  const [newCollectionName, setNewCollectionName] = useState("");
+
+ // Saved filters (mntt): the filter row as it stands, and the one function that puts a preset —
+ // or the defaults, for Clear filters — back.
+ const filterSnapshot: FilterSettings = {
+  term,
+  termRegex,
+  termCase,
+  termNegative,
+  inScopeOnly,
+  statusClass,
+  mimeFilter,
+  toolFilter,
+  workflowFilter,
+  extensionFilter,
+  annotatedOnly,
+ };
+ const applyFilterSettings = (next: FilterSettings) => {
+  const v = sanitizeSettings("organizer", next, ORGANIZER_FILTER_ALLOWED).settings;
+  setTerm(v.term as string);
+  setTermRegex(v.termRegex as boolean);
+  setTermCase(v.termCase as boolean);
+  setTermNegative(v.termNegative as boolean);
+  setInScopeOnly(v.inScopeOnly as boolean);
+  setStatusClass(v.statusClass as StatusClass);
+  setMimeFilter(v.mimeFilter as string);
+  setToolFilter(v.toolFilter as string);
+  setWorkflowFilter(v.workflowFilter as WorkflowStatus | "all");
+  setExtensionFilter(v.extensionFilter as string);
+  setAnnotatedOnly(v.annotatedOnly as boolean);
+ };
 
  const filtering =
   inScopeOnly ||
@@ -790,24 +828,13 @@ export function OrganizerPage(): JSX.Element {
       )}
      </Field>
      <Checkbox label="Annotated only" checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} />
+     <FilterPresetsMenu table="organizer" current={filterSnapshot} apply={applyFilterSettings} allowed={ORGANIZER_FILTER_ALLOWED} />
      {filtering ? (
       <>
        <Button
         variant="outline"
         size="small"
-        onClick={() => {
-         setInScopeOnly(false);
-         setStatusClass("all");
-         setMimeFilter("all");
-         setToolFilter("all");
-         setWorkflowFilter("all");
-         setTerm("");
-         setTermRegex(false);
-         setTermCase(false);
-         setTermNegative(false);
-         setExtensionFilter("all");
-         setAnnotatedOnly(false);
-        }}
+        onClick={() => applyFilterSettings(structuredClone(FILTER_DEFAULTS.organizer))}
        >
         <RotateCcw size={13} />
         Clear filters
