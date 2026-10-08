@@ -37,6 +37,11 @@ interface ExtractDraft {
  pattern: string;
  /** Blank means the server's default of 1 (the first capture), not group 0. */
  group: string;
+ /** Burp's custom-parameter fields (355h). */
+ prefix: string;
+ suffix: string;
+ /** "Extracted value is URL-encoded" — checked unless the stored rule says false. */
+ urlEncoded: boolean;
 }
 
 interface StepDraft {
@@ -143,6 +148,9 @@ function extractionIn(extraction: SessionExtraction): ExtractDraft {
   how: "regex",
   pattern: "",
   group: "1",
+  prefix: extraction.prefix ?? "",
+  suffix: extraction.suffix ?? "",
+  urlEncoded: extraction.url_encoded !== false,
  };
  if (how === "whole") draft.how = "whole";
  else if ("json_path" in how) {
@@ -164,7 +172,12 @@ function extractionOut(draft: ExtractDraft): SessionExtraction {
   const parsed = Number(draft.group.trim());
   how = { regex: { pattern: draft.pattern, group: Number.isInteger(parsed) && parsed >= 0 ? parsed : 1 } };
  }
- return { name: draft.name, from, how };
+ const out: SessionExtraction = { name: draft.name, from, how };
+ if (draft.prefix) out.prefix = draft.prefix;
+ if (draft.suffix) out.suffix = draft.suffix;
+ // Checked is the default, literal substitution, so it is left off the wire.
+ if (!draft.urlEncoded) out.url_encoded = false;
+ return out;
 }
 
 /**
@@ -579,6 +592,28 @@ function ExtractionRows({
       disabled={disabled || entry.how !== "regex"}
       onChange={(event) => patch(position, { group: event.target.value })}
      />
+     <Input
+      aria-label={`Step ${index + 1} extraction ${position + 1} value prefix`}
+      title="Parameter value prefix (optional)"
+      value={entry.prefix}
+      placeholder="prefix"
+      disabled={disabled}
+      onChange={(event) => patch(position, { prefix: event.target.value })}
+     />
+     <Input
+      aria-label={`Step ${index + 1} extraction ${position + 1} value suffix`}
+      title="Parameter value suffix (optional)"
+      value={entry.suffix}
+      placeholder="suffix"
+      disabled={disabled}
+      onChange={(event) => patch(position, { suffix: event.target.value })}
+     />
+     <Checkbox
+      label="URL-encoded"
+      checked={entry.urlEncoded}
+      disabled={disabled}
+      onCheckedChange={(on) => patch(position, { urlEncoded: on })}
+     />
      <IconButton
       label={`Remove step ${index + 1} extraction ${position + 1}`}
       size="small"
@@ -594,7 +629,7 @@ function ExtractionRows({
      variant="outline"
      size="small"
      disabled={disabled}
-     onClick={() => onChange([...step.extract, { name: "", fromKind: "body", header: "", how: "regex", pattern: "", group: "1" }])}
+     onClick={() => onChange([...step.extract, { name: "", fromKind: "body", header: "", how: "regex", pattern: "", group: "1", prefix: "", suffix: "", urlEncoded: true }])}
     >
      <Plus size={13} />
      Add extraction
