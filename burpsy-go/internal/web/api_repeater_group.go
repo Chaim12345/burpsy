@@ -85,6 +85,8 @@ type repeaterGroupSendItem struct {
 	Options      *repeaterSendOptions `json:"options,omitempty"`
 	// Note is the tab's note, recorded on this item's exchange exactly as a single send records it.
 	Note string `json:"note,omitempty"`
+	// SNI is the tab's Override SNI (k011), with the single send's meaning and checks.
+	SNI string `json:"sni,omitempty"`
 }
 
 // repeaterGroupSendResp is the group's outcome: one result per item, in the order they were sent.
@@ -205,6 +207,11 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		spec.Note = item.Note
+		if err := validRepeaterSNI("sni", item.SNI, spec.TLS); err != nil {
+			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), http.StatusBadRequest)
+			return
+		}
+		spec.SNI = item.SNI
 		specs[i] = spec
 	}
 
@@ -352,7 +359,7 @@ func (s *Server) sendGroupItemSynchronized(
 	ctx context.Context, tabID string, spec repeaterSendSpec, sync sender.SyncPoints,
 ) repeaterGroupItemResult {
 	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendSynchronized(spec.Options.sendContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
+	rawResp, outcome, err := s.sender.SendSynchronized(spec.sendContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
@@ -417,6 +424,15 @@ func (s *Server) sendGroupOnOneConnection(
 ) ([]repeaterGroupItemResult, string, error) {
 	first := specs[0]
 	for i, spec := range specs {
+		// One socket has one handshake, so one ClientHello: tabs that disagree about the Override SNI
+		// (k011) cannot share it, and picking the first tab's would send the others under a name
+		// their operator did not set.
+		if spec.SNI != first.SNI {
+			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
+				"refused: one connection has one TLS handshake, and tab %s overrides the SNI with %q while tab %s uses %q. "+
+					"Give the tabs the same SNI, or send on separate connections",
+				sent[0].TabID, first.SNI, sent[i].TabID, spec.SNI)}
+		}
 		if spec.Host != first.Host || spec.Port != first.Port || spec.TLS != first.TLS {
 			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
 				"refused: one connection addresses one target, and this group names two — tab %s is %s and tab %s is %s. "+
@@ -449,7 +465,7 @@ func (s *Server) sendGroupOnOneConnection(
 				sent[i].TabID, describeResponseTimeout(spec.Options.ResponseTimeoutMS))}
 		}
 	}
-	exchanges, err := s.sender.SendKeepAlive(first.Options.sendContext(ctx), first.Host, first.Port, first.TLS, raws)
+	exchanges, err := s.sender.SendKeepAlive(first.sendContext(ctx), first.Host, first.Port, first.TLS, raws)
 	if err != nil {
 		// SendKeepAlive's error return is reserved for a failure before any exchange could be attempted
 		// — the dial. Nothing went out, so this is the group's failure, not an item's.

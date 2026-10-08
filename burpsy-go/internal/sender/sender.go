@@ -533,6 +533,9 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
 		ClientCerts:        s.config.ClientCerts,
+		// Repeater's Override SNI (k011), when this send carries one. Every raw TLS path dials here,
+		// so the override reaches h2 and HTTP/1 sends alike.
+		SNI: sniOverride(ctx),
 	}
 	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
 	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
@@ -937,8 +940,10 @@ func (s *Sender) SendRawOutcome(
 	// See cancel.go: without this, cancelling the context leaves the read blocked until the
 	// configured timeout, whatever the caller asked for.
 	defer watchCancel(ctx, conn)()
-	if plan.wantH2 {
-		// Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
+	if plan.wantH2 && sniOverride(ctx) == "" {
+		// Not learnt under an SNI override (k011): a server can negotiate differently for the probe
+		// name than for its own, and caching that answer would misdescribe the target to every later
+		// send. Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
 		// http/1.1 back is no evidence at all about whether the target speaks h2, and recording it as
 		// ProtocolSupportHTTP11 would turn our own choice into a claim about the target.
 		s.protocols.learn(host, port, useTLS, negotiated)

@@ -104,6 +104,12 @@ function shownResponse(entry: { response: string; response_unpacked?: string }):
   return entry.response_unpacked ?? entry.response;
 }
 
+/** The tab's Override SNI as a send carries it (k011): absent unless set and the target is TLS. */
+function sniFor(tab: RepeaterTab): { sni: string } | Record<string, never> {
+  const sni = tab.sni?.trim() ?? "";
+  return sni !== "" && schemeOf(tab.target) === "https" ? { sni } : {};
+}
+
 function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
   return tab.note && tab.note.trim() !== "" ? { note: tab.note } : {};
 }
@@ -327,6 +333,7 @@ export function RepeaterPage(): JSX.Element {
         // arrives, so an empty object is never sent when the operator set nothing.
         ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
         ...noteFor(tab),
+        ...sniFor(tab),
       },
       {
         onSuccess: (result) => {
@@ -458,6 +465,7 @@ export function RepeaterPage(): JSX.Element {
           ...(tab.fromExchange != null ? { from_exchange: tab.fromExchange } : {}),
           ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
           ...noteFor(tab),
+          ...sniFor(tab),
         })),
       },
       {
@@ -525,6 +533,7 @@ export function RepeaterPage(): JSX.Element {
             protocol: schemeOf(tab.target),
             ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
             ...noteFor(tab),
+            ...sniFor(tab),
           }),
         );
         // Same pairing rule as a normal send: the entry this hand-off adds carries the draft it
@@ -1590,6 +1599,23 @@ export function RepeaterPage(): JSX.Element {
               />
             )}
           </Field>
+          {active.kind !== "ws" ? (
+            /* Burp's target-dialog "Override SNI" (k011): the ClientHello's server name, for
+             * reproducing an SNI-based external service interaction with a Collaborator domain.
+             * Only the handshake changes — Host and the address dialled stay the target's. */
+            <Field label="Override SNI" style={{ maxWidth: "var(--w-md)" }}>
+              {(id) => (
+                <Input
+                  id={id}
+                  value={active.sni ?? ""}
+                  disabled={schemeOf(active.target) !== "https"}
+                  placeholder={schemeOf(active.target) === "https" ? "target's name" : "TLS targets only"}
+                  title="The server name the TLS ClientHello carries instead of the target's. Blank sends the target's own. Redirect hops never carry it."
+                  onChange={(event) => updateRepeaterTab(active.id, { sni: event.target.value })}
+                />
+              )}
+            </Field>
+          ) : null}
           <Field label="Tab name" style={{ maxWidth: "var(--w-md)" }}>
             {(id) => <Input id={id} value={active.name} onChange={(event) => updateRepeaterTab(active.id, { name: event.target.value })} />}
           </Field>

@@ -535,6 +535,8 @@ export interface RepeaterGroupSendItem {
  options?: RepeaterSendOptions;
  /** The tab's note, recorded on this item's exchange (jva5). */
  note?: string;
+ /** The tab's Override SNI (k011). */
+ sni?: string;
 }
 
 /**

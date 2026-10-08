@@ -55,6 +55,27 @@ type repeaterSendReq struct {
 	// comment column, Organizer's add, Logger) then has it without a second channel. Empty records
 	// no comment rather than an empty one.
 	Note string `json:"note,omitempty"`
+	// SNI is the tab's Override SNI (burpsy-react-ui-k011): the server name the TLS ClientHello
+	// carries instead of the target's, to reproduce an SNI-based external service interaction with a
+	// Collaborator domain. Only the ClientHello changes — the address dialled, the Host header and
+	// certificate verification stay the target's — and a redirect hop never carries it. Empty is no
+	// override. Refused on a plaintext target, where there is no ClientHello to put it in.
+	SNI string `json:"sni,omitempty"`
+}
+
+// validRepeaterSNI checks an Override SNI against the target it rides: a valid server name, on a TLS
+// target. field names the request key.
+func validRepeaterSNI(field, sni string, tls bool) error {
+	if sni == "" {
+		return nil
+	}
+	if !tls {
+		return fmt.Errorf("refused: %s is set but the target is plain HTTP; there is no TLS ClientHello to carry it", field)
+	}
+	if err := sender.ValidateSNI(field, sni); err != nil {
+		return fmt.Errorf("refused: %w", err)
+	}
+	return nil
 }
 
 // maxRepeaterNoteBytes bounds a tab note carried on a send. A note is prose about one request, and
@@ -162,6 +183,20 @@ type repeaterSendSpec struct {
 	// Note is the tab's note, written onto the exchange as its comment (jva5). Set by the handlers
 	// after prepareRepeaterSend, because it shapes the record, not the wire.
 	Note string
+	// SNI is the tab's Override SNI (k011), validated by the handlers against TLS.
+	SNI string
+}
+
+// sendContext is ctx carrying everything this send overrides: the tab's options (response timeout,
+// streaming window) and its Override SNI.
+func (spec repeaterSendSpec) sendContext(ctx context.Context) context.Context {
+	ctx = spec.Options.sendContext(ctx)
+	if spec.SNI == "" {
+		return ctx
+	}
+	opts, _ := sender.SendOptionsFrom(ctx)
+	opts.SNI = spec.SNI
+	return sender.WithSendOptions(ctx, opts)
 }
 
 // prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
@@ -330,7 +365,7 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
 	// The tab's response timeout (mmca) rides the context, so it bounds this send and every redirect
 	// hop below without touching the network settings the next send reads.
-	ctx = spec.Options.sendContext(ctx)
+	ctx = spec.sendContext(ctx)
 	sendStarted := time.Now()
 	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
 	elapsed := time.Since(sendStarted)
@@ -344,7 +379,9 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 		return repeaterSendResp{}, err
 	}
 	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
-	resp.Redirects = s.followRepeaterRedirects(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options)
+	// HopContext: a hop keeps the send's timeouts but never the SNI override, which names this
+	// target's handshake rather than wherever a Location points next (k011).
+	resp.Redirects = s.followRepeaterRedirects(sender.HopContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options)
 	return resp, nil
 }
 
@@ -377,6 +414,11 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec.Note = req.Note
+	if err := validRepeaterSNI("sni", req.SNI, spec.TLS); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.SNI = req.SNI
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

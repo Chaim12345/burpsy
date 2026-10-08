@@ -214,6 +214,13 @@ export interface RepeaterTab {
   * which is how it reaches Organizer and every other tool that reads an exchange's notes.
   */
  note?: string;
+ /**
+  * Override SNI (burpsy-react-ui-k011): Burp's target-dialog "Override SNI". The server name this
+  * tab's TLS ClientHello carries instead of the target's — a Collaborator domain, to reproduce an
+  * SNI-based external service interaction by hand. Empty or absent is no override. Only the
+  * ClientHello changes; the server refuses it on a plain-HTTP target.
+  */
+ sni?: string;
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:

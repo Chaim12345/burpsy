@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"time"
 )
@@ -48,6 +49,51 @@ type SendOptions struct {
 	// or the streaming body cap is reached.
 	StreamingTimeout    time.Duration
 	StreamingTimeoutSet bool
+	// SNI replaces the server name this send's TLS ClientHello carries (burpsy-react-ui-k011 —
+	// Repeater's "Override SNI"). Only the ClientHello changes: the address dialled, the Host header
+	// and the name the certificate is verified against stay the target's (see alpn.Dialer.SNI). A
+	// redirect hop never carries it — HopContext strips it — because the override names this
+	// target's handshake, not wherever a Location points next. Empty means no override.
+	SNI string
+}
+
+// sniOverride is the ClientHello server name ctx asks for, or "".
+func sniOverride(ctx context.Context) string {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok {
+		return ""
+	}
+	return opts.SNI
+}
+
+// HopContext is ctx for a redirect hop: the per-send options that describe this target alone (the
+// SNI override) are removed, and the ones that describe the whole send (the response timeout, the
+// streaming window) are kept.
+func HopContext(ctx context.Context) context.Context {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok || opts.SNI == "" {
+		return ctx
+	}
+	opts.SNI = ""
+	return WithSendOptions(ctx, opts)
+}
+
+// ValidateSNI refuses a server name a ClientHello cannot carry: empty, longer than a DNS name, an IP
+// literal (crypto/tls sends no SNI for one, so the override would silently send none), or a character
+// outside letters, digits, '.', '-' and '_'. field names the request key.
+func ValidateSNI(field, name string) error {
+	if name == "" || len(name) > 253 {
+		return fmt.Errorf("%s must be 1 to 253 characters, got %d", field, len(name))
+	}
+	if net.ParseIP(name) != nil {
+		return fmt.Errorf("%s %q is an IP address; a ClientHello carries no SNI for an IP, so the override would send none", field, name)
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			return fmt.Errorf("%s %q contains %q; a server name is letters, digits, '.', '-' and '_'", field, name, r)
+		}
+	}
+	return nil
 }
 
 type sendOptionsKey struct{}

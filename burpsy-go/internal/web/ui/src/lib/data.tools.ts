@@ -113,6 +113,8 @@ export interface RepeaterSendBody {
   options?: RepeaterSendOptions;
   /** The tab's note, recorded as the sent exchange's comment so it travels to other tools (jva5). */
   note?: string;
+  /** The tab's Override SNI (k011). */
+  sni?: string;
 }
 
 /**
