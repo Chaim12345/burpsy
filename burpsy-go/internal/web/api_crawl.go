@@ -1419,6 +1419,15 @@ func overlayCrawlLimits(dst *crawler.Limits, src crawler.Limits) {
 	if src.MaxSpeculativeLinks != 0 {
 		dst.MaxSpeculativeLinks = src.MaxSpeculativeLinks
 	}
+	// max_submissions_per_form (u0k3) was parsed and then dropped here, so a named configuration's
+	// form cap never reached the crawl. The crawl strategy's band rides the same path (8bp2).
+	if src.MaxSubmissionsPerForm != 0 {
+		dst.MaxSubmissionsPerForm = src.MaxSubmissionsPerForm
+	}
+	if src.LocationToleranceBand != nil {
+		band := *src.LocationToleranceBand
+		dst.LocationToleranceBand = &band
+	}
 }
 
 // sectionPrefixes names unknown crawler sub-objects the way a key is named, so the unapplied list

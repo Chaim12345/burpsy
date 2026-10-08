@@ -124,6 +124,10 @@ type Limits struct {
 	// LEFT OUT of normalise on purpose — see above. A bound that silently became 6 for every caller
 	// would be a behaviour change disguised as a default.
 	MaxSubmissionsPerForm int
+	// LocationToleranceBand is how many of a page's link targets may differ before it counts as a
+	// different location (location_band.go). nil means Burp's normal crawl strategy, 2. Set by
+	// crawl_strategy (strategy.go), where 0 is a real value, which is why this is a pointer.
+	LocationToleranceBand *int
 	// MaxRelogins caps how many times this crawl may attempt to restore an expired session
 	// (Gap A). Every attempt costs the target a login macro and every failure costs repeated
 	// login-page fetches, so both are bounded by one number. Unlike some bounds this is not a
