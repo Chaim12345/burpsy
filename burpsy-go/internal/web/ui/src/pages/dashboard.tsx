@@ -6,14 +6,15 @@ import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Squar
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
-import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { useIssuesDetailed, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
 import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -1002,6 +1003,11 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const setLive = useSetScannerLive();
  const [query, setQuery] = useState("");
+ // Burp's live task Scan configuration and Resource pool tabs (chct).
+ const configs = useScannerConfigs();
+ const pools = usePools();
+ const [config, setConfig] = useState("");
+ const [poolName, setPoolName] = useState("");
  const close = () => onOpenChange(false);
 
  return (
@@ -1010,9 +1016,30 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
     <Field label="Scope filter query (optional)">
      {(id) => <Input id={id} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='host == "demo.local"' />}
     </Field>
-    <p className="cell-dim" style={{ margin: 0 }}>
-     Which checks run is global — set it under Settings → Audit checks.
-    </p>
+    <Field label="Scan configuration">
+     {(id) => (
+      <Select id={id} value={config} onChange={(event) => setConfig(event.target.value)}>
+       <option value="">Server default (Settings → Audit checks)</option>
+       {(configs.data?.configs ?? []).map((c) => (
+        <option key={c.name} value={c.name}>
+         {c.name}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+    <Field label="Resource pool">
+     {(id) => (
+      <Select id={id} value={poolName} onChange={(event) => setPoolName(event.target.value)}>
+       <option value="">Global pace</option>
+       {(pools.data?.pools ?? []).map((p) => (
+        <option key={p.name} value={p.name}>
+         {p.name}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
     <div className="toolbar-end">
      <Button variant="outline" size="small" onClick={close}>
       Cancel
@@ -1022,7 +1049,7 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
       disabled={setLive.isPending}
       onClick={() => {
        setLive.mutate(
-        { enabled: true, query: query.trim() || undefined },
+        { enabled: true, query: query.trim() || undefined, config, pool: poolName },
         {
          onSuccess: () => toast.success("Live audit sweep enabled"),
          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Enabling the live sweep failed"),

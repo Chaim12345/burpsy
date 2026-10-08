@@ -360,6 +360,9 @@ export interface CorpusChecks {
 export interface LiveAuditState {
  wired: boolean;
  enabled: boolean;
+ /** The live task's own scan configuration and resource pool (chct); "" is the default. */
+ config?: string;
+ pool?: string;
  hint?: string;
  swept?: number;
  findings?: number;
