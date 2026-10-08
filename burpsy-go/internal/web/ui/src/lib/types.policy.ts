@@ -214,6 +214,17 @@ export interface SessionAction {
   * pre-field behaviour and what every rule written before it means.
   */
  validate_every?: number;
+ /**
+  * A run_macro action's "after the macro" choices (burpsy-react-ui-8gk8), under Burp's key names.
+  * update_with_cookies absent means the whole jar, the behaviour before the field existed.
+  */
+ update_with_params?: boolean;
+ match_params?: "all_params_except" | "specified_params";
+ params?: string[];
+ tolerate_url_mismatch?: boolean;
+ update_with_cookies?: boolean;
+ match_cookies?: "all_cookies_except" | "specified_cookies";
+ cookies?: string[];
 }
 
 /** One entry of the action palette, served so the editor cannot drift from what the server accepts. */

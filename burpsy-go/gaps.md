@@ -1714,3 +1714,16 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   resent; the credential applies from the host's next request. A raw Repeater/Intruder send never
   consults platform authentication (the raw path sends the bytes as written), so it never prompts.
   Negotiate is recorded but cannot be answered by this build.
+
+## Run-macro parameter update reads HTML forms and links only (2026-10-08, burpsy-react-ui-8gk8)
+- **Burp:** after a "Run a macro" action, "update the current request with parameters matched from the
+  final macro response" and "with cookies from the session handling cookie jar", each as all-except or
+  only-the-following, plus "Tolerate URL mismatch when matching parameters".
+- **burpsy:** all five choices, under Burp's keys (`update_with_params`, `match_params`, `params`,
+  `tolerate_url_mismatch`, `update_with_cookies`, `match_cookies`, `cookies`). Parameters are derived
+  from the final response's HTML forms (input, textarea, select against the form's action) and link
+  query strings, and update only parameters the current request already carries in its query string or
+  urlencoded body. A stored action without the fields behaves as before: no parameter update, the whole
+  jar.
+- **Divergence:** values in JSON, multipart bodies, or script are not derived or updated. The cookie
+  choice applies to the re-sent current request; macro steps always carry the whole jar.
