@@ -129,6 +129,67 @@ export function useSetCollaboratorServer() {
   });
 }
 
+/** One row of Burp's "Run health check" (burpsy-react-ui-8e3n), under Burp's own label. */
+export interface CollaboratorHealthItem {
+  name: string;
+  protocol: "dns" | "http" | "smtp";
+  /** A capture row can also be "not_triggered": every trigger for the protocol failed, so nothing was sent. */
+  status: "ok" | "error" | "not_triggered";
+  detail: string;
+  /** Null when the item did not complete. */
+  latency_ms: number | null;
+}
+
+export interface CollaboratorHealthReport {
+  /** Decided by the capture rows: did each protocol's interaction come back through polling. */
+  status: "healthy" | "degraded" | "failed";
+  summary: string;
+  server?: string;
+  domain: string;
+  address: string;
+  connections: CollaboratorHealthItem[];
+  captures: CollaboratorHealthItem[];
+  waited_ms: number;
+  polling: string;
+}
+
+/** POST /api/collaborator/health. It may register the channel (an explicit click) and takes up to ~30s. */
+export function useCollaboratorHealth() {
+  const client = useQueryClient();
+  return useMutation<CollaboratorHealthReport, Error>({
+    mutationFn: () => api<CollaboratorHealthReport>("/api/collaborator/health", json("POST", {})),
+    onSettled: () => void client.invalidateQueries({ queryKey: keys.collaborator }),
+  });
+}
+
+export interface CollaboratorUnsetResult {
+  status: CollaboratorStatus;
+  orphaned_payloads: number;
+  was_configured: boolean;
+  closed_domain?: string;
+  close_error?: string;
+}
+
+/**
+ * Burp's "Don't use Burp Collaborator" (8e3n): DELETE /api/collaborator/server. With a registered
+ * channel the server answers 409 unless `discardOpenChannel` is set, because the payloads minted from it
+ * would point at a server nobody polls. The caller asks the operator first.
+ */
+export function useUnsetCollaboratorServer() {
+  const client = useQueryClient();
+  return useMutation<CollaboratorUnsetResult, Error, { discardOpenChannel: boolean }>({
+    mutationFn: ({ discardOpenChannel }) =>
+      api<CollaboratorUnsetResult>(
+        "/api/collaborator/server",
+        json("DELETE", discardOpenChannel ? { discard_open_channel: true } : {}),
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.collaborator });
+      void client.invalidateQueries({ queryKey: keys.collaboratorInteractions });
+    },
+  });
+}
+
 export function usePollNow() {
   const client = useQueryClient();
   return useMutation<{ interactions: number }, Error>({

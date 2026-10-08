@@ -108,6 +108,10 @@ type collaboratorHub struct {
 	mu       sync.Mutex
 	minted   []mintedPayload
 	lastRead *collaboratorRead
+	// healthProbes and healthWait replace the health check's network actions and capture wait
+	// (api_collaborator_health.go). Nil and zero mean the real ones; only tests set them.
+	healthProbes *collaboratorProbes
+	healthWait   time.Duration
 }
 
 // mintedPayload is one address handed to an operator.
@@ -566,6 +570,10 @@ type collaboratorServerRequest struct {
 // domain and no correlated payload, so nothing can be orphaned. That is also the most likely reason
 // anyone reaches for this endpoint — a mistyped server, or a machine without the client binary.
 func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		s.handleCollaboratorServerUnset(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -906,4 +914,69 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 		RawRequest:    in.RawRequest,
 		RawResponse:   in.RawResponse,
 	})
+}
+
+// handleCollaboratorServerUnset serves DELETE /api/collaborator/server: Burp's "Don't use Burp
+// Collaborator" (burpsy-react-ui-8e3n). The installation goes back to not_configured, and every
+// out-of-band check refuses again rather than reporting a clean result.
+//
+// An open channel is the same hazard the POST refuses on: the payloads minted from it, and any finding
+// that cites them, would point at a server nobody polls. Burp lets an operator make that choice, so this
+// does too, but only on purpose. Without {"discard_open_channel": true} it answers 409, naming the
+// domain and how many minted payloads would be orphaned. With it, the channel is closed, those payloads
+// are dropped from this surface and counted in the reply, and the interaction counts go back to null.
+// They do not go to 0, because a payload nobody polls has no interactions to count.
+func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DiscardOpenChannel bool `json:"discard_open_channel"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {\"discard_open_channel\": true} or empty", http.StatusBadRequest)
+			return
+		}
+	}
+	if s.scanner == nil {
+		http.Error(w, "no scanner is attached to this server, so there is no interaction channel to unset",
+			http.StatusServiceUnavailable)
+		return
+	}
+	hub := s.collab()
+	hub.mu.Lock()
+	minted := len(hub.minted)
+	hub.mu.Unlock()
+	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open && !req.DiscardOpenChannel {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "a collaborator channel is registered",
+			"domain":         reg.Domain,
+			"minted_payload": minted,
+			"detail": fmt.Sprintf("not using Collaborator closes the channel on %s, and the %d payload "+
+				"address(es) minted from it would point at a server nobody polls. Send "+
+				"{\"discard_open_channel\": true} to do it anyway.", reg.Domain, minted),
+		})
+		return
+	}
+	reg, configured, err := s.scanner.ClearOOBProvider()
+	orphaned := 0
+	if configured && reg.Open {
+		orphaned = minted
+	}
+	hub.mu.Lock()
+	hub.minted = nil
+	hub.lastRead = nil
+	hub.mu.Unlock()
+	out := map[string]any{
+		"status":            s.collaboratorStatusNow(false),
+		"orphaned_payloads": orphaned,
+		"was_configured":    configured,
+	}
+	if reg.Open {
+		out["closed_domain"] = reg.Domain
+	}
+	if err != nil {
+		// The provider is already gone. Only the subprocess's shutdown complained, so report that and
+		// do not pretend the unset failed.
+		out["close_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
 }

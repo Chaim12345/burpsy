@@ -1082,6 +1082,8 @@ func (s *Server) setupRoutes() {
 	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
 	// uploaded — so Intruder's file source and content discovery both point once.
 	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
+	// Burp's "Run health check" (8e3n). Like /payload it may register the channel: an explicit click.
+	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealth)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)

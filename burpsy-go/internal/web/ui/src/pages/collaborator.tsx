@@ -25,6 +25,9 @@ import {
   useMintPayload,
   usePollNow,
   useSetCollaboratorServer,
+  useCollaboratorHealth,
+  useUnsetCollaboratorServer,
+  type CollaboratorHealthReport,
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
 import { copyToClipboard } from "../lib/api";
@@ -57,6 +60,8 @@ export function CollaboratorPage(): JSX.Element {
   const poll = usePollNow();
   const mintBX = useMintBlindXSSPayload();
   const setServer = useSetCollaboratorServer();
+  const health = useCollaboratorHealth();
+  const unsetServer = useUnsetCollaboratorServer();
   const [selected, setSelected] = useState<number | null>(null);
   const [serverInput, setServerInput] = useState("");
   const [clientPath, setClientPath] = useState("");
@@ -136,6 +141,59 @@ export function CollaboratorPage(): JSX.Element {
           >
             {setServer.isPending ? "Setting…" : "Set server"}
           </Button>
+          {s.configured ? (
+            <>
+              {/* Burp's "Run health check" (8e3n): a negative out-of-band result means something only
+                  if the callbacks actually come back, which is what this checks end to end. */}
+              <Button
+                size="small"
+                variant="outline"
+                disabled={health.isPending}
+                onClick={() =>
+                  health.mutate(undefined, {
+                    onError: (failure: unknown) =>
+                      toast.error(failure instanceof Error ? failure.message : "The health check could not run"),
+                  })
+                }
+              >
+                {health.isPending ? "Checking… (up to 30s)" : "Run health check"}
+              </Button>
+              {/* Burp's "Don't use Burp Collaborator". With a registered channel, the payloads already
+                  handed out would point at a server nobody polls, so the operator is told how many first. */}
+              <Button
+                size="small"
+                variant="outline"
+                disabled={unsetServer.isPending}
+                onClick={() => {
+                  const open = Boolean(s.domain);
+                  if (
+                    open &&
+                    !window.confirm(
+                      `Stop using Collaborator? The channel on ${s.domain} is closed, and the ${s.payloads.length} payload address(es) minted from it will point at a server nobody polls — a late callback to them is lost.`,
+                    )
+                  )
+                    return;
+                  unsetServer.mutate(
+                    { discardOpenChannel: open },
+                    {
+                      onSuccess: (result) => {
+                        health.reset();
+                        toast.success(
+                          result.orphaned_payloads > 0
+                            ? `Collaborator is off. ${result.orphaned_payloads} payload address(es) are no longer polled.`
+                            : "Collaborator is off. Out-of-band checks will refuse until a server is set.",
+                        );
+                      },
+                      onError: (failure: unknown) =>
+                        toast.error(failure instanceof Error ? failure.message : "Turning Collaborator off failed"),
+                    },
+                  );
+                }}
+              >
+                Don&apos;t use Collaborator
+              </Button>
+            </>
+          ) : null}
           <span style={{ fontSize: "var(--fs-sm)", color: "var(--fg-dim)" }}>
             <code>public</code> uses interactsh's own pool — third-party, and your callback data lands
             there. Hosting a private server is out of scope for burpsy; driving its client is not.
@@ -146,9 +204,11 @@ export function CollaboratorPage(): JSX.Element {
             A channel is registered on <code>{s.domain}</code>, so the server can no longer be changed
             from here: the payload addresses already handed out — and the findings that reference them
             — belong to that domain, and repointing would leave them at a server nobody is polling.
-            Restart with <code>-collaborator-server</code> to change it.
+            To change it, choose <strong>Don&apos;t use Collaborator</strong> first, which says how many
+            payloads that orphans, then set the new server.
           </div>
         ) : null}
+        {health.data ? <HealthReport report={health.data} /> : null}
       </Card>
 
       <Card>
@@ -306,6 +366,44 @@ export function CollaboratorPage(): JSX.Element {
  * channel is a subprocess-appended log nothing in this process owns; the unread count on
  * the tool tab itself rides the tab-attention work (burpsy-react-ui-xvo).
  */
+const HEALTH_TONE: Record<string, "good" | "warn" | "bad" | "neutral"> = {
+  ok: "good",
+  error: "bad",
+  not_triggered: "warn",
+  healthy: "good",
+  degraded: "warn",
+  failed: "bad",
+};
+
+/** Burp's health-check results: the capture rows decide, and the connection rows explain them. */
+function HealthReport({ report }: { report: CollaboratorHealthReport }): JSX.Element {
+  const row = (item: CollaboratorHealthReport["connections"][number]) => (
+    <tr key={item.name}>
+      <td>{item.name}</td>
+      <td>
+        <Badge tone={HEALTH_TONE[item.status] ?? "neutral"}>{item.status.replace("_", " ")}</Badge>
+      </td>
+      <td className="cell-num">{item.latency_ms === null ? "—" : `${item.latency_ms} ms`}</td>
+      <td className="cell-dim">{item.detail}</td>
+    </tr>
+  );
+  return (
+    <div style={{ marginTop: 12 }}>
+      <SectionHeading
+        title="Health check"
+        detail={`${report.address} · waited ${(report.waited_ms / 1000).toFixed(1)}s for callbacks`}
+        actions={<Badge tone={HEALTH_TONE[report.status] ?? "neutral"}>{report.status}</Badge>}
+      />
+      <p className="field-hint">{report.summary}.</p>
+      <SimpleTable headers={["Interaction came back through polling", "Result", "After", "Detail"]}>
+        {report.captures.map(row)}
+      </SimpleTable>
+      <SimpleTable headers={["Connection", "Result", "Took", "Detail"]}>{report.connections.map(row)}</SimpleTable>
+      <p className="field-hint">{report.polling}.</p>
+    </div>
+  );
+}
+
 function InteractionsTable({
   rows,
   loading,

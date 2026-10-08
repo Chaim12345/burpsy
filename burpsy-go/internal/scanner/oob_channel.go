@@ -199,6 +199,25 @@ func (s *ActiveScanner) OOBRegistration() (OOBRegistration, bool) {
 	return p.Registration(), true
 }
 
+// ClearOOBProvider removes the collaborator handle and closes its channel: Burp's "Don't use Burp
+// Collaborator" (burpsy-react-ui-8e3n). Afterwards the out-of-band rows report a missing capability, as
+// they do on an installation that never configured one, never zero interactions. It returns what
+// Registration reported just before the removal, so a caller can say which domain was given up.
+func (s *ActiveScanner) ClearOOBProvider() (OOBRegistration, bool, error) {
+	if s == nil {
+		return OOBRegistration{}, false, nil
+	}
+	s.oobMu.Lock()
+	p := s.oob
+	s.oob = nil
+	s.oobMu.Unlock()
+	if p == nil {
+		return OOBRegistration{}, false, nil
+	}
+	reg := p.Registration()
+	return reg, true, p.Close()
+}
+
 // closeOOB releases the channel at the end of a scan.
 func (s *ActiveScanner) closeOOB() error {
 	if s == nil {
