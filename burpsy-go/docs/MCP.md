@@ -21,7 +21,9 @@ MCP on **stdin/stdout** and does not start a second console.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-web` | `http://127.0.0.1:8081` | base URL of the running console. A bare `host:port` is accepted and assumed `http`. |
-| `-timeout` | `10m` | how long one tool call may take before the transport gives up. Generous because an audit runs synchronously and a large one takes minutes. |
+| `-timeout` | `10m` | how long one HTTP call to the console may take before the transport gives up. |
+| `-sync-window` | `15s` | how long a call that started a console task (an audit, a crawl, an API scan) waits for it before answering with a task handle. |
+| `-no-notifications` | off | do not push task completion and High/Critical issues as `notifications/message`. |
 | `-surface` | `grouped` | which tool list to publish: `grouped` (capability-grouped tools, below) or `routes` (one tool per manifest route — the pre-cvzq surface, kept for debugging and for clients bound to its names). |
 | `-list` | off | print the tool surface this binary would expose (surface, route count, tool names) and exit, without speaking stdio. The manifest is compiled in, so this works with no console running. |
 | `-version` | off | print the version and exit. |
@@ -42,9 +44,11 @@ Implemented methods:
 | Method | Behaviour |
 |---|---|
 | `initialize` | reports the protocol revision (echoing the client's when it is one this server knows: `2024-11-05`, `2025-03-26`, `2025-06-18`), `capabilities.tools`, and an `instructions` block that explains the risk classes and the confirmation flow before a client calls anything. |
-| `notifications/initialized` | ignored, like every notification. A notification gets **no** reply — answering one makes a client that reuses ids mis-attribute the reply. |
+| `notifications/initialized` | starts the console watcher (below). Like every notification it gets **no** reply — answering one makes a client that reuses ids mis-attribute the reply. |
+| `notifications/cancelled` | cancels the named call in flight; a call waiting on a console task also cancels the task (`POST /api/tasks/{id}/cancel`). The cancelled call gets no answer. |
+| `logging/setLevel` | sets the minimum level of pushed `notifications/message` (default `info`). |
 | `tools/list` | the grouped surface (62 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
-| `tools/call` | forwards the call to the console and returns its answer. |
+| `tools/call` | forwards the call to the console and returns its answer. Dispatched concurrently (at most 8 at once), so a long call does not stop `ping`, `tools/list` or another call; every write goes through one serialised encoder. |
 | `ping` | an empty result. |
 
 ## The tool list (default: capability-grouped)
@@ -188,6 +192,28 @@ One refusal happens in the transport rather than at the server: a call whose `pa
 `api_audit` at `/api/audit/selected`, because a descriptor's published risk class would then describe
 a route other than the one it reaches. It is decided by `web.MCPRouteForPath`, which is the gate's own
 longest-prefix resolver, so the binding and the gate cannot disagree about which route a path names.
+
+## Task handles, progress and pushed notifications (burpsy-react-ui-wdza)
+
+- **Sync window.** An audit called through the transport (`scan` / `POST /api/audit/`) is started
+  with `{"async": true}` — the console answers 202 with a `task_id` at once — and any 202 carrying a
+  `task_id` (an audit, a crawl, an API scan, an audit of a selection) is awaited for the sync window
+  (15 s, Burp's own). Finished in time: the call answers `HTTP 202 POST … -> task N finished …` with the
+  task view, whose `result` is what a blocking audit returns. Not finished: the call answers
+  `HTTP 202 task handle` with `{"task_id", "status": "running", "poll_interval_ms", "next"}`. The
+  handle lives in the console's task registry, so it outlives the MCP process. `"async": false` in
+  the body keeps the old blocking call.
+- **`burpsy_task_status`** `{"task_id", "wait_seconds" (0–60)}` reads a handle — `GET /api/tasks/{id}`,
+  long-polling until the task finishes.
+- **Progress.** A `tools/call` carrying `_meta.progressToken` gets `notifications/progress` (done/total,
+  and a message) while it waits on its task; a call without one gets none.
+- **Cancellation.** `notifications/cancelled` for a call waiting on its task cancels the task.
+- **Pushed notifications.** After `notifications/initialized` the transport holds the console's SSE
+  stream (`/api/events`) and, on each dashboard or issues change, pushes `notifications/message`:
+  `info` `{"event":"task.finished","task_id",…}` for each task that finished, and `warning`
+  `{"event":"issue.found","issue_id","severity",…}` for each **High or Critical** issue that appeared
+  since the session began (a baseline is taken first, so nothing older is announced). `initialize`
+  advertises `capabilities.logging`.
 
 ## Honest limits
 

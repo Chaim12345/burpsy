@@ -38,6 +38,10 @@ func main() {
 		"print the tool surface this binary would expose and exit (does not speak stdio)")
 	surface := flag.String("surface", string(mcp.SurfaceGrouped),
 		"tool surface to publish: \"grouped\" (capability-grouped tools, the default) or \"routes\" (one tool per manifest route, for debugging)")
+	syncWindow := flag.Duration("sync-window", 15*time.Second,
+		"how long a call that started a console task (an audit, a crawl) waits for it before answering with a task handle")
+	noNotify := flag.Bool("no-notifications", false,
+		"do not push task completion and High/Critical issues as notifications/message")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -50,9 +54,11 @@ func main() {
 	// printed without a console running. That is the point of -list: an operator can see what an
 	// assistant would be handed before wiring it to anything.
 	srv, err := mcp.New(mcp.Options{
-		BaseURL: *webAddr,
-		Timeout: *timeout,
-		Surface: mcp.Surface(*surface),
+		BaseURL:         *webAddr,
+		Timeout:         *timeout,
+		Surface:         mcp.Surface(*surface),
+		SyncWindow:      *syncWindow,
+		NoNotifications: *noNotify,
 	})
 	if err != nil {
 		fatal(err)

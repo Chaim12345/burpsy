@@ -166,8 +166,8 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 	for _, r := range manifest {
 		byRoute[r.Pattern] = r
 	}
-	if len(listed.Tools) != len(manifest)+1 {
-		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm tool",
+	if len(listed.Tools) != len(manifest)+2 {
+		t.Fatalf("tools/list exposed %d tools, want %d manifest routes plus the confirm and task-status tools",
 			len(listed.Tools), len(manifest))
 	}
 
@@ -178,7 +178,7 @@ func TestToolsListCarriesEveryManifestRouteWithItsRiskClass(t *testing.T) {
 			t.Fatalf("two tools are named %q; an MCP tool name is an address and has to name one tool", tl.Name)
 		}
 		names[tl.Name] = true
-		if tl.Name == confirmToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
 			continue
 		}
 
@@ -406,7 +406,7 @@ func TestAMintedConfirmationLetsTheGatedCallThroughExactlyOnce(t *testing.T) {
 	if run.IsError {
 		t.Fatalf("the confirmed call was still refused: %s", textOf(run))
 	}
-	if !strings.HasPrefix(textOf(run), "HTTP 200 POST /api/audit/999999") {
+	if !strings.HasPrefix(textOf(run), "HTTP 202 POST /api/audit/999999 -> task") {
 		t.Fatalf("the confirmed call did not reach the handler:\n%s", textOf(run))
 	}
 

@@ -112,7 +112,8 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | GET | `/api/scanner/coverage` | read | What the check set covers, and what it declines to look at. |
 | GET | `/api/scanner/configs` | read | The built-in scan configurations. |
 | GET, POST | `/api/scanner/live` | attack | The live sweep over newly-completed proxied traffic; POST opts in. |
-| POST | `/api/audit/{id}` | attack | Run an active audit over one captured exchange, by id (`0` is a valid id). |
+| POST | `/api/audit/{id}` | attack | Run an active audit over one captured exchange, by id (`0` is a valid id). With `{"async": true}` it answers **202** `{task_id, poll, cancel}` at once and runs as a dashboard task. |
+| GET, POST, DELETE | `/api/tasks/{id}` | local-write | `GET` one task: `{task, result, done}` — `result` is an async audit's finished body (the last 64 kept), null otherwise. `POST {id}/cancel`, `POST {id}/again`, `POST pause`/`resume`, `DELETE {id}`. |
 | POST | `/api/audit/selected` | attack | Run one active audit over a selection: `{"exchange_ids":[1,2,3]}` (plus optional `config`, `pool`). Answers **202** with `{task_id, kind, count, exchange_ids, duplicates_dropped, target, config_name, unapplied, pool}` rather than with the outcome — a selection has no bound on its size, so the work is followed through the task row. Refuses an empty selection (400) and an unknown configuration or pool. |
 | POST | `/api/scanner/audit` | attack | Legacy alias for `/api/audit/{id}`, taking the id in the body. |
 

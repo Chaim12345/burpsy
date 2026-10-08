@@ -1736,3 +1736,18 @@ the two differ. Burp evidence is the decompiled agent registry
   every occurrence and refuses when there is none; a body op on a chunked request is refused rather
   than re-framing it. A structured send is authorised on its final bytes including the path, which is
   stricter than the plain send's host-level gate.
+
+### Task handles and pushed notifications (burpsy-react-ui-wdza)
+- **Burp:** a 15 s sync window then a `TaskHandle` (uuid, status, `pollIntervalMs`, `ttlMs`)
+  (`task/SyncWindow.java`, `TaskHandle.java`); MCP progress notifications; finished operations and
+  High-severity issues "reported back automatically".
+- **burpsy:** the transport applies the same 15 s window to any console call that answers 202 with a
+  `task_id`, and starts an audit as such a call (`POST /api/audit/{id}` `{"async": true}`); the handle
+  is the console task id (`GET /api/tasks/{id}`, `burpsy_task_status`); progress notifications for a
+  call with a progress token; `notifications/message` for finished tasks and High/Critical issues.
+- **Divergences:** the handle has no `ttlMs` — a finished task's row lives until the registry's
+  500-row bound evicts it, and an async audit's full result body is kept for the last 64 tasks. The
+  window applies to the audit, crawl, API-scan and selection-audit routes; Intruder still answers
+  synchronously (its run returns its own report and can be stopped through `POST
+  /api/intruder/attacks/{task}/stop`). Push is for tasks finished and issues found *after* the session
+  started.

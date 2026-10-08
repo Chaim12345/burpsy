@@ -965,13 +965,16 @@ var manifest = map[string]route{
 		// riskLocal too by its route: it starts a crawl, but /api/crawl — the same act from the New
 		// scan dialog — is classified by what the crawl does after the start, which the confirmation
 		// gate already covers at its own route.
-		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
+		// GET {id} reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
+		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
 		actionPaths: map[string][]string{
 			"1/cancel": {"POST"},
 			"pause":    {"POST"},
 			"resume":   {"POST"},
 		},
-		summary: "POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
+		summary: "GET {id}: one task's row and an async task's finished body. " +
+			"POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
 			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
 			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
 	},

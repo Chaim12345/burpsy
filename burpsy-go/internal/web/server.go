@@ -159,6 +159,8 @@ type Server struct {
 	// longer in force — findings and the task log are the durable record.
 	auditItems *scanner.AuditItemLedger
 	tasks      *dash.Registry
+	// finished holds async tasks' finished bodies for GET /api/tasks/{id} (burpsy-react-ui-wdza).
+	finished taskResultStore
 	// attacks is the live table of Intruder attacks this process is running, keyed by dashboard task
 	// id, so pause/resume/stop can reach one from another connection while /api/intruder/run holds the
 	// attack's own request open. See api_intruder_control.go.

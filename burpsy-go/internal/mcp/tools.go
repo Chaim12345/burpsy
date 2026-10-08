@@ -95,7 +95,7 @@ func (s *Server) buildRouteTools() []tool {
 	// The transport's own tool name is claimed first so a manifest route can never shadow it: a
 	// descriptor list where "burpsy_confirm" means a route is a list where the confirm flow is
 	// unreachable.
-	used := map[string]bool{confirmToolName: true}
+	used := map[string]bool{confirmToolName: true, taskStatusToolName: true}
 
 	out := make([]tool, 0, len(routes)+1)
 	for _, r := range routes {
@@ -113,6 +113,9 @@ func (s *Server) buildRouteTools() []tool {
 	confirm := s.confirmToolDescriptor(routes)
 	out = append(out, confirm)
 	s.byName[confirm.Name] = confirm
+	status := taskStatusDescriptor()
+	out = append(out, status)
+	s.byName[status.Name] = status
 	return out
 }
 
@@ -346,7 +349,7 @@ route must be the exact pattern %s, not a concrete path — the refusal message 
 func (s *Server) buildGroupedTools() ([]tool, error) {
 	out := make([]tool, 0, len(groupedTools)+1)
 	for _, g := range groupedTools {
-		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName {
+		if _, taken := s.byName[g.name]; taken || g.name == confirmToolName || g.name == taskStatusToolName {
 			return nil, fmt.Errorf("mcp: grouped tool name %q is used twice", g.name)
 		}
 		t := tool{Name: g.name, byOp: make(map[string]op, len(g.ops))}
@@ -383,6 +386,9 @@ func (s *Server) buildGroupedTools() ([]tool, error) {
 	confirm := s.confirmToolDescriptor(s.routes)
 	out = append(out, confirm)
 	s.byName[confirm.Name] = confirm
+	status := taskStatusDescriptor()
+	out = append(out, status)
+	s.byName[status.Name] = status
 	return out, nil
 }
 
@@ -634,6 +640,9 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments,omitempty"`
+		Meta      struct {
+			ProgressToken json.RawMessage `json:"progressToken,omitempty"`
+		} `json:"_meta"`
 	}
 	if r := s.parseParams(req, &params); r != nil {
 		return *r
@@ -652,6 +661,10 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 	if params.Name == confirmToolName {
 		return s.callConfirm(ctx, req, args)
 	}
+	call := callState{progressToken: params.Meta.ProgressToken}
+	if params.Name == taskStatusToolName {
+		return s.ok(req, s.taskStatus(ctx, params.Arguments, call))
+	}
 
 	t, ok := s.byName[params.Name]
 	if !ok {
@@ -661,7 +674,7 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 		return s.fail(req, codeInvalidParams, "no tool named %q; call tools/list for the surface", params.Name)
 	}
 
-	res := s.invoke(ctx, t, args)
+	res := s.invoke(ctx, t, args, call)
 	out := map[string]any{"content": res.Content}
 	if res.IsError {
 		out["isError"] = true
@@ -674,7 +687,7 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 //
 // It makes no authorisation decision. Whether the call is permitted is the running console's
 // answer, and the only thing this function does with a confirmation is relay the caller's token.
-func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
+func (s *Server) invoke(ctx context.Context, t tool, args callArgs, call callState) callResult {
 	route := t.route
 	var method string
 	if t.ops != nil {
@@ -706,6 +719,12 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 		target += "?" + q.Encode()
 	}
 
+	// An audit started through the transport runs as a console task and is awaited for the sync
+	// window (burpsy-react-ui-wdza): the call answers with the finished result, or with a task handle
+	// the session can keep working past. "async": false in the body keeps the old blocking call.
+	if asyncOps[method+" "+route.Pattern] {
+		args.Body = withAsync(args.Body)
+	}
 	var body io.Reader
 	if len(args.Body) > 0 {
 		body = bytes.NewReader(args.Body)
@@ -759,6 +778,11 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 
 	if resp.StatusCode == http.StatusPreconditionRequired {
 		return errResult(refusalText(route, text))
+	}
+	if resp.StatusCode == http.StatusAccepted && !truncated {
+		if id, ok := taskIDOf(payload); ok {
+			return s.awaitTask(ctx, id, text, call)
+		}
 	}
 	if resp.StatusCode >= 400 {
 		return errResult(text)

@@ -84,8 +84,8 @@ func routeVerbs() map[string]web.MCPRouteInfo {
 
 func TestTheDefaultSurfaceIsGroupedWithNoAssetsAndNoSubtreeSpellings(t *testing.T) {
 	tools, raw := listGrouped(t)
-	if len(tools) != len(groupedTools)+1 {
-		t.Fatalf("tools/list published %d tools, want the %d grouped tools plus %s", len(tools), len(groupedTools), confirmToolName)
+	if len(tools) != len(groupedTools)+2 {
+		t.Fatalf("tools/list published %d tools, want the %d grouped tools plus %s and %s", len(tools), len(groupedTools), confirmToolName, taskStatusToolName)
 	}
 	if len(tools) >= 100 {
 		t.Fatalf("the grouped surface has %d tools; it exists to be far smaller than the 147-route surface", len(tools))
@@ -97,7 +97,7 @@ func TestTheDefaultSurfaceIsGroupedWithNoAssetsAndNoSubtreeSpellings(t *testing.
 		case strings.HasSuffix(tl.Name, "_subtree"), strings.HasPrefix(tl.Name, "api_"):
 			t.Fatalf("tool %q is a route-surface name on the grouped surface", tl.Name)
 		}
-		if tl.Name == confirmToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
 			continue
 		}
 		if tl.Annotations.Group == "" || tl.Annotations.ShortDescription == "" {
@@ -169,7 +169,7 @@ func TestNoGroupedToolSpansTwoRiskClasses(t *testing.T) {
 	tools, _ := listGrouped(t)
 	verbs := routeVerbs()
 	for _, tl := range tools {
-		if tl.Name == confirmToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
 			continue
 		}
 		if len(tl.Annotations.Operations) == 0 {
@@ -257,7 +257,7 @@ func TestAGroupedGatedOperationIsRefusedThenConfirmedOnce(t *testing.T) {
 		t.Fatalf("mint failed: %v\n%s", err, textOf(minted))
 	}
 	args["confirm"] = token.Token
-	if run := callGrouped(t, base, "scan", args); run.IsError || !strings.HasPrefix(textOf(run), "HTTP 200 POST /api/audit/999999") {
+	if run := callGrouped(t, base, "scan", args); run.IsError || !strings.HasPrefix(textOf(run), "HTTP 202 POST /api/audit/999999 -> task") {
 		t.Fatalf("the confirmed audit did not reach the handler:\n%s", textOf(run))
 	}
 	if replay := callGrouped(t, base, "scan", args); !replay.IsError || !strings.Contains(textOf(replay), "HTTP 428") {
@@ -320,7 +320,7 @@ func TestTheGroupedSurfaceRefusesAnOperationTheManifestLacks(t *testing.T) {
 func TestEachGroupedSchemaOffersExactlyItsOperations(t *testing.T) {
 	tools, _ := listGrouped(t)
 	for _, tl := range tools {
-		if tl.Name == confirmToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
 			continue
 		}
 		props, _ := tl.InputSchema["properties"].(map[string]any)

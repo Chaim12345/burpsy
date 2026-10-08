@@ -183,8 +183,8 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "tasks", group: groupScanning,
-		short: "Cancels, re-runs or removes a dashboard task, and pauses or resumes every task.",
-		ops:   []string{"POST /api/tasks/", "DELETE /api/tasks/"},
+		short: "Reads one task (and an async audit's finished result), cancels, re-runs or removes it, and pauses or resumes every task.",
+		ops:   []string{"GET /api/tasks/", "POST /api/tasks/", "DELETE /api/tasks/"},
 	},
 	{
 		name: "datasets", group: groupDatasets,

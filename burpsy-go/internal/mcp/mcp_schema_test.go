@@ -39,7 +39,7 @@ func TestEveryGroupedOperationPublishesItsHandlersBodySchema(t *testing.T) {
 	}
 	typed := 0
 	for _, tl := range tools {
-		if tl.Name == confirmToolName {
+		if tl.Name == confirmToolName || tl.Name == taskStatusToolName {
 			continue
 		}
 		branches := bodyBranches(t, tl.InputSchema)
