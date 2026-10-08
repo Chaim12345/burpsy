@@ -1,0 +1,16 @@
+[package]
+name = "burpsy-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+burpsy-core = { path = "../core" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+chromiumoxide = "0.9.1"
+futures = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true }
