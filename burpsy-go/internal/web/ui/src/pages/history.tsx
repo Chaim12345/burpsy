@@ -1076,6 +1076,11 @@ export function HistoryPage(): JSX.Element {
     size: 78,
     cell: (info) => {
      const value = info.getValue<number | null>();
+     // A request generated from a schema and never sent (7v1e) has no status because nothing went
+     // out — "pending" would claim a response is on its way.
+     if (value === null && (info.row.original as { source?: string }).source === "schema") {
+      return <Badge tone="warn">not sent</Badge>;
+     }
      return value === null ? <Badge>pending</Badge> : <Badge tone={statusTone(value)}>{value}</Badge>;
     },
    },
@@ -1288,7 +1293,7 @@ export function HistoryPage(): JSX.Element {
      </strong>
     </div>
     <div className="detail-actions">
-     <Badge tone={statusTone(selected.status)}>{selected.status ?? "pending"}</Badge>
+     <Badge tone={statusTone(selected.status)}>{selected.status ?? (selected.source === "schema" ? "not sent" : "pending")}</Badge>
      <Badge>{formatDuration(selected.duration_ms)}</Badge>
      <Badge>{selected.protocol}</Badge>
      {/* The protocol badge answers "what carried this". On a tunnel interception moved off HTTP/2 it

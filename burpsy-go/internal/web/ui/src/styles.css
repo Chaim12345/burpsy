@@ -5170,13 +5170,16 @@ tbody td {
   cursor: pointer;
 }
 
+/* A rule, not a fill, for the same contrast reason as the diff marks: the dim target text must keep
+   AA contrast on the highlighted row. */
 .repeater-tab-search-results li[data-active] {
-  background: var(--accent-soft, rgba(255, 102, 51, 0.14));
+  box-shadow: inset var(--border-strong) 0 0 var(--accent);
 }
 
 /* Repeater's change highlighting against the previous response (b4gt). */
+/* An outline, not a fill: a tinted background under syntax-coloured text drops its contrast below
+   AA (axe color-contrast), and the mark must not make the changed text harder to read. */
 .cm-diff-changed {
-  background: var(--accent-soft, rgba(255, 102, 51, 0.22));
   outline: 1px solid var(--accent);
   border-radius: var(--radius-sm);
 }

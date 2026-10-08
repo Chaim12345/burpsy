@@ -1315,7 +1315,10 @@ export function RepeaterPage(): JSX.Element {
                               ? "Identical to previous"
                               : `${changeMarks?.marks.length ?? 0} change${(changeMarks?.marks.length ?? 0) === 1 ? "" : "s"} vs previous` +
                                 (changeMarks?.discounted ? ` (+${changeMarks.discounted} ignored)` : "") +
-                                (changes.data?.truncated ? " (diff truncated)" : "")}
+                                (changes.data?.truncated ? " (diff truncated)" : "") +
+                                // Painted on the Raw view only — Pretty reformats the text, so the
+                                // positions would name the wrong characters there.
+                                ((changeMarks?.marks.length ?? 0) > 0 ? " · Raw view" : "")}
                   </Button>
                 </Tooltip>
               ) : null}
@@ -1467,8 +1470,10 @@ export function RepeaterPage(): JSX.Element {
             <Input
               aria-label="Search Repeater tabs by name or target"
               role="combobox"
-              aria-expanded
-              aria-controls="repeater-tab-search-results"
+              // Only while the listbox exists: a dangling aria-controls is an invalid attribute value
+              // to axe, and a miss renders a status line instead of the list.
+              aria-expanded={searchMatches.length > 0}
+              aria-controls={searchMatches.length > 0 ? "repeater-tab-search-results" : undefined}
               aria-activedescendant={searchMatches[searchCursor] ? `tab-search-${searchMatches[searchCursor]!.id}` : undefined}
               autoFocus
               value={tabSearch}

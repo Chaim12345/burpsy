@@ -1916,3 +1916,12 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Divergence:** the default is off where Burp's is on. Every raw send in burpsy has always dialled fresh, and
   turning reuse on silently would change what "this request's response" means for every existing tab; an
   operator turns it on per tab in Config. A failed send on a reused connection is reported, never retried.
+
+### Response change highlighting — Raw view only (b4gt)
+- **Burp:** "Burp Repeater highlights any changes between the new and original responses"
+  (testing-for-reflected-xss.html), in the response editor.
+- **burpsy:** the word diff against the previous send in the tab is painted on the response's Raw view; the
+  header button counts the changes and says "· Raw view".
+- **Divergence:** not painted on Pretty (which reformats the body, so diff positions would name the wrong
+  characters) or on Hex/typed views. An HTML or JSON response opens on Pretty, so the operator switches to Raw
+  to see the marks.

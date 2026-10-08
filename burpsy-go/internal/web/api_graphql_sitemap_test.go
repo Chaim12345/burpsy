@@ -252,3 +252,39 @@ func TestSaveGraphQLQueriesKeepsABareLFRequestsLineEndings(t *testing.T) {
 		t.Fatalf("generated request head:\n%q", head)
 	}
 }
+
+// The saved operations are site-map items, not traffic: the dashboard's "Captured traffic" summary
+// skips them with their own reason instead of counting them as captured exchanges.
+func TestSavedGraphQLQueriesAreNotCountedAsCapturedTraffic(t *testing.T) {
+	s := newTestServer()
+	id := seedExchange(t, s, "POST /graphql HTTP/1.1\r\nHost: api.test\r\n\r\n{\"query\":\"x\"}", jsonResponse(introspectionFixture))
+	if rec := postJSON(t, s, "/api/graphql/sitemap", map[string]any{"exchange_id": id}); rec.Code != http.StatusOK {
+		t.Fatalf("save = %d", rec.Code)
+	}
+	summary := s.captureSummary()
+	if summary.Breakdown.Found != 1 || summary.Breakdown.Skipped != 3 {
+		t.Fatalf("captured traffic = %+v, want the 1 sent exchange found and the 3 unsent ones skipped", summary.Breakdown)
+	}
+	found := false
+	for _, reason := range summary.Reasons {
+		if strings.Contains(reason.Detail, "never sent") && reason.Count == 3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("reasons = %+v, want the unsent schema requests named", summary.Reasons)
+	}
+}
+
+// The exchange view names the row's source, so the console can render an unsent schema request as
+// "not sent" rather than "pending".
+func TestASavedGraphQLQueryReadsAsSchemaSourcedInTheExchangeView(t *testing.T) {
+	s := newTestServer()
+	id := seedExchange(t, s, "POST /graphql HTTP/1.1\r\nHost: api.test\r\n\r\n{\"query\":\"x\"}", jsonResponse(introspectionFixture))
+	var out graphqlSitemapWire
+	json.Unmarshal(postJSON(t, s, "/api/graphql/sitemap", map[string]any{"exchange_id": id}).Body.Bytes(), &out)
+	view := getJSON(t, s, "/api/exchange/"+strconv.Itoa(out.Operations[0].ExchangeID)).Body.String()
+	if !strings.Contains(view, `"source":"schema"`) || !strings.Contains(view, `"status":null`) {
+		t.Fatalf("exchange view = %s, want source schema and a null status", view)
+	}
+}

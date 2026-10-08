@@ -560,6 +560,11 @@ export function SiteMapPage(): JSX.Element {
     size: 78,
     cell: (info) => {
      const value = info.getValue<number | null>();
+     // A request generated from a schema and never sent (7v1e) has no status because nothing went
+     // out — "pending" would claim a response is on its way.
+     if (value === null && (info.row.original as { source?: string }).source === "schema") {
+      return <Badge tone="warn">not sent</Badge>;
+     }
      return value === null ? <Badge>pending</Badge> : <Badge tone={statusTone(value)}>{value}</Badge>;
     },
    },
@@ -835,7 +840,7 @@ export function SiteMapPage(): JSX.Element {
      </h3>
     </div>
     <div className="detail-actions">
-     <Badge tone={statusTone(activeExchange.status)}>{activeExchange.status ?? "pending"}</Badge>
+     <Badge tone={statusTone(activeExchange.status)}>{activeExchange.status ?? (activeExchange.source === "schema" ? "not sent" : "pending")}</Badge>
      <Badge>{formatDuration(activeExchange.duration_ms)}</Badge>
      <Button variant="outline" size="small" onClick={() => void actions.sendToRepeater(activeExchange)}>
       <Repeat2 size={13} />

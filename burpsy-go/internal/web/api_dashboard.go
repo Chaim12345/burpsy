@@ -279,9 +279,15 @@ func (s *Server) liveAuditSummary() dash.Summary {
 // up on the dashboard as an unattributed count, which is visible and fixable.
 func (s *Server) captureSummary() dash.Summary {
 	perSource := map[core.Source]uint64{}
-	var attributed, unattributed uint64
+	var attributed, unattributed, unsent uint64
 	for _, ex := range s.store.Exchanges() {
 		perSource[ex.Source]++
+		if ex.Source == core.SourceSchema {
+			// Requests generated from an API schema and never sent (7v1e) are site-map items, not
+			// captured traffic: skipped here, with their own reason, rather than counted as found.
+			unsent++
+			continue
+		}
 		if ex.Source.Attributed() {
 			attributed++
 		} else {
@@ -296,8 +302,15 @@ func (s *Server) captureSummary() dash.Summary {
 			Count:  unattributed,
 		})
 	}
+	if unsent > 0 {
+		reasons = append(reasons, dash.Reason{
+			Bucket: dash.BucketSkipped,
+			Detail: "requests generated from a GraphQL schema (Save GraphQL queries to site map) and never sent; they are site-map items, not traffic",
+			Count:  unsent,
+		})
+	}
 	return dash.NewSummary("Captured traffic", "attributed exchanges", "exchanges",
-		dash.Breakdown{Found: attributed, Skipped: unattributed}, reasons...)
+		dash.Breakdown{Found: attributed, Skipped: unattributed + unsent}, reasons...)
 }
 
 // sourceCounts is the per-source histogram the capture summary headlines, reported separately because

@@ -317,6 +317,9 @@ class DeletedMarker extends WidgetType {
  override toDOM(): HTMLElement {
   const span = document.createElement("span");
   span.className = "cm-diff-deleted";
+  // role="img" so the name is permitted: a bare span is the generic role, where aria-label is
+  // prohibited and dropped.
+  span.setAttribute("role", "img");
   span.title = "Text the previous response had here is gone";
   span.setAttribute("aria-label", "deleted text");
   return span;
