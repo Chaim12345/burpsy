@@ -202,12 +202,15 @@ const (
 	// DowngradeContentLengthDisagreesWithBody means Content-Length disagrees with the body written. h2
 	// frames the body itself, so the lie would be corrected on the way out.
 	DowngradeContentLengthDisagreesWithBody
+	// DowngradeProjectDefaultHTTP1 means the project's "Default to HTTP/2" setting is off and the send
+	// named no protocol of its own (burpsy-react-ui-ry5n).
+	DowngradeProjectDefaultHTTP1
 )
 
 // DowngradeReasonAll is every reason, in the order the send path tests them: negotiation facts first,
 // then the request's own constructs in the order planH2 reads them. A caller iterating this sees
 // reasons in the same order the code decides them.
-var DowngradeReasonAll = [19]DowngradeReason{
+var DowngradeReasonAll = [20]DowngradeReason{
 	DowngradePlaintextTarget,
 	DowngradeNegotiatedHTTP11,
 	DowngradeNoALPN,
@@ -227,6 +230,7 @@ var DowngradeReasonAll = [19]DowngradeReason{
 	DowngradeDuplicateContentLength,
 	DowngradeContentLengthUnreadable,
 	DowngradeContentLengthDisagreesWithBody,
+	DowngradeProjectDefaultHTTP1,
 }
 
 // Explanation is one line an operator can act on.
@@ -240,6 +244,8 @@ func (r DowngradeReason) Explanation() string {
 		return "the TLS handshake carried no ALPN protocol, so the target never agreed to h2"
 	case DowngradePinnedByCaller:
 		return "the caller pinned this send to HTTP/1.1 so the bytes go on the wire as written"
+	case DowngradeProjectDefaultHTTP1:
+		return "the project setting \"Default to HTTP/2 if the server supports it\" is off, so a send that names no protocol uses HTTP/1.1"
 	case DowngradeHeadersNotTerminated:
 		return "the request has no blank line ending its header section"
 	case DowngradeRequestLineUnreadable:

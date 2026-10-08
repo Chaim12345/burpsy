@@ -544,3 +544,27 @@ func TestNetworkSettingsCarryTheRedirectTypes(t *testing.T) {
 		t.Errorf("a refused patch changed the types: %+v, was %+v", got, live)
 	}
 }
+
+// Burp's HTTP/1 keep-alive and "Default to HTTP/2" (burpsy-react-ui-ry5n) through the route: Burp's
+// defaults are on the wire before anything set them, and a PUT reaches the sender.
+func TestNetworkSettingsCarryTheHTTPProtocolDefaults(t *testing.T) {
+	s := networkSettingsServer()
+	body := get(t, s, "/api/network/settings").Body.String()
+	for _, want := range []string{`"http1":{"enable_keep_alive":false}`, `"http2":{"enable_http2":true}`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET lacks %s: %s", want, body)
+		}
+	}
+	rec := putNetworkSettings(t, s, `{"http1": {"enable_keep_alive": true}, "http2": {"enable_http2": false}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d %s", rec.Code, rec.Body.String())
+	}
+	live := s.sender.Network()
+	if !live.KeepAliveHTTP1() || live.DefaultToHTTP2() {
+		t.Errorf("after the PUT keep-alive %v, h2 default %v; want true, false", live.KeepAliveHTTP1(), live.DefaultToHTTP2())
+	}
+	if rec := putNetworkSettings(t, s, `{"http2": {"default_http2": true}}`); rec.Code != http.StatusBadRequest ||
+		!strings.Contains(rec.Body.String(), "default_http2") {
+		t.Errorf("an unknown key = %d %q, want 400 naming it", rec.Code, rec.Body.String())
+	}
+}

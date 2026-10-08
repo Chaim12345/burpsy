@@ -67,6 +67,12 @@ export interface NetworkSettings {
      */
     types?: RedirectTypes;
   };
+  /**
+   * Burp's project-wide protocol defaults. The server always answers them, Burp's defaults
+   * included: keep-alive off, HTTP/2 on.
+   */
+  http1?: { enable_keep_alive: boolean };
+  http2?: { enable_http2: boolean };
   continue: {
     understand_100_continue: boolean;
     remove_expect_header: boolean;

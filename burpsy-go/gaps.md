@@ -1689,3 +1689,16 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Divergence:** `understand_javascript_driven: true` is refused by name. Following a script-driven
   redirect means executing the page's JavaScript, which the sender does not do; storing the flag
   would be a promise nothing keeps.
+
+## HTTP/1 keep-alive reaches the raw send path only (2026-10-08, burpsy-react-ui-ry5n)
+- **Burp:** Settings → Network → HTTP, "Use keep-alive for HTTP/1 if the server supports it" (off by
+  default; idle connections closed after five seconds) "affects all Burp Suite tools", with per-tool
+  overrides in Repeater ("Enable HTTP/1 connection reuse") and Intruder.
+- **burpsy:** `http1.enable_keep_alive` on `/api/network/settings` drives a pool on the sender's raw
+  path (`SendRawOutcome`, which Repeater, Intruder and the scanner's raw probes use): a connection the
+  exchange left reusable is kept per authority and closed after five seconds idle. `http2.enable_http2`
+  ("Default to HTTP/2") reaches both the raw path and the typed transport.
+- **Divergence:** the typed `http.Transport` path keeps its own connection reuse whatever the switch
+  says, because that transport also carries h2 and disabling keep-alive there would close h2
+  connections too. The proxy's upstream leg is unaffected. Repeater's and Intruder's per-tool reuse
+  overrides are not offered.

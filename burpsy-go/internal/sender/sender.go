@@ -43,6 +43,9 @@ type Sender struct {
 	// written on the send path and read by nothing else — the dial builds its own copy of the value.
 	tlsMu  sync.Mutex
 	tlsCAs map[string]*x509.CertPool
+	// pool holds the HTTP/1 connections kept alive for reuse (ry5n, keepalive.go). Its zero value is
+	// an empty pool.
+	pool http1Pool
 	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
 	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
 	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
@@ -280,7 +283,8 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 			}
 			return dialer.DialContext(ctx, network, target)
 		},
-		ForceAttemptHTTP2:     true,
+		// Burp's "Default to HTTP/2" (ry5n) reaches the typed path too: off, no h2 is attempted.
+		ForceAttemptHTTP2:     settings.DefaultToHTTP2(),
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
@@ -377,6 +381,9 @@ func (s *Sender) ApplyNetwork(settings NetworkSettings) error {
 	defer s.mu.Unlock()
 	s.net = normalised
 	s.client = buildClient(s.config, normalised, s.carrier)
+	// A kept connection was dialled under the settings just replaced (resolution, TLS, timeouts), so
+	// none of them may carry the next send.
+	s.pool.closeAll()
 	return nil
 }
 
@@ -916,15 +923,48 @@ func (s *Sender) SendRawOutcome(
 	rawRequest []byte,
 	pref ProtocolPreference,
 ) ([]byte, SendOutcome, error) {
+	settings := s.Network()
+	projectHTTP1 := pref == ProtocolPreferenceAuto && !settings.DefaultToHTTP2() && !burpsyhttp2.IsHTTP2Request(rawRequest)
+	if projectHTTP1 {
+		// Burp's "Default to HTTP/2" off (ry5n): a send that named no protocol is planned as pinned,
+		// and reported under its own reason so the coverage report says why h2 never happened.
+		pref = ProtocolPreferenceHTTP1
+	}
 	plan, err := planSend(rawRequest, useTLS, pref)
 	if err != nil {
 		return nil, SendOutcome{}, err
+	}
+	if projectHTTP1 && plan.block != nil && plan.block.Reason == DowngradePinnedByCaller {
+		plan.block = &Downgrade{Reason: DowngradeProjectDefaultHTTP1}
+	}
+
+	// Keep-alive (ry5n): an HTTP/1 send may ride a connection an earlier send left reusable.
+	keep := settings.KeepAliveHTTP1() && !settings.Streaming.isStreaming(host)
+	key := poolKey(host, port, useTLS)
+	if keep {
+		if ic := s.pool.take(key, plan.wantH2); ic != nil {
+			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
+			if err == nil || !staleReuse(err) {
+				down := plan.block
+				if down == nil {
+					down = &Downgrade{Reason: DowngradeNegotiatedHTTP11, Forced: plan.mustH2}
+					if ic.negotiated == "" {
+						down = &Downgrade{Reason: DowngradeNoALPN, Forced: plan.mustH2}
+					}
+				}
+				out := s.finish(host, port, useTLS, ic.negotiated, down, nil, nil, remoteIP(ic.conn), err)
+				s.release(key, ic, plan.http1, resp, err)
+				return resp, out, err
+			}
+			// The server closed it while it sat idle; this send gets a fresh connection.
+			ic.conn.Close()
+		}
 	}
 
 	if !useTLS {
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
-		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1)
+		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
 		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
 		return resp, out, err
 	}
@@ -933,7 +973,12 @@ func (s *Sender) SendRawOutcome(
 	if err != nil {
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
-	defer conn.Close()
+	kept := false
+	defer func() {
+		if !kept {
+			conn.Close()
+		}
+	}()
 	// See cancel.go: without this, cancelling the context leaves the read blocked until the
 	// configured timeout, whatever the caller asked for.
 	defer watchCancel(ctx, conn)()
@@ -967,9 +1012,31 @@ func (s *Sender) SendRawOutcome(
 			}
 		}
 	}
+	if keep {
+		br := bufio.NewReader(conn)
+		stop := watchCancel(ctx, conn)
+		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
+		stop()
+		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+		if err == nil && reusableAfter(plan.http1, resp) {
+			kept = true
+			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
+		}
+		return resp, out, err
+	}
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
 	return resp, out, err
+}
+
+// release returns a reused connection to the pool when its exchange left it reusable, and closes it
+// otherwise.
+func (s *Sender) release(key string, ic *idleConn, request, response []byte, err error) {
+	if err == nil && reusableAfter(request, response) {
+		s.pool.put(key, ic)
+		return
+	}
+	ic.conn.Close()
 }
 
 // finish builds one send's outcome, counts it when the exchange actually completed, and returns it stamped
@@ -1112,16 +1179,24 @@ func planSend(raw []byte, useTLS bool, pref ProtocolPreference) (sendPlan, error
 // sendHTTP1Plain dials cleartext and writes one request. The dialled address is returned
 // alongside the response, because a caller recording the exchange wants where the socket went
 // — the same fact the TLS path reads off its own connection (burpsy-react-ui-gj4f).
-func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte) ([]byte, string, error) {
+//
+// With keep set, a connection the exchange left reusable is kept for the next send (keepalive.go).
+func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, raw []byte, keep bool) ([]byte, string, error) {
 	conn, err := s.dialPlain(ctx, host, port)
 	if err != nil {
 		return nil, "", fmt.Errorf("connection failed: %w", err)
 	}
-	defer conn.Close()
-	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
-	defer watchCancel(ctx, conn)()
 	ip := remoteIP(conn)
-	resp, err := s.writeHTTP1(ctx, conn, host, raw)
+	br := bufio.NewReader(conn)
+	// Cancelling the context must unblock the read, not merely be noticed after it. See cancel.go.
+	stop := watchCancel(ctx, conn)
+	resp, err := s.exchangeHTTP1(ctx, conn, br, host, raw)
+	stop()
+	if keep && err == nil && reusableAfter(raw, resp) {
+		s.pool.put(poolKey(host, port, false), &idleConn{conn: conn, br: br})
+	} else {
+		conn.Close()
+	}
 	return resp, ip, err
 }
 
@@ -1131,6 +1206,12 @@ func (s *Sender) sendHTTP1Plain(ctx context.Context, host string, port uint16, r
 // cannot: whether this authority's responses are declared open-ended, and — under a resolution
 // override — the connection's remote address is not the host at all.
 func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw []byte) ([]byte, error) {
+	return s.exchangeHTTP1(ctx, conn, bufio.NewReader(conn), host, raw)
+}
+
+// exchangeHTTP1 is writeHTTP1 on a connection whose reader is kept with it, which a kept-alive
+// connection needs: bytes buffered past one response belong to the connection, not to the read.
+func (s *Sender) exchangeHTTP1(ctx context.Context, conn net.Conn, br *bufio.Reader, host string, raw []byte) ([]byte, error) {
 	settings := s.Network()
 	s.setDeadline(ctx, conn, host)
 	if _, err := conn.Write(raw); err != nil {
@@ -1139,7 +1220,7 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
 	response, err := readResponse(
-		bufio.NewReader(conn),
+		br,
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
 		eventStreamPromoter(ctx, conn, settings),

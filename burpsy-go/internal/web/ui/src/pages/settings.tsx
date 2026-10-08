@@ -1351,6 +1351,38 @@ function NetworkSection(): JSX.Element {
       this sender does not do.
      </p>
 
+     <h3 className="subheading">HTTP/1 and HTTP/2</h3>
+     <div className="switch-grid">
+      <label className="switch-row" htmlFor="network-http1-keep-alive">
+       <span>
+        <span>Use keep-alive for HTTP/1 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         Off by default: each request gets its own connection. On, a connection the response left reusable carries the next request to that host, and is closed after five seconds idle.
+        </span>
+       </span>
+       <Switch
+        id="network-http1-keep-alive"
+        label="Use keep-alive for HTTP/1 if the server supports it"
+        checked={draft.http1?.enable_keep_alive === true}
+        onCheckedChange={(on) => patchSection("http1", { enable_keep_alive: on })}
+       />
+      </label>
+      <label className="switch-row" htmlFor="network-http2-default">
+       <span>
+        <span>Default to HTTP/2 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         On by default. Off, a request that names no protocol goes out as HTTP/1.1; one written as HTTP/2, or pinned to HTTP/2 in Repeater, still uses it.
+        </span>
+       </span>
+       <Switch
+        id="network-http2-default"
+        label="Default to HTTP/2 if the server supports it"
+        checked={draft.http2?.enable_http2 !== false}
+        onCheckedChange={(on) => patchSection("http2", { enable_http2: on })}
+       />
+      </label>
+     </div>
+
      <h3 className="subheading">100-continue</h3>
      <div className="stack">
       <Switch

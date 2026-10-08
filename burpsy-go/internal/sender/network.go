@@ -36,7 +36,33 @@ type NetworkSettings struct {
 	Continue   ContinueSettings   `json:"continue"`
 	Streaming  StreamingSettings  `json:"streaming"`
 	TLS        TLSSettings        `json:"tls"`
+	// HTTP1 and HTTP2 are Burp's project-wide protocol defaults (burpsy-react-ui-ry5n), under Burp's
+	// own key names (project_options.http.http1 / http2). Pointers because a settings document written
+	// before they existed is unmarshalled onto a zero struct, and the zero value of HTTP2 would turn
+	// h2 off for every send: nil means Burp's default, which is keep-alive off and h2 on.
+	HTTP1 *HTTP1Settings `json:"http1,omitempty"`
+	HTTP2 *HTTP2Settings `json:"http2,omitempty"`
 }
+
+// HTTP1Settings is Burp's "HTTP/1" panel.
+type HTTP1Settings struct {
+	// EnableKeepAlive is "Use keep-alive for HTTP/1 if the server supports it". See keepalive.go.
+	EnableKeepAlive bool `json:"enable_keep_alive"`
+}
+
+// HTTP2Settings is Burp's "HTTP/2" panel.
+type HTTP2Settings struct {
+	// EnableHTTP2 is "Default to HTTP/2 if the server supports it". Off, a send that names no protocol
+	// goes out as HTTP/1.1 whatever the target negotiates; a request written as HTTP/2, or pinned to
+	// h2 by its caller, still rides h2, as Burp's per-request protocol toggle overrides this default.
+	EnableHTTP2 bool `json:"enable_http2"`
+}
+
+// KeepAliveHTTP1 reports whether HTTP/1 connections are kept for reuse.
+func (n NetworkSettings) KeepAliveHTTP1() bool { return n.HTTP1 != nil && n.HTTP1.EnableKeepAlive }
+
+// DefaultToHTTP2 reports whether a send that names no protocol may use h2.
+func (n NetworkSettings) DefaultToHTTP2() bool { return n.HTTP2 == nil || n.HTTP2.EnableHTTP2 }
 
 // TLSSettings is how the operator governs the certificate the TARGET presents.
 //

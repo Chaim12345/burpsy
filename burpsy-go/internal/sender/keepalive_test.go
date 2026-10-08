@@ -1,0 +1,221 @@
+package sender
+
+import (
+	"context"
+	"crypto/tls"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/burpsy-go/burpsy/internal/alpn"
+)
+
+// Burp's project-wide HTTP/1 keep-alive and "Default to HTTP/2" (burpsy-react-ui-ry5n), driven
+// through SendRawOutcome against real listeners that count the connections they accept.
+
+type connCountingServer struct {
+	host  string
+	port  uint16
+	conns atomic.Int64
+	srv   *httptest.Server
+}
+
+func startConnCounting(t *testing.T, useTLS bool, protos []string, handler http.HandlerFunc) *connCountingServer {
+	t.Helper()
+	c := &connCountingServer{}
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			c.conns.Add(1)
+		}
+	}
+	if useTLS {
+		srv.EnableHTTP2 = false
+		for _, p := range protos {
+			if p == alpn.H2 {
+				srv.EnableHTTP2 = true
+			}
+		}
+		srv.TLS = &tls.Config{NextProtos: protos}
+		srv.StartTLS()
+	} else {
+		srv.Start()
+	}
+	t.Cleanup(srv.Close)
+	addr := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "https://"), "http://")
+	host, port, err := hostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.host, c.port, c.srv = host, port, srv
+	return c
+}
+
+func okHandler(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) }
+
+func senderWithHTTP(t *testing.T, keepAlive bool, h2 bool) *Sender {
+	t.Helper()
+	s := testSender()
+	n := s.Network()
+	n.HTTP1 = &HTTP1Settings{EnableKeepAlive: keepAlive}
+	n.HTTP2 = &HTTP2Settings{EnableHTTP2: h2}
+	if err := s.ApplyNetwork(n); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func sendN(t *testing.T, s *Sender, srv *connCountingServer, useTLS bool, n int, raw []byte) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		resp, _, err := s.SendRawOutcome(context.Background(), srv.host, srv.port, useTLS, raw, ProtocolPreferenceAuto)
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		if !strings.HasSuffix(string(resp), "ok") {
+			t.Fatalf("send %d answered %q", i, resp)
+		}
+	}
+}
+
+func TestKeepAliveIsOffByDefaultAndEachSendDialsItsOwnConnection(t *testing.T) {
+	srv := startConnCounting(t, false, nil, okHandler)
+	sendN(t, testSender(), srv, false, 3, rawGet(srv.host, srv.port))
+	if got := srv.conns.Load(); got != 3 {
+		t.Errorf("three sends with keep-alive off opened %d connection(s), want 3", got)
+	}
+}
+
+func TestKeepAliveReusesOneConnectionForPlaintextAndTLS(t *testing.T) {
+	plain := startConnCounting(t, false, nil, okHandler)
+	sendN(t, senderWithHTTP(t, true, true), plain, false, 3, rawGet(plain.host, plain.port))
+	if got := plain.conns.Load(); got != 1 {
+		t.Errorf("plaintext: three keep-alive sends opened %d connection(s), want 1", got)
+	}
+	// A TLS target that declines h2: the connection kept after the h2 offer serves the next sends.
+	secure := startConnCounting(t, true, []string{alpn.HTTP11}, okHandler)
+	sendN(t, senderWithHTTP(t, true, true), secure, true, 3, rawGet(secure.host, secure.port))
+	if got := secure.conns.Load(); got != 1 {
+		t.Errorf("TLS http/1.1: three keep-alive sends opened %d connection(s), want 1", got)
+	}
+}
+
+func TestAConnectionCloseOrUnframedResponseIsNotReused(t *testing.T) {
+	closing := startConnCounting(t, false, nil, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Connection", "close")
+		w.Write([]byte("ok"))
+	})
+	sendN(t, senderWithHTTP(t, true, true), closing, false, 2, rawGet(closing.host, closing.port))
+	if got := closing.conns.Load(); got != 2 {
+		t.Errorf("Connection: close was ignored: %d connection(s) for 2 sends, want 2", got)
+	}
+	// The request asking for close is honoured too.
+	plain := startConnCounting(t, false, nil, okHandler)
+	raw := []byte("GET /probe HTTP/1.1\r\nHost: " + formatHostPort(plain.host, plain.port) + "\r\nConnection: close\r\n\r\n")
+	sendN(t, senderWithHTTP(t, true, true), plain, false, 2, raw)
+	if got := plain.conns.Load(); got != 2 {
+		t.Errorf("a request's Connection: close was ignored: %d connection(s), want 2", got)
+	}
+}
+
+func TestReusableAfterReadsTheFraming(t *testing.T) {
+	get := []byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+	for _, c := range []struct {
+		resp string
+		want bool
+	}{
+		{"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", true},
+		{"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", true},
+		{"HTTP/1.1 204 No Content\r\n\r\n", true},
+		{"HTTP/1.1 200 OK\r\n\r\nread until close", false},
+		{"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok", false},
+		{"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n", false},
+		{"HTTP/1.1 200 OK\r\nConnection: keep-alive, close\r\nContent-Length: 2\r\n\r\nok", false},
+	} {
+		if got := reusableAfter(get, []byte(c.resp)); got != c.want {
+			t.Errorf("reusableAfter(%q) = %v, want %v", firstLineOf(c.resp), got, c.want)
+		}
+	}
+}
+
+// A kept connection the server closed while it sat idle is retried on a fresh one, not reported as
+// a failed send.
+func TestAKeptConnectionTheServerClosedIsRetriedOnAFreshOne(t *testing.T) {
+	srv := startConnCounting(t, false, nil, okHandler)
+	s := senderWithHTTP(t, true, true)
+	sendN(t, s, srv, false, 1, rawGet(srv.host, srv.port))
+	srv.srv.CloseClientConnections()
+	time.Sleep(50 * time.Millisecond)
+	sendN(t, s, srv, false, 1, rawGet(srv.host, srv.port))
+	if got := srv.conns.Load(); got != 2 {
+		t.Errorf("%d connection(s), want 2: the dead one, then a fresh one", got)
+	}
+}
+
+func TestAKeptConnectionIsClosedAfterTheIdleTimeoutAndOnASettingsChange(t *testing.T) {
+	prev := http1IdleTimeout
+	http1IdleTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { http1IdleTimeout = prev })
+
+	srv := startConnCounting(t, false, nil, okHandler)
+	s := senderWithHTTP(t, true, true)
+	sendN(t, s, srv, false, 1, rawGet(srv.host, srv.port))
+	if s.pool.idleCount() != 1 {
+		t.Fatalf("after one send %d connection(s) kept, want 1", s.pool.idleCount())
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := s.pool.idleCount(); n != 0 {
+		t.Errorf("%d connection(s) still kept past the idle timeout", n)
+	}
+
+	sendN(t, s, srv, false, 1, rawGet(srv.host, srv.port))
+	if err := s.ApplyNetwork(s.Network()); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.pool.idleCount(); n != 0 {
+		t.Errorf("%d connection(s) survived a settings change", n)
+	}
+}
+
+func TestDefaultToHTTP2OffSendsHTTP1AndSaysWhy(t *testing.T) {
+	srv := startALPNServer(t, []string{alpn.H2, alpn.HTTP11}, true)
+	s := senderWithHTTP(t, false, false)
+	_, outcome, err := s.SendRawOutcome(context.Background(), srv.host, srv.port, true, rawGet(srv.host, srv.port), ProtocolPreferenceAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.lastProto(t); got != "HTTP/1.1" {
+		t.Errorf("with Default to HTTP/2 off the send arrived as %s", got)
+	}
+	if !outcome.Downgraded() || outcome.Downgrade.Reason != DowngradeProjectDefaultHTTP1 {
+		t.Errorf("outcome %+v, want the project-default reason", outcome.Downgrade)
+	}
+
+	// A request written as HTTP/2, and a caller's h2 pin, still ride h2: the per-request choice
+	// overrides the project default, as Burp's Inspector toggle does.
+	h2raw := []byte("GET /h2path HTTP/2\r\nHost: " + formatHostPort(srv.host, srv.port) + "\r\n\r\n")
+	if _, _, err := s.SendRawOutcome(context.Background(), srv.host, srv.port, true, h2raw, ProtocolPreferenceAuto); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.lastProto(t); got != "HTTP/2.0" {
+		t.Errorf("an HTTP/2-written request arrived as %s", got)
+	}
+	if _, _, err := s.SendRawOutcome(context.Background(), srv.host, srv.port, true, rawGet(srv.host, srv.port), ProtocolPreferenceForceH2); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.lastProto(t); got != "HTTP/2.0" {
+		t.Errorf("a caller's h2 pin arrived as %s", got)
+	}
+
+	// The default (nil) is Burp's: h2 on.
+	if _, _, err := testSender().SendRawOutcome(context.Background(), srv.host, srv.port, true, rawGet(srv.host, srv.port), ProtocolPreferenceAuto); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.lastProto(t); got != "HTTP/2.0" {
+		t.Errorf("with the default settings the send arrived as %s, want h2", got)
+	}
+}

@@ -163,6 +163,30 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 			return nil
 		},
 	},
+	// Burp's project-wide protocol defaults (burpsy-react-ui-ry5n), under Burp's section and key names.
+	"http1": {
+		"enable_keep_alive": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			v := sender.HTTP1Settings{}
+			if n.HTTP1 != nil {
+				v = *n.HTTP1
+			}
+			if err := patchBool(raw, &v.EnableKeepAlive); err != nil {
+				return err
+			}
+			n.HTTP1 = &v
+			return nil
+		},
+	},
+	"http2": {
+		"enable_http2": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			v := sender.HTTP2Settings{EnableHTTP2: n.DefaultToHTTP2()}
+			if err := patchBool(raw, &v.EnableHTTP2); err != nil {
+				return err
+			}
+			n.HTTP2 = &v
+			return nil
+		},
+	},
 	"continue": {
 		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchBool(raw, &n.Continue.Understand100)
@@ -277,6 +301,8 @@ func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
 		// the five boxes as the sender reads them rather than guessing what an absent object means.
 		types := live.Redirects.EffectiveTypes()
 		live.Redirects.Types = &types
+		live.HTTP1 = &sender.HTTP1Settings{EnableKeepAlive: live.KeepAliveHTTP1()}
+		live.HTTP2 = &sender.HTTP2Settings{EnableHTTP2: live.DefaultToHTTP2()}
 		writeJSON(w, http.StatusOK, networkSettingsView{Settings: live, Accepted: networkAccepted()})
 	case http.MethodPut:
 		if s.sender == nil {
