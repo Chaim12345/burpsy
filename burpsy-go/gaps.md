@@ -1871,3 +1871,34 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Intruder B: attack tabs, Request item again, Collaborator interactions, anomaly ranking (burpsy-react-ui-xixe.2, 2026-10-08)
+
+### Anomaly ranking (burpsy-react-ui-pglp)
+- **Burp:** Montoya `ResponseVariationsAnalyzer` (33 `AttributeType`s: tag names, anchor labels, input names,
+  word/line counts, cookie and header names, …) and `RankingUtils.rank(…, ANOMALY)`.
+- **burpsy:** `internal/intruder/anomaly.go` reads 8 of them that one response yields cheaply and
+  deterministically — status code, content type, body length, word count, line count, page title, Location,
+  cookie names — plus the outcome of a failed send. Burp does not document its weights; burpsy's score is the
+  sum of −ln(frequency) over the attributes that varied, dense-ranked (1 = least like the rest).
+- **Re-open:** the remaining attribute types (tag/anchor/input names, header names, body content hashes) if
+  ranks prove too coarse on real attacks.
+
+### Attack tabs (burpsy-react-ui-9bv2)
+- **Burp:** each attack tab runs its own attack, concurrently with the others.
+- **burpsy:** tabs hold independent configurations and reports, but one attack runs at a time across all
+  tabs (`canRun` requires no attack in flight; the menu says why). A report always lands in the tab that
+  launched it. Open tabs are capped at 8, because every open tab's report is persisted in the browser and one
+  500-row report is about 200K characters of a ~5M-character localStorage quota. The reopen stack is
+  session-only, like Repeater's.
+- **Re-open:** concurrent attacks need per-attack mutation state on the page (one `useIntruderRun` per tab)
+  and per-tab running controls.
+
+### Collaborator interactions per result (burpsy-react-ui-nib6)
+- **Burp:** an Interactions column and an interaction-details panel under the selected result.
+- **burpsy:** the column, and the details in a dialog opened from the count. The count dedupes one event's
+  repeats (protocol, query type, client) within the attempt; the Collaborator page's own count does the same
+  across the whole log, which undercounts when one resolver calls back for two payloads
+  (burpsy-react-ui-vfqy).
+- **Request item again (2rw7)** re-sends one row's stored request; that row's anomaly rank is cleared rather
+  than recomputed, since the rank compares the row against the rest of the attack as it was.

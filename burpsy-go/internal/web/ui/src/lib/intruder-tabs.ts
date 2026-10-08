@@ -34,8 +34,13 @@ export interface IntruderTabsState extends IntruderLive {
   closedIntruderTabs: IntruderTabSlot[];
 }
 
-/** Open tabs are persisted with their reports, so the strip is bounded. */
-export const INTRUDER_TAB_CAP = 16;
+/**
+ * Open tabs are persisted with their reports, so the strip is bounded. Measured: one finished
+ * 500-row attack (the server's detail limit) adds about 200K characters to burpsy.workspace, and the
+ * browser's localStorage quota is about 5M characters per origin, shared with Repeater drafts. Eight
+ * full tabs is about 1.6M; sixteen would be 3.2M, close enough to the quota that a save could fail.
+ */
+export const INTRUDER_TAB_CAP = 8;
 export const INTRUDER_REOPEN_CAP = 8;
 
 export function freshLive(): IntruderLive {
@@ -117,8 +122,15 @@ export function reopenIntruderTab(s: IntruderTabsState): Partial<IntruderTabsSta
   let tabs = parked(s);
   // A lone pristine tab is a placeholder, not work: the reopened attack takes its place.
   if (tabs.length === 1 && isPristine(liveOf(s))) tabs = [];
-  tabs = [...tabs, last].slice(-INTRUDER_TAB_CAP);
-  return { ...enter(tabs, last.id), closedIntruderTabs: s.closedIntruderTabs.slice(0, -1) };
+  tabs = [...tabs, last];
+  let closed = s.closedIntruderTabs.slice(0, -1);
+  // At the cap the oldest tab moves to the reopen stack, as in openIntruderTab: never dropped.
+  while (tabs.length > INTRUDER_TAB_CAP) {
+    const evict = tabs[0]!;
+    tabs = tabs.slice(1);
+    closed = [evict, ...closed].slice(-INTRUDER_REOPEN_CAP);
+  }
+  return { ...enter(tabs, last.id), closedIntruderTabs: closed };
 }
 
 export function renameIntruderTab(s: IntruderTabsState, id: string, name: string): Partial<IntruderTabsState> {

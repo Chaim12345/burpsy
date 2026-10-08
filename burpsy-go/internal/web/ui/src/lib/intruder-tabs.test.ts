@@ -92,6 +92,22 @@ describe("intruder attack tabs", () => {
     expect(renameIntruderTab(s, s.activeIntruderTabId, "   ")).toEqual({});
   });
 
+  test("reopening at the cap moves the oldest tab to the reopen stack instead of dropping it", () => {
+    let s = start();
+    for (let i = 0; i < INTRUDER_TAB_CAP; i++) s = apply(s, openIntruderTab(withMsg(s, `m${i}`)));
+    // CAP + 1 tabs were made; one went to the stack. Close one more, open one, then reopen.
+    expect(s.intruderTabs.length).toBe(INTRUDER_TAB_CAP);
+    s = apply(s, closeIntruderTab(s, s.activeIntruderTabId));
+    s = apply(s, openIntruderTab(withMsg(s, "fill")));
+    const oldest = s.intruderTabs[0]!.id;
+    const before = s.closedIntruderTabs.length;
+    s = apply(s, reopenIntruderTab(s));
+    expect(s.intruderTabs.length).toBe(INTRUDER_TAB_CAP);
+    expect(s.intruderTabs.some((t) => t.id === oldest)).toBe(false);
+    expect(s.closedIntruderTabs.some((t) => t.id === oldest)).toBe(true);
+    expect(s.closedIntruderTabs.length).toBe(before);
+  });
+
   test("a workspace saved before tabs existed gets one tab holding its attack", () => {
     const repaired = repairIntruderTabs({});
     expect(repaired.intruderTabs).toEqual([{ id: "i1", name: "1", parked: null }]);

@@ -1567,7 +1567,8 @@ export function IntruderPage(): JSX.Element {
                 ...view.report,
                 attempts: view.report.attempts.map((a) =>
                   a.ordinal === attempt.ordinal
-                    ? { ...a, status: row.status, response_len: row.response_len, duration_ms: row.duration_ms, request_id: row.request_id, response_id: row.response_id, error: null, grep_matched: null, grep_extract: null, requested_again: true }
+                    ? // The anomaly rank described the response this replaces; it is not recomputed for one row.
+                      { ...a, status: row.status, response_len: row.response_len, duration_ms: row.duration_ms, request_id: row.request_id, response_id: row.response_id, error: null, grep_matched: null, grep_extract: null, requested_again: true, anomaly_rank: undefined }
                     : a,
                 ),
               },
@@ -2137,41 +2138,47 @@ export function IntruderPage(): JSX.Element {
       body.payload_sets = payloadTexts.map(payloadList);
     }
     setTabRunning(launchTab, true);
-    run.mutate(body as unknown as IntruderRunRequest, {
-      onSettled: () => setTabRunning(launchTab, false),
-      onSuccess: (payload) => {
-        // The report goes to the tab that launched the attack. If the operator has moved to another
-        // tab meanwhile, it waits there, and the toast says where.
-        const state = useApp.getState();
-        const here = state.activeIntruderTabId === launchTab;
-        const tabName = state.intruderTabs.find((t) => t.id === launchTab)?.name ?? launchTab;
-        const where = here ? "" : ` — results are in attack tab ${tabName}`;
-        // Naming a mode always selects the full report shape, but stay defensive:
-        // an older server could still answer with the flat legacy array.
-        if (payload && typeof payload === "object" && "report" in payload) {
-          const view = payload as RunView;
-          setRunFor(launchTab, { view, legacy: null, snapshot: snapshotAtLaunch });
-          if (here) setTab("results");
-          toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}${where}`);
-        } else {
-          setRunFor(launchTab, { view: null, legacy: payload, snapshot: snapshotAtLaunch });
-          if (here) setTab("results");
-          toast.success(`Attack finished${where}`);
-        }
-      },
-      onError: (error) => {
-        // A launch refused because of auto-pause is also shown next to the expressions rather than
-        // only here. The server compiles them with RE2 and answers 400 for one that does not
-        // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
-        // nothing is the wrong place for it: the operator's next action is to edit the expression.
-        // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
-        // form, and blaming the expressions would send the operator to the wrong control.
-        if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
-          setAutoPauseError(error.message);
-        }
-        toast.error(error instanceof Error ? error.message : String(error));
-      },
-    });
+    // mutateAsync, not mutate with per-call callbacks: those are skipped once this page unmounts, and
+    // leaving Intruder mid-attack would then lose the report and leave its tab marked running for
+    // the rest of the session. The promise settles whether or not the page is mounted, and every
+    // write below goes to the store.
+    void run
+      .mutateAsync(body as unknown as IntruderRunRequest)
+      .then(
+        (payload) => {
+          // The report goes to the tab that launched the attack. If the operator has moved to another
+          // tab meanwhile, it waits there, and the toast says where.
+          const state = useApp.getState();
+          const here = state.activeIntruderTabId === launchTab;
+          const tabName = state.intruderTabs.find((t) => t.id === launchTab)?.name ?? launchTab;
+          const where = here ? "" : ` — results are in attack tab ${tabName}`;
+          // Naming a mode always selects the full report shape, but stay defensive:
+          // an older server could still answer with the flat legacy array.
+          if (payload && typeof payload === "object" && "report" in payload) {
+            const view = payload as RunView;
+            setRunFor(launchTab, { view, legacy: null, snapshot: snapshotAtLaunch });
+            if (here) setTab("results");
+            toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}${where}`);
+          } else {
+            setRunFor(launchTab, { view: null, legacy: payload, snapshot: snapshotAtLaunch });
+            if (here) setTab("results");
+            toast.success(`Attack finished${where}`);
+          }
+        },
+        (error: unknown) => {
+          // A launch refused because of auto-pause is also shown next to the expressions rather than
+          // only here. The server compiles them with RE2 and answers 400 for one that does not
+          // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
+          // nothing is the wrong place for it: the operator's next action is to edit the expression.
+          // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
+          // form, and blaming the expressions would send the operator to the wrong control.
+          if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
+            setAutoPauseError(error.message);
+          }
+          toast.error(error instanceof Error ? error.message : String(error));
+        },
+      )
+      .finally(() => setTabRunning(launchTab, false));
   };
 
   // The payload upload (016): the operator's wordlist goes up as the request body, and the
