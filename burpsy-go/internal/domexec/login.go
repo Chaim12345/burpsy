@@ -54,7 +54,8 @@ type LoginStepResult struct {
 	Description string `json:"description"`
 	OK          bool   `json:"ok"`
 	Error       string `json:"error,omitempty"`
-	// URL is the page's address after the step.
+	// URL is the page's address after the step, with query values and the fragment redacted
+	// (RedactURL): an SSO hop carries code=, state= and #access_token= in exactly this field.
 	URL       string `json:"url,omitempty"`
 	ElapsedMS int64  `json:"elapsed_ms"`
 }
@@ -70,11 +71,15 @@ type LoginCheckResult struct {
 type LoginReplay struct {
 	// Succeeded is every step done, the final page in scope, and the status check (if any) found its
 	// text. Anything less is a failed login, and Reason says which part.
-	Succeeded bool              `json:"succeeded"`
-	Reason    string            `json:"reason,omitempty"`
-	Steps     []LoginStepResult `json:"steps"`
-	FinalURL  string            `json:"final_url,omitempty"`
-	Check     *LoginCheckResult `json:"status_check,omitempty"`
+	Succeeded bool `json:"succeeded"`
+	// Verified is Succeeded AND a status check found its confirmation text. Without a status check a
+	// login form that rejected the password still "runs every step" and ends on an in-scope page, so
+	// Succeeded alone is "the steps ran", not "logged in" — the console words the two differently.
+	Verified bool              `json:"verified"`
+	Reason   string            `json:"reason,omitempty"`
+	Steps    []LoginStepResult `json:"steps"`
+	FinalURL string            `json:"final_url,omitempty"`
+	Check    *LoginCheckResult `json:"status_check,omitempty"`
 	// Blocked are the requests the scope gate refused during this replay.
 	Blocked []string `json:"blocked"`
 	// Screenshot is a JPEG of the page when the replay ended. Not marshalled; the caller decides
@@ -98,6 +103,8 @@ func (s *Session) ReplayLogin(ctx context.Context, actions []LoginAction, check 
 	started := time.Now()
 	out := LoginReplay{Steps: []LoginStepResult{}, Blocked: []string{}}
 	s.TakeBlocked()
+	s.setReplaying(true)
+	defer s.setReplaying(false)
 	// A replay logs in from nothing. A re-login in a session that still holds the previous login's
 	// cookies would be sent past the login form by many applications, and its first step would then
 	// fail to find the field it types into.
@@ -136,13 +143,17 @@ func (s *Session) ReplayLogin(ctx context.Context, actions []LoginAction, check 
 		res := LoginStepResult{Index: i + 1, Kind: a.Kind, Description: a.Description}
 		err := runLoginAction(tabCtx, a)
 		res.ElapsedMS = time.Since(stepStarted).Milliseconds()
-		res.URL = currentURL(tabCtx)
+		res.URL = RedactURL(currentURL(tabCtx))
 		if err != nil {
 			res.Error = err.Error()
 			out.Steps = append(out.Steps, res)
 			out.FinalURL = res.URL
 			shoot()
 			reason := fmt.Sprintf("step %d (%s) failed: %s", i+1, a.Description, err.Error())
+			if strings.Contains(err.Error(), "ERR_CERT") {
+				reason += "; the target's TLS certificate is not trusted — add its CA in Settings → Network, or turn " +
+					"certificate verification off there (it applies to every leg, this replay included)"
+			}
 			if blocked := s.Blocked(); len(blocked) > 0 {
 				reason += fmt.Sprintf("; the scope gate refused %d request(s) during the replay — an identity provider or asset host may need to be added to scope", len(blocked))
 			}
@@ -152,12 +163,13 @@ func (s *Session) ReplayLogin(ctx context.Context, actions []LoginAction, check 
 		out.Steps = append(out.Steps, res)
 	}
 	settle(tabCtx, 5*time.Second)
-	out.FinalURL = currentURL(tabCtx)
+	finalURL := currentURL(tabCtx)
+	out.FinalURL = RedactURL(finalURL)
 	shoot()
 
 	// Burp: "the login sequence must end on a page that is in scope". An error page or an
 	// out-of-scope landing is not a login.
-	if fu, err := url.Parse(out.FinalURL); err != nil || (fu.Scheme != "http" && fu.Scheme != "https") {
+	if fu, err := url.Parse(finalURL); err != nil || (fu.Scheme != "http" && fu.Scheme != "https") {
 		return finish(fmt.Sprintf("the sequence did not end on a web page (%q)", out.FinalURL))
 	} else if s.gate != nil {
 		if err := s.gate.AllowURL(fu); err != nil {
@@ -184,6 +196,7 @@ func (s *Session) ReplayLogin(ctx context.Context, actions []LoginAction, check 
 		if !cr.Found {
 			return finish("the status check page does not contain the confirmation text, so the login did not take")
 		}
+		out.Verified = true
 	}
 
 	cookies, err := s.Cookies(tabCtx)
@@ -338,4 +351,36 @@ func runLoginAction(tabCtx context.Context, a LoginAction) error {
 		}
 	}
 	return fmt.Errorf("unknown step kind %q", a.Kind)
+}
+
+// RedactURL keeps what an operator needs to recognise a page — scheme, host, path and the NAMES of its
+// query parameters — and drops what an identity provider puts in a URL: query values and the fragment.
+// A login's redirect chain carries code=, state=, SAMLResponse= and #access_token=, and a replay result
+// or a crawl report that printed them would be the session it was careful not to print as a cookie.
+func RedactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		if i := strings.IndexAny(raw, "?#"); i >= 0 {
+			return raw[:i] + "?…"
+		}
+		return raw
+	}
+	if u.RawQuery != "" {
+		parts := strings.Split(u.RawQuery, "&")
+		for i, p := range parts {
+			name, _, hasValue := strings.Cut(p, "=")
+			if hasValue {
+				parts[i] = name + "=…"
+			}
+		}
+		u.RawQuery = strings.Join(parts, "&")
+	}
+	hadFragment := u.Fragment != "" || u.RawFragment != ""
+	u.Fragment, u.RawFragment = "", ""
+	u.User = nil
+	out := u.String()
+	if hadFragment {
+		out += "#…"
+	}
+	return out
 }

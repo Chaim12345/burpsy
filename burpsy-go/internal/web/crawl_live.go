@@ -34,6 +34,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
+	"github.com/burpsy-go/burpsy/internal/dash"
 )
 
 // crawlLiveRecent is how many completed fetches the view keeps.
@@ -48,7 +49,10 @@ const (
 	livePhaseLoggingIn = "logging-in"
 	livePhaseFetching  = "fetching"
 	livePhaseRendering = "rendering"
-	livePhaseFinished  = "finished"
+	// livePhaseAuditing is the rendered-DOM audit after the crawl's own loop: still the crawl's task,
+	// no longer the crawl's pages.
+	livePhaseAuditing = "rendered-audit"
+	livePhaseFinished = "finished"
 )
 
 type liveFetch struct {
@@ -148,6 +152,15 @@ func (l *crawlLive) loggingIn(label string) {
 	l.current = &liveCurrent{URL: "recorded login: " + label, Since: time.Now()}
 }
 
+// auditing marks the post-crawl rendered-DOM audit, so the view does not keep showing the last page the
+// crawl rendered as if the crawler were still on it.
+func (l *crawlLive) auditing() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.phase = livePhaseAuditing
+	l.current = nil
+}
+
 // finish drops the frame: frames are kept only while a crawl runs.
 func (l *crawlLive) finish() {
 	l.mu.Lock()
@@ -158,17 +171,35 @@ func (l *crawlLive) finish() {
 	l.frame = nil
 }
 
-// liveLogin wraps a crawl's BrowserLogin so the view says the crawl is logging in. It takes no frame.
+// liveLogin wraps a crawl's BrowserLogin so the view says the crawl is logging in (it takes no frame),
+// and so each replay is in the task's event log — Burp's RECORDED_SEQUENCE_STARTED / _ERROR events.
+// taskID is set once the task exists, before the crawl goroutine starts.
 type liveLogin struct {
-	inner crawler.BrowserLogin
-	live  *crawlLive
+	inner  crawler.BrowserLogin
+	live   *crawlLive
+	events *dash.EventLog
+	taskID uint64
 }
 
-func (w liveLogin) Label() string { return w.inner.Label() }
+func (w *liveLogin) Label() string { return w.inner.Label() }
 
-func (w liveLogin) Login(ctx context.Context) crawler.LoginAttempt {
+func (w *liveLogin) Login(ctx context.Context) crawler.LoginAttempt {
 	w.live.loggingIn(w.inner.Label())
-	return w.inner.Login(ctx)
+	w.events.RecordFor(w.taskID, dash.EventCrawlLogin, dash.SeverityInfo,
+		fmt.Sprintf("recorded login %q started", w.inner.Label()))
+	a := w.inner.Login(ctx)
+	switch {
+	case !a.Succeeded:
+		w.events.RecordFor(w.taskID, dash.EventCrawlLogin, dash.SeverityWarn,
+			fmt.Sprintf("recorded login %q failed: %s", w.inner.Label(), a.Reason))
+	case a.Verified:
+		w.events.RecordFor(w.taskID, dash.EventCrawlLogin, dash.SeverityInfo,
+			fmt.Sprintf("recorded login %q logged in; the status check confirmed it", w.inner.Label()))
+	default:
+		w.events.RecordFor(w.taskID, dash.EventCrawlLogin, dash.SeverityWarn,
+			fmt.Sprintf("recorded login %q ran every step, but it has no status check, so nothing confirmed the login took", w.inner.Label()))
+	}
+	return a
 }
 
 // ---- GET /api/crawl/live?task=N ----------------------------------------------------------------

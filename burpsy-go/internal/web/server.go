@@ -576,6 +576,9 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreAuthzIdentities(p)
 		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
 		s.restoreSecretDetection(p)
+		// And the recorded login sequences, which carry credentials and must never cross from one
+		// project into another (burpsy-react-ui-xhtk).
+		s.restoreRecordedLogins(p)
 	}
 	return s
 }

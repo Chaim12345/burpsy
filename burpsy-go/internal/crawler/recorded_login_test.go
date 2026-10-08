@@ -172,6 +172,12 @@ func TestARecordedLoginAuthenticatesTheWholeCrawlAndRecoversALostSession(t *test
 	if blocked, ok := wire.Login["blocked"].([]any); !ok || len(blocked) != 0 {
 		t.Errorf("blocked must be [] not null or missing: %v", wire.Login["blocked"])
 	}
+	if n, _ := wire.Login["pages_found_after_login"].(float64); int(n) != rep.Locations || n < 5 {
+		t.Errorf("pages_found_after_login = %v, locations %d", wire.Login["pages_found_after_login"], rep.Locations)
+	}
+	if rb, ok := wire.Login["render_blocked"].([]any); !ok || len(rb) != 0 {
+		t.Errorf("render_blocked must be []: %v", wire.Login["render_blocked"])
+	}
 	if n, _ := wire.Login["requests_with_session"].(float64); n < 6 {
 		t.Errorf("requests_with_session = %v", wire.Login["requests_with_session"])
 	}
@@ -199,6 +205,9 @@ func TestAFailedRecordedLoginIsAStopAndTheCrawlRunsLoggedOut(t *testing.T) {
 	if rep.Login == nil || rep.Login.Authenticated || rep.Login.Failed < 1 ||
 		!strings.Contains(rep.Login.LastFailure, "step 3") || len(rep.Login.Blocked) != 1 {
 		t.Fatalf("login block = %+v", rep.Login)
+	}
+	if rep.Login.PagesFoundAfterLogin != 0 {
+		t.Fatalf("a failed login found %d pages after login", rep.Login.PagesFoundAfterLogin)
 	}
 	if !rep.Limits.Hit(StopLoginFailed) || rep.Complete() {
 		t.Fatalf("stops %v: a crawl whose login failed must not be complete", rep.Limits.Stops)

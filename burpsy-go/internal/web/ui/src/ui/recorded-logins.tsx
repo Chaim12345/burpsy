@@ -226,13 +226,21 @@ function ReplayResult({ reply, onDismiss }: { reply: ReplayReply; onDismiss: () 
     <div className="stack replay-result">
       <div className="toolbar">
         <strong>Replay of “{reply.label}”</strong>
-        <Badge tone={replay.succeeded ? "good" : "bad"}>{replay.succeeded ? "logged in" : "login failed"}</Badge>
+        <Badge tone={replay.verified ? "good" : replay.succeeded ? "warn" : "bad"}>
+          {replay.verified ? "logged in · verified" : replay.succeeded ? "steps ran · not verified" : "login failed"}
+        </Badge>
         <span className="cell-dim">{(replay.elapsed_ms / 1000).toFixed(1)} s</span>
         <Button variant="outline" size="small" onClick={onDismiss}>
           Dismiss
         </Button>
       </div>
       {replay.reason ? <p className="warn-text" style={{ margin: 0 }}>{replay.reason}</p> : null}
+      {replay.succeeded && !replay.verified ? (
+        <p className="warn-text" style={{ margin: 0 }}>
+          Every step ran, but this sequence has no status check, so nothing confirmed the login took — a rejected password
+          looks the same. Add a status check (a page and text only a logged-in user sees).
+        </p>
+      ) : null}
       <SimpleTable headers={["#", "Step", "Result", "Page after"]}>
         {replay.steps.map((step) => (
           <tr key={step.index}>

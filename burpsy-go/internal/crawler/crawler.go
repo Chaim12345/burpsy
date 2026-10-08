@@ -1509,6 +1509,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	rep.SpeculativeAdmitted = c.speculativeAdmitted
 	if c.login != nil {
 		login := c.login.report
+		if login.Authenticated {
+			login.PagesFoundAfterLogin = rep.Locations
+		}
 		rep.Login = &login
 	}
 	return rep

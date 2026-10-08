@@ -1727,6 +1727,26 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   content. The crawl's own render pass (link discovery) does run inside the login's browser context.
 - **Burp's "Browser settings" on a TOTP step** (three switches in Zrsc) are not represented; their meaning
   is not recoverable from the decompiled panel.
+- **Verified vs ran.** A replay is `verified` only when its status check found the confirmation text.
+  Without a status check (optional except with TOTP, as in Burp) a sequence whose password was rejected
+  still "runs every step"; the replay result, the crawl's login card and `report.login.verified` say
+  "not verified" rather than "logged in".
+- **TLS:** the replay browser follows the operator's one certificate-verification setting (Settings →
+  Network, `tls.verify`): verification on refuses a self-signed staging host on step 1, named; off accepts
+  it — applied per tab, so the shared DOM-check browser keeps verifying.
+- **Redaction:** reported URLs (per-step, final, refused) keep scheme, host, path and parameter NAMES and
+  drop query values and fragments (`code=…`, `#…`), as cookie values are never reported.
+- **Chrome's own traffic:** one `CONNECT www.google.com:443` per new browser window still appears in a
+  replay's refusal list (it is refused; no page asked for it). Chrome-internal services that produced
+  more such tunnels are switched off in `domexec.NewBrowser`.
+- **Authenticated render pass:** requests the logged-in render pass's pages make are scope-gated too;
+  refusals are reported in `report.login.render_blocked`, so a page whose script is on an out-of-scope CDN
+  renders empty with the reason stated.
+- **Burp's login crawl events** (Zwkv `RECORDED_SEQUENCE_STARTED/ERROR`, `PAGES_FOUND_AFTER_LOGIN` /
+  `NO_PAGES_FOUND_AFTER_LOGIN`): each replay is a `crawl.login` event in the task's event log, and
+  `report.login.pages_found_after_login` carries the count. `RECORDED_SEQUENCE_BROWSER_ERROR` is a 400 at
+  launch (no browser, no crawl task). The credential-login events (`ATTEMPTING_TO_LOGIN`,
+  `REGISTERING_USER`, login/registration page found) belong to burpsy-react-ui-uzil, not built here.
 
 ### Live crawl view (burpsy-react-ui-1l3x) — built, with these differences from Burp
 

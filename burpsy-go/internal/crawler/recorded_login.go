@@ -55,6 +55,9 @@ type LoginCookie struct {
 // LoginAttempt is one replay's outcome.
 type LoginAttempt struct {
 	Succeeded bool
+	// Verified is Succeeded confirmed by the sequence's status check. A sequence with no status
+	// check can succeed without being verified: every step ran, which is not proof of a session.
+	Verified bool
 	// Reason is why it did not succeed — the failed step, the refused status check, the blocked host.
 	Reason   string
 	FinalURL string
@@ -71,6 +74,9 @@ type LoginReport struct {
 	// Authenticated is whether the replay before the first fetch logged in. False means the whole
 	// crawl ran logged out, and Limits carries StopLoginFailed.
 	Authenticated bool `json:"authenticated"`
+	// Verified is whether the last successful replay was confirmed by the status check. False with
+	// Authenticated true means the steps ran and nothing checked that they logged in.
+	Verified bool `json:"verified"`
 	// Attempts counts every replay — the initial login plus each re-login.
 	Attempts  int `json:"attempts"`
 	Succeeded int `json:"succeeded"`
@@ -86,6 +92,14 @@ type LoginReport struct {
 	Blocked []string `json:"blocked"`
 	// RequestsWithSession counts the crawl requests that carried the login's cookies.
 	RequestsWithSession int `json:"requests_with_session"`
+	// PagesFoundAfterLogin is the locations the crawl found while authenticated — every location,
+	// since the login runs before the first fetch, and 0 when it failed. Burp's PAGES_FOUND_AFTER_LOGIN
+	// / NO_PAGES_FOUND_AFTER_LOGIN crawl events (Zwkv) as one count.
+	PagesFoundAfterLogin int `json:"pages_found_after_login"`
+	// RenderBlocked are requests the logged-in render pass's pages made that scope refused — a page
+	// whose script lives on an out-of-scope CDN renders empty, and this says why. Filled by the caller
+	// that owns the browser session; [] when there was nothing, or no render pass.
+	RenderBlocked []string `json:"render_blocked"`
 }
 
 // maxLoginBlockedReported bounds LoginReport.Blocked.
@@ -109,7 +123,7 @@ func newLoginStateOrNil(l BrowserLogin) *loginState {
 
 func newLoginState(l BrowserLogin) *loginState {
 	return &loginState{login: l, report: LoginReport{
-		Method: "recorded", Label: l.Label(), CookieNames: []string{}, Blocked: []string{},
+		Method: "recorded", Label: l.Label(), CookieNames: []string{}, Blocked: []string{}, RenderBlocked: []string{},
 	}}
 }
 
@@ -137,6 +151,7 @@ func (s *loginState) attempt(ctx context.Context, relogin bool) LoginAttempt {
 	}
 	s.report.Succeeded++
 	s.report.FinalURL = a.FinalURL
+	s.report.Verified = a.Verified
 	jar, _ := cookiejar.New(nil)
 	names := make([]string, 0, len(a.Cookies))
 	for _, c := range a.Cookies {

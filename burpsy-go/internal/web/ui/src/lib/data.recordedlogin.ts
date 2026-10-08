@@ -114,6 +114,8 @@ export interface LoginStepResult {
 
 export interface LoginReplay {
   succeeded: boolean;
+  /** Succeeded AND the status check found its confirmation text. */
+  verified: boolean;
   reason?: string;
   steps: LoginStepResult[];
   final_url?: string;

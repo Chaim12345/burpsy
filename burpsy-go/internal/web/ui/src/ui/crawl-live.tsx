@@ -16,6 +16,7 @@ const PHASE_LABEL: Record<string, string> = {
   "logging-in": "logging in",
   fetching: "fetching",
   rendering: "rendering",
+  "rendered-audit": "rendered-DOM audit",
   finished: "finished",
 };
 

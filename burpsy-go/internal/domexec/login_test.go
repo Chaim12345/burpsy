@@ -2,6 +2,7 @@ package domexec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -103,7 +104,8 @@ func newLoginApp(t *testing.T) *loginApp {
 				return
 			}
 			http.SetCookie(w, &http.Cookie{Name: "stage", Value: "pass-ok", Path: "/"})
-			http.Redirect(w, r, "/mfa", http.StatusFound)
+			// An SSO-shaped hop: the state value is a token, and must not reach a result.
+			http.Redirect(w, r, "/mfa?state=s3cr3t-state", http.StatusFound)
 			return
 		}
 		// Rendered from script after load, so a replay that does not wait for its element fails.
@@ -175,6 +177,9 @@ func TestARecordedLoginReplaysMultiStepWithTOTPAndEarnsTheSessionCookie(t *testi
 	if !rep.Succeeded {
 		t.Fatalf("replay failed: %s\nsteps: %+v\nblocked: %v", rep.Reason, rep.Steps, rep.Blocked)
 	}
+	if !rep.Verified {
+		t.Fatal("a replay whose status check found its text must be verified")
+	}
 	if codes != 1 {
 		t.Errorf("the TOTP code function ran %d times, want once", codes)
 	}
@@ -197,6 +202,10 @@ func TestARecordedLoginReplaysMultiStepWithTOTPAndEarnsTheSessionCookie(t *testi
 		if strings.Contains(s.Description+s.Error, "hunter2") {
 			t.Fatalf("a step result carries the password: %+v", s)
 		}
+	}
+	// The redirect's token is redacted from the per-step URLs, its parameter name kept.
+	if raw, _ := json.Marshal(rep); strings.Contains(string(raw), "s3cr3t-state") || !strings.Contains(string(raw), "state=…") {
+		t.Fatalf("step URLs must keep the parameter name and drop its value: %s", raw)
 	}
 
 	// The scope gate, positive-controlled: every way the login page reached outside scope was tried,
@@ -255,6 +264,9 @@ func TestSessionsAreIsolatedFromEachOtherAndFromTheDefaultContext(t *testing.T) 
 	rep := one.ReplayLogin(ctx, app.actions(func(context.Context) (string, error) { return "123456", nil }), nil)
 	if !rep.Succeeded {
 		t.Fatalf("replay failed: %s", rep.Reason)
+	}
+	if rep.Verified {
+		t.Fatal("a replay with no status check is not verified — nothing checked that it logged in")
 	}
 	// The logged-in session renders /home; a second session and the default context are sent to the
 	// login page.
@@ -385,5 +397,61 @@ func TestTheSessionProxyStopsWhatAnOutOfProcessFrameLoads(t *testing.T) {
 	}
 	if n := outside.Load(); n != 0 {
 		t.Fatalf("the out-of-scope server received %d request(s) from the out-of-process frame", n)
+	}
+}
+
+func TestRedactURLKeepsTheShapeAndDropsTheTokens(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://idp.example/cb?code=SplxlOBeZQ&state=af0ifjsldkj":    "https://idp.example/cb?code=…&state=…",
+		"https://app.example/#access_token=eyJ.x.y&token_type=bearer": "https://app.example/#…",
+		"https://u:p@app.example/home":                                "https://app.example/home",
+		"https://app.example/home":                                    "https://app.example/home",
+		"https://app.example/search?flag&q=secret":                    "https://app.example/search?flag&q=…",
+	} {
+		if got := RedactURL(in); got != want {
+			t.Errorf("RedactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A self-signed target fails on its certificate, named — unless the session was told to accept it,
+// and that permission stays inside the session: the shared browser's own tabs keep verifying.
+func TestIgnoringCertificateErrorsIsScopedToTheSession(t *testing.T) {
+	b := newTestBrowser(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<html><body><h1>staging</h1></body></html>`))
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	gate := testGate{host: u.Hostname(), port: uint16(port)}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	steps := []LoginAction{{Kind: "goto", URL: srv.URL + "/", Description: "Navigate to /"}}
+
+	strict, err := b.NewSession(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep := strict.ReplayLogin(ctx, steps, nil)
+	strict.Close()
+	if rep.Succeeded || !strings.Contains(rep.Reason, "certificate is not trusted") {
+		t.Fatalf("an untrusted certificate must fail step 1, named: %q", rep.Reason)
+	}
+
+	relaxed, err := b.NewSession(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relaxed.Close()
+	relaxed.IgnoreCertificateErrors(true)
+	rep = relaxed.ReplayLogin(ctx, steps, nil)
+	if !rep.Succeeded {
+		t.Fatalf("a session told to accept the certificate failed: %q", rep.Reason)
+	}
+	// The default context — the DOM checks' — still refuses it.
+	if html, err := b.RenderedDOM(ctx, srv.URL+"/"); err == nil && strings.Contains(html, "staging") {
+		t.Fatal("the session's certificate relaxation leaked into the shared browser")
 	}
 }

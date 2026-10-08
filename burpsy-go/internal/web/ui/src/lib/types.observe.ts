@@ -139,6 +139,9 @@ export interface CrawlLoginReport {
  method: string;
  label: string;
  authenticated: boolean;
+ /** The last successful replay was confirmed by the status check. False with `authenticated` true
+  *  means every step ran and nothing checked the login took. */
+ verified: boolean;
  attempts: number;
  succeeded: number;
  failed: number;
@@ -148,6 +151,10 @@ export interface CrawlLoginReport {
  cookie_names: string[];
  blocked: string[];
  requests_with_session: number;
+ /** Locations found while authenticated — every location, when the login before the first fetch worked. */
+ pages_found_after_login: number;
+ /** Requests the logged-in render pass's pages made that scope refused. */
+ render_blocked: string[];
 }
 
 export interface CrawlReport {

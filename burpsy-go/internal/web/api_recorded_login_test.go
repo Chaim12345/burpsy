@@ -6,12 +6,15 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"go.uber.org/zap"
 )
 
 // The script the operator pastes: Burp's Login Recorder shape (see internal/session's own sample),
@@ -151,6 +154,7 @@ type totpLoginApp struct {
 	mu       sync.Mutex
 	sessions map[string]bool
 	accounts int
+	reports  int
 }
 
 func newTOTPLoginApp(t *testing.T) *totpLoginApp {
@@ -164,6 +168,12 @@ func newTOTPLoginApp(t *testing.T) *totpLoginApp {
 	app.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/login":
+			// A user part-way through the login is sent on to the second factor, as real applications
+			// do — which is why a re-login must start from an empty jar.
+			if c, err := r.Cookie("pre"); r.Method == http.MethodGet && err == nil && c.Value == "1" {
+				http.Redirect(w, r, "/mfa", http.StatusFound)
+				return
+			}
 			if r.Method == http.MethodPost && r.FormValue("user") == "alice" && r.FormValue("pass") == "hunter2" {
 				http.SetCookie(w, &http.Cookie{Name: "pre", Value: "1", Path: "/"})
 				http.Redirect(w, r, "/mfa", http.StatusFound)
@@ -205,11 +215,22 @@ func newTOTPLoginApp(t *testing.T) *totpLoginApp {
 		switch r.URL.Path {
 		case "/home":
 			page(w, `<h1>Welcome alice</h1><p>dashboard</p><a href="/account">Account</a>`)
+		case "/maintenance":
+			// Ends every session, so the next authenticated page is the login form at 200.
+			app.mu.Lock()
+			app.sessions = map[string]bool{}
+			app.mu.Unlock()
+			page(w, `<ul><li>sessions reset</li><li><a href="/reports">Reports</a></li></ul>`)
+		case "/reports":
+			app.mu.Lock()
+			app.reports++
+			app.mu.Unlock()
+			page(w, `<section><article><h2>reports of alice</h2></article></section>`)
 		case "/account":
 			app.mu.Lock()
 			app.accounts++
 			app.mu.Unlock()
-			page(w, `<table><tr><td>account of alice</td></tr></table>`)
+			page(w, `<table><tr><td>account of alice</td><td><a href="/maintenance">Maintenance</a></td></tr></table>`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -285,6 +306,9 @@ func TestARecordedTOTPLoginReplaysAndAuthenticatesACrawlThroughTheRoutes(t *test
 	if err := json.Unmarshal(rec.Body.Bytes(), &replay); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(rec.Body.String(), `"verified":true`) {
+		t.Fatalf("a replay confirmed by its status check must say verified: %s", rec.Body.String())
+	}
 	if !replay.Replay.Succeeded || replay.Replay.Check == nil || !replay.Replay.Check.Found || len(replay.Replay.Steps) != 6 {
 		t.Fatalf("replay: %s", rec.Body.String())
 	}
@@ -328,7 +352,7 @@ func TestARecordedTOTPLoginReplaysAndAuthenticatesACrawlThroughTheRoutes(t *test
 	if !sawLoggingIn {
 		t.Fatal("the live view never reported the crawl logging in")
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(150 * time.Second)
 	var run map[string]any
 	for time.Now().Before(deadline) {
 		rec = get(t, s, "/api/crawl?task="+strings.TrimSpace(jsonNumber(start.TaskID)))
@@ -347,10 +371,19 @@ func TestARecordedTOTPLoginReplaysAndAuthenticatesACrawlThroughTheRoutes(t *test
 		t.Fatalf("requests_with_session: %v", login["requests_with_session"])
 	}
 	app.mu.Lock()
-	accounts := app.accounts
+	accounts, reports := app.accounts, app.reports
 	app.mu.Unlock()
 	if accounts == 0 {
 		t.Fatal("the crawl never reached /account, which only a logged-in user is linked to")
+	}
+	// /maintenance ended the session; /reports was then served the login form, the crawl detected
+	// it, replayed the login in the same browser session — from an empty jar, waiting out the TOTP
+	// period it had just used — and retried /reports logged in.
+	if login["relogins"] != float64(1) || login["verified"] != true || reports == 0 {
+		t.Fatalf("re-login: relogins=%v verified=%v reports=%d login=%v", login["relogins"], login["verified"], reports, login)
+	}
+	if n, _ := login["pages_found_after_login"].(float64); n < 3 {
+		t.Fatalf("pages_found_after_login = %v", login["pages_found_after_login"])
 	}
 	// The rendered-DOM audit renders logged out; on an authenticated crawl it is declined, named.
 	if ra, _ := report["rendered_audit"].(map[string]any); ra == nil || !strings.Contains(ra["declined"].(string), "recorded login") {
@@ -393,5 +426,31 @@ func TestASecondTOTPCodeInOneRunWaitsForTheNextTimeStep(t *testing.T) {
 	want, _ := cfg.CodeForCounter(r.lastCounter[0])
 	if second != want || (first == second && r.lastCounter[0] == firstCounter) {
 		t.Fatalf("second code %s, want %s for step %d", second, want, r.lastCounter[0])
+	}
+}
+
+// A project switch replaces the library: one client's passwords and TOTP secrets never appear in, or
+// get saved into, the next client's project.
+func TestAProjectSwitchReplacesTheRecordedLoginLibrary(t *testing.T) {
+	s := newTestServerWithPersist(t)
+	first := s.persist
+	rec := postJSON(t, s, "/api/crawl/logins", map[string]any{"label": "client A", "script": burpScriptFor("https://a.example")})
+	if rec.Code != 200 {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body.String())
+	}
+	other, err := persist.Open(filepath.Join(t.TempDir(), "client-b.db"), zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.WithPersist(other)
+	if body := get(t, s, "/api/crawl/logins").Body.String(); !strings.Contains(body, `"logins":[]`) {
+		t.Fatalf("client B's project shows client A's logins: %s", body)
+	}
+	if raw, _ := other.LoadRecordedLogins(); raw != nil {
+		t.Fatalf("client B's project file holds recorded logins it never saved: %s", raw)
+	}
+	s.WithPersist(first)
+	if body := get(t, s, "/api/crawl/logins").Body.String(); !strings.Contains(body, "client A") {
+		t.Fatalf("switching back did not restore client A's library: %s", body)
 	}
 }

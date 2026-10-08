@@ -48,6 +48,7 @@ import (
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/security"
 	"github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -72,6 +73,26 @@ type Session struct {
 	mu      sync.Mutex
 	closed  bool
 	blocked []string
+	// renderBlocked are the refusals made while no replay was running — the render pass's pages, in an
+	// authenticated crawl — kept apart so a replay's own list does not swallow them (and so a page whose
+	// script lives on an out-of-scope CDN is reported, not silently empty).
+	renderBlocked []string
+	replaying     bool
+	// ignoreCertErrors follows the operator's TLS verification setting; see IgnoreCertificateErrors.
+	ignoreCertErrors bool
+}
+
+// IgnoreCertificateErrors makes the session's tabs accept a certificate the browser cannot verify. It
+// exists for one reason: the operator turned TLS verification off for every leg (Settings → Network),
+// as an assessor does for a self-signed or internal-CA staging host, and a recorded login that refused
+// the certificate every other request accepts would fail on step 1 for a reason nobody chose. It is
+// applied per TAB (Security.setIgnoreCertificateErrors on the tab's own session), so the shared
+// browser's other tabs — the DOM checks — keep verifying; TestIgnoringCertificateErrorsIsScopedToTheSession
+// pins that. Call before opening tabs.
+func (s *Session) IgnoreCertificateErrors(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ignoreCertErrors = on
 }
 
 // MaxBlockedRecorded bounds the refusal list one session keeps.
@@ -191,14 +212,31 @@ func (s *Session) TakeBlocked() []string {
 func (s *Session) recordBlocked(what string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, b := range s.blocked {
+	list := &s.blocked
+	if !s.replaying {
+		list = &s.renderBlocked
+	}
+	for _, b := range *list {
 		if b == what {
 			return
 		}
 	}
-	if len(s.blocked) < MaxBlockedRecorded {
-		s.blocked = append(s.blocked, what)
+	if len(*list) < MaxBlockedRecorded {
+		*list = append(*list, what)
 	}
+}
+
+// RenderBlocked returns the refusals made outside any replay — by the authenticated render pass.
+func (s *Session) RenderBlocked() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.renderBlocked...)
+}
+
+func (s *Session) setReplaying(on bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replaying = on
 }
 
 // newTab opens a tab in this session's browser context, gated by Fetch interception, bounded by
@@ -227,6 +265,15 @@ func (s *Session) newTab(ctx context.Context, timeout time.Duration) (context.Co
 	if err := chromedp.Run(opCtx); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("domexec: could not attach to the session's tab: %w", err)
+	}
+	s.mu.Lock()
+	ignore := s.ignoreCertErrors
+	s.mu.Unlock()
+	if ignore {
+		if err := chromedp.Run(opCtx, security.SetIgnoreCertificateErrors(true)); err != nil {
+			cancel()
+			return nil, nil, fmt.Errorf("domexec: could not relax certificate checks in the session's tab: %w", err)
+		}
 	}
 	if s.gate != nil {
 		if err := s.installFetchGate(opCtx); err != nil {
@@ -262,7 +309,7 @@ func (s *Session) installFetchGate(tabCtx context.Context) error {
 				err = fmt.Errorf("scheme %q is not sent by a recorded login", u.Scheme)
 			}
 			if err != nil {
-				s.recordBlocked(e.Request.Method + " " + e.Request.URL + " — " + err.Error())
+				s.recordBlocked(e.Request.Method + " " + RedactURL(e.Request.URL) + " — " + err.Error())
 				_ = fetch.FailRequest(e.RequestID, network.ErrorReasonBlockedByClient).Do(exec)
 				return
 			}
@@ -352,7 +399,7 @@ func (p *gateProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := p.gate.AllowURL(r.URL); err != nil {
-		p.record(r.Method + " " + r.URL.String() + " — " + err.Error())
+		p.record(r.Method + " " + RedactURL(r.URL.String()) + " — " + err.Error())
 		http.Error(w, "burpsy: refused by the engagement scope: "+err.Error(), http.StatusForbidden)
 		return
 	}

@@ -34,6 +34,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/crawler"
 	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/session"
 )
@@ -48,22 +49,32 @@ type recordedLoginStore struct {
 }
 
 func (s *Server) recordedLoginStore() *recordedLoginStore {
-	s.recordedLoginsOnce.Do(func() {
-		st := &recordedLoginStore{}
-		if s.persist != nil {
-			raw, err := s.persist.LoadRecordedLogins()
-			switch {
-			case err != nil:
-				st.restoreNote = "the saved recorded logins could not be read: " + err.Error()
-			case raw != nil:
-				if err := json.Unmarshal(raw, &st.logins); err != nil {
-					st.restoreNote = "the saved recorded logins could not be decoded: " + err.Error()
-				}
-			}
-		}
-		s.recordedLogins = st
-	})
+	s.recordedLoginsOnce.Do(func() { s.recordedLogins = &recordedLoginStore{} })
 	return s.recordedLogins
+}
+
+// restoreRecordedLogins REPLACES the library with the project's own, on startup and on every
+// in-console project switch (WithPersist runs for both). Replace, not merge: a switch that kept the
+// outgoing library would put one client's passwords and TOTP secrets in front of the next client's
+// engagement, and the next save would write them into that client's project file.
+func (s *Server) restoreRecordedLogins(p *persist.Store) {
+	st := s.recordedLoginStore()
+	var logins []*session.RecordedLogin
+	note := ""
+	raw, err := p.LoadRecordedLogins()
+	switch {
+	case err != nil:
+		note = "the saved recorded logins could not be read: " + err.Error()
+	case raw != nil:
+		if err := json.Unmarshal(raw, &logins); err != nil {
+			logins = nil
+			note = "the saved recorded logins could not be decoded: " + err.Error()
+		}
+	}
+	st.mu.Lock()
+	st.logins = logins
+	st.restoreNote = note
+	st.mu.Unlock()
 }
 
 // get returns a deep-enough copy of one sequence: its own Steps slice and TOTP configs, so a replay
@@ -364,7 +375,14 @@ func (s *Server) openLoginSession(ctx context.Context) (*domexec.Session, error)
 	if err != nil {
 		return nil, err
 	}
-	return b.NewSession(sessionScopeGate{scope: s.scope})
+	sess, err := b.NewSession(sessionScopeGate{scope: s.scope})
+	if err != nil {
+		return nil, err
+	}
+	// The operator's one TLS-verification setting (Settings → Network) governs this leg too: a
+	// staging host the crawl's own sender may reach with verification off is one the login may reach.
+	sess.IgnoreCertificateErrors(s.sender != nil && !s.sender.Network().TLS.Verify)
+	return sess, nil
 }
 
 // ---- the replay, as a crawler.BrowserLogin -----------------------------------------------------
@@ -447,7 +465,7 @@ func (r *browserLoginRunner) replay(ctx context.Context) domexec.LoginReplay {
 // Login is crawler.BrowserLogin.
 func (r *browserLoginRunner) Login(ctx context.Context) crawler.LoginAttempt {
 	rep := r.replay(ctx)
-	a := crawler.LoginAttempt{Succeeded: rep.Succeeded, Reason: rep.Reason, FinalURL: rep.FinalURL, Blocked: rep.Blocked}
+	a := crawler.LoginAttempt{Succeeded: rep.Succeeded, Verified: rep.Verified, Reason: rep.Reason, FinalURL: rep.FinalURL, Blocked: rep.Blocked}
 	for _, c := range rep.Cookies {
 		a.Cookies = append(a.Cookies, crawler.LoginCookie{
 			Name: c.Name, Value: c.Value, Domain: c.Domain, HostOnly: !strings.HasPrefix(c.Domain, "."),

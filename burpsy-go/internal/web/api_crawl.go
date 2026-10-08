@@ -808,8 +808,10 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	if cfg.RenderWithOutcome != nil {
 		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
 	}
+	var loginWrap *liveLogin
 	if loginRunner != nil {
-		cfg.BrowserLogin = liveLogin{inner: loginRunner, live: live}
+		loginWrap = &liveLogin{inner: loginRunner, live: live, events: s.events}
+		cfg.BrowserLogin = loginWrap
 	}
 	c, err := crawler.New(cfg)
 	if err != nil {
@@ -833,6 +835,10 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
 	s.crawls.start(task.ID(), seeds, kind, limits)
 	s.crawls.attachLive(task.ID(), live)
+	if loginWrap != nil {
+		// Before the goroutine starts, which orders this write before the login's first read.
+		loginWrap.taskID = task.ID()
+	}
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser
@@ -863,6 +869,12 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 			feed.start(ctx)
 		}
 		rep := c.Run(ctx)
+		// The logged-in render pass's refusals (burpsy-react-ui-xhtk): the session kept them apart from
+		// the replays' own, and the report is where a page that rendered empty is explained.
+		if rep.Login != nil && loginSess != nil {
+			rep.Login.RenderBlocked = loginSess.RenderBlocked()
+		}
+		live.auditing()
 		// The rendered-DOM audit over the crawl's locations (burpsy-react-ui-xuim): the crawl
 		// captured wire bytes, so script-created content was never audited. This pass renders
 		// each distinct location in the same headless browser the audit's DOM checks use and
@@ -932,10 +944,13 @@ func (s *Server) auditCrawlLocations(ctx context.Context, taskID uint64, rep *cr
 	// browser, logged out, and comparing the two would report every authenticated page as "content
 	// visible only after script runs". Declined, with the reason, rather than run wrong
 	// (burpsy-react-ui-xhtk).
-	if rep.Login != nil {
+	// Declined whenever ANY replay logged in — a crawl whose first login failed and a later re-login
+	// succeeded has logged-in wire bodies too. A crawl whose every replay failed was logged out
+	// throughout, and its comparison with a logged-out render is the ordinary one.
+	if rep.Login != nil && rep.Login.Succeeded > 0 {
 		rep.RenderedAudit = &crawler.RenderedAuditReport{
 			Candidates: len(locations),
-			Declined: "the crawl was authenticated by a recorded login and this pass renders logged out; " +
+			Declined: "the crawl ran logged in through its recorded login and this pass renders logged out; " +
 				"comparing logged-out renders with logged-in wire bodies would report false script-only content, so it was not run",
 		}
 		return

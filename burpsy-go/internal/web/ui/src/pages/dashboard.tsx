@@ -558,17 +558,26 @@ function CrawlLoginCard({ login }: { login: CrawlLoginReport }): JSX.Element {
  return (
   <Card>
    <SectionHeading
-    title={login.authenticated ? `Logged in with “${login.label}”` : `The recorded login “${login.label}” failed`}
+    title={
+     !login.authenticated
+      ? `The recorded login “${login.label}” failed`
+      : login.verified
+       ? `Logged in with “${login.label}”`
+       : `“${login.label}” ran — the login was not verified`
+    }
     detail={
-     login.authenticated
-      ? "The recorded login was replayed in an isolated browser before the first request; its session was carried on every request."
-      : "The replay before the first request did not log in, so this crawl ran logged out."
+     !login.authenticated
+      ? "The replay before the first request did not log in, so this crawl ran logged out."
+      : login.verified
+       ? "The recorded login was replayed in an isolated browser before the first request, confirmed by its status check, and its session was carried on every request."
+       : "Every step ran, but the sequence has no status check, so nothing confirmed the session was real. A rejected password looks the same."
     }
    />
    <div className="metric-grid wide">
     <Metric label="Replays" value={login.attempts} detail={`${login.succeeded} logged in, ${login.failed} failed`} tone={login.failed > 0 ? "warn" : undefined} />
     <Metric label="Re-logins" value={login.relogins} detail="replays run because the session was detected as lost" />
     <Metric label="Requests with the session" value={login.requests_with_session} />
+    <Metric label="Pages found after login" value={login.pages_found_after_login} tone={login.authenticated && login.pages_found_after_login === 0 ? "warn" : undefined} />
    </div>
    <DetailList
     rows={[
@@ -580,6 +589,20 @@ function CrawlLoginCard({ login }: { login: CrawlLoginReport }): JSX.Element {
       value: login.blocked.length ? (
        <ul className="replay-blocked">
         {login.blocked.map((line) => (
+         <li key={line}>
+          <code>{line}</code>
+         </li>
+        ))}
+       </ul>
+      ) : (
+       "nothing"
+      ),
+     },
+     {
+      label: "Refused while rendering",
+      value: login.render_blocked.length ? (
+       <ul className="replay-blocked">
+        {login.render_blocked.map((line) => (
          <li key={line}>
           <code>{line}</code>
          </li>

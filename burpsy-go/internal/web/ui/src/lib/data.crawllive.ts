@@ -19,7 +19,7 @@ export interface CrawlLiveFetch {
 export interface CrawlLiveView {
   task_id: number;
   state: "running" | "done" | "failed";
-  phase: "starting" | "logging-in" | "fetching" | "rendering" | "finished";
+  phase: "starting" | "logging-in" | "fetching" | "rendering" | "rendered-audit" | "finished";
   current: { method?: string; url: string; since: string } | null;
   fetched: number;
   /** Newest first, at most fifty. */
