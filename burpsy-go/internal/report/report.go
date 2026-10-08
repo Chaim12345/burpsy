@@ -43,6 +43,31 @@ type Row struct {
 	// Evidence is where this finding was actually observed. A finding with no location is an
 	// assertion; a finding with one is a thing someone can go and reproduce.
 	Evidence []Evidence `json:"evidence,omitempty"`
+	// Messages carries the evidence pair's HTTP bytes when the operator asked
+	// for them (Settings.MessageMode relevant or full — burpsy-react-ui-a9qy).
+	// Empty in every bulk export by default: see FindingReport for why a
+	// scan-wide report that always carried messages is a defect, not a feature.
+	// It is json:"-" because these ride the HTML and XML artefacts, not the
+	// JSON export; that export keeps its stable shape and the message ids in
+	// Evidence, which is the reproduction a script needs.
+	Messages []AttachedMessage `json:"-"`
+}
+
+// AttachedMessage is one evidence message attached to a Row for the HTML and
+// XML exports. It is not the single-finding report's Message: that type is a
+// stand-alone artefact with its own note field, and this one carries the
+// truncation flag the settings report needs to print its "[truncated]" marker.
+type AttachedMessage struct {
+	IsRequest bool
+	// Text is the (possibly truncated) bytes as text, for the HTML renderer.
+	Text string
+	// Raw is the full bytes, carried so the XML export can base64 them. The
+	// HTML renderer prints Text; the XML one encodes Raw, because base64 of an
+	// already-truncated text would not round-trip to what the operator saw.
+	Raw []byte
+	// Truncated says MaxMessageLen cut the message, so the renderer prints the
+	// explicit marker rather than letting the text read as the whole message.
+	Truncated bool
 }
 
 // Advisory is the catalogue entry backing a finding. DescriptionHTML and RemediationHTML have already
@@ -318,6 +343,76 @@ func HTML(rows []Row) []byte {
 	return []byte(b.String())
 }
 
+// Settings are Burp's report-settings.html choices: the title, how issues are
+// organised, how deep the table of contents goes, which issue-detail sections
+// are printed, and how HTTP messages appear. Zero value means the defaults the
+// settings-free HTML() has always used — organise by severity, everything
+// except messages — so the new parameters widen the old report rather than
+// replacing it.
+type Settings struct {
+	// Title replaces "burpsy scan report" as the document's h1 and window title.
+	Title string
+	// OrganiseBy chooses the primary grouping: "type", "severity" or "url".
+	// Anything else (including the empty string) is severity, the reader-first
+	// order the report has always used; an unknown value is refused by the
+	// route that builds these Settings, not silently coerced here.
+	OrganiseBy string
+	// TOCDepth is how many levels of detail the table of contents renders.
+	// 0 means no TOC at all. Depth 1 lists the primary groups; depth 2 also
+	// lists each finding beneath its group; deeper levels would repeat those
+	// same rows, so the value is clamped by the route.
+	TOCDepth int
+	// Sections selects which issue-detail blocks print: "background",
+	// "remediation", "detail", "classifications". The zero value prints all of
+	// them — the report without a settings step carries everything, and these
+	// settings exist to let an operator take things out, not to add a second
+	// default that hides content the old report showed.
+	Sections []string
+	// MessageMode is how evidence messages appear: "none" (the bulk export's
+	// rule — messages never ride the scan-wide report by default), "relevant"
+	// (an extract around the evidence spans) or "full" (whole messages).
+	MessageMode string
+	// MaxMessageLen bounds each message at MaxMessageLen bytes once it is
+	// included at all, with an explicit "truncated" marker when it bites —
+	// Burp's "limit each message to a maximum length" report-settings option.
+	// 0 means no bound. Negative is refused by the route.
+	MaxMessageLen int
+}
+
+// sectionOn says whether one issue-detail section is printed under these
+// settings. With no Sections list every section prints; an explicit list is a
+// keep-if-match, the same semantics the severity filter on the route uses.
+func (s Settings) sectionOn(name string) bool {
+	if len(s.Sections) == 0 {
+		return true
+	}
+	for _, want := range s.Sections {
+		if want == name {
+			return true
+		}
+	}
+	return false
+}
+
+// HTMLWithSettings renders the report page under Settings. The grouping order
+// is the only structural change from HTML(); message inclusion is decided by
+// the caller, which has the store to read the bytes — a Settings here that
+// asks for messages the caller did not attach is a settings echo, not a
+// report, so the caller (api_report.go) is the one that honours MessageMode.
+//
+// "By URL" groups by host then path ascending; "by type" groups by the
+// finding's name; both keep severity worst-first *within* a group so the
+// reader's eye still lands on the worst thing first inside every group.
+func HTMLWithSettings(rows []Row, st Settings) []byte {
+	switch st.OrganiseBy {
+	case "type", "url":
+		return renderGroupedHTML(rows, st)
+	default:
+		// severity — HTML's own order, with the settings applied around it.
+		return renderSeverityHTML(rows, st)
+	}
+}
+
 func writeFinding(b *strings.Builder, f Row, sev string) {
 	b.WriteString(fmt.Sprintf(`<article class="sev-%s">`, strings.ToLower(sev)))
 	b.WriteString(fmt.Sprintf(`<h3>%s</h3>`, html.EscapeString(f.Name)))
@@ -436,4 +531,305 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// renderSeverityHTML is HTML() with a Settings applied. The severity grouping
+// and worst-first order are exactly HTML()'s; the settings add the title, the
+// TOC, section selection and (via the caller-attached messages on each Row)
+// the message extracts. It exists separately from HTML() so the default export
+// keeps its own tested shape and cannot drift into carrying settings it was
+// never given.
+func renderSeverityHTML(rows []Row, st Settings) []byte {
+	sorted := make([]Row, len(rows))
+	copy(sorted, rows)
+	sort.SliceStable(sorted, func(i, j int) bool { return severityRank(sorted[i].Severity) < severityRank(sorted[j].Severity) })
+	return renderReportDocument(sorted, st, func(b *strings.Builder) {
+		lastSev := ""
+		for _, f := range sorted {
+			sev := strings.ToUpper(strings.TrimSpace(f.Severity))
+			if sev != lastSev {
+				b.WriteString(fmt.Sprintf(`<h2 class="sev sev-%s">%s</h2>`, strings.ToLower(sev), html.EscapeString(sev)))
+				lastSev = sev
+			}
+			writeFindingWithSettings(b, f, sev, st)
+		}
+	})
+}
+
+// renderGroupedHTML renders the by-type and by-URL organisations: one h2 per
+// group, findings within a group ordered worst-severity-first so the report
+// still leads with the worst thing in each section.
+func renderGroupedHTML(rows []Row, st Settings) []byte {
+	type group struct {
+		key   string
+		title string
+		rows  []Row
+	}
+	var groups []*group
+	byKey := map[string]*group{}
+	for _, f := range rows {
+		key, title := groupKey(f, st.OrganiseBy)
+		g, ok := byKey[key]
+		if !ok {
+			g = &group{key: key, title: title}
+			byKey[key] = g
+			groups = append(groups, g)
+		}
+		g.rows = append(g.rows, f)
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].key < groups[j].key })
+	for _, g := range groups {
+		sort.SliceStable(g.rows, func(i, j int) bool {
+			return severityRank(g.rows[i].Severity) < severityRank(g.rows[j].Severity)
+		})
+	}
+	return renderReportDocument(rows, st, func(b *strings.Builder) {
+		for _, g := range groups {
+			b.WriteString(fmt.Sprintf(`<h2 class="group">%s</h2>`, html.EscapeString(g.title)))
+			for _, f := range g.rows {
+				writeFindingWithSettings(b, f, strings.ToUpper(strings.TrimSpace(f.Severity)), st)
+			}
+		}
+	})
+}
+
+// groupKey returns the group identity for one row and a display title for it.
+// By type groups by the finding's name; by URL groups by host then path, so
+// two findings on one page sit together. The evidence table inside the finding
+// carries the full detail, so the group key can stay short.
+func groupKey(f Row, organiseBy string) (key, title string) {
+	if organiseBy == "type" {
+		return f.Name, f.Name
+	}
+	// url
+	if len(f.Evidence) > 0 && f.Evidence[0].Host != "" {
+		e := f.Evidence[0]
+		return e.Host + " " + e.Path, e.Host + e.Path
+	}
+	if len(f.Hosts) > 0 {
+		return f.Hosts[0], f.Hosts[0]
+	}
+	return "(no location recorded)", "(no location recorded)"
+}
+
+// renderReportDocument is the page frame every organisation shares: head,
+// title, severity summary, TOC, body, footer. body() writes the grouped
+// findings between the summary and the footer.
+func renderReportDocument(sorted []Row, st Settings, body func(*strings.Builder)) []byte {
+	title := st.Title
+	if title == "" {
+		title = "burpsy scan report"
+	}
+	counts := map[string]int{}
+	for _, r := range sorted {
+		counts[strings.ToUpper(strings.TrimSpace(r.Severity))]++
+	}
+
+	var b strings.Builder
+	b.WriteString(`<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">`)
+	b.WriteString(`<meta name="viewport" content="width=device-width,initial-scale=1">`)
+	b.WriteString(fmt.Sprintf(`<title>%s</title><style>`, html.EscapeString(title)))
+	b.WriteString(reportCSS)
+	b.WriteString(reportSettingsCSS)
+	b.WriteString(`</style></head><body><div class="wrap">`)
+
+	b.WriteString(fmt.Sprintf(`<header><h1>%s</h1>`, html.EscapeString(title)))
+	b.WriteString(fmt.Sprintf(`<div class="meta">%d finding%s &middot; generated %s</div></header>`,
+		len(sorted), plural(len(sorted)), html.EscapeString(time.Now().Format("2006-01-02 15:04 MST"))))
+
+	b.WriteString(`<div class="summary">`)
+	for _, sev := range severityOrder {
+		b.WriteString(fmt.Sprintf(`<div class="tile"><div class="n sev-%s">%d</div><div class="k">%s</div></div>`,
+			strings.ToLower(sev), counts[sev], html.EscapeString(sev)))
+	}
+	b.WriteString(`</div>`)
+
+	if len(sorted) == 0 {
+		b.WriteString(`<div class="empty">No findings were recorded in this session.<br>` +
+			`An empty report means nothing was found by the checks that ran &mdash; not that the target is clean.</div>`)
+	}
+
+	writeTOC(&b, sorted, st)
+	body(&b)
+
+	b.WriteString(`<footer>Generated by burpsy. Advisory text, where present, comes from the bundled ` +
+		`issue-definition catalogue.</footer>`)
+	b.WriteString(`</div></body></html>`)
+	return []byte(b.String())
+}
+
+// reportSettingsCSS is the extra stylesheet the settings report needs: the TOC
+// and the per-finding message blocks. Kept beside reportCSS so the report is
+// still one self-contained file.
+const reportSettingsCSS = `
+.toc{margin:0 0 2rem;padding:0 1rem;border-left:3px solid var(--line,var(--accent,#f0950f));}
+.toc h2{font-size:1rem;margin:.75rem 0 .25rem;}
+.toc ul{margin:0;padding-left:1.25rem;}
+.toc a{color:inherit;}
+.msg{margin:.5rem 0;padding:.5rem .75rem;background:var(--panel,#f4f4f5);border-radius:4px;overflow-x:auto;}
+.msg pre{margin:0;white-space:pre-wrap;word-break:break-all;}
+.msg .truncated{font-style:italic;}
+`
+
+// writeTOC renders the table of contents to the requested depth. Depth 1 lists
+// the groups; depth 2 lists each finding under its group. Deeper would repeat
+// the same rows, so the caller clamps the value — and this function is
+// written to be correct for any non-negative depth anyway.
+func writeTOC(b *strings.Builder, sorted []Row, st Settings) {
+	if st.TOCDepth <= 0 {
+		return
+	}
+	b.WriteString(`<nav class="toc"><h2>Contents</h2>`)
+	switch st.OrganiseBy {
+	case "type", "url":
+		type group struct {
+			title string
+			rows  []Row
+		}
+		var groups []*group
+		byTitle := map[string]*group{}
+		for _, f := range sorted {
+			_, title := groupKey(f, st.OrganiseBy)
+			g, ok := byTitle[title]
+			if !ok {
+				g = &group{title: title}
+				byTitle[title] = g
+				groups = append(groups, g)
+			}
+			g.rows = append(g.rows, f)
+		}
+		sort.SliceStable(groups, func(i, j int) bool { return groups[i].title < groups[j].title })
+		for _, g := range groups {
+			b.WriteString(fmt.Sprintf(`<h2>%s</h2>`, html.EscapeString(g.title)))
+			if st.TOCDepth >= 2 {
+				b.WriteString(`<ul>`)
+				for _, f := range g.rows {
+					b.WriteString(fmt.Sprintf(`<li><a href="#finding-%d">%s</a></li>`, f.ID, html.EscapeString(f.Name)))
+				}
+				b.WriteString(`</ul>`)
+			}
+		}
+	default:
+		// severity: the summary tiles already show the counts, so depth 1 lists
+		// the severity bands that have findings; depth 2 names each finding.
+		b.WriteString(`<ul>`)
+		for _, sev := range severityOrder {
+			if n := countSeverity(sorted, sev); n == 0 {
+				continue
+			}
+			b.WriteString(fmt.Sprintf(`<li>%s (%d)`, html.EscapeString(sev), n))
+			if st.TOCDepth >= 2 {
+				b.WriteString(`<ul>`)
+				for _, f := range sorted {
+					if strings.ToUpper(strings.TrimSpace(f.Severity)) == sev {
+						b.WriteString(fmt.Sprintf(`<li><a href="#finding-%d">%s</a></li>`, f.ID, html.EscapeString(f.Name)))
+					}
+				}
+				b.WriteString(`</ul>`)
+			}
+			b.WriteString(`</li>`)
+		}
+		b.WriteString(`</ul>`)
+	}
+	b.WriteString(`</nav>`)
+}
+
+func countSeverity(rows []Row, sev string) int {
+	n := 0
+	for _, r := range rows {
+		if strings.ToUpper(strings.TrimSpace(r.Severity)) == sev {
+			n++
+		}
+	}
+	return n
+}
+
+// writeFindingWithSettings is writeFinding with the settings applied: the
+// heading gains an anchor the TOC points at, and the optional sections and
+// message blocks are filtered by st. The always-printed core — name, severity
+// pill, affected hosts and parameters, evidence table — is unchanged from the
+// settings-free report, because Settings exists to take detail OUT of a report
+// the operator finds too dense, not to invent a second default that hides the
+// things every report reader needs.
+func writeFindingWithSettings(b *strings.Builder, f Row, sev string, st Settings) {
+	b.WriteString(fmt.Sprintf(`<article class="sev-%s" id="finding-%d">`, strings.ToLower(sev), f.ID))
+	b.WriteString(fmt.Sprintf(`<h3>%s</h3>`, html.EscapeString(f.Name)))
+	b.WriteString(fmt.Sprintf(`<span class="pill sev-%s">%s</span>`, strings.ToLower(sev), html.EscapeString(sev)))
+	if f.Confidence != "" {
+		b.WriteString(fmt.Sprintf(`<span class="pill">%s confidence</span>`, html.EscapeString(f.Confidence)))
+	}
+	b.WriteString(fmt.Sprintf(`<span class="pill">%d occurrence%s</span>`, f.Occurrences, plural(f.Occurrences)))
+
+	if len(f.Hosts) > 0 {
+		b.WriteString(`<div class="label">Affected hosts</div><div class="hosts">`)
+		for _, h := range f.Hosts {
+			b.WriteString(fmt.Sprintf(`<code>%s</code>`, html.EscapeString(h)))
+		}
+		b.WriteString(`</div>`)
+	}
+	if len(f.Params) > 0 {
+		b.WriteString(`<div class="label">Affected parameters</div><div class="hosts">`)
+		for _, p := range f.Params {
+			b.WriteString(fmt.Sprintf(`<code>%s</code>`, html.EscapeString(p)))
+		}
+		b.WriteString(`</div>`)
+	}
+
+	if st.sectionOn("detail") {
+		if f.Description != "" {
+			b.WriteString(`<div class="label">Detail</div><p>` + html.EscapeString(f.Description) + `</p>`)
+		}
+	}
+	if st.sectionOn("remediation") {
+		if f.Remediation != "" {
+			b.WriteString(`<div class="label">Remediation</div><p>` + html.EscapeString(f.Remediation) + `</p>`)
+		}
+	}
+
+	if len(f.Evidence) > 0 {
+		b.WriteString(`<div class="label">Evidence</div><div class="scroll"><table><thead><tr>` +
+			`<th>Method</th><th>Host</th><th>Path</th><th>Status</th></tr></thead><tbody>`)
+		for _, e := range f.Evidence {
+			status := ""
+			if e.Status != 0 {
+				status = strconv.Itoa(e.Status)
+			}
+			b.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
+				html.EscapeString(e.Method), html.EscapeString(e.Host),
+				html.EscapeString(e.Path), html.EscapeString(status)))
+		}
+		b.WriteString(`</tbody></table></div>`)
+	}
+
+	// The catalogue sections. "background" covers the whole advisory block the
+	// way the settings-free report prints it; "classifications" alone hides
+	// only the reference/classification link lists, which are the densest and
+	// least load-bearing part for a client-facing copy.
+	if f.Advisory != nil {
+		if st.sectionOn("background") {
+			writeAdvisory(b, f.Advisory)
+		} else if st.sectionOn("classifications") {
+			writeLinks(b, "Classifications", f.Advisory.Classifications)
+			writeLinks(b, "References", f.Advisory.References)
+		}
+	} else if f.AdvisoryNote != "" && st.sectionOn("background") {
+		b.WriteString(`<div class="label">Catalogue</div><p class="note">` +
+			html.EscapeString(f.AdvisoryNote) + `</p>`)
+	}
+
+	// Messages, when the caller attached them (see Settings.MessageMode).
+	for i := range f.Messages {
+		m := &f.Messages[i]
+		label := "Response"
+		if m.IsRequest {
+			label = "Request"
+		}
+		b.WriteString(fmt.Sprintf(`<div class="msg"><div class="label">%s</div><pre>`, label))
+		b.WriteString(html.EscapeString(m.Text))
+		if m.Truncated {
+			b.WriteString(`<span class="truncated">[truncated at ` + strconv.Itoa(st.MaxMessageLen) + ` bytes]</span>`)
+		}
+		b.WriteString(`</pre></div>`)
+	}
+	b.WriteString(`</article>`)
 }
