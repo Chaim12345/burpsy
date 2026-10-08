@@ -14,6 +14,8 @@ import type {
  SessionCookiesResponse,
  SessionLoginResponse,
  SessionMacroStep,
+ SessionPromptsResponse,
+ SessionPromptResolveResponse,
  SessionRulesResponse,
  SessionTestResponse,
  SessionAnalyzeResponse,
@@ -29,6 +31,10 @@ export const policyKeys = {
  caStatus: ["ca-status"] as const,
  passthrough: ["tls-passthrough"] as const,
  sessionTrace: ["session", "trace"] as const,
+ // The pending browser-recovery prompts (dq1g, landed by bkun). Shares the ["session"] prefix
+ // with the rules and cookies, so the "session" event that announces a prompt invalidates it —
+ // that is the whole mechanism: a prompt appears and dismisses without a poll.
+ sessionPrompts: ["session", "prompts"] as const,
 };
 
 export interface CaCertState {
@@ -120,6 +126,35 @@ export interface CaStatus {
 
 export const useCaStatus = (): UseQueryResult<CaStatus> =>
  useResource<CaStatus>(policyKeys.caStatus, "/api/proxy/ca");
+
+/**
+ * GET /api/session/prompts — the pending browser-recovery prompts, oldest first.
+ *
+ * Not polled, on purpose: the "session" event the server sends when a prompt appears or resolves
+ * is what refetches it (the ["session"] prefix on the key), so the modal opens and closes exactly
+ * when the server's state changed. A poll interval here would be a second clock racing the one
+ * the event stream already provides.
+ */
+export const useSessionPrompts = (): UseQueryResult<SessionPromptsResponse> =>
+ useQuery({
+  queryKey: policyKeys.sessionPrompts,
+  queryFn: ({ signal }) => api<SessionPromptsResponse>("/api/session/prompts", { signal }),
+ });
+
+/**
+ * POST /api/session/prompts/{id}/resolve — an operator's answer to one prompt.
+ *
+ * The caller invalidates on success; the hook does not, because both answers (recovered and
+ * declined) end the prompt and the server notifies on the resolve either way — the notification
+ * is the refetch trigger, and adding one here would be the same second clock the read hook
+ * refuses. The id is the prompt's own, not its list position.
+ */
+export function useResolveSessionPrompt(id: number) {
+ return useMutation({
+  mutationFn: (body: { recovered: boolean }) =>
+   api<SessionPromptResolveResponse>(`/api/session/prompts/${id}/resolve`, json("POST", body)),
+ });
+}
 
 /**
  * Import the operator's own CA — Burp's `configPanelCustomCACertificates`.

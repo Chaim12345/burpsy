@@ -611,3 +611,43 @@ export interface SessionTraceResponse {
 export interface SessionTraceEnableResponse {
  enabled: boolean;
 }
+
+/* --- browser-recovery prompts (dq1g, landed by bkun) --------------------------------- */
+
+/**
+ * One pending browser-recovery prompt, mirroring the server's sessionPromptDto exactly. The task
+ * that hit the "prompt for browser recovery" action is suspended server-side until an operator
+ * answers, and this row is the operator-facing half of that wait.
+ *
+ * `id` is the number the resolve route takes, not a list index: the modal shows the oldest prompt
+ * (prompts[0]) and resolves by id, so a second prompt appearing mid-answer cannot make the modal
+ * resolve the wrong one.
+ */
+export interface SessionPromptView {
+ id: number;
+ rule_name: string;
+ request_url: string;
+ /** RFC 3339, as encoding/json writes time.Time. */
+ created_at: string;
+}
+
+/** GET /api/session/prompts — the pending list, oldest first. */
+export interface SessionPromptsResponse {
+ prompts: SessionPromptView[];
+}
+
+/**
+ * POST /api/session/prompts/{id}/resolve. `recovered` is the operator's whole answer: true means
+ * the task resumes and the request goes out with the session the browser established; false means
+ * the request is not sent, and the rule's trace records a decline rather than a session that was
+ * never established.
+ */
+export interface SessionPromptResolveRequest {
+ recovered: boolean;
+}
+
+/** The resolve route's confirmation: what the server did, not an echo of the request. */
+export interface SessionPromptResolveResponse {
+ resolved: boolean;
+ recovered: boolean;
+}

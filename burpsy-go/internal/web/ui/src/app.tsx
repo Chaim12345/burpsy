@@ -42,6 +42,7 @@ import { useScannerLive } from "./lib/data.attack";
 import { useCrawls } from "./lib/data.observe";
 import { attentionFor, attentionSignals } from "./lib/attention";
 import { useCaCert } from "./lib/data.policy";
+import { SessionPromptLayer } from "./pages/session-prompt";
 import {
  attackConfigFilename,
  parseAttackConfig,
@@ -1483,6 +1484,12 @@ function App(): JSX.Element {
     ) : null}
    </Modal>
    <Toaster position="bottom-right" theme={resolveTheme(theme)} closeButton duration={3800} />
+   {/* The browser-recovery prompt layer (dq1g, landed by bkun): a suspended task can fire from
+       anywhere, so its modal is mounted at the app shell rather than on the Session page — a
+       prompt rendered only where the operator happens to be looking is a prompt nobody sees.
+       Renders null whenever no prompt is pending; see pages/session-prompt.tsx for why the list
+       is subscribed here rather than polled. */}
+   <SessionPromptLayer />
   </Tooltip.Provider>
  );
 }
