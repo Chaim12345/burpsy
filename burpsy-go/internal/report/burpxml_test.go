@@ -110,7 +110,7 @@ func TestTheTypeElementCarriesTheCatalogueIndexAsADecimal(t *testing.T) {
 		"<name>SQL injection</name>",
 		`<host ip="">shop.test</host>`,
 		"<path>/login</path>",
-		"<location>shop.test/login [q]</location>",
+		"<location>/login [q parameter]</location>",
 		"<severity>High</severity>",
 		"<confidence>Firm</confidence>",
 		"<issueDetail>The q parameter is injectable.</issueDetail>",
@@ -296,4 +296,27 @@ func xmlNameText(t *testing.T, doc, element string) string {
 		}
 		return s.Text
 	}
+}
+
+// Burp's four severity words, its service-URL host with the server IP, and a control byte from
+// captured data that would otherwise make the document not well-formed (review findings).
+func TestBurpXMLSpeaksBurpsVocabularyAndStaysWellFormed(t *testing.T) {
+	info := xmlRow()
+	info.Severity = "Informational"
+	crit := xmlRow()
+	crit.Severity = "Critical"
+	crit.Name = "Bad\x01name"
+	crit.Evidence = []Evidence{{Scheme: "https", Host: "shop.test", Port: 8443, IP: "10.1.2.3", Path: "/login"}}
+	doc := BurpXML([]Row{info, crit}, xmlSettings(), xmlTestTime())
+	s := string(doc)
+	for _, want := range []string{"<severity>Information</severity>", "<severity>High</severity>",
+		`<host ip="10.1.2.3">https://shop.test:8443</host>`, "Bad\uFFFDname"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the export lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "Informational") || strings.Contains(s, "\x01") {
+		t.Error("a burpsy-only severity word or a raw control byte reached the export")
+	}
+	validateWithXmllint(t, doc)
 }

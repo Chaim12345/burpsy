@@ -123,6 +123,12 @@ type Link struct {
 // row; a single-finding report does read them, and that is the export the operator reaches for
 // when they want the evidence in the file rather than a reference to it.
 type Evidence struct {
+	// Scheme, Port and IP are the service the evidence came from, for the exports that name a
+	// service rather than a host (Burp-XML's <host ip="…">https://h:8443</host>). Empty when the
+	// exchange could not be read.
+	Scheme string `json:"scheme,omitempty"`
+	Port   int    `json:"port,omitempty"`
+	IP     string `json:"ip,omitempty"`
 	Host   string `json:"host"`
 	Path   string `json:"path"`
 	Method string `json:"method"`

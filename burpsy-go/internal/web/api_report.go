@@ -404,6 +404,10 @@ func (s *Server) findingEvidence(f *core.Finding) []report.Evidence {
 		e.Host = ex.Host
 		e.Path = ex.Path
 		e.Method = ex.Method
+		e.Scheme, e.Port, e.IP = "http", int(ex.Port), ex.ServerIP
+		if ex.TLS {
+			e.Scheme = "https"
+		}
 		if ex.Status != nil {
 			e.Status = int(*ex.Status)
 		}

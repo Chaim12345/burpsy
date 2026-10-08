@@ -89,12 +89,11 @@ func TestTheXMLExportRouteServesAValidatableDocumentWithExactMessages(t *testing
 		"<serialNumber>0</serialNumber>",
 		"<type>1049088</type>", // 0x00100200, the catalogue's SQL injection index, as a decimal
 		"<name>SQL injection</name>",
-		`<host ip="">shop.test</host>`,
+		// Burp's host element is the service URL, scheme and all.
+		`>https://shop.test</host>`,
 		"<path>/login</path>",
-		// location is the entry-point description and carries the URL as
-		// observed — the query included — where the path element above is
-		// the DTD's query-excluded path.
-		"<location>shop.test/login?user=x [q]</location>",
+		// location is Burp's entry-point shape: the path and the parameter.
+		"<location>/login [q parameter]</location>",
 		"<severity>High</severity>",
 		"<confidence>Firm</confidence>",
 		"<issueDetail>The q parameter is injectable.</issueDetail>",

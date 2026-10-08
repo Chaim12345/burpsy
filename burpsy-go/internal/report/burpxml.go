@@ -191,11 +191,11 @@ func writeBurpIssue(b *strings.Builder, f *Row, st Settings) {
 	// including xmllint here. An empty element says "no value", which is the
 	// truth, where a missing one says "no element", which is a broken file.
 	writeRequiredXMLElement(b, "name", f.Name)
-	host := burpIssueHost(*f)
-	b.WriteString(`    <host ip="">` + xmlText(host) + "</host>\r\n")
+	host, ip := burpIssueService(*f)
+	b.WriteString(`    <host ip="` + xmlAttrValue(ip) + `">` + xmlText(host) + "</host>\r\n")
 	writeRequiredXMLElement(b, "path", stripQuery(burpIssuePath(*f)))
 	writeRequiredXMLElement(b, "location", burpIssueLocation(*f))
-	writeRequiredXMLElement(b, "severity", f.Severity)
+	writeRequiredXMLElement(b, "severity", burpSeverity(f.Severity))
 	writeRequiredXMLElement(b, "confidence", f.Confidence)
 
 	// The catalogue's standard text, which Burp writes as the issueBackground
@@ -348,11 +348,53 @@ func stripQuery(path string) string {
 // excluding the query string", while location is the entry-point description,
 // and a finding observed at /login?user=x is described by that whole target.
 func burpIssueLocation(f Row) string {
-	loc := burpIssueHost(f) + burpIssuePath(f)
-	if len(f.Params) > 0 {
-		loc += " [" + strings.Join(f.Params, ", ") + "]"
+	loc := stripQuery(burpIssuePath(f))
+	switch len(f.Params) {
+	case 0:
+	case 1:
+		loc += " [" + f.Params[0] + " parameter]"
+	default:
+		loc += " [" + strings.Join(f.Params, ", ") + " parameters]"
 	}
 	return loc
+}
+
+// burpIssueService is the host element: Burp writes the service URL (scheme, host and a
+// non-default port — Ze1r writes the service's toString) with the server's IP in the ip
+// attribute. A row whose evidence carries no scheme falls back to the bare host it has.
+func burpIssueService(f Row) (string, string) {
+	if len(f.Evidence) > 0 && f.Evidence[0].Host != "" && f.Evidence[0].Scheme != "" {
+		e := f.Evidence[0]
+		svc := e.Scheme + "://" + e.Host
+		if e.Port != 0 && !(e.Scheme == "https" && e.Port == 443) && !(e.Scheme == "http" && e.Port == 80) {
+			svc += ":" + strconv.Itoa(e.Port)
+		}
+		return svc, e.IP
+	}
+	return burpIssueHost(f), ""
+}
+
+// burpSeverity maps burpsy's severity words onto Burp's four: High, Medium, Low, Information.
+// burpsy's Informational is Burp's Information; Burp has no Critical, so a Critical row is High
+// (Burp's highest), which keeps it at the top of any consumer's triage.
+func burpSeverity(s string) string {
+	switch strings.ToLower(s) {
+	case "critical", "high":
+		return "High"
+	case "medium":
+		return "Medium"
+	case "low":
+		return "Low"
+	case "info", "informational", "information":
+		return "Information"
+	}
+	return s
+}
+
+// xmlLegal reports whether r may appear in an XML 1.0 document. Captured data can carry control
+// bytes, and one of them would make the whole export not well-formed.
+func xmlLegal(r rune) bool {
+	return r == '\t' || r == '\n' || r == '\r' || (r >= 0x20 && r <= 0xD7FF) || (r >= 0xE000 && r <= 0xFFFD) || (r >= 0x10000 && r <= 0x10FFFF)
 }
 
 // linkLines renders the advisory's references or classifications as one
@@ -401,6 +443,9 @@ func writeXMLElement(b *strings.Builder, name, content string) {
 func xmlText(s string) string {
 	var b strings.Builder
 	for _, r := range s {
+		if !xmlLegal(r) {
+			r = '\uFFFD'
+		}
 		switch r {
 		case '&':
 			b.WriteString("&amp;")
@@ -426,6 +471,9 @@ func xmlText(s string) string {
 func xmlAttrValue(s string) string {
 	var b strings.Builder
 	for _, r := range s {
+		if !xmlLegal(r) {
+			r = '\uFFFD'
+		}
 		switch r {
 		case '&':
 			b.WriteString("&amp;")

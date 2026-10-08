@@ -72,7 +72,9 @@ export function reportSettingsQuery(settings: ReportSettings, format: string): s
    if (settings.sections.size === 0) params.set("sections", "");
    else params.set("sections", [...settings.sections].join(","));
   }
-  if (settings.messageMode !== "none") params.set("message_mode", settings.messageMode);
+  // The XML export defaults to full messages when the mode is unstated, so "Do not include" has to
+  // be said out loud for it; the HTML export's own default is none, and the query stays minimal.
+  if (settings.messageMode !== "none" || format === "xml") params.set("message_mode", settings.messageMode);
   const len = settings.maxMessageLen.trim();
   if (len) params.set("max_message_len", len);
  }
