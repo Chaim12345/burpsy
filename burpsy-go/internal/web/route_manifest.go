@@ -656,6 +656,12 @@ var manifest = map[string]route{
 		summary: "mint two one-shot URLs that re-issue a stored exchange in the original and in the " +
 			"current session, for the operator's own browser to open",
 	},
+	"/api/repeater/history-export": {
+		// riskRead: it reads stored messages by id and sends nothing. POST because the body is the
+		// tab's list of ids, which a query string would bound far below a long session's history.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "Repeater's Save entire history: a tab's sends as one file, request/response bytes base64 by message id",
+	},
 	"/api/repeater/send": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",

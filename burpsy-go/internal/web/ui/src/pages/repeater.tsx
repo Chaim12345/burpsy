@@ -6,7 +6,8 @@ import { cn } from "../lib/cn";
 import { filterTabs, reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
-import { api, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
+import { api, downloadText, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
+import { historyExportBody } from "../lib/repeater-history-export";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
@@ -870,6 +871,13 @@ export function RepeaterPage(): JSX.Element {
         id: "edit",
         actions: [
           { id: "duplicate", label: "Duplicate tab", icon: Copy, onSelect: () => duplicateRepeaterTab(tab.id) },
+          {
+            id: "save-history",
+            label: (history[tab.id]?.length ?? 0) > 0 ? `Save entire history (${history[tab.id]!.length})` : "Save entire history",
+            icon: FileOutput,
+            disabled: (history[tab.id]?.length ?? 0) === 0,
+            onSelect: () => void saveEntireHistory(tab),
+          },
           // A tab's own colour (fkj). Burp colours a GROUP, and its tabs take that colour; the
           // gap this closes is that an UNGROUPED tab had no way to be marked at all, so an operator
           // pointing at the one request to attack next could not colour a whole group to say so.
@@ -1052,6 +1060,36 @@ export function RepeaterPage(): JSX.Element {
       </div>
     </ContextMenu>
    );
+  };
+
+  /**
+   * Burp's "Save entire history" (pznm): every send this tab made, as one file. The server exports
+   * the stored bytes by message id, so a binary body round-trips exactly; entries it cannot export (a
+   * WebSocket send, a send with no stored message) come back counted under `skipped`, and the toast
+   * says how many — "saved 3 of 5" never reads as "saved all 5".
+   */
+  const saveEntireHistory = async (tab: RepeaterTab) => {
+    const entries = history[tab.id] ?? [];
+    if (entries.length === 0) {
+      toast.info(`${tab.name} has no sends yet — the history is the sends this tab made in this session`);
+      return;
+    }
+    try {
+      const file = await api<{ exported: number; requested: number; skipped: unknown[]; missing_responses: number }>(
+        "/api/repeater/history-export",
+        json("POST", historyExportBody(tab, entries)),
+      );
+      const safe = tab.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "tab";
+      downloadText(`repeater-history-${safe}.json`, JSON.stringify(file, null, 2), "application/json");
+      const partial = file.exported < file.requested || file.missing_responses > 0;
+      const detail = `${file.exported} of ${file.requested} send${file.requested === 1 ? "" : "s"} saved` +
+        (file.skipped.length ? `, ${file.skipped.length} skipped (reasons are in the file)` : "") +
+        (file.missing_responses ? `, ${file.missing_responses} without a response` : "");
+      if (partial) toast.warning(detail);
+      else toast.success(detail);
+    } catch (error) {
+      toast.error(`Could not save the history: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   /** Bulk closes can orphan response history keys; the pruning effect above owns cleanup. */

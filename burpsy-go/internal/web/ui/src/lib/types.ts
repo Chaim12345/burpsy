@@ -439,6 +439,10 @@ export interface RepeaterResult {
  /** The response body's exact octets when `response` cannot carry them (not UTF-8), so the response
   *  pane can show a binary body such as a gRPC reply in the Protobuf tab (burpsy-react-ui-3pco). */
  response_body_base64?: string;
+ /** The stored request and response message ids — the exact bytes that went out and came back.
+  *  Save entire history (pznm) exports by these, never by the lossy `response` string. */
+ request_msg_id?: number;
+ response_msg_id?: number;
  exchange_id: number;  /**
    * The redirect chain this send produced, present only when the response was a 30x.
    *

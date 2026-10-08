@@ -1871,3 +1871,17 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Repeater A: editor views, tab workflow, per-tab overrides, GraphQL actions (burpsy-react-ui-i9ti.1, 2026-10-08)
+
+### Save entire history — the file format (pznm)
+- **Burp:** `desktop/tools/context-menu.html` — "Save entire history — Saves the change history for the
+  selected request to a file"; the menu item is `burp.Zgkb` ("Save entire history", action id 134832).
+- **burpsy:** the tab context menu's *Save entire history* posts the tab's message ids to
+  `POST /api/repeater/history-export` and downloads a JSON file, `format: "burpsy-repeater-history/1"`,
+  with each send's request and response bytes base64-encoded from the store (byte-exact, binary bodies
+  included), plus `skipped` (WebSocket sends, sends with no stored message) and `missing_responses`.
+- **Divergence:** Burp's on-disk format for this file is not in the evidence — the serializer behind
+  action 134832 could not be traced in the decompiled jar, and neither the string table nor the
+  bundled docs describe it. burpsy writes its own declared format rather than guess at Burp's; a file
+  saved by one cannot be loaded by the other. Re-open with a Burp-saved sample file.
