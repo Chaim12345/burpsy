@@ -872,6 +872,9 @@ func (s *Server) issuesByNode() map[string]*issueAgg {
 		return out
 	}
 	for _, f := range s.findings.All() {
+		if s.findingIsolated(f) {
+			continue // an isolated scan's findings stay off the site map (13uw)
+		}
 		// core.Finding's own contract: a dismissed finding stays in the store but "the severity
 		// counts exclude it" — the Issues page honours that, and the site map's per-node counts
 		// are the same severity counts by another door. A node that kept counting what the

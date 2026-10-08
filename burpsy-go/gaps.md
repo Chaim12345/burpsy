@@ -1698,3 +1698,11 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   urlencoded, form-data (text fields; a file part names a file on the author's machine and is skipped) and
   GraphQL bodies. Pre-request and test scripts are not run.
 - **Not done:** SOAP WSDL on the API-only path is still refused by name — tracked as the rest of this bead.
+
+### Isolated scans (13uw)
+- **burpsy:** "Run isolated scan" in New scan (and `isolated: true` on `POST /api/crawl`) tags the crawl's traffic
+  with the source `isolated-scan`; the site map skips those exchanges, and `/api/issues` / `/api/findings` omit
+  findings whose every occurrence is on one (a finding also seen on ordinary traffic stays). The task's own view
+  reads `/api/issues?include_isolated=1` and gets them flagged. Burp keeps an isolated scan's results in a store
+  of their own; burpsy keeps them in the project, filtered by source, so they survive a restart and HTTP history
+  still lists the traffic.

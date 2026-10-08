@@ -226,6 +226,10 @@ type crawlStartReq struct {
 	// Scope narrows this crawl within the engagement scope (burpsy-react-ui-501u). Omitted is the
 	// engagement scope alone — every caller predating the field. See crawlScopeReq.
 	Scope *crawlScopeReq `json:"scope,omitempty"`
+	// Isolated is Burp's "Run isolated scan" (burpsy-react-ui-13uw): the crawl's exchanges carry
+	// SourceIsolatedScan, so neither they nor the issues found on them reach the site map or the
+	// issue list; the task's own views still show them.
+	Isolated bool `json:"isolated,omitempty"`
 	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
 	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
 	// request may name its own origins as well. Taking the set consumes it — a second crawl
@@ -1329,7 +1333,7 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 			Scanner:  s.passiveScanner,
 			Findings: s.findings,
 			Logger:   s.logger,
-			Source:   core.SourceCrawl,
+			Source:   crawlSource(req.Isolated),
 		},
 		Query:              req.Query,
 		RetentionQuery:     req.RetentionQuery,
@@ -1592,4 +1596,11 @@ func (s *Server) mustCrawlScope(req *crawlScopeReq, seeds []string) crawler.Scop
 		return s.scope
 	}
 	return sc
+}
+
+func crawlSource(isolated bool) core.Source {
+	if isolated {
+		return core.SourceIsolatedScan
+	}
+	return core.SourceCrawl
 }

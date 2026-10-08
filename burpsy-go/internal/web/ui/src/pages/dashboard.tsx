@@ -6,7 +6,7 @@ import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Squar
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
-import { useIssuesDetailed, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
@@ -599,6 +599,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // directory"; the detailed configuration takes URL prefixes. Always inside the engagement scope.
  const [scopeMode, setScopeMode] = useState<"seed_directories" | "engagement" | "prefixes">("seed_directories");
  const [scopeInclude, setScopeInclude] = useState("");
+ // Burp's "Run isolated scan" (13uw): results stay out of the site map and All issues.
+ const [isolated, setIsolated] = useState(false);
  const [scopeExclude, setScopeExclude] = useState("");
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
@@ -686,6 +688,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     seeds,
     kind: chosen.wire,
     protocols,
+    isolated: isolated || undefined,
     scope: {
      mode: scopeMode,
      include: scopeMode === "prefixes" ? parseSeeds(scopeInclude) : undefined,
@@ -949,6 +952,12 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         {(id) => <Input id={id} value={scopeExclude} onChange={(event) => setScopeExclude(event.target.value)} placeholder="https://demo.local/app/logout" />}
        </Field>
       ) : null}
+      <label style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+       <input type="checkbox" checked={isolated} onChange={(event) => setIsolated(event.target.checked)} />
+       <span>
+        Run isolated scan <span className="field-hint">— its locations and issues stay out of the site map and All issues; the task still shows them</span>
+       </span>
+      </label>
       <div role="radiogroup" aria-label="Protocol settings">
        {(
         [
@@ -1187,7 +1196,9 @@ function TaskDetail({
  // The same cache key the Issues page reads, so a finding that arrives mid-scan is here on the
  // next render without a second request. Reverse-chronological by id: the store is a dense counter
  // from zero, so higher id == raised later — the feed's whole point (burpsy-react-ui-i18).
- const issuesDetailed = useIssuesDetailed();
+ // With isolated scans' findings (13uw): a task's own view shows what it found even when the run
+ // was isolated from All issues and the site map.
+ const issuesDetailed = useIssuesDetailedWithIsolated();
  // The retained run behind this task, when there is one. Only an API scan's row carries anything the
  // detail pane does not already have (its definition), and the request is made for every kind anyway
  // because which kinds have a run is not something the console should have to predict — a crawl

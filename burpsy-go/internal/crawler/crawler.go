@@ -1795,7 +1795,7 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		// Attributed, so history can distinguish what the crawl caused from what the operator's own
 		// browser did. Leaving it unset would land this in the store as unattributed, which is the
 		// store's honest default and the wrong answer when the surface is known.
-		Source: core.SourceCrawl,
+		Source: c.captureSource(),
 	})
 	if cerr != nil {
 		// The bytes came back and could not be stored, so they were never scanned either. It counts
@@ -3265,4 +3265,13 @@ func isResourceTag(tag string) bool {
 	default:
 		return false
 	}
+}
+
+// captureSource is the Source the crawl's captures carry: the capture's own when the caller set one
+// (an isolated scan, 13uw), the crawl's otherwise.
+func (c *Crawler) captureSource() core.Source {
+	if c.cfg.Capture.Source != core.SourceUnattributed {
+		return c.cfg.Capture.Source
+	}
+	return core.SourceCrawl
 }

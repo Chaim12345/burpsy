@@ -840,6 +840,9 @@ type issueAdvisoryLink struct {
 // issueFindingView mirrors the UI's Finding shape. check_name is the rule/check that fired;
 // issue_name the human title; occurrences carry the exchange ids the check saw.
 type issueFindingView struct {
+	// Isolated marks a finding raised only on an isolated scan's traffic (13uw). Present only on a
+	// listing that asked for them (?include_isolated=1); the default listing — "All issues" — omits them.
+	Isolated    bool    `json:"isolated,omitempty"`
 	ID          uint64  `json:"id"`
 	CheckName   string  `json:"check_name"`
 	IssueName   *string `json:"issue_name"`
@@ -1044,8 +1047,17 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	findings := s.findings.All()
 	views := make([]issueFindingView, 0, len(findings))
+	includeIsolated := r.URL.Query().Get("include_isolated") == "1"
 	for _, f := range findings {
-		views = append(views, s.findingToIssueView(f))
+		// Burp: "Results from isolated scans do not appear in ... Dashboard > All issues" (13uw). A
+		// task's own view asks for them with include_isolated=1 and gets them flagged.
+		isolated := s.findingIsolated(f)
+		if isolated && !includeIsolated {
+			continue
+		}
+		v := s.findingToIssueView(f)
+		v.Isolated = isolated
+		views = append(views, v)
 	}
 
 	loaded := 0
@@ -1375,6 +1387,9 @@ func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
 	findings := s.findings.All()
 	views := make([]FindingView, 0, len(findings))
 	for _, f := range findings {
+		if s.findingIsolated(f) {
+			continue // an isolated scan's findings are not on the issue list (13uw)
+		}
 		views = append(views, FindingView{
 			ID:          f.ID,
 			Name:        f.Name,
@@ -1664,4 +1679,19 @@ func advisoryLinks(refs []advisory.Reference, cls []advisory.Classification) []i
 		return nil
 	}
 	return out
+}
+
+// findingIsolated reports whether every occurrence of a finding is on an isolated scan's exchange
+// (13uw). A finding also seen on ordinary traffic is not isolated: it belongs on the issue list.
+func (s *Server) findingIsolated(f *core.Finding) bool {
+	if f == nil || len(f.Occurrences) == 0 {
+		return false
+	}
+	for _, occ := range f.Occurrences {
+		ex, err := s.store.GetExchange(occ.ExchangeID)
+		if err != nil || ex == nil || !ex.Source.Isolated() {
+			return false
+		}
+	}
+	return true
 }

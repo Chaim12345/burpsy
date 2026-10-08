@@ -141,6 +141,9 @@ export function useForwardHeld() {
 /** Same endpoint and cache key as the shared `useIssues`, typed to the full finding shape (`id`, and
  * nullable detail/remediation) that stable row selection and honest empty text need. */
 export const useIssuesDetailed = () => useResource<IssuesDetail>(keys.issues, "/api/issues");
+/** The issue list including isolated scans' findings (13uw) — for a task's own view, never "All issues". */
+export const useIssuesDetailedWithIsolated = () =>
+ useResource<IssuesDetail>([...keys.issues, "with-isolated"], "/api/issues?include_isolated=1");
 
 /**
  * The triage writes (burpsy-react-ui-pwd): PUT /api/issues/{id} for severity, confidence,

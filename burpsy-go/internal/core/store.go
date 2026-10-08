@@ -750,7 +750,15 @@ const (
 	// It is kept distinct from SourceProxy for the same reason Repeater is: history must not claim the
 	// operator's own client sent a request that in fact arrived from a colleague's session or a CI run.
 	SourceImport Source = "import"
+	// SourceIsolatedScan is traffic an isolated scan originated (burpsy-react-ui-13uw): Burp's "Run
+	// isolated scan", whose "results ... do not appear in the Target > Site map ... or Dashboard >
+	// All issues". A source of its own because it must survive a restart: the site map and the
+	// issue list exclude by it.
+	SourceIsolatedScan Source = "isolated-scan"
 )
+
+// Isolated reports whether this exchange belongs to an isolated scan.
+func (s Source) Isolated() bool { return s == SourceIsolatedScan }
 
 // Attributed reports whether a producer named this exchange's origin.
 func (s Source) Attributed() bool { return s != SourceUnattributed }
