@@ -30,6 +30,8 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/config/export": false,
  "/api/config/import": true,
  "/api/crawl": true,
+ "/api/crawl/logins": true,
+ "/api/crawl/logins/replay": true,
  "/api/dashboard": false,
  "/api/dashboard/events": true,
  "/api/discovery": true,

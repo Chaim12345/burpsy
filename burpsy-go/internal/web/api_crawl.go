@@ -261,6 +261,11 @@ type crawlStartReq struct {
 	// the same rule the rest of this request follows, so a configuration mistake is something the
 	// operator fixes rather than a crawl that appears in the dashboard and then fails.
 	LoginPagePattern string `json:"login_page_pattern,omitempty"`
+	// RecordedLogin names a saved recorded login sequence by id (burpsy-react-ui-xhtk): replayed in a
+	// scope-gated browser session before the first fetch, its session carried on every request and
+	// replayed again when the session is lost. An unknown id, an empty scope or no browser is a 400
+	// before any task row exists — Burp: an authenticated scan cannot start without its browser.
+	RecordedLogin string `json:"recorded_login,omitempty"`
 	// Kind is which scan kind to run: crawlKindCrawl (the default, empty) or crawlKindAudit. An
 	// unrecognised value is refused rather than treated as the default — see startCrawl. A typo'd
 	// kind that silently ran a plain crawl would leave an operator waiting for findings that the
@@ -576,6 +581,13 @@ func scanKind(requested string) (string, error) {
 // the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
 // wire parse was the whole story.
 func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
+	return s.crawlRendererIn(nil)
+}
+
+// crawlRendererIn is crawlRenderer inside a recorded login's session (burpsy-react-ui-xhtk), so an
+// authenticated crawl's rendered pass sees the logged-in application rather than its login page. A
+// nil session is the ordinary renderer.
+func (s *Server) crawlRendererIn(sess *domexec.Session) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
 	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
 		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
 		// function that returns "" would be a render that always produced nothing -- which the engine
@@ -584,20 +596,28 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 		return nil
 	}
 	return func(ctx context.Context, targetURL string) (string, crawler.RenderOutcome, error) {
-		browser, err := s.scanner.BrowserForRender(ctx)
-		if err != nil {
-			return "", crawler.RenderOutcome{}, err
+		opts := domexec.RenderOptions{
+			DOMQuiet:    domexec.DefaultDOMQuiet,
+			NetworkIdle: domexec.DefaultNetworkIdle,
+			MaxWait:     domexec.DefaultMaxRenderWait,
+		}
+		var html string
+		var outcome domexec.RenderOutcome
+		var err error
+		if sess != nil {
+			html, outcome, err = sess.RenderedDOMWithOptions(ctx, targetURL, opts)
+		} else {
+			browser, berr := s.scanner.BrowserForRender(ctx)
+			if berr != nil {
+				return "", crawler.RenderOutcome{}, berr
+			}
+			html, outcome, err = browser.RenderedDOMWithOptions(ctx, targetURL, opts)
 		}
 		// The OUTCOME form, so a render that reached its cap is reported as capped. The previous
 		// call read the DOM after a fixed 300 ms and said nothing about whether the page had settled
 		// (burpsy-react-ui-efra): a client-rendered route populating after load contributed no links
 		// and the crawl reported the application as having almost no locations, which is a confident
 		// wrong answer rather than a missing feature.
-		html, outcome, err := browser.RenderedDOMWithOptions(ctx, targetURL, domexec.RenderOptions{
-			DOMQuiet:    domexec.DefaultDOMQuiet,
-			NetworkIdle: domexec.DefaultNetworkIdle,
-			MaxWait:     domexec.DefaultMaxRenderWait,
-		})
 		reqs := make([]crawler.RenderedRequest, 0, len(outcome.Requests))
 		for _, r := range outcome.Requests {
 			reqs = append(reqs, crawler.RenderedRequest{URL: r.URL, Method: r.Method})
@@ -754,8 +774,29 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
-	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh))
+	// The recorded login (burpsy-react-ui-xhtk): resolved, scope-checked and given its browser
+	// session here, before any task row, so every reason it cannot run is a 400 the operator fixes.
+	var loginSess *domexec.Session
+	var loginRunner *browserLoginRunner
+	if id := strings.TrimSpace(req.RecordedLogin); id != "" {
+		login, ok := s.recordedLoginStore().get(id)
+		if !ok {
+			return 0, nil, 0, nil, fmt.Errorf("no recorded login with id %q is saved", id)
+		}
+		sess, serr := s.openLoginSession(context.Background())
+		if serr != nil {
+			return 0, nil, 0, nil, fmt.Errorf("the recorded login %q cannot run: %w", login.Label, serr)
+		}
+		loginSess, loginRunner = sess, newBrowserLoginRunner(login, sess)
+	}
+	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh)
+	if loginRunner != nil {
+		cfg.BrowserLogin = loginRunner
+		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess)
+	}
+	c, err := crawler.New(cfg)
 	if err != nil {
+		loginSess.Close()
 		return 0, nil, 0, nil, err
 	}
 	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
@@ -791,6 +832,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		// The login's browser context lives exactly as long as the crawl: its cookies are the
+		// operator's session on the target and are not kept a moment longer.
+		defer loginSess.Close()
 		// Started before Run, not after it: from here on every completed fetch is audited while the
 		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
 		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two
@@ -862,6 +906,18 @@ func (s *Server) auditCrawlLocations(ctx context.Context, taskID uint64, rep *cr
 		locations[f.URL] = f.ExchangeID
 	}
 	if len(locations) == 0 {
+		return
+	}
+	// An authenticated crawl's wire bodies are logged-in pages; this pass renders in the shared
+	// browser, logged out, and comparing the two would report every authenticated page as "content
+	// visible only after script runs". Declined, with the reason, rather than run wrong
+	// (burpsy-react-ui-xhtk).
+	if rep.Login != nil {
+		rep.RenderedAudit = &crawler.RenderedAuditReport{
+			Candidates: len(locations),
+			Declined: "the crawl was authenticated by a recorded login and this pass renders logged out; " +
+				"comparing logged-out renders with logged-in wire bodies would report false script-only content, so it was not run",
+		}
 		return
 	}
 

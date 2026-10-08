@@ -130,7 +130,29 @@ export interface CrawlFetch {
  link_text?: string;
 }
 
+/**
+ * A recorded login's account on the crawl report (burpsy-react-ui-xhtk). Cookie NAMES only — the
+ * values are the session. `authenticated: false` means the whole crawl ran logged out, and the
+ * report's stops carry "login-failed".
+ */
+export interface CrawlLoginReport {
+ method: string;
+ label: string;
+ authenticated: boolean;
+ attempts: number;
+ succeeded: number;
+ failed: number;
+ relogins: number;
+ last_failure?: string;
+ final_url?: string;
+ cookie_names: string[];
+ blocked: string[];
+ requests_with_session: number;
+}
+
 export interface CrawlReport {
+ /** Present only when the crawl was launched with a recorded login. */
+ login?: CrawlLoginReport;
  seeds: string[];
  query?: string;
  retention_query?: string;

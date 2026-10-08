@@ -8,6 +8,7 @@ import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, 
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import type { FindingDetail } from "../lib/types.attack";
+import type { CrawlLoginReport } from "../lib/types.observe";
 import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
 import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
@@ -17,6 +18,7 @@ import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metr
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
+import { RecordedLoginPicker } from "../ui/recorded-logins";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 import { severityTone } from "../lib/severity";
 
@@ -548,6 +550,50 @@ function selectedScanType(id: string) {
  return SCAN_TYPES.find((scan) => scan.id === id) ?? SCAN_TYPES[0];
 }
 
+// The recorded login's account of a crawl (burpsy-react-ui-xhtk): whether it was authenticated at
+// all, every replay, and what the replay's scope gate refused. A failed login is the first thing on
+// it, because an unauthenticated crawl of an application behind a login maps the login page.
+function CrawlLoginCard({ login }: { login: CrawlLoginReport }): JSX.Element {
+ return (
+  <Card>
+   <SectionHeading
+    title={login.authenticated ? `Logged in with “${login.label}”` : `The recorded login “${login.label}” failed`}
+    detail={
+     login.authenticated
+      ? "The recorded login was replayed in an isolated browser before the first request; its session was carried on every request."
+      : "The replay before the first request did not log in, so this crawl ran logged out."
+    }
+   />
+   <div className="metric-grid wide">
+    <Metric label="Replays" value={login.attempts} detail={`${login.succeeded} logged in, ${login.failed} failed`} tone={login.failed > 0 ? "warn" : undefined} />
+    <Metric label="Re-logins" value={login.relogins} detail="replays run because the session was detected as lost" />
+    <Metric label="Requests with the session" value={login.requests_with_session} />
+   </div>
+   <DetailList
+    rows={[
+     ...(login.last_failure ? [{ label: "Last failure", value: <span className="warn-text">{login.last_failure}</span> }] : []),
+     { label: "Ended on", value: login.final_url ? <code>{login.final_url}</code> : "—" },
+     { label: "Cookies earned", value: login.cookie_names.length ? login.cookie_names.join(", ") : "none" },
+     {
+      label: "Refused by scope",
+      value: login.blocked.length ? (
+       <ul className="replay-blocked">
+        {login.blocked.map((line) => (
+         <li key={line}>
+          <code>{line}</code>
+         </li>
+        ))}
+       </ul>
+      ) : (
+       "nothing"
+      ),
+     },
+    ]}
+   />
+  </Card>
+ );
+}
+
 function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const startCrawl = useStartCrawl();
  const auditSelected = useAuditSelected();
@@ -567,6 +613,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
+ // The recorded login the crawl logs in with (burpsy-react-ui-xhtk); "" is none.
+ const [recordedLogin, setRecordedLogin] = useState("");
  // The API-only scan's own inputs. `definitionName` is only ever a label — it is what the operator
  // picked or pasted from, shown so a pasted document and an uploaded one are distinguishable after
  // the fact — and never travels to the server, which reads the bytes and not the filename.
@@ -652,6 +700,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
+    recorded_login: recordedLogin || undefined,
    },
    {
     onSuccess: () => toast.success(`${verb} started on ${seed.trim()}`),
@@ -898,6 +947,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         {(id) => <Input id={id} type="number" min={1} value={maxDuration} onChange={(event) => setMaxDuration(event.target.value)} placeholder="uncapped" />}
        </Field>
       </div>
+      <RecordedLoginPicker value={recordedLogin} onChange={setRecordedLogin} />
      </>
     ) : null}
     <div className="toolbar-end">
@@ -1257,6 +1307,8 @@ function TaskDetail({
         </ul>
        </Card>
       ) : null}
+
+      {run.data?.report?.login ? <CrawlLoginCard login={run.data.report.login} /> : null}
 
       {run.data?.definition ? (
        <Card>

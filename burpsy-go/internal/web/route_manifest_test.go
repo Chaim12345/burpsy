@@ -375,6 +375,9 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	// previous CA stops signing, so every trust store they installed it into has to be updated.
 	wantCredential := []string{
 		"/api/blindxss",
+		// A recorded login sequence holds typed passwords and TOTP secrets, and its replay sends them
+		// to the target (burpsy-react-ui-xhtk).
+		"/api/crawl/logins", "/api/crawl/logins/replay",
 		"/api/network/auth", "/api/network/client-certs",
 		"/api/proxy/ca/import",
 		"/api/session/cookies", "/api/session/login",

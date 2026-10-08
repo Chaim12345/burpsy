@@ -2585,6 +2585,23 @@ func (s *Store) LoadFindingConsolidation() ([]byte, error) {
 	return []byte(v), nil
 }
 
+// SaveRecordedLogins persists the recorded login sequences (burpsy-react-ui-xhtk) with the project,
+// as the sequences JSON. It carries their secrets — typed passwords and TOTP secrets — exactly as the
+// platform-authentication store carries its passwords: the project file is the operator's own, and a
+// sequence that came back from a reopened project without its password would replay and fail.
+func (s *Store) SaveRecordedLogins(raw []byte) error {
+	return s.setSetting("crawl.recorded_logins", string(raw))
+}
+
+// LoadRecordedLogins returns the stored sequences JSON, or nil when none was saved.
+func (s *Store) LoadRecordedLogins() ([]byte, error) {
+	v, err := s.getSetting("crawl.recorded_logins")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return []byte(v), nil
+}
+
 // SaveHistoryExtractors persists the custom history/Intruder extractor columns (burpsy-react-ui-28n8)
 // with the project, as the raw definitions JSON.
 func (s *Store) SaveHistoryExtractors(raw []byte) error {

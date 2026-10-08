@@ -29,6 +29,8 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/config/export": "riskRead",
  "/api/config/import": "riskScope",
  "/api/crawl": "riskAttack",
+ "/api/crawl/logins": "riskCredential",
+ "/api/crawl/logins/replay": "riskCredential",
  "/api/dashboard": "riskRead",
  "/api/dashboard/events": "riskDestructive",
  "/api/discovery": "riskAttack",

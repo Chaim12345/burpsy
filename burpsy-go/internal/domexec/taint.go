@@ -787,7 +787,7 @@ const MaxRenderedRequests = 200
 func (b *Browser) RenderedDOMWithOptions(ctx context.Context, targetURL string, opts RenderOptions) (string, RenderOutcome, error) {
 	opts = opts.withDefaults()
 	started := time.Now()
-	html, reqs, dropped, err := b.renderedDOM(ctx, targetURL, opts, started)
+	html, reqs, dropped, err := b.renderedDOMIn(ctx, b.newTab, targetURL, opts)
 	outcome := RenderOutcome{Waited: time.Since(started), Requests: reqs, RequestsDropped: dropped}
 	if err != nil {
 		return "", outcome, err
@@ -805,8 +805,10 @@ func (b *Browser) RenderedDOM(ctx context.Context, targetURL string) (string, er
 	return html, err
 }
 
-func (b *Browser) renderedDOM(ctx context.Context, targetURL string, opts RenderOptions, started time.Time) (string, []RenderedRequest, int, error) {
-	tabCtx, cancel, err := b.newTab(ctx)
+// renderedDOMIn renders in a tab newTab opens: the Browser's default context for an ordinary render,
+// or an isolated Session's for an authenticated one (Session.RenderedDOMWithOptions).
+func (b *Browser) renderedDOMIn(ctx context.Context, newTab func(context.Context) (context.Context, context.CancelFunc, error), targetURL string, opts RenderOptions) (string, []RenderedRequest, int, error) {
+	tabCtx, cancel, err := newTab(ctx)
 	if err != nil {
 		return "", nil, 0, err
 	}
