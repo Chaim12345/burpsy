@@ -1780,3 +1780,35 @@ exact behaviour is not recoverable from the documentation, the divergence is rec
   appends a CRLF after every entry, so a captured body ending in CRLF reproduces byte-exactly
   (it is cut from the value and the browser puts it back) and one that does not gets a note saying
   the sent body is the captured one plus two bytes.
+
+## Content discovery: the session shape (2026-10-08, burpsy-react-ui-dgbi)
+
+Burp's "Discover content" builds a session, not one run (content-discovery.html); where its exact
+algorithms are not in the documentation, burpsy's stated rules are recorded here.
+
+- **The derivation rule set is burpsy's own.** Burp's docs give one example — "if Burp discovers
+  the directory AnnualReport2018, it also checks for AnnualReport2019, AnnualReport2020" — and no
+  algorithm. burpsy's deterministic set (see `deriveDiscoveryNames`): trailing-number +1 and +2,
+  name + "_old", name + ".bak", and the all-lower and all-upper case variants of each discovered
+  item's last path segment, swept in the directory the discovery was made in.
+- **Recursion is breadth-first, not priority-ordered.** Burp "may add a task" per discovery and
+  "new tasks are prioritized by how likely they are to discover new content"; burpsy sweeps each
+  depth's discovered directories in the order they were found, one bounded ffuf run per directory,
+  scope-checked before launch (which is also why ffuf's own -recursion is not used: it dials paths
+  burpsy never checked against scope). Re-open: a priority ordering when there is evidence for one.
+- **Observed names come from the capture store's exchanges on the target host** — the directory
+  segments and filename stems burpsy has actually seen — where Burp reads its site map. The two
+  stores agree for burpsy's purposes (the site map is built from the same exchanges); burpsy
+  matches the host only, not the scheme or port, and sorts the names so the merged wordlist file is
+  reproducible from the request by hand.
+- **The built-in lists are the four Burp ships**: short/long file lists and short/long directory
+  lists, from the bundled PortSwigger corpus (`internal/intruder/wordlists/burp-*`). A custom list
+  is the operator's wordlist path, which merges with them.
+- **Not implemented from Burp's Config tab**: "Test all extensions observed in use on target site,
+  except for…" (the always-test extension list is the `extensions` field) and the case-sensitivity
+  mode (ffuf matches paths as the target serves them). Neither is in this bead's scope; both are
+  one-option follow-ups if an engagement needs them.
+- **A running run's `by_status` serialises as []** — a pre-existing null that crashed the console's
+  status chips the first time an e2e sweep rendered a running run (the tool had never been
+  allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:
+  the server initialises the counts and the page tolerates an older server's null.

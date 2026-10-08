@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +87,15 @@ type discoveryRun struct {
 	// Summary is the one line that states the counts with their caveats, so a surface that renders
 	// nothing else still cannot present a partial result as a complete one.
 	Summary string `json:"summary"`
+	// Levels is one entry per recursion depth that ran (burpsy-react-ui-dgbi).
+	// Empty - [], never null - when the session never recursed: a flat run and
+	// a run that recursed into nothing are different sentences.
+	Levels []discoveryLevel `json:"levels"`
+	// RecurseDepth and VariantExtensions echo the request so a reader of the
+	// run can tell a flat run from one configured to recurse, without
+	// correlating back to the POST that started it.
+	RecurseDepth      int    `json:"recurse_depth"`
+	VariantExtensions string `json:"variant_extensions,omitempty"`
 }
 
 // discoveryCounts partitions what the tool reported: what is being shown, and what was dropped.
@@ -124,19 +134,28 @@ func (d *discoveryRuns) start(taskID uint64, req discoveryStartReq, target strin
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	run := &discoveryRun{
-		TaskID:     taskID,
-		Target:     target,
-		Wordlist:   req.Wordlist,
-		Extensions: req.Extensions,
-		MatchCodes: req.MatchCodes,
-		State:      "running",
-		Started:    time.Now(),
-		Outcome:    "running",
-		ExitCode:   -1,
+		TaskID:            taskID,
+		Target:            target,
+		Wordlist:          req.Wordlist,
+		Extensions:        req.Extensions,
+		MatchCodes:        req.MatchCodes,
+		Levels:            []discoveryLevel{},
+		RecurseDepth:      req.RecurseDepth,
+		VariantExtensions: req.VariantExtensions,
+		State:             "running",
+		Started:           time.Now(),
+		Outcome:           "running",
+		ExitCode:          -1,
 		// Non-nil from the start: a running run must serialise `"discoveries": []` rather than null,
 		// so a client reading the field cannot tell a run in progress from one that failed to record.
 		Discoveries: []extscan.Discovery{},
-		Summary:     "running: ffuf has not reported yet, so nothing about this target is known",
+		// Same rule for the counts: a run in progress serialises `"by_status": []`, not null —
+		// the console renders the status chips off this array the whole time the run is live,
+		// and the first e2e sweep that ever rendered a running run crashed on the null
+		// (the tool had never been allowlisted in a browser suite before, so nothing had
+		// exercised the shape).
+		Counts:  discoveryCounts{ByStatus: []discoveryStatusCount{}},
+		Summary: "running: ffuf has not reported yet, so nothing about this target is known",
 	}
 	d.byID[taskID] = run
 	d.order = append(d.order, taskID)
@@ -151,13 +170,17 @@ func (d *discoveryRuns) start(taskID uint64, req discoveryStartReq, target strin
 // start returned, because a long sweep can outlive its own retention window — by the time it ends its
 // entry may already have been evicted, and writing through a stale pointer would resurrect a record
 // the eviction removed. Same reasoning as crawlRuns.finish.
-func (d *discoveryRuns) finish(taskID uint64, state string, res extscan.FFUFResult) {
+func (d *discoveryRuns) finish(taskID uint64, state string, res extscan.FFUFResult, levels []discoveryLevel) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	run := d.byID[taskID]
 	if run == nil {
 		return
 	}
+	if levels == nil {
+		levels = []discoveryLevel{}
+	}
+	run.Levels = levels
 	now := time.Now()
 	run.Finished = &now
 	run.State = state
@@ -264,6 +287,31 @@ type discoveryStartReq struct {
 	// Rate caps requests per second. Zero is uncapped, which is ffuf's default; an engagement with a
 	// rate agreement should set it.
 	Rate int `json:"rate"`
+
+	// Lists names the built-in lists to merge into the session's wordlist
+	// (burpsy-react-ui-dgbi): Burp's Filenames settings, from the corpus
+	// PortSwigger ships with Burp itself. At least one of Lists or Wordlist is
+	// required.
+	Lists []string `json:"lists"`
+	// RecurseDepth is how many levels of subdirectory to sweep inside
+	// discovered directories (Burp's "how many levels of subdirectory to look
+	// for"). Zero is the flat run this endpoint has always been. Every level
+	// is a separate bounded ffuf run per directory, scope-checked before
+	// launch - ffuf's own -recursion is deliberately not used, because it
+	// dials paths burpsy never checked against scope.
+	RecurseDepth int `json:"recurse_depth"`
+	// ObservedNames adds the directory names and filename stems the capture
+	// store has seen on the target's host - Burp's "Names observed in use on
+	// target site", re-tested in every swept directory.
+	ObservedNames bool `json:"observed_names"`
+	// Derivations runs a derivation pass over each directory's discoveries -
+	// Burp's "Derivations based on discovered items". The rule set is stated
+	// and deterministic; see deriveDiscoveryNames.
+	Derivations bool `json:"derivations"`
+	// VariantExtensions retests the stems of discovered files with these
+	// extensions - Burp's "Test these variant extensions on discovered files",
+	// the backup-copy check. Comma-separated, ffuf's -e form.
+	VariantExtensions string `json:"variant_extensions"`
 }
 
 // extscanConfig is the delegated-tool configuration for this process: the operator's allowlist and
@@ -301,8 +349,12 @@ func (s *Server) handleDiscoveryGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"tool":     s.discoveryToolState(),
-		"runs":     s.discoveries.list(),
+		"tool": s.discoveryToolState(),
+		"runs": s.discoveries.list(),
+		// lists is the built-in inventory the Filenames settings can name, with
+		// each list's word count, so the console renders what a sweep will
+		// actually cost rather than a name alone (burpsy-react-ui-dgbi).
+		"lists":    discoveryListInventory(),
 		"retained": discoveryRunsKept,
 	})
 }
@@ -319,6 +371,28 @@ func (s *Server) discoveryToolState() discoveryToolState {
 	}
 	state.Available = true
 	return state
+}
+
+// discoveryListEntry is one built-in list as the console can offer it.
+type discoveryListEntry struct {
+	Name  string `json:"name"`
+	Words int    `json:"words"`
+}
+
+// discoveryListInventory counts each built-in list once per call rather than
+// caching: the corpus is compiled in, so the count cannot change while the
+// process runs, and a cache would only make the reader wonder when it clears.
+func discoveryListInventory() []discoveryListEntry {
+	out := make([]discoveryListEntry, 0, len(discoveryBuiltinLists))
+	for _, l := range discoveryBuiltinLists {
+		words, err := discoveryListWords(l.Name)
+		if err != nil {
+			// Unreachable: every name in discoveryBuiltinLists is in the corpus.
+			continue
+		}
+		out = append(out, discoveryListEntry{Name: l.Name, Words: len(words)})
+	}
+	return out
 }
 
 // discoveryUnavailableReason turns extscan's typed refusal into a sentence naming what to do about
@@ -346,12 +420,27 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Target = strings.TrimSpace(req.Target)
 	req.Wordlist = strings.TrimSpace(req.Wordlist)
+	req.VariantExtensions = strings.TrimSpace(req.VariantExtensions)
 	if req.Target == "" {
 		http.Error(w, "A target URL is required, e.g. https://target.test/app/", http.StatusBadRequest)
 		return
 	}
-	if req.Wordlist == "" {
-		http.Error(w, "A wordlist path is required: ffuf with no wordlist is not a smaller sweep, it is no sweep",
+	// The list names are validated here, before anything is registered or run:
+	// a name that silently matched nothing would produce a sweep that claimed
+	// to test a list it never read.
+	for _, name := range req.Lists {
+		if _, err := discoveryListWords(name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.RecurseDepth < 0 {
+		http.Error(w, fmt.Sprintf("recurse_depth %d is negative; subdirectory levels start at zero", req.RecurseDepth),
+			http.StatusBadRequest)
+		return
+	}
+	if req.Wordlist == "" && len(req.Lists) == 0 {
+		http.Error(w, "A wordlist path or at least one built-in list is required: ffuf with no words is not a smaller sweep, it is no sweep",
 			http.StatusBadRequest)
 		return
 	}
@@ -375,13 +464,16 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := extscan.FFUFOptions{
-		Wordlist:   req.Wordlist,
-		Extensions: strings.TrimSpace(req.Extensions),
-		MatchCodes: strings.TrimSpace(req.MatchCodes),
-		Threads:    req.Threads,
-		Rate:       req.Rate,
+	// The session's merged wordlist: the selected built-in lists, the
+	// operator's own, and the observed names the request asked for. Built
+	// before the task is registered so a refusal costs nothing and registers
+	// nothing; removed when the session ends.
+	mergedPath, mergedWords, err := s.discoveryWordlist(req, authorised)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+	req.Extensions = strings.TrimSpace(req.Extensions)
 
 	// Total is 0 — not the wordlist's line count. ffuf reports no progress through the JSON file it
 	// writes at the end, and with -e set it sends several requests per word, so any total this handler
@@ -389,7 +481,11 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	// total as "N done, total not yet known", which is the true statement.
 	task := s.tasks.Start(dash.KindDiscovery, authorised.URL, 0)
 	run := s.discoveries.start(task.ID(), req, authorised.URL)
-	task.SetNote("ffuf sweeping " + authorised.URL + " with " + req.Wordlist)
+	wordlistName := req.Wordlist
+	if wordlistName == "" {
+		wordlistName = fmt.Sprintf("%d merged built-in/observed word(s)", mergedWords)
+	}
+	task.SetNote("ffuf sweeping " + authorised.URL + " with " + wordlistName)
 
 	// Detached from the request context on purpose, exactly as a crawl is: the sweep outlives the HTTP
 	// call that started it, and binding it to r.Context() would kill ffuf the moment the operator's
@@ -399,9 +495,15 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := task.WithCancel(context.Background())
 		defer cancel()
+		defer os.Remove(mergedPath)
 
-		res := extscan.RunFFUF(ctx, cfg, s.scope, authorised, opts)
-		s.discoveries.finish(task.ID(), discoveryFinish(ctx, task, res), res)
+		if req.RecurseDepth > 0 || req.ObservedNames || req.Derivations || req.VariantExtensions != "" || len(req.Lists) > 0 {
+			task.SetNote(fmt.Sprintf("ffuf session on %s (%d merged words, %d recursion level(s))",
+				authorised.URL, mergedWords, req.RecurseDepth))
+		}
+		session := s.runDiscoverySession(ctx, cfg, authorised, req, mergedPath)
+		res := session.Result
+		s.discoveries.finish(task.ID(), discoveryFinish(ctx, task, res), res, session.Levels)
 		// Only the dashboard changes: these paths were never fetched by burpsy, so no history row, no
 		// site-map node and no finding moved. Notifying changeHistory here would make the UI refetch a
 		// store this run did not touch.
