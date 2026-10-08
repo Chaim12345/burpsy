@@ -163,6 +163,9 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   captureCaseSensitive: bool,
   captureNegate: bool,
   captureStatuses: arrayOf(oneOf(["2xx", "3xx", "4xx", "5xx"])),
+  // Store requests / Store responses (nqww).
+  storeRequests: bool,
+  storeResponses: bool,
   // The resource pool's delay variation (burpsy-react-ui-nn0n). Held as text by the page, so saved
   // as text: "" is "not set", which is not the same attack as an explicit 0.
   delayJitterPct: str,

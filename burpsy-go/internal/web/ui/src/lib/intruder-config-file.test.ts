@@ -101,6 +101,8 @@ function fullConfig(): IntruderConfig {
   captureCaseSensitive: true,
   captureNegate: true,
   captureStatuses: ["2xx", "5xx"],
+  storeRequests: false,
+  storeResponses: false,
   };
 }
 

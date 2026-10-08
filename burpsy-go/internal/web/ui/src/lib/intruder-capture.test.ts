@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { captureFilterField, describeCaptureFilter } from "./intruder-capture";
+import { NOT_STORED, captureFilterField, describeCaptureFilter, missingReason, storageFields } from "./intruder-capture";
 import { emptyIntruderConfig } from "./store";
 
 describe("the results capture filter (ip2b)", () => {
@@ -44,5 +44,22 @@ describe("the results capture filter (ip2b)", () => {
     expect(describeCaptureFilter({ discard_no_response: false, term: "", regex: false, case_sensitive: false, negate: false })).toBe(
       "Capturing all items",
     );
+  });
+});
+
+describe("Store requests / Store responses (nqww)", () => {
+  test("on by default, and only an off switch is sent", () => {
+    const config = emptyIntruderConfig();
+    expect(config.storeRequests).toBe(true);
+    expect(config.storeResponses).toBe(true);
+    expect(storageFields(config)).toEqual({});
+    expect(storageFields({ storeRequests: false, storeResponses: true })).toEqual({ store_requests: false });
+    expect(storageFields({ storeRequests: true, storeResponses: false })).toEqual({ store_responses: false });
+  });
+
+  test("a row's missing bytes are explained by the setting when the attack had it off", () => {
+    expect(missingReason(false, "fallback")).toBe(NOT_STORED);
+    expect(missingReason(true, "fallback")).toBe("fallback");
+    expect(missingReason(undefined, "fallback")).toBe("fallback");
   });
 });

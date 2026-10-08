@@ -606,6 +606,13 @@ type intruderRunReq struct {
 	// everything, as every attack did before it existed. Distinct from the page's view filter, which only
 	// hides rows that were captured.
 	CaptureFilter *intruder.CaptureFilterSpec `json:"capture_filter,omitempty"`
+	// StoreRequests and StoreResponses are Burp's "Store requests / responses" attack-results settings
+	// (burpsy-react-ui-nqww): whether the exact requests (the attempt rows' and each bucket's) and each
+	// bucket's exemplar response go into the traffic store. Nil is true — Burp's default and what every
+	// attack did before the fields existed. Off, the ids go out null and the report's requests_stored /
+	// responses_stored say why; the attack still sends, buckets, greps and feeds the session jar.
+	StoreRequests  *bool `json:"store_requests,omitempty"`
+	StoreResponses *bool `json:"store_responses,omitempty"`
 	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
 	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
 	// never thought about error handling is exactly the person Burp's default protects, and a
@@ -1344,7 +1351,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// questions, and an operator who pressed "pause everything" should not have to find this
 	// attack's own button as well.
 	attack.SuiteGate = s.tasks.GateCheck
-	attack.RecordRequest = true
+	// "Store requests" / "Store responses" (nqww), Burp's defaults on.
+	attack.RecordRequest = req.StoreRequests == nil || *req.StoreRequests
+	attack.StoreResponses = req.StoreResponses == nil || *req.StoreResponses
 	attack.RequestFn = func(raw []byte) uint64 {
 		id, err := s.store.Put(raw, core.DirectionRequest)
 		if err != nil {

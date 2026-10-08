@@ -310,6 +310,13 @@ export interface IntruderConfig {
  captureCaseSensitive: boolean;
  captureNegate: boolean;
  captureStatuses: ("2xx" | "3xx" | "4xx" | "5xx")[];
+ /**
+  * Burp's "Store requests" / "Store responses" (burpsy-react-ui-nqww). On by default, as in Burp. Off, the
+  * attack still sends, buckets and greps every request; it just does not keep that half in the traffic
+  * store, so its rows cannot be opened, resent or compared.
+  */
+ storeRequests: boolean;
+ storeResponses: boolean;
  /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
   *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
   *  two different requests rather than one request that means both. */
@@ -494,6 +501,8 @@ export function emptyIntruderConfig(): IntruderConfig {
   captureCaseSensitive: false,
   captureNegate: false,
   captureStatuses: ["2xx", "3xx", "4xx", "5xx"],
+  storeRequests: true,
+  storeResponses: true,
  autoPauseEnabled: false,
  autoPauseMode: "appears",
  autoPauseExpressions: [],

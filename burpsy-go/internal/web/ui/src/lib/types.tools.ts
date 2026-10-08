@@ -217,6 +217,11 @@ export interface AttackReport {
   discarded?: number;
   /** The capture filter the attack ran with, or null when it captured everything. */
   capture_filter?: CaptureFilterSpec | null;
+  /** Whether this attack stored its exact requests and its exemplar responses (nqww: Burp's "Store
+   *  requests / responses"). false explains every null id of that half; absent from an older server,
+   *  which always stored both. */
+  requests_stored?: boolean;
+  responses_stored?: boolean;
   /** The Grep - Payloads settings the attack ran with (7qc3). Absent from an older server, whose
    *  reflection check was the fixed one: on, case-sensitive, headers included, matched as sent. */
   grep_payloads?: GrepPayloadsSettings;

@@ -149,6 +149,13 @@ describe("intruderReportToCSV", () => {
     expect(intruderReportToCSV(report(), report().attempts, resolveNothing).split("\n")[7]).toStartWith('"Ordinal"');
   });
 
+  it("says when empty ids are the attack's storage setting (nqww)", () => {
+    const unstored = report({ requests_stored: true, responses_stored: false });
+    const lines = intruderReportToCSV(unstored, unstored.attempts, resolveNothing).split("\n");
+    expect(lines[7]).toBe("# stored: requests yes, responses no — empty ids below are the attack's storage setting, not missing responses");
+    expect(intruderReportToCSV(report({ requests_stored: true, responses_stored: true }), report().attempts, resolveNothing).split("\n")[7]).toStartWith('"Ordinal"');
+  });
+
   it("guards a comment beginning with = so Excel reads text, not a formula", () => {
     const csv = intruderReportToCSV(report(), report().attempts, resolveNothing, new Date(), new Map([[0, "=cmd|'/c calc'!A0"]]));
     expect(csv).toContain("\"'=cmd|'/c calc'!A0\"");

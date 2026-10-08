@@ -1762,3 +1762,21 @@ request; the report carries `discarded` and echoes `capture_filter`; buckets gai
   applied"; burpsy's is part of the attack's configuration.
 - The session cookie jar still learns from discarded responses: it is fed by the engine's `Observe` hook on
   each bucket's opening response, not by the recorder.
+
+### Store requests / Store responses (nqww)
+
+**Burp:** configure-attack/settings.html "Store requests / responses - Specify whether the attack saves the
+contents of individual requests and responses"; `intruderAttackConfigSettingsStoreRequests` /
+`…StoreResponses` (`Zrua`), persisted as `storerequests` / `storeresponses` and read as on unless "false".
+**burpsy:** `store_requests` and `store_responses` on the run request (absent = on); the report carries
+`requests_stored` and `responses_stored`, and every null id of a half that was not stored is explained by them —
+the results table, row menus, extractor columns and CSV say "not stored (attack setting)" rather than implying
+nothing came back.
+
+- What is stored differs from Burp by design: burpsy keeps each bucket's exemplar response plus the exact requests
+  of the rows and exemplars (one response per distinct behaviour, the engine's memory contract), so these switch
+  that set off rather than one request and response per result.
+- Off, the attack is otherwise unchanged: every request is sent, bucketed, grepped and reflection-checked, and the
+  session cookie jar still learns from the responses (the engine's `Observe` hook, independent of the recorder).
+- Burp greys "Store responses" while denial-of-service mode is on; burpsy has no denial-of-service mode (see
+  the fmxv note in the UI), so the two never interact.

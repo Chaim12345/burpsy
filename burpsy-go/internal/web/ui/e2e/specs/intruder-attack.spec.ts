@@ -46,7 +46,11 @@ function postJson<T>(webPort: number, path: string, body: unknown): Promise<T> {
  * Mint a base request of our own (HTTP history is shared state other specs mutate), point the page at
  * it, select the q position and launch with the page's default payloads.
  */
-async function launchAttack(page: import("@playwright/test").Page, path: string): Promise<void> {
+async function launchAttack(
+  page: import("@playwright/test").Page,
+  path: string,
+  configure?: (page: import("@playwright/test").Page) => Promise<void>,
+): Promise<void> {
   const { webPort, targetPort } = readHarness();
   const origin = `http://127.0.0.1:${targetPort}`;
   const raw = `GET ${path}?q=alpha HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\nConnection: close\r\n\r\n`;
@@ -60,6 +64,7 @@ async function launchAttack(page: import("@playwright/test").Page, path: string)
   await page.getByLabel("Target authority").fill(origin);
   await page.getByRole("button", { name: "Find positions" }).click();
   await page.getByRole("checkbox", { name: "Use position q" }).check();
+  if (configure) await configure(page);
   const launch = page.getByRole("button", { name: /Launch attack/ });
   await expect(launch).toBeEnabled();
   await launch.click();
@@ -121,6 +126,40 @@ test.describe("intruder attack results", () => {
     // The rule is the attack's Grep extract now, on the Settings tab where it is typed by hand.
     await page.getByRole("tab", { name: /^Settings/ }).click();
     await expect(page.getByLabel("Grep extract (regular expression)")).toHaveValue(regex);
+
+    expect(consoleErrors).toEqual([]);
+  });
+
+  // Settings that decide what an attack keeps (ip2b, nqww) and how it reads reflections (7qc3), set on
+  // the Settings tab and read back off the Results tab of a real run.
+  test("the capture filter, storage switches and grep payloads shape the results", async ({ page, consoleErrors }) => {
+    await pinTheme(page, "dark");
+    await launchAttack(page, "/capture-and-store", async (p) => {
+      await p.getByRole("tab", { name: /^Settings/ }).click();
+      await p.getByRole("checkbox", { name: "Apply capture filter" }).check();
+      // The origin echoes the request target, so only the row whose payload is "admin" contains it.
+      await p.getByLabel("Capture by search term").fill("q=admin");
+      // The attack-results switches sit with retries and the baseline request.
+      await p.getByRole("tab", { name: /^Resource pool/ }).click();
+      await p.getByRole("checkbox", { name: "Store responses" }).uncheck();
+    });
+
+    const caveats = page.locator(".notice-warn").filter({ hasText: "Bounds applied to this attack" });
+    await expect(caveats).toContainText("Capture filter: Matching expression q=admin");
+    await expect(caveats).toContainText("4 results discarded");
+    await expect(caveats).toContainText("Not stored (attack setting): responses");
+    // One row out of five is the filter's doing, not the row limit's, and the caveats must not say otherwise.
+    await expect(caveats).not.toContainText("Per-attempt detail limited");
+
+    const attempts = page.getByRole("group", { name: "Attempts" });
+    await expect(attempts.locator("tbody tr")).toHaveCount(1);
+    await expect(attempts.locator("tbody tr").first()).toContainText("admin");
+    // Grep - Payloads is on by default: one count column for the one payload set, and the echoed
+    // payload is counted.
+    await expect(attempts.getByRole("columnheader", { name: "Payload reflections" })).toBeVisible();
+
+    // The row's response was not stored, and the cell says it was the setting.
+    await expect(attempts.locator('tbody tr [title^="Not stored (attack setting)"]').first()).toBeVisible();
 
     expect(consoleErrors).toEqual([]);
   });

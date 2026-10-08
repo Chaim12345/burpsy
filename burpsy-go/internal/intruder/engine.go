@@ -394,6 +394,12 @@ type Attack struct {
 	// stays tied to the rows an operator can act on rather than multiplying the 100k-request
 	// memory profile the report is designed to avoid.
 	RequestFn func(raw []byte) uint64
+	// StoreResponses is Burp's "Store responses" attack-results setting (burpsy-react-ui-nqww): whether
+	// the recorder is asked to store each bucket's exemplar response. True by NewAttack, Burp's default
+	// (Zrua reads storeresponses as anything but "false"). False trades the stored bodies for memory and
+	// disk: every response is still read, bucketed and grepped, and the session jar still learns from it
+	// (Observe), but no response id is handed out. "Store requests" is RecordRequest above.
+	StoreResponses bool
 	// SuiteGate blocks while the dashboard's suite-wide pause is set, checked between enumerations
 	// alongside the attack's own Control. Two pauses rather than one because they answer different
 	// questions — "hold this attack" and "hold everything" — and an operator who pressed the second
@@ -516,9 +522,11 @@ func NewAttack(base []byte, points []InsertionPoint, sets []PayloadSet, plan *At
 		Plan:     plan,
 		// The reflection check every attack ran before Grep - Payloads had settings (7qc3).
 		GrepPayloads: LegacyGrepPayloads(),
-		Limits:       DefaultRateLimit(),
-		DetailLimit:  500,
-		MaxBuckets:   2_000,
+		// Burp's default, and what every attack did before the switch existed (nqww).
+		StoreResponses: true,
+		Limits:         DefaultRateLimit(),
+		DetailLimit:    500,
+		MaxBuckets:     2_000,
 	}
 }
 
@@ -848,6 +856,12 @@ type AttackReport struct {
 	Discarded int `json:"discarded"`
 	// CaptureFilter is the capture filter the attack ran with, or null when it captured everything.
 	CaptureFilter *CaptureFilterSpec `json:"capture_filter"`
+	// RequestsStored and ResponsesStored say whether this attack stored the exact requests and the
+	// exemplar responses at all (nqww: Burp's "Store requests" / "Store responses"). A null id on a row is
+	// then read through them: not stored because the attack was told not to, rather than because nothing
+	// came back — the two mean different things about the target.
+	RequestsStored  bool `json:"requests_stored"`
+	ResponsesStored bool `json:"responses_stored"`
 	// GrepPayloads is the Grep - Payloads configuration this attack ran with (7qc3) — always present,
 	// so the report says whether reflected and its count columns were asked at all, and how, rather
 	// than leaving a reader to infer it from an all-false column.
@@ -927,6 +941,8 @@ type collector struct {
 	// (discarded by the capture filter), so the first captured response in them becomes the exemplar.
 	observe         func([]byte)
 	pendingExemplar map[int]bool
+	// storeResponses is Attack.StoreResponses with a recorder present (nqww).
+	storeResponses bool
 	// chain is the recursive driver's payload-per-ordinal record (ztuu); nil for every
 	// plan-driven attack, which is how finish() knows to leave ChainPayloads empty.
 	chain []string
@@ -958,6 +974,7 @@ func newCollector(a *Attack, record RecordFn) *collector {
 		capture:         a.Capture,
 		observe:         a.Observe,
 		pendingExemplar: map[int]bool{},
+		storeResponses:  a.StoreResponses && record != nil,
 	}
 }
 
@@ -1044,7 +1061,7 @@ func (c *collector) absorb(o outcome) {
 		requestID = &id
 	}
 	var responseID *uint64
-	if exemplar && c.record != nil {
+	if exemplar && c.storeResponses {
 		id := c.record(h.raw)
 		responseID = &id
 	}
@@ -1189,6 +1206,8 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		GrepPayloads:    a.GrepPayloads,
 		Discarded:       c.discarded,
 		CaptureFilter:   captureSpec(a.Capture),
+		RequestsStored:  c.recordDetail,
+		ResponsesStored: c.storeResponses,
 	}
 }
 

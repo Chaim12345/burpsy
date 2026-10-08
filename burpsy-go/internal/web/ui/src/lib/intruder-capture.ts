@@ -13,6 +13,31 @@ import type { CaptureFilterSpec } from "./types.tools";
 export const STATUS_CLASSES = ["2xx", "3xx", "4xx", "5xx"] as const;
 export type StatusClassName = (typeof STATUS_CLASSES)[number];
 
+export type StorageConfig = Pick<IntruderConfig, "storeRequests" | "storeResponses">;
+
+/**
+ * Burp's "Store requests" / "Store responses" (burpsy-react-ui-nqww) as run-request fields. Each is sent
+ * only when switched off: absent is the server's (and Burp's) "store", and an attack persisted before
+ * the switches existed keeps storing.
+ */
+export function storageFields(config: StorageConfig): { store_requests?: false; store_responses?: false } {
+  return {
+    ...(config.storeRequests === false ? { store_requests: false as const } : {}),
+    ...(config.storeResponses === false ? { store_responses: false as const } : {}),
+  };
+}
+
+/** Why a row has no request or response to act on, when the attack itself chose not to store it. */
+export const NOT_STORED = "Not stored (attack setting): this attack ran with storage switched off in Settings.";
+
+/**
+ * The reason a result row carries no stored request or response: the attack setting when it was off,
+ * otherwise the row-specific fallback the caller gives (a failed send, a row that did not open its bucket).
+ */
+export function missingReason(stored: boolean | undefined, fallback: string): string {
+  return stored === false ? NOT_STORED : fallback;
+}
+
 export type CaptureConfig = Pick<
   IntruderConfig,
   | "captureFilterEnabled"

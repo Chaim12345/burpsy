@@ -26,7 +26,7 @@ import { addManualSpan, displayText, selectionToRawSpan } from "../lib/intruder-
 import { delayVariationFields } from "../lib/intruder-variation";
 import { PAYLOAD_PLACEMENTS, describePoint, placementFields, type PayloadPlacement } from "../lib/intruder-placement";
 import { grepPayloadsField, reflectionColumnLabels } from "../lib/intruder-grep-payloads";
-import { STATUS_CLASSES, captureFilterField, describeCaptureFilter } from "../lib/intruder-capture";
+import { STATUS_CLASSES, captureFilterField, describeCaptureFilter, missingReason, storageFields } from "../lib/intruder-capture";
 import { connectionReuseSummary, hostHeaderCaveats, intruderSendSettingsFields, reuseRequested } from "../lib/send-settings";
 import { filterTableRows } from "../lib/table-filter";
 import {
@@ -359,6 +359,10 @@ function ResponseCell({
 interface ResultHandoff {
   requestId: number | null;
   responseId: number | null;
+  /** Why requestId / responseId is null, shown on the greyed actions — the attack's storage setting
+   *  (nqww) or the row's own reason. */
+  missingRequest?: string;
+  missingResponse?: string;
   /** How the row names itself in a Repeater tab title and in the toasts. */
   label: string;
 }
@@ -416,6 +420,8 @@ function useResultMenu(
       };
       const noRequest = row.requestId === null;
       const noResponse = row.responseId === null;
+      const requestHint = noRequest ? row.missingRequest : undefined;
+      const responseHint = noResponse ? row.missingResponse : undefined;
       const compare = (id: number | null, what: string, slot: "a" | "b") =>
         withBytes(id, what, (raw) => {
           setComparerSlot(slot, raw);
@@ -431,6 +437,7 @@ function useResultMenu(
               label: "Send to Repeater",
               icon: Repeat2,
               disabled: noRequest,
+              hint: requestHint,
               onSelect: withBytes(row.requestId, "request", (raw) => {
                 openRepeaterTab({
                   name: row.label.slice(0, 42),
@@ -453,6 +460,7 @@ function useResultMenu(
               label: "Request to slot A",
               icon: Combine,
               disabled: noRequest,
+              hint: requestHint,
               onSelect: compare(row.requestId, "request", "a"),
             },
             {
@@ -460,6 +468,7 @@ function useResultMenu(
               label: "Request to slot B",
               icon: ArrowRightLeft,
               disabled: noRequest,
+              hint: requestHint,
               onSelect: compare(row.requestId, "request", "b"),
             },
             {
@@ -467,6 +476,7 @@ function useResultMenu(
               label: "Response to slot A",
               icon: Combine,
               disabled: noResponse,
+              hint: responseHint,
               onSelect: compare(row.responseId, "response", "a"),
             },
             {
@@ -474,6 +484,7 @@ function useResultMenu(
               label: "Response to slot B",
               icon: ArrowRightLeft,
               disabled: noResponse,
+              hint: responseHint,
               onSelect: compare(row.responseId, "response", "b"),
             },
           ],
@@ -492,7 +503,8 @@ function useResultMenu(
                     icon: FileSearch,
                     disabled: noResponse,
                     hint: noResponse
-                      ? "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row."
+                      ? (row.missingResponse ??
+                        "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row.")
                       : "Highlight the value in this response and use it as the attack's Grep extract rule",
                     onSelect: () => {
                       if (row.responseId !== null) onDefineExtract(row.responseId, row.label);
@@ -510,6 +522,7 @@ function useResultMenu(
               label: "Copy request",
               icon: Copy,
               disabled: noRequest,
+              hint: requestHint,
               onSelect: withBytes(row.requestId, "request", (raw) => {
                 void copyToClipboard(raw).then(() => toast.success(`${row.label} request copied`));
               }),
@@ -701,7 +714,10 @@ function AttackResult({
         </>
       ),
     },
-    ...extractorColumns<ResultBucket>((bucket) => bucket.example_response_id, "The engine stored no response for this bucket"),
+    ...extractorColumns<ResultBucket>(
+      (bucket) => bucket.example_response_id,
+      missingReason(report.responses_stored, "The engine stored no response for this bucket"),
+    ),
     {
       id: "first_payload",
       header: "First payload",
@@ -719,11 +735,12 @@ function AttackResult({
           // bucket's first ordinal (ip2b).
           label={`Response to attempt ${row.original.example_ordinal ?? row.original.first_ordinal}`}
           onOpen={onOpenMessage}
-          missing={
+          missing={missingReason(
+            report.responses_stored,
             report.capture_filter && row.original.example_ordinal === null
               ? "Not captured: the capture filter discarded every response in this bucket."
-              : "The engine stored no response for this bucket."
-          }
+              : "The engine stored no response for this bucket.",
+          )}
         />
       ),
     },
@@ -908,14 +925,22 @@ function AttackResult({
     },
     ...extractorColumns<Attempt>(
       (attempt) => attempt.response_id,
-      "Response not kept: only the attempt that opened its bucket stores one — read the bucket's row, or use Grep - Extract for every attempt",
+      missingReason(
+        report.responses_stored,
+        "Response not kept: only the attempt that opened its bucket stores one — read the bucket's row, or use Grep - Extract for every attempt",
+      ),
     ),
     {
       id: "response",
       header: "Response",
       enableSorting: false,
       cell: ({ row }) => (
-        <ResponseCell id={row.original.response_id} label={`Response to attempt ${row.original.ordinal}`} onOpen={onOpenMessage} />
+        <ResponseCell
+          id={row.original.response_id}
+          label={`Response to attempt ${row.original.ordinal}`}
+          onOpen={onOpenMessage}
+          missing={missingReason(report.responses_stored, "No response was stored for this attempt.")}
+        />
       ),
     },
     {
@@ -955,12 +980,26 @@ function AttackResult({
     !report.combinations_exact ? "Combination count is a floor, not an exact total" : null,
     report.buckets_truncated ? "Result buckets were truncated" : null,
     report.unbucketed ? `${formatCount(report.unbucketed)} results outside the shown buckets` : null,
-    report.attempts.length < report.sent ? `Per-attempt detail limited to ${formatCount(report.detail_limit)} rows` : null,
+    // Rows are kept for captured items only, so the bound is measured against what was captured — the
+    // capture filter's discards (ip2b) are their own caveat below, not a sign the row limit was hit.
+    report.attempts.length < report.sent + report.failed - (report.discarded ?? 0) &&
+    report.attempts.length >= report.detail_limit
+      ? `Per-attempt detail limited to ${formatCount(report.detail_limit)} rows`
+      : null,
     report.auto_throttle_engaged ? `Auto-throttle engaged ${report.auto_throttle_engaged}×` : null,
     // n39: the error-handling count is a caveat, not a footnote — an attack that retried its
     // way to a full result set says so, the way Burp's own results mark retried requests.
     report.retries_used ? `${formatCount(report.retries_used)} retried request${report.retries_used === 1 ? "" : "s"} (network failures sent again per the error-handling settings)` : null,
     report.baseline ? "Item 0 is the unmodified baseline request (no payloads) — every other row is one ordinal higher than the payload set's arithmetic." : null,
+    // Store requests / responses (nqww): rows exist but their bytes were deliberately not kept.
+    report.requests_stored === false || report.responses_stored === false
+      ? `Not stored (attack setting): ${[
+          report.requests_stored === false ? "requests" : null,
+          report.responses_stored === false ? "responses" : null,
+        ]
+          .filter(Boolean)
+          .join(" and ")}. Rows cannot be opened, resent or compared for that half.`
+      : null,
     // The capture filter (ip2b) is a bound like the others: what it dropped is gone, and the report
     // says how much and by what rule rather than presenting the captured rows as the whole attack.
     report.capture_filter
@@ -1248,6 +1287,8 @@ export function IntruderPage(): JSX.Element {
     captureCaseSensitive,
     captureNegate,
     captureStatuses,
+    storeRequests,
+    storeResponses,
     autoPauseEnabled,
     autoPauseMode,
     autoPauseExpressions,
@@ -1348,6 +1389,8 @@ export function IntruderPage(): JSX.Element {
   const setCaptureCaseSensitive = field("captureCaseSensitive");
   const setCaptureNegate = field("captureNegate");
   const setCaptureStatuses = field("captureStatuses");
+  const setStoreRequests = field("storeRequests");
+  const setStoreResponses = field("storeResponses");
   // Auto-pause is five draft fields, not one switch: the expressions and the mode are the attack's
   // own settings, so an operator who turns the switch off and on again must find their list intact
   // rather than retyping it. The switch decides only whether the block is SENT (burpsy-react-ui-2cvk).
@@ -1406,8 +1449,13 @@ export function IntruderPage(): JSX.Element {
         requestId: bucket.example_request_id,
         responseId: bucket.example_response_id,
         label: `Intruder attempt ${bucket.example_ordinal ?? bucket.first_ordinal}`,
+        missingRequest: missingReason(storedRun?.view?.report.requests_stored, "No request was stored for this bucket."),
+        missingResponse: missingReason(
+          storedRun?.view?.report.responses_stored,
+          "No response was stored for this bucket: the capture filter discarded every response in it.",
+        ),
       }),
-    [resultMenu],
+    [resultMenu, storedRun],
   );
   const attemptMenu = useCallback(
     (attempt: Attempt) =>
@@ -1415,8 +1463,16 @@ export function IntruderPage(): JSX.Element {
         requestId: attempt.request_id,
         responseId: attempt.response_id,
         label: `Intruder attempt ${attempt.ordinal}`,
+        missingRequest: missingReason(
+          storedRun?.view?.report.requests_stored,
+          "No request was stored for this attempt: it was refused or failed before it was sent.",
+        ),
+        missingResponse: missingReason(
+          storedRun?.view?.report.responses_stored,
+          "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row.",
+        ),
       }),
-    [resultMenu],
+    [resultMenu, storedRun],
   );
 
   // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
@@ -1788,6 +1844,8 @@ export function IntruderPage(): JSX.Element {
       ...grepPayloadsField(config),
       // The results capture filter (ip2b): only when switched on.
       ...captureFilterField(config),
+      // Store requests / responses (nqww): only an off switch is sent.
+      ...storageFields(config),
       // Auto-pause (burpsy-react-ui-2cvk). The block is sent only when the switch is on, and only
       // with expressions in it, for the same reason every other optional field here is omitted
       // rather than sent empty: an absent field and an empty expression list must not be two wire
@@ -3043,6 +3101,23 @@ export function IntruderPage(): JSX.Element {
                   />
                 )}
               </Field>
+              {/* Burp's "Store requests / responses" (nqww): on by default, as in Burp. */}
+              <Checkbox
+                checked={storeRequests !== false}
+                onCheckedChange={(v) => setStoreRequests(v)}
+                label="Store requests"
+              />
+              <Checkbox
+                checked={storeResponses !== false}
+                onCheckedChange={(v) => setStoreResponses(v)}
+                label="Store responses"
+              />
+              <p className="cell-dim">
+                Keeps the exact requests and each result bucket&apos;s response in the traffic store, so a result can be
+                opened, resent and compared. Switching either off trades that for memory and disk: every request is
+                still sent, bucketed and grepped, and the session jar still learns from the responses, but that half of
+                each row is not kept.
+              </p>
               <Checkbox
                 checked={baseline}
                 onCheckedChange={(v) => setBaseline(v)}
