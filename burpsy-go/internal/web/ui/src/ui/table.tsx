@@ -10,12 +10,13 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, Copy, GripVertical } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy, EyeOff, GripVertical, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useApp } from "../lib/store";
+import { canHideColumn, reconcileVisibility, visibilityStorageKey } from "../lib/table-columns";
 import { clickAction, contextKeepsSelection, reduceSelection, sameIds, type SelectionAction, type SelectionState } from "../lib/table-selection";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
@@ -159,6 +160,40 @@ function useColumnOrder(defaultOrder: string[]): [ColumnOrderState, (updater: Co
   return [order, setOrder];
 }
 
+/**
+ * Uncontrolled column visibility, persisted per table shape (bae7) — the same fingerprint, and the
+ * same reasoning, as useColumnOrder. A page that owns the state (History, Logger) passes it in and
+ * this hook is bypassed; every other table now remembers what the operator hid, as Burp does.
+ */
+function usePersistedVisibility(ids: string[]): [VisibilityState, (next: VisibilityState) => void] {
+  const storageKey = visibilityStorageKey(ids);
+  const read = (): VisibilityState => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? reconcileVisibility(JSON.parse(raw), ids) : {};
+    } catch {
+      return {};
+    }
+  };
+  const [visibility, setVisibility] = useState<VisibilityState>(read);
+  // A different table shape reusing the hook (Site map's table across node clicks keeps its shape;
+  // a page adding a column changes it) re-reads rather than carrying the old map over.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setVisibility(read()), [storageKey]);
+  const write = useCallback(
+    (next: VisibilityState) => {
+      setVisibility(next);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // Private window or blocked storage: the choice still holds for this session.
+      }
+    },
+    [storageKey],
+  );
+  return [visibility, write];
+}
+
 /** Move `moving` to sit immediately before `target` in `order`. A `target` no longer present
  *  (dropped between drag-start and drop, or a stale event) is a no-op rather than a silent drop
  *  of the moved column off the end. */
@@ -197,9 +232,9 @@ export interface VirtualTableProps<T> {
   height?: string;
   initialSort?: SortingState;
   /**
-   * Shows the column show/hide trigger in the header. Off by default so a table
-   * that never opts in behaves exactly as before — no button, no menu, no
-   * change to `columns.length`-based layout.
+   * Shows the column show/hide trigger in the header and the header's "Hide column" item. On by
+   * default (bae7): Burp offers both on every table it lets you customise, and a table that opts
+   * out should have a reason. Uncontrolled tables persist the choice per table shape.
    *
    * Mark a column non-removable with TanStack's own `enableHiding: false` on its
    * `ColumnDef`, not a parallel prop.
@@ -255,7 +290,7 @@ export function VirtualTable<T>({
   density: densityProp,
   height = "100%",
   initialSort = [],
-  enableColumnVisibility = false,
+  enableColumnVisibility = true,
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
   followNewRows = false,
@@ -279,7 +314,8 @@ export function VirtualTable<T>({
   // the same split `Field`-adjacent components in this codebase use, so a table
   // that never opts in stays on the internal `{}` (every column visible) and a
   // page that wants to persist the choice can own the state instead.
-  const [internalVisibility, setInternalVisibility] = useState<VisibilityState>({});
+  const columnIds = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const [internalVisibility, setInternalVisibility] = usePersistedVisibility(columnIds);
   const visibility = controlledVisibility ?? internalVisibility;
   const setVisibility = useCallback(
     (next: VisibilityState) => {
@@ -295,7 +331,7 @@ export function VirtualTable<T>({
 
   // Drag-to-reorder (burpsy-react-ui-mem3): always on, unlike visibility, because every page gets
   // it for free — see useColumnOrder for why persistence needs no prop from the caller either.
-  const defaultColumnOrder = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const defaultColumnOrder = columnIds;
   const [columnOrder, setColumnOrder] = useColumnOrder(defaultColumnOrder);
   // Which column's header is mid-drag, purely to know what a drop on another header should move.
   // Not persisted itself — only the resulting order is.
@@ -691,8 +727,49 @@ export function VirtualTable<T>({
                         groups={[
                           {
                             id: "column",
-                            actions: [{ id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn }],
+                            actions: [
+                              { id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn },
+                              // Burp's "Hide column" (customize-tables.html). Absent on a column the page
+                              // marked enableHiding:false (History's tick column); disabled, with the
+                              // reason, on the last visible one, because hiding it would leave no header
+                              // to bring anything back from.
+                              ...(enableColumnVisibility && header.column.getCanHide()
+                                ? [
+                                    {
+                                      id: "hide-column",
+                                      label: `Hide ${columnLabel} column`,
+                                      icon: EyeOff,
+                                      disabled: !canHideColumn(columnIds, visibility, header.column.id),
+                                      hint: canHideColumn(columnIds, visibility, header.column.id)
+                                        ? "Show it again from the columns button at the right of the header"
+                                        : "The last visible column cannot be hidden",
+                                      onSelect: () => header.column.toggleVisibility(false),
+                                    },
+                                  ]
+                                : []),
+                            ],
                           },
+                          ...(enableColumnVisibility
+                            ? [
+                                {
+                                  id: "layout",
+                                  actions: [
+                                    {
+                                      // Burp's "Restore default table": every column shown, in the
+                                      // page's own order.
+                                      id: "restore-table",
+                                      label: "Restore default table layout",
+                                      icon: RotateCcw,
+                                      onSelect: () => {
+                                        table.resetColumnVisibility();
+                                        setVisibility({});
+                                        setColumnOrder(columnIds);
+                                      },
+                                    },
+                                  ],
+                                },
+                              ]
+                            : []),
                         ]}
                       >
                         {label}
