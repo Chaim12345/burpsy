@@ -180,6 +180,8 @@ type Server struct {
 	// discoveries retains recent content-discovery runs, keyed by task id for the same reason crawls
 	// are — see api_discovery.go.
 	discoveries *discoveryRuns
+	// hiddenInputs retains recent hidden-input guessing runs (burpsy-react-ui-wlz8), keyed by task id.
+	hiddenInputs *hiddenInputRuns
 	// externalTools is the operator's -tools allowlist, the one that also gates `run tool` bchecks.
 	// Nil means external delegation is off, and /api/discovery refuses and says which name is missing
 	// rather than answering with an empty result. The server never builds one: which binary may be
@@ -287,6 +289,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		schedules:          schedule.NewRunner(),
 		crawls:             newCrawlRuns(),
 		discoveries:        newDiscoveryRuns(),
+		hiddenInputs:       newHiddenInputRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
 		domInvader:         dominvader.NewStore(),
@@ -1172,6 +1175,9 @@ func (s *Server) setupRoutes() {
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.
 	s.mux.HandleFunc("/api/discovery", s.handleDiscovery)
+	// Hidden-input guessing: Burp's Param Miner "Guess params", built in (burpsy-react-ui-wlz8). The
+	// other half of the same question — discovery guesses paths, this guesses the inputs one path reads.
+	s.mux.HandleFunc("/api/hidden-inputs", s.handleHiddenInputs)
 
 	// The blind-XSS callback channel: the listener's state, and minting a correlation payload to plant.
 	// Two patterns because they are two operations, and the mint is a POST because it changes what the

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { RepeaterSendOptions } from "./types";
+import type { Exchange, RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
@@ -634,6 +634,10 @@ interface AppState {
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
  decoderSeed: { label: string; input: string } | null;
+ /** The exchange the "Guess hidden inputs" dialog is open for, or null when it is closed
+  *  (burpsy-react-ui-wlz8). One app-level dialog rather than one per page, because the row menu
+  *  that opens it is shared by every table. */
+ hiddenInputsTarget: Exchange | null;
  /** Set when another page asks History to focus one exchange. */
  historyFocus: number | null;
  /** Set when another page pushes a filter expression into History. */
@@ -708,6 +712,7 @@ interface AppState {
  clearIntruderCommand: () => void;
  setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
+ setHiddenInputsTarget: (exchange: Exchange | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  /** Append one item to a side's list (yy2): send-to adds; the comparison runs on the selected
   * item from each list, so sending no longer discards what was there. */
@@ -823,6 +828,7 @@ export const useApp = create<AppState>()(
  intruderCommand: null,
  intruderStatus: null,
    decoderSeed: null,
+   hiddenInputsTarget: null,
    comparerSlots: { a: "", b: "" },
  comparerItems: { a: [], b: [] },
    historyFocus: null,
@@ -1063,6 +1069,7 @@ export const useApp = create<AppState>()(
    clearIntruderCommand: () => set({ intruderCommand: null }),
    setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
+   setHiddenInputsTarget: (hiddenInputsTarget) => set({ hiddenInputsTarget }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
  addComparerItem: (slot, item) =>
   set({

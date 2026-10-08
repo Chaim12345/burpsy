@@ -333,6 +333,16 @@ var manifest = map[string]route{
 		summary: "the header names the Comparer discounts, per direction, with the response-side " +
 			"defaults and the list of surfaces that consult them",
 	},
+	"/api/hidden-inputs": {
+		// riskAttack, like /api/discovery and /api/audit/: a POST sends up to the run's request budget
+		// (500 by default) of guessed parameters, cookies and headers at a captured exchange's target.
+		// It is a deliberately separate pattern from /api/exchange/, which is riskLocal — nested there,
+		// the guess would inherit a class the confirmation gate does not stop. The GET is a read; the
+		// pattern takes the stronger verb's class, as /api/discovery's does.
+		methods: []string{"GET", "POST"}, risk: riskAttack,
+		summary: "GET: retained hidden-input guessing runs. POST: guess hidden query parameters, cookies " +
+			"and headers against one captured exchange (Burp's Param Miner \"Guess params\")",
+	},
 	"/api/history": {
 		// DELETE is Burp's "Delete items"/"Clear (tool)" (r6li): a tombstone on the operator's
 		// view, not on the stored bytes — positional ids stay stable, so the read route's contract

@@ -1647,3 +1647,47 @@ Burp rather than wider:
   enough that an AMF0/AMF3 codec (object graphs, references, externalizable types) is not worth its
   maintenance. **Re-open** when an engagement brings a live AMF endpoint; the codec would slot in as a
   nested-point container beside JSON and XML in `bcheck/insertion.go`.
+
+## Hidden-input guessing: where burpsy differs from Param Miner (2026-10-08, burpsy-react-ui-wlz8)
+- **Burp:** Param Miner is a BApp (Extensions > Param Miner > Guess params: GET parameters, cookie
+  parameters, headers, everything). Confirmed inputs are logged to its Output tab and raised as
+  "Secret input" issues. burpsy builds it in as an on-demand row action ("Guess hidden inputs…",
+  `POST /api/hidden-inputs`), never as part of an audit. The issues are filed as "Secret input: query
+  parameter" / "Secret input: cookie" / "Secret input: header", Information severity, and resolve to
+  the catalogue's Extension generated issue type (0x08000000). That type is the one Burp gives any
+  extension's issue.
+- **Wordlist:** about 450 hand-assembled names (229 query, 93 cookie, 135 header;
+  `scanner/hidden_inputs_wordlist.go`). This is not Param Miner's list, which is far larger. Param
+  Miner also mines names from the target (scope, responses, JS). burpsy does no mining, so it cannot
+  find an input whose name is not on its list. The run summary says so.
+- **Method:** two identical baselines must match, or the run stops ("the response varies on its own").
+  Then, per kind:
+  - A control batch of random names. If it changes the response, the kind stops and its names are
+    counted as never sent.
+  - Batches of 40 query parameters, 30 cookies or 20 headers.
+  - Bisection of any batch that changes the response.
+  - Confirmation of each candidate: with it the response differs, without it the baseline returns,
+    and a second send with a fresh value differs again.
+
+  Param Miner's own heuristics (attribute-level response diffing, its "fuzzy" mode, value-type
+  guessing) are not ported. The fingerprint is status, Content-Type, Location and the
+  whitespace-normalised body, with every run token stripped. A change confined to another response
+  header (for example Set-Cookie or Vary) is missed.
+- **Confidence:** Firm when both confirming sends changed the response identically. Tentative when both
+  changed it but differently. A value that comes back in the response is also reported as Firm, but only
+  after two single-name sends and only when the control's values did not come back. This grading is
+  burpsy's. Param Miner's own confidence rules were not available to transcribe.
+- **Cache safety:** on by default, a fresh `burpsycb=<random>` query parameter on every request,
+  baselines included. It keys each guess to a cache entry nobody else requests, so a guessed unkeyed
+  header cannot poison a shared cache. An application that rejects unknown query parameters can have it
+  turned off in the dialog. Param Miner's cache-poisoning detection is not ported. The fixtures do not
+  exercise a cache.
+- **Bounds:** 500 requests by default (route cap 5000). A run that hits the bound says so (state
+  `budget`) and counts the names it never sent. A scope refusal or a failed request stops the run
+  instead of being counted as tested. Framing and routing headers (Host, Content-Length,
+  Transfer-Encoding, Connection, TE, Upgrade, Expect, Proxy-*, …) and Cookie and Authorization are never
+  sent as guesses. Method-override headers are sent only with random values, never a real verb.
+- **Not built:** guessing body parameters (form or JSON). Param Miner offers "Guess body params"; the
+  bead and Burp's tutorial name only the three kinds above. Also not built: multi-request
+  selection (Burp lets one launch cover several selected requests; burpsy guesses one exchange per
+  run).

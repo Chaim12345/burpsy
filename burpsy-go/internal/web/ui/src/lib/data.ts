@@ -57,6 +57,7 @@ export const keys = {
  sitemap: ["sitemap"] as const,
  crawls: ["crawls"] as const,
  discovery: ["discovery"] as const,
+ hiddenInputs: ["hidden-inputs"] as const,
  wsConnections: ["ws", "connections"] as const,
  /** The trailing filter axes keep one cache entry per distinct view (burpsy-react-ui-5k4):
   * a page fetched under one payload substring must not be served for another. */
@@ -100,13 +101,15 @@ export const keys = {
 const INVALIDATION: Record<string, string[][]> = {
  history: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
  capture: [["history"], ["stats"], ["sitemap"], ["dashboard"]],
- issues: [["issues"], ["dashboard"], ["scanner"]],
+ // A finished hidden-input run files its findings and notifies issues and dashboard; both refresh
+ // the run record so the dialog's result does not wait for its own poll.
+ issues: [["issues"], ["dashboard"], ["scanner"], ["hidden-inputs"]],
  scanner: [["issues"], ["dashboard"], ["scanner"]],
  toollog: [["toollog"], ["dashboard"]],
  // A finished content-discovery run notifies changeDashboard and nothing else — it fetched
  // nothing through burpsy, so no history row, site-map node or finding moved. That makes this
  // entry the only event that can tell the console a sweep has results.
- dashboard: [["dashboard"], ["discovery"]],
+ dashboard: [["dashboard"], ["discovery"], ["hidden-inputs"]],
  task: [["dashboard"]],
  tasks: [["dashboard"]],
  ws: [["ws"], ["stats"], ["dashboard"]],
