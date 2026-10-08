@@ -1689,3 +1689,12 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   matching rules" (per-field host/port/file regexes) are not offered: the engagement scope already has that
   rule shape, and a second rule editor scoped to one crawl would duplicate it. An API caller that omits
   `scope` keeps the engagement scope alone, as before.
+
+### Postman Collections for API scans (r39r)
+- **burpsy:** Postman Collection v2.0/v2.1 is read into the same operation model as OpenAPI: folders walked in order,
+  collection variables substituted (an undefined `{{var}}` is counted as a placeholder; an undefined leading
+  `{{baseUrl}}` makes the request relative to the scan's base URL), disabled headers/query/body fields left out,
+  bearer/basic/header-apikey auth inherited collection → folder → request with `noauth` overriding, and raw,
+  urlencoded, form-data (text fields; a file part names a file on the author's machine and is skipped) and
+  GraphQL bodies. Pre-request and test scripts are not run.
+- **Not done:** SOAP WSDL on the API-only path is still refused by name — tracked as the rest of this bead.

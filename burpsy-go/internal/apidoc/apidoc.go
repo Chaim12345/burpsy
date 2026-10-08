@@ -187,6 +187,10 @@ func Parse(data []byte) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A Postman Collection (r39r) has its own reader; it shares the Operation model and provenance rules.
+	if isPostman(root) {
+		return parsePostman(root)
+	}
 	format, specVersion, err := detectFormat(root)
 	if err != nil {
 		return nil, err

@@ -764,7 +764,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </p>
       <Field
        label="API definition"
-       hint="OpenAPI 3.x or Swagger 2.0, in JSON or YAML. Paste it here, or load the file."
+       hint="OpenAPI 3.x, Swagger 2.0 or a Postman Collection (v2.x), in JSON or YAML. Paste it here, or load the file."
       >
        {(id) => (
         <Textarea
