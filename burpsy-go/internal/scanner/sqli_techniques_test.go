@@ -271,3 +271,32 @@ func TestTheBlindTechniquePayloadsAreTheRecoveredForms(t *testing.T) {
 		}
 	}
 }
+
+// The repeat rules (review of saq3.2.1): one differential or one slow response is not evidence.
+func TestTheBlindConfirmationRulesRejectAOneOff(t *testing.T) {
+	a, b, c := NewResponseFingerprint(200, "rows"), NewResponseFingerprint(200, "no rows"), NewResponseFingerprint(429, "slow down")
+	if !confirmBooleanDifferential(a, a, a, b, a, b) {
+		t.Error("a repeated differential against a stable baseline was rejected")
+	}
+	for name, seq := range map[string][6]ResponseFingerprint{
+		"unstable baseline":       {a, c, a, b, a, b},
+		"true half drifted":       {a, a, a, b, c, b},
+		"false half not repeated": {a, a, a, b, a, a},
+		"false halves disagree":   {a, a, a, b, a, c},
+	} {
+		if confirmBooleanDifferential(seq[0], seq[1], seq[2], seq[3], seq[4], seq[5]) {
+			t.Errorf("%s was confirmed", name)
+		}
+	}
+
+	s := time.Second
+	if confirmTiming(100*time.Millisecond, 5*s, 120*time.Millisecond, 5*s, 5*s) != InjectionEvidenceTiming {
+		t.Error("a delay that repeated with a fast zero-delay control was not confirmed")
+	}
+	if confirmTiming(100*time.Millisecond, 5*s, 120*time.Millisecond, 200*time.Millisecond, 5*s) == InjectionEvidenceTiming {
+		t.Error("a delay that did not repeat was confirmed — one slow response is not evidence")
+	}
+	if confirmTiming(100*time.Millisecond, 5*s, 5*s, 5*s, 5*s) == InjectionEvidenceTiming {
+		t.Error("a delay whose zero-delay control was also slow was confirmed — the endpoint is just slow")
+	}
+}

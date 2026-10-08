@@ -353,29 +353,69 @@ func codeInjectionHandlers(re *regexp.Regexp) (vulnerable, safe http.HandlerFunc
 // directive with a numeric argument - never the specific payload the check happens to send,
 // and the safe twin concatenates nothing and recognises nothing.
 
-// sqlBooleanCondition matches a comparison of two bare operands anywhere in the value: the
-// fragment `1=1` a boolean payload appends to the WHERE clause. Both operands are captured,
-// because the difference between always-true and always-false is the whole signal.
-var sqlBooleanCondition = regexp.MustCompile(`(\w+)\s*=\s*(\w+)`)
+// sqlQuotedClause evaluates the clause `col='<value>'` the way a database would, for the blind
+// SQLi fixtures (review of saq3.2.1). The value is concatenated inside the string literal, so a
+// payload only reaches the statement if it closes that literal itself: what follows the literal is
+// parsed as SQL — a trailing `-- ` comment, an `and` condition comparing two numbers or two quoted
+// strings, or (for the jobs fixture) a sleep call — and anything else there is a syntax error. The
+// literal's own content must still be the expected value for rows to come back.
+//
+// This is what makes the fixtures honest: a condition sent instead of the value, or one that does
+// not close the quote, lands inside the literal and changes nothing but the row match.
+type sqlClause struct {
+	literal  string
+	rest     string // SQL after the literal, comment removed, trimmed
+	parseErr bool
+}
 
-// sortBookedByCondition approximates `ORDER BY`-style concatenation: the value lands in the
-// query, and a condition the attacker appends decides whether the row set comes back. An
-// always-true condition leaves the listing as the unmodified request had it — byte-identical,
-// because the differential classifier requires the true half to match the baseline and reads
-// any difference as "the payload was rejected, not interpreted" — and an always-false one
-// filters every row out, which is the only half allowed to differ.
+func parseQuotedClause(value string) sqlClause {
+	q := value + "'" // the application's own closing quote
+	i := strings.IndexByte(q, '\'')
+	if i < 0 {
+		return sqlClause{parseErr: true}
+	}
+	rest := q[i+1:]
+	if c := strings.Index(rest, "--"); c >= 0 {
+		rest = rest[:c]
+	}
+	rest = strings.TrimSpace(rest)
+	// A dangling quote left over (the application's closing one, after a payload closed the
+	// literal and then commented nothing out) is unbalanced SQL.
+	if strings.Count(rest, "'")%2 != 0 {
+		return sqlClause{literal: q[:i], parseErr: true}
+	}
+	return sqlClause{literal: q[:i], rest: rest}
+}
+
+// sqlAndCondition is `and <operand> = <operand>`, operands numbers or quoted strings.
+var sqlAndCondition = regexp.MustCompile(`^(?i)and\s+(\d+|'[^']*')\s*=\s*(\d+|'[^']*')$`)
+
+// sortBookedByCondition concatenates sort_col into `category='<value>'`: an appended condition
+// that closes the literal decides whether the rows come back, and the always-true one leaves the
+// listing byte-identical to the baseline.
 func sortBookedByCondition(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	v := r.URL.Query().Get("sort_col")
-	m := sqlBooleanCondition.FindStringSubmatch(v)
-	if m != nil && m[1] != m[2] {
-		// A condition that did not hold filtered every row: a materially different body,
-		// which is the false half of the differential the classifier needs.
+	clause := parseQuotedClause(r.URL.Query().Get("sort_col"))
+	rows := clause.literal == "seed"
+	switch {
+	case clause.parseErr:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "query failed")
+		return
+	case clause.rest == "":
+	default:
+		m := sqlAndCondition.FindStringSubmatch(clause.rest)
+		if m == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, "query failed")
+			return
+		}
+		rows = rows && m[1] == m[2]
+	}
+	if !rows {
 		fmt.Fprint(w, "Products: (no rows)")
 		return
 	}
-	// No condition, or one that held: the full listing, byte-identical in both cases so the
-	// always-true half of a boolean pair matches the baseline exactly.
 	fmt.Fprint(w, "Products: Widget, Gadget, Gizmo")
 }
 
@@ -386,34 +426,40 @@ func safeSortBookedByCondition(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Products sorted by %s: Widget, Gadget, Gizmo", r.URL.Query().Get("sort_col"))
 }
 
-// sqlSleepDirective matches a dialect's sleep call with a numeric argument - PostgreSQL's
-// pg_sleep(N) or SQL Server's waitfor delay'0:0:N' - and returns the seconds it asks for.
-// Which dialect fired is not distinguished, because the timing classifier only reads how long
-// the response took.
-var sqlSleepDirective = regexp.MustCompile(`pg_sleep\s*\(\s*(\d+)\s*\)|waitfor\s+delay\s*'0:0:(\d+)'`)
+// sqlSleepAfterLiteral is what may follow the queue literal and execute: a PostgreSQL pg_sleep(N)
+// joined by `||` or `and`, or a SQL Server waitfor delay'0:0:N' after a separator.
+var sqlSleepAfterLiteral = regexp.MustCompile(`^(?i)(?:\|\||and|,''\|\|)?\s*pg_sleep\s*\(\s*(\d+)\s*\)$|^(?i)[),0\s]*waitfor\s+delay\s*'0:0:(\d+)'$`)
 
-// queueJobWithDelay approximates concatenation into a job-query parameter: a sleep directive
-// in the value is executed as part of the query, and the response takes as long as it asked.
-// The delay is capped so a test that sends a 5-second probe does not hold the suite hostage -
-// the classifier asks for InjectionTimingDelay and reads anything at or past the margin.
+// queueJobWithDelay concatenates queue into `queue='<value>'`: a sleep call that closes the literal
+// executes and delays the response. Capped so a probe cannot hold the suite hostage.
 func queueJobWithDelay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	v := r.URL.Query().Get("queue")
-	m := sqlSleepDirective.FindStringSubmatch(v)
-	if m != nil {
+	clause := parseQuotedClause(v)
+	if clause.parseErr {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "query failed")
+		return
+	}
+	if clause.rest != "" {
+		m := sqlSleepAfterLiteral.FindStringSubmatch(clause.rest)
+		if m == nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, "query failed")
+			return
+		}
 		secs := m[1]
 		if secs == "" {
 			secs = m[2]
 		}
-		n, err := strconv.Atoi(secs)
-		if err == nil && n > 0 {
+		if n, err := strconv.Atoi(secs); err == nil && n > 0 {
 			if n > 5 {
 				n = 5
 			}
 			time.Sleep(time.Duration(n) * time.Second)
 		}
 	}
-	fmt.Fprintf(w, "Job queued: %s", v)
+	fmt.Fprintf(w, "Job queued: %s", clause.literal)
 }
 
 func safeQueueJobWithDelay(w http.ResponseWriter, r *http.Request) {

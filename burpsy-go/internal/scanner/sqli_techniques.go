@@ -60,6 +60,18 @@ var sqlBooleanContexts = [][2]string{
 	{",", ""},         // a further argument: the condition becomes a new expression
 }
 
+// sqlQuotedBooleanPairs are the quote-opening pairs for a value that sits inside a string literal
+// (burpsy's own, the standard forms): the payload closes the application's quote, adds the
+// condition, and leaves the application's own closing quote to finish the last literal. Appended
+// to the original value — `seed' and '1'='1` — so the literal before the condition is still the
+// value the application expected.
+var sqlQuotedBooleanPairs = [][2]string{
+	{"' and '1'='1", "' and '1'='2"},
+	{"' and 1=1-- ", "' and 1=2-- "},
+	{`" and "1"="1`, `" and "1"="2`},
+	{"') and ('1'='1", "') and ('1'='2"},
+}
+
 // sqlBooleanPayloads renders the always-true / always-false pair for each context.
 //
 // The condition cores are the documented standard forms; see the file header for why they are
@@ -78,13 +90,16 @@ func sqlBooleanPayloads() [][2]string {
 		}
 		out = append(out, [2]string{trueCore, falseCore})
 	}
-	return out
+	return append(out, sqlQuotedBooleanPairs...)
 }
 
 // sqlTimingPayload is one dialect's delay probe: the payload text with the delay already
 // substituted, and every Burp detection method that gates it.
 type sqlTimingPayload struct {
 	payload string
+	// render spells the probe for a given delay in seconds; render(0) is the zero-delay control a
+	// confirmation sends.
+	render  func(seconds int) string
 	methods []string
 }
 
@@ -105,27 +120,27 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 	if seconds < 1 {
 		seconds = 1
 	}
-	pg := fmt.Sprintf("pg_sleep(%d)--", seconds)
-	mssql := fmt.Sprintf("waitfor delay'0:0:%d'--", seconds)
 	pgMethods := []string{MethodTimeDelays, MethodPostgreSQLSpecific}
 	mssqlMethods := []string{MethodTimeDelays, MethodSQLServerSpecific}
+	form := func(prefix, call string, methods []string) sqlTimingPayload {
+		render := func(n int) string { return prefix + fmt.Sprintf(call, n) }
+		return sqlTimingPayload{payload: render(seconds), render: render, methods: methods}
+	}
 
 	var out []sqlTimingPayload
 	// PostgreSQL (Zxpy): every recovered break ahead of the sleep call, each with its quoted
 	// form — Zxpy builds `break+pg_sleep(%%)--` and `'break+pg_sleep(%%)--` per prefix.
 	for _, brk := range []string{"||", " AND ", ",''||"} {
-		body := brk + pg
 		out = append(out,
-			sqlTimingPayload{payload: body, methods: pgMethods},
-			sqlTimingPayload{payload: "'" + body, methods: pgMethods},
+			form(brk, "pg_sleep(%d)--", pgMethods),
+			form("'"+brk, "pg_sleep(%d)--", pgMethods),
 		)
 	}
 	// SQL Server (Zuyg): every recovered break ahead of waitfor, same two forms per prefix.
 	for _, brk := range []string{" ", ")", ",0)", ",0,0)", ",0,0,0)"} {
-		body := brk + mssql
 		out = append(out,
-			sqlTimingPayload{payload: body, methods: mssqlMethods},
-			sqlTimingPayload{payload: "'" + body, methods: mssqlMethods},
+			form(brk, "waitfor delay'0:0:%d'--", mssqlMethods),
+			form("'"+brk, "waitfor delay'0:0:%d'--", mssqlMethods),
 		)
 	}
 	return out
@@ -149,18 +164,150 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 	var probes []InjectionProbe
 	for _, pair := range sqlBooleanPayloads() {
-		pr := h.ProbeBoolean(ctx, p, pair[0], pair[1])
+		if ctx.Err() != nil {
+			return probes
+		}
+		pr := sqlBooleanProbe(ctx, h, p, pair[0], pair[1])
 		probes = append(probes, pr)
 		if pr.Evidence == InjectionEvidenceBooleanDifferential {
 			break // a proven differential; the further break styles ask the same question
 		}
 	}
+	// A baseline already slow relative to the delay makes every timing probe undecidable; one
+	// probe says so instead of sixteen requests each waiting to learn it.
+	if h.baseline.Duration >= time.Duration(float64(InjectionTimingDelay)*TimingBaselineNoiseCeiling) {
+		return append(probes, InjectionProbe{Payload: "time delays", Evidence: InjectionEvidenceInconclusive,
+			Detail: fmt.Sprintf("%s %q: the baseline took %s, too close to the %s delay for a delay to be told apart; no timing probe sent",
+				p.Kind, p.Name, h.baseline.Duration, InjectionTimingDelay)})
+	}
 	for _, tp := range sqlTimingPayloads(InjectionTimingDelay) {
-		pr := h.ProbeTimingUnder(ctx, p, tp.payload, InjectionTimingDelay, tp.methods)
+		if ctx.Err() != nil {
+			return probes
+		}
+		pr := sqlTimingProbe(ctx, h, p, tp, InjectionTimingDelay)
 		probes = append(probes, pr)
 		if pr.Evidence == InjectionEvidenceTiming {
 			break // the delay is proven; the further break styles ask the same question
 		}
 	}
 	return probes
+}
+
+// sqlBooleanProbe sends one always-true / always-false pair appended to the point's value, and
+// confirms a differential before reporting it (review of saq3.2.1): one pair can differ by chance
+// — a rate limit, a rotating banner, a session that expired between the two requests — so a
+// differential stands only when the baseline re-fetches unchanged and the true / false pair
+// repeats with the same verdict. That costs three requests, and only on a positive.
+//
+// Both halves changing the response is a clean answer for SQL injection, not an undecided one: the
+// payload was rejected or reflected, not interpreted, and a reflecting parameter would otherwise
+// never count as clean for the light-audit tier or the effectiveness prior.
+func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, truePayload, falsePayload string) InjectionProbe {
+	out := InjectionProbe{Payload: truePayload + " / " + falsePayload}
+	if h.withhold(MethodBooleanConditions, 2) {
+		return withheldProbe(p, out.Payload, MethodBooleanConditions)
+	}
+	fingerprint := func(payload string) (ResponseFingerprint, error) {
+		resp, err := h.SendAppending(ctx, p, payload)
+		if err != nil {
+			return ResponseFingerprint{}, err
+		}
+		return NewResponseFingerprint(resp.Status, resp.Body), nil
+	}
+	base := NewResponseFingerprint(h.baseline.Status, h.baseline.Body)
+	t1, err := fingerprint(truePayload)
+	if err == nil {
+		var f1 ResponseFingerprint
+		if f1, err = fingerprint(falsePayload); err == nil {
+			switch ClassifyBooleanDifferential(base, t1, f1) {
+			case InjectionEvidenceBooleanDifferential:
+				var base2, t2, f2 ResponseFingerprint
+				if base2, err = fingerprint(""); err == nil {
+					if t2, err = fingerprint(truePayload); err == nil {
+						f2, err = fingerprint(falsePayload)
+					}
+				}
+				if err != nil {
+					break
+				}
+				if confirmBooleanDifferential(base, base2, t1, f1, t2, f2) {
+					out.Evidence = InjectionEvidenceBooleanDifferential
+					out.Detail = fmt.Sprintf("%s %q: always-true kept the response, always-false changed it, twice, against a stable baseline", p.Kind, p.Name)
+				} else {
+					out.Evidence = InjectionEvidenceNone
+					out.Detail = fmt.Sprintf("%s %q: a differential appeared once and did not repeat against a stable baseline", p.Kind, p.Name)
+				}
+				return out
+			case InjectionEvidenceInconclusive:
+				out.Evidence = InjectionEvidenceNone
+				out.Detail = fmt.Sprintf("%s %q: both halves changed the response, so the condition was not interpreted", p.Kind, p.Name)
+				return out
+			default:
+				out.Evidence = InjectionEvidenceNone
+				out.Detail = fmt.Sprintf("%s %q: %s", p.Kind, p.Name, InjectionEvidenceNone)
+				return out
+			}
+		}
+	}
+	out.Evidence = InjectionEvidenceInconclusive
+	out.Detail = fmt.Sprintf("%s %q: boolean probe not completed: %v", p.Kind, p.Name, err)
+	return out
+}
+
+// confirmBooleanDifferential is the repeat rule: the baseline is stable, both true probes match it,
+// both false probes differ from it, and the two false probes agree with each other.
+func confirmBooleanDifferential(base, base2, t1, f1, t2, f2 ResponseFingerprint) bool {
+	return base.SameShape(base2) && base.SameShape(t1) && base.SameShape(t2) &&
+		!base.SameShape(f1) && !base.SameShape(f2) && f1.SameShape(f2)
+}
+
+// sqlTimingProbe sends one delay probe appended to the point's value and confirms a delay before
+// reporting it (review of saq3.2.1): a single slow response is what a GC pause, a throttle after a
+// burst or a tarpit also produces. A delay stands only when the same probe with a zero-second delay
+// comes back fast and the delayed probe is slow again — three requests, only on a positive.
+func sqlTimingProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, tp sqlTimingPayload, delay time.Duration) InjectionProbe {
+	out := InjectionProbe{Payload: tp.payload}
+	for _, method := range tp.methods {
+		if h.withhold(method, 1) {
+			return withheldProbe(p, tp.payload, method)
+		}
+	}
+	seconds := int(delay.Seconds())
+	first, err := h.SendAppending(ctx, p, tp.render(seconds))
+	if err != nil {
+		out.Evidence = InjectionEvidenceInconclusive
+		out.Detail = fmt.Sprintf("%s %q: probe not sent: %v", p.Kind, p.Name, err)
+		return out
+	}
+	ev := ClassifyTimingEvidence(h.baseline.Duration, first.Duration, delay)
+	if ev != InjectionEvidenceTiming {
+		out.Evidence = ev
+		out.Detail = fmt.Sprintf("%s %q: baseline %s, injected %s, requested %s: %s", p.Kind, p.Name, h.baseline.Duration, first.Duration, delay, ev)
+		return out
+	}
+	control, cerr := h.SendAppending(ctx, p, tp.render(0))
+	second, serr := h.SendAppending(ctx, p, tp.render(seconds))
+	if cerr != nil || serr != nil {
+		out.Evidence = InjectionEvidenceInconclusive
+		out.Detail = fmt.Sprintf("%s %q: one slow response, and its confirmation could not be sent", p.Kind, p.Name)
+		return out
+	}
+	out.Evidence = confirmTiming(h.baseline.Duration, first.Duration, control.Duration, second.Duration, delay)
+	out.Detail = fmt.Sprintf("%s %q: baseline %s, delayed %s and %s, zero-delay control %s, requested %s: %s",
+		p.Kind, p.Name, h.baseline.Duration, first.Duration, second.Duration, control.Duration, delay, out.Evidence)
+	return out
+}
+
+// confirmTiming is the repeat rule for a delay: both delayed probes read as the requested delay and
+// the zero-delay control does not.
+func confirmTiming(baseline, first, control, second, delay time.Duration) InjectionEvidence {
+	if ClassifyTimingEvidence(baseline, first, delay) != InjectionEvidenceTiming ||
+		ClassifyTimingEvidence(baseline, second, delay) != InjectionEvidenceTiming {
+		return InjectionEvidenceNone
+	}
+	if ClassifyTimingEvidence(baseline, control, delay) != InjectionEvidenceNone {
+		// The control was slow too: the endpoint is slow now, whatever the payload says.
+		return InjectionEvidenceNone
+	}
+	return InjectionEvidenceTiming
 }

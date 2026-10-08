@@ -281,6 +281,23 @@ func (h *ProbeHarness) Send(ctx context.Context, point bcheck.InsertionPoint, pa
 	return h.guidedSend(&point, payload, ctx)
 }
 
+// SendAppending is Send with the payload appended to the point's original value rather than
+// replacing it — the blind SQL probes' placement: a condition or a sleep only parses in the
+// statement when it follows the value the application put there (`5 and 1=1`, `seed' and '1'='1`).
+// An empty payload re-sends the original request, the baseline re-fetch a confirmation needs.
+func (h *ProbeHarness) SendAppending(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	mutated, err := point.Apply(h.reqBytes, payload, true)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	resp, err := h.send(ctx, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	return resp, nil
+}
+
 // guidedSend applies the payload, sends, and folds the response into the coverage
 // ledger — the one place a probe's response is recorded, so no probe path (direct Send,
 // probe, or the baseline) can skip it.
