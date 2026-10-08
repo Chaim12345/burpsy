@@ -231,6 +231,7 @@ func (s *Server) startAPIScan(req apiScanReq) (uint64, *apiScanSummary, error) {
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		ctx = task.Pausable(ctx) // the sweep's own Pause reaches its gate (g0ba)
 		rep := c.Run(ctx)
 		s.crawls.finish(task.ID(), &rep, nil)
 		task.SetNote(apiScanNote(&rep, summary))

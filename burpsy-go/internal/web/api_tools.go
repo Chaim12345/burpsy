@@ -1321,6 +1321,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// and needs the opposite.
 	taskCtx, cancelTask := task.WithCancel(ctx)
 	defer cancelTask()
+	// The driver calls SuiteGate between requests with a background context, so the gate is bound to
+	// this task's context here: the row's own Pause holds the attack as Pause all does (g0ba).
+	gateCtx := task.Pausable(taskCtx)
+	attack.SuiteGate = func(context.Context) { s.tasks.GateCheck(gateCtx) }
 	attackDone := make(chan struct{})
 	defer close(attackDone)
 	control.StopOnContext(taskCtx, attackDone, "stopped from the dashboard")

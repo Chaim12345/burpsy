@@ -791,6 +791,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		// The crawl calls its suite gate between fetches with this context, so the row's own Pause
+		// reaches it — and the audit feed, whose context derives from this one (g0ba).
+		ctx = task.Pausable(ctx)
 		// Started before Run, not after it: from here on every completed fetch is audited while the
 		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
 		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two
@@ -1063,7 +1066,7 @@ func newCrawlAuditFeed(s *Server, target string) *crawlAuditFeed {
 // problem, and a row that says the former is the only way to tell them apart on screen.
 func (f *crawlAuditFeed) start(ctx context.Context) {
 	f.task = f.s.tasks.Start(dash.KindAuditSession, f.target+" (audited during the crawl)", 0)
-	go f.run(ctx)
+	go f.run(f.task.Pausable(ctx))
 }
 
 // offer is the crawler's OnFetch callback: one completed fetch, announced from the crawl goroutine.

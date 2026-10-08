@@ -88,6 +88,31 @@ function useClearEventLog() {
  });
 }
 
+// Burp's per-task Pause / Resume (burpsy-react-ui-g0ba), shown only on a running task whose loop
+// stops at the pause gate. The server answers 409 for any other, so the button never promises more.
+function TaskPauseButton({ task }: { task: TaskRow }): JSX.Element | null {
+ const invalidate = useInvalidate();
+ const toggle = useMutation({
+  mutationFn: (pause: boolean) => api<{ id: number; paused: boolean }>(`/api/tasks/${task.id}/${pause ? "pause" : "resume"}`, json("POST")),
+  onSuccess: (out) => {
+   toast.success(out.paused ? `Task ${task.id} paused at its next step` : `Task ${task.id} resumed`);
+   invalidate([["dashboard"]]);
+  },
+  onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Pausing the task failed"),
+ });
+ if (task.id === -1 || !task.pausable || task.state !== "running") return null;
+ return (
+  <IconButton
+   label={`${task.paused ? "Resume" : "Pause"} ${task.kind} task on ${task.target}`}
+   size="small"
+   disabled={toggle.isPending}
+   onClick={() => toggle.mutate(!task.paused)}
+  >
+   {task.paused ? <Play size={12} /> : <Pause size={12} />}
+  </IconButton>
+ );
+}
+
 function useCancelTask() {
  const invalidate = useInvalidate();
  return useMutation({
@@ -206,6 +231,8 @@ function TaskTile({
       {ordinal}. {task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`}
      </strong>
     </button>
+    {task.paused ? <Badge tone="warn">paused</Badge> : null}
+    <TaskPauseButton task={task} />
     {task.id !== -1 && task.cancellable && task.state === "running" ? (
      <IconButton
       label={`Cancel ${task.kind} task on ${task.target}`}
@@ -1108,6 +1135,7 @@ function TaskDetail({
    <div className="task-detail-head">
     <h2>{title}</h2>
     <div className="task-detail-actions">
+     <TaskPauseButton task={task} />
      {task.id !== -1 && task.cancellable && task.state === "running" ? (
       <IconButton
        label={`Cancel ${task.kind} task on ${task.target}`}

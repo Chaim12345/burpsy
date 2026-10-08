@@ -289,6 +289,10 @@ export interface TaskRow {
  fraction: number;
  fraction_known: boolean;
  cancellable: boolean;
+ /** The task's loop stops at the pause gate, so its own Pause/Resume does something (g0ba). */
+ pausable?: boolean;
+ /** This task's own pause, distinct from the dashboard-wide Pause all. */
+ paused?: boolean;
  note?: string;
  progress: string;
  elapsed_ms: number;

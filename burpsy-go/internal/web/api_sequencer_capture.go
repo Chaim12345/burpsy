@@ -559,6 +559,8 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 	// the request line, which is the check a host-level pre-filter cannot make.
 	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	ctx, cancel := task.WithCancel(context.Background())
+	// The capture loop calls GateCheck between sends, so this row's own Pause reaches it (g0ba).
+	ctx = task.Pausable(ctx)
 	go func() {
 		defer cancel()
 		s.runCapture(ctx, capture, task, auth, host, port, tls, []byte(req.Request),
