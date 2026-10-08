@@ -85,8 +85,12 @@ type Server struct {
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
-	advisories         *advisory.Catalogue
-	sitemap            *sitemap.SiteMap
+	advisories *advisory.Catalogue
+	sitemap    *sitemap.SiteMap
+	// repeaterH2 is Repeater's HTTP/2 connection reuse pool (adkx), made on first use by
+	// repeaterH2Sessions; repeaterH2Once guards that.
+	repeaterH2         *sender.H2Sessions
+	repeaterH2Once     sync.Once
 	sessionCoordinator *session.Coordinator
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter

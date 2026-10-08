@@ -55,6 +55,12 @@ type SendOptions struct {
 	// redirect hop never carries it — HopContext strips it — because the override names this
 	// target's handshake, not wherever a Location points next. Empty means no override.
 	SNI string
+	// H2Sessions, when set, keeps this send's h2 connection open for the next send with the same
+	// H2SessionKey and authority, and rides an open one when it exists (adkx — Burp's "HTTP/2
+	// connection reuse"). Nil, the default, dials fresh for every send, so every request is the
+	// first on its connection. HTTP/1 sends never touch it.
+	H2Sessions   *H2Sessions
+	H2SessionKey string
 }
 
 // sniOverride is the ClientHello server name ctx asks for, or "".
@@ -67,14 +73,18 @@ func sniOverride(ctx context.Context) string {
 }
 
 // HopContext is ctx for a redirect hop: the per-send options that describe this target alone (the
-// SNI override) are removed, and the ones that describe the whole send (the response timeout, the
+// SNI override, the tab's h2 session) are removed, and the ones that describe the whole send (the response timeout, the
 // streaming window) are kept.
 func HopContext(ctx context.Context) context.Context {
 	opts, ok := SendOptionsFrom(ctx)
-	if !ok || opts.SNI == "" {
+	if !ok || (opts.SNI == "" && opts.H2Sessions == nil) {
 		return ctx
 	}
 	opts.SNI = ""
+	// A hop dials its own connection, as every hop always has: the tab's reused session belongs to
+	// the tab's own target.
+	opts.H2Sessions = nil
+	opts.H2SessionKey = ""
 	return WithSendOptions(ctx, opts)
 }
 

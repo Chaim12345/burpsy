@@ -334,6 +334,8 @@ export function RepeaterPage(): JSX.Element {
         ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
         ...noteFor(tab),
         ...sniFor(tab),
+        // Keys the tab's reused HTTP/2 connection when that override is on (adkx).
+        tab_id: tab.id,
       },
       {
         onSuccess: (result) => {
@@ -1249,6 +1251,23 @@ export function RepeaterPage(): JSX.Element {
                     </Tooltip>
                   ) : null}
                   {httpResult.framing ? <Badge>framing: {httpResult.framing}</Badge> : null}
+                  {/* HTTP/2 connection reuse (adkx): whether this was the first request on its
+                      connection — the fact the setting exists to control. */}
+                  {httpResult.h2_connection ? (
+                    <Tooltip
+                      content={
+                        httpResult.h2_connection === "reused"
+                          ? "This request rode the tab's open HTTP/2 connection — it was not the first request on it."
+                          : httpResult.h2_connection === "new"
+                            ? "This request was the first on a new HTTP/2 connection, which the tab keeps open for its next send."
+                            : "HTTP/2 connection reuse is on, but this send did not ride HTTP/2."
+                      }
+                    >
+                      <Badge tone={httpResult.h2_connection === "reused" ? "accent" : "neutral"}>
+                        {httpResult.h2_connection === "reused" ? "h2: reused connection" : httpResult.h2_connection === "new" ? "h2: new connection" : "h2 reuse: not h2"}
+                      </Badge>
+                    </Tooltip>
+                  ) : null}
                   {/* Unpack compressed responses (of0z): say which bytes the pane shows. */}
                   {httpResult.response_unpacked != null ? (
                     <Tooltip content={`The pane shows the ${httpResult.unpacked_from} body decoded. The stored response is the compressed bytes that arrived; turn off "Unpack compressed responses" in Config to see them.`}>
@@ -2051,6 +2070,16 @@ function SendOptionsPanel({
         {/* On unless turned off (Burp's default). Display only: the stored response is always the
             bytes that arrived. */}
         <Checkbox
+          checked={!!options?.h2_connection_reuse}
+          label="HTTP/2 connection reuse"
+          onCheckedChange={(checked) => onChange({ h2_connection_reuse: checked })}
+        />
+        <Checkbox
+          checked={!!options?.enforce_protocol_cross_domain}
+          label="Use selected protocol for cross-domain redirects"
+          onCheckedChange={(checked) => onChange({ enforce_protocol_cross_domain: checked })}
+        />
+        <Checkbox
           checked={options?.unpack_responses !== false}
           label="Unpack compressed responses"
           onCheckedChange={(checked) => onChange({ unpack_responses: checked })}
@@ -2212,7 +2241,7 @@ function RedirectChain({
           {chain.error}
         </p>
       ) : null}
-      <SimpleTable headers={["From", "Status", "Location", "Followed", "Why not", "Bytes"]}>
+      <SimpleTable headers={["From", "Status", "Location", "Followed", "Protocol", "Why not", "Bytes"]}>
         {chain.hops.map((hop, index) => (
           <tr key={`${hop.from}-${index}`}>
             <td>
@@ -2227,6 +2256,7 @@ function RedirectChain({
             <td>
               <Badge tone={hop.followed ? "good" : "warn"}>{hop.followed ? "sent" : "not sent"}</Badge>
             </td>
+            <td>{hop.protocol ? <code>{hop.protocol}</code> : <span className="cell-dim">—</span>}</td>
             <td>{hop.reason ? hop.reason : <span className="cell-dim">—</span>}</td>
             <td>
               {hop.followed ? (

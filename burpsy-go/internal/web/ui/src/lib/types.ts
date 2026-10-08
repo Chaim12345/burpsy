@@ -436,6 +436,10 @@ export interface RepeaterSendOptions {
  /** Burp's "Unpack compressed responses" (of0z). Absent is Burp's default, on; only an explicit
   *  false is ever sent, which shows the compressed bytes instead. */
  unpack_responses?: boolean;
+ /** Burp's "HTTP/2 connection reuse" (adkx): this tab's h2 sends share one connection per target. */
+ h2_connection_reuse?: boolean;
+ /** Burp's "Use selected protocol for cross-domain redirects" (adkx). */
+ enforce_protocol_cross_domain?: boolean;
 }
 
 export interface RepeaterResult {
@@ -466,6 +470,8 @@ export interface RepeaterResult {
  /** The encoding that was decoded, or that could not be (see unpack_error). */
  unpacked_from?: string;
  unpack_error?: string;
+ /** With HTTP/2 connection reuse on (adkx): whether this request was the first on its connection. */
+ h2_connection?: "new" | "reused" | "not-h2";
 }
 
 /**
@@ -585,6 +591,8 @@ export interface RepeaterRedirectHop {
  to?: string;
  followed: boolean;
  reason?: string;
+ /** What carried a followed hop ("HTTP/1.1" | "HTTP/2") — what cross-domain enforcement (adkx) changes. */
+ protocol?: string;
  /**
   * The hop's request and response bytes, present only when the hop was followed —
   * a hop that was never sent has no bytes, and absence says exactly that.

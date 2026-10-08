@@ -212,6 +212,7 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		spec.SNI = item.SNI
+		spec.TabID = item.TabID
 		specs[i] = spec
 	}
 

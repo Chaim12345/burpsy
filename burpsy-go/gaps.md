@@ -1906,3 +1906,13 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   responses the global rule already recognises — an operator who sets a streaming window on a tab is asking for
   that endpoint to be read as a stream. A framed (Content-Length or non-event-stream chunked) response is never
   promoted.
+
+### HTTP/2 connection reuse — off by default (adkx)
+- **Burp:** `desktop/http2/index.html` — "By default, Repeater reuses the same connection for multiple HTTP/2
+  requests"; `settings/tools/repeater.html` lists it under Connections, default on.
+- **burpsy:** per-tab `h2_connection_reuse` keeps one h2 connection per (tab, target, SNI) open between sends
+  (at most 32, closed after 60 s idle) and every answer says `h2_connection: "new" | "reused" | "not-h2"`. Off,
+  every send dials fresh, so every request is the first on its connection.
+- **Divergence:** the default is off where Burp's is on. Every raw send in burpsy has always dialled fresh, and
+  turning reuse on silently would change what "this request's response" means for every existing tab; an
+  operator turns it on per tab in Config. A failed send on a reused connection is reported, never retried.

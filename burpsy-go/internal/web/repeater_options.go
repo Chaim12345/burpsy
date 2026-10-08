@@ -63,6 +63,16 @@ type repeaterSendOptions struct {
 	// show. false shows the compressed bytes. Display only either way — the stored response is always
 	// the bytes that arrived.
 	UnpackResponses *bool `json:"unpack_responses,omitempty"`
+	// H2ConnectionReuse is Burp's "HTTP/2 connection reuse" (burpsy-react-ui-adkx): this tab's h2
+	// sends ride one connection per target, kept open between sends (idle TTL repeaterH2SessionTTL),
+	// and each answer says whether it was the connection's first request ("new") or a later one
+	// ("reused"). Off — every send the first on a fresh connection — is burpsy's default, where
+	// Burp's is on; gaps.md records it.
+	H2ConnectionReuse bool `json:"h2_connection_reuse,omitempty"`
+	// EnforceProtocolCrossDomain is Burp's "Use selected protocol for cross-domain redirects"
+	// (adkx): a followed hop to another host uses the protocol that carried this send, instead of
+	// negotiating its own. Off (Burp's default) negotiates each hop as normal.
+	EnforceProtocolCrossDomain bool `json:"enforce_protocol_cross_domain,omitempty"`
 }
 
 // unpack reports whether this send's response is unpacked for display: Burp's default, on, unless

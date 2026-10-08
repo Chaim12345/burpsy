@@ -115,6 +115,8 @@ export interface RepeaterSendBody {
   note?: string;
   /** The tab's Override SNI (k011). */
   sni?: string;
+  /** The tab, which keys its reused HTTP/2 connection (adkx). */
+  tab_id?: string;
 }
 
 /**
