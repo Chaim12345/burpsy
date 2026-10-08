@@ -166,6 +166,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		points = points[:MaxInjectionPointsPerCheck]
 	}
 
+	// One finding per fact: a breakout stops the walk (the first confirmed point is the
+	// finding, as before), while a decoding-without-breakout is a lesser fact that does not,
+	// and is collected here so a later point's breakout cannot lose it.
+	var findings []*Finding
+
 	for _, point := range points {
 		var evidence XSSEvidence
 
@@ -203,7 +208,13 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// Each distinct context gets the payload that actually works there. Distinct, because a
 		// value echoed into both a text node and an attribute is ordinary, and the two need
 		// different payloads.
-		for _, payload := range xssPayloadsForContexts(contexts) {
+		bank := xssPayloadsForContexts(contexts)
+		// viaDecoding names the Burp decoding variants (burpsy-react-ui-79ld) whose encoded
+		// form of the primary payload confirmed a breakout at this point; decodedOnly names
+		// the variants whose payload came back DECODED but neutralized — the transformation
+		// half, reported on its own row below.
+		var viaDecoding, decodedOnly []string
+		for _, payload := range bank {
 			canary := newXSSCanary()
 			sent, err := h.SendFollowing(ctx, point, payload.build(canary))
 			if err != nil {
@@ -244,6 +255,66 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			}
 		}
 
+		// The decoding variants (burpsy-react-ui-79ld), in Burp's own order (Zguu.java:63-77:
+		// plain APPEND, plain REPLACE, and only then the variant list, breaking on the first
+		// confirmation). They run only where the plain bank failed while the canary still
+		// reflected — the XSS that fires only after the application decodes its input — which
+		// is also what bounds the cost: at most five probes per reflected-but-unbroken point,
+		// under the same per-check point cap as everything above.
+		//
+		// The primary payload is the bank's first, the most specific attempt the point's
+		// context chose; encoding the whole bank would re-ask a question one probe answers.
+		if evidence&XSSEvidenceReflected != 0 && !xssBreakoutConfirmed(evidence) && len(bank) > 0 {
+			primary := bank[0]
+			for _, variant := range xssDecodingVariants() {
+				canary := newXSSCanary()
+				plain := primary.build(canary)
+				sent, err := h.SendFollowingOpts(ctx, point, variant.encode(plain), bcheck.ApplyOptions{Raw: true})
+				if err != nil {
+					continue
+				}
+				res := sent.landing()
+				contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+				if !strings.Contains(res.Body, canary) {
+					continue
+				}
+				evidence |= XSSEvidenceReflected
+				bit := primary.bit
+				if bit == 0 {
+					bit = XSSEvidenceHTMLBreakout
+				}
+				if rendersAsMarkup(contentType) && primary.confirm != nil && primary.confirm(res.Body, canary) {
+					evidence |= bit
+					viaDecoding = append(viaDecoding, variant.name)
+					landedOn = sent.FollowedTo
+					break
+				}
+				// No live markup. The variant's transformMarker is the byte-level signal that
+				// the application performed the decoding anyway — Burp's
+				// UNEXPECTED_TRANSFORMATION half, reported on the row that exists for it.
+				if variant.transformMarker != nil {
+					if marker := variant.transformMarker(plain, canary); marker != "" && strings.Contains(res.Body, marker) {
+						decodedOnly = append(decodedOnly, variant.name)
+					}
+				}
+			}
+		}
+
+		if len(decodedOnly) > 0 {
+			// "Suspicious input transformation (reflected)" is a catalogue row with its own
+			// descriptor (checks_final.go); the finding is filed under THAT row rather than a
+			// new name, because the transformation is a different (and lesser) fact than the
+			// breakout this check exists for, and the row is where an operator already reads it.
+			if definition, ok := ByName("Suspicious input transformation (reflected)"); ok {
+				findings = append(findings, buildHeaderFinding(cc, "Suspicious input transformation (reflected)",
+					definition.TypicalSeverity, "firm",
+					fmt.Sprintf("the application decoded the payload before output-encoding it (%s)", strings.Join(decodedOnly, ", ")),
+					fmt.Sprintf("a value submitted in %s %q is reflected here after the application decoded it — "+
+						"the breakout did not confirm, but the decoding is itself worth reviewing",
+						point.Kind, point.Name)))
+			}
+		}
+
 		if !xssBreakoutConfirmed(evidence) {
 			continue
 		}
@@ -260,20 +331,30 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			detail += fmt.Sprintf("; %d further insertion point(s) were NOT probed (cap %d reached)",
 				capped, MaxInjectionPointsPerCheck)
 		}
-		return []*Finding{{
-			Name:        xssReflectedIssue,
-			Severity:    severity,
-			Confidence:  "firm",
-			Description: "Reflected XSS evidence: " + detail,
-			URL:         cc.Exchange.Path,
-			Method:      cc.Exchange.Method,
-			Evidence:    xssEvidenceText(evidence),
-			Solution:    remediation,
-			ExchangeID:  cc.Exchange.ID,
-			Timestamp:   nowUTC(),
-		}}, nil
+		// The evidence names the decoding when a variant carried the breakout: "markup
+		// breakout via URL decoding" says what the plain payload could not — that the
+		// application decodes this input before reflecting it.
+		evidenceText := xssEvidenceText(evidence)
+		if len(viaDecoding) > 0 {
+			evidenceText += " via " + strings.Join(viaDecoding, ", ")
+			detail += "; the plain payload did not break out, the encoded one did"
+		}
+		findings = append(findings, &Finding{
+			Name:             xssReflectedIssue,
+			Severity:         severity,
+			Confidence:       "firm",
+			Description:      "Reflected XSS evidence: " + detail,
+			URL:              cc.Exchange.Path,
+			Method:           cc.Exchange.Method,
+			Evidence:         evidenceText,
+			Solution:         remediation,
+			ExchangeID:       cc.Exchange.ID,
+			Timestamp:        nowUTC(),
+			DecodingVariants: DecodingVariants(viaDecoding),
+		})
+		break
 	}
-	return nil, nil
+	return findings, nil
 }
 
 // checkFilePathTraversalCore reports a traversal sequence that escaped the intended directory,

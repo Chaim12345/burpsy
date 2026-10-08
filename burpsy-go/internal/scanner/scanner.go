@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -268,6 +269,25 @@ type Finding struct {
 	// target is where the token was seen, and one weak key seen on 200 pages is one finding, not 200.
 	// Empty — the behaviour for every other row — means the target is the key.
 	MergeKey string
+	// DecodingVariants names the Burp decoding variants (burpsy-react-ui-79ld) that carried a
+	// confirmed breakout at this point — "URL decoding", "overlong UTF-8 decoding", … — in
+	// Burp's own vocabulary. Empty for every finding no variant produced, which is the honest
+	// shape: an empty list marshals as [] rather than null, because a console reading "no
+	// variants" out of a null would be reading the absence of a list as a clean one.
+	DecodingVariants DecodingVariants `json:"decoding_variants"`
+}
+
+// DecodingVariants is a finding's decoding-variant evidence list (burpsy-react-ui-79ld). The
+// MarshalJSON rule is the one MethodDeclines established: an empty list is an empty list, never
+// a null.
+type DecodingVariants []string
+
+// MarshalJSON keeps an empty list an empty list.
+func (d DecodingVariants) MarshalJSON() ([]byte, error) {
+	if d == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(d))
 }
 
 // TriageNote is one LLM triage verdict attached to a finding (ei0v).

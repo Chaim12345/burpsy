@@ -205,7 +205,16 @@ func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSende
 // (sender.FollowRedirectsAfterPolicy), metered as an attempt with its outcome, and counted against the
 // run's request budget. A hop the scope refused is a refusal on the probe's own gate.
 func (h *ProbeHarness) SendFollowing(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
-	mutated, err := point.Apply(h.reqBytes, payload, false)
+	return h.SendFollowingOpts(ctx, point, payload, bcheck.ApplyOptions{})
+}
+
+// SendFollowingOpts is SendFollowing with the apply options (burpsy-react-ui-79ld): the decoding
+// variants send payload bytes that must reach the wire verbatim — a percent-escape the
+// application is meant to decode, an overlong or invalid UTF-8 sequence — so their probes pass
+// ApplyOptions.Raw and every other behaviour of SendFollowing is unchanged.
+func (h *ProbeHarness) SendFollowingOpts(ctx context.Context, point bcheck.InsertionPoint, payload string,
+	opts bcheck.ApplyOptions) (ProbeResponse, error) {
+	mutated, err := point.ApplyOpts(h.reqBytes, payload, false, opts)
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
 	}

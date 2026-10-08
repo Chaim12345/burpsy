@@ -1669,6 +1669,21 @@ func clauseRemovalSep(s string, start, end int, sep byte) (int, int) {
 	return s0, s1
 }
 
+// ApplyOptions tunes how Apply places a payload (burpsy-react-ui-79ld).
+//
+// Raw is the decoding-variant escape policy: a payload whose bytes ARE the probe — a
+// percent-escape the application is meant to decode, an overlong or invalid UTF-8 sequence —
+// must reach the wire verbatim, because percentEscape's own `%`→`%25` and non-ASCII escaping
+// would hand the application a different payload than the check wrote (the URL-decoding
+// variant double-encoded; the UTF-8 variants never arrive as bytes at all). What Raw keeps is
+// everything the REQUEST needs to stay parseable: the `k=v` structural separators and the
+// request-line-unsafe bytes. A container that re-encodes by design — a JSON string literal, an
+// XML text node — is not loosened by Raw: a raw 0xC0 byte inside a JSON string is not a
+// "decoding variant", it is a malformed document, and no check asks for it.
+type ApplyOptions struct {
+	Raw bool
+}
+
 // Apply splices payload into this point of req, which must be the request the
 // point was enumerated from. appending keeps the existing value and adds to it;
 // otherwise it is overwritten. The new raw request is returned.
@@ -1681,6 +1696,11 @@ func clauseRemovalSep(s string, start, end int, sep byte) (int, int) {
 // Everything else in the request is untouched, which is what makes a resulting
 // finding attributable to the point's name.
 func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]byte, error) {
+	return p.ApplyOpts(req, payload, appending, ApplyOptions{})
+}
+
+// ApplyOpts is Apply with options. See ApplyOptions for what Raw changes.
+func (p *InsertionPoint) ApplyOpts(req []byte, payload string, appending bool, opts ApplyOptions) ([]byte, error) {
 	// A manual point splices into the RAW request bytes at its marked span, bypassing the component
 	// parser entirely — the operator marked a byte range, not a parsed parameter (burpsy-react-ui-806w).
 	if p.loc.kind == locManualRaw {
@@ -1712,7 +1732,11 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 	var escaped string
 	switch p.coding {
 	case codingForm:
-		escaped = percentEscape(payload)
+		// Raw loosens only THIS escape (79ld): the decoding-variant payloads live in `k=v`
+		// containers, and every other coding either splices verbatim already (cookie, raw-safe)
+		// or re-encodes by the grammar of its container (JSON, XML), which Raw deliberately
+		// does not loosen — see ApplyOptions.
+		escaped = percentEscapeOpts(payload, opts.Raw)
 	case codingJson:
 		escaped = jsonEscape(payload)
 	case codingXML:
@@ -2065,12 +2089,35 @@ func jsonStringValues(s string) []jsonValue {
 // ASCII — space included — cannot appear in a request line at all. Everything
 // else is passed through, so an injection payload arrives looking like itself.
 func percentEscape(s string) string {
+	return percentEscapeOpts(s, false)
+}
+
+// percentEscapeOpts is percentEscape with the Raw policy (burpsy-react-ui-79ld).
+//
+// Raw drops exactly the two escapes that rewrite a decoding-variant payload rather than
+// transport it: `%` is left alone, so a variant's own percent-escape (`%3C`) is not turned into
+// `%253C` on the wire — one container decode too many, the "double-encoded" payload the
+// application never sees as the check wrote it; and bytes >= 0x7f are left alone, so an
+// overlong or invalid UTF-8 sequence reaches the target as the bytes it is, not as the ASCII
+// text spelling of its hex. What Raw keeps is every escape the REQUEST itself needs: the
+// `k=v` separators (`&`, `=`, `+`, `;`, `#`) and the bytes that cannot appear in a request
+// line. Control bytes stay escaped even under Raw — a raw 0x01 is not a decoding variant, it
+// is a broken request line, and no payload this option exists for needs one.
+func percentEscapeOpts(s string, raw bool) string {
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
-			c <= 0x20 || c >= 0x7f {
+		var escaped bool
+		switch {
+		case raw:
+			// Structural and request-line safety only: `%` and the high bytes pass through.
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20
+		default:
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
+				c <= 0x20 || c >= 0x7f
+		}
+		if escaped {
 			fmt.Fprintf(&sb, "%%%02X", c)
 		} else {
 			sb.WriteByte(c)
