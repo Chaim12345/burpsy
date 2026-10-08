@@ -295,6 +295,8 @@ function App(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const tableStripes = useApp((state) => state.tableStripes);
+ const setTableStripes = useApp((state) => state.setTableStripes);
  const paletteOpen = useApp((state) => state.paletteOpen);
  const setPaletteOpen = useApp((state) => state.setPaletteOpen);
  const shortcutsOpen = useApp((state) => state.shortcutsOpen);
@@ -982,6 +984,17 @@ function App(): JSX.Element {
     run: toggleTheme,
    },
    {
+    id: "cmd:stripes",
+    label: tableStripes ? "Use plain table rows (no zebra stripe)" : "Use zebra-striped table rows",
+    group: "Appearance",
+    keywords: "zebra stripe striping rows table appearance",
+    icon: Rows3,
+    run: () => {
+     setTableStripes(!tableStripes);
+     toast.success(tableStripes ? "Table rows are plain" : "Table rows are zebra-striped");
+    },
+   },
+   {
     id: "cmd:density",
     label: `Use ${density === "compact" ? "comfortable" : "compact"} table rows`,
     group: "Appearance",
@@ -1051,7 +1064,7 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [themeChord, navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
+ }, [themeChord, navigate, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
 
@@ -1306,6 +1319,12 @@ function App(): JSX.Element {
     {
      id: "density",
      actions: [
+      {
+       id: "stripes-toggle",
+       label: "Zebra-striped table rows",
+       checked: tableStripes,
+       onSelect: () => setTableStripes(!tableStripes),
+      },
       {
        id: "density-toggle",
        label: `${density === "compact" ? "Comfortable" : "Compact"} table rows`,

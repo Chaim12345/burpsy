@@ -1709,6 +1709,8 @@ function AppearanceSection(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const tableStripes = useApp((state) => state.tableStripes);
+ const setTableStripes = useApp((state) => state.setTableStripes);
  const editorFont = useApp((state) => state.editorFont);
  const setEditorFont = useApp((state) => state.setEditorFont);
  const editorFontFamily = useApp((state) => state.editorFontFamily);
@@ -1728,6 +1730,16 @@ function AppearanceSection(): JSX.Element {
          {option.label}
         </option>
        ))}
+      </Select>
+     )}
+    </Field>
+    {/* Burp's Settings › Display › Table appearance (desktop/settings/ui/display.html): "Zebra
+        stripe" / "No zebra stripe", zebra by default. */}
+    <Field label="Table appearance" hint="Zebra stripes shade every other row, so a long table reads across.">
+     {(id) => (
+      <Select id={id} value={tableStripes ? "zebra" : "plain"} onChange={(event) => setTableStripes(event.target.value === "zebra")}>
+       <option value="zebra">Zebra stripe</option>
+       <option value="plain">No zebra stripe</option>
       </Select>
      )}
     </Field>

@@ -1265,8 +1265,30 @@ tbody td {
   cursor: default;
 }
 
+/* Zebra striping (69p0): Burp's table_appearance.zebra_striping, on by default. color.ink mixed
+   into paper-raised at a per-theme opacity (pending tokens opacity.stripe-dark/-light; the
+   measured contrast is in penpot-export.json's _stripeNote). Declared before the hover and
+   selection rules so both still win on a striped row, and below the highlight rule's
+   specificity so a highlighted row keeps its colour. */
+:root {
+  --stripe-alpha: var(--opacity-stripe-dark);
+}
+
+[data-theme="light"] {
+  --stripe-alpha: var(--opacity-stripe-light);
+}
+
+.table-stripes .row-stripe td,
+.table-stripes.simple-stripes tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--ink) calc(var(--stripe-alpha) * 100%), var(--paper-raised));
+}
+
+/* Hover mixes into the same per-theme base as selection (--row-selected-base, below). Over dark's
+   --paper-raised the 7% info tint measured 4.47:1 for body text and ~4.0:1 for muted cells
+   (pre-existing; it failed axe whenever the pointer rested on a row, found in the 69p0 drive);
+   over --paper-sunken it is 6.4:1 and 5.8:1. */
 .data-row:hover td {
-  background: color-mix(in srgb, var(--info) 7%, var(--paper-raised));
+  background: color-mix(in srgb, var(--info) 7%, var(--row-selected-base));
 }
 
 /* The surface a selected row's accent is mixed into (fe16). Dark mixes into --paper-sunken, not

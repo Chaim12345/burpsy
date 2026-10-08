@@ -314,6 +314,10 @@ export function VirtualTable<T>({
   // when no prop is passed), and an explicit prop still wins when a page supplies one.
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  // Zebra striping (69p0), Burp's table_appearance.zebra_striping. Applied per row from the
+  // virtual index, never :nth-child — the virtualizer's padding row and its windowing would flip
+  // the parity as the table scrolls, and the stripes would swap under the operator.
+  const stripes = useApp((state) => state.tableStripes);
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -621,7 +625,7 @@ export function VirtualTable<T>({
   const visibleColumnCount = table.getVisibleLeafColumns().length;
 
   return (
-    <div className={cn("table-frame", `density-${density}`)}>
+    <div className={cn("table-frame", `density-${density}`, stripes && "table-stripes")}>
       <div
         ref={setProbe}
         aria-hidden="true"
@@ -838,6 +842,7 @@ export function VirtualTable<T>({
                   height={rowHeight}
                   selected={multiSelect ? selectedSet.has(row.id) : row.id === selectedId}
                   focused={multiSelect && row.id === selectedId}
+                  striped={virtualRow.index % 2 === 1}
                   className={rowClassName?.(row.original)}
                   clickable={Boolean(onSelect) || multiSelect}
                   onRowClick={onRowClick}
@@ -884,11 +889,13 @@ function TableRow<T>({
   onDoubleActivate,
   menuFor,
   docTopic,
+  striped,
 }: {
   row: Row<T>;
   height: number;
   selected: boolean;
   focused: boolean;
+  striped: boolean;
   className?: string;
   clickable: boolean;
   onRowClick: (row: Row<T>, event: React.MouseEvent) => void;
@@ -904,7 +911,7 @@ function TableRow<T>({
     <tr
       style={{ height }}
       aria-selected={selected}
-      className={cn("data-row", selected && "selected-row", focused && "focus-row", clickable && "clickable", className)}
+      className={cn("data-row", striped && "row-stripe", selected && "selected-row", focused && "focus-row", clickable && "clickable", className)}
       // Shift-click is a range select here, not a text selection: without this the browser also
       // paints a text selection across every row between the two clicks.
       onMouseDown={(event) => {
@@ -1009,6 +1016,7 @@ export function SortableTable<T>({
 }): JSX.Element {
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  const stripes = useApp((state) => state.tableStripes);
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const table = useReactTable({
     data,
@@ -1021,7 +1029,7 @@ export function SortableTable<T>({
   });
 
   return (
-    <div className={cn("table-frame", `density-${density}`)} role="group" aria-label={ariaLabel}>
+    <div className={cn("table-frame", `density-${density}`, stripes && "table-stripes")} role="group" aria-label={ariaLabel}>
       <div className="table-scroll">
         <table>
           <thead>
@@ -1056,11 +1064,11 @@ export function SortableTable<T>({
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((row) => (
+            {table.getRowModel().rows.map((row, index) => (
               <SortableRow
                 key={row.id}
                 row={row}
-                className={rowClassName?.(row.original)}
+                className={cn(index % 2 === 1 && "row-stripe", rowClassName?.(row.original))}
                 menuGroups={menuGroups}
                 docTopic={docTopic}
               />
@@ -1122,8 +1130,11 @@ export function SimpleTable({
   // place and consumed here, and the crossing must not silently stop working.
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  const stripes = useApp((state) => state.tableStripes);
   return (
-    <div className={cn("table-frame", "density-" + density, className)}>
+    // SimpleTable renders every row with no padding rows, so :nth-child parity is stable here and
+    // the page's own <tr>s need no class (styles.css, .simple-stripes).
+    <div className={cn("table-frame", "density-" + density, stripes && "table-stripes simple-stripes", className)}>
       <div className="table-scroll">
         <table>
           <thead>
