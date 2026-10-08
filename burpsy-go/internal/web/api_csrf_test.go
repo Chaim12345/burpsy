@@ -99,11 +99,18 @@ func TestCSRFForABodylessGetStillProducesAUsableForm(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
 		t.Fatalf("decode csrf view: %v", err)
 	}
-	if view.Method != "GET" || view.Action != "http://app.test/search?q=1" {
-		t.Fatalf("method/action = %q/%q; a GET PoC replays through the query string in the action", view.Method, view.Action)
+	if view.Method != "GET" {
+		t.Fatalf("method = %q, want GET", view.Method)
 	}
-	if len(view.Params) != 0 {
-		t.Fatalf("params = %+v; a bodyless GET has no body parameters to embed", view.Params)
+	// A GET form replaces its action's query with its own fields, so the query has to travel as
+	// hidden inputs and the action keeps only the path; a query left in the action is dropped by
+	// the browser and the PoC would navigate to /search with nothing (review finding).
+	if len(view.Params) != 1 || view.Params[0]["name"] != "q" || view.Params[0]["value"] != "1" {
+		t.Fatalf("params = %+v, want the query field q=1 embedded", view.Params)
+	}
+	if !strings.Contains(view.HTML, `<form action="http://app.test/search" method="GET">`) ||
+		!strings.Contains(view.HTML, `name="q" value="1"`) {
+		t.Fatalf("the form does not submit q=1 to /search: %s", view.HTML)
 	}
 	found := false
 	for _, note := range view.Notes {
@@ -429,5 +436,50 @@ func TestTheXHRPoCEscapesScriptClosersFromTheCapturedBody(t *testing.T) {
 	}
 	if !strings.Contains(view.HTML, `\u003c/script>`) {
 		t.Errorf("the captured script closer was not escaped into the JS string:\n%s", view.HTML)
+	}
+}
+
+// A form can only send GET or POST: a captured PUT is submitted as POST and the PoC says so (review
+// finding: it used to emit method="PUT", which a browser silently turns into GET).
+func TestCSRFFormForAPutPostsAndSaysWhy(t *testing.T) {
+	s := newTestServer()
+	id := seedCSRFExchange(t, s,
+		"PUT /profile HTTP/1.1\r\nHost: app.test\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nname=x",
+		&core.Exchange{Host: "app.test", Port: 80, Method: "PUT", Path: "/profile"},
+	)
+	var view csrfTestView
+	_ = json.Unmarshal(get(t, s, "/api/exchange/"+strconv.FormatUint(id, 10)+"/csrf?technique=form").Body.Bytes(), &view)
+	if !strings.Contains(view.HTML, `method="POST"`) || strings.Contains(view.HTML, `method="PUT"`) {
+		t.Errorf("form = %s, want method POST", view.HTML)
+	}
+	if !strings.Contains(strings.Join(view.Notes, " "), "only send GET or POST") {
+		t.Errorf("notes = %v, want the reason PUT became POST", view.Notes)
+	}
+}
+
+// Multipart parts are embedded in the captured order, and a file part is named as not embedded.
+func TestCSRFMultipartKeepsPartOrder(t *testing.T) {
+	s := newTestServer()
+	body := "--B\r\nContent-Disposition: form-data; name=\"zeta\"\r\n\r\n1\r\n" +
+		"--B\r\nContent-Disposition: form-data; name=\"alpha\"\r\n\r\n2\r\n" +
+		"--B\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"a.txt\"\r\n\r\nx\r\n" +
+		"--B\r\nContent-Disposition: form-data; name=\"mid\"\r\n\r\n3\r\n--B--\r\n"
+	id := seedCSRFExchange(t, s,
+		"POST /up HTTP/1.1\r\nHost: app.test\r\nContent-Type: multipart/form-data; boundary=B\r\n\r\n"+body,
+		&core.Exchange{Host: "app.test", Port: 80, Method: "POST", Path: "/up"},
+	)
+	for i := 0; i < 5; i++ {
+		var view csrfTestView
+		_ = json.Unmarshal(get(t, s, "/api/exchange/"+strconv.FormatUint(id, 10)+"/csrf?technique=multipart").Body.Bytes(), &view)
+		var names []string
+		for _, p := range view.Params {
+			names = append(names, p["name"].(string))
+		}
+		if strings.Join(names, ",") != "zeta,alpha,mid" {
+			t.Fatalf("part order = %v, want zeta, alpha, mid every time", names)
+		}
+		if !strings.Contains(strings.Join(view.Notes, " "), `"doc"`) {
+			t.Fatalf("notes = %v, want the file part named as not embedded", view.Notes)
+		}
 	}
 }

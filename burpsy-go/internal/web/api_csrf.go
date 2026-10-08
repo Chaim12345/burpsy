@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -173,20 +174,26 @@ func (s *Server) handleCSRF(w http.ResponseWriter, r *http.Request, id core.Exch
 			// displays a warning."
 			notes = append(notes, "the form technique replays application/x-www-form-urlencoded bodies; this request's body ("+contentType+") was not one, so no body parameters were embedded — a dropped multipart boundary or a raw blob is not a proof")
 		} else {
-			notes = append(notes, "the request carried no form body; the PoC replays through the query string in the action")
+			notes = append(notes, "the request carried no form body")
 		}
-		csrfHTML = buildCSRFFormHTML(method, action, "", params, autoSubmit)
+		formMethod, formAction, query, formNotes := csrfFormTarget(method, action)
+		params, notes = append(query, params...), append(notes, formNotes...)
+		csrfHTML = buildCSRFFormHTML(formMethod, formAction, "", params, autoSubmit)
 
 	case "multipart":
 		mpParams, mpNotes := multipartParams(contentType, body)
 		params, notes = mpParams, mpNotes
-		csrfHTML = buildCSRFFormHTML(method, action, "multipart/form-data", params, autoSubmit)
+		formMethod, formAction, _, formNotes := csrfFormTarget(nonGetMethod(method), action)
+		notes = append(notes, formNotes...)
+		csrfHTML = buildCSRFFormHTML(formMethod, formAction, "multipart/form-data", params, autoSubmit)
 
 	case "plain":
 		eq := strings.Index(body, "=")
 		if eq < 0 {
 			notes = append(notes, "the plain-text technique needs an equals character in the body to reproduce it; this body has none, so the form cannot send it exactly — consider the cross-domain XHR technique")
-			csrfHTML = buildCSRFFormHTML(method, action, "text/plain", nil, autoSubmit)
+			formMethod, formAction, _, formNotes := csrfFormTarget(nonGetMethod(method), action)
+			notes = append(notes, formNotes...)
+			csrfHTML = buildCSRFFormHTML(formMethod, formAction, "text/plain", nil, autoSubmit)
 			break
 		}
 		// The browser's text/plain submission sends name + "=" + value and
@@ -200,13 +207,20 @@ func (s *Server) handleCSRF(w http.ResponseWriter, r *http.Request, id core.Exch
 		} else {
 			notes = append(notes, "the browser's text/plain submission appends a trailing carriage return and line feed, so the body it sends is the captured body plus those two bytes")
 		}
+		if strings.Contains(strings.ReplaceAll(body, "\r\n", ""), "\n") {
+			// Form submission normalises every line break in a value to CRLF, so a body with bare
+			// LF line breaks (pretty-printed JSON, say) arrives with CRLF ones instead.
+			notes = append(notes, "the body's bare LF line breaks are sent as CRLF, because a browser normalises line breaks in a submitted form value")
+		}
 		params = append(params, csrfParam{Name: name, Value: value})
 		if ct := contentType; ct != "" {
 			notes = append(notes, "the browser submits this form as Content-Type: text/plain, not the captured "+ct+"; an application that rejects unexpected content types may refuse the request, and such CSRF-like conditions might not be practically exploitable")
 		} else {
 			notes = append(notes, "the browser submits this form as Content-Type: text/plain, not the captured request's content type; an application that rejects unexpected content types may refuse the request")
 		}
-		csrfHTML = buildCSRFFormHTML(method, action, "text/plain", params, autoSubmit)
+		formMethod, formAction, _, formNotes := csrfFormTarget(nonGetMethod(method), action)
+		notes = append(notes, formNotes...)
+		csrfHTML = buildCSRFFormHTML(formMethod, formAction, "text/plain", params, autoSubmit)
 
 	case "xhr":
 		notes = append(notes, xhrNotes(contentType)...)
@@ -270,23 +284,77 @@ func multipartParams(contentType, body string) ([]csrfParam, []string) {
 			"the multipart technique needs a parsable multipart/form-data body with a boundary; this request's content type (" + contentType + ") did not carry one, so no parts were embedded",
 		}
 	}
+	// Part by part, in the captured order — a form's field order is part of the request it sends —
+	// and in memory: ReadForm would spill large parts to temp files nobody removes.
 	reader := multipart.NewReader(strings.NewReader(body), params["boundary"])
-	form, err := reader.ReadForm(1 << 20)
-	if err != nil {
-		return []csrfParam{}, []string{
-			"the captured multipart body could not be parsed (" + err.Error() + "); no parts were embedded, because a half-parsed body is not a proof",
+	out := []csrfParam{}
+	var notes []string
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
 		}
-	}
-	out := make([]csrfParam, 0, len(form.Value))
-	for name, values := range form.Value {
-		for _, value := range values {
-			out = append(out, csrfParam{Name: name, Value: value})
+		if err != nil {
+			return []csrfParam{}, []string{
+				"the captured multipart body could not be parsed (" + err.Error() + "); no parts were embedded, because a half-parsed body is not a proof",
+			}
 		}
+		if part.FileName() != "" {
+			notes = append(notes, "file part "+strconv.Quote(part.FormName())+" was not embedded: a generated form cannot attach a file")
+			continue
+		}
+		value, err := io.ReadAll(io.LimitReader(part, 1<<20))
+		if err != nil {
+			return []csrfParam{}, []string{"the captured multipart body could not be read (" + err.Error() + "); no parts were embedded"}
+		}
+		out = append(out, csrfParam{Name: part.FormName(), Value: string(value)})
 	}
 	if len(out) == 0 {
 		return out, []string{"the multipart body parsed to no form fields; file parts cannot be replayed by a generated form"}
 	}
-	return out, []string{"the browser regenerates the multipart boundary when the form submits, so the framing differs from the captured body; the parts' names and values are reproduced"}
+	return out, append(notes, "the browser regenerates the multipart boundary when the form submits, so the framing differs from the captured body; the parts' names and values are reproduced")
+}
+
+// nonGetMethod is the method a body-carrying form technique submits with: a captured GET has no body
+// a multipart or text/plain form could carry, so those techniques post it.
+func nonGetMethod(method string) string {
+	if strings.EqualFold(method, "GET") || strings.EqualFold(method, "HEAD") {
+		return "POST"
+	}
+	return method
+}
+
+// csrfFormTarget is the method and action an HTML form can actually submit for the captured request,
+// and the query fields a GET form must carry itself.
+//
+// A form submitted with method GET replaces its action's query string with its own fields, so a
+// captured GET's query becomes hidden inputs and the action keeps only the path; leaving the query
+// in the action would navigate to the path with an empty query. A form can only send GET or POST:
+// any other method is sent as POST, said so, because the cross-domain XHR technique is the one that
+// can send it.
+func csrfFormTarget(method, action string) (string, string, []csrfParam, []string) {
+	switch strings.ToUpper(method) {
+	case "GET", "HEAD":
+		u, err := url.Parse(action)
+		if err != nil || u.RawQuery == "" {
+			return "GET", action, []csrfParam{}, nil
+		}
+		var query []csrfParam
+		for _, pair := range strings.Split(u.RawQuery, "&") {
+			if pair == "" {
+				continue
+			}
+			name, value, _ := strings.Cut(pair, "=")
+			query = append(query, csrfParam{Name: decodeFormComponent(name), Value: decodeFormComponent(value)})
+		}
+		u.RawQuery = ""
+		return "GET", u.String(), query, []string{"a GET form sends its fields as the query string, so the captured query is embedded as hidden inputs"}
+	case "POST":
+		return "POST", action, []csrfParam{}, nil
+	default:
+		return "POST", action, []csrfParam{}, []string{"an HTML form can only send GET or POST, so the captured " +
+			strings.ToUpper(method) + " request is submitted as POST; use the cross-domain XHR technique to send " + strings.ToUpper(method)}
+	}
 }
 
 // corsSimpleContentTypes are the Content-Type values that keep a cross-domain

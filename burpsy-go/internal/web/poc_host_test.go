@@ -128,3 +128,43 @@ func TestNoPoCHostStartsWithoutATestURL(t *testing.T) {
 		t.Error("a PoC host started although no test URL was requested")
 	}
 }
+
+// The PoC host holds a bounded number of unfetched pages, and an expired page is gone (review
+// finding: every refetch minted a page that was held forever).
+func TestThePocHostIsBounded(t *testing.T) {
+	s := newTestServer()
+	var urls []string
+	for i := 0; i < maxPocPages+5; i++ {
+		u, err := s.mintPocURL("<p>x</p>")
+		if err != nil {
+			t.Fatal(err)
+		}
+		urls = append(urls, u)
+	}
+	s.poc.mu.Lock()
+	n := len(s.poc.pages)
+	for token, page := range s.poc.pages {
+		page.expires = page.expires.Add(-2 * pocPageTTL)
+		s.poc.pages[token] = page
+		break
+	}
+	s.poc.mu.Unlock()
+	if n != maxPocPages {
+		t.Errorf("%d pages held, want the bound %d", n, maxPocPages)
+	}
+	gone := 0
+	for _, u := range urls {
+		resp, err := http.Get(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusGone {
+			gone++
+		}
+	}
+	// The five evicted by the bound, plus the one expired above.
+	if gone != 6 {
+		t.Errorf("%d URLs answered 410, want 6 (5 evicted, 1 expired)", gone)
+	}
+}

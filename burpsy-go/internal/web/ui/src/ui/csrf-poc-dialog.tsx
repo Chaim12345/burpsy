@@ -50,19 +50,39 @@ export function CsrfPocDialog(): JSX.Element {
   queryKey: ["csrf-poc", exchange?.id ?? 0, technique, autoSubmit],
   enabled: open && exchange !== null,
   queryFn: () =>
-   api<CsrfView>(`/api/exchange/${exchange!.id}/csrf?technique=${technique}&auto_submit=${autoSubmit}&test_url=true`),
+   api<CsrfView>(`/api/exchange/${exchange!.id}/csrf?technique=${technique}&auto_submit=${autoSubmit}`),
  });
 
  const view = query.data;
 
+ // A one-shot page is minted only when the operator asks to test, never on a refetch: each mint is a
+ // page the PoC host holds until it is fetched or expires.
  const testInBrowser = () => {
-  if (!view?.test_url) {
-   toast.error("No test URL was minted; regenerate first");
-   return;
-  }
-  // The PoC host's own origin — never the console's; see the dialog's doc
-  // comment for why that property is the point.
-  window.open(view.test_url, "_blank", "noopener");
+  if (!exchange) return;
+  // Opened synchronously, inside the click, so a popup blocker sees the gesture; pointed at the
+  // page once it is minted.
+  const tab = window.open("about:blank", "_blank");
+  void api<CsrfView>(`/api/exchange/${exchange.id}/csrf?technique=${technique}&auto_submit=${autoSubmit}&test_url=true`).then(
+   (minted) => {
+    if (!minted.test_url) {
+     tab?.close();
+     toast.error("No test URL was minted");
+     return;
+    }
+    // The PoC host's own origin — never the console's; see the dialog's doc comment for why that
+    // property is the point. The opener is cut so the page cannot reach back into the console.
+    if (tab) {
+     tab.opener = null;
+     tab.location.href = minted.test_url;
+    } else {
+     window.open(minted.test_url, "_blank", "noopener");
+    }
+   },
+   (failure: unknown) => {
+    tab?.close();
+    toast.error(failure instanceof Error ? failure.message : "The test page could not be minted");
+   },
+  );
  };
 
  return (
