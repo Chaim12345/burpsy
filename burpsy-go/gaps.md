@@ -1747,9 +1747,11 @@ the two differ. Burp evidence is the decompiled agent registry
   call with a progress token; `notifications/message` for finished tasks and High/Critical issues.
 - **Divergences:** the handle has no `ttlMs` — a finished task's row lives until the registry's
   500-row bound evicts it, and an async audit's full result body is kept for the last 64 tasks. The
-  window applies to the audit, crawl, API-scan and selection-audit routes; Intruder still answers
-  synchronously (its run returns its own report and can be stopped through `POST
-  /api/intruder/attacks/{task}/stop`). Push is for tasks finished and issues found *after* the session
+  window applies to any call answering 202 with a `task_id` (crawl, API scan, selection audit), and
+  the transport starts only `POST /api/audit/{id}` that way. Still synchronous through MCP: Intruder
+  (its run returns its own report and can be stopped through `POST /api/intruder/attacks/{task}/stop`),
+  the queue's "audit again" (`POST /api/scanner/audit-items/{id}/again`), and the legacy alias
+  `POST /api/scanner/audit` (not on the grouped surface). Push is for tasks finished and issues found *after* the session
   started.
 
 ### Skills (burpsy-react-ui-ulsy)

@@ -48,7 +48,7 @@ Implemented methods:
 | `notifications/cancelled` | cancels the named call in flight; a call waiting on a console task also cancels the task (`POST /api/tasks/{id}/cancel`). The cancelled call gets no answer. |
 | `logging/setLevel` | sets the minimum level of pushed `notifications/message` (default `info`). |
 | `prompts/list`, `prompts/get` | the console's skill library as MCP prompts (below). |
-| `tools/list` | the grouped surface (62 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
+| `tools/list` | the grouped surface (62 tools, plus `burpsy_confirm` and `burpsy_task_status`) — or, with `-surface routes`, one tool per manifest route. |
 | `tools/call` | forwards the call to the console and returns its answer. Dispatched concurrently (at most 8 at once), so a long call does not stop `ping`, `tools/list` or another call; every write goes through one serialised encoder. |
 | `ping` | an empty result. |
 
@@ -90,6 +90,11 @@ Two rules are enforced by tests rather than by review:
    operations sit together. `readOnlyHint` is additionally false for any tool that can PUT, PATCH or
    DELETE: that is why `DELETE /api/history`, which the manifest classes `read`
    (burpsy-react-ui-gf68), is its own `history_delete` tool rather than an op of `history`.
+
+Size, measured on this branch: the grouped surface is 64 tools and about 224 KB of `tools/list`
+JSON with every body and query typed; the route surface is 155 tools and about 326 KB typed; before
+this work the route surface was 148 tools and about 226 KB with untyped bodies. Grouping buys the tool
+count, and typing spends roughly what grouping saved.
 
 Each grouped descriptor's annotations carry `group`, `shortDescription` and `operations` beside the
 risk keys. The server refuses to start if the table names a route or verb the manifest does not
