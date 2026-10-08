@@ -64,6 +64,7 @@ import {
   type SetSize,
 } from "../lib/types.tools";
 import { HttpEditor } from "../ui/editor";
+import { ExtractGrepDialog } from "../ui/extract-grep-dialog";
 import { PageHeader, SectionHeading } from "../ui/layout";
 import { JsonView } from "../ui/json";
 import {
@@ -387,7 +388,10 @@ function targetScheme(target: string): "http" | "https" {
  * attack ordinal is not one. Fabricating an exchange id to reuse the menu would put the rest of
  * its actions — Add to scope, Record an issue, annotate — behind an id that names nothing.
  */
-function useResultMenu(target: string): (row: ResultHandoff) => MenuGroup[] {
+function useResultMenu(
+  target: string,
+  onDefineExtract?: (responseId: number, label: string) => void,
+): (row: ResultHandoff) => MenuGroup[] {
   const openRepeaterTab = useApp((state) => state.openRepeaterTab);
   const setComparerSlot = useApp((state) => state.setComparerSlot);
   const setRoute = useApp((state) => state.setRoute);
@@ -470,6 +474,30 @@ function useResultMenu(target: string): (row: ResultHandoff) => MenuGroup[] {
             },
           ],
         },
+        // Burp's "Define extract grep from response" (df8r). Only a row whose response was stored can
+        // offer it — the operator highlights the value in that response — so every other row says why
+        // not rather than opening an empty dialog.
+        ...(onDefineExtract
+          ? [
+              {
+                id: "grep",
+                actions: [
+                  {
+                    id: "define-extract-grep",
+                    label: "Define extract grep from response",
+                    icon: FileSearch,
+                    disabled: noResponse,
+                    hint: noResponse
+                      ? "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row."
+                      : "Highlight the value in this response and use it as the attack's Grep extract rule",
+                    onSelect: () => {
+                      if (row.responseId !== null) onDefineExtract(row.responseId, row.label);
+                    },
+                  },
+                ],
+              },
+            ]
+          : []),
         {
           id: "clipboard",
           actions: [
@@ -486,7 +514,7 @@ function useResultMenu(target: string): (row: ResultHandoff) => MenuGroup[] {
         },
       ];
     },
-    [openRepeaterTab, setComparerSlot, setRoute, target],
+    [openRepeaterTab, setComparerSlot, setRoute, target, onDefineExtract],
   );
 }
 
@@ -1336,7 +1364,10 @@ export function IntruderPage(): JSX.Element {
   // Results handoff (burpsy-react-ui-79u). A bucket's stored exchange is its exemplar's, so both
   // row types are labelled by the ordinal whose bytes they actually carry — a bucket row that said
   // "bucket 200/1024" while resending ordinal 7's request would be naming the wrong thing.
-  const resultMenu = useResultMenu(target);
+  // "Define extract grep from response" (df8r): which stored response the dialog has open.
+  const [extractFrom, setExtractFrom] = useState<{ id: number; label: string } | null>(null);
+  const onDefineExtract = useCallback((id: number, label: string) => setExtractFrom({ id, label }), []);
+  const resultMenu = useResultMenu(target, onDefineExtract);
   const bucketMenu = useCallback(
     (bucket: ResultBucket) =>
       resultMenu({
@@ -3409,6 +3440,18 @@ export function IntruderPage(): JSX.Element {
         </TabsContent>
       </Tabs>
 
+      {extractFrom ? (
+        <ExtractGrepDialog
+          responseId={extractFrom.id}
+          label={extractFrom.label}
+          currentExtract={grepExtract}
+          onSave={(regex) => {
+            setGrepExtract(regex);
+            toast.success("Grep extract set — it applies to the next attack");
+          }}
+          onClose={() => setExtractFrom(null)}
+        />
+      ) : null}
       {openMessage ? (
         <StoredMessage id={openMessage.id} label={openMessage.label} onClose={() => setOpenMessage(null)} />
       ) : null}

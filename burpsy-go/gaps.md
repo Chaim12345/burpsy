@@ -1707,3 +1707,30 @@ and the effective settings echoed as `report.grep_payloads`.
   processing rules — the same point Burp takes it. Recursive-grep and Collaborator payloads are never
   URL-encoded, so both forms are the same bytes.
 - Not exported to the CSV; the JSON report carries the counts.
+
+### Define extract grep from response (df8r)
+
+**Burp:** results workflow "Define extract grep from response — Open the response extraction rule dialog"; the
+dialog (`Zh5c`) rebuilds its rule from a highlighted selection ("Update config based on selection"), growing a
+start-after anchor and an end-at delimiter at token boundaries (6 to 200 characters) until each occurs first
+against the selection, and offers it as `quote(prefix)(.*?)quote(suffix)`, or `$` with no suffix.
+**burpsy:** the row menu's "Define extract grep from response" opens the row's stored response; highlighting
+in the Raw view rebuilds the rule (`lib/intruder-extract.ts`), the rule is previewed against that response,
+and it is saved into the attack's Grep extract field.
+
+- **One rule, in regex form.** burpsy's Grep - Extract is a single regex (first group of the first match), not
+  Burp's list of start/end items, so the rule is stored in Burp's regex-group form, and an existing rule is
+  named and replaced deliberately.
+- **`([\s\S]*?)`, not `(.*?)`.** A highlighted value can span lines, and neither Go's RE2 nor the browser's
+  RegExp lets `.` cross a newline by default. The same pattern string runs in both: the browser preview and
+  the engine are checked against shared golden cases (`intruder-extract.golden.json`, run through
+  `/api/intruder/run` in `intruder_extract_golden_test.go`).
+- **Anchors are cut at 200, not abandoned.** Burp gives up on a delimiter whose token runs past 200
+  characters (a JWT, a base64 blob) and extracts to the end of the response; burpsy keeps the first 200
+  characters, and the first-occurrence check decides whether that is enough.
+- **Save requires the preview to extract exactly the highlighted text at the highlighted offset.** Only rows
+  with a stored response offer the action (the bucket exemplar, or the attempt that opened its bucket).
+- **Applies to the next attack.** Burp can re-run grep over stored results when full payloads are stored; the
+  rows of an existing burpsy report keep what they extracted.
+- The preview runs on the response as text; a response whose bytes are not valid UTF-8 can preview
+  differently from what the engine matches.
