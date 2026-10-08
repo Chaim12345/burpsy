@@ -1751,3 +1751,15 @@ the two differ. Burp evidence is the decompiled agent registry
   synchronously (its run returns its own report and can be stopped through `POST
   /api/intruder/attacks/{task}/stop`). Push is for tasks finished and issues found *after* the session
   started.
+
+### Skills (burpsy-react-ui-ulsy)
+- **Burp:** PortSwigger-packaged skills run with `run_skill_script` (`McpBurpTool.java`), delivering
+  files to a code-execution sandbox (`toolargs/CodeExecutionMeta.java`); listed in the client with the
+  tools they use (`desktop/burp-at/skills.html`).
+- **burpsy:** an operator-named directory of JSON manifests (`-skills DIR`, `internal/skills`), served
+  as MCP prompts with a banner naming the tools each skill calls; per-project disable in Settings.
+- **Divergence:** prompt-only skills run; a script-bearing skill is listed as unavailable with its
+  reason, because burpsy has no scripting runtime yet (burpsy-react-ui-wiwh). There is no packaged
+  library — burpsy ships the mechanism, not PortSwigger's techniques. The per-project switch is its
+  own setting (`skills.disabled`) rather than part of the per-tool policy store planned in
+  burpsy-react-ui-2jig, which arrives in the second 2jrr PR.

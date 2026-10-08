@@ -79,6 +79,8 @@ var uiRouteExempt = map[string]string{
 		"follows the store, and the console's own Add to site map uses POST /api/sitemap",
 	"/api/datasets/": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
 		"datasets MCP tool, burpsy-react-ui-co88); the console pages each list through its own route",
+	"/api/skills/": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
+		"console's Skills card lists and switches skills through /api/skills and /api/skills/disabled",
 	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
 		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
 		"in_scope verdict on every history row and edits the rules through /api/scope",

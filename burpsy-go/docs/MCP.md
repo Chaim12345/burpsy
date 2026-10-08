@@ -47,6 +47,7 @@ Implemented methods:
 | `notifications/initialized` | starts the console watcher (below). Like every notification it gets **no** reply — answering one makes a client that reuses ids mis-attribute the reply. |
 | `notifications/cancelled` | cancels the named call in flight; a call waiting on a console task also cancels the task (`POST /api/tasks/{id}/cancel`). The cancelled call gets no answer. |
 | `logging/setLevel` | sets the minimum level of pushed `notifications/message` (default `info`). |
+| `prompts/list`, `prompts/get` | the console's skill library as MCP prompts (below). |
 | `tools/list` | the grouped surface (62 tools, plus `burpsy_confirm`) — or, with `-surface routes`, one tool per manifest route. |
 | `tools/call` | forwards the call to the console and returns its answer. Dispatched concurrently (at most 8 at once), so a long call does not stop `ping`, `tools/list` or another call; every write goes through one serialised encoder. |
 | `ping` | an empty result. |
@@ -214,6 +215,20 @@ longest-prefix resolver, so the binding and the gate cannot disagree about which
   `{"event":"issue.found","issue_id","severity",…}` for each **High or Critical** issue that appeared
   since the session began (a baseline is taken first, so nothing older is announced). `initialize`
   advertises `capabilities.logging`.
+
+## Skills as prompts (burpsy-react-ui-ulsy)
+
+`burpsy -skills DIR` loads a skill library: one `<name>.json` manifest per skill —
+`{"name", "description", "tools": [...], "arguments": [{"name","description","required"}],
+"prompt": "… {{argument}} …"}` (or `"prompt_file"`, a file in the same directory). The transport
+publishes them through MCP's prompts capability: `prompts/list` offers every skill that is available
+and not disabled for the project, and `prompts/get` renders one with its arguments, prefixed by a
+banner — `[burpsy skill NAME] description` / `Tools this skill calls: …` — flagging any tool the
+current surface does not publish. A manifest that names a `"script"` loads but is **unavailable**
+(script-bearing skills run through the scripting runtime, burpsy-react-ui-wiwh); a manifest that does
+not parse is refused and listed with why (`GET /api/skills`). The console's **Settings › Skills** card
+switches a skill off for the current project (`PUT /api/skills/disabled`, saved with `-db`). An
+unreachable console is a JSON-RPC error, not an empty prompt list.
 
 ## Honest limits
 

@@ -29,6 +29,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/skills"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
@@ -69,6 +70,7 @@ func main() {
 	// this flag is the only way one is admitted. Nothing is started here — a load is an act the operator
 	// performs from the Extensions tab — and a name that is not on this list cannot be loaded at all,
 	// the same gate -tools puts in front of `run tool`.
+	skillsDir := flag.String("skills", "", "load the skill library from DIR: one <name>.json manifest per skill, published to MCP clients as prompts")
 	pluginsFlag := flag.String("plugins", "", "allowlist burpsy plugins for the Extender: name=/path/to/plugin (comma-separated name=path)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
@@ -733,6 +735,20 @@ func main() {
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
 		WithNetAuthRestoreNotes(netAuthNotes)
+	// The skill library (burpsy-react-ui-ulsy). An unreadable directory refuses to start: the operator
+	// named it, and a console that came up without it would serve an empty library as though it were
+	// theirs. A refused manifest is logged and served in the library's refused list.
+	if *skillsDir != "" {
+		lib, serr := skills.Load(*skillsDir)
+		if serr != nil {
+			log.Fatalf("Failed to load skills from %s: %v", *skillsDir, serr)
+		}
+		for _, e := range lib.Errors {
+			logger.Warn("skill manifest refused", zap.String("file", e.File), zap.String("error", e.Error))
+		}
+		logger.Info("skills loaded", zap.String("dir", *skillsDir), zap.Int("skills", len(lib.Skills)), zap.Int("refused", len(lib.Errors)))
+		webServer.WithSkills(lib)
+	}
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.

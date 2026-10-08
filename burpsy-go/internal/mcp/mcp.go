@@ -477,6 +477,10 @@ func (s *Server) handle(ctx context.Context, req request) (response, bool) {
 		return s.callTool(ctx, req), true
 	case "logging/setLevel":
 		return s.setLevel(req), true
+	case "prompts/list":
+		return s.listPrompts(ctx, req), true
+	case "prompts/get":
+		return s.getPrompt(ctx, req), true
 	default:
 		return s.fail(req, codeMethodNotFound, "method %q is not implemented", req.Method), true
 	}
@@ -517,6 +521,8 @@ type capabilities struct {
 	// Logging is advertised when the console watcher is on: task completion and High findings arrive
 	// as notifications/message, and logging/setLevel filters them.
 	Logging *struct{} `json:"logging,omitempty"`
+	// Prompts publishes the console's skill library (burpsy-react-ui-ulsy).
+	Prompts promptsCapability `json:"prompts"`
 }
 
 type toolsCapability struct {

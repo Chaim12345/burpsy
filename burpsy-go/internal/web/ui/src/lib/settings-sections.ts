@@ -105,6 +105,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "llm ai triage second look endpoint model openai",
   },
   {
+    id: "skills",
+    title: "Skills",
+    summary: "The skill library loaded with -skills DIR: packaged prompt techniques an MCP client invokes, the tools each one calls, and which this project turns off.",
+    keywords: "skills prompts mcp agent techniques library disable",
+  },
+  {
     id: "browser-engine",
     title: "Browser engine",
     summary: "Which headless browser runs the DOM-based checks. Changing it takes a restart.",

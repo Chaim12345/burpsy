@@ -2524,6 +2524,28 @@ func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
 	return s.setSetting("network.settings", string(encoded))
 }
 
+// SaveDisabledSkills persists the project's disabled-skill names (burpsy-react-ui-ulsy).
+func (s *Store) SaveDisabledSkills(names []string) error {
+	b, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("skills.disabled", string(b))
+}
+
+// LoadDisabledSkills returns the project's disabled-skill names; none saved is an empty list.
+func (s *Store) LoadDisabledSkills() ([]string, error) {
+	v, err := s.getSetting("skills.disabled")
+	if err != nil || v == "" {
+		return []string{}, err
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(v), &names); err != nil {
+		return []string{}, fmt.Errorf("stored disabled-skill list is unreadable: %w", err)
+	}
+	return names, nil
+}
+
 // SaveBrowserSettings persists the operator browser's settings (burpsy-react-ui-bufa) with the
 // project. Stored as the browser package's own JSON, under Burp's key names.
 func (s *Store) SaveBrowserSettings(raw []byte) error {

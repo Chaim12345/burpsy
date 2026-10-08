@@ -135,6 +135,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/scope/check":    {body: typeOf[scopeCheckReq]()},
 	"POST /api/sitemap":        {body: typeOf[sitemapInsertReq]()},
 	"DELETE /api/sitemap":      {body: typeOf[sitemapDeleteReq]()},
+	"PUT /api/skills/disabled": {body: typeOf[skillsDisabledReq]()},
 	"POST /api/sitemap/record": {body: typeOf[sitemapRecordReq]()},
 
 	// ---- Issues -------------------------------------------------------------------------------

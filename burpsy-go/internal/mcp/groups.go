@@ -457,4 +457,8 @@ var notExposed = map[string]string{
 	"GET /api/exchanges/":     "legacy alias of /api/exchange/ (history_annotate's GET); listing it would be a second spelling of one read",
 	"GET /api/findings":       "legacy alias of /api/issues (issues' GET); a second spelling of one read",
 	"POST /api/scanner/audit": "legacy alias of POST /api/audit/{id} (scan); a second spelling of one attack",
+	"GET /api/skills":         "served as MCP prompts: prompts/list reads it, so a skill is invoked as a prompt, not called as a tool",
+	"GET /api/skills/":        "served as MCP prompts: prompts/get renders a skill through it",
+	"PUT /api/skills/disabled": "the operator's per-project switch, set in the console's Settings; an agent sees its effect " +
+		"as the skills prompts/list no longer offers",
 }

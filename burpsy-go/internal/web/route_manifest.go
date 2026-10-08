@@ -953,6 +953,21 @@ var manifest = map[string]route{
 		summary: "record a captured exchange into the site map by id (Burp's add_to_sitemap): already on " +
 			"the map, or pinned past the Delete host/branch/item suppression that hid it",
 	},
+	"/api/skills": {
+		// riskRead: the library loaded from the operator's -skills directory, read-only (ulsy).
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the skill library from -skills DIR: each skill, the tools it calls, whether it is available " +
+			"and disabled for this project, and every refused manifest with why",
+	},
+	"/api/skills/": {
+		methods: []string{"GET"}, risk: riskRead, subPath: "none",
+		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
+	},
+	"/api/skills/disabled": {
+		// riskLocal: a project setting naming which loaded skills are switched off; sends nothing.
+		methods: []string{"PUT"}, risk: riskLocal,
+		summary: "set which skills this project turns off: {\"disabled\":[names]}, the whole list",
+	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",

@@ -28,6 +28,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
+	"github.com/burpsy-go/burpsy/internal/skills"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"go.uber.org/zap"
@@ -161,6 +162,10 @@ type Server struct {
 	tasks      *dash.Registry
 	// finished holds async tasks' finished bodies for GET /api/tasks/{id} (burpsy-react-ui-wdza).
 	finished taskResultStore
+	// skills is the operator's -skills library, and skillsMem the disabled list when no project
+	// database holds it (burpsy-react-ui-ulsy).
+	skills    *skills.Library
+	skillsMem skillsState
 	// attacks is the live table of Intruder attacks this process is running, keyed by dashboard task
 	// id, so pause/resume/stop can reach one from another connection while /api/intruder/run holds the
 	// attack's own request open. See api_intruder_control.go.
@@ -941,6 +946,10 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/exchange/", s.handleExchange)
 	s.mux.HandleFunc("/api/exchanges/", s.handleExchange) // legacy alias for /api/exchange/
 	s.mux.HandleFunc("/api/stats", s.handleStats)
+	// The operator's skill library (ulsy): the list, one rendered prompt, the per-project switch.
+	s.mux.HandleFunc("/api/skills", s.handleSkills)
+	s.mux.HandleFunc("/api/skills/", s.handleSkill)
+	s.mux.HandleFunc("/api/skills/disabled", s.handleSkillsDisabled)
 	// One table view over the lists — regex, columns, sort, offset, facets, long-poll (co88).
 	s.mux.HandleFunc("/api/datasets/", s.handleDatasets)
 	// Not under /api: a browser is told to fetch this by URL, and the UI links to it as a download.
