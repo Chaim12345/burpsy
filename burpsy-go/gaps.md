@@ -1691,3 +1691,14 @@ Burp rather than wider:
   bead and Burp's tutorial name only the three kinds above. Also not built: multi-request
   selection (Burp lets one launch cover several selected requests; burpsy guesses one exchange per
   run).
+
+## Scanner C: BCheck interpreter and console authoring (burpsy-react-ui-saq3.4, 2026-10-08)
+
+### `removing` send-request actions (movb)
+- **Burp:** `bcheck-definition-reference.html` — `removing headers|queries: <names>`, `removing query_string|path|method|body`.
+- **burpsy:** all six. Two readings are burpsy's, because the BCheck engine is not in the decompiled tree:
+  `removing queries` ("Removes the value of the specified query parameter(s)") drops each named parameter,
+  name and value, rather than leaving `name=`; `removing path` ("Removes all path parameters") leaves the
+  path `/` and keeps the query. `removing method` sends a request line with no method.
+- The same pass fixed two mis-sends: `appending query_string` replaced the query, and `replacing queries`
+  appended a duplicate instead of replacing the named parameter's value.

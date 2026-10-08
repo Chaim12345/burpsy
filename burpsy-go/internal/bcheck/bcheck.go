@@ -1162,6 +1162,16 @@ func (ctx *Context) interpolate(s string) string {
 				case 't':
 					out.WriteByte('\t')
 					i++
+				// Burp's "Special characters" (movb): \s space, \b backspace, \f form feed.
+				case 's':
+					out.WriteByte(' ')
+					i++
+				case 'b':
+					out.WriteByte('\b')
+					i++
+				case 'f':
+					out.WriteByte('\f')
+					i++
 				case '\\':
 					out.WriteByte('\\')
 					i++
