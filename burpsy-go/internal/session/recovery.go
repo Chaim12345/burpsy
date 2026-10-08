@@ -36,6 +36,14 @@ type LoginOutcome struct {
 	Attempts int               // Succeeded / GaveUp: how many attempts were made
 	Attempt  int               // MacroFailed: the 1-based attempt that failed
 	Failure  *MacroStepFailure // MacroFailed
+	// Values are the {{name}} values the successful run extracted, shared with every caller that
+	// joined this run and with the actions that follow a macro action in the same rule.
+	//
+	// Published from the winning attempt only. A gave-up run's values are the tokens of a login that
+	// did not work, and handing them to an action that writes one into an outgoing request would send
+	// a credential the target has already refused — the same reasoning recordObserved applies to
+	// promoting a macro's steps.
+	Values map[string]string
 }
 
 // MacroStepFailure names one macro step that produced no usable result — it could not be sent, or
@@ -72,6 +80,12 @@ const (
 	RecoveryMacroFailed
 	// RecoveryRetryFailed: re-login succeeded, but resending the original request failed to send.
 	RecoveryRetryFailed
+	// RecoveryRuleApplied: the rule's actions rewrote the request and it was re-sent; no login was
+	// attempted. A kind of its own rather than a flavour of Recovered, because the two are different
+	// facts an operator acts on differently: "a session was established" and "a header was set".
+	// Validity carries the rule's own check of the answer when it states one, Indeterminate
+	// otherwise — including for a rule whose actions never check, which has no verdict to report.
+	RecoveryRuleApplied
 )
 
 // RecoveryOutcome is what handling one observed response produced. Every variant is reachable and
@@ -80,11 +94,16 @@ type RecoveryOutcome struct {
 	Kind          RecoveryOutcomeKind
 	URL           string            // NoRuleApplies
 	LoginAttempts int               // Recovered / StillInvalid / GaveUp / RetryFailed
-	Validity      ValidityState     // StillInvalid
-	Response      *StepResult       // Recovered / StillInvalid
+	Validity      ValidityState     // StillInvalid / RuleApplied
+	Response      *StepResult       // Recovered / StillInvalid / RuleApplied
 	Attempt       int               // MacroFailed: 1-based attempt
 	Failure       *MacroStepFailure // MacroFailed
 	Error         string            // RetryFailed
+	// Actions is what the rule's action list did, in the order it was reached — including the
+	// actions that were skipped and why. Present on every outcome the walk produced, so an operator
+	// can see that a rule whose macro failed also has a header action that did run, which is the
+	// difference between a rule to fix and a rule to delete.
+	Actions []ActionRan
 }
 
 // UpdateMacroOutcomeKind is what Coordinator.UpdateMacro did. An enum rather than a bool because
@@ -147,7 +166,11 @@ func (r *loginRun) wait() LoginOutcome {
 // for the same rule while that run is registered blocks in wait instead of starting one of its own,
 // which is "N concurrent observers, one login" without any request beyond the first ever reaching
 // the runner.
-func (c *Coordinator) ensureLoggedIn(id RuleID, rule *SessionRule, runner MacroStepRunner) LoginOutcome {
+// validity is the condition an attempt must satisfy to count as a successful login. It is a
+// parameter rather than always `rule.Validity` because a rule's actions can nest a macro under a
+// validity check that states its own condition (Burp's "perform sub-actions conditionally on the
+// result"): satisfying the rule's rule there would report success for a check nobody ran.
+func (c *Coordinator) ensureLoggedIn(id RuleID, rule *SessionRule, runner MacroStepRunner, validity *ValidityRule) LoginOutcome {
 	c.runsMu.Lock()
 	run, alreadyRunning := c.runs[id]
 	if !alreadyRunning {
@@ -174,7 +197,7 @@ func (c *Coordinator) ensureLoggedIn(id RuleID, rule *SessionRule, runner MacroS
 				}
 			}
 		}()
-		return c.runWithRetries(id, rule, runner)
+		return c.runWithRetries(id, rule, runner, validity)
 	}()
 
 	run.publish(outcome)
@@ -189,16 +212,16 @@ func (c *Coordinator) ensureLoggedIn(id RuleID, rule *SessionRule, runner MacroS
 	return outcome
 }
 
-func (c *Coordinator) runWithRetries(id RuleID, rule *SessionRule, runner MacroStepRunner) LoginOutcome {
+func (c *Coordinator) runWithRetries(id RuleID, rule *SessionRule, runner MacroStepRunner, validity *ValidityRule) LoginOutcome {
 	for attempt := 1; attempt <= c.maxAttempts(rule); attempt++ {
-		resp, sent, failure := c.runMacroOnce(rule, runner)
+		resp, sent, values, failure := c.runMacroOnce(rule, runner)
 		if failure != nil {
 			return LoginOutcome{Kind: LoginMacroFailed, Attempt: attempt, Failure: failure}
 		}
-		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
+		if validity == nil || validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
 			// Only a successful run is promoted; a failed run must never overwrite a working macro.
 			c.recordObserved(id, sent)
-			return LoginOutcome{Kind: LoginSucceeded, Attempts: attempt}
+			return LoginOutcome{Kind: LoginSucceeded, Attempts: attempt, Values: values}
 		}
 		// The macro completed but its own response says we still are not authenticated. Loop
 		// again, bounded by max_attempts.
@@ -222,9 +245,14 @@ func (c *Coordinator) maxAttempts(rule *SessionRule) int {
 //
 // Unlike the web-facing RunMacro, this is the strict recovery path: a step that cannot be sent ends
 // the attempt with a MacroStepFailure rather than a nil sentinel row.
-func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*StepResult, []MacroStep, *MacroStepFailure) {
+// The fourth return value is the extraction map the run built, handed back so an action *after* a
+// macro action can write one of those values into the request — the second half of the CSRF recipe,
+// which is the reason this whole unit exists. It is returned on the failure paths as nil: a
+// half-built map from an attempt that never completed its steps names values whose provenance the
+// caller cannot verify.
+func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*StepResult, []MacroStep, map[string]string, *MacroStepFailure) {
 	if rule == nil || len(rule.Steps) == 0 {
-		return nil, nil, &MacroStepFailure{StepIndex: 0, Error: "login macro has no steps to run"}
+		return nil, nil, nil, &MacroStepFailure{StepIndex: 0, Error: "login macro has no steps to run"}
 	}
 	values := make(map[string]string)
 	sent := make([]MacroStep, 0, len(rule.Steps))
@@ -235,7 +263,7 @@ func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*
 		resolved := resolveStep(step, values)
 		resp, err := c.sendWithJar(runner, resolved)
 		if err != nil {
-			return nil, nil, &MacroStepFailure{StepIndex: stepIndex, Error: err.Error()}
+			return nil, nil, nil, &MacroStepFailure{StepIndex: stepIndex, Error: err.Error()}
 		}
 		// Recorded with this run's extracted values turned back into their placeholders, so
 		// promoting it later reinstates a template rather than a one-time secret.
@@ -257,7 +285,7 @@ func (c *Coordinator) runMacroOnce(rule *SessionRule, runner MacroStepRunner) (*
 		}
 		last = resp
 	}
-	return last, sent, nil
+	return last, sent, values, nil
 }
 
 // sendWithJar sends `step` with the jar's current cookie for its host attached, then absorbs any
@@ -342,10 +370,7 @@ func (c *Coordinator) HandleRecovery(tool string, original MacroStep, response *
 	if rule == nil {
 		return RecoveryOutcome{Kind: RecoveryNoRuleApplies, URL: original.URL}
 	}
-	if response != nil && rule.Validity != nil && rule.Validity.Evaluate(response.Status, response.Headers, response.Body, response.FinalURL) == Valid {
-		return RecoveryOutcome{Kind: RecoveryAlreadyValid}
-	}
-	return c.recover(id, rule, original, runner)
+	return c.recover(id, rule, original, response, runner)
 }
 
 // EnsureLoggedIn is the public single-flight re-login for a rule: it runs the rule's macro (once,
@@ -355,7 +380,7 @@ func (c *Coordinator) EnsureLoggedIn(rule *SessionRule, runner MacroStepRunner) 
 		return LoginOutcome{Kind: LoginGaveUp, Attempts: 0}
 	}
 	id := c.ruleIDOf(rule)
-	return c.ensureLoggedIn(id, rule, runner)
+	return c.ensureLoggedIn(id, rule, runner, rule.Validity)
 }
 
 // matchingRuleID returns the id and rule of the first enabled rule whose URL scope covers `req`.
@@ -392,29 +417,79 @@ func (c *Coordinator) ruleIDOf(rule *SessionRule) RuleID {
 	return 0
 }
 
-func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, runner MacroStepRunner) RecoveryOutcome {
-	outcome := c.ensureLoggedIn(id, rule, runner)
-	switch outcome.Kind {
-	case LoginSucceeded:
-		resp, err := c.sendWithJar(runner, original)
-		if err != nil {
-			return RecoveryOutcome{Kind: RecoveryRetryFailed, LoginAttempts: outcome.Attempts, Error: err.Error()}
+// recover runs the rule's action list over the request and reports what came of it.
+//
+// # What changed when actions arrived, and what did not
+//
+// The pre-action flow was two hardcoded steps — evaluate validity, and if it is not Valid run the
+// macro to term — plus a resend of the original request when the macro succeeded. That flow is now
+// the *synthesised* action list (see EffectiveActions: a validity check whose Else branch runs the
+// macro), which is why every outcome below still means what it always meant for a rule nobody has
+// edited: a rule with a validity rule and a macro produces AlreadyValid, Recovered,
+// StillInvalidAfterRelogin, GaveUp or MacroFailed exactly as before.
+//
+// Three things the walk adds:
+//
+//   - Actions other than the login run at all. A rule can set a header, add the jar's cookies, set a
+//     parameter from a value a macro extracted, or rewrite part of the request — in the order the
+//     operator put them, with a macro anywhere in that order.
+//   - A request the actions changed is re-sent, and that resend is reported as RecoveryRuleApplied
+//     rather than as a recovery: no login was attempted, and saying "recovered" would tell an
+//     operator that a session was established when what happened is that a header was set.
+//   - A failed macro ends the walk, because there is no session to handle and continuing would send
+//     a request the rule has just been told cannot be authenticated.
+func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, response *StepResult, runner MacroStepRunner) RecoveryOutcome {
+	res := c.runActions(rule, original, response, runner)
+
+	if res.MacroRan {
+		switch res.MacroOutcome.Kind {
+		case LoginMacroFailed:
+			return RecoveryOutcome{
+				Kind:    RecoveryMacroFailed,
+				Attempt: res.MacroOutcome.Attempt, Failure: res.MacroOutcome.Failure, Actions: res.Trace,
+			}
+		case LoginGaveUp:
+			return RecoveryOutcome{
+				Kind: RecoveryGaveUp, LoginAttempts: res.MacroOutcome.Attempts, Actions: res.Trace,
+			}
 		}
-		if rule.Validity == nil || rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
-			return RecoveryOutcome{Kind: RecoveryRecovered, LoginAttempts: outcome.Attempts, Response: resp}
-		}
-		return RecoveryOutcome{
-			Kind:          RecoveryStillInvalidAfterRelogin,
-			LoginAttempts: outcome.Attempts,
-			Validity:      rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL),
-			Response:      resp,
-		}
-	case LoginGaveUp:
-		return RecoveryOutcome{Kind: RecoveryGaveUp, LoginAttempts: outcome.Attempts}
-	case LoginMacroFailed:
-		return RecoveryOutcome{Kind: RecoveryMacroFailed, Attempt: outcome.Attempt, Failure: outcome.Failure}
 	}
-	return RecoveryOutcome{Kind: RecoveryGaveUp}
+
+	// Two reasons to re-send, and the second is not the first: a macro that succeeded left the bytes
+	// identical and changed the *jar*, and the retried request has to carry the new cookies or the
+	// login was performed for nothing. The pre-action flow resent on a successful login for exactly
+	// this reason, so leaving the jar out here would silently break every re-login.
+	macroSucceeded := res.MacroRan && res.MacroOutcome.Kind == LoginSucceeded
+	if !res.Changed && !macroSucceeded {
+		return RecoveryOutcome{Kind: RecoveryAlreadyValid, Actions: res.Trace}
+	}
+
+	resp, err := c.sendWithJar(runner, res.Request)
+	if err != nil {
+		return RecoveryOutcome{Kind: RecoveryRetryFailed, LoginAttempts: res.MacroOutcome.Attempts,
+			Error: err.Error(), Actions: res.Trace}
+	}
+
+	// Only when the rule states a check. A rule whose actions never look at validity has no verdict
+	// to report, and inventing a Valid one would tell an operator the session is alive on the
+	// strength of a check the rule does not make.
+	verdict := Indeterminate
+	if rule.Validity != nil {
+		verdict = rule.Validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL)
+	}
+	switch {
+	case macroSucceeded && (rule.Validity == nil || verdict == Valid):
+		return RecoveryOutcome{Kind: RecoveryRecovered, LoginAttempts: res.MacroOutcome.Attempts,
+			Response: resp, Actions: res.Trace}
+	case macroSucceeded:
+		return RecoveryOutcome{Kind: RecoveryStillInvalidAfterRelogin, LoginAttempts: res.MacroOutcome.Attempts,
+			Validity: verdict, Response: resp, Actions: res.Trace}
+	default:
+		// The actions rewrote the request and no login was attempted, so this is not a recovery and
+		// the validity field only says what the rule's own check made of the answer — which the
+		// caller renders as such.
+		return RecoveryOutcome{Kind: RecoveryRuleApplied, Validity: verdict, Response: resp, Actions: res.Trace}
+	}
 }
 
 // UpdateMacro overwrites a rule's recorded steps with the requests its last *successful* login

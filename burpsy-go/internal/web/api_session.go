@@ -197,6 +197,55 @@ type sessionRuleDto struct {
 	Steps       []sessionStepDto `json:"steps"`
 	Validity    json.RawMessage  `json:"validity"`
 	MaxAttempts *int             `json:"max_attempts,omitempty"`
+	// Actions is the rule's ordered action list — Burp's rule shape (burpsy-react-ui-ayi), and the
+	// list the executor actually runs.
+	//
+	// Served as the *effective* list, never a bare r.Actions: a rule installed before this existed,
+	// or one whose row predates the column, behaves as the synthesised validity-check-plus-macro, and
+	// an empty table here would draw a rule that does nothing while the proxy was doing what the
+	// operator's macro said. EffectiveActions is the same value validate.go and actions_run.go read,
+	// so what the editor shows and what the walk runs cannot disagree.
+	//
+	// Not omitempty: an absent field and an empty list are the same JSON, and "this rule does
+	// nothing" is not a thing a rule can be.
+	Actions []sessionActionDto `json:"actions"`
+}
+
+// sessionActionDto is one rule action on the wire, recursive where Burp recurses: a CheckValidity
+// action's Then/Else are lists of the same shape. Depth is bounded by session.ValidateActions, which
+// walks the whole tree, so the recursion cannot be used to make an unbounded document.
+type sessionActionDto struct {
+	Kind    string `json:"kind"`
+	Enabled bool   `json:"enabled"`
+	Stop    bool   `json:"stop,omitempty"`
+	// Label is the operator-facing name (session.ActionKindLabel) — Burp's own words for the action.
+	// Served with the palette below for the reason the tools list is served: a copy of the vocabulary
+	// in the UI is a second vocabulary, and the failure it produces is silent — an editor that offers
+	// a kind the API refuses, or spells one the API does not accept.
+	Label string             `json:"label"`
+	Macro []sessionStepDto   `json:"macro,omitempty"`
+	Then  []sessionActionDto `json:"then,omitempty"`
+	Else  []sessionActionDto `json:"else,omitempty"`
+
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`
+	In          string `json:"in,omitempty"`
+	Match       string `json:"match,omitempty"`
+	Replacement string `json:"replacement,omitempty"`
+	Regex       bool   `json:"regex,omitempty"`
+	Extension   string `json:"extension,omitempty"`
+}
+
+// sessionActionKindDto is one entry of the action palette.
+type sessionActionKindDto struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+}
+
+// sessionDeclinedActionDto records a Burp action this build deliberately does not implement.
+type sessionDeclinedActionDto struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 // sessionRulesResp mirrors the UI's RulesResp.
@@ -214,6 +263,17 @@ type sessionRulesResp struct {
 	// and an empty list are the same JSON, and "this server knows of no tools" is precisely the
 	// fact a client must not confuse with "the server is too old to say".
 	Tools []string `json:"tools"`
+	// ActionKinds is the action palette, built from this build's own vocabulary rather than a copy in
+	// the UI — same reasoning and same failure mode as Tools above.
+	ActionKinds []sessionActionKindDto `json:"action_kinds"`
+	// DeclinedActions names the Burp actions this port does not implement, with the reason it does
+	// not. Served so the editor can show them with the reason attached: an action that is simply
+	// absent from the palette reads as one the operator has not found yet, and this is the difference
+	// between "burpsy does not do this" and "burpsy forgot".
+	//
+	// Never omitempty, for the same reason Tools is not: an empty list would then be
+	// indistinguishable from a client that is too old to be told.
+	DeclinedActions []sessionDeclinedActionDto `json:"declined_actions"`
 }
 
 // sessionCookiesResp mirrors the UI's CookiesResp.
@@ -266,7 +326,7 @@ type sessionLoginReq struct {
 // quietly stopped trying". That is the shape crates/web/src/routes/session.rs's `outcome_body`
 // serves, and these fields are its union — only the ones an outcome actually carries are emitted.
 type sessionLoginResp struct {
-	// Outcome is one of: "no_rule_applies", "already_valid", "recovered",
+	// Outcome is one of: "no_rule_applies", "already_valid", "recovered", "rule_applied",
 	// "still_invalid_after_relogin", "gave_up", "macro_failed", "retry_failed", "probe_failed".
 	Outcome string `json:"outcome,omitempty"`
 	Rule    string `json:"rule,omitempty"`
@@ -289,6 +349,36 @@ type sessionLoginResp struct {
 	Response *sessionLoginResponseView `json:"response,omitempty"`
 	// Error: macro_failed / retry_failed / probe_failed.
 	Error string `json:"error,omitempty"`
+	// Actions is what the matched rule's action list did, in the order it was reached, including the
+	// actions that were skipped and why. On every outcome the coordinator produced: a rule is a list
+	// of actions now, so "which of them ran" is part of the answer rather than a debugging extra —
+	// and it is what makes a rule whose macro failed but whose header action worked legible as a
+	// rule to fix rather than one to delete.
+	Actions []sessionActionRanView `json:"actions,omitempty"`
+}
+
+// sessionActionRanView is one entry of that trace.
+type sessionActionRanView struct {
+	Index   int    `json:"index"`
+	Kind    string `json:"kind"`
+	Label   string `json:"label"`
+	Detail  string `json:"detail,omitempty"`
+	Changed bool   `json:"changed,omitempty"`
+	Skipped string `json:"skipped,omitempty"`
+}
+
+func sessionActionsView(trace []session.ActionRan) []sessionActionRanView {
+	if len(trace) == 0 {
+		return nil
+	}
+	out := make([]sessionActionRanView, 0, len(trace))
+	for _, a := range trace {
+		out = append(out, sessionActionRanView{
+			Index: a.Index, Kind: session.ActionKindName(a.Kind), Label: a.Label,
+			Detail: a.Detail, Changed: a.Changed, Skipped: a.Skipped,
+		})
+	}
+	return out
 }
 
 // sessionLoginResponseView is the retried original request's response, mirroring Rust's
@@ -429,7 +519,86 @@ func ruleToDto(r *session.SessionRule) sessionRuleDto {
 		}
 		dto.Steps = append(dto.Steps, d)
 	}
+	// The effective list, not r.Actions — see the field's comment: a rule whose row predates the
+	// actions column would otherwise read back as a rule with no actions while the proxy ran its
+	// macro, and the operator's next save from that form would make the empty table real.
+	for _, a := range r.EffectiveActions() {
+		dto.Actions = append(dto.Actions, actionToDto(a))
+	}
 	return dto
+}
+
+// actionToDto renders one action, recursively for a check's branches.
+func actionToDto(a *session.Action) sessionActionDto {
+	d := sessionActionDto{
+		Kind:        session.ActionKindName(a.Kind),
+		Label:       session.ActionKindLabel(a.Kind),
+		Enabled:     a.Enabled,
+		Stop:        a.Stop,
+		Name:        a.Name,
+		Value:       a.Value,
+		In:          a.In,
+		Match:       a.Match,
+		Replacement: a.Replacement,
+		Regex:       a.Regex,
+		Extension:   a.Extension,
+	}
+	// A macro action's own steps are emitted only when it carries them. An empty Macro means "the
+	// rule's own Steps", and emitting the rule's steps here instead would launder that reference into
+	// a copy — so an operator editing the rule's macro afterwards would find this action still
+	// running the old text, with nothing in the editor saying so.
+	for _, step := range a.Macro {
+		d.Macro = append(d.Macro, macroStepToDto(step))
+	}
+	for _, child := range a.Then {
+		d.Then = append(d.Then, actionToDto(child))
+	}
+	for _, child := range a.Else {
+		d.Else = append(d.Else, actionToDto(child))
+	}
+	return d
+}
+
+// actionsToModel is the read direction. An unrecognised kind is an error rather than a skipped
+// action: session.ParseActionKind's refusal names the accepted list, and silently dropping the entry
+// would leave a rule that looks like the operator's while missing the step that authenticated it.
+func actionsToModel(dtos []sessionActionDto) ([]*session.Action, error) {
+	out := make([]*session.Action, 0, len(dtos))
+	for i, d := range dtos {
+		kind, err := session.ParseActionKind(d.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("action %d: %w", i+1, err)
+		}
+		a := &session.Action{
+			Kind:        kind,
+			Enabled:     d.Enabled,
+			Stop:        d.Stop,
+			Name:        d.Name,
+			Value:       d.Value,
+			In:          d.In,
+			Match:       d.Match,
+			Replacement: d.Replacement,
+			Regex:       d.Regex,
+			Extension:   d.Extension,
+		}
+		for _, s := range d.Macro {
+			headers := make(map[string]string, len(s.Headers))
+			for _, kv := range s.Headers {
+				headers[kv[0]] = kv[1]
+			}
+			a.Macro = append(a.Macro, session.MacroStep{
+				Method: s.Method, URL: s.URL, Headers: headers, Body: s.Body,
+			})
+		}
+		if a.Then, err = actionsToModel(d.Then); err != nil {
+			return nil, fmt.Errorf("action %d → then: %w", i+1, err)
+		}
+		if a.Else, err = actionsToModel(d.Else); err != nil {
+			return nil, fmt.Errorf("action %d → else: %w", i+1, err)
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // macroStepToDto renders one step. Headers are emitted in sorted order: a Go map has none, and an
@@ -531,6 +700,23 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 	if dto.MaxAttempts != nil {
 		rule.MaxAttempts = *dto.MaxAttempts
 	}
+	// A stated list replaces the migrated shape outright, and a *stated but empty* list is refused
+	// rather than accepted. Accepting it would be the worst of the three options: NormaliseActions
+	// materialises the pre-action flow for any rule with an empty list, so an operator who deleted
+	// every action would get the check-validity-and-replay-a-login rule back, silently — the editor
+	// would then show a list they did not write. A nil field, which is what every client written
+	// before this sends, means "not stated" and keeps the migrated reading.
+	if dto.Actions != nil {
+		if len(dto.Actions) == 0 {
+			return nil, fmt.Errorf("actions is present but empty: a rule with no actions does nothing, " +
+				"and a rule that quietly runs a login instead of nothing is worse than a refusal")
+		}
+		actions, err := actionsToModel(dto.Actions)
+		if err != nil {
+			return nil, err
+		}
+		rule.Actions = actions
+	}
 	for i, s := range dto.Steps {
 		headers := make(map[string]string, len(s.Headers))
 		for _, kv := range s.Headers {
@@ -611,7 +797,42 @@ func (s *Server) sessionRulesGet(w http.ResponseWriter, r *http.Request) {
 		dtos = append(dtos, ruleToDto(rule))
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(sessionRulesResp{Wired: true, Rules: dtos, Tools: toolNames()})
+	json.NewEncoder(w).Encode(sessionRulesResp{
+		Wired:           true,
+		Rules:           dtos,
+		Tools:           toolNames(),
+		ActionKinds:     sessionActionKinds(),
+		DeclinedActions: sessionDeclinedActions(),
+	})
+}
+
+// sessionActionKinds is the action palette, walked off the enum rather than written out here so a
+// kind added to session without a label shows up as an empty label in the editor (visible) instead
+// of as a kind the editor never offers (invisible, and read as "burpsy does not have it").
+func sessionActionKinds() []sessionActionKindDto {
+	out := make([]sessionActionKindDto, 0, session.ActionKindCount)
+	for i := 0; i < int(session.ActionKindCount); i++ {
+		kind := session.ActionKind(i)
+		out = append(out, sessionActionKindDto{Kind: session.ActionKindName(kind), Label: session.ActionKindLabel(kind)})
+	}
+	return out
+}
+
+// sessionDeclinedActions is the Burp actions this build does not implement, named with the reason.
+//
+// One entry, and it is here rather than in a comment because Burp's own rule editor shows nine
+// actions and this one shows eight: an operator following Burp's documentation would otherwise be
+// left to conclude the ninth was overlooked. Each reason states what burpsy has instead, so the
+// operator can reach a decision rather than only learning a thing is missing.
+func sessionDeclinedActions() []sessionDeclinedActionDto {
+	return []sessionDeclinedActionDto{{
+		Name: "Prompt the user for in-browser session recovery",
+		Reason: "burpsy has no browser window to open for the operator: the console is a page the " +
+			"operator opens themselves, and the headless engine this port owns (internal/domexec) " +
+			"confirms findings rather than asking a person a question. Nothing here will silently wait " +
+			"for someone who was never asked. Use the intercept hold queue to hand-edit the next request, " +
+			"or an Invoke-an-extension action against a plugin that can do it.",
+	}}
 }
 
 func (s *Server) sessionRulesPost(w http.ResponseWriter, r *http.Request) {
@@ -839,12 +1060,29 @@ func loginOutcomeResponse(o session.RecoveryOutcome) (int, sessionLoginResp) {
 		// honestly instead of being told the login worked.
 		return http.StatusOK, sessionLoginResp{Outcome: "no_rule_applies", URL: o.URL}
 	case session.RecoveryAlreadyValid:
-		return http.StatusOK, sessionLoginResp{Outcome: "already_valid"}
+		return http.StatusOK, sessionLoginResp{
+			Outcome: "already_valid",
+			Actions: sessionActionsView(o.Actions),
+		}
+	case session.RecoveryRuleApplied:
+		// No login was attempted; the rule's actions rewrote the request and it was re-sent. The
+		// validity field is present when the rule states a check, and absent for a rule that does not
+		// — which is not the same as a rule whose check passed.
+		resp := sessionLoginResp{
+			Outcome:  "rule_applied",
+			Response: responseView(o.Response),
+			Actions:  sessionActionsView(o.Actions),
+		}
+		if o.Validity != session.Indeterminate {
+			resp.Validity = validityName(o.Validity)
+		}
+		return http.StatusOK, resp
 	case session.RecoveryRecovered:
 		return http.StatusOK, sessionLoginResp{
 			Outcome:       "recovered",
 			LoginAttempts: &attempts,
 			Response:      responseView(o.Response),
+			Actions:       sessionActionsView(o.Actions),
 		}
 	case session.RecoveryStillInvalidAfterRelogin:
 		return http.StatusOK, sessionLoginResp{
@@ -852,11 +1090,16 @@ func loginOutcomeResponse(o session.RecoveryOutcome) (int, sessionLoginResp) {
 			LoginAttempts: &attempts,
 			Validity:      validityName(o.Validity),
 			Response:      responseView(o.Response),
+			Actions:       sessionActionsView(o.Actions),
 		}
 	case session.RecoveryGaveUp:
-		return http.StatusOK, sessionLoginResp{Outcome: "gave_up", LoginAttempts: &attempts}
+		return http.StatusOK, sessionLoginResp{
+			Outcome: "gave_up", LoginAttempts: &attempts, Actions: sessionActionsView(o.Actions),
+		}
 	case session.RecoveryMacroFailed:
-		resp := sessionLoginResp{Outcome: "macro_failed", Attempt: &o.Attempt}
+		resp := sessionLoginResp{
+			Outcome: "macro_failed", Attempt: &o.Attempt, Actions: sessionActionsView(o.Actions),
+		}
 		if o.Failure != nil {
 			idx := o.Failure.StepIndex
 			resp.StepIndex = &idx
@@ -866,6 +1109,7 @@ func loginOutcomeResponse(o session.RecoveryOutcome) (int, sessionLoginResp) {
 	case session.RecoveryRetryFailed:
 		return http.StatusBadGateway, sessionLoginResp{
 			Outcome: "retry_failed", LoginAttempts: &attempts, Error: o.Error,
+			Actions: sessionActionsView(o.Actions),
 		}
 	}
 	// A RecoveryOutcomeKind this mapping does not know is reported as such rather than silently

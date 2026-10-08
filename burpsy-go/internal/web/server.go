@@ -728,6 +728,12 @@ func (s *Server) Tasks() *dash.Registry { return s.tasks }
 func (s *Server) WithSessionCoordinator(sc *session.Coordinator) *Server {
 	s.sessionCoordinator = sc
 	s.installSuiteScopePredicate()
+	// A rule's "Invoke an extension" action is wired here, beside the scope predicate and for the
+	// same reason: the seam has match sites inside internal/session where no host is in reach, and a
+	// rule that named an extension must not be reachable from one call path and refused from
+	// another. The adapter resolves the host per call — see extension_session_action.go — so a plugin
+	// loaded after this line is still found.
+	s.sessionCoordinator.SetSessionActionInvoker(sessionActionInvoker{s: s})
 	return s
 }
 

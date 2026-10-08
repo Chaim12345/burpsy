@@ -154,15 +154,17 @@ func API() APIView {
 // which Montoya call it is the analogue of, so the APIs tab can be read next to
 // Burp's own documentation.
 var kindLabels = map[Kind]string{
-	KindContextMenu: "Context-menu item",
-	KindMenu:        "Menu action",
-	KindEditorTab:   "Message-editor tab",
+	KindContextMenu:   "Context-menu item",
+	KindMenu:          "Menu action",
+	KindEditorTab:     "Message-editor tab",
+	KindSessionAction: "Session-handling action",
 }
 
 var kindMontoya = map[Kind]string{
-	KindContextMenu: "registerContextMenuItemsProvider",
-	KindMenu:        "registerMenuBarItem",
-	KindEditorTab:   "registerHttpRequestEditorProvider (read-only half only)",
+	KindContextMenu:   "registerContextMenuItemsProvider",
+	KindMenu:          "registerMenuBarItem",
+	KindEditorTab:     "registerHttpRequestEditorProvider (read-only half only)",
+	KindSessionAction: "registerSessionHandlingAction",
 }
 
 func kindViews() []KindView {
