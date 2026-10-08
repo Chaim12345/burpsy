@@ -80,8 +80,9 @@ type Server struct {
 	// toolRunner is the allowlist runner `run tool` statements dispatch through
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
-	toolRunner bcheck.ToolRunner
-	findings   *core.FindingStore
+	toolRunner  bcheck.ToolRunner
+	oobProvider scanner.OOBProvider
+	findings    *core.FindingStore
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
@@ -1089,6 +1090,7 @@ func (s *Server) setupRoutes() {
 	// has registered a domain — see handleCollaboratorServer.
 	s.mux.HandleFunc("/api/collaborator/server", s.handleCollaboratorServer)
 	s.mux.HandleFunc("/api/collaborator/status", s.handleCollaboratorStatus)
+	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealthCheck)
 
 	// Session
 	s.mux.HandleFunc("/api/session/rules", s.handleSessionRules)
@@ -1377,4 +1379,13 @@ func loadAdvisories() *advisory.Catalogue {
 		return nil
 	}
 	return c
+}
+
+// WithOOBProvider attaches an out-of-band provider to this server and its scanner.
+func (s *Server) WithOOBProvider(p scanner.OOBProvider) *Server {
+	s.oobProvider = p
+	if s.scanner != nil {
+		s.scanner.WithOOBProvider(p)
+	}
+	return s
 }

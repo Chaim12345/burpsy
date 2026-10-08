@@ -226,6 +226,10 @@ var manifest = map[string]route{
 		summary: "the out-of-band channel's state: configured or not, the registered domain, minted " +
 			"payloads, and how many corpus checks are gated without it",
 	},
+	"/api/collaborator/health": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "connectivity health of the configured out-of-band collaborator server (DNS, HTTP, SMTP)",
+	},
 	"/api/config/export": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "one JSON bundle of every configurable surface: scope, intercept rules, session handling rules",
