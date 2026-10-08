@@ -186,3 +186,24 @@ func TestAnIntruderDatasetIsOneAttacksRequests(t *testing.T) {
 		t.Fatalf("the listing: %d %s", code, raw)
 	}
 }
+
+// The unflattened fast page (no pattern, no since, no facets, id order) answers exactly the rows the
+// full evaluation does, in both directions — it only skips flattening rows it does not return.
+func TestTheFastPageIsTheSameAsTheFullEvaluation(t *testing.T) {
+	s := newTestServer()
+	for i := 0; i < 40; i++ {
+		addExchange(t, s, "a.test", fmt.Sprintf("/f/%d", i), 200, core.SourceProxy, 0)
+	}
+	for _, q := range []string{"offset=7&limit=9", "offset=30&limit=25", "sort_order=desc&offset=3&limit=5", "offset=40"} {
+		fast, fastRaw, _ := getDataset(t, s, "/api/datasets/history?"+q)
+		full, fullRaw, _ := getDataset(t, s, "/api/datasets/history?"+q+"&facets=status")
+		if !strings.Contains(fastRaw, `"columns_sampled":true`) || strings.Contains(fullRaw, `"columns_sampled"`) {
+			t.Fatalf("%s: the fast path did not run, or the full one claimed to sample", q)
+		}
+		fr, _ := json.Marshal(fast.Rows)
+		gr, _ := json.Marshal(full.Rows)
+		if string(fr) != string(gr) || fast.Matched != full.Matched || fmt.Sprint(fast.NextOffset) != fmt.Sprint(full.NextOffset) && (fast.NextOffset == nil) != (full.NextOffset == nil) {
+			t.Fatalf("%s: fast %s / %v differs from full %s / %v", q, fr, fast.NextOffset, gr, full.NextOffset)
+		}
+	}
+}

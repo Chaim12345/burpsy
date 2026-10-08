@@ -57,23 +57,31 @@ type datasetSource struct {
 	desc          string
 	defaultFacets []string
 	defaultSort   string
-	rows          func(s *Server, arg string) ([]datasetRow, error)
-	needsArg      bool
+	// rows returns the source's rows lazily: a row is flattened (a JSON round trip of its view) only
+	// when something reads it, so a page of an unfiltered list costs its own rows, not the whole list.
+	rows     func(s *Server, arg string) ([]lazyRow, error)
+	needsArg bool
+	// idOrdered: the natural order is ascending "id", so an unfiltered id-sorted page can be cut
+	// before any row is flattened.
+	idOrdered bool
 }
+
+// lazyRow flattens one row on demand.
+type lazyRow func() datasetRow
 
 // datasetSources is the table. Ordered for the listing.
 var datasetSources = []datasetSource{
 	{
-		name: "history", desc: "proxy history rows (proxied and crawled traffic; tool-sent requests are in tool-log)",
+		name: "history", idOrdered: true, desc: "proxy history rows (proxied and crawled traffic; tool-sent requests are in tool-log)",
 		defaultFacets: []string{"host", "method", "status", "mime"}, defaultSort: "id",
-		rows: func(s *Server, _ string) ([]datasetRow, error) {
-			var out []datasetRow
+		rows: func(s *Server, _ string) ([]lazyRow, error) {
+			var out []lazyRow
 			for _, ex := range s.store.Exchanges() {
 				switch ex.Source {
 				case core.SourceRepeater, core.SourceIntruder, core.SourceScanner:
 					continue
 				}
-				out = append(out, flattenRow(exchangeView(ex)))
+				out = append(out, func() datasetRow { return flattenRow(exchangeView(ex)) })
 			}
 			return out, nil
 		},
@@ -81,10 +89,10 @@ var datasetSources = []datasetSource{
 	{
 		name: "issues", desc: "scanner issues",
 		defaultFacets: []string{"severity", "confidence", "name", "host"}, defaultSort: "id",
-		rows: func(s *Server, _ string) ([]datasetRow, error) {
-			var out []datasetRow
+		rows: func(s *Server, _ string) ([]lazyRow, error) {
+			var out []lazyRow
 			for _, f := range s.findings.All() {
-				out = append(out, flattenRow(s.findingToIssueView(f)))
+				out = append(out, func() datasetRow { return flattenRow(s.findingToIssueView(f)) })
 			}
 			return out, nil
 		},
@@ -92,63 +100,68 @@ var datasetSources = []datasetSource{
 	{
 		name: "sitemap", desc: "one row per observed host and path node of the site map",
 		defaultFacets: []string{"host", "methods", "statuses"}, defaultSort: "url",
-		rows: func(s *Server, _ string) ([]datasetRow, error) {
-			var out []datasetRow
+		rows: func(s *Server, _ string) ([]lazyRow, error) {
+			var out []lazyRow
 			for _, h := range s.sitemap.Hosts() {
 				for _, p := range h.PathsSorted() {
-					out = append(out, flattenRow(datasetRow{
-						"url":       nodeURL(h.Host, h.Port, h.TLS, p.Path),
-						"host":      h.Host,
-						"port":      h.Port,
-						"tls":       h.TLS,
-						"path":      p.Path,
-						"methods":   toAnySlice(p.MethodsSorted()),
-						"statuses":  intsToAny(p.StatusesSorted()),
-						"exchanges": len(p.ExchangeIDs),
-						"in_scope":  s.scope.Contains(h.Host, h.Port, p.Path, h.TLS),
-					}))
+					out = append(out, func() datasetRow {
+						return flattenRow(datasetRow{
+							"url":       nodeURL(h.Host, h.Port, h.TLS, p.Path),
+							"host":      h.Host,
+							"port":      h.Port,
+							"tls":       h.TLS,
+							"path":      p.Path,
+							"methods":   toAnySlice(p.MethodsSorted()),
+							"statuses":  intsToAny(p.StatusesSorted()),
+							"exchanges": len(p.ExchangeIDs),
+							"in_scope":  s.scope.Contains(h.Host, h.Port, p.Path, h.TLS),
+						})
+					})
 				}
 			}
 			return out, nil
 		},
 	},
 	{
-		name: "tool-log", desc: "every request burpsy itself sent (Repeater, Intruder, Scanner, …)",
+		name: "tool-log", idOrdered: true, desc: "every request burpsy itself sent (Repeater, Intruder, Scanner, …)",
 		defaultFacets: []string{"tool", "host", "status"}, defaultSort: "id",
-		rows: func(s *Server, _ string) ([]datasetRow, error) {
-			var out []datasetRow
+		rows: func(s *Server, _ string) ([]lazyRow, error) {
+			var out []lazyRow
 			for _, e := range s.toolLog.All() {
-				out = append(out, flattenRow(toolLogEntryView(e)))
+				out = append(out, func() datasetRow { return flattenRow(toolLogEntryView(e)) })
 			}
 			return out, nil
 		},
 	},
 	{
-		name: "ws-history", desc: "captured WebSocket frames",
+		name: "ws-history", idOrdered: true, desc: "captured WebSocket frames",
 		defaultFacets: []string{"direction", "opcode", "host"}, defaultSort: "id",
-		rows: func(s *Server, _ string) ([]datasetRow, error) {
+		rows: func(s *Server, _ string) ([]lazyRow, error) {
 			msgs := s.store.WsMessages(0, s.store.WsCount())
-			out := make([]datasetRow, 0, len(msgs))
+			out := make([]lazyRow, 0, len(msgs))
 			// WsMessages answers newest first; a dataset's natural order is oldest first.
 			for i := len(msgs) - 1; i >= 0; i-- {
-				handshake, _ := s.store.GetExchange(msgs[i].Exchange)
-				out = append(out, flattenRow(wsRowFromMessage(msgs[i], handshake)))
+				m := msgs[i]
+				out = append(out, func() datasetRow {
+					handshake, _ := s.store.GetExchange(m.Exchange)
+					return flattenRow(wsRowFromMessage(m, handshake))
+				})
 			}
 			return out, nil
 		},
 	},
 	{
-		name: "intruder", desc: "the requests one Intruder attack sent: intruder/{task_id}", needsArg: true,
+		name: "intruder", idOrdered: true, desc: "the requests one Intruder attack sent: intruder/{task_id}", needsArg: true,
 		defaultFacets: []string{"status", "response_len"}, defaultSort: "id",
-		rows: func(s *Server, arg string) ([]datasetRow, error) {
+		rows: func(s *Server, arg string) ([]lazyRow, error) {
 			task, err := strconv.ParseUint(arg, 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("intruder/{task_id}: %q is not a task id", arg)
 			}
-			var out []datasetRow
+			var out []lazyRow
 			for _, ex := range s.store.Exchanges() {
 				if ex.Source == core.SourceIntruder && ex.TaskID == task {
-					out = append(out, flattenRow(exchangeView(ex)))
+					out = append(out, func() datasetRow { return flattenRow(exchangeView(ex)) })
 				}
 			}
 			return out, nil
@@ -264,13 +277,16 @@ type datasetFacet struct {
 
 // datasetView is the envelope.
 type datasetView struct {
-	Source    string   `json:"source"`
-	Columns   []string `json:"columns"`
-	TotalRows int      `json:"total_rows"`
-	Matched   int      `json:"matched"`
-	Offset    int      `json:"offset"`
-	Limit     int      `json:"limit"`
-	Returned  int      `json:"returned"`
+	Source  string   `json:"source"`
+	Columns []string `json:"columns"`
+	// ColumnsSampled: the page was cut without reading every row (an unfiltered id-ordered page), so
+	// Columns lists the returned rows' columns rather than every row's.
+	ColumnsSampled bool `json:"columns_sampled,omitempty"`
+	TotalRows      int  `json:"total_rows"`
+	Matched        int  `json:"matched"`
+	Offset         int  `json:"offset"`
+	Limit          int  `json:"limit"`
+	Returned       int  `json:"returned"`
 	// NextOffset is where the next page starts, or null when this page reached the last matched row.
 	NextOffset *int         `json:"next_offset"`
 	SortBy     string       `json:"sort_by"`
@@ -441,9 +457,16 @@ func facetsOf(rows []datasetRow, cols []string) []datasetFacet {
 
 // buildDataset evaluates the query once over a fresh read of the source.
 func (s *Server) buildDataset(src datasetSource, name, arg string, dq datasetQuery) (datasetView, error) {
-	rows, err := src.rows(s, arg)
+	lazy, err := src.rows(s, arg)
 	if err != nil {
 		return datasetView{}, err
+	}
+	if src.idOrdered && dq.pattern == nil && dq.since == nil && !dq.wantFace && dq.sortBy == "id" {
+		return pageWithoutFlattening(lazy, name, dq), nil
+	}
+	rows := make([]datasetRow, len(lazy))
+	for i, f := range lazy {
+		rows[i] = f()
 	}
 	colSet := map[string]bool{}
 	for _, r := range rows {
@@ -505,6 +528,57 @@ func (s *Server) buildDataset(src datasetSource, name, arg string, dq datasetQue
 		view.Facets = facetsOf(matched, dq.facets)
 	}
 	return view, nil
+}
+
+// pageWithoutFlattening answers an unfiltered, id-ordered page by cutting the page out of the lazy
+// rows first, so only the returned rows are flattened: paging to the end of a long history costs each
+// page its own rows rather than the whole history again. The columns are then the returned rows'
+// columns, and columns_sampled says so.
+func pageWithoutFlattening(lazy []lazyRow, name string, dq datasetQuery) datasetView {
+	view := datasetView{
+		Source: name, TotalRows: len(lazy), Matched: len(lazy), Offset: dq.offset, Limit: dq.limit,
+		SortBy: dq.sortBy, SortOrder: "asc", Rows: []datasetRow{}, ColumnsSampled: true,
+	}
+	if dq.desc {
+		view.SortOrder = "desc"
+	}
+	if dq.offset < len(lazy) {
+		end := dq.offset + dq.limit
+		if end > len(lazy) {
+			end = len(lazy)
+		}
+		for i := dq.offset; i < end; i++ {
+			idx := i
+			if dq.desc {
+				idx = len(lazy) - 1 - i
+			}
+			r := lazy[idx]()
+			if len(dq.ret) > 0 {
+				pick := make(datasetRow, len(dq.ret))
+				for _, c := range dq.ret {
+					pick[c] = r[c]
+				}
+				r = pick
+			}
+			view.Rows = append(view.Rows, r)
+		}
+		if end < len(lazy) {
+			view.NextOffset = &end
+		}
+	}
+	view.Returned = len(view.Rows)
+	colSet := map[string]bool{}
+	for _, r := range view.Rows {
+		for k := range r {
+			colSet[k] = true
+		}
+	}
+	view.Columns = make([]string, 0, len(colSet))
+	for k := range colSet {
+		view.Columns = append(view.Columns, k)
+	}
+	sort.Strings(view.Columns)
+	return view
 }
 
 // datasetListing is GET /api/datasets/ with no source.
