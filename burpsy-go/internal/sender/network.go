@@ -312,6 +312,37 @@ type RedirectSettings struct {
 	// throwaway cookies is the other reason: without a switch, following its redirects would keep
 	// resending them.
 	ReplayCookies bool `json:"replay_cookies"`
+	// Types is Burp's "Allowed redirect types" (project_options.http.redirections, burpsy-react-ui-z9zi):
+	// which kinds of response count as a redirect to follow. nil means Burp's defaults (3xx with
+	// Location, the Refresh header and the meta refresh tag; not any status with a Location, not
+	// JavaScript), so a settings document written before this existed behaves as Burp does. A pointer
+	// because the zero value of the struct would be "follow nothing".
+	Types *RedirectTypes `json:"types,omitempty"`
+}
+
+// RedirectTypes are Burp's five redirect kinds, under Burp's own key names.
+type RedirectTypes struct {
+	Understand3xx           bool `json:"understand_3xx_status_code"`
+	UnderstandAnyLocation   bool `json:"understand_any_status_code_with_location_header"`
+	UnderstandRefreshHeader bool `json:"understand_refresh_header"`
+	UnderstandMetaRefresh   bool `json:"understand_meta_refresh_tag"`
+	// UnderstandJavaScript is accepted only as false: following a JavaScript-driven redirect means
+	// executing the page's script, which the sender does not do. Setting it true is refused by name
+	// rather than stored as a promise nothing keeps.
+	UnderstandJavaScript bool `json:"understand_javascript_driven"`
+}
+
+// DefaultRedirectTypes is Burp's shipped default (Preferences/ProjectDefaults.json).
+func DefaultRedirectTypes() RedirectTypes {
+	return RedirectTypes{Understand3xx: true, UnderstandRefreshHeader: true, UnderstandMetaRefresh: true}
+}
+
+// EffectiveTypes is the redirect types in force: the configured ones, or Burp's defaults.
+func (r RedirectSettings) EffectiveTypes() RedirectTypes {
+	if r.Types == nil {
+		return DefaultRedirectTypes()
+	}
+	return *r.Types
 }
 
 // ContinueSettings makes the 100-continue handling explicit.
@@ -553,6 +584,10 @@ func (r RedirectSettings) validate() error {
 	if r.MaxHops < 0 || r.MaxHops > MaxRedirectHops {
 		return fmt.Errorf("redirects.max_hops is %d, and a chain is bounded to between 0 and %d hops",
 			r.MaxHops, MaxRedirectHops)
+	}
+	if r.Types != nil && r.Types.UnderstandJavaScript {
+		return fmt.Errorf("redirects.types.understand_javascript_driven cannot be true: following a " +
+			"JavaScript-driven redirect means executing the page's script, which this sender does not do")
 	}
 	if r.Mode != RedirectNever && r.MaxHops == 0 {
 		return fmt.Errorf("redirects.mode is %q but redirects.max_hops is 0, which follows nothing: "+

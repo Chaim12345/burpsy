@@ -1678,3 +1678,14 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Redirect types: JavaScript-driven is refused (2026-10-08, burpsy-react-ui-z9zi)
+- **Burp:** Settings → Network → HTTP → Redirections, "Allowed redirect types": 3xx with Location,
+  any status with Location, the Refresh header, the meta refresh tag, and JavaScript-driven. Defaults
+  (`ProjectDefaults.json`, `project_options.http.redirections`): the first, third and fourth on.
+- **burpsy:** `redirects.types` on `/api/network/settings` carries all five under Burp's key names,
+  with Burp's defaults when unset. The first four are honoured by the sender's follower; a Refresh or
+  meta-refresh hop is a bodiless GET.
+- **Divergence:** `understand_javascript_driven: true` is refused by name. Following a script-driven
+  redirect means executing the page's JavaScript, which the sender does not do; storing the flag
+  would be a promise nothing keeps.

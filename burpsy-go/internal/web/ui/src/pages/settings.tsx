@@ -6,7 +6,7 @@ import type { CaExportKind } from "../lib/ca-export";
 import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
 import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
-import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
+import { DEFAULT_REDIRECT_TYPES, useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type {
  AddressFamily,
  HostOverride,
@@ -1028,6 +1028,7 @@ function NetworkSection(): JSX.Element {
  };
 
  const following = draft !== null && draft.redirects.mode !== "never";
+ const redirectTypes = draft?.redirects.types ?? DEFAULT_REDIRECT_TYPES;
 
  return (
   <Card>
@@ -1315,6 +1316,39 @@ function NetworkSection(): JSX.Element {
       {draft.redirects.replay_cookies === true
        ? "A hop's Set-Cookie is carried to the next hop on the same host. Off by default: a credential the target set mid-chain is not one you asked to send, and a target that sets throwaway cookies would keep resending them."
        : "Off. A login or SSO flow that sets a cookie on its 302 will arrive at the destination unauthenticated, which reads as a broken application rather than a missing cookie."}
+     </p>
+
+     <h3 className="subheading">Allowed redirect types</h3>
+     <p className="field-hint">
+      Which responses count as a redirect when one is followed. A Refresh or meta-refresh hop is
+      sent as a GET with no body, the way a browser navigates it.
+     </p>
+     <div className="switch-grid">
+      {(
+       [
+        ["understand_3xx_status_code", "3xx status code with Location header", "On by default"],
+        ["understand_any_status_code_with_location_header", "Any status code with Location header", "Off by default: a 201 names what it created, not where to go"],
+        ["understand_refresh_header", "Refresh header", "On by default"],
+        ["understand_meta_refresh_tag", "Meta refresh tag", "On by default; HTML responses only"],
+       ] as const
+      ).map(([key, label, detail]) => (
+       <label key={key} className="switch-row" htmlFor={`redirect-type-${key}`}>
+        <span>
+         <span>{label}</span>
+         <span className="cell-dim" style={{ display: "block" }}>{detail}</span>
+        </span>
+        <Switch
+         id={`redirect-type-${key}`}
+         label={label}
+         checked={redirectTypes[key]}
+         onCheckedChange={(on) => patchSection("redirects", { types: { ...redirectTypes, [key]: on } })}
+        />
+       </label>
+      ))}
+     </div>
+     <p className="field-hint">
+      JavaScript-driven redirects are not followed: that would mean running the page's script, which
+      this sender does not do.
      </p>
 
      <h3 className="subheading">100-continue</h3>

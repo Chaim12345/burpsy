@@ -505,3 +505,42 @@ func TestNetworkSettingsApplyWithoutAStoreStillTakesEffect(t *testing.T) {
 		t.Errorf("read_ms = %d, want 2500", got)
 	}
 }
+
+// Burp's "Allowed redirect types" (burpsy-react-ui-z9zi) through the route: the defaults are on the
+// wire before anything set them, a partial object changes only what it names, and the JavaScript kind
+// and an unknown kind are refused by name with the live settings untouched.
+func TestNetworkSettingsCarryTheRedirectTypes(t *testing.T) {
+	s := networkSettingsServer()
+	rec := get(t, s, "/api/network/settings")
+	want := `"types":{"understand_3xx_status_code":true,"understand_any_status_code_with_location_header":false,` +
+		`"understand_refresh_header":true,"understand_meta_refresh_tag":true,"understand_javascript_driven":false}`
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("GET does not carry Burp's default redirect types %s: %s", want, rec.Body.String())
+	}
+
+	rec = putNetworkSettings(t, s, `{"redirects": {"types": {"understand_meta_refresh_tag": false}}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT types = %d %s", rec.Code, rec.Body.String())
+	}
+	live := s.sender.Network().Redirects.EffectiveTypes()
+	if live.UnderstandMetaRefresh || !live.Understand3xx || !live.UnderstandRefreshHeader {
+		t.Errorf("after turning only meta refresh off the types are %+v", live)
+	}
+
+	for _, body := range []string{
+		`{"redirects": {"types": {"understand_javascript_driven": true}}}`,
+		`{"redirects": {"types": {"understand_html5_history": true}}}`,
+	} {
+		rec = putNetworkSettings(t, s, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("PUT %s = %d, want 400", body, rec.Code)
+		}
+	}
+	if !strings.Contains(putNetworkSettings(t, s, `{"redirects": {"types": {"understand_javascript_driven": true}}}`).Body.String(),
+		"understand_javascript_driven") {
+		t.Error("the JavaScript refusal does not name the key")
+	}
+	if got := s.sender.Network().Redirects.EffectiveTypes(); got != live {
+		t.Errorf("a refused patch changed the types: %+v, was %+v", got, live)
+	}
+}
