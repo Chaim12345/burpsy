@@ -79,6 +79,39 @@ export function Button({
   return <button type="button" className={cn("button", `button-${variant}`, size === "small" && "button-sm", className)} {...props} />;
 }
 
+/**
+ * A button that cannot act until the operator supplies something, and says so (burpsy-react-ui-us6r.9).
+ *
+ * The alternative this replaces was an enabled button whose click only produced a toast ("The probe
+ * needs a URL…"), next to a field whose example placeholder looked like a typed value. Disabled with
+ * the reason printed beside it, and linked with aria-describedby so a screen reader hears why, the
+ * control explains itself before anyone presses it. `missing` is null when the button can act.
+ */
+export function NeedsValueButton({
+  missing,
+  disabled,
+  children,
+  ...props
+}: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "aria-describedby"> & {
+  missing: string | null;
+  variant?: "primary" | "outline" | "danger" | "quiet" | "ghost";
+  size?: "medium" | "small";
+}): JSX.Element {
+  const reasonId = useId();
+  return (
+    <span className="needs-value">
+      <Button {...props} disabled={disabled || missing !== null} aria-describedby={missing ? reasonId : undefined}>
+        {children}
+      </Button>
+      {missing ? (
+        <small className="field-hint" id={reasonId}>
+          {missing}
+        </small>
+      ) : null}
+    </span>
+  );
+}
+
 export function LinkButton({
   className,
   variant = "outline",
