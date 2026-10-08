@@ -3,32 +3,46 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Activity,
   Command,
+  Copy,
+  Crosshair,
   Database,
   FileDown,
   FileUp,
+  FolderOpen,
   Gauge,
   Keyboard,
+  ListChecks,
   Moon,
   Network,
   Plus,
+  Radar,
   Repeat2,
   RotateCcw,
   Rows3,
+  Save,
+  ScanSearch,
   Settings,
   ShieldCheck,
+  Square,
   Sun,
   Unplug,
+  Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { api, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, templateRequest } from "./lib/api";
+import { api, copyToClipboard, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useScope, useStats } from "./lib/data";
 import { useCaCert } from "./lib/data.policy";
+import {
+  attackConfigFilename,
+  parseAttackConfig,
+  serializeAttackConfig,
+} from "./lib/intruder-config-file";
 import { onDesktopEvent } from "./lib/runtime";
-import { resolveTheme, useApp } from "./lib/store";
-import type { Exchange } from "./lib/types";
+import { emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, useApp } from "./lib/store";
+import type { Exchange, MessageView } from "./lib/types";
 import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
 import { useChord, useKeymap } from "./lib/keymap";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
@@ -322,6 +336,262 @@ function App(): JSX.Element {
     }
   }, []);
 
+  // ---- Burp's Intruder menu ---------------------------------------------------------------------
+  //
+  // burp.Zcur's mainIntruderMenu, adapted. The rule for every row below is the repo's: a control
+  // that cannot be honoured is present-but-disabled saying why, or absent — never a no-op. The
+  // rows that act do so through state the Intruder page already owns; the page stays the single
+  // authority on launching, because a second copy of its `onRun` in this file would be a second
+  // attack launcher, and the two would drift.
+  //
+  // Absent rather than greyed, because they name a concept burpsy does not have at all:
+  // "Copy configuration from first tab", "Copy configuration from last tab" and "New tab behavior".
+  // Burp opens each attack in its own tab; burpsy holds exactly one attack (see IntruderConfig), so
+  // there is no other tab to copy from and no new-tab behaviour to configure. A greyed row for each
+  // would imply a multi-attack feature is a setting away.
+  const intruderConfig = useApp((state) => state.intruder);
+  const setIntruderConfig = useApp((state) => state.setIntruder);
+  const setIntruderRun = useApp((state) => state.setIntruderRun);
+  const intruderStatus = useApp((state) => state.intruderStatus);
+  const requestIntruderCommand = useApp((state) => state.requestIntruderCommand);
+  const attackInputRef = useRef<HTMLInputElement>(null);
+  const [attackLoadError, setAttackLoadError] = useState<string | null>(null);
+  const [confirmAttackDefaults, setConfirmAttackDefaults] = useState(false);
+
+  const saveAttackConfig = useCallback(() => {
+    downloadText(attackConfigFilename(), serializeAttackConfig(intruderConfig), "application/json");
+    toast.success("Attack configuration saved");
+  }, [intruderConfig]);
+
+  const loadAttackConfig = useCallback(
+    async (file: File) => {
+      const result = parseAttackConfig(await file.text());
+      if (!result.ok) {
+        // Named refusal, not a partial load: a configuration half-taken from the file and half left
+        // over from the page is an attack nobody wrote, and the operator would find out by reading
+        // a report produced by requests they did not intend.
+        setAttackLoadError(result.reason);
+        return;
+      }
+      setIntruderConfig(result.config);
+      // The stored report was produced by the plan being replaced. Keeping it beside a different
+      // configuration would label one attack's rows with another attack's payload sets.
+      setIntruderRun(null);
+      navigate("intruder");
+      toast.success(`Attack configuration loaded from ${file.name}`);
+    },
+    [setIntruderConfig, setIntruderRun, navigate],
+  );
+
+  const copyAttackConfig = useCallback(
+    (withPositions: boolean) => {
+      // Burp's own submenu wording. "Without payload positions" is the portable form: the same
+      // payload sets, processing rules and settings, with the base request's marked positions
+      // dropped so the configuration can be pasted onto a different request.
+      const config = withPositions ? intruderConfig : { ...intruderConfig, points: [], selected: [] };
+      void copyToClipboard(serializeAttackConfig(config)).then(
+        () => toast.success(withPositions ? "Attack config copied" : "Attack config copied without payload positions"),
+        (error: unknown) => toast.error(`Could not copy: ${error instanceof Error ? error.message : String(error)}`),
+      );
+    },
+    [intruderConfig],
+  );
+
+  const sendAttackBaseToRepeater = useCallback(async () => {
+    const id = Number(intruderConfig.msgId);
+    try {
+      const message = await api<MessageView>(`/api/message/${id}`);
+      if (message.truncated) {
+        // Sending the prefix would put a request in Repeater that is not the one that was captured,
+        // and every send from that tab would be a send of something nobody wrote.
+        toast.error(
+          `Stored message ${id} is truncated${typeof message.len === "number" ? ` (${formatBytes(message.len)} captured)` : ""}, so Repeater would receive a request that is not the one captured.`,
+        );
+        return;
+      }
+      const raw = message.text ?? "";
+      if (raw === "") {
+        toast.error(`Stored message ${id} has no bytes to send.`);
+        return;
+      }
+      // The target is what the attack itself sends to, so Repeater inherits it verbatim rather than
+      // re-deriving a host from the request's own Host header, which a proxied request may not have.
+      const target = intruderConfig.target.trim();
+      const protocol = target.toLowerCase().startsWith("http://") ? "http" : "https";
+      openRepeaterTab({
+        name: (intruderConfig.label || `Intruder base #${id}`).slice(0, 42),
+        target,
+        protocol,
+        request: raw,
+      });
+      navigate("repeater");
+      toast.success("Intruder's base request sent to Repeater");
+    } catch (error) {
+      toast.error(`Could not load message ${id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [intruderConfig, openRepeaterTab, navigate]);
+
+  // Why "Start attack" is grey. The mounted page publishes its own reason (it alone can size the
+  // payload sets); with the page unmounted the store's necessary-conditions check stands in, and
+  // anything it cannot see the page refuses on arrival, by name, in a toast.
+  const attackRunning = intruderStatus?.running ?? false;
+  const startBlocker = attackRunning
+    ? "An attack is already running."
+    : intruderStatus
+      ? intruderStatus.refusal
+      : intruderLaunchBlocker(intruderConfig);
+  const stopBlocker = !attackRunning
+    ? "No attack is running."
+    : intruderStatus?.controllable
+      ? null
+      : "The running attack has not been identified yet — its controls appear in the Intruder header once it is named.";
+
+  const INTRUDER_MENU: MenuGroup[] = [
+    {
+      id: "attack",
+      actions: [
+        {
+          id: "start",
+          label: "Start attack",
+          icon: Zap,
+          disabled: startBlocker !== null,
+          hint: startBlocker ?? "Launch this attack from the Intruder page.",
+          onSelect: () => {
+            navigate("intruder");
+            requestIntruderCommand("start");
+          },
+        },
+        {
+          // Burp keeps Stop on the attack window (burp.Zhwf), not on this menu, because each attack
+          // has its own window. burpsy has one attack and no window to put it on, so a menu that
+          // could start an attack and not stop it would be a one-way door.
+          id: "stop",
+          label: "Stop",
+          icon: Square,
+          disabled: stopBlocker !== null,
+          hint: stopBlocker ?? "Stop the running attack; the report shows everything sent so far.",
+          onSelect: () => {
+            navigate("intruder");
+            requestIntruderCommand("stop");
+          },
+        },
+        {
+          id: "open-saved",
+          label: "Open saved attack",
+          icon: FolderOpen,
+          disabled: true,
+          hint: "burpsy has no project file, so a finished attack and its results are not stored on disk to be reopened. Save attack config writes the configuration to a JSON file instead.",
+          onSelect: () => undefined,
+        },
+      ],
+    },
+    {
+      id: "config",
+      actions: [
+        {
+          id: "save-config",
+          label: "Save attack config",
+          icon: Save,
+          hint: "Write the whole attack — base message, target, positions, payload sets, processing rules, grep and limits — to a JSON file.",
+          onSelect: saveAttackConfig,
+        },
+        {
+          id: "load-config",
+          label: "Load attack config",
+          icon: FileUp,
+          disabled: attackRunning,
+          hint: attackRunning
+            ? "An attack is running; loading a different configuration under it would misreport the attack in flight."
+            : "Read an attack back from a saved JSON file. A file this burpsy cannot restore in full is refused naming the field.",
+          onSelect: () => attackInputRef.current?.click(),
+        },
+        {
+          id: "copy-config",
+          label: "Copy attack config",
+          icon: Copy,
+          hint: "Copy the configuration to the clipboard in the same format Save writes.",
+          onSelect: () => undefined,
+          submenu: [
+            {
+              id: "copy-config-variants",
+              actions: [
+                {
+                  id: "copy-with-positions",
+                  label: "With payload positions",
+                  onSelect: () => copyAttackConfig(true),
+                },
+                {
+                  id: "copy-without-positions",
+                  label: "Without payload positions",
+                  hint: "The portable form: same payloads and settings, no marked positions, so it can be pasted onto a different request.",
+                  onSelect: () => copyAttackConfig(false),
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "defaults",
+          label: "Use default attack configuration",
+          icon: RotateCcw,
+          disabled: attackRunning,
+          hint: attackRunning
+            ? "An attack is running; resetting its configuration under it would misreport the attack in flight."
+            : "Restore the payload sets, processing rules, grep and limits to their defaults, keeping the base request, target and positions.",
+          onSelect: () => setConfirmAttackDefaults(true),
+        },
+        {
+          id: "payload-lists",
+          label: "Configure predefined payload lists",
+          icon: ListChecks,
+          disabled: true,
+          hint: "burpsy has no payload-list library. A payload set can read a server-side file by name on the Intruder page's Payloads tab, which is the closest thing that exists.",
+          onSelect: () => undefined,
+        },
+      ],
+    },
+    {
+      id: "scan",
+      actions: [
+        {
+          id: "scan-points",
+          label: "Scan defined insertion points",
+          icon: ScanSearch,
+          disabled: true,
+          hint: "burpsy's audit (POST /api/audit/{exchange}) derives its own insertion points and has no field that accepts a chosen set, so the positions marked here could not be the ones scanned.",
+          onSelect: () => undefined,
+        },
+        {
+          id: "active-scan",
+          label: "Do active scan",
+          icon: Radar,
+          disabled: true,
+          hint: "The audit is keyed by exchange id; Intruder's base request is a stored message id, and a message carries no back-reference to the exchange it came from. Start an active audit from the History row instead.",
+          onSelect: () => undefined,
+        },
+        {
+          id: "passive-scan",
+          label: "Do passive scan",
+          icon: Crosshair,
+          disabled: true,
+          hint: "The only passive entry point (POST /api/scanner/passive-branch) sweeps a whole site-map branch, which is many exchanges rather than this one base request.",
+          onSelect: () => undefined,
+        },
+        {
+          id: "to-repeater",
+          label: "Send to Repeater",
+          icon: Repeat2,
+          disabled: intruderConfig.msgId.trim() === "" || intruderConfig.target.trim() === "",
+          hint:
+            intruderConfig.msgId.trim() === "" || intruderConfig.target.trim() === ""
+              ? "The attack has no base message and target yet, so there is nothing to send."
+              : "Open the attack's base request, unmodified, in a new Repeater tab.",
+          onSelect: () => void sendAttackBaseToRepeater(),
+        },
+      ],
+    },
+  ];
+
   const hotkeyTools = useMemo(() => TOOLS.filter((entry) => entry.hotkey), []);
   useHotkeys(
     hotkeyTools.map((entry) => `alt+${entry.hotkey}`).join(","),
@@ -406,10 +676,14 @@ function App(): JSX.Element {
   const hasSubTabs = tool.leaves.length > 1;
 
   /**
-   * Burp's menu bar, adapted rather than copied. Its Project menu is built around
-   * project files, and its Intruder menu around attack-config state that only the
-   * Intruder page holds — neither has a global equivalent here, so those items are
-   * dropped instead of shipped as decoration. Every entry below does something.
+   * Burp's menu bar, adapted rather than copied. Its Project menu is built around project files,
+   * which burpsy does not have, so those items stay out.
+   *
+   * Intruder is here now (burpsy-react-ui-yinb). It was dropped on the grounds that its state lives
+   * only on the Intruder page — true, and the wrong conclusion: the attack configuration moved into
+   * the store (burpsy-react-ui-rby), so the menu can read it, and the page can be asked to act on it
+   * without this file learning how to launch an attack. Every enabled entry below does something;
+   * every disabled one says why it cannot, in its `hint`.
    */
   const MENUS: { label: string; groups: MenuGroup[] }[] = [
     {
@@ -462,6 +736,10 @@ function App(): JSX.Element {
           ],
         },
       ],
+    },
+    {
+      label: "Intruder",
+      groups: INTRUDER_MENU,
     },
     {
       label: "Repeater",
@@ -719,6 +997,73 @@ function App(): JSX.Element {
           event.target.value = "";
         }}
       />
+      {/* Load attack config's file picker. Separate from the configuration import above because the
+          two accept different documents and must not be able to feed each other's reader. */}
+      <input
+        ref={attackInputRef}
+        type="file"
+        accept="application/json,.json"
+        data-testid="attack-config-input"
+        style={{ display: "none" }}
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) void loadAttackConfig(file);
+          event.target.value = "";
+        }}
+      />
+      <Modal
+        open={attackLoadError !== null}
+        onOpenChange={(open) => {
+          if (!open) setAttackLoadError(null);
+        }}
+        title="Attack configuration refused"
+        description={attackLoadError ?? undefined}
+      >
+        <p>
+          Nothing was loaded. The attack on the Intruder page is untouched — a configuration that
+          cannot be restored in full is refused rather than applied in part.
+        </p>
+      </Modal>
+      <Modal
+        open={confirmAttackDefaults}
+        onOpenChange={setConfirmAttackDefaults}
+        title="Use the default attack configuration?"
+        description="The payload sets, processing rules, grep expressions and limits go back to their defaults."
+      >
+        <p>
+          The base message, target and marked insertion points are kept, so the attack still points at
+          the same request. The last report is cleared: it was produced by the configuration being
+          replaced.
+        </p>
+        <div className="toolbar">
+          <button type="button" className="button" onClick={() => setConfirmAttackDefaults(false)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={() => {
+              const defaults = emptyIntruderConfig();
+              setIntruderConfig((current) => ({
+                ...defaults,
+                msgId: current.msgId,
+                target: current.target,
+                label: current.label,
+                mode: current.mode,
+                allPoints: current.allPoints,
+                points: current.points,
+                selected: current.selected,
+              }));
+              setIntruderRun(null);
+              setConfirmAttackDefaults(false);
+              navigate("intruder");
+              toast.success("Attack configuration reset to defaults");
+            }}
+          >
+            Use defaults
+          </button>
+        </div>
+      </Modal>
       <Modal
         open={importResult !== null}
         onOpenChange={(open) => {

@@ -12,6 +12,15 @@ export interface MenuAction {
   danger?: boolean;
   disabled?: boolean;
   /**
+   * Why this row is here, rendered as the item's `title`.
+   *
+   * It exists for the disabled rows. A greyed item with no explanation is a dead end an operator
+   * has to guess at — worse than an absent one, because it implies the feature is somewhere nearby.
+   * With a hint the row says what burpsy cannot do and why, which is the honest version of a control
+   * that cannot be honoured. Enabled rows may carry one too, as a plain hover explanation.
+   */
+  hint?: string;
+  /**
    * Nested groups. When present the row becomes a submenu trigger and `onSelect` is
    * never called — a row cannot both open a submenu and do something, because a click
    * on it would then be ambiguous. Burp's own colour and severity pickers are submenus,
@@ -86,7 +95,7 @@ function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
         if (action.submenu && hasMenuActions(action.submenu)) {
           return (
             <Sub key={action.id}>
-              <SubTrigger className="menu-item menu-item-sub" disabled={action.disabled}>
+              <SubTrigger className="menu-item menu-item-sub" disabled={action.disabled} title={action.hint}>
                 {body}
                 <span className="menu-item-chevron" aria-hidden="true">
                   <ChevronRight size={13} />
@@ -105,6 +114,7 @@ function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
             key={action.id}
             className={action.danger ? "menu-item menu-item-danger" : "menu-item"}
             disabled={action.disabled}
+            title={action.hint}
             onSelect={action.onSelect}
           >
             {body}

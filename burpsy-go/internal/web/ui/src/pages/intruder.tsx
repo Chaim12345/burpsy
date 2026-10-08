@@ -552,6 +552,13 @@ export function IntruderPage(): JSX.Element {
   const tab = useApp((state) => state.intruderTab);
   const setTab = useApp((state) => state.setIntruderTab);
 
+  // The menubar's Intruder menu talks to this page rather than launching attacks of its own: a
+  // second copy of `onRun` in app.tsx would be a second launcher, and the two would drift. The menu
+  // states an intention here; everything below decides whether it can be honoured and says why not.
+  const command = useApp((state) => state.intruderCommand);
+  const clearCommand = useApp((state) => state.clearIntruderCommand);
+  const setStatus = useApp((state) => state.setIntruderStatus);
+
   /** A setter for one configuration field, accepting a value or an updater like useState's. */
   function field<K extends keyof IntruderConfig>(key: K) {
     return (value: IntruderConfig[K] | ((current: IntruderConfig[K]) => IntruderConfig[K])) =>
@@ -941,6 +948,68 @@ export function IntruderPage(): JSX.Element {
       onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
     });
   };
+
+  /**
+   * Why this attack will not launch, in the page's own terms.
+   *
+   * `canRun` is a boolean, and a menu item that refuses without a reason is the thing this bead
+   * exists to avoid. The order matches the order an operator fills the form in, so the message names
+   * the first thing still missing rather than the last.
+   */
+  const launchRefusal = (): string => {
+    if (msgId.trim() === "") return "Choose a stored message id first.";
+    if (!canDiscover) return `"${msgId}" is not a stored message id.`;
+    if (target.trim() === "") return "The attack has no target authority.";
+    if (selected.length === 0) return "No insertion points are selected — discover and choose some first.";
+    const empty = setSizes.findIndex((size) => size !== null && size <= 0);
+    if (empty >= 0) return `Payload set ${empty + 1} is empty, so there is nothing to send.`;
+    return "This attack is not ready to launch.";
+  };
+
+  // Publish what this page permits so the menubar can grey its items truthfully, and say WHY when it
+  // greys one. Only the mounted page knows an attack is in flight, so the menu reads it from here
+  // rather than guessing.
+  const launchRefusalNow = run.isPending ? "An attack is already running." : canRun ? null : launchRefusal();
+  useEffect(() => {
+    setStatus({ refusal: launchRefusalNow, running: run.isPending, controllable: myTaskId !== null });
+  }, [launchRefusalNow, run.isPending, myTaskId, setStatus]);
+  // Leaving the page takes the knowledge with it: a status left behind would tell the menubar an
+  // attack is running long after the mutation that was running it was unmounted.
+  useEffect(() => () => setStatus(null), [setStatus]);
+
+  /**
+   * Perform a menubar instruction.
+   *
+   * Depends on `command` alone on purpose: `onRun` and `controlAttack` are rebuilt every render, so
+   * listing them would re-fire the effect — and re-firing this one launches an attack. The command
+   * is cleared first, so a refusal consumes the instruction exactly like a launch does and a second
+   * click is a second command (that is what the nonce is for).
+   */
+  useEffect(() => {
+    if (!command) return;
+    clearCommand();
+    if (command.kind === "start") {
+      if (run.isPending) {
+        toast.info("An attack is already running — stop it before starting another");
+        return;
+      }
+      if (!canRun) {
+        toast.error(launchRefusal());
+        return;
+      }
+      void onRun();
+      return;
+    }
+    if (!run.isPending) {
+      toast.info("No attack is running, so there is nothing to stop");
+      return;
+    }
+    if (myTaskId === null) {
+      toast.info("Still locating the attack — its controls appear in the header once it is named");
+      return;
+    }
+    controlAttack("stop");
+  }, [command]);
 
   // Only a known count can be over budget. When the estimate is a floor the guard may still fire —
   // a floor above the cap is certainly above it — but its silence proves nothing, which is why the
