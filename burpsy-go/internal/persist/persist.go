@@ -1144,6 +1144,76 @@ func (s *Store) LoadScopeDropOutOfScope() bool {
 	return v == "true"
 }
 
+// scopeDropRule is one rule of the custom drop scope as stored: the rule's arms, nothing compiled.
+type scopeDropRule struct {
+	Include  bool    `json:"include"`
+	Pattern  string  `json:"pattern"`
+	Path     *string `json:"path,omitempty"`
+	Port     *uint16 `json:"port,omitempty"`
+	Protocol *string `json:"protocol,omitempty"`
+	Enabled  bool    `json:"enabled"`
+}
+
+// scopeDropDoc is the stored drop-scope choice: the custom rules, and whether they are in force.
+type scopeDropDoc struct {
+	Custom bool            `json:"custom"`
+	Rules  []scopeDropRule `json:"rules"`
+}
+
+// SaveScopeDropScope persists the custom drop scope's rules and whether the drop gate uses them
+// (burpsy-react-ui-47ed). Beside the drop switch in the settings table: it is the same egress
+// setting, and it must survive a restart for the same reason the switch does.
+func (s *Store) SaveScopeDropScope(custom *core.Scope, use bool) {
+	doc := scopeDropDoc{Custom: use && custom != nil, Rules: []scopeDropRule{}}
+	if custom != nil {
+		for _, r := range custom.Rules() {
+			doc.Rules = append(doc.Rules, scopeDropRule{Include: r.Kind == core.ScopeInclude, Pattern: r.Pattern,
+				Path: r.PathPrefix, Port: r.Port, Protocol: r.Protocol, Enabled: r.Enabled})
+		}
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		s.log("scope drop_scope", err)
+		return
+	}
+	if err := s.setSetting("scope.drop_scope", string(raw)); err != nil {
+		s.log("scope drop_scope", err)
+	}
+}
+
+// LoadScopeDropScope restores the custom drop scope's rules (nil when none) and whether they are in
+// force. A row that cannot be read back is logged and restored as the suite scope, never as a custom
+// scope missing rules the operator wrote.
+func (s *Store) LoadScopeDropScope() (*core.Scope, bool) {
+	v, err := s.getSetting("scope.drop_scope")
+	if err != nil || v == "" {
+		return nil, false
+	}
+	var doc scopeDropDoc
+	if err := json.Unmarshal([]byte(v), &doc); err != nil {
+		s.log("scope drop_scope", err)
+		return nil, false
+	}
+	if len(doc.Rules) == 0 {
+		return nil, false
+	}
+	custom := core.NewScope()
+	for _, r := range doc.Rules {
+		kind := core.ScopeExclude
+		if r.Include {
+			kind = core.ScopeInclude
+		}
+		rule, err := core.NewScopeRuleFrom(kind, r.Pattern, r.Path, r.Port, r.Protocol)
+		if err != nil {
+			s.log("scope drop_scope", err)
+			return nil, false
+		}
+		rule.Enabled = r.Enabled
+		custom.Add(rule)
+	}
+	return custom, doc.Custom
+}
+
 // SaveScope replaces the scope rule set (small table; delete-and-reinsert is fine).
 //
 // # Why there are two tables, and why the old one is still written
@@ -2801,6 +2871,7 @@ func (s *Store) Restore(
 		// governs: an egress fence that lapses because the process restarted is worse than
 		// one that was never raised, because the panel says it is up.
 		scope.SetDropOutOfScope(s.LoadScopeDropOutOfScope())
+		scope.SetDropScope(s.LoadScopeDropScope())
 	}
 
 	if mr != nil {

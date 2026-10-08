@@ -328,6 +328,11 @@ type ScopeRequest struct {
 	// that did not send the field, refused rather than guessed. On "include"/"exclude" a nil
 	// reads as the default (true): a rule is created active unless a caller says otherwise.
 	Enabled *bool `json:"enabled,omitempty"`
+	// Mode and DropRules are the "drop_scope" action (burpsy-react-ui-47ed): Burp's "Use suite scope"
+	// ("suite") or "Use custom scope" ("custom") for which requests the drop switch drops, and the
+	// custom scope's rules, each in the include/exclude shape (action is the rule's kind).
+	Mode      string         `json:"mode,omitempty"`
+	DropRules []ScopeRequest `json:"drop_rules,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -402,6 +407,86 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	return rule, nil
 }
 
+// buildDropScope reads a drop_scope action into the custom rules and whether they are in force.
+//
+// "suite" keeps the custom rules already set, as Burp's panel does. "custom" with drop_rules replaces
+// them; "custom" without drop_rules puts the kept rules back in force.
+//
+// A custom scope in force must include something. With no include rule core.Scope allows by default,
+// so an empty custom scope would drop nothing while the panel said a custom fence was up; refusing it
+// is clearer than either reading.
+func buildDropScope(req ScopeRequest, live *core.Scope) (*core.Scope, bool, error) {
+	kept, _ := live.DropScope()
+	switch req.Mode {
+	case "suite":
+		if len(req.DropRules) > 0 {
+			return nil, false, fmt.Errorf("drop_rules are only read with mode \"custom\"; mode \"suite\" drops by the suite scope")
+		}
+		return kept, false, nil
+	case "custom":
+		if req.DropRules == nil {
+			if kept == nil {
+				return nil, false, fmt.Errorf("mode \"custom\" needs drop_rules: no custom drop scope has been set yet")
+			}
+			return kept, true, nil
+		}
+	default:
+		return nil, false, fmt.Errorf("drop_scope wants mode \"suite\" (Use suite scope) or \"custom\" (Use custom scope), not %q", req.Mode)
+	}
+	custom := core.NewScope()
+	includes := 0
+	for i, dr := range req.DropRules {
+		kind, ok := scopeKindFromString(dr.Action)
+		if !ok {
+			return nil, false, fmt.Errorf("drop_rules[%d].action must be \"include\" or \"exclude\", not %q", i, dr.Action)
+		}
+		if dr.Pattern == "" {
+			return nil, false, fmt.Errorf("drop_rules[%d].pattern is required", i)
+		}
+		rule, err := buildScopeRule(kind, dr)
+		if err != nil {
+			return nil, false, fmt.Errorf("drop_rules[%d]: %v", i, err)
+		}
+		if kind == core.ScopeInclude && rule.Enabled {
+			includes++
+		}
+		custom.Add(rule)
+	}
+	if includes == 0 {
+		return nil, false, fmt.Errorf("a custom drop scope needs at least one enabled include rule: without one it would " +
+			"admit every request, and the drop switch would drop nothing")
+	}
+	if err := custom.Validate(); err != nil {
+		return nil, false, err
+	}
+	return custom, true, nil
+}
+
+type dropScopeViewBody struct {
+	Mode  string          `json:"mode"`
+	Rules []scopeRuleView `json:"rules"`
+}
+
+func dropScopeView(custom *core.Scope, use bool) dropScopeViewBody {
+	view := dropScopeViewBody{Mode: "suite", Rules: []scopeRuleView{}}
+	if use {
+		view.Mode = "custom"
+	}
+	if custom == nil {
+		return view
+	}
+	for _, rule := range custom.Rules() {
+		kind := "Include"
+		if rule.Kind == core.ScopeExclude {
+			kind = "Exclude"
+		}
+		pattern := rule.Pattern
+		view.Rules = append(view.Rules, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix,
+			Port: rule.Port, Protocol: rule.Protocol, Enabled: rule.Enabled})
+	}
+	return view
+}
+
 // scopeKindFromString maps the wire's kind to the engine's. Kept beside the handler so both
 // "remove" (optional kind) and "toggle" (required kind) agree on the vocabulary.
 func scopeKindFromString(kind string) (core.ScopeRuleKind, bool) {
@@ -465,6 +550,8 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 		// Burp's "Out-of-scope request handling: Drop all out-of-scope requests". Reported
 		// unconditionally, like enabled: the UI's switch has to read the state it toggles.
 		"drop_out_of_scope": s.scope.DropOutOfScope(),
+		// Which scope the drop switch drops by (47ed): always present, rules always an array.
+		"drop_scope": dropScopeView(s.scope.DropScope()),
 		// Always an array, never null: the console reads .length on it, and a nil slice marshals to
 		// null, which would take the page down instead of showing an empty picker.
 		"libraries": libraries,
@@ -509,6 +596,16 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 		s.scope.SetDropOutOfScope(*req.Enabled)
 		if s.persist != nil {
 			s.persist.SaveScopeDropOutOfScope(*req.Enabled)
+		}
+	case "drop_scope":
+		custom, use, err := buildDropScope(req, s.scope)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.scope.SetDropScope(custom, use)
+		if s.persist != nil {
+			s.persist.SaveScopeDropScope(custom, use)
 		}
 	case "include", "exclude":
 		kind := core.ScopeInclude
@@ -620,7 +717,7 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	case "clear":
 		s.scope.Clear()
 	default:
-		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, library_save, library_load or library_delete", http.StatusBadRequest)
+		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, drop_scope, library_save, library_load or library_delete", http.StatusBadRequest)
 		return
 	}
 	s.persistScope()

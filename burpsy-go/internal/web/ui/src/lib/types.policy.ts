@@ -392,11 +392,35 @@ export interface ScopeView {
   * Always on the wire — the switch has to read the state it toggles.
   */
  drop_out_of_scope: boolean;
+ /**
+  * Which scope the drop switch drops by: Burp's "Use suite scope" or "Use custom scope". Always on
+  * the wire; rules is always an array (empty for the suite scope).
+  */
+ drop_scope?: DropScopeView;
+}
+
+export interface DropScopeView {
+ mode: "suite" | "custom";
+ rules: ScopeRuleView[];
+}
+
+/** One rule of a custom drop scope, in the include/exclude request shape. */
+export interface DropScopeRule {
+ action: "include" | "exclude";
+ pattern: string;
+ path?: string;
+ port?: number;
+ protocol?: "http" | "https";
+ enabled?: boolean;
 }
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
- action: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope";
+ action: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope" | "drop_scope";
+ /** On "drop_scope": which scope the drop switch drops by. */
+ mode?: "suite" | "custom";
+ /** On "drop_scope" with mode "custom": the custom scope's rules. */
+ drop_rules?: DropScopeRule[];
  kind?: "include" | "exclude";
  pattern?: string;
  path?: string;
