@@ -2453,3 +2453,49 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   the reason that only a Repeater tab sends a kettled request. Burp's Proxy supports kettled requests; burpsy's
   intercept does not (it holds HTTP/1-shaped bytes). The detail view is a panel at the foot of the Inspector, not
   a drill-down page that replaces the item list.
+
+### Kettled HTTP/2 requests — what is refused, what the editor shows, what the record says (jae5)
+- **Burp:** `desktop/http2/index.html` "Kettled requests" — an Inspector edit HTTP/1 cannot represent (an uppercase
+  letter or colon in a header name, a newline in a name or value, a modified `:scheme`, a space in `:path` or
+  `:method`, a duplicate pseudo-header, "; " in a cookie value) kettles the request; the editor then shows "This
+  request is kettled because:" with the reasons in place of the headers and keeps the body editable; reversing the
+  edits or downgrading to HTTP/1 (with a warning that the changes are lost) unkettles it; Proxy, Repeater, Logger and
+  Scanner support kettled requests, Intruder normalises them.
+- **burpsy:** a Repeater tab kettles when a detail-view edit puts CR/LF into a header of an HTTP/2 draft (ln2a). The
+  tab then carries the field list (`h2Headers`); the request pane shows the note — reasons from
+  `POST /api/http2/kettle` (`internal/http2.KettleReasons`) — and the body editor; the Inspector's Request headers edit
+  the list, pseudo-headers included. Send carries `h2_headers`, and `sender.AuthorisedSender.SendH2Fields` writes it as
+  literal HPACK fields (no indexing, no Huffman) on a fresh h2 connection, acknowledging SETTINGS and PING, pacing DATA
+  by flow control, and reading stream 1 to END_STREAM/RST_STREAM/GOAWAY, whichever is named.
+- **Decline — some of Burp's triggers are kettled but never sent.** A space (or CR/LF) in `:path`/`:method` and a
+  duplicate pseudo-header are refused by the frame-program classifier (`http2/authorise.go`): the engagement-scope gate
+  reads a request line, and a path with a space in it would be authorised up to the space and sent whole. A modified
+  `:scheme` other than `http`/`https` is refused at send time by the sender's second scope check, which cannot read an
+  authority under a scheme it cannot dial (`:scheme: http` on a TLS connection is authorised against the http authority
+  and sends). There is no override, by design. For the classifier's refusals the note says "Sending it will be
+  refused:" with the classifier's own sentence before Send; every refusal answers Send with 403 and the reason. Lifting this needs a scope
+  check that authorises a raw `:path` without rendering it into a request line — a CEO-level decision, not made here.
+- **The cookie trigger, read at the field level:** burpsy's kettled Inspector has no cookie list, so "; " in a cookie
+  value is read as RFC 9113 §8.2.3 frames it — more than one `cookie` field, one of which contains "; " — because
+  joining crumbs with "; " for HTTP/1 is exactly where that loss happens. A single `cookie` field containing "; " is
+  one Cookie line and is not kettled.
+- **burpsy addition:** a pseudo-header after a regular header is a kettle reason (HTTP/1 text cannot say where it
+  sat). Burp's list does not name it.
+- **Unkettling** is automatic only when HTTP/1 text provably carries the list unchanged (it re-seeds to the same
+  fields) and nothing would refuse it; a list that is merely "not kettled by Burp's rules" but would still change
+  (say, no `:path`) stays a field list and the note says so. The downgrade (Inspector > HTTP/1) asks first, then
+  normalises: CR/LF removed, extra pseudo-headers and colon names dropped, cookie fields joined.
+- **Raw text edits:** the request pane hides the head while kettled, as Burp does; any other path that rewrites the
+  head of the text (a body-encoding transform, a GraphQL action) drops the list at the store chokepoint and the tab
+  falls back to the normalised text, rather than sending a list the operator's edit no longer matches.
+- **The stored exchange:** history stores HTTP/1-shaped bytes and a kettled list has none, so the stored request is
+  a rendering with CR and LF inside a field written as the text `\r` `\n`, pseudo-headers folded into the request line
+  and Host, and the exchange note lists every field as sent, Go-quoted, in order. Burp stores the HTTP/2 message.
+- **Tab settings on a kettled send:** Override SNI, the response timeout, Unpack, the note, Process cookies, Strip
+  Connection and Update Content-Length apply (the last three to the field list). Normalize line endings applies to the
+  body only. HTTP/2 connection reuse does not (always a fresh connection) and redirects are not followed; each is named
+  in the answer's `kettled.notes` and the result badge. A plain-HTTP target and an HTTP/1 protocol pin are refused
+  (Repeater speaks HTTP/2 only over TLS).
+- **Not supported elsewhere:** Proxy intercept, Logger and Scanner do not carry kettled requests (Burp's do); a group
+  send refuses a kettled member by name; To Intruder refuses an unsent kettled tab and otherwise hands Intruder the
+  stored rendering, saying so — Burp normalises.

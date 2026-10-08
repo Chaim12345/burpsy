@@ -81,6 +81,10 @@ type repeaterSendReq struct {
 	// TabID is the Repeater tab this send comes from, which keys the tab's reused h2 connection when
 	// h2_connection_reuse is on (adkx). Opaque to the server; absent shares one key.
 	TabID string `json:"tab_id,omitempty"`
+	// H2Headers is a kettled tab's HTTP/2 header list (burpsy-react-ui-jae5). When present it is the
+	// request's whole header section, sent exactly as listed — pseudo-headers, order, casing and any
+	// CR/LF inside a field — and only the body is taken from the request text. See api_http2_kettle.go.
+	H2Headers []h2FieldView `json:"h2_headers,omitempty"`
 }
 
 // validRepeaterSNI checks an Override SNI against the target it rides: a valid server name, on a TLS
@@ -151,6 +155,9 @@ type repeaterSendResp struct {
 	// first on its connection ("new"), a later one ("reused"), or did not ride h2 at all ("not-h2").
 	// Absent when reuse is off, where every request is the first on a fresh connection.
 	H2Connection string `json:"h2_connection,omitempty"`
+	// Kettled is present only on a kettled send (jae5): how many fields went out, which tab settings
+	// were not honoured, and what ended the read.
+	Kettled *kettledSendView `json:"kettled,omitempty"`
 }
 
 // repeaterRedirects is the follow outcome as the panel reads it.
@@ -474,6 +481,23 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	}
 	spec.SNI = req.SNI
 	spec.TabID = req.TabID
+	if len(req.H2Headers) > 0 {
+		fields, ferr := validKettledFields("h2_headers", req.H2Headers)
+		if ferr != nil {
+			http.Error(w, "refused: "+ferr.Error(), http.StatusBadRequest)
+			return
+		}
+		// The body is the request text's; its head is the normalised rendering the tab keeps for a
+		// downgrade, and is not what is sent.
+		_, body, _ := strings.Cut(request, "\r\n\r\n")
+		resp, code, kerr := s.sendKettledRepeaterRequest(r.Context(), spec, fields, []byte(body))
+		if kerr != nil {
+			http.Error(w, kerr.Error(), code)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

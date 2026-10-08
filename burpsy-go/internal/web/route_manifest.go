@@ -403,6 +403,11 @@ var manifest = map[string]route{
 		summary: "import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable " +
 			"and resendable in Repeater; nothing is sent to any target — the requests are recorded, not replayed",
 	},
+	"/api/http2/kettle": {
+		// riskRead: it classifies a header list and sends nothing. POST because the list is a body.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "whether an HTTP/2 header list is kettled (HTTP/1 text cannot carry it) and whether a send would be refused",
+	},
 	"/api/http2/program": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send a raw HTTP/2 frame program: the pseudo-header and frame-level surface",

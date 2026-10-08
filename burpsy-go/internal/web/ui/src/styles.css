@@ -5391,3 +5391,33 @@ tbody td.burp-hotkeys-reason {
   gap: var(--s1);
   margin-left: var(--s3);
 }
+
+/* ---- a kettled Repeater draft (jae5): Burp's note in place of the headers, the body below ---- */
+
+.kettled-request {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+}
+
+.kettled-note {
+  flex-direction: column;
+  border-left-color: var(--warn);
+}
+
+.kettled-note ul {
+  margin: 0;
+  padding-left: var(--s4);
+}
+
+.kettled-title {
+  color: var(--ink);
+  font-weight: var(--weight-bold);
+}
+
+.kettled-request > :last-child {
+  flex: 1;
+  min-height: 0;
+}
