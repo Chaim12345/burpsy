@@ -120,7 +120,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 
 | Method | Path | Risk | Summary |
 |---|---|---|---|
-| POST | `/api/repeater/send` | egress | Send one operator-authored request and record the exchange. |
+| POST | `/api/repeater/send` | egress | Send one operator-authored request and record the exchange. **Structured send** (vuxy): `from_message` / `from_exchange` as the base (target implied by the stored exchange), `edits` — ordered ops `set_method`, `set_path`, `set_query_string`, `set_query_param`, `delete_query_param`, `set_header`, `delete_header`, `set_body_param`, `delete_body_param`, `set_request_cookie`, `delete_request_cookie`, `set_body`, `set_form_fields`, `set_json_field`, `raw_insert_at`, `raw_replace` (internal/reqedit; each touches only its span, Content-Length fixed after a body op) — `http_version` (`auto`/`1.1`/`2`) and `dry_run` (the exact bytes, target and scope verdict; nothing sent). A structured send is authorised on the final bytes (`AuthoriseRaw`, path included); the stored base is never modified. |
 | GET | `/api/protocols` | read | Per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded. |
 | POST | `/api/http2/program` | egress | Send a raw HTTP/2 frame program: the pseudo-header and frame-level surface. |
 

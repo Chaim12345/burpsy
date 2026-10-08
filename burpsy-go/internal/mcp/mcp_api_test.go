@@ -193,3 +193,28 @@ func TestALongHistoryIsPagedToItsLastRowThroughTheDatasetsTool(t *testing.T) {
 		t.Fatalf("paged %d rows of %d", seen, n)
 	}
 }
+
+// vuxy: a structured, edited send previewed through the send tool — nothing leaves the process.
+func TestAnEditedSendIsPreviewedThroughTheSendTool(t *testing.T) {
+	store := core.NewTrafficStore()
+	base := consoleOver(t, store)
+	raw := "GET /a?x=1 HTTP/1.1\r\nHost: t.test\r\n\r\n"
+	mid, err := store.Put([]byte(raw), core.DirectionRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := callGrouped(t, base, "send", map[string]any{"op": "POST /api/repeater/send", "body": map[string]any{
+		"from_message": uint64(mid), "target": "http://t.test:80", "dry_run": true, "http_version": "1.1",
+		"edits": []map[string]any{{"op": "set_query_param", "name": "x", "value": "2"}, {"op": "set_header", "name": "X-Test", "value": "1"}},
+	}})
+	if res.IsError || !strings.Contains(textOf(res), `"request":"GET /a?x=2 HTTP/1.1\r\nHost: t.test\r\nX-Test: 1\r\n\r\n"`) {
+		t.Fatalf("the preview is not the edited request: %s", textOf(res))
+	}
+	bad := callGrouped(t, base, "send", map[string]any{"op": "POST /api/repeater/send", "body": map[string]any{
+		"from_message": uint64(mid), "target": "http://t.test:80", "dry_run": true,
+		"edits": []map[string]any{{"op": "set_header", "nme": "X"}},
+	}})
+	if !bad.IsError || !strings.Contains(textOf(bad), `unknown field "nme"`) {
+		t.Fatalf("a misspelled edit field was not refused: %s", textOf(bad))
+	}
+}

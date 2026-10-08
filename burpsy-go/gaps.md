@@ -1721,3 +1721,18 @@ the two differ. Burp evidence is the decompiled agent registry
   Organizer items, scan configurations and Burp's bulk-send results are not sources yet: the organizer
   route is riskLocal and carries operator notes, and burpsy has no bulk-send engine (its scripts
   arrive with burpsy-react-ui-wiwh). The wait bound is the one the collaborator poll states.
+
+### Structured send edits (burpsy-react-ui-vuxy)
+- **Burp:** `send_request` takes `request_id` / `url` / `host`, 15 edit ops and `http_version`
+  `auto|http_1|http_2` (`toolargs/RequestSpec.java`, `EditOperation.java`, `HttpVersionSpec.java`).
+- **burpsy:** `POST /api/repeater/send` with `from_message` / `from_exchange`, `edits`, `http_version`
+  `auto|1.1|2`, `dry_run` (`internal/reqedit`, `internal/web/repeater_edits.go`). The 15 ops plus
+  `set_json_field` (a dotted path; replaces that value's bytes or inserts the key into its parent).
+- **Divergences, each on purpose:** no `url`/`host` builder (a typed `request` with `target` already
+  does that); `set_query_param` / `set_body_param` insert the value **as written** (URL-encode it
+  yourself — an encoder would decide for you what a parameter-pollution or encoding test sends;
+  `set_form_fields` does encode); `set_header` replaces the **first** occurrence and leaves later
+  duplicates (smuggling research needs them), while `delete_header` removes all; `raw_replace` replaces
+  every occurrence and refuses when there is none; a body op on a chunked request is refused rather
+  than re-framing it. A structured send is authorised on its final bytes including the path, which is
+  stricter than the plain send's host-level gate.
