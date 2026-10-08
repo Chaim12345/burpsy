@@ -42,7 +42,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -571,7 +570,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req collaboratorServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -645,6 +644,13 @@ func (s *Server) handleCollaboratorPoll(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
 }
 
+// collaboratorPayloadReq is the request body handleCollaboratorPayload decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type collaboratorPayloadReq struct {
+	Count                 int    `json:"count"`
+	CustomData            string `json:"custom_data"`
+	WithoutServerLocation bool   `json:"without_server_location"`
+}
+
 // handleCollaboratorPayload serves POST /api/collaborator/payload: mint one address.
 //
 // The refusal path is the one worth reading. With no provider this answers 409 and NO address, because
@@ -676,12 +682,8 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 	var customData string
 	withoutLocation := false
 	if r.Body != nil {
-		var req struct {
-			Count                 int    `json:"count"`
-			CustomData            string `json:"custom_data"`
-			WithoutServerLocation bool   `json:"without_server_location"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		var req collaboratorPayloadReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {'count': N} or empty", http.StatusBadRequest)
 			return
 		}

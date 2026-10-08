@@ -26,7 +26,6 @@ package web
 // the certificate, which is public, and 0600 for the key, which is not.
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -103,17 +102,18 @@ func (s *Server) handleCAImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Decoded before the engine check so the schema sweep reaches it (burpsy-react-ui-3zw0); a
+	// malformed body is a 400 whatever this process carries.
+	var req caImportRequest
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 	if s.tlsEngine == nil {
 		// Nothing would consult an imported CA, so accepting it would store a value that changes
 		// nothing.
 		http.Error(w, "TLS interception is off, so there is no signing CA to replace; start burpsy "+
 			"with -intercept-tls", http.StatusServiceUnavailable)
-		return
-	}
-
-	var req caImportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	if req.CertPEM == "" || req.KeyPEM == "" {

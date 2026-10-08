@@ -30,7 +30,7 @@ type scannerAuditReq struct {
 	ExchangeID core.ExchangeID `json:"exchange_id,omitempty"`
 	// Config names one of scanner.BuiltInConfigs to run under. Empty means the server default. An
 	// unknown name is refused rather than ignored — see Server.resolveAuditConfig.
-	Config string `json:"config,omitempty"`
+	Config string `json:"config,omitempty" desc:"a built-in scan configuration name; empty means the server default"`
 	// Pool names a saved resource pool to bound this audit's probes. Empty means unpaced, which is
 	// how every audit ran before pools existed — the audit path had no rate limit at all, which is
 	// the gap a named pool closes here.
@@ -69,7 +69,7 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req scannerAuditReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -117,7 +117,7 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	// and malformed is an error. Decoding into a zero-valued struct and treating io.EOF as "no body"
 	// is what keeps those two apart.
 	var req scannerAuditReq
-	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil && derr != io.EOF {
+	if derr := requestJSON(w, r, nil).Decode(&req); derr != nil && derr != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -310,7 +310,7 @@ func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req auditSelectedReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}

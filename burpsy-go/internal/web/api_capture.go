@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,11 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// historyDeleteReq is the request body historyDelete decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type historyDeleteReq struct {
+	IDs []core.ExchangeID `json:"ids"`
+}
+
 // historyDelete removes exchanges from the operator's view. With a JSON body {"ids":[..]} the
 // named exchanges go; with no body (or an empty ids array) the whole capture clears — Burp's
 // "Clear (tool)". The response reports removed and requested separately, so a caller that named
@@ -37,12 +43,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // Deletion is a view-level tombstone (core.TrafficStore.DeleteExchanges): positional ids stay
 // stable, so nothing else on the wire is renumbered by a cleanup.
 func (s *Server) historyDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []core.ExchangeID `json:"ids"`
-	}
+	var req historyDeleteReq
 	if r.Body != nil {
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-		if err := dec.Decode(&req); err != nil && err != io.EOF {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {\"ids\":[..]} or empty", http.StatusBadRequest)
 			return
 		}
@@ -216,6 +219,13 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// exchangePatchReq is PATCH /api/exchange/{id}'s body. Both members are raw so the handler can tell
+// "omitted" (nil: leave unchanged) from an explicit null (clear the notes) — a typed *string cannot.
+type exchangePatchReq struct {
+	Notes     json.RawMessage `json:"notes" desc:"a string sets the notes; null clears them; omit to leave them unchanged"`
+	Highlight json.RawMessage `json:"highlight" desc:"a highlight colour name, or \"\" for none; omit to leave it unchanged"`
+}
+
 // handlePatchExchange serves PATCH /api/exchange/{id}: body {"notes": string|null, "highlight":
 // string}, both optional. An omitted field is left unchanged; an explicit `null` on notes clears it
 // (there is no way to express "clear" for highlight other than sending ""="none", so an omitted
@@ -224,17 +234,17 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 // core.ValidHighlights; anything else is a 400 and is never coerced to a nearby value. Responds with
 // the updated ExchangeView.
 func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id core.ExchangeID) {
-	var body map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var body exchangePatchReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	var notes *string
 	notesSet := false
-	if raw, ok := body["notes"]; ok {
+	if body.Notes != nil {
 		notesSet = true
-		if err := json.Unmarshal(raw, &notes); err != nil {
+		if err := json.Unmarshal(body.Notes, &notes); err != nil {
 			http.Error(w, "notes must be a string or null", http.StatusBadRequest)
 			return
 		}
@@ -242,9 +252,9 @@ func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id 
 
 	highlight := ""
 	highlightSet := false
-	if raw, ok := body["highlight"]; ok {
+	if body.Highlight != nil {
 		highlightSet = true
-		if err := json.Unmarshal(raw, &highlight); err != nil {
+		if err := json.Unmarshal(body.Highlight, &highlight); err != nil {
 			http.Error(w, "highlight must be a string", http.StatusBadRequest)
 			return
 		}
@@ -300,9 +310,9 @@ type ScopeRequest struct {
 	// of the three library actions — "library_save", "library_load", "library_delete" — which operate
 	// on a named copy of the whole rule set rather than on one rule. See updateScopeLibrary for why
 	// they are actions here rather than a route of their own.
-	Action  string `json:"action"`
-	Kind    string `json:"kind"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
-	Pattern string `json:"pattern"`
+	Action  string `json:"action" enum:"include|exclude|remove|edit|clear|toggle|drop_out_of_scope|library_save|library_load|library_delete" desc:"what to do; include/exclude add a rule"`
+	Kind    string `json:"kind" enum:"include|exclude" desc:"the rule kind, for remove and toggle"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
+	Pattern string `json:"pattern" desc:"the host pattern: a hostname, *.wildcard, regex:… or range:CIDR"`
 	// Name is the library a library_* action names. Unused by every other action, and deliberately
 	// separate from Pattern: a library is named after an engagement, not after a host.
 	Name string `json:"name,omitempty"`
@@ -481,7 +491,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	var req ScopeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1158,6 +1168,16 @@ func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
 	s.handleIssueTriage(w, r, id)
 }
 
+// issueTriageReq is the request body handleIssueTriage decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type issueTriageReq struct {
+	// Severity/Confidence use the same lower-case vocabulary the views emit
+	// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
+	Severity      *string `json:"severity"`
+	Confidence    *string `json:"confidence"`
+	FalsePositive *bool   `json:"false_positive"`
+	Comment       *string `json:"comment"`
+}
+
 // handleIssueTriage serves PUT /api/issues/{id} (operator triage: severity, confidence,
 // false-positive, comment) and DELETE /api/issues/{id} (remove the finding). These are the write
 // paths the read-only /api/issues never had; the store applies every decision under one lock and
@@ -1188,21 +1208,14 @@ func (s *Server) handleIssueTriage(w http.ResponseWriter, r *http.Request, idStr
 		return
 	}
 
-	var req struct {
-		// Severity/Confidence use the same lower-case vocabulary the views emit
-		// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
-		Severity      *string `json:"severity"`
-		Confidence    *string `json:"confidence"`
-		FalsePositive *bool   `json:"false_positive"`
-		Comment       *string `json:"comment"`
-	}
+	var req issueTriageReq
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 	if len(body) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
+		if err := requestJSON(w, r, bytes.NewReader(body)).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
 		}
@@ -1301,7 +1314,7 @@ func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req manualIssueReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

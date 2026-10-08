@@ -298,7 +298,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req repeaterSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -470,7 +470,7 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req intruderPointsReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -831,7 +831,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req intruderRunReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1624,7 +1624,7 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(s.liveAuditStatus())
 	case http.MethodPost:
 		var req liveAuditEnableReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -1770,7 +1770,7 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req sequencerAnalyseReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

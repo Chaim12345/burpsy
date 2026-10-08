@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -98,6 +97,12 @@ func (s *Server) domInvaderView() domInvaderView {
 	}
 }
 
+// domInvaderReq is the request body handleDomInvader decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type domInvaderReq struct {
+	Canary  *string `json:"canary"`
+	Enabled *bool   `json:"enabled"`
+}
+
 // handleDomInvader serves GET/PUT /api/dominvader. riskLocal: it reads and writes burpsy's own
 // auditor state and sends nothing.
 func (s *Server) handleDomInvader(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +110,8 @@ func (s *Server) handleDomInvader(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.domInvaderView())
 	case http.MethodPut:
-		var body struct {
-			Canary  *string `json:"canary"`
-			Enabled *bool   `json:"enabled"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+		var body domInvaderReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
 			http.Error(w, `the body must be {"canary"?:"...","enabled"?:bool}`, http.StatusBadRequest)
 			return
 		}
@@ -139,7 +141,7 @@ func (s *Server) handleDomInvaderHit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var h dominvader.Hit
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&h); err != nil {
 		http.Error(w, "the body must be one hit object", http.StatusBadRequest)
 		return
 	}

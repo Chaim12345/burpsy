@@ -112,12 +112,46 @@ Each descriptor carries:
   `openWorldHint`) taken from the console's own derivation in `agent_tools.go` rather than re-judged
   here, plus `riskClass`, `escalationTier`, `requiresConfirmation` and the exact `route` pattern;
 - **inputSchema** — `method` (an enum of the verbs that route declares), `path`, `query`, `body` and
-  `confirm`. `path` is required for a subtree pattern (the pattern itself is not a requestable URL)
+  `confirm`, with `body`/`query` typed per verb (see *Typed input schemas* below). `path` is required for a subtree pattern (the pattern itself is not a requestable URL)
   and must be exactly the pattern for an exact route.
 
-The body schema is deliberately permissive: every route's wire shape is documented in the console's
-own API docs rather than in the manifest, and inventing 122 schemas here would be a second source of
-truth that nothing checks.
+## Typed input schemas (burpsy-react-ui-3zw0)
+
+Both surfaces publish each operation's `body` and `query` **typed**, and the type is the handler's
+own — not a second, hand-written schema:
+
+- `internal/web/route_schemas.go` names, per `"VERB /pattern"`, the Go type the handler decodes its
+  body into (or `noBody`, or a `raw` description for a non-JSON upload), plus the query parameters
+  it reads. `internal/web/route_schema.go` reflects JSON Schema from that type: field names from the
+  `json` tags, types from the Go types, `desc:"…"` and `enum:"a|b"` tags where a field has them,
+  `additionalProperties: false`. A type that decodes itself (a custom `UnmarshalJSON`) must have an
+  explicit override — `intruder.PayloadSource`'s tagged union is published as one titled branch per
+  `type` — or the sweep fails rather than publishing a guess.
+- Every handler decodes through `requestJSON`. In an in-process probe (a context value no wire
+  request can carry) it records the type it was handed and stops the handler before it acts.
+  `TestEveryBodyTakingRouteDecodesItsDeclaredType` drives every declared route-verb through the
+  real mux and asserts the handler decoded into **exactly** the declared type, that an example
+  generated from the **published** schema decodes, and that an unknown field is refused.
+  `TestEveryMutatingRouteVerbDeclaresItsInput` fails on a mutating route-verb with no declaration, so
+  a new route cannot reach the MCP surface untyped.
+- **Strict decoding for agents.** burpsy-mcp sends `X-Burpsy-Agent` on every call. A request carrying
+  it is decoded with unknown fields refused: HTTP 400, and the decoder's own error — which names the
+  field — rides the `X-Burpsy-Body-Error` response header, which the transport prints into the tool
+  result as `body error: json: unknown field "…"`. The console's own UI does not send the header and
+  keeps the lenient decoding it was written against (it round-trips several GET shapes into PUTs).
+- Three settings patches decode a key→value map and check each key against a table of their own
+  (`PUT /api/scanner/config`, `PUT /api/proxy/options`, `PUT /api/network/settings`). Their schemas
+  are built from those tables, and `TestAKeyTablePatchRefusesAnUnknownKey` drives the handler's own
+  refusal, which the probe cannot see.
+
+On the grouped surface, `body` is the operation's schema when the tool has one body-taking
+operation, and otherwise an `anyOf` with one branch per operation, titled with the operation
+(`"POST /api/tools/hash"`). `query` lists every declared parameter with the operations that read it.
+
+What is not proven: query parameters are declared, and `TestEveryDeclaredQueryParameterIsReadSomewhere`
+only checks each name is spelled in a handler; and a declared `optional` body (the handler accepts an
+empty one) is taken from the handler's `io.EOF` branch, not driven, because an empty-body probe would
+let the handler act.
 
 ## The confirmation gate, mapped onto the risk classes
 

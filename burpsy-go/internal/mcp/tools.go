@@ -231,10 +231,9 @@ func mutatingMethods(methods []string) []string {
 	return out
 }
 
-// schemaForRoute is the InputSchema every route tool shares. It is intentionally permissive about
-// the body: the wire shapes are the handlers' own structs, they are documented per route in the
-// console's API docs (/api/apidoc), and inventing a stricter schema here would be a second
-// definition of each route's payload that nothing checks.
+// schemaForRoute is a route tool's InputSchema. The body and query are typed per verb from the
+// handler's own request type (web.MCPSchemaFor, burpsy-react-ui-3zw0); a route answering several
+// verbs offers each verb's body as one titled branch.
 func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 	methods := make([]string, 0, len(r.Methods))
 	for _, m := range r.Methods {
@@ -242,19 +241,17 @@ func schemaForRoute(r web.MCPRouteInfo) map[string]any {
 	}
 	sort.Strings(methods)
 
+	ops := make([]op, 0, len(methods))
+	for _, m := range methods {
+		ops = append(ops, op{name: m + " " + r.Pattern, route: r, method: m})
+	}
 	props := map[string]any{
 		"method": map[string]any{
 			"type": "string", "enum": methods,
 			"description": "HTTP method. Optional when the route answers exactly one verb, or when it answers GET and no body is supplied; otherwise required.",
 		},
-		"query": map[string]any{
-			"type":                 "object",
-			"additionalProperties": map[string]any{"type": "string"},
-			"description":          "Query string parameters.",
-		},
-		"body": map[string]any{
-			"description": "JSON request body, sent verbatim as application/json. See /api/apidoc for this route's shape.",
-		},
+		"query": querySchemaFor(ops),
+		"body":  bodySchemaFor(ops),
 		"confirm": map[string]any{
 			"type":        "string",
 			"description": "One-time confirmation token minted by " + confirmToolName + ". The server refuses a mutating call to a confirmation-worthy route without it (HTTP 428).",
@@ -488,14 +485,8 @@ func schemaForGrouped(ops []op) map[string]any {
 			"type": "string", "enum": names,
 			"description": "The operation: one HTTP verb and route of the burpsy console, exactly as listed.",
 		},
-		"query": map[string]any{
-			"type":                 "object",
-			"additionalProperties": map[string]any{"type": "string"},
-			"description":          "Query string parameters.",
-		},
-		"body": map[string]any{
-			"description": "JSON request body, sent verbatim as application/json.",
-		},
+		"query": querySchemaFor(ops),
+		"body":  bodySchemaFor(ops),
 		"confirm": map[string]any{
 			"type":        "string",
 			"description": "One-time confirmation token minted by " + confirmToolName + ". The server refuses a mutating call to a confirmation-worthy route without it (HTTP 428).",
@@ -516,6 +507,88 @@ func schemaForGrouped(ops []op) map[string]any {
 		required = append(required, "op")
 	}
 	return map[string]any{"type": "object", "properties": props, "required": required}
+}
+
+// bodySchemaFor is the "body" property for a set of operations: each operation's body schema,
+// reflected from the handler's own request type by web.MCPSchemaFor. One operation with a body
+// publishes its schema directly; several publish one branch each, titled with the operation it
+// belongs to, so a model reads which body goes with which op. Operations that take no body are named
+// in the description rather than given an empty branch.
+func bodySchemaFor(ops []op) map[string]any {
+	var branches []map[string]any
+	var none []string
+	for _, o := range ops {
+		spec, ok := web.MCPSchemaFor(o.method, o.route.Pattern)
+		if !ok || spec.Body == nil {
+			none = append(none, o.name)
+			continue
+		}
+		b := cloneMap(spec.Body)
+		b["title"] = o.name
+		desc, _ := b["description"].(string)
+		req := "required"
+		if !spec.BodyRequired {
+			req = "optional"
+		}
+		b["description"] = strings.TrimSpace(fmt.Sprintf("Body for %s (%s). %s", o.name, req, desc))
+		branches = append(branches, b)
+	}
+	note := "JSON request body, sent as application/json. The server decodes it strictly for an agent: an unknown field is refused with HTTP 400 naming the field."
+	if len(none) > 0 {
+		note += " No body for: " + strings.Join(none, ", ") + "."
+	}
+	switch len(branches) {
+	case 0:
+		return map[string]any{"description": "These operations take no body; omit it. (" + strings.Join(none, ", ") + ")"}
+	case 1:
+		b := branches[0]
+		b["description"] = fmt.Sprint(b["description"]) + " " + note
+		return b
+	}
+	anyOf := make([]any, 0, len(branches))
+	for _, b := range branches {
+		anyOf = append(anyOf, b)
+	}
+	return map[string]any{"anyOf": anyOf, "description": note + " Each branch is titled with the operation it belongs to."}
+}
+
+// querySchemaFor is the "query" property: the union of the declared query parameters of the
+// operations, each described with the operations that read it. Values are strings on the wire.
+func querySchemaFor(ops []op) map[string]any {
+	props := map[string]any{}
+	users := map[string][]string{}
+	for _, o := range ops {
+		spec, ok := web.MCPSchemaFor(o.method, o.route.Pattern)
+		if !ok || spec.Query == nil {
+			continue
+		}
+		qp, _ := spec.Query["properties"].(map[string]any)
+		for name, p := range qp {
+			if _, seen := props[name]; !seen {
+				props[name] = cloneMap(p.(map[string]any))
+			}
+			users[name] = append(users[name], o.name)
+		}
+	}
+	for name, p := range props {
+		m := p.(map[string]any)
+		desc, _ := m["description"].(string)
+		m["description"] = strings.TrimSpace(desc + " (read by " + strings.Join(users[name], ", ") + ")")
+	}
+	return map[string]any{
+		"type":                 "object",
+		"properties":           props,
+		"additionalProperties": map[string]any{"type": "string"},
+		"description":          "Query string parameters. The named ones are the parameters the handlers read; values are strings.",
+	}
+}
+
+func cloneMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // resolveOp picks the operation a grouped-tool call names.
@@ -646,6 +719,9 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	// Marks the call as an agent's, which opts it into strict body decoding: a guessed field name is
+	// refused with 400 naming it, rather than dropped while the request runs without it.
+	req.Header.Set(web.MCPAgentHeaderName, "burpsy-mcp")
 	// The confirmation travels as a header, not as a body field: the gate's comment explains why
 	// (a field the payload can set is not a confirmation). Relaying is the whole of this layer's
 	// involvement — it never mints one, never retries without one, and never caches one.
@@ -676,6 +752,9 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs) callResult {
 		fmt.Fprintf(&b, "(truncated at %d bytes — the console's full response is larger)\n", maxResultBytes)
 	}
 	b.Write(payload)
+	if bodyErr := resp.Header.Get(web.BodyErrorHeader); bodyErr != "" {
+		fmt.Fprintf(&b, "\nbody error: %s", bodyErr)
+	}
 	text := b.String()
 
 	if resp.StatusCode == http.StatusPreconditionRequired {

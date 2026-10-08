@@ -847,7 +847,7 @@ func sessionActionKinds() []sessionActionKindDto {
 
 func (s *Server) sessionRulesPost(w http.ResponseWriter, r *http.Request) {
 	var dto sessionRuleDto
-	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&dto); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -911,7 +911,7 @@ func (s *Server) handleSessionRuleDetail(w http.ResponseWriter, r *http.Request)
 	switch r.Method {
 	case http.MethodPut:
 		var dto sessionRuleDto
-		if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&dto); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -997,7 +997,7 @@ func (s *Server) handleSessionLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req sessionLoginReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1594,6 +1594,11 @@ func (s *Server) sessionRuleAnalyzeMacro(w http.ResponseWriter, r *http.Request,
 	})
 }
 
+// sessionRuleApplyExtractionsReq is the request body sessionRuleApplyExtractions decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sessionRuleApplyExtractionsReq struct {
+	Names []string `json:"names"`
+}
+
 // sessionRuleApplyExtractions serves POST /api/session/rules/{id}/apply-extractions — the
 // apply half of Re-analyze. The body names which suggested extractions to add, by name, so
 // the operator picks from the list they were shown; the server rebuilds each extraction from
@@ -1610,15 +1615,13 @@ func (s *Server) sessionRuleApplyExtractions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rule := s.sessionCoordinator.Rule(session.RuleID(id))
-	if rule == nil {
-		http.Error(w, "Rule not found", http.StatusNotFound)
+	var req sessionRuleApplyExtractionsReq
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	var req struct {
-		Names []string `json:"names"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if rule == nil {
+		http.Error(w, "Rule not found", http.StatusNotFound)
 		return
 	}
 	if len(req.Names) == 0 {
@@ -1665,6 +1668,11 @@ func (s *Server) sessionRuleApplyExtractions(w http.ResponseWriter, r *http.Requ
 		"applied": applied,
 		"rule":    ruleToDto(s.sessionCoordinator.Rule(session.RuleID(id))),
 	})
+}
+
+// sessionTraceReq is the request body handleSessionTrace decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sessionTraceReq struct {
+	Enabled bool `json:"enabled"`
 }
 
 // handleSessionTrace serves GET /api/session/trace and POST /api/session/trace/enable
@@ -1715,10 +1723,8 @@ func (s *Server) handleSessionTrace(w http.ResponseWriter, r *http.Request) {
 			"capacity": 200,
 		})
 	case rest == "/enable" && r.Method == http.MethodPost:
-		var req struct {
-			Enabled bool `json:"enabled"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil {
+		var req sessionTraceReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<10)).Decode(&req); err != nil {
 			http.Error(w, "body must be JSON {enabled: bool}", http.StatusBadRequest)
 			return
 		}
@@ -1806,6 +1812,20 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// sessionCookiesMutateReq is the request body handleSessionCookiesMutate decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sessionCookiesMutateReq struct {
+	Action string `json:"action"`
+	Host   string `json:"host"`
+	Port   uint16 `json:"port"`
+	TLS    bool   `json:"tls"`
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	// Tools is the monitored-tool set for the "monitor" action (burpsy-react-ui-sn3j) —
+	// Burp's "configure the cookie jar to monitor any of the following tools". Not read
+	// by any other action; a nil field keeps the current set.
+	Tools []string `json:"tools"`
+}
+
 // handleSessionCookiesMutate is the cookie jar's write surface (dkb): Burp's cookie jar dialog
 // — "you can edit cookies manually, remove cookies from the jar, or empty the jar altogether".
 // One route, three actions, because they are three verbs over the same resource and a fourth
@@ -1829,19 +1849,8 @@ func (s *Server) handleSessionCookiesMutate(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed: POST {action: set | remove | clear, host, port, tls, name, value}", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Action string `json:"action"`
-		Host   string `json:"host"`
-		Port   uint16 `json:"port"`
-		TLS    bool   `json:"tls"`
-		Name   string `json:"name"`
-		Value  string `json:"value"`
-		// Tools is the monitored-tool set for the "monitor" action (burpsy-react-ui-sn3j) —
-		// Burp's "configure the cookie jar to monitor any of the following tools". Not read
-		// by any other action; a nil field keeps the current set.
-		Tools []string `json:"tools"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+	var req sessionCookiesMutateReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON", http.StatusBadRequest)
 		return
 	}
@@ -1890,6 +1899,11 @@ func (s *Server) handleSessionCookiesMutate(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// sessionRuleMoveReq is the request body sessionRuleMove decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sessionRuleMoveReq struct {
+	Offset int `json:"offset"`
+}
+
 // sessionRuleMove serves POST /api/session/rules/{id}/move — rule precedence.
 //
 // Precedence is not cosmetic here: MatchingRule runs the first enabled rule whose scope covers a
@@ -1912,10 +1926,8 @@ func (s *Server) sessionRuleMove(w http.ResponseWriter, r *http.Request, idStr s
 		http.Error(w, "Invalid rule id", http.StatusBadRequest)
 		return
 	}
-	var body struct {
-		Offset int `json:"offset"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var body sessionRuleMoveReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

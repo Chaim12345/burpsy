@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -152,6 +151,11 @@ func listenerBindStatus(err error) int {
 	return http.StatusBadRequest
 }
 
+// proxyListenerReq is the request body handleProxyListener decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type proxyListenerReq struct {
+	Bind string `json:"bind"`
+}
+
 // handleProxyListener serves GET/PUT/POST/DELETE /api/proxy/listener.
 func (s *Server) handleProxyListener(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -166,21 +170,20 @@ func (s *Server) handleProxyListener(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPut:
-		if s.proxyServer == nil {
-			http.Error(w, "No proxy server is attached to this server, so there is no listener to re-bind", http.StatusServiceUnavailable)
-			return
-		}
 		// An id names one listener in the collection and replaces its whole spec; without
-		// one this is the legacy re-bind of the boot listener, unchanged.
+		// one this is the legacy re-bind of the boot listener, unchanged. Each body is decoded
+		// before the proxy check so the schema sweep reaches it (burpsy-react-ui-3zw0).
 		if id := strings.TrimSpace(r.URL.Query().Get("id")); id != "" {
 			s.updateProxyListener(w, r, id)
 			return
 		}
-		var req struct {
-			Bind string `json:"bind"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req proxyListenerReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Body must be JSON: {\"bind\": \"host:port\"}", http.StatusBadRequest)
+			return
+		}
+		if s.proxyServer == nil {
+			http.Error(w, "No proxy server is attached to this server, so there is no listener to re-bind", http.StatusServiceUnavailable)
 			return
 		}
 		addr, err := normalizeListenerAddr(req.Bind)
@@ -210,13 +213,13 @@ func (s *Server) handleProxyListener(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case http.MethodPost:
-		if s.proxyServer == nil {
-			http.Error(w, "No proxy server is attached to this server, so a listener cannot be added", http.StatusServiceUnavailable)
+		var body proxyListenerBody
+		if err := requestJSON(w, r, nil).Decode(&body); err != nil {
+			http.Error(w, "Body must be JSON: {\"bind\": \"host:port\", \"redirect_host\": …, \"redirect_port\": …, \"force_tls\": …, \"invisible\": …}", http.StatusBadRequest)
 			return
 		}
-		var body proxyListenerBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "Body must be JSON: {\"bind\": \"host:port\", \"redirect_host\": …, \"redirect_port\": …, \"force_tls\": …, \"invisible\": …}", http.StatusBadRequest)
+		if s.proxyServer == nil {
+			http.Error(w, "No proxy server is attached to this server, so a listener cannot be added", http.StatusServiceUnavailable)
 			return
 		}
 		spec, err := specFromBody(body)
@@ -280,8 +283,12 @@ func (s *Server) handleProxyListener(w http.ResponseWriter, r *http.Request) {
 // listener serving and is an error the operator reads, never a dead row.
 func (s *Server) updateProxyListener(w http.ResponseWriter, r *http.Request, id string) {
 	var body proxyListenerBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "Body must be JSON: {\"bind\": \"host:port\", \"redirect_host\": …, \"redirect_port\": …, \"force_tls\": …, \"invisible\": …}", http.StatusBadRequest)
+		return
+	}
+	if s.proxyServer == nil {
+		http.Error(w, "No proxy server is attached to this server, so there is no listener to re-bind", http.StatusServiceUnavailable)
 		return
 	}
 	spec, err := specFromBody(body)
