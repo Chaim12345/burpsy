@@ -196,6 +196,10 @@ type loc struct {
 	// nested points (coding == codingNested). Zero for all other points.
 	innerStart int
 	innerEnd   int
+	// wrapOpen and wrapClose surround the payload when it is spliced: a self-closing XML element's
+	// point (burpsy-react-ui-lzzz) replaces its "/>" with ">" + payload + "</name>". Empty for every
+	// other point.
+	wrapOpen, wrapClose string
 }
 
 // coding describes how a payload must be escaped so the surrounding container
@@ -1024,12 +1028,22 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 	}
 
 	// An XML body is enumerated by structure, not by Content-Type alone: a
-	// document posted as text/plain is the same document. A body whose scan
-	// finds no text node and no attribute value (`<a/>`) has genuinely nowhere to
-	// inject — that is an empty enumeration, like a form with no pairs, not a
-	// refusal.
+	// document posted as text/plain is the same document. An empty element
+	// (`<a/>`) is a point of its own, as in Burp: the payload opens the element
+	// around itself (burpsy-react-ui-lzzz).
 	if strings.Contains(ctype, "xml") || looksLikeXML(trimmed) {
 		for _, xp := range xmlPoints(body) {
+			if xp.closeTag != "" {
+				// A self-closing element (lzzz): no value to keep, and the splice opens the element.
+				*out = append(*out, InsertionPoint{
+					Kind:      IpXML,
+					Name:      xp.name,
+					BaseValue: "",
+					loc:       loc{kind: locBody, start: xp.start, end: xp.end, wrapOpen: ">", wrapClose: "</" + xp.closeTag + ">"},
+					coding:    codingXML,
+				})
+				continue
+			}
 			*out = append(*out, InsertionPoint{
 				Kind:      IpXML,
 				Name:      xp.name,
@@ -1341,6 +1355,9 @@ func headerParams(s string) []headerParam {
 type xmlPoint struct {
 	name       string
 	start, end int
+	// closeTag is set for a self-closing element's point (lzzz): the element name to close when
+	// the "/>" at [start,end) is opened into ">" + payload + "</name>".
+	closeTag string
 }
 
 // xmlFrame is one open element during an XML scan: the path a finding reports
@@ -1471,6 +1488,15 @@ func xmlPoints(s string) []xmlPoint {
 			end, selfClosing := xmlAttrs(s, j, path, &out)
 			if !selfClosing {
 				stack = append(stack, xmlFrame{path: path})
+			} else if end >= 2 && s[end-1] == '>' && s[end-2] == '/' {
+				// Burp's standalone-tag point (Zuq addStandaloneTagInsertionPoint): an empty
+				// element has no text node to inject into, so the "/>" — with any spaces before it —
+				// is the point, and a payload opens the element around itself.
+				slash := end - 2
+				for slash > j && isXMLSpace(s[slash-1]) {
+					slash--
+				}
+				out = append(out, xmlPoint{name: path, start: slash, end: end, closeTag: name})
 			}
 			textStart = end
 			i = end
@@ -1769,6 +1795,9 @@ func (p *InsertionPoint) ApplyOpts(req []byte, payload string, appending bool, o
 	newVal := escaped
 	if appending {
 		newVal = p.BaseValue + escaped
+	}
+	if p.loc.wrapClose != "" {
+		newVal = p.loc.wrapOpen + newVal + p.loc.wrapClose
 	}
 
 	switch p.loc.kind {
