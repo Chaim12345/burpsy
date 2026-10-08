@@ -2967,6 +2967,9 @@ tbody td {
   display: grid;
   place-items: center;
   color: var(--muted);
+  /* No button padding: the 12px chevron in a 14-16px box was pushed off-centre and clipped by the
+     global button padding (seen in the txnw live drive, site map and crawl paths alike). */
+  padding: 0;
 }
 
 .tree-row-icon {
@@ -5190,4 +5193,33 @@ tbody td.burp-hotkeys-reason {
   white-space: normal;
   line-height: 1.35;
   width: 50%;
+}
+
+/* Crawl paths (txnw): the disclosure toggle beside each selectable row, and the Expand all /
+   Collapse all pair at the end of the run summary. */
+.crawl-path-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+/* The same 14px column the site-map tree gives its toggle (.tree-row's first grid track). */
+.crawl-path-line > .tree-toggle {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.crawl-path-line > .crawl-path-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.crawl-paths-actions {
+  display: inline-flex;
+  gap: var(--s1);
+  margin-left: var(--s3);
 }

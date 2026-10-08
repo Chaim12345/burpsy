@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data";
@@ -23,6 +23,7 @@ import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Moda
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
+import { collectBranch, setExpandedKeys } from "../lib/tree-expand";
 import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
 import { EngagementView, type EngagementSeedRequest } from "./engagement";
@@ -687,7 +688,41 @@ export function SiteMapPage(): JSX.Element {
         // exchange the operator had to find under it first. Passive scan sends nothing (it re-reads
         // the store); add-to-scope and active crawl hit the server in the same shapes the
         // exchange-level menu already uses, so both share one code path with the row menu.
+        // Burp's Expand branch / Collapse branch (siteMapTreeExpandBranchMenuItem, txnw). The tree
+        // is loaded whole, so expanding needs no fetch — but it is capped (lib/tree-expand.ts), and
+        // the toast says how many branches stayed closed rather than implying all opened.
+        const branch = collectBranch(target.node, (node) => node.children, nodeKey);
+        const treeGroup: MenuGroup = {
+         id: "node-tree",
+         actions: [
+          {
+           id: "expand-branch",
+           label: target.depth === 0 ? "Expand host" : "Expand branch",
+           icon: ChevronsUpDown,
+           disabled: branch.total === 0,
+           hint: branch.total === 0 ? "Nothing under this node to expand" : undefined,
+           onSelect: () => {
+            setExpanded((current) => setExpandedKeys(current, branch.keys, true));
+            if (branch.truncated) {
+             toast.warning(`Expanded ${branch.keys.length.toLocaleString()} of ${branch.total.toLocaleString()} folders — the rest stay closed so the tree stays responsive`);
+            }
+           },
+          },
+          {
+           id: "collapse-branch",
+           label: target.depth === 0 ? "Collapse host" : "Collapse branch",
+           icon: ChevronsDownUp,
+           disabled: branch.total === 0,
+           onSelect: () => {
+            // Collapsing is never capped: every key, not just the first EXPAND_CAP.
+            const all = collectBranch(target.node, (node) => node.children, nodeKey, Number.POSITIVE_INFINITY);
+            setExpanded((current) => setExpandedKeys(current, all.keys, false));
+           },
+          },
+         ],
+        };
         return [
+         treeGroup,
          {
           id: "node-scope",
           actions: [
