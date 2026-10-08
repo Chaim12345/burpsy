@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
 import {
  breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
@@ -40,6 +40,7 @@ import { cn } from "../lib/cn";
 import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
+import { extraEditorTabs } from "../lib/editor-extra-tabs";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
 import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { useMintPayload } from "../lib/data.collab";
@@ -467,6 +468,10 @@ type MessageView =
 // The tab bar's labels, keyed by view. Kept next to the type so a view added to the
 // union fails to compile here first — a tab that renders its key instead of a label is
 // exactly the kind of half-wired view this editor shipped with once already.
+/** The views that take an Add in an editable context (11r8): the ones whose items an operator
+ *  adds to a request — never Attributes, which are facts about the message, not a list. */
+const ADDABLE_VIEWS: MessageView[] = ["headers", "queryparams", "bodyparams", "cookies"];
+
 const VIEW_LABELS: Record<MessageView, string> = {
  pretty: "Pretty",
  raw: "Raw",
@@ -482,17 +487,6 @@ const VIEW_LABELS: Record<MessageView, string> = {
  cookies: "Cookies",
  attributes: "Attributes",
 };
-
-/**
- * Whether a message has cookie rows to read: a response's Set-Cookie lines, or a request's
- * Cookie header. Decides whether the Cookies tab exists for this message.
- */
-function cookiesToRead(value: string): { name: string; value: string }[] {
- if (isResponse(value)) {
-  return cookiesOf(parseMessage(value).headers, true).map(([name, val]) => ({ name, value: val }));
- }
- return cookieSpans(value).map((pair) => ({ name: pair.name, value: pair.value }));
-}
 
 /**
  * Raw HTTP message editor with Burp's message-editor views.
@@ -942,17 +936,15 @@ export function HttpEditor({
  const setEditorTabs = useApp((state) => state.setEditorTabs);
  const setUrlEncodeAsYouType = useApp((state) => state.setUrlEncodeAsYouType);
 
- // The five operator-added tabs (t94i). Each warrants itself by the message's own content —
- // a Headers tab exists for every HTTP message (every message has a head), Query/Body
- // params and Cookies exist when there is something to read, Attributes always. The
- // prefs decide which of these are hidden and their order, but never invent a tab the
- // message cannot fill.
- const extraTabs: OptionalEditorTab[] = ["headers", "attributes"];
- if (querySpans(value).length > 0) extraTabs.push("queryparams");
- if (bodyParamSpans(value).length > 0 || cookiesToRead(value).length > 0) {
-  if (bodyParamSpans(value).length > 0) extraTabs.push("bodyparams");
-  if (cookiesToRead(value).length > 0) extraTabs.push("cookies");
- }
+ // The five operator-added tabs (t94i). Read-only, each warrants itself by the message's own
+ // content — Headers and Attributes always, Query/Body params and Cookies when there is
+ // something to read. Editable, a request gets every view so an item can be ADDED where none
+ // exists yet (11r8: Burp's "in editable contexts … displays all views"). The prefs decide
+ // which of these are hidden and their order. The rule is lib/editor-extra-tabs.ts.
+ const extraTabs: OptionalEditorTab[] = extraEditorTabs(value, editable);
+ // Where an add from one of those tabs is written: the same onChange Raw writes through, so
+ // the raw text stays the single source of truth and the tab is a writer over it, not a copy.
+ const addInto = editable ? onChange : undefined;
 
  // Preferences: hidden tabs leave the strip, the order array reorders it. A pref naming a
  // tab the message does not warrant is inert — the strip still only offers what it can fill.
@@ -1584,13 +1576,13 @@ export function HttpEditor({
        }
       />
      ) : active === "headers" ? (
-      <HeadersTab raw={value} />
+      <HeadersTab raw={value} onAdd={addInto} />
      ) : active === "queryparams" ? (
-      <QueryParamsTab raw={value} />
+      <QueryParamsTab raw={value} onAdd={addInto} />
      ) : active === "bodyparams" ? (
-      <BodyParamsTab raw={value} />
+      <BodyParamsTab raw={value} onAdd={addInto} />
      ) : active === "cookies" ? (
-      <CookiesTab raw={value} />
+      <CookiesTab raw={value} onAdd={addInto} />
      ) : active === "attributes" ? (
       <AttributesTab raw={value} />
      ) : (
@@ -1682,7 +1674,9 @@ export function HttpEditor({
    </Modal>
    {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
     <div className="editor-note">
-     Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
+     {ADDABLE_VIEWS.includes(active) && addInto
+      ? "Add an item here and it is written into the message. Edit, remove or reorder existing items in Raw or the Inspector."
+      : "Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back."}
     </div>
    ) : null}
    {charsetError ? (

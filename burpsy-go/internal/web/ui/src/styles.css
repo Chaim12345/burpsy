@@ -5126,3 +5126,16 @@ tbody td {
   border-left-color: var(--warn);
   color: var(--text);
 }
+
+/* An editable editor's Add row under a Headers/Query/Body/Cookies tab (11r8). */
+.typed-add {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+
+.typed-add .input {
+  flex: 1;
+  min-width: 0;
+}
