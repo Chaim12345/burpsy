@@ -234,7 +234,7 @@ var routeSchemas = map[string]opSchema{
 
 	// ---- Collaborator -------------------------------------------------------------------------
 	"POST /api/collaborator/payload": {body: typeOf[collaboratorPayloadReq](), optional: true},
-	"POST /api/collaborator/poll":    noBody,
+	"POST /api/collaborator/poll":    {body: typeOf[collaboratorPollReq](), optional: true},
 	"POST /api/collaborator/server":  {body: typeOf[collaboratorServerRequest]()},
 	"POST /api/blindxss/payload":     noBody,
 

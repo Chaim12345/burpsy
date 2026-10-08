@@ -641,7 +641,19 @@ func (s *Server) handleCollaboratorPoll(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+	// The body is optional: an empty POST is the original "re-read now" and answers exactly as it
+	// always did. payload_ids / wait_seconds / min_interactions are the filtered long-poll
+	// (burpsy-react-ui-myr2, api_collaborator_poll.go).
+	var req collaboratorPollReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "body must be empty or JSON {\"payload_ids\":[…],\"wait_seconds\":N,\"min_interactions\":M}", http.StatusBadRequest)
+		return
+	}
+	if req.empty() {
+		writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+		return
+	}
+	s.collaboratorLongPoll(w, r, req)
 }
 
 // collaboratorPayloadReq is the request body handleCollaboratorPayload decodes (hoisted for its published schema, burpsy-react-ui-3zw0).

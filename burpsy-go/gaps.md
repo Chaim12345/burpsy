@@ -1678,3 +1678,19 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## MCP surface: divergences from Burp's agent tools (2026-10, burpsy-react-ui-2jrr.1)
+
+Burp-parity entries for the MCP surface sub-epic. Each says what Burp does, what burpsy does, and why
+the two differ. Burp evidence is the decompiled agent registry
+(`/root/burp-re/out/deobf/ai_agentic/burp/agentic/`).
+
+### Collaborator long-poll wait bound (burpsy-react-ui-myr2)
+- **Burp:** `poll_for_collaborator_interactions` takes `wait_seconds` 1–300
+  (`toolargs/PollForCollaboratorInteractionsArgs.java`, `@Range(min = 1L, max = 300L)`).
+- **burpsy:** `POST /api/collaborator/poll` takes `wait_seconds` 0–60 (0 = return at once) and refuses
+  61+ with 400 (`internal/web/api_collaborator_poll.go`, `maxCollaboratorWaitSeconds`).
+- **Divergence:** a long-poll holds one HTTP request and one MCP tool call open for its whole wait;
+  60 s sits well inside every client timeout on that path, where 300 s does not. A caller that needs
+  longer polls again. burpsy also answers a fourth status, `unavailable`, when no channel is open or
+  the log cannot be read, instead of waiting out the timer and reporting `empty`.
