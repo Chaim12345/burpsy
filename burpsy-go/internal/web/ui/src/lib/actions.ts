@@ -30,6 +30,7 @@ import { editableBodyBase64 } from "./message";
 import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
 import { useAnnotateExchange } from "./data";
+import { formDialog, promptDialog } from "./dialogs";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
 import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
@@ -647,56 +648,82 @@ const showResponseInBrowser = (exchange: Exchange) => {
   * Burp's "Add comment", seeded with whatever note the row already carries so the menu entry
   * edits rather than replaces.
   *
-  * `window.prompt` rather than a modal: the menu factory is a plain function called on every
-  * right-click from six different pages, and a dialog would mean every one of those pages
-  * owning open/target/draft state for a single-line string. The trade is real and is why the
-  * detail pane's textarea stays — that is where a multi-line note belongs. Cancel returns null
-  * and is left alone; clearing the box to empty is a deliberate "remove the note" and is sent
-  * as null, which is what the PATCH endpoint takes for "unset".
+  * Through the shell's themed prompt (lib/dialogs.ts, bea3), not window.prompt: the menu factory
+  * is a plain function with no React subtree of its own, which is exactly what promptDialog is
+  * for — it awaits an answer from the one host mounted in the shell. The detail pane's textarea
+  * stays the place for a multi-line note. Cancel resolves null and is left alone; clearing the box
+  * to empty is a deliberate "remove the note" and is sent as null, which is what the PATCH
+  * endpoint takes for "unset".
   */
  const addComment = (exchange: Exchange) => {
   const existing = exchange.notes ?? "";
-  const next = window.prompt(`Comment on exchange #${exchange.id}`, existing);
-  if (next === null) return;
-  const trimmed = next.trim();
-  if (trimmed === existing) return;
-  annotate.mutate(
-   { id: exchange.id, notes: trimmed === "" ? null : trimmed },
-   {
-    onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
-    onError: (error) =>
-     toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
-   },
-  );
+  void promptDialog({
+   title: existing ? `Edit comment on exchange #${exchange.id}` : `Comment on exchange #${exchange.id}`,
+   description: `${exchange.method} ${exchange.host}${exchange.path}. An empty comment removes it.`,
+   label: "Comment",
+   initial: existing,
+   confirmLabel: "Save comment",
+   allowEmpty: true,
+  }).then((next) => {
+   if (next === null) return;
+   const trimmed = next.trim();
+   if (trimmed === existing) return;
+   annotate.mutate(
+    { id: exchange.id, notes: trimmed === "" ? null : trimmed },
+    {
+     onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
+     onError: (error) =>
+      toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
+    },
+   );
+  });
  };
 
  // Record an issue (burpsy-react-ui-4qqz): Burp's "Record an issue" context-menu action. The
  // operator names and grades the finding; the exchange they invoked the menu on is attached as
- // the occurrence, so the issue is jumpable to the bytes that demonstrate it. The description
- // is asked for in a second prompt so the name stays the report heading, not a paragraph.
+ // the occurrence, so the issue is jumpable to the bytes that demonstrate it.
+ //
+ // One form, not the three chained window.prompt calls it used to be (bea3). The severity was a
+ // free-text box then, and the server folds anything it does not recognise to Informational
+ // (core.ParseSeverity) — so a typo like "hihg" silently recorded an informational issue. A select
+ // over the server's own five values makes that impossible.
  const recordIssue = (exchange: Exchange) => {
-  const name = window.prompt("Record an issue — name", "");
-  if (name === null) return;
-  if (!name.trim()) {
-   toast.error("An issue needs a name — it is the report heading");
-   return;
-  }
-  const description = window.prompt("Record an issue — description (optional)", "");
-  if (description === null) return;
-  const severity = window.prompt("Record an issue — severity (info, low, medium, high, critical)", "low");
-  if (severity === null) return;
-  record.mutate(
-   {
-    name: name.trim(),
-    description: description.trim(),
-    severity: severity.trim().toLowerCase(),
-    exchange_id: exchange.id,
-   },
-   {
-    onSuccess: (result) => toast.success(`Issue #${result.id} recorded against #${exchange.id}`),
-    onError: (cause) => toast.error(`Could not record the issue: ${cause instanceof Error ? cause.message : String(cause)}`),
-   },
-  );
+  void formDialog({
+   title: "Record an issue",
+   description: `Against exchange #${exchange.id}: ${exchange.method} ${exchange.host}${exchange.path}`,
+   confirmLabel: "Record issue",
+   fields: [
+    { id: "name", label: "Name", kind: "text", required: true, hint: "The report heading" },
+    { id: "description", label: "Description", kind: "textarea" },
+    {
+     id: "severity",
+     label: "Severity",
+     kind: "select",
+     initial: "low",
+     options: [
+      { value: "critical", label: "Critical" },
+      { value: "high", label: "High" },
+      { value: "medium", label: "Medium" },
+      { value: "low", label: "Low" },
+      { value: "info", label: "Information" },
+     ],
+    },
+   ],
+  }).then((values) => {
+   if (values === null) return;
+   record.mutate(
+    {
+     name: (values.name ?? "").trim(),
+     description: (values.description ?? "").trim(),
+     severity: values.severity ?? "low",
+     exchange_id: exchange.id,
+    },
+    {
+     onSuccess: (result) => toast.success(`Issue #${result.id} recorded against #${exchange.id}`),
+     onError: (cause) => toast.error(`Could not record the issue: ${cause instanceof Error ? cause.message : String(cause)}`),
+    },
+   );
+  });
  };
 
  const menu = (exchange: Exchange, extra: MenuGroup[] = []): MenuGroup[] => [

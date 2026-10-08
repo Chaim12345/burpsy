@@ -1707,6 +1707,18 @@ tbody td {
   width: min(1000px, calc(100vw - 28px));
 }
 
+/* The shell's confirm/prompt/form dialog (ui/dialog-host.tsx, bea3): the fields stacked, the reason
+   the confirm button is disabled under them, then the actions. */
+.dialog-form {
+  display: grid;
+  gap: var(--s3);
+}
+
+.dialog-form-blocker {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
 .dialog-head {
   display: flex;
   align-items: start;

@@ -61,6 +61,8 @@ import { ErrorBoundary } from "./ui/layout";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
+import { DialogHost } from "./ui/dialog-host";
+import { promptDialog } from "./lib/dialogs";
 import { SearchDialog } from "./ui/search-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
@@ -291,6 +293,29 @@ function App(): JSX.Element {
    )
    .catch((error) => toast.error(`Save copy failed: ${String(error)}`));
  }, [project.data?.backupable]);
+ // Rename, from the Project menu and from the palette: one handler, through the shell's themed
+ // prompt (bea3). A blank name cannot be submitted — the dialog says so under the field — which
+ // replaces the old pair of checks (silent return in one caller, a toast in the other).
+ const renameProjectViaDialog = useCallback(() => {
+  if (!project.data?.persisted) {
+   toast.info("A project name lives in the database file, and this instance has none — start burpsy with -db.");
+   return;
+  }
+  const current = project.data?.name ?? "";
+  void promptDialog({
+   title: "Rename project",
+   description: "The name is stored in the project database, so it survives a restart.",
+   label: "Project name",
+   initial: current === "Unnamed" ? "" : current,
+   confirmLabel: "Rename",
+  }).then((name) => {
+   if (name === null || name.trim() === "") return;
+   renameProject.mutate(name.trim(), {
+    onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
+    onError: (error) => toast.error(`Rename refused: ${String(error)}`),
+   });
+  });
+ }, [project.data?.persisted, project.data?.name, renameProject]);
  const live = useConnection((state) => state.live);
  const lastEventAt = useConnection((state) => state.lastEventAt);
  const eventCount = useConnection((state) => state.eventCount);
@@ -891,19 +916,7 @@ function App(): JSX.Element {
     group: "Help",
     keywords: "project name rename file db database",
     icon: PencilLine,
-    run: () => {
-     if (!project.data?.persisted) {
-      toast.info("A project name lives in the database file, and this instance has none — start burpsy with -db.");
-      return;
-     }
-     const current = project.data?.name ?? "";
-     const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
-     if (name === null || name.trim() === "") return;
-     renameProject.mutate(name.trim(), {
-      onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
-      onError: (error) => toast.error(`Rename refused: ${String(error)}`),
-     });
-    },
+    run: renameProjectViaDialog,
    },
    {
     id: "cmd:project-open",
@@ -929,7 +942,7 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, saveProjectCopy, setProjectsOpen]);
+ }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
 
@@ -1027,19 +1040,7 @@ function App(): JSX.Element {
        hint: project.data?.persisted
         ? "Name the project; the name is stored in the database, so it survives a restart."
         : "A project name lives in the database file, and this instance has none.",
-       onSelect: () => {
-        const current = project.data?.name ?? "";
-        const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
-        if (name === null) return;
-        if (name.trim() === "") {
-         toast.error("A project name must not be blank.");
-         return;
-        }
-        renameProject.mutate(name.trim(), {
-         onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
-         onError: (error) => toast.error(`Rename refused: ${String(error)}`),
-        });
-       },
+       onSelect: renameProjectViaDialog,
       },
      ],
     },
@@ -1108,15 +1109,21 @@ function App(): JSX.Element {
        id: "paste-url",
        label: "Paste host / URL as request",
        icon: ClipboardPaste,
-       onSelect: () => {
-        // window.prompt rather than a modal, for the reason lib/actions.ts's addComment
-        // records: this menu is built by a plain factory on every open, so a modal would
-        // need state threaded through the menubar to reach it.
+       onSelect: async () => {
+        // The shell's themed prompt (lib/dialogs.ts, bea3): this menu is built by a plain
+        // factory on every open, and promptDialog is how a factory asks for a string without
+        // threading modal state through the menubar.
         //
         // The clipboard is not read directly. navigator.clipboard.readText needs a
         // permission the operator has to grant, and a menu item that silently does
         // nothing on refusal is worse than one that shows them what it is about to use.
-        const pasted = window.prompt("Paste host or URL", "");
+        const pasted = await promptDialog({
+         title: "Paste host or URL as request",
+         description: "A host (example.com), host:port, or a full URL. Opens a new Repeater tab with a GET for it.",
+         label: "Host or URL",
+         placeholder: "https://example.com/path",
+         confirmLabel: "Open in Repeater",
+        });
         if (pasted === null) return;
         const built = requestFromUrl(pasted);
         if (!built) {
@@ -1422,6 +1429,8 @@ function App(): JSX.Element {
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+   {/* Every confirm/prompt in the console (lib/dialogs.ts, bea3). Mounted once, here. */}
+   <DialogHost />
    {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
           chosen file. Cleared after every change so picking the same file twice still fires. */}
    <input

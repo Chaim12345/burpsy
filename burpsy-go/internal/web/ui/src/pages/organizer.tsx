@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { copyToClipboard, downloadText, organizerToCSV } from "../lib/api";
 import { useMessage, useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
+import { promptDialog } from "../lib/dialogs";
 import {
  HIGHLIGHTS,
  HIGHLIGHT_TONE,
@@ -484,9 +485,17 @@ export function OrganizerPage(): JSX.Element {
      label: item.title ? "Rename" : "Add a title",
      icon: Pencil,
      onSelect: () => {
-      const next = window.prompt(`Title for saved item ${item.id} (exchange #${item.exchange})`, item.title);
-      if (next === null || next.trim() === item.title) return;
-      patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
+      void promptDialog({
+       title: item.title ? `Rename saved item ${item.id}` : `Add a title to saved item ${item.id}`,
+       description: `Exchange #${item.exchange}. An empty title clears it.`,
+       label: "Title",
+       initial: item.title,
+       confirmLabel: "Save title",
+       allowEmpty: true,
+      }).then((next) => {
+       if (next === null || next.trim() === item.title) return;
+       patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
+      });
      },
     },
     {
@@ -888,8 +897,13 @@ export function OrganizerPage(): JSX.Element {
            <IconButton
             label={`Rename ${collection.name}`}
             size="small"
-            onClick={() => {
-             const next = window.prompt(`Rename collection ${collection.name}`, collection.name);
+            onClick={async () => {
+             const next = await promptDialog({
+              title: `Rename collection ${collection.name}`,
+              label: "Collection name",
+              initial: collection.name,
+              confirmLabel: "Rename",
+             });
              if (next === null || next.trim() === collection.name) return;
              mutations.updateCollection.mutate(
               { id: collection.id, name: next.trim() },
@@ -905,8 +919,16 @@ export function OrganizerPage(): JSX.Element {
            <IconButton
             label={`Edit note on ${collection.name}`}
             size="small"
-            onClick={() => {
-             const next = window.prompt(`Note for collection ${collection.name} (About tab)`, collection.note);
+            onClick={async () => {
+             const next = await promptDialog({
+              title: `Note for collection ${collection.name}`,
+              description: "Shown on the collection's About tab. An empty note clears it.",
+              label: "Note",
+              initial: collection.note,
+              confirmLabel: "Save note",
+              multiline: true,
+              allowEmpty: true,
+             });
              if (next === null) return;
              mutations.updateCollection.mutate(
               { id: collection.id, note: next },

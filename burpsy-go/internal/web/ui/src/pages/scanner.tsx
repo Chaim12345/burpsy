@@ -4,6 +4,7 @@ import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
 import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Combine, SlidersHorizontal, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
+import { confirmDialog, promptDialog } from "../lib/dialogs";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useIssueLLMTriage, useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
@@ -214,7 +215,18 @@ export function ScannerPage(): JSX.Element {
 
  /** Deletion is the one irreversible triage act, so it asks — Burp's own "Delete issue" does. */
  const removeFinding = (finding: FindingDetail) => {
-  if (!window.confirm(`Delete "${findingName(finding)}" on ${finding.host}? A re-audit of the same endpoint will re-raise it.`)) return;
+  void confirmDialog({
+   title: `Delete "${findingName(finding)}"?`,
+   description: `On ${finding.host}. A re-audit of the same endpoint will re-raise it.`,
+   confirmLabel: "Delete issue",
+   cancelLabel: "Keep it",
+   danger: true,
+  }).then((confirmed) => {
+   if (confirmed) deleteFinding(finding);
+  });
+ };
+
+ const deleteFinding = (finding: FindingDetail) => {
   triage.remove.mutate(finding.id, {
    onSuccess: () => {
     toast.success("Issue deleted");
@@ -225,9 +237,17 @@ export function ScannerPage(): JSX.Element {
  };
 
  const editComment = (finding: FindingDetail) => {
-  const next = window.prompt(`Comment on "${findingName(finding)}"`, finding.comment);
-  if (next === null || next === finding.comment) return;
-  applyTriage(finding, { comment: next.trim() }, next.trim() === "" ? "Comment cleared" : "Comment saved");
+  void promptDialog({
+   title: `Comment on "${findingName(finding)}"`,
+   description: "An empty comment clears it.",
+   label: "Comment",
+   initial: finding.comment,
+   confirmLabel: "Save comment",
+   allowEmpty: true,
+  }).then((next) => {
+   if (next === null || next === finding.comment) return;
+   applyTriage(finding, { comment: next.trim() }, next.trim() === "" ? "Comment cleared" : "Comment saved");
+  });
  };
 
  const debouncedTerm = useDebounced(term, 260);
