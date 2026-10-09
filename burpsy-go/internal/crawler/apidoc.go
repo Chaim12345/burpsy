@@ -149,9 +149,18 @@ func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
 	}
 	text := strings.ToLower(string(head) + " " + contentType)
 
+	// An HTML page is never an API definition, whatever it mentions. Before this an HTML page that
+	// merely LINKED to service.wsdl, or said "openapi" in its text, was consumed as a definition and
+	// its own links were never walked (found by burpsy-react-ui-ai64's WSDL test).
+	lowerCT := strings.ToLower(contentType)
+	lead := strings.TrimSpace(strings.ToLower(string(head)))
+	if strings.Contains(lowerCT, "html") || strings.HasPrefix(lead, "<!doctype html") || strings.HasPrefix(lead, "<html") {
+		return APIDocNone
+	}
+
 	switch {
 	case strings.Contains(text, "<wsdl:definitions"), strings.Contains(text, "<definitions"),
-		strings.Contains(text, "<soap:schema"), strings.Contains(text, "wsdl"):
+		strings.Contains(text, "<soap:schema"), strings.Contains(lowerCT, "wsdl"):
 		return APIDocWSDL
 	case strings.Contains(text, `"openapi"`), strings.Contains(text, "'openapi'"),
 		strings.Contains(text, "openapi:"):

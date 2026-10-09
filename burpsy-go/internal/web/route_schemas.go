@@ -7,6 +7,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -42,7 +43,8 @@ var routeSchemas = map[string]opSchema{
 		{name: "wait_seconds", kind: "integer", desc: "long-poll up to this many seconds (0-60) for min_rows matched rows at or beyond offset"},
 		{name: "min_rows", kind: "integer", desc: "rows to wait for with wait_seconds (default 1)"},
 	}},
-	"GET /api/discovery": {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
+	"GET /api/crawl/live": {query: []queryParam{{name: "task", kind: "integer", desc: "the crawl task to watch"}}},
+	"GET /api/discovery":  {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
 	"GET /api/engagement/": {query: []queryParam{
 		{name: "host", kind: "string", desc: "limit the search to one host"},
 		{name: "q", kind: "string", desc: "the search term"},
@@ -138,6 +140,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/intercept/newline-correction": {body: typeOf[interceptNewlineCorrectionReq]()},
 	"PUT /api/intercept/rules/":             {body: typeOf[interceptListState]()},
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
+	"POST /api/proxy/history-logging":       {body: typeOf[proxyHistoryLoggingReq]()},
 
 	// ---- Scope & Sitemap ----------------------------------------------------------------------
 	"POST /api/scope":           {body: typeOf[ScopeRequest]()},
@@ -227,13 +230,17 @@ var routeSchemas = map[string]opSchema{
 		body: typeOf[map[string]json.RawMessage](), schema: networkSettingsPatchSchema,
 		keysCheckedBy: "applyNetworkSettingsPatch refuses a section or key networkPatchFields does not list, before applying any",
 	},
-	"POST /api/pools":                  {body: typeOf[pool.Pool]()},
-	"PUT /api/pools/":                  {body: typeOf[pool.Pool]()},
-	"DELETE /api/pools/":               noBody,
-	"POST /api/network/auth":           {body: typeOf[postNetworkAuthReq]()},
-	"DELETE /api/network/auth":         {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
-	"POST /api/network/client-certs":   {body: typeOf[postNetworkClientCertsReq]()},
-	"DELETE /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"POST /api/pools":                         {body: typeOf[pool.Pool]()},
+	"PUT /api/pools/":                         {body: typeOf[pool.Pool]()},
+	"DELETE /api/pools/":                      noBody,
+	"POST /api/network/auth":                  {body: typeOf[postNetworkAuthReq]()},
+	"DELETE /api/network/auth":                {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
+	"POST /api/network/client-certs":          {body: typeOf[postNetworkClientCertsReq]()},
+	"DELETE /api/network/client-certs":        {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"PUT /api/network/auth":                   {body: typeOf[putNetworkAuthPromptReq]()},
+	"DELETE /api/network/auth/failures":       {query: []queryParam{{name: "host", kind: "string", desc: "the host whose recorded failure is dismissed"}}},
+	"DELETE /api/network/server-certificates": noBody,
+	"PUT /api/project/logging":                {body: typeOf[filelog.Settings]()},
 
 	"POST /api/session/cookies":     {body: typeOf[sessionCookiesMutateReq]()},
 	"POST /api/session/login":       {body: typeOf[sessionLoginReq]()},
@@ -262,6 +269,9 @@ var routeSchemas = map[string]opSchema{
 	// ---- Fuzzing ------------------------------------------------------------------------------
 	"POST /api/intruder/run":           {body: typeOf[intruderRunReq]()},
 	"POST /api/intruder/again":         {body: typeOf[intruderAgainReq]()},
+	"POST /api/crawl/logins":           {body: typeOf[recordedLoginSaveReq]()},
+	"POST /api/crawl/logins/replay":    {body: typeOf[recordedLoginReplayReq]()},
+	"DELETE /api/crawl/logins":         {query: []queryParam{{name: "id", kind: "string", desc: "the recorded login to remove"}}},
 	"POST /api/intruder/points":        {body: typeOf[intruderPointsReq]()},
 	"POST /api/intruder/attacks/":      noBody,
 	"POST /api/intruder/payload-files": {raw: "the wordlist file's bytes, one payload per line (not JSON)"},

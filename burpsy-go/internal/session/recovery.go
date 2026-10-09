@@ -44,6 +44,11 @@ type LoginOutcome struct {
 	// a credential the target has already refused — the same reasoning recordObserved applies to
 	// promoting a macro's steps.
 	Values map[string]string
+	// Final is the winning attempt's last response, and FinalStepURL the URL that step was sent to:
+	// what the run-macro action derives "parameters matched from final macro response" from
+	// (burpsy-react-ui-8gk8). Nil on every other outcome.
+	Final        *StepResult
+	FinalStepURL string
 }
 
 // MacroStepFailure names one macro step that produced no usable result — it could not be sent, or
@@ -229,7 +234,11 @@ func (c *Coordinator) runWithRetries(id RuleID, rule *SessionRule, runner MacroS
 		if validity == nil || validity.Evaluate(resp.Status, resp.Headers, resp.Body, resp.FinalURL) == Valid {
 			// Only a successful run is promoted; a failed run must never overwrite a working macro.
 			c.recordObserved(id, sent)
-			return LoginOutcome{Kind: LoginSucceeded, Attempts: attempt, Values: values}
+			finalURL := ""
+			if len(rule.Steps) > 0 {
+				finalURL = resolveStep(rule.Steps[len(rule.Steps)-1], values).URL
+			}
+			return LoginOutcome{Kind: LoginSucceeded, Attempts: attempt, Values: values, Final: resp, FinalStepURL: finalURL}
 		}
 		// The macro completed but its own response says we still are not authenticated. Loop
 		// again, bounded by max_attempts.
@@ -541,7 +550,7 @@ func (c *Coordinator) recover(id RuleID, rule *SessionRule, original MacroStep, 
 	// res.CookieOverrides, not just res.Request: the walk wrote its set_cookie values into the
 	// request's Cookie header, and applyJar is about to drop that header on the floor. Carrying them
 	// separately is what makes the action real on the wire rather than only in the trace.
-	resp, err := c.sendWithJarAnd(runner, res.Request, res.CookieOverrides)
+	resp, err := c.sendCurrentRequest(runner, res.Request, res.CookieOverrides, res.CookieScope)
 	if err != nil {
 		return RecoveryOutcome{Kind: RecoveryRetryFailed, LoginAttempts: res.MacroOutcome.Attempts,
 			Error: err.Error(), Actions: res.Trace}
