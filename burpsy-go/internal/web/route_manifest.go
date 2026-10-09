@@ -396,12 +396,14 @@ var manifest = map[string]route{
 			"and headers against one captured exchange (Burp's Param Miner \"Guess params\")",
 	},
 	"/api/history": {
-		// DELETE is Burp's "Delete items"/"Clear (tool)" (r6li): a tombstone on the operator's
-		// view, not on the stored bytes — positional ids stay stable, so the read route's contract
-		// is untouched.
-		methods: []string{"GET", "DELETE"}, risk: riskRead,
-		summary: "proxy history, filtered by the typed query DSL; DELETE removes rows from the " +
-			"operator's view (ids body) or clears the capture (no body)",
+		// GET only. The removal that used to share this pattern as a DELETE moved to
+		// /api/history/rows (burpsy-react-ui-gf68): a risk class is per pattern, so a DELETE here
+		// was either classed riskRead — and passed the confirmation gate ungated, which is what it
+		// did — or it dragged the busiest read in the console into riskDestructive, making every
+		// agent escalate to look at history. The pattern split is /api/dashboard vs
+		// /api/dashboard/events, not /api/sitemap's whole-pattern class.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "proxy history, filtered by the typed query DSL",
 	},
 	"/api/history/extractors": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
@@ -418,6 +420,18 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskLocal,
 		summary: "import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable " +
 			"and resendable in Repeater; nothing is sent to any target — the requests are recorded, not replayed",
+	},
+	"/api/history/rows": {
+		// riskDestructive (burpsy-react-ui-gf68), on the same line /api/sitemap's DELETE draws: the
+		// removal is a tombstone on the operator's view, not on the stored bytes — positional ids stay
+		// stable — but a row that leaves history leaves the record an operator reasons and reports
+		// from, and "clear the capture" with no body empties all of it. Until gf68 this was DELETE
+		// /api/history under that pattern's riskRead, so any same-origin caller could empty history
+		// without the confirmation every other evidence-discarding route requires.
+		methods: []string{"DELETE"}, risk: riskDestructive,
+		summary: "Burp's \"Delete items\" / \"Clear (tool)\": remove the named rows ({\"ids\":[..]}) from " +
+			"proxy history, or every row (no body); a view-level tombstone — ids stay stable and the bytes " +
+			"are not erased",
 	},
 	"/api/http2/kettle": {
 		// riskRead: it classifies a header list and sends nothing. POST because the list is a body.
@@ -1070,7 +1084,7 @@ var manifest = map[string]route{
 		// suppression never touches the stored exchanges (that is the recorded decision on
 		// burpsy-react-ui-10e — history, findings and audit references keep naming them), but it
 		// removes a branch from the view an operator reasons and reports from, and a branch that
-		// stops being visible stops being worked. The same shape as DELETE /api/history. GET is
+		// stops being visible stops being worked. The same shape as DELETE /api/history/rows. GET is
 		// riskRead unchanged.
 		// POST is riskLocal: it records a host/path the operator wrote down. It sends no traffic, so
 		// it cannot touch the target, and the nodes it adds live in their own store rather than in the

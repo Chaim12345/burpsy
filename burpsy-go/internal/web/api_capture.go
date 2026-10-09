@@ -18,17 +18,36 @@ import (
 	"go.uber.org/zap"
 )
 
-// handleHistory serves GET /api/history and DELETE /api/history (burpsy-react-ui-r6li). GET is
-// the listing the UI has always read; DELETE is Burp's "Delete items" / "Clear (tool)".
+// handleHistory serves GET /api/history, the listing the UI has always read.
+//
+// A DELETE here is refused with a pointer rather than a bare 405: until burpsy-react-ui-gf68 this
+// pattern also served Burp's "Delete items" / "Clear (tool)", and it did so under this pattern's
+// riskRead class, which is to say past the confirmation gate. The removal now lives at
+// /api/history/rows, classed riskDestructive; a caller still sending the old verb is told where it
+// went instead of being left to guess whether history was cleared.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.historyGet(w, r)
 	case http.MethodDelete:
-		s.historyDelete(w, r)
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "DELETE /api/history moved to DELETE /api/history/rows, which needs a confirmation; nothing was removed", http.StatusMethodNotAllowed)
 	default:
+		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleHistoryRows serves DELETE /api/history/rows (burpsy-react-ui-r6li, gated since gf68): Burp's
+// "Delete items" / "Clear (tool)". The confirmation gate stands in front of it as riskDestructive, so
+// by the time a request is here a human-minted token has been spent on it.
+func (s *Server) handleHistoryRows(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		w.Header().Set("Allow", http.MethodDelete)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.historyDelete(w, r)
 }
 
 // historyDeleteReq is the request body historyDelete decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
