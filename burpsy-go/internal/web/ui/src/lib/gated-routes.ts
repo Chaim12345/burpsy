@@ -10,6 +10,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/advisories": false,
  "/api/advisories/": false,
  "/api/apiscan": true,
+ "/api/apiscan/fetch": false,
  "/api/audit/": true,
  "/api/audit/selected": true,
  "/api/authz/identities": false,

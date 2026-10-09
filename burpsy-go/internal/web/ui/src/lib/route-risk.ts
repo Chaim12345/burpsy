@@ -9,6 +9,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/advisories": "riskRead",
  "/api/advisories/": "riskRead",
  "/api/apiscan": "riskAttack",
+ "/api/apiscan/fetch": "riskEgress",
  "/api/audit/": "riskAttack",
  "/api/audit/selected": "riskAttack",
  "/api/authz/identities": "riskLocal",

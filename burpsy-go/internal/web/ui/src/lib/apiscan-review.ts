@@ -291,3 +291,131 @@ export function discardStale(operations: APIScanOperation[], state: ReviewState)
  }
  return { ...state, excluded: state.excluded.filter((k) => known.has(k)), overrides };
 }
+
+// ---- Upload from URL, with Add auth (burpsy-react-ui-fu4l) ----------------------------------------
+//
+// Burp's API scan can fetch the definition from a URL, with an authentication method for that fetch.
+// POST /api/apiscan/fetch does the fetch through the scope-checked sender; these helpers decide what
+// the dialog sends and what it says about what came back. The credential typed here is for the
+// fetch only — it is not the scan's own authentication method above, and it lives only in the
+// dialog's component state, never in the persisted store.
+
+export type FetchAuth =
+ | { type: "none" }
+ | { type: "basic"; username: string; password: string }
+ | { type: "bearer"; token: string }
+ | { type: "oauth2_client_credentials"; tokenUrl: string; clientId: string; clientSecret: string; scope: string };
+
+export type FetchAuthType = FetchAuth["type"];
+
+export const FETCH_AUTH_LABELS: Record<FetchAuthType, string> = {
+ none: "No authentication",
+ basic: "Basic",
+ bearer: "Bearer token",
+ oauth2_client_credentials: "OAuth2 client credentials",
+};
+
+export function blankFetchAuth(type: FetchAuthType): FetchAuth {
+ switch (type) {
+  case "basic":
+   return { type, username: "", password: "" };
+  case "bearer":
+   return { type, token: "" };
+  case "oauth2_client_credentials":
+   return { type, tokenUrl: "", clientId: "", clientSecret: "", scope: "" };
+  default:
+   return { type: "none" };
+ }
+}
+
+/** Why `raw` cannot be fetched, or null. The server re-checks everything; this is the early word. */
+export function fetchURLProblem(raw: string, what = "The definition URL"): string | null {
+ const text = raw.trim();
+ if (text === "") return `${what} is empty.`;
+ let url: URL;
+ try {
+  url = new URL(text);
+ } catch {
+  return `${what} is not an absolute URL.`;
+ }
+ if (url.protocol !== "http:" && url.protocol !== "https:") return `${what} must be http or https.`;
+ if (url.username || url.password) return `${what} carries credentials; put them under Add auth instead.`;
+ return null;
+}
+
+/** Why the auth method is not ready to send, or null. */
+export function fetchAuthProblem(auth: FetchAuth): string | null {
+ switch (auth.type) {
+  case "basic":
+   return auth.username.trim() === "" ? "Basic authentication needs a username." : null;
+  case "bearer":
+   return auth.token.trim() === "" ? "Bearer authentication needs a token." : null;
+  case "oauth2_client_credentials":
+   if (auth.clientId.trim() === "") return "OAuth2 client credentials needs a client ID.";
+   return fetchURLProblem(auth.tokenUrl, "The token URL");
+  default:
+   return null;
+ }
+}
+
+/** The POST body for /api/apiscan/fetch, in the server's field names. No auth key for "none". */
+export function fetchRequestBody(url: string, auth: FetchAuth): { url: string; auth?: Record<string, string> } {
+ const body = { url: url.trim() };
+ switch (auth.type) {
+  case "basic":
+   return { ...body, auth: { type: "basic", username: auth.username, password: auth.password } };
+  case "bearer":
+   return { ...body, auth: { type: "bearer", token: auth.token.trim() } };
+  case "oauth2_client_credentials":
+   return {
+    ...body,
+    auth: {
+     type: "oauth2_client_credentials",
+     token_url: auth.tokenUrl.trim(),
+     client_id: auth.clientId,
+     client_secret: auth.clientSecret,
+     ...(auth.scope.trim() ? { scope: auth.scope.trim() } : {}),
+    },
+   };
+  default:
+   return body;
+ }
+}
+
+/** POST /api/apiscan/fetch's answer. */
+export interface FetchedDefinition {
+ definition: string;
+ format: string;
+ scannable: boolean;
+ note?: string;
+ url: string;
+ status: number;
+ content_type?: string;
+ bytes: number;
+ token_fetched?: boolean;
+}
+
+const FORMAT_NAMES: Record<string, string> = {
+ "openapi-3": "OpenAPI 3",
+ "swagger-2": "Swagger 2.0",
+ "postman-2": "Postman collection",
+ wsdl: "WSDL",
+ unknown: "unrecognised",
+};
+
+/** The caption shown beside the definition box once a fetch has filled it. */
+export function fetchedCaption(fetched: FetchedDefinition): string {
+ const name = FORMAT_NAMES[fetched.format] ?? fetched.format;
+ return `${fetched.url} — ${name}, ${fetched.bytes} bytes${fetched.token_fetched ? " (OAuth2 token obtained)" : ""}`;
+}
+
+/**
+ * What the dialog says about a fetched document the scan cannot read, or null when it can. The
+ * document still goes in the box — the operator may want to read it — but the reason is stated
+ * rather than left to the dry run's parser message.
+ */
+export function fetchedWarning(fetched: FetchedDefinition): string | null {
+ if (fetched.scannable) return null;
+ const name = FORMAT_NAMES[fetched.format] ?? fetched.format;
+ return `Fetched, but this is ${name === "unrecognised" ? "not a definition this build recognises" : `a ${name} document`}: ${fetched.note ?? "the API scan cannot read it"}`;
+}

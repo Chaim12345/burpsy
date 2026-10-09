@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
 import { keys, useDebounced, useInvalidate, useResource } from "./data";
 import type { Exchange } from "./types";
-import type { ReviewFields } from "./apiscan-review";
+import type { FetchedDefinition, ReviewFields } from "./apiscan-review";
 import type { APIScanAccepted, APIScanCheck, CrawlRun, SiteMapDetail, WsMessageDetail } from "./types.observe";
 import type { SitemapDiffResponse } from "./sitemap-diff";
 
@@ -239,6 +239,18 @@ export function useAPIScanReviewCheck(definition: string, baseUrl: string, field
  * useStartCrawl does: the sweep outlives the request. The reply's `definition.operations` is the list
  * the server actually built, so a toast can name the work rather than the document that was sent.
  */
+/**
+ * Upload from URL (burpsy-react-ui-fu4l): fetch an API definition through the scope-checked sender,
+ * optionally authenticated. A mutation, not a query: it sends traffic (and possibly a credential) and
+ * must run only when the operator presses Fetch — never on a keystroke, never on a refetch.
+ */
+export function useFetchAPIDefinition() {
+ return useMutation({
+  mutationFn: (body: { url: string; auth?: Record<string, string> }) =>
+   api<FetchedDefinition>("/api/apiscan/fetch", json("POST", body)),
+ });
+}
+
 export function useStartAPIScan() {
  const invalidate = useInvalidate();
  return useMutation({
