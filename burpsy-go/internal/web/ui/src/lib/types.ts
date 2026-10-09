@@ -1,3 +1,4 @@
+import type { H2Field } from "./kettle";
 /** Wire types for the burpsy HTTP API. Field names mirror the Go json tags exactly. */
 
 /**
@@ -480,6 +481,8 @@ export interface RepeaterResult {
  unpack_error?: string;
  /** With HTTP/2 connection reuse on (adkx): whether this request was the first on its connection. */
  h2_connection?: "new" | "reused" | "not-h2";
+ /** Present only on a kettled send (jae5): fields sent, the tab settings not honoured, what ended the read. */
+ kettled?: { fields: number; notes: string[]; ended: string };
 }
 
 /**
@@ -499,6 +502,11 @@ export interface RepeaterResult {
  */
 export interface RepeaterHistoryEntry extends RepeaterResult {
  request: string;
+ /**
+  * The HTTP/2 header list a kettled send carried (jae5). `request` is then the list's normalised text,
+  * which is not what went out, so paging back shows this list instead and says so.
+  */
+ h2Headers?: H2Field[];
  /**
   * How this entry was sent, when it was not an ordinary single Send. Absent means the Send button.
   *

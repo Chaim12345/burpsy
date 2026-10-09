@@ -122,6 +122,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/history/import/har":      {raw: "an HTTP Archive (HAR 1.2) JSON document, as a browser or proxy exports it; its members are the producer's, so unknown ones are ignored"},
 	"PUT /api/headers/uninteresting":    {body: typeOf[uninterestingHeadersReq]()},
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
+	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},

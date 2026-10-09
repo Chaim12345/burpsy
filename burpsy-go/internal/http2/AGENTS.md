@@ -19,17 +19,17 @@ replace it, it sits a level down.
 | `hpack.go` | `Decoder`, `Encoder`, `HeaderField`, `HpackError` — a hand-rolled HPACK codec that will decode a malformed block rather than reset the stream, which `x/net/http2/hpack`'s conformant decoder will not do |
 | `malformed.go` | `Malformation`, `MalformationKind`, `Violation`, `ViolationKind`, `Audit` — a vocabulary for breaking the spec on purpose plus a report naming every rule broken, with its RFC section |
 | `authorise.go` | `Authorise`, `Authorisation`, `ProgramRequest`, `Refusal`/`RefusalKind`, `ProgramVerdict` — decodes a program's header blocks so `:authority`/`:path` can be checked, or refuses by name when it cannot be decided |
+| `kettle.go` | `KettleReasons`, `KettleKind`, `EncodeLiteral` — which constructs make an HTTP/2 header list unrepresentable as HTTP/1 text (Burp's "kettled", burpsy-react-ui-jae5), and the literal-only HPACK encoding a hand-written list is sent with. Kettled is not refused: `Authorise` decides that |
+| `h2test/` | Test support only: a raw h2 TLS origin that decodes the request block with this package's decoder, so a test can see a CR/LF value or an uppercase name exactly as the wire carried it (net/http's server rejects both) |
 | `normalise.go` | `RenderRequest`/`RenderResponse` (h2 exchange → HTTP/1-shaped bytes), `Header`, `HeadersFromHTTP`, `IsHopHeader` |
 | `parse.go` | `IsHTTP2Request`, `ParseRequest`, `ParsedRequest` — reads `RenderRequest`-shaped bytes back into fields |
 
 ## For AI Agents
 
 - **No sockets, deliberately.** Nothing here opens a connection; `internal/sender` is the one
-  authorising path out. `malformed.go` states this explicitly: nothing in `internal/sender` or
-  `internal/proxy` calls `Audit` or `Encode`, because a program with a dishonest length or raw
-  header-block fragment cannot have its `:path` authorised (the peer will not decode what we decoded).
-  `Audit` is the capability an operator can actually reach from here; an emitted program has no route
-  to a socket, and saying otherwise would be an overclaim.
+  authorising path out. Since `authorise.go` exists, `sender.AuthorisedSender.SendFrameProgram` sends a
+  program the classifier can decide, and `SendH2Fields` (sender/h2fields.go) sends a kettled field list
+  encoded with `EncodeLiteral`; both are gated by `Authorise` first. (`h2test/` listens, but only in tests.)
 - **The writer preserves; `malformed` names intent.** `FrameSpec` fields can be set to anything and
   are emitted verbatim, so an illegal frame is already possible. `Malformation` (e.g.
   `ClearFlags(FlagEndHeaders)`, `DeclareLength(n)`) exists so a *deliberate* malformation is
