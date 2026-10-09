@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -319,5 +320,144 @@ func TestTheSenderRecordsTheCertificateATargetPresents(t *testing.T) {
 	}
 	if rec.hosts[0] != formatHostPort(srv.host, srv.port) || !rec.chains[0][0].Equal(rec.chains[1][0]) {
 		t.Errorf("hosts %v; the raw and typed paths must record the same leaf", rec.hosts)
+	}
+}
+
+// startPathEchoServer answers every request it reads with a response whose body is the request's
+// path, each one in its own write after delay, so a pipelined second response arrives after the first
+// has already been read: the Buffered()==0 guard cannot see it. It counts connections.
+func startPathEchoServer(t *testing.T, delay time.Duration) (string, uint16, *atomic.Int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	conns := &atomic.Int64{}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			go func(c net.Conn) {
+				defer c.Close()
+				br := bufio.NewReader(c)
+				for {
+					req, err := http.ReadRequest(br)
+					if err != nil {
+						return
+					}
+					_, _ = io.Copy(io.Discard, req.Body)
+					time.Sleep(delay)
+					path := req.URL.Path
+					if _, err := fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(path), path); err != nil {
+						return
+					}
+				}
+			}(c)
+		}
+	}()
+	host, port, err := hostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, port, conns
+}
+
+// A request carrying a second request past its own framing — pipelined, or a smuggling payload sent
+// on purpose — must not leave its connection pooled: the second request's response arrives later and
+// would be read by the next send to the host as its own (the PR #315 review finding).
+func TestARequestWithBytesPastItsFramingDoesNotPoolItsConnection(t *testing.T) {
+	host, port, conns := startPathEchoServer(t, 50*time.Millisecond)
+	s := senderWithHTTP(t, true, true)
+	hostHeader := "Host: " + formatHostPort(host, port) + "\r\n"
+	send := func(raw string) string {
+		t.Helper()
+		resp, _, err := s.SendRawOutcome(context.Background(), host, port, false, []byte(raw), ProtocolPreferenceHTTP1)
+		if err != nil {
+			t.Fatalf("send %q: %v", firstLineOf(raw), err)
+		}
+		_, body, _ := strings.Cut(string(resp), "\r\n\r\n")
+		return body
+	}
+
+	if got := send("GET /first HTTP/1.1\r\n" + hostHeader + "\r\nGET /smuggled HTTP/1.1\r\n" + hostHeader + "\r\n"); got != "/first" {
+		t.Fatalf("the pipelined send read %q, want /first", got)
+	}
+	if n := s.pool.idleCount(); n != 0 {
+		t.Errorf("%d connection(s) kept after a request with a second request past its framing, want 0", n)
+	}
+	if got := send("GET /second HTTP/1.1\r\n" + hostHeader + "\r\n"); got != "/second" {
+		t.Fatalf("the next send to the host read %q, want its own /second", got)
+	}
+	if got := conns.Load(); got != 2 {
+		t.Errorf("%d connection(s) for 2 sends, want 2: the pipelined one must not be reused", got)
+	}
+}
+
+// The framing check must not cost an ordinary request its keep-alive: a single request with a
+// Content-Length body, or a chunked one, is exactly its framing and its connection is reused.
+func TestASingleRequestWithABodyStillPools(t *testing.T) {
+	host, port, conns := startPathEchoServer(t, 0)
+	s := senderWithHTTP(t, true, true)
+	hostHeader := "Host: " + formatHostPort(host, port) + "\r\n"
+	for i, raw := range []string{
+		"POST /cl HTTP/1.1\r\n" + hostHeader + "Content-Length: 5\r\n\r\nhello",
+		"POST /chunked HTTP/1.1\r\n" + hostHeader + "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+		"GET /plain HTTP/1.1\r\n" + hostHeader + "\r\n",
+	} {
+		resp, _, err := s.SendRawOutcome(context.Background(), host, port, false, []byte(raw), ProtocolPreferenceHTTP1)
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		if n := s.pool.idleCount(); n != 1 {
+			t.Errorf("after %q %d connection(s) kept, want 1", firstLineOf(raw), n)
+		}
+		if !strings.HasPrefix(string(resp), "HTTP/1.1 200") {
+			t.Fatalf("send %d answered %q", i, resp)
+		}
+	}
+	if got := conns.Load(); got != 1 {
+		t.Errorf("%d connection(s) for 3 single-request sends, want 1", got)
+	}
+}
+
+func TestRequestEndsAtFraming(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		want bool
+	}{
+		{"GET / HTTP/1.1\r\nHost: a\r\n\r\n", true},
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\nok", true},
+		{"POST / HTTP/1.1\r\nHost: a\r\ncontent-length:0\r\n\r\n", true},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n2;ext=1\r\nok\r\n0\r\nX-T: 1\r\n\r\n", true},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: Chunked\r\n\r\n0\r\n\r\n", true},
+
+		// Bytes past the framing: a second request.
+		{"GET / HTTP/1.1\r\nHost: a\r\n\r\nGET /b HTTP/1.1\r\nHost: a\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\n\r\nokGET /b HTTP/1.1\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /b HTTP/1.1\r\n\r\n", false},
+		{"GET / HTTP/1.1\r\nHost: a\r\n\r\n\r\n", false},
+		// Short of the framing: the server is still waiting for body bytes.
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\n\r\nok", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n", false},
+		// Ambiguous or unreadable framing.
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\nok", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: +2\r\n\r\nok", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 2, 2\r\n\r\nok", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n0x2\r\nok\r\n0\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nokXX0\r\n\r\n", false},
+		{"POST / HTTP/1.1\r\nHost: a\r\n Content-Length: 2\r\n\r\nok", false},
+		{"GET / HTTP/1.1\nHost: a\n\n", false},
+		{"CONNECT a:443 HTTP/1.1\r\nHost: a:443\r\n\r\n", false},
+	} {
+		if got := requestEndsAtFraming([]byte(c.raw)); got != c.want {
+			t.Errorf("requestEndsAtFraming(%q) = %v, want %v", c.raw, got, c.want)
+		}
 	}
 }

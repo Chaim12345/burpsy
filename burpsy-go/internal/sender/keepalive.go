@@ -28,6 +28,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -138,7 +139,16 @@ func (p *http1Pool) idleCount() int {
 }
 
 // reusableAfter reports whether a connection that carried request and response can carry another.
+//
+// The request is held to its own framing as strictly as the response is: bytes written past where
+// the request's framing ends are a second request (pipelined, or smuggled on purpose by a desync
+// probe), and the server's answer to it may arrive after the first response was read. Kept, that
+// connection would hand the next send another request's response. So a request is only poolable when
+// requestEndsAtFraming says the bytes written are exactly one request.
 func reusableAfter(request, response []byte) bool {
+	if !requestEndsAtFraming(request) {
+		return false
+	}
 	reqHead, _, _ := bytes.Cut(request, []byte("\r\n\r\n"))
 	respHead, _, ok := bytes.Cut(response, []byte("\r\n\r\n"))
 	if !ok {
@@ -168,6 +178,113 @@ func reusableAfter(request, response []byte) bool {
 		}
 	}
 	return false
+}
+
+// requestEndsAtFraming reports whether raw is exactly one HTTP/1 request: a head, then the body its
+// own framing declares (Content-Length bytes, or a chunked body through its last chunk and trailer
+// section, or nothing), and not one byte more.
+//
+// It answers for pooling only, so every doubt answers false and costs a dial rather than a
+// misattributed response: a head that is not CRLF-terminated, an unreadable request line or header
+// line, CONNECT (whose 2xx turns the connection into a tunnel), more than one Content-Length or
+// Transfer-Encoding field, both together, a Transfer-Encoding other than exactly "chunked", a
+// Content-Length that is not plain digits, and a body shorter than declared (the server is still
+// waiting for bytes, which the next send would supply). The header checks reuse planH2's octet rules
+// (protocol.go) so the two readings of a request's head cannot disagree about what a field is.
+func requestEndsAtFraming(raw []byte) bool {
+	head, rest, ok := bytes.Cut(raw, []byte("\r\n\r\n"))
+	if !ok {
+		return false
+	}
+	lines := strings.Split(string(head), "\r\n")
+	method, _, _, ok := splitRequestLine(lines[0])
+	if !ok || strings.EqualFold(method, "CONNECT") {
+		return false
+	}
+	contentLength, lengths, encodings := -1, 0, 0
+	chunked := false
+	for _, line := range lines[1:] {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok || !isFieldName(name) {
+			return false
+		}
+		value = strings.Trim(value, " \t")
+		if !isFieldValue(value) {
+			return false
+		}
+		switch strings.ToLower(name) {
+		case "content-length":
+			lengths++
+			if value == "" || len(value) > 18 || strings.Trim(value, "0123456789") != "" {
+				return false
+			}
+			contentLength, _ = strconv.Atoi(value)
+		case "transfer-encoding":
+			encodings++
+			chunked = strings.EqualFold(value, "chunked")
+			if !chunked {
+				return false
+			}
+		}
+	}
+	switch {
+	case lengths > 1 || encodings > 1 || (lengths == 1 && encodings == 1):
+		return false
+	case chunked:
+		n, ok := chunkedBodyLen(rest)
+		return ok && n == len(rest)
+	case lengths == 1:
+		return len(rest) == contentLength
+	default:
+		return len(rest) == 0
+	}
+}
+
+// chunkedBodyLen returns how many bytes of body make up one complete chunked body (RFC 9112 §7.1):
+// chunks of hex size, optional extension and CRLF-terminated data, the zero-size last chunk, and the
+// trailer section through its empty line. ok is false for anything else, including a body that ends
+// before its terminator. Bytes after the terminator are not read; the caller compares the length.
+func chunkedBodyLen(body []byte) (int, bool) {
+	pos := 0
+	for {
+		eol := bytes.Index(body[pos:], []byte("\r\n"))
+		if eol < 0 {
+			return 0, false
+		}
+		sizeText := string(body[pos : pos+eol])
+		if semi := strings.IndexByte(sizeText, ';'); semi >= 0 {
+			sizeText = sizeText[:semi]
+		}
+		sizeText = strings.TrimRight(sizeText, " \t")
+		if sizeText == "" || len(sizeText) > 15 || strings.Trim(sizeText, "0123456789abcdefABCDEF") != "" {
+			return 0, false
+		}
+		size, err := strconv.ParseInt(sizeText, 16, 64)
+		if err != nil {
+			return 0, false
+		}
+		pos += eol + 2
+		if size == 0 {
+			for {
+				eol := bytes.Index(body[pos:], []byte("\r\n"))
+				if eol < 0 {
+					return 0, false
+				}
+				pos += eol + 2
+				if eol == 0 {
+					return pos, true
+				}
+			}
+		}
+		if int64(len(body)-pos) < size+2 {
+			return 0, false
+		}
+		pos += int(size)
+		if body[pos] != '\r' || body[pos+1] != '\n' {
+			return 0, false
+		}
+		pos += 2
+	}
 }
 
 // headerHasToken reports whether any field called name in head carries token in its comma list.
