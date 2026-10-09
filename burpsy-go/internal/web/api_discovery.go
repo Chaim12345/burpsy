@@ -119,16 +119,30 @@ type discoveryStatusCount struct {
 // as crawlRuns, deliberately: a long-running task started over HTTP has exactly one right answer for
 // how its progress is reported, and inventing a second would leave the UI with two.
 type discoveryRuns struct {
+	// mu guards byID, order AND every field of every *discoveryRun reachable from byID
+	// (burpsy-react-ui-s5ed). A run is mutated only under the write lock (start, finish) and leaves
+	// this type only as a value copy taken under the lock (snapshot), so a handler marshalling a run
+	// never reads a field the session goroutine is writing. finish replaces each slice and pointer
+	// field wholesale rather than writing into a backing array a snapshot may share, which is what
+	// makes the shallow copy a consistent snapshot rather than a torn one.
 	mu    sync.RWMutex
 	byID  map[uint64]*discoveryRun
 	order []uint64
+}
+
+// snapshot copies a run for use outside d.mu. Caller holds d.mu (read or write). Shallow on
+// purpose: the slices and the Finished pointer it shares are never written through after
+// assignment (see the mu comment), and a poll copying every discovery would cost an allocation
+// proportional to the sweep on each request.
+func (run *discoveryRun) snapshot() discoveryRun {
+	return *run
 }
 
 func newDiscoveryRuns() *discoveryRuns {
 	return &discoveryRuns{byID: map[uint64]*discoveryRun{}}
 }
 
-func (d *discoveryRuns) start(taskID uint64, req discoveryStartReq, target string) *discoveryRun {
+func (d *discoveryRuns) start(taskID uint64, req discoveryStartReq, target string) discoveryRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	run := &discoveryRun{
@@ -161,7 +175,7 @@ func (d *discoveryRuns) start(taskID uint64, req discoveryStartReq, target strin
 		delete(d.byID, d.order[0])
 		d.order = d.order[1:]
 	}
-	return run
+	return run.snapshot()
 }
 
 // finish records a run's outcome. It looks the run up again rather than writing through the pointer
@@ -201,21 +215,27 @@ func (d *discoveryRuns) finish(taskID uint64, state string, res extscan.FFUFResu
 	run.Summary = discoverySummary(res)
 }
 
-func (d *discoveryRuns) get(taskID uint64) (*discoveryRun, bool) {
+// get returns a snapshot of one run, taken under the lock: the session goroutine may finish the
+// run while the caller is still marshalling it.
+func (d *discoveryRuns) get(taskID uint64) (discoveryRun, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	run, ok := d.byID[taskID]
-	return run, ok
+	if !ok {
+		return discoveryRun{}, false
+	}
+	return run.snapshot(), true
 }
 
-// list returns the retained runs, newest first.
-func (d *discoveryRuns) list() []*discoveryRun {
+// list returns snapshots of the retained runs, newest first, all taken under one lock hold so the
+// list is one consistent moment rather than runs read at different times.
+func (d *discoveryRuns) list() []discoveryRun {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	out := make([]*discoveryRun, 0, len(d.order))
+	out := make([]discoveryRun, 0, len(d.order))
 	for _, id := range d.order {
 		if run := d.byID[id]; run != nil {
-			out = append(out, run)
+			out = append(out, run.snapshot())
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TaskID > out[j].TaskID })

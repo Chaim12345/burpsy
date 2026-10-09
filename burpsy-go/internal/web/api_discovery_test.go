@@ -466,3 +466,60 @@ func TestDiscoveryCapabilityWasExercised(t *testing.T) {
 	t.Fatalf("%s\nInstall ffuf to exercise it, or set %s=1 to accept a run that does not check the claim.",
 		msg, allowUnverifiedExtscanEnv)
 }
+
+// TestDiscoveryRunReadsAreSnapshotsTakenUnderTheLock pins burpsy-react-ui-s5ed without needing ffuf:
+// a poller marshalling the run (get and list) runs concurrently with the session goroutine
+// finishing it. Before the fix get/list handed out the live *discoveryRun and the marshal read its
+// fields outside d.mu, which `go test -race` reported as dozens of races per run. It also pins the
+// value semantics: a snapshot taken before finish still reads "running" afterwards, so a caller can
+// never observe a half-written run through a retained copy.
+func TestDiscoveryRunReadsAreSnapshotsTakenUnderTheLock(t *testing.T) {
+	d := newDiscoveryRuns()
+	const id = 7
+	started := d.start(id, discoveryStartReq{Target: "https://t.test/"}, "https://t.test/")
+	before, _ := d.get(id)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if run, ok := d.get(id); ok {
+					if _, err := json.Marshal(run); err != nil {
+						t.Error(err)
+						return
+					}
+				}
+				if _, err := json.Marshal(d.list()); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	for i := range 50 {
+		d.finish(id, "done", extscan.FFUFResult{
+			Outcome:     extscan.OutcomeCompleted,
+			Discoveries: []extscan.Discovery{{URL: fmt.Sprintf("https://t.test/%d", i), Path: fmt.Sprintf("/%d", i), Status: 200}},
+			Command:     []string{"ffuf", strconv.Itoa(i)},
+		}, []discoveryLevel{{Level: 1, Runs: i}})
+	}
+	close(stop)
+	wg.Wait()
+
+	if started.State != "running" || before.State != "running" || before.Finished != nil {
+		t.Fatalf("a snapshot taken before finish changed afterwards: start=%q get=%q finished=%v",
+			started.State, before.State, before.Finished)
+	}
+	after, ok := d.get(id)
+	if !ok || after.State != "done" || after.Counts.Discovered != 1 || after.Finished == nil {
+		t.Fatalf("finish did not land: ok=%v %+v", ok, after)
+	}
+}
