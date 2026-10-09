@@ -175,6 +175,9 @@ var exchangeFieldRules = map[string]fieldRule{
 	// an invented one.
 	"ServerIP":     ruleIdentical,
 	"ListenerPort": ruleMayDiffer,
+	// ClientIP (3bkn): asymmetric for ListenerPort's reason. A crawl did not arrive on a listener, so
+	// no client sent it to one.
+	"ClientIP": ruleMayDiffer,
 	// The retained earlier stages of each message (burpsy-react-ui-c05). All four are ruleAbsent for
 	// ordinary traffic, and that is a claim rather than a placeholder: the exchange this test
 	// compares is modified by nothing — no Match & Replace rule is enabled and no intercept hold

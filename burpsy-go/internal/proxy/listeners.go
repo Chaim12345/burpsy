@@ -97,7 +97,15 @@ type ListenerSpec struct {
 	// cannot speak it — or silently mean a floor, and an operator cannot tell which from the name.
 	TLSMinVersion uint16
 	TLSMaxVersion uint16
+	// HTTP2 is Burp's per-listener "Support HTTP/2" (burpsy-react-ui-34rd). nil and true keep h2 in the
+	// browser leg's ALPN offer, which is what every listener did before this existed. false drops it, so
+	// a client with a broken h2 stack is held to HTTP/1.1 on this listener without turning interception
+	// on. A pointer so an absent field cannot be read as "off".
+	HTTP2 *bool
 }
+
+// http2Allowed reports whether this listener offers HTTP/2 to the client.
+func (sp ListenerSpec) http2Allowed() bool { return sp.HTTP2 == nil || *sp.HTTP2 }
 
 // redirectFor answers where a request that named host:port should actually be sent. Both
 // halves are independent, which is what lets a listener move every request to one test

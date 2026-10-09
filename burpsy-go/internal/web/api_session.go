@@ -300,6 +300,9 @@ type sessionCookiesResp struct {
 	// set a cookie" — a measurement, not an absence of one.
 	ResponsesObserved  uint64 `json:"responses_observed"`
 	SetCookiesAbsorbed uint64 `json:"set_cookies_absorbed"`
+	// RequestCookiesAbsorbed is how many cookies the browser's request Cookie headers fed the jar
+	// (sm1k), apart from Set-Cookie lines.
+	RequestCookiesAbsorbed uint64 `json:"request_cookies_absorbed"`
 }
 
 type sessionHostCookies struct {
@@ -1793,7 +1796,9 @@ func (s *Server) handleSessionCookies(w http.ResponseWriter, r *http.Request) {
 		AbsorbingFrom:      sources,
 		ResponsesObserved:  obs.ResponsesObserved,
 		SetCookiesAbsorbed: obs.SetCookiesAbsorbed,
-		Monitored:          s.sessionCoordinator.MonitoredSources(),
+
+		RequestCookiesAbsorbed: obs.RequestCookiesAbsorbed,
+		Monitored:              s.sessionCoordinator.MonitoredSources(),
 	}
 	if len(out) == 0 {
 		// An empty table, an unread one and an unwatched one look the same on screen, so the empty

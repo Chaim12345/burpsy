@@ -213,6 +213,8 @@ export interface Exchange {
   * exchange that did not come from a listener — Repeater, Intruder, the crawler, the scanner.
   */
  listener_port: number;
+ /** The client that sent the request to the listener (3bkn); "" when the row did not come from a listener. */
+ client_ip: string;
  /**
   * Burp's three readings of a message, per direction (burpsy-react-ui-c05).
   *
@@ -400,6 +402,8 @@ export interface HeldMessage {
  id: number;
  direction: string;
  host: string;
+ /** The client that sent the held message to the listener (3bkn); "" when unknown. */
+ client_ip?: string;
  method: string;
  path: string;
  raw: string;

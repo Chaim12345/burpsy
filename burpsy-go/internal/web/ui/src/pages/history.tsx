@@ -1349,6 +1349,19 @@ export function HistoryPage(): JSX.Element {
     },
    },
    {
+    // The client that sent the request (burpsy-react-ui-3bkn), Burp's sourceIpAddress(): with several
+    // browsers or devices on one listener it is what tells their rows apart. Absent for rows that did
+    // not come from a listener, the same rows whose listener port is absent.
+    id: "client_ip",
+    header: "Client IP",
+    size: 130,
+    accessorFn: (row: Exchange) => row.client_ip ?? "",
+    cell: (info) => {
+     const ip = info.getValue<string>();
+     return ip === "" ? <span className="cell-dim">—</span> : <span>{ip}</span>;
+    },
+   },
+   {
     // Burp's Title column (burpsy-react-ui-tk6z): the page title for HTML responses.
     id: "title",
     header: "Title",

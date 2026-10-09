@@ -205,6 +205,9 @@ type CapturedExchange struct {
 	// recorded here rather than derived at list time (burpsy-react-ui-mr4p, burpsy-react-ui-he81).
 	ServerIP     string
 	ListenerPort uint16
+	// ClientIP is the peer address of the client connection the request arrived on (3bkn). Empty for
+	// every producer that is not a listener.
+	ClientIP string
 }
 
 // ErrNoResponse is returned by Record when there are no response bytes to capture.
@@ -340,6 +343,7 @@ func (c Capture) Record(x CapturedExchange) (*core.Exchange, error) {
 		// listed, so this seam is the only place either answer exists.
 		ServerIP:     x.ServerIP,
 		ListenerPort: x.ListenerPort,
+		ClientIP:     x.ClientIP,
 	}
 	c.Store.AddExchange(ex)
 	c.ScanExchange(ex)

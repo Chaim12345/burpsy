@@ -2054,6 +2054,20 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Proxy listener: in-browser interface and Miscellaneous switches (2026-10, burpsy-react-ui-beof, 0q9d)
+
+- **The in-browser interface is plain HTTP only.** `http://burpsy`, `http://burpsuite` and the
+  listener's own address answer with a welcome page and the CA certificate in DER at `/cert`. Requests
+  to the interface are not recorded. `https://burpsuite` would need the CONNECT path to mint a
+  certificate for a host that resolves nowhere and to answer without an upstream. The certificate is
+  what makes HTTPS through the proxy work at all, so the HTTP page is the one that matters.
+- **"Use HTTP/1.0 in requests to server" changes only the version token.** A chunked request body
+  keeps its framing, which an HTTP/1.0 origin may refuse.
+- **"Use HTTP/1.0 in responses to client" is applied with the other response options**, so history
+  records the status line the browser received.
+- **"Suppress error messages" covers burpsy's own explanatory replies:** scope and egress refusals, a
+  failed CONNECT, an unattributable request, and a refused WebSocket retarget. The connection closes
+  instead. An operator's intercept drop is not an error and still answers 403.
 ## MCP surface: divergences from Burp's agent tools (2026-10, burpsy-react-ui-2jrr.1)
 
 Burp-parity entries for the MCP surface sub-epic. Each says what Burp does, what burpsy does, and why

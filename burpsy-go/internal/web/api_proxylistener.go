@@ -68,7 +68,10 @@ type proxyListenerRow struct {
 	RedirectPort uint16 `json:"redirect_port"`
 	ForceTLS     bool   `json:"force_tls"`
 	Invisible    *bool  `json:"invisible"`
-	Removable    bool   `json:"removable"`
+	// SupportHTTP2 is the listener's "Support HTTP/2" (34rd): null and true offer h2 to the client,
+	// false holds it to HTTP/1.1.
+	SupportHTTP2 *bool `json:"support_http2"`
+	Removable    bool  `json:"removable"`
 }
 
 // proxyListenerView is one GET's answer. PreviousBind is empty unless this process
@@ -89,6 +92,7 @@ type proxyListenerBody struct {
 	RedirectPort *int    `json:"redirect_port"`
 	ForceTLS     *bool   `json:"force_tls"`
 	Invisible    *bool   `json:"invisible"`
+	SupportHTTP2 *bool   `json:"support_http2"`
 	ID           *string `json:"id"`
 }
 
@@ -104,6 +108,7 @@ func listenerRows(statuses []proxy.ListenerStatus) []proxyListenerRow {
 			RedirectPort: st.RedirectPort,
 			ForceTLS:     st.ForceTLS,
 			Invisible:    st.Invisible,
+			SupportHTTP2: st.HTTP2,
 			Removable:    st.ID != proxy.BootListenerID,
 		})
 	}
@@ -135,6 +140,7 @@ func specFromBody(body proxyListenerBody) (proxy.ListenerSpec, error) {
 		RedirectHost: host,
 		RedirectPort: redirectPort,
 		Invisible:    body.Invisible,
+		HTTP2:        body.SupportHTTP2,
 	}
 	if body.ForceTLS != nil {
 		spec.ForceTLS = *body.ForceTLS
