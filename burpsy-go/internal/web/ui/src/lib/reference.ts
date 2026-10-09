@@ -35,6 +35,8 @@ import { chordKeys, shortcutGroups, type Keymap } from "./shortcuts";
 
 /** One term and what it means. `keys` renders as <Kbd> chips instead of monospace text. */
 export interface ReferenceRow {
+  /** A stable React key when `term` is not unique in its panel (two unbound hotkeys both read "unbound"). */
+  key?: string;
   term: string;
   detail: string;
   keys?: string[];
@@ -423,6 +425,186 @@ export const DOCS_PANEL: ReferencePanel = {
   ],
 };
 
+/* --- per-tool menus (u9zz) ------------------------------------------------ */
+
+/**
+ * One panel per tool whose context menu ends with a "<Tool> documentation" entry (lib/docs.ts).
+ * Each lists what that menu's entries do, in the menu's own words, plus where burpsy differs from
+ * Burp. lib/reference-topics.test.ts requires a panel for every topic a menu names.
+ */
+export const TOOL_PANELS: ReferencePanel[] = [
+  {
+    id: "tool-tables",
+    title: "Tables",
+    summary: "What every table in the console does, whichever tool it belongs to.",
+    source: "src/ui/table.tsx, src/lib/table-selection.ts, src/lib/filter-presets.ts",
+    rows: [
+      { term: "Click / Ctrl-click / Shift-click", detail: "Select one row, toggle one, or select the range from the last plain click. Ranges follow the rows as displayed — sorted and filtered.", note: "Opt-in per table: History, Logger and the site map's request table have it." },
+      { term: "Shift+arrows, Ctrl+A", detail: "Extend the selection from the keyboard; select every displayed row (with the table focused)." },
+      { term: "Right-click inside a selection", detail: "Keeps the selection and offers the N-row menu: Send to Comparer (A and B), Copy URLs, Add to Organizer, Add hosts to scope, and the table's own bulk actions." },
+      { term: "Column header right-click", detail: "Copy <column> column (every loaded row's value), Hide <column> column, Restore default table layout." },
+      { term: "Columns button", detail: "Show or hide columns; the choice is remembered per table." },
+      { term: "Drag a header grip", detail: "Reorder columns; the order is remembered per table." },
+      { term: "Saved filters", detail: "History, Logger and Organizer: restore defaults, save the filter as a named preset or to a file, and load either back." },
+      { term: "Go to entry", detail: "History: jump to a row by its # number; says when the row is filtered out, older than the loaded rows, or gone." },
+    ],
+  },
+  {
+    id: "tool-proxy-history",
+    title: "Proxy history",
+    summary: "The HTTP history row menu (and the same menu on the site map's request table).",
+    source: "src/lib/actions.ts (useExchangeActions().menu), src/pages/history.tsx",
+    rows: [
+      { term: "Send to Repeater / Intruder / Sequencer / Decoder", detail: "Hand the exchange's request to that tool. Repeater opens a new tab; the others seed their input." },
+      { term: "Send to Comparer (A) / (B)", detail: "Load the request into one side of Comparer." },
+      { term: "Edit a copy in Repeater", detail: "Change request method, change body encoding, toggle chunked framing — each on a copy in a new Repeater tab; the history row never changes." },
+      { term: "Copy URL / Copy as curl / Copy links", detail: "The URL; a curl command with the request's headers and body; every link the response carries." },
+      { term: "Copy request to file / Save request and response", detail: "Download the request alone, or both halves in one labelled file." },
+      { term: "Highlight / Add comment", detail: "Annotate the row; both are filterable (highlight and comment are query fields)." },
+      { term: "Add to Organizer / Add to site map", detail: "Keep the exchange in Organizer; record its URL on the site map without sending anything." },
+      { term: "Show details in new window", detail: "The request and response in a separate window (also: double-click a row)." },
+      { term: "Filter history by <host>", detail: "Replace the query with host = <host>." },
+      { term: "Open URL in browser / Show response in browser", detail: "Fetch the URL through burpsy's browser, or serve this exchange's stored response as-is." },
+      { term: "Add <host> to scope", detail: "An include rule for the host. The status bar's rule count updates." },
+      { term: "Audit exchange / Actively scan this branch or host (crawl)", detail: "Queue an active audit of this exchange, or crawl from it." },
+      { term: "Record an issue / Generate CSRF PoC", detail: "Record a finding against this exchange; open an auto-submitting PoC page for it." },
+      { term: "Delete selected items", detail: "Multi-row menu: remove the rows from the history view, after a confirmation.", note: "Burp's Delete item; the underlying capture is not renumbered." },
+    ],
+  },
+  {
+    id: "tool-websockets",
+    title: "WebSockets history",
+    summary: "The frame and connection menus on Proxy › WebSockets history.",
+    source: "src/pages/wshistory.tsx",
+    rows: [
+      { term: "Send to Repeater", detail: "Open the connection in a Repeater WebSocket tab." },
+      { term: "Send payload to Comparer (A) / (B) / Decoder", detail: "Hand one frame's payload to that tool." },
+      { term: "Copy frame summary / frame id / exchange id", detail: "Identifiers and a one-line description for notes and tickets." },
+      { term: "Save payload to file", detail: "The frame's payload bytes, as a download." },
+      { term: "Show this exchange in HTTP history", detail: "Jump to the upgrade request that opened the connection." },
+    ],
+  },
+  {
+    id: "tool-site-map",
+    title: "Site map",
+    summary: "The site map tree's node menu; its request table uses the Proxy history menu.",
+    source: "src/pages/sitemap.tsx",
+    rows: [
+      { term: "Expand / Collapse host or branch", detail: "Open or close every folder under the node. Expanding stops at 5,000 folders and says how many stayed closed." },
+      { term: "Add <host> to scope", detail: "An include rule for the node's host." },
+      { term: "Passively scan this host / branch", detail: "Re-read the stored traffic under the node through the passive checks; nothing is sent." },
+      { term: "Actively scan (crawl)", detail: "Crawl from the node, retained to its host or branch." },
+      { term: "Copy URLs in this host / branch", detail: "Every URL under the node, one per line." },
+      { term: "Open in Issues", detail: "The issues found under the node." },
+      { term: "Delete host / branch / item", detail: "Hide the node from the map, after a confirmation.", note: "Suppression, not deletion: the captured bytes stay in the store." },
+    ],
+  },
+  {
+    id: "tool-scope",
+    title: "Scope",
+    summary: "The scope rule table.",
+    source: "src/pages/scope.tsx",
+    rows: [
+      { term: "Include / exclude rules", detail: "A URL is in scope when an enabled include rule matches it and no enabled exclude rule does." },
+      { term: "Add to scope from traffic", detail: "Proxy history, the site map and Logger rows all offer Add <host> to scope." },
+    ],
+  },
+  {
+    id: "tool-intercept",
+    title: "Intercept",
+    summary: "The held-message menu and the queue toolbar on Proxy › Intercept.",
+    source: "src/pages/intercept.tsx",
+    rows: [
+      { term: "Forward / Drop", detail: "Release the held message (edited or not), or fail it." },
+      { term: "Do intercept the response to this request", detail: "Forward the request and hold its response when it comes back." },
+      { term: "Don't intercept requests to <host> / for .<ext> files", detail: "Add a request rule that stops holding traffic like this." },
+      { term: "Forward all / Drop all", detail: "The whole queue. Drop all asks first — from the toolbar, the palette or its hotkey alike." },
+      { term: "Send to Repeater / Comparer / Decoder, Copy URL, Copy as curl", detail: "As in Proxy history, on the held bytes." },
+    ],
+  },
+  {
+    id: "tool-logger",
+    title: "Logger",
+    summary: "The Logger row menu: requests burpsy itself made or relayed.",
+    source: "src/pages/logger.tsx",
+    rows: [
+      { term: "Add / Edit comment, highlight colours", detail: "Annotate the log row." },
+      { term: "Copy URL (as logged) / Copy as curl (request line only)", detail: "The log keeps the request line, not the headers or body, and the labels say so." },
+      { term: "Add <host> to scope", detail: "An include rule for the row's host; a multi-row selection adds every distinct host." },
+      { term: "Show <host> in HTTP history", detail: "Open History filtered to the host, or to the host and path." },
+    ],
+  },
+  {
+    id: "tool-organizer",
+    title: "Organizer",
+    summary: "The Organizer item menu.",
+    source: "src/pages/organizer.tsx",
+    rows: [
+      { term: "Rename / Add a title", detail: "Give the saved item a title (an empty title clears it)." },
+      { term: "Status", detail: "New, in progress, postponed, done or ignored — Burp's workflow statuses." },
+      { term: "Highlight", detail: "Colour the item." },
+      { term: "Move to… / Copy to…", detail: "File the item into a collection, or copy it into another." },
+      { term: "Copy note / Copy exchange id", detail: "For tickets and reports." },
+      { term: "Show exchange #N in HTTP history", detail: "Jump to the capture the item came from." },
+      { term: "Remove item", detail: "Take the item out of Organizer; the capture keeps the exchange." },
+    ],
+  },
+  {
+    id: "tool-issues",
+    title: "Issues",
+    summary: "The issue list's menu on Target › Issues.",
+    source: "src/pages/scanner.tsx, src/lib/issue-triage.ts",
+    rows: [
+      { term: "Set severity / Set confidence", detail: "An operator override; Engine default clears it." },
+      { term: "Mark as false positive / Comment", detail: "Triage that stays with the issue and shows in exports." },
+      { term: "Delete issue", detail: "Asks first. A re-audit of the same endpoint raises it again." },
+      { term: "Copy issue name / location / detail", detail: "For reports and tickets." },
+      { term: "Export this issue / Export scan report", detail: "HTML, JSON or SARIF." },
+      { term: "Show exchange #N in HTTP history", detail: "The request that demonstrates the issue." },
+    ],
+  },
+  {
+    id: "tool-intruder",
+    title: "Intruder",
+    summary: "The attack results table's row menu.",
+    source: "src/pages/intruder.tsx",
+    rows: [
+      { term: "Send to Repeater", detail: "The attempt's request, in a new Repeater tab." },
+      { term: "Request / Response to slot A or B", detail: "Load one attempt's request or response into Comparer." },
+      { term: "Copy request", detail: "The attempt's request as sent." },
+    ],
+  },
+  {
+    id: "tool-repeater",
+    title: "Repeater",
+    summary: "The Repeater tab menu.",
+    source: "src/pages/repeater.tsx",
+    rows: [
+      { term: "Tab colour / Rename", detail: "Label the tab; double-click its name to rename too." },
+      { term: "New group with this tab / Move to <group> / Remove from group", detail: "Tab groups, which can be sent together." },
+      { term: "Send group in parallel / in sequence", detail: "Send every tab in the group, as Burp's group send does." },
+      { term: "Duplicate tab", detail: "A copy of the tab, request draft included." },
+      { term: "Close / Close other tabs / to the left / to the right", detail: "Closed tabs can be reopened, draft included (palette: Reopen the last closed tab)." },
+    ],
+  },
+  {
+    id: "tool-message-editor",
+    title: "Message editor",
+    summary: "The request/response editor's menu, in every tool that shows a message.",
+    source: "src/ui/editor.tsx",
+    rows: [
+      { term: "Convert selection", detail: "URL, HTML and Base64 encode or decode the selected text (Ctrl+U/H/B, Shift to decode). A read-only message shows the result in a dialog." },
+      { term: "Insert Collaborator payload", detail: "Mint a payload and insert it at the cursor (editable messages)." },
+      { term: "Add § payload marker", detail: "Intruder's base request: mark the selection as a payload position." },
+      { term: "Actively audit this selection", detail: "Raw view: audit only the selected bytes as the insertion point." },
+      { term: "Find in this message", detail: "Open the editor's search panel (Ctrl+S)." },
+      { term: "Pretty / Raw / Hex and the typed views", detail: "Pretty reformats only the display; the bytes sent are Raw's." },
+      { term: "Keys", detail: "Ctrl+S search, Ctrl+, / Ctrl+. previous/next match, Ctrl+D delete line, Ctrl+Up/Down paragraph, Ctrl+Alt+C copy prettified." },
+      { term: "The tool's own entries", detail: "Above these, the same send-to and copy actions as the tool's table menu." },
+    ],
+  },
+];
+
 /* --- keyboard ------------------------------------------------------------- */
 
 /**
@@ -439,14 +621,14 @@ export function shortcutPanels(keymap: Keymap): ReferencePanel[] {
     source: "src/lib/shortcuts.ts — the same registry behind the ? sheet and Settings → Hotkeys",
     rows: group.rows.map((row) => {
       const keys = chordKeys(row, keymap);
-      return { term: keys.join(" + "), detail: row.label, keys, note: row.note };
+      return { key: row.id, term: keys.join(" + "), detail: row.label, keys, note: row.note };
     }),
   }));
 }
 
 /** Every panel, in reading order: the gaps first, because they change how the rest is read. */
 export function referencePanels(keymap: Keymap): ReferencePanel[] {
-  return [LIMITS_PANEL, QUERY_PANEL, BCHECK_PANEL, ...shortcutPanels(keymap), DOCS_PANEL];
+  return [LIMITS_PANEL, QUERY_PANEL, BCHECK_PANEL, ...TOOL_PANELS, ...shortcutPanels(keymap), DOCS_PANEL];
 }
 
 /* --- search --------------------------------------------------------------- */

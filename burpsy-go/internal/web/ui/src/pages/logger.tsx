@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { FolderTree, Link2, MessageSquare, Search, Terminal, Trash2, X } from "lucide-react";
+import { FolderTree, Link2, MessageSquare, Search, ShieldCheck, Terminal, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../lib/cn";
+import { useExchangeActions } from "../lib/actions";
+import { distinctHosts } from "../lib/actions-many";
+import { sanitizeSettings } from "../lib/filter-presets";
+import { FilterPresetsMenu } from "../ui/filter-presets";
 import { copyToClipboard, downloadText, formatBytes, formatDuration, relativeTime, statusTone, toolLogToCSV } from "../lib/api";
 import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
 import { useExchange } from "../lib/data.observe";
@@ -273,6 +277,9 @@ export function LoggerPage(): JSX.Element {
    },
   );
 
+ // Scope writes go through the same handler History's menu uses, so the toast and the scope-query
+ // refresh are the same wherever the operator adds a host from.
+ const { addHostsToScope } = useExchangeActions();
  const showInHistory = (expression: string) => {
   setHistoryQuery(expression);
   setRoute("history");
@@ -593,6 +600,20 @@ export function LoggerPage(): JSX.Element {
               only items that have been annotated, either by a comment or highlight"). Here that
               is one toggle over both fields, since the two are one act of attention. */}
      <Checkbox checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} label="Annotated only" />
+     {/* Saved display filters (mntt). The capture filter below is server configuration with its
+         own Save button, and is not part of a display preset. */}
+     <FilterPresetsMenu
+      table="logger"
+      current={{ tool, term, annotatedOnly, method, statusClass }}
+      apply={(next) => {
+       const v = sanitizeSettings("logger", next).settings;
+       setTool(v.tool as string);
+       setTerm(v.term as string);
+       setAnnotatedOnly(v.annotatedOnly as boolean);
+       setMethod(v.method as string);
+       setStatusClass(v.statusClass as string);
+      }}
+     />
      {/* Burp Logger's view filter axes (uvpb) — reversible, judged by the server against the scope as
          it is now. Not to be confused with the Capture row below, which decides what is recorded. */}
      <Checkbox checked={viewScopeOnly} onCheckedChange={setViewScopeOnly} label="In-scope only" />
@@ -723,11 +744,43 @@ export function LoggerPage(): JSX.Element {
     master={
      <VirtualTable
       ariaLabel="Requests burpsy made or relayed"
+      docTopic="logger"
       data={filteredRows}
       columns={columns}
       getRowId={(row) => String(row.id)}
       selectedId={selectedId === null ? null : String(selectedId)}
       onSelect={(row) => setSelectedId(row.id)}
+      // Multi-row selection (fe16). Logger rows are log entries, not captured exchanges — many
+      // carry no exchange id at all — so the N-row menu is the part that needs only what the log
+      // holds: the URLs as logged, and their hosts for scope.
+      multiSelect
+      menuGroupsMany={(rows) => {
+       const hosts = distinctHosts(rows);
+       return [
+        {
+         id: "selection",
+         title: `${rows.length.toLocaleString()} selected items`,
+         actions: [
+          {
+           id: "copy-urls",
+           label: `Copy URLs as logged (${rows.length.toLocaleString()})`,
+           icon: Link2,
+           onSelect: () => {
+            void copyToClipboard(rows.map(rowUrl).join("\n"));
+            toast.success(`Copied ${rows.length} URLs`);
+           },
+          },
+          {
+           id: "scope",
+           label: hosts.length === 1 ? `Add ${hosts[0]} to scope` : `Add ${hosts.length} hosts to scope`,
+           icon: ShieldCheck,
+           hint: hosts.length > 1 ? hosts.join(", ") : undefined,
+           onSelect: () => void addHostsToScope(hosts),
+          },
+         ],
+        },
+       ];
+      }}
       enableColumnVisibility
       columnVisibility={columnVisibility}
       onColumnVisibilityChange={setColumnVisibility}
@@ -780,6 +833,21 @@ export function LoggerPage(): JSX.Element {
            void copyToClipboard(rowCurl(row));
            toast.success("curl command copied — the log stores no headers or body");
           },
+         },
+        ],
+       },
+       {
+        // Burp: "You can directly add URLs to scope from the Target site map, Proxy history, and
+        // Logger" (desktop/testing-workflow/test-scope.html). History and the site map had it
+        // through the shared exchange menu; Logger builds its own menu and did not (pahd). The
+        // same handler as History's, so the rule written and the toast are the same.
+        id: "scope",
+        actions: [
+         {
+          id: "scope",
+          label: `Add ${row.host} to scope`,
+          icon: ShieldCheck,
+          onSelect: () => void addHostsToScope([row.host]),
          },
         ],
        },

@@ -994,6 +994,7 @@ function AttackResult({
             />
             {bucketRows.length ? (
               <SortableTable
+                docTopic="intruder"
                 data={bucketRows}
                 columns={bucketColumns}
                 getRowId={(bucket) => `${bucket.status}-${bucket.response_len}-${bucket.first_ordinal}`}
@@ -1021,6 +1022,7 @@ function AttackResult({
           />
           {errorRows.length ? (
             <SortableTable
+              docTopic="intruder"
               data={errorRows}
               columns={errorColumns}
               getRowId={(bucket) => bucket.error}
@@ -1046,6 +1048,7 @@ function AttackResult({
             />
             {setRows.length ? (
               <SortableTable
+                docTopic="intruder"
                 data={setRows}
                 columns={setColumns}
                 getRowId={(set) => `${set.kind}-${sets.indexOf(set)}`}
@@ -1075,6 +1078,7 @@ function AttackResult({
           />
           {attemptRows.length ? (
             <SortableTable
+              docTopic="intruder"
               data={attemptRows}
               columns={attemptColumns}
               getRowId={(attempt) => String(attempt.ordinal)}

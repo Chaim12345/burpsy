@@ -62,6 +62,7 @@ import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
+import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
 import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
 
 const THEMES: { value: Theme; label: string }[] = [
@@ -1647,7 +1648,60 @@ function HotkeysSection(): JSX.Element {
      ))
     )}
    </div>
+   <BurpHotkeyTable term={term} />
   </Card>
+ );
+}
+
+const DISPOSITION_LABEL = { same: "Same chord", alternative: "Browser alternative", declined: "Declined" } as const;
+const DISPOSITION_TONE = { same: "good", alternative: "warn", declined: "neutral" } as const;
+
+/**
+ * Burp's 50 shipped hotkeys and what burpsy does with each (2czi, lib/burp-hotkeys.ts): the same
+ * chord, a browser-forced alternative with the reason, or declined with the reason. The answer to
+ * "where did my Ctrl+T go" lives here rather than in a wiki.
+ */
+function BurpHotkeyTable({ term }: { term: string }): JSX.Element {
+ const needle = term.trim().toLowerCase();
+ const rows = BURP_HOTKEYS.filter(
+  (row) =>
+   needle === "" ||
+   row.action.replace(/_/g, " ").includes(needle) ||
+   row.burpChord.toLowerCase().includes(needle) ||
+   (row.chord ?? "").includes(needle) ||
+   row.reason.toLowerCase().includes(needle),
+ );
+ const counts = { same: 0, alternative: 0, declined: 0 };
+ for (const row of BURP_HOTKEYS) counts[row.disposition] += 1;
+ return (
+  <div className="burp-hotkeys">
+   <div className="shortcut-group">Burp's default hotkeys</div>
+   <p className="field-hint">
+    Burp ships {BURP_HOTKEYS.length}: {counts.same} bound to the same chord, {counts.alternative} to a browser-forced
+    alternative, {counts.declined} declined. Every other Burp action has no default chord and is in the command palette.
+   </p>
+   {rows.length === 0 ? (
+    <Empty title="No matching Burp hotkey" detail="Nothing in Burp's default table matches that search." />
+   ) : (
+    <SimpleTable headers={["Burp action", "Burp", "burpsy", "Disposition", "Why"]}>
+     {rows.map((row) => (
+      <tr key={row.action}>
+       <td>
+        <code>{row.action}</code>
+       </td>
+       <td>
+        <Kbd>{row.burpChord}</Kbd>
+       </td>
+       <td>{row.chord ? <Kbd>{row.chord}</Kbd> : <span className="cell-dim">none</span>}</td>
+       <td>
+        <Badge tone={DISPOSITION_TONE[row.disposition]}>{DISPOSITION_LABEL[row.disposition]}</Badge>
+       </td>
+       <td className="burp-hotkeys-reason">{row.reason}</td>
+      </tr>
+     ))}
+    </SimpleTable>
+   )}
+  </div>
  );
 }
 
@@ -1656,6 +1710,8 @@ function AppearanceSection(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const tableStripes = useApp((state) => state.tableStripes);
+ const setTableStripes = useApp((state) => state.setTableStripes);
  const editorFont = useApp((state) => state.editorFont);
  const setEditorFont = useApp((state) => state.setEditorFont);
  const editorFontFamily = useApp((state) => state.editorFontFamily);
@@ -1675,6 +1731,16 @@ function AppearanceSection(): JSX.Element {
          {option.label}
         </option>
        ))}
+      </Select>
+     )}
+    </Field>
+    {/* Burp's Settings › Display › Table appearance (desktop/settings/ui/display.html): "Zebra
+        stripe" / "No zebra stripe", zebra by default. */}
+    <Field label="Table appearance" hint="Zebra stripes shade every other row, so a long table reads across.">
+     {(id) => (
+      <Select id={id} value={tableStripes ? "zebra" : "plain"} onChange={(event) => setTableStripes(event.target.value === "zebra")}>
+       <option value="zebra">Zebra stripe</option>
+       <option value="plain">No zebra stripe</option>
       </Select>
      )}
     </Field>
