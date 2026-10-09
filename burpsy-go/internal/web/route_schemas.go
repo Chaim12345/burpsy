@@ -63,6 +63,7 @@ var routeSchemas = map[string]opSchema{
 		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
 		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
 	}},
+	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
 	"GET /api/message/": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},
@@ -121,6 +122,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/history/import/har":      {raw: "an HTTP Archive (HAR 1.2) JSON document, as a browser or proxy exports it; its members are the producer's, so unknown ones are ignored"},
 	"PUT /api/headers/uninteresting":    {body: typeOf[uninterestingHeadersReq]()},
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
+	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},

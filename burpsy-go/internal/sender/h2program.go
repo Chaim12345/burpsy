@@ -153,28 +153,8 @@ func (a *AuthorisedSender) sendFrameProgram(
 		Violations:    burpsyhttp2.Audit(program),
 	}
 
-	switch res.Authorisation.Verdict {
-	case burpsyhttp2.VerdictUndecidable:
-		a.refused.Add(1)
-		return res, fmt.Errorf("refused: this frame program is %s", res.Authorisation.Explain())
-	case burpsyhttp2.VerdictConnectionOnly:
-		if err := a.authoriseHostOnly(); err != nil {
-			a.refused.Add(1)
-			return res, err
-		}
-	case burpsyhttp2.VerdictAuthorisable:
-		for _, req := range res.Authorisation.Requests {
-			if err := a.authoriseProgramRequest(req); err != nil {
-				a.refused.Add(1)
-				return res, err
-			}
-		}
-	default:
-		// A verdict this build does not know how to act on is a refusal, not a pass. The alternative — a
-		// default that sends — would mean a verdict added later reaches the wire before anyone teaches this
-		// switch what it means.
-		a.refused.Add(1)
-		return res, fmt.Errorf("refused: this build cannot act on verdict %d", int(res.Authorisation.Verdict))
+	if err := a.authoriseProgram(res.Authorisation); err != nil {
+		return res, err
 	}
 
 	// Paced after the authorisation switch above and before the dial, matching Send: a refused
@@ -209,6 +189,37 @@ func (a *AuthorisedSender) sendFrameProgram(
 	res.Duration = time.Since(res.Started)
 	res.ReplyFrames, res.ReplyTail = burpsyhttp2.ReadFrames(res.Response)
 	return res, nil
+}
+
+// authoriseProgram acts on the classifier's verdict: every addressed request through the scope gate, the
+// host-level question for a program that addresses none, and a refusal for anything undecidable. It
+// counts a refusal itself, so every caller — the raw frame program and the kettled field list
+// (h2fields.go) — is refused by the same switch and counted the same way.
+func (a *AuthorisedSender) authoriseProgram(auth burpsyhttp2.Authorisation) error {
+	switch auth.Verdict {
+	case burpsyhttp2.VerdictUndecidable:
+		a.refused.Add(1)
+		return fmt.Errorf("refused: this frame program is %s", auth.Explain())
+	case burpsyhttp2.VerdictConnectionOnly:
+		if err := a.authoriseHostOnly(); err != nil {
+			a.refused.Add(1)
+			return err
+		}
+	case burpsyhttp2.VerdictAuthorisable:
+		for _, req := range auth.Requests {
+			if err := a.authoriseProgramRequest(req); err != nil {
+				a.refused.Add(1)
+				return err
+			}
+		}
+	default:
+		// A verdict this build does not know how to act on is a refusal, not a pass. The alternative — a
+		// default that sends — would mean a verdict added later reaches the wire before anyone teaches this
+		// switch what it means.
+		a.refused.Add(1)
+		return fmt.Errorf("refused: this build cannot act on verdict %d", int(auth.Verdict))
+	}
+	return nil
 }
 
 // authoriseHostOnly asks the host-level question for a program that addresses no request.

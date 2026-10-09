@@ -105,6 +105,8 @@ func (c *Crawler) probeNotFound(ctx context.Context, item frontierItem, rep *Rep
 	}
 	c.noteSent()
 	note := "crawler not-found probe: a nonexistent sibling, fetched to learn what this directory answers for a missing page"
+	// The crawl's own source, not SourceCrawl outright: an isolated scan's probe stays out of the site
+	// map like the rest of its fetches (13uw).
 	ex, cerr := c.cfg.Capture.Record(scanner.CapturedExchange{
 		Host:     probeURL.Hostname(),
 		Port:     portOf(&probeURL),
@@ -117,7 +119,7 @@ func (c *Crawler) probeNotFound(ctx context.Context, item frontierItem, rep *Rep
 		Duration: res.Duration,
 		Protocol: core.ProtocolHTTP1,
 		ServerIP: res.Outcome.ServerIP,
-		Source:   core.SourceCrawl,
+		Source:   c.captureSource(),
 		Notes:    &note,
 	})
 	if cerr != nil || ex == nil || ex.Response == nil {

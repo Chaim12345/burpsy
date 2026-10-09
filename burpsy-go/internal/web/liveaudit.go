@@ -183,6 +183,9 @@ type LiveAuditState struct {
 	// the sweep reads it per exchange, and a pane showing one source while another filters
 	// traffic is the same lie a split query read would be.
 	trafficSource LiveAuditTrafficSource
+	// configName and poolName are the live task's own scan configuration and resource pool
+	// (burpsy-react-ui-chct); "" is the process-wide AuditConfig and the global pace. Guarded by queryMu.
+	configName, poolName string
 	// refusedSource counts in-scope exchanges the sweep skipped because of the source gate.
 	// Counted per source like the other refuses: a sweep that declined 40 crawler captures
 	// is 40 rows of "the operator chose Proxy", and the pane says so rather than reading
@@ -202,6 +205,26 @@ func (la *LiveAuditState) TrafficSource() LiveAuditTrafficSource {
 
 // SetTrafficSource installs the operator's choice. An unknown value is refused rather than
 // read as "everything": a typo in the wire shape must not silently widen the gate.
+// SetRunSettings records the live task's scan configuration and resource pool by name (chct). The
+// caller has already resolved both, so a name stored here is one that resolves.
+func (la *LiveAuditState) SetRunSettings(config, pool *string) {
+	la.queryMu.Lock()
+	defer la.queryMu.Unlock()
+	if config != nil {
+		la.configName = *config
+	}
+	if pool != nil {
+		la.poolName = *pool
+	}
+}
+
+// RunSettings returns the live task's scan configuration and resource pool names.
+func (la *LiveAuditState) RunSettings() (config, pool string) {
+	la.queryMu.Lock()
+	defer la.queryMu.Unlock()
+	return la.configName, la.poolName
+}
+
 func (la *LiveAuditState) SetTrafficSource(src LiveAuditTrafficSource) error {
 	switch src {
 	case LiveAuditSourceProxy, LiveAuditSourceEverything:
@@ -678,6 +701,10 @@ type liveAuditView struct {
 	LedgerResets uint64 `json:"ledger_resets"`
 	// Query is the DSL-03 filter as the operator wrote it, empty for none.
 	Query string `json:"query,omitempty"`
+	// Config and Pool are the live task's own scan configuration and resource pool (chct); empty is
+	// the server default configuration and the global pace.
+	Config string `json:"config"`
+	Pool   string `json:"pool"`
 	// StalledAt is the exchange id the cursor is waiting on, omitted when it is moving.
 	StalledAt *uint64 `json:"stalled_at,omitempty"`
 	// RefusedSource is in-scope exchanges the source gate skipped (zk35): the sweep's own
@@ -753,6 +780,7 @@ func (s *Server) liveAuditStatus() liveAuditView {
 		LedgerResets: s.liveAudit.LedgerResets(),
 		Query:        querySrc,
 	}
+	v.Config, v.Pool = s.liveAudit.RunSettings()
 	if id, waiting := s.liveAudit.StalledAt(); waiting {
 		v.StalledAt = &id
 	}
@@ -1365,6 +1393,26 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// passive issue type — or scan_type_passive false — stopped in the session and kept firing on
 	// every captured exchange one loop earlier.
 	cfg := s.scanner.AuditConfig()
+	// The live task's own scan configuration and pool (chct), resolved per tick so a change applies
+	// from the next batch, and resolved here — before the passive half — so both halves run under the
+	// task's configuration, not only the active one. A name that stopped resolving (a pool deleted
+	// since) falls back to the default with an event, rather than stopping the sweep.
+	if cfgName, poolName := s.liveAudit.RunSettings(); cfgName != "" || poolName != "" {
+		if cfgName != "" {
+			if named, _, _, err := s.resolveAuditConfig(cfgName); err == nil {
+				cfg = named
+			} else {
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's scan configuration no longer resolves; this batch runs the default: "+err.Error())
+			}
+		}
+		if poolName != "" {
+			if pctx, err := s.auditContext(ctx, poolName); err == nil {
+				ctx = pctx
+			} else {
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's resource pool no longer resolves; this batch runs at the global pace: "+err.Error())
+			}
+		}
+	}
 	passiveFindings := 0
 	if s.scanner != nil {
 		for _, id := range ids {

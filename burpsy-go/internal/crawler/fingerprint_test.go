@@ -28,8 +28,8 @@ func TestRequestFingerprintTreatsEquivalentURLsAsOne(t *testing.T) {
 		{"http://h/a?sid=1&page=2", "http://h/a?sid=9&page=2"}, // volatile alongside a real parameter
 	}
 	for _, pair := range same {
-		a := requestFingerprint("GET", mustURL(t, pair[0]), nil)
-		b := requestFingerprint("GET", mustURL(t, pair[1]), nil)
+		a := requestFingerprint("GET", mustURL(t, pair[0]), nil, "")
+		b := requestFingerprint("GET", mustURL(t, pair[1]), nil, "")
 		if a != b {
 			t.Errorf("%q and %q are the same request but fingerprint differently:\n %s\n %s", pair[0], pair[1], a, b)
 		}
@@ -49,28 +49,28 @@ func TestRequestFingerprintKeepsGenuineDifferences(t *testing.T) {
 		{"http://h/a", "http://other/a"},           // host
 	}
 	for _, pair := range different {
-		a := requestFingerprint("GET", mustURL(t, pair[0]), nil)
-		b := requestFingerprint("GET", mustURL(t, pair[1]), nil)
+		a := requestFingerprint("GET", mustURL(t, pair[0]), nil, "")
+		b := requestFingerprint("GET", mustURL(t, pair[1]), nil, "")
 		if a == b {
 			t.Errorf("%q and %q are different requests but share fingerprint %s", pair[0], pair[1], a)
 		}
 	}
 	// Method and body are part of the request's identity too.
 	u := mustURL(t, "http://h/submit")
-	if requestFingerprint("GET", u, nil) == requestFingerprint("POST", u, nil) {
+	if requestFingerprint("GET", u, nil, "") == requestFingerprint("POST", u, nil, "") {
 		t.Error("method must be part of the fingerprint")
 	}
-	if requestFingerprint("POST", u, []byte("a=1")) == requestFingerprint("POST", u, []byte("a=2")) {
+	if requestFingerprint("POST", u, []byte("a=1"), "") == requestFingerprint("POST", u, []byte("a=2"), "") {
 		t.Error("two submissions with different bodies are different requests")
 	}
-	if requestFingerprint("POST", u, nil) == requestFingerprint("POST", u, []byte("a=1")) {
+	if requestFingerprint("POST", u, nil, "") == requestFingerprint("POST", u, []byte("a=1"), "") {
 		t.Error("a body's presence must change the fingerprint")
 	}
 	// The fragment never reaches the server, so it must not be part of the identity. Both sides of
 	// this comparison used to be the same fragment-free URL, so it asserted only that the function is
 	// deterministic and the property it names went untested.
-	if requestFingerprint("GET", mustURL(t, "http://h/a#top"), nil) !=
-		requestFingerprint("GET", mustURL(t, "http://h/a"), nil) {
+	if requestFingerprint("GET", mustURL(t, "http://h/a#top"), nil, "") !=
+		requestFingerprint("GET", mustURL(t, "http://h/a"), nil, "") {
 		t.Error("a fragment never reaches the server and must not change the fingerprint")
 	}
 }
@@ -162,8 +162,8 @@ func TestLocationFingerprintSplitsOnAnEphemeralLinkTarget(t *testing.T) {
 		t.Fatal("this is documented as a false split; if it now merges, the raw-link-target rule was weakened")
 	}
 	// The frontier's own key does merge them, which is the layer that contains the split.
-	if requestFingerprint("GET", mustURL(t, "http://h/next?_=111"), nil) !=
-		requestFingerprint("GET", mustURL(t, "http://h/next?_=222"), nil) {
+	if requestFingerprint("GET", mustURL(t, "http://h/next?_=111"), nil, "") !=
+		requestFingerprint("GET", mustURL(t, "http://h/next?_=222"), nil, "") {
 		t.Fatal("the request fingerprint should normalise a cache-buster away")
 	}
 }
@@ -180,8 +180,8 @@ func TestURLTemplateCollapsesIDSpaces(t *testing.T) {
 		{"http://h/cal?month=1&year=2026", "http://h/cal?year=2027&month=3"},
 	}
 	for _, pair := range same {
-		a := urlTemplate("GET", mustURL(t, pair[0]), nil)
-		b := urlTemplate("GET", mustURL(t, pair[1]), nil)
+		a := urlTemplate("GET", mustURL(t, pair[0]), nil, "")
+		b := urlTemplate("GET", mustURL(t, pair[1]), nil, "")
 		if a != b {
 			t.Errorf("%q and %q are one template but differ:\n %s\n %s", pair[0], pair[1], a, b)
 		}
@@ -193,7 +193,7 @@ func TestURLTemplateCollapsesIDSpaces(t *testing.T) {
 		{"http://h/a", "http://other/a"},
 	}
 	for _, pair := range different {
-		if urlTemplate("GET", mustURL(t, pair[0]), nil) == urlTemplate("GET", mustURL(t, pair[1]), nil) {
+		if urlTemplate("GET", mustURL(t, pair[0]), nil, "") == urlTemplate("GET", mustURL(t, pair[1]), nil, "") {
 			t.Errorf("%q and %q are different templates but collapsed together", pair[0], pair[1])
 		}
 	}
@@ -212,10 +212,10 @@ func TestURLTemplateCollapsesIDSpaces(t *testing.T) {
 	// A form's field names are part of its template: two forms posting different field sets to one
 	// action are different shapes.
 	u := mustURL(t, "http://h/submit")
-	if urlTemplate("POST", u, []string{"a", "b"}) == urlTemplate("POST", u, []string{"c"}) {
+	if urlTemplate("POST", u, []string{"a", "b"}, "") == urlTemplate("POST", u, []string{"c"}, "") {
 		t.Error("field names must be part of a form submission's template")
 	}
-	if urlTemplate("POST", u, []string{"a", "b"}) != urlTemplate("POST", u, []string{"b", "a"}) {
+	if urlTemplate("POST", u, []string{"a", "b"}, "") != urlTemplate("POST", u, []string{"b", "a"}, "") {
 		t.Error("field-name order must not change a template")
 	}
 }

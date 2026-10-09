@@ -248,6 +248,21 @@ const (
 	// Recorded rather than silently dropped: a form refused by a cap is a hole in the crawl's coverage,
 	// and an operator reading "N forms submitted" needs to know why it was not more.
 	SkipFormSubmissionCap
+	// SkipFormDestinationExhausted means a form was NOT submitted because the number of distinct
+	// destinations the crawl has already submitted THIS form to has reached
+	// Config.FormSubmissionOptimizationThreshold (burpsy-react-ui-ddln).
+	//
+	// A different bound from SkipFormSubmissionCap, and the difference is the whole reason the two
+	// thresholds are separate keys in Burp. That one bounds how many times ONE destination may be
+	// submitted; this one bounds how many DESTINATIONS are worth trying before the form's input
+	// strategy is judged to have stopped yielding new locations. A pagination control whose page
+	// parameter walks forward forever hits this one with its cap untouched: every submission is a
+	// new URL, so a per-destination cap never fires, and the form is still submitting into a space
+	// with nothing left to learn from.
+	//
+	// Recorded rather than silently dropped, for the same honest-counting reason as the cap: a form
+	// refused here is a hole in the crawl's coverage and the operator has to be able to see it.
+	SkipFormDestinationExhausted
 	// SkipLocationFolded means the response was recognised as a location already seen by the
 	// TOLERANCE BAND rather than by exact fingerprint equality (burpsy-react-ui-9x67,
 	// location_band.go): same structure, same text bucket, same set of link paths and parameter
@@ -285,7 +300,7 @@ const (
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [44]Skip{
+var SkipAll = [45]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -324,6 +339,7 @@ var SkipAll = [44]Skip{
 	SkipGraphQLIntrospection,
 	SkipOutOfScopeResource,
 	SkipFormSubmissionCap,
+	SkipFormDestinationExhausted,
 	SkipLocationFolded,
 	SkipSoftNotFound,
 	SkipAPILocationOutOfScope,
@@ -413,18 +429,20 @@ func (s Skip) slot() int {
 		return 36
 	case SkipFormSubmissionCap:
 		return 37
-	case SkipLocationFolded:
+	case SkipFormDestinationExhausted:
 		return 38
-	case SkipSoftNotFound:
+	case SkipLocationFolded:
 		return 39
-	case SkipAPILocationOutOfScope:
+	case SkipSoftNotFound:
 		return 40
-	case SkipWSDLInvalid:
+	case SkipAPILocationOutOfScope:
 		return 41
-	case SkipWSDLNoOperations:
+	case SkipWSDLInvalid:
 		return 42
-	case SkipSeedRedirectedOutOfScope:
+	case SkipWSDLNoOperations:
 		return 43
+	case SkipSeedRedirectedOutOfScope:
+		return 44
 	}
 	panic("unknown Skip")
 }
@@ -508,6 +526,8 @@ func (s Skip) String() string {
 		return "out-of-scope-resource"
 	case SkipFormSubmissionCap:
 		return "form-submission-cap"
+	case SkipFormDestinationExhausted:
+		return "form-destination-exhausted"
 	case SkipLocationFolded:
 		return "location-folded"
 	case SkipSoftNotFound:
@@ -558,6 +578,10 @@ func (s Skip) Explanation() string {
 	case SkipFormSubmissionCap:
 		return "this form was already submitted the maximum number of times the crawl allows, so it was " +
 			"not submitted again: raise max_submissions_per_form to explore it further"
+	case SkipFormDestinationExhausted:
+		return "this form has been submitted to as many distinct destinations as the optimization " +
+			"threshold allows, so its input strategy is treated as exhausted: raise " +
+			"form_submission_optimization_threshold to explore further"
 	case SkipAlreadyQueued:
 		return "an identical request has already been queued or fetched"
 	case SkipTemplateQuota:
@@ -686,7 +710,8 @@ func (s Skip) Category() SkipCategory {
 	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource,
 		SkipAPILocationOutOfScope, SkipSeedRedirectedOutOfScope:
 		return CategoryScope
-	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap:
+	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap,
+		SkipFormDestinationExhausted:
 		return CategoryPolicy
 	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded, SkipSoftNotFound:
 		return CategoryDuplicate
