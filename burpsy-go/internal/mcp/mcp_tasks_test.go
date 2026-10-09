@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -146,10 +147,13 @@ func tasks(t *testing.T, base, action string) {
 	resp.Body.Close()
 }
 
-// mintAudit mints the audit confirmation through the console.
-func mintAudit(t *testing.T, base string) string {
+// mintAudit mints the confirmation for one audit call through the console. The token is bound to the
+// resolved call (burpsy-react-ui-e0yq), which for an audit started through this transport is the
+// subtree path with the {"async":true} body the transport adds — so that is what is described.
+func mintAudit(t *testing.T, base string, exID core.ExchangeID) string {
 	t.Helper()
-	resp, err := http.Post(base+web.MCPConfirmEndpoint("/api/audit/"), "application/json", nil)
+	desc, _ := json.Marshal(map[string]string{"method": "POST", "url": fmt.Sprintf("/api/audit/%d", exID), "body": string(withAsync(nil))})
+	resp, err := http.Post(base+web.MCPConfirmEndpoint("/api/audit/"), "application/json", bytes.NewReader(desc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,12 +162,15 @@ func mintAudit(t *testing.T, base string) string {
 		Token string `json:"token"`
 	}
 	json.NewDecoder(resp.Body).Decode(&tok)
+	if tok.Token == "" {
+		t.Fatalf("minting the audit confirmation returned no token (HTTP %d)", resp.StatusCode)
+	}
 	return tok.Token
 }
 
 func auditCall(id int, base string, t *testing.T, exID core.ExchangeID, meta map[string]any) map[string]any {
 	params := map[string]any{"name": "scan", "arguments": map[string]any{
-		"op": "POST /api/audit/", "id": fmt.Sprint(exID), "confirm": mintAudit(t, base),
+		"op": "POST /api/audit/", "id": fmt.Sprint(exID), "confirm": mintAudit(t, base, exID),
 	}}
 	if meta != nil {
 		params["_meta"] = meta

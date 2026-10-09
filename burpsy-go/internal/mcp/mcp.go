@@ -28,9 +28,15 @@
 // # The confirmation flow, and why the mint is a separate visible tool
 //
 // A gated call with no confirmation is answered with the gate's refusal. Recovering from it is an
-// explicit, separate step: the client calls the burpsy_confirm tool, which POSTs to the console's
-// own mint endpoint and returns the one-time token, and then re-issues the original call with that
-// token. Nothing here mints a token automatically, and nothing retries a refused call.
+// explicit, separate step: the client calls the burpsy_confirm tool with the tool and the exact
+// arguments of the call it wants confirmed, which POSTs the resolved request to the console's own
+// mint endpoint and returns the console's preview of that request with a one-time token bound to it,
+// and then re-issues the original call, unchanged, with that token. Nothing here mints a token
+// automatically, and nothing retries a refused call.
+//
+// The token authorises that one request and no other (burpsy-react-ui-e0yq): the gate compares the
+// method, path, query and body of the spending call with what was minted, so a host that showed its
+// human the confirm call's arguments — or the preview it returned — showed them what will run.
 //
 // That is a deliberate choice with an honest limit. The gate's own comment states the argument:
 // "an agent that can supply the confirm itself has learned nothing from being asked". A server
@@ -547,9 +553,9 @@ const instructions = `burpsy is an HTTP testing proxy with a risk-gated API. Eve
 Calling a tool is calling the route. Nothing here is simulated: an "attack" tool sends real traffic to the engagement target, and a "destructive" tool discards evidence.
 
 Routes whose risk class requires confirmation (scope, attack, credential, destructive) refuse a MUTATING call that carries no confirmation. The refusal is HTTP 428 and is returned to you as an isError tool result. To proceed you must make the escalation its own step:
-  1. call burpsy_confirm with the route pattern the refusal names, which returns a one-time token;
-  2. re-issue the original tool call with that token in its "confirm" argument.
-A token authorises exactly one call, expires in 60 seconds, and is bound to the route it was minted for.
+  1. call burpsy_confirm with {"tool": <the tool>, "arguments": <the exact arguments of the call>} — the refusal prints this for you. It returns a preview of the resolved request (method, URL, body) and a one-time token bound to that request;
+  2. re-issue the original tool call, unchanged, with that token in its "confirm" argument.
+A token authorises exactly one call, expires in 60 seconds, and is refused (and burned) on a call whose method, path, query or body differs from the one it was minted for.
 
 Only mint a confirmation when a human has asked you to perform that specific action. An agent that mints its own confirmations has turned a checkpoint into a formality, and the refusal exists because these classes send unbounded traffic, widen the engagement's scope, or hand out credentials.`
 

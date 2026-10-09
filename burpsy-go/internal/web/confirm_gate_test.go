@@ -32,29 +32,77 @@ func guarded(t *testing.T, s *Server, method, path, body string) *httptest.Respo
 	return rec
 }
 
-// confirm mints a token for a route and returns it.
-func confirm(t *testing.T, s *Server, pattern string) string {
+// confirm mints a token for one concrete call — method, target (path plus optional query) and body —
+// at the mint endpoint of the route the target resolves to, and returns it.
+func confirm(t *testing.T, s *Server, method, target, body string) string {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, pattern+"/confirm", nil)
+	rec := mintAt(t, s, target, confirmDescription(method, target, body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("minting for %s %s = %d, want 200: %s", method, target, rec.Code, rec.Body.String())
+	}
+	var minted confirmMinted
+	if err := json.Unmarshal(rec.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decoding the confirm response: %v", err)
+	}
+	if minted.Token == "" {
+		t.Fatal("the confirm response carried no token")
+	}
+	return minted.Token
+}
+
+// confirmDescription is a mint request body for one call. An empty body is described as no body.
+func confirmDescription(method, target, body string) string {
+	desc := map[string]any{"method": method, "url": target}
+	if body != "" {
+		desc["body"] = body
+	}
+	raw, _ := json.Marshal(desc)
+	return string(raw)
+}
+
+// mintAt POSTs desc to the mint endpoint of the route target resolves to, through the whole chain.
+func mintAt(t *testing.T, s *Server, target, desc string) *httptest.ResponseRecorder {
+	t.Helper()
+	path := target
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	pattern, _, ok := routeRiskFor(path)
+	if !ok {
+		t.Fatalf("%s resolves to no manifest route", path)
+	}
+	var req *http.Request
+	if desc == "" {
+		req = httptest.NewRequest(http.MethodPost, strings.TrimSuffix(pattern, "/")+"/confirm", nil)
+	} else {
+		req = httptest.NewRequest(http.MethodPost, strings.TrimSuffix(pattern, "/")+"/confirm", strings.NewReader(desc))
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Host = "127.0.0.1:8081"
 	req.Header.Set("Origin", "http://127.0.0.1:8081")
 	rec := httptest.NewRecorder()
 	// Through s.guarded, not s.mux: the mint is served from confirmMux and reached by the gate
 	// routing to it, so a test that called s.mux would be testing a path no caller can take.
 	s.guarded.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST %s/confirm = %d, want 200: %s", pattern, rec.Code, rec.Body.String())
+	return rec
+}
+
+// spendOn sends method target body through the whole chain carrying token.
+func spendOn(t *testing.T, s *Server, token, method, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var req *http.Request
+	if body == "" {
+		req = httptest.NewRequest(method, target, nil)
+	} else {
+		req = httptest.NewRequest(method, target, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
 	}
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decoding the confirm response: %v", err)
-	}
-	if body.Token == "" {
-		t.Fatal("the confirm response carried no token")
-	}
-	return body.Token
+	req.Host = "127.0.0.1:8081"
+	req.Header.Set("Origin", "http://127.0.0.1:8081")
+	req.Header.Set(ConfirmHeader, token)
+	rec := httptest.NewRecorder()
+	s.guarded.ServeHTTP(rec, req)
+	return rec
 }
 
 // The gate's whole reason for existing: a confirmation-worthy route refuses a mutating call that
@@ -74,7 +122,7 @@ func TestAConfirmationWorthyRouteRefusesAnUnconfirmedCall(t *testing.T) {
 // gate that refused everything would be indistinguishable from having no route.
 func TestAConfirmedCallProceeds(t *testing.T) {
 	s := newScannerServer()
-	token := confirm(t, s, "/api/crawl")
+	token := confirm(t, s, http.MethodPost, "/api/crawl", `{"seeds":["http://x/"]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/crawl", strings.NewReader(`{"seeds":["http://x/"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Host = "127.0.0.1:8081"
@@ -92,7 +140,7 @@ func TestAConfirmedCallProceeds(t *testing.T) {
 // licence, and a gate that let it replay would be no gate at all against a caller that logs.
 func TestAConfirmationCannotBeReplayed(t *testing.T) {
 	s := newScannerServer()
-	token := confirm(t, s, "/api/crawl")
+	token := confirm(t, s, http.MethodPost, "/api/crawl", `{"seeds":["http://x/"]}`)
 	first := func() int {
 		req := httptest.NewRequest(http.MethodPost, "/api/crawl", strings.NewReader(`{"seeds":["http://x/"]}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -119,7 +167,7 @@ func TestAConfirmationIsBoundToTheRouteItWasIssuedFor(t *testing.T) {
 	// /api/scope is riskScope; /api/crawl is riskAttack. Both gated, both different acts. The token
 	// is minted and NOT spent, which is the point: an unspent token for the wrong route must not
 	// carry.
-	token := confirm(t, s, "/api/scope")
+	token := confirm(t, s, http.MethodPost, "/api/scope", "")
 	if !s.confirms.pending(token) {
 		t.Fatal("a freshly minted token does not read as pending; the store is broken before the " +
 			"route binding is even tested")
@@ -182,7 +230,7 @@ func TestAnUnusableConfirmationSaysNothingAboutWhichFailureItWas(t *testing.T) {
 // test, shortening ConfirmTTL to a nanosecond would look fine and mean nothing.
 func TestAnExpiredConfirmationIsRefused(t *testing.T) {
 	s := newScannerServer()
-	token := confirm(t, s, "/api/crawl")
+	token := confirm(t, s, http.MethodPost, "/api/crawl", `{"seeds":["http://x/"]}`)
 	// Age it past the TTL rather than sleeping: the test asserts the BOUND, not the wait.
 	s.confirms.mu.Lock()
 	e := s.confirms.tokens[token]
@@ -215,7 +263,7 @@ func TestAConfirmationCannotBeMintedWithAGet(t *testing.T) {
 // limit — a console left running for days is exactly the case.
 func TestExpiredConfirmationsAreSweptRatherThanAccumulating(t *testing.T) {
 	c := newConfirmStore()
-	old, err := c.issue("/api/crawl")
+	old, err := c.issue("/api/crawl", callBinding{})
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -224,7 +272,7 @@ func TestExpiredConfirmationsAreSweptRatherThanAccumulating(t *testing.T) {
 	e.expires = time.Now().Add(-time.Hour)
 	c.tokens[old] = e
 	c.mu.Unlock()
-	fresh, err := c.issue("/api/crawl")
+	fresh, err := c.issue("/api/crawl", callBinding{})
 	if err != nil {
 		t.Fatalf("second issue: %v", err)
 	}
@@ -286,7 +334,7 @@ func TestAPrefixAloneDoesNotMakeARouteGated(t *testing.T) {
 // everything within its TTL.
 func TestAConfirmationMintedForOneRouteIsRefusedOnAnother(t *testing.T) {
 	s, _ := newTestServerWithCA(t)
-	token := confirm(t, s, "/api/crawl")
+	token := confirm(t, s, http.MethodPost, "/api/crawl", `{"seeds":["http://x/"]}`)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/proxy/ca/export", strings.NewReader(`{"kind":"key"}`))
 	req.Host = "127.0.0.1:8081"
@@ -305,22 +353,23 @@ func TestAConfirmationMintedForOneRouteIsRefusedOnAnother(t *testing.T) {
 // half of rule creates and edits).
 func TestAConfirmationSpendsOnEitherMemberOfItsSubtreePair(t *testing.T) {
 	s := newTestServer()
+	call := newCallBinding(http.MethodPost, "/api/session/rules", "", []byte(`{"name":"r"}`))
 	for _, path := range []string{"/api/session/rules", "/api/session/rules/"} {
-		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules/"), path) {
+		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules/", call), path, call) {
 			t.Errorf("a token minted at the pair's confirm endpoint was refused on %s", path)
 		}
-		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules"), path) {
+		if !s.confirms.spend(mustIssue(t, s, "/api/session/rules", call), path, call) {
 			t.Errorf("a token minted for the exact pattern was refused on %s", path)
 		}
 	}
-	if s.confirms.spend(mustIssue(t, s, "/api/session/rules"), "/api/scope") {
+	if s.confirms.spend(mustIssue(t, s, "/api/session/rules", call), "/api/scope", call) {
 		t.Error("a session-rules token spent on /api/scope")
 	}
 }
 
-func mustIssue(t *testing.T, s *Server, pattern string) string {
+func mustIssue(t *testing.T, s *Server, pattern string, call callBinding) string {
 	t.Helper()
-	tok, err := s.confirms.issue(pattern)
+	tok, err := s.confirms.issue(pattern, call)
 	if err != nil {
 		t.Fatal(err)
 	}

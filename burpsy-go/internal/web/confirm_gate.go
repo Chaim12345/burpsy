@@ -1,10 +1,13 @@
 package web
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -58,12 +61,18 @@ type confirmStore struct {
 	tokens map[string]confirmEntry
 }
 
-// confirmEntry is a minted token's expiry and the route it confirms.
+// confirmEntry is a minted token's expiry, the route it confirms, and the one call it confirms.
 type confirmEntry struct {
 	expires time.Time
 	// route is the pattern the token was minted for, normalised by confirmRouteKey so a subtree pair
 	// (/api/x and /api/x/, which share one /confirm endpoint) is one route.
 	route string
+	// call is the digest of the resolved call the approver was shown (callBinding.digest): method,
+	// concrete path, canonical query and canonical body hash. A token bound only to its route let a
+	// confirmation for one request authorise any other request to the same route — a crawl of the
+	// in-scope host confirmed a crawl of any host, an export of the certificate confirmed an export
+	// of the private key (burpsy-react-ui-e0yq).
+	call string
 }
 
 func newConfirmStore() *confirmStore {
@@ -77,8 +86,8 @@ func newConfirmStore() *confirmStore {
 // (burpsy-react-ui-r9b5).
 func confirmRouteKey(pattern string) string { return strings.TrimSuffix(pattern, "/") }
 
-// issue mints a token bound to one route pattern, and returns it.
-func (c *confirmStore) issue(pattern string) (string, error) {
+// issue mints a token bound to one route pattern and one resolved call, and returns it.
+func (c *confirmStore) issue(pattern string, call callBinding) (string, error) {
 	raw, err := randomHex(16)
 	if err != nil {
 		return "", err
@@ -94,14 +103,15 @@ func (c *confirmStore) issue(pattern string) (string, error) {
 			delete(c.tokens, k)
 		}
 	}
-	c.tokens[raw] = confirmEntry{expires: now.Add(ConfirmTTL), route: confirmRouteKey(pattern)}
+	c.tokens[raw] = confirmEntry{expires: now.Add(ConfirmTTL), route: confirmRouteKey(pattern), call: call.digest()}
 	return raw, nil
 }
 
-// spend redeems a token for the pattern it was issued against. False means absent, expired, or
-// issued for a different route — all three are refusals and none of them says which, so the error
-// a caller sees cannot be used to probe for a live token.
-func (c *confirmStore) spend(token, pattern string) bool {
+// spend redeems a token for the pattern and the call it was issued against. False means absent,
+// expired, issued for a different route, or issued for a different call on this route — all four are
+// refusals and none of them says which, so the error a caller sees cannot be used to probe for a live
+// token.
+func (c *confirmStore) spend(token, pattern string, call callBinding) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.tokens[token]
@@ -113,8 +123,14 @@ func (c *confirmStore) spend(token, pattern string) bool {
 	// route with one confirmation. Before burpsy-react-ui-r9b5 the route was recorded at mint and
 	// never compared, so a confirmation for a cheap gated call (a crawl) confirmed any other gated call
 	// (a project switch, a CA private-key export) within the TTL.
+	//
+	// The same holds for a spend on the right route with a different call: the token was shown to an
+	// approver as one request, and a caller presenting it with another is either confused or swapping
+	// the request after approval. Either way the approval does not carry, and it is not left live for
+	// a second try. The digest comparison is constant-time because the digest is derived from what the
+	// approver saw, and a timing difference over it is a needless signal.
 	delete(c.tokens, token)
-	return time.Now().Before(e.expires) && e.route == confirmRouteKey(pattern)
+	return time.Now().Before(e.expires) && e.route == confirmRouteKey(pattern) && constantTimeEqual(e.call, call.digest())
 }
 
 // pending reports whether a token exists and has not expired, without consuming it. Used by the
@@ -168,8 +184,25 @@ func (s *Server) confirmationGate(h, confirmMux http.Handler) http.Handler {
 		// the other way round, a cross-site caller received this 428 and learned which header to
 		// try next.
 		token := r.Header.Get(ConfirmHeader)
-		if token == "" || !s.confirms.spend(token, pattern) {
-			s.refuseUnconfirmed(w, pattern, risk, token == "")
+		if token == "" {
+			s.refuseUnconfirmed(w, pattern, risk, true)
+			return
+		}
+		// The body is read here, in full, so the call can be compared with the one the token was
+		// minted for, and then handed to the route unchanged. Only when a token is presented: an
+		// unconfirmed call is refused without the gate reading a byte of it. The cap is the server's
+		// own request cap, so the gate buffers nothing a handler could not have been sent anyway.
+		call, body, err := bindingOfRequest(r)
+		if err != nil {
+			// The token is burned as a spend would burn it: a presented token whose call cannot be
+			// read is not left live for a second attempt.
+			s.confirms.burn(token)
+			http.Error(w, "could not read the request body to check it against its confirmation: "+err.Error(), http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if !s.confirms.spend(token, pattern, call) {
+			s.refuseUnconfirmed(w, pattern, risk, false)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -196,9 +229,10 @@ func methodMutates(method string) bool {
 // permitted, it is missing a precondition. 403 would tell a caller "no" about a thing it has not
 // tried yet, and 401 would imply an authentication problem this console does not have.
 func (s *Server) refuseUnconfirmed(w http.ResponseWriter, pattern string, risk riskClass, missing bool) {
-	detail := "this route needs an explicit confirmation; POST " + pattern + "/confirm to get one"
+	detail := "this route needs an explicit confirmation of this exact call; POST " + strings.TrimSuffix(pattern, "/") +
+		`/confirm with {"method":…,"url":…,"body":…} describing the call to get one`
 	if !missing {
-		detail = "the confirmation for this route is not valid: it has expired, was already used, or was issued for a different route"
+		detail = "the confirmation for this call is not valid: it has expired, was already used, or was issued for a different route or a different request (method, path, query or body)"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusPreconditionRequired)
@@ -211,18 +245,26 @@ func (s *Server) refuseUnconfirmed(w http.ResponseWriter, pattern string, risk r
 	})
 }
 
-// handleConfirm mints a one-time confirmation for the route named in the path.
+// handleConfirm mints a one-time confirmation for one concrete call to the route named in the path.
 //
 // Registered as a SUBTREE under each gated pattern, so the pattern is taken from the request rather
 // than from a table entry — a caller cannot be handed a token for one route and spend it on
 // another, because the token is issued FOR this path and the gate spends it against this path.
+//
+// The body describes the call the token will authorise (confirmCall), and the answer echoes back
+// what the server resolved it to (confirmPreview) — the request an approver is agreeing to, as the
+// gate will compare it, not as the caller summarised it. Before burpsy-react-ui-e0yq the mint took
+// no body: the approver signed a route name, and the token it produced authorised any request to
+// that route. A mint with no call described is refused rather than defaulted to "any call": an
+// unbound token is exactly the thing this binding removes.
 //
 // The gate does not consult this handler's response for anything but the token. A caller that can
 // POST here without a human present has the same problem as a caller that can set the header
 // itself, and no server-side scheme fixes that on its own: it is why the confirm endpoint is the
 // right place for the console's own auth to sit, and why that auth is a separate bead (console
 // auth, not this one). What this gate DOES guarantee is that the dangerous call is never reached
-// by accident, and never reached by a tool acting on the operator's earlier, unrelated instruction.
+// by accident, never reached by a tool acting on the operator's earlier, unrelated instruction, and
+// never reached by a request other than the one that was shown.
 func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -242,17 +284,36 @@ func (s *Server) handleConfirm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this route does not require confirmation", http.StatusBadRequest)
 		return
 	}
-	token, err := s.confirms.issue(pattern)
+	var desc confirmCall
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxConfirmDescriptionBytes)).Decode(&desc); err != nil {
+		msg := "describe the call this confirmation is for: " + `{"method":"POST","url":"` + pattern + `…","body":"<the exact request body>"}`
+		if !errors.Is(err, io.EOF) {
+			msg += " (" + err.Error() + ")"
+		}
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
+	call, err := desc.resolve(pattern)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	token, err := s.confirms.issue(pattern, call)
 	if err != nil {
 		http.Error(w, "could not mint a confirmation: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"confirm_with": ConfirmHeader,
-		"token":        token,
-		"route":        pattern,
-		"expires_in":   int(ConfirmTTL.Seconds()),
+	// A preview may carry request content; it is the caller's own request echoed back, and it is not
+	// a response anything should cache.
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(confirmMinted{
+		ConfirmWith: ConfirmHeader,
+		Token:       token,
+		Route:       pattern,
+		ExpiresIn:   int(ConfirmTTL.Seconds()),
+		Binding:     call.digest(),
+		Call:        call.preview(),
 	})
 }
 
@@ -316,6 +377,19 @@ func pathHasPrefix(path, pattern string) bool {
 // shape in this package.
 type confirmBody struct {
 	Token string `json:"token"`
+}
+
+// confirmMinted is a mint's answer: the token, and the call it is bound to as the server resolved it.
+type confirmMinted struct {
+	ConfirmWith string `json:"confirm_with"`
+	Token       string `json:"token"`
+	Route       string `json:"route"`
+	ExpiresIn   int    `json:"expires_in"`
+	// Binding is the digest the gate compares a spend against. A client that shows the preview and
+	// mints again later (say, after the operator took longer than the TTL to answer) compares the two
+	// digests to prove the second token authorises the request the operator saw.
+	Binding string         `json:"binding"`
+	Call    confirmPreview `json:"call"`
 }
 
 // randomHex is a 2n-character lowercase hex string from crypto/rand.

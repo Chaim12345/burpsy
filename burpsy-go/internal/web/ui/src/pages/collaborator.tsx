@@ -30,10 +30,10 @@ import {
   type CollaboratorHealthReport,
   type CollaboratorInteractionRow,
 } from "../lib/data.collab";
-import { api, copyToClipboard, downloadText } from "../lib/api";
+import { api, ConfirmationDeclined, copyToClipboard, downloadText } from "../lib/api";
 import { collaboratorToCSV, type CollaboratorExportRow } from "../lib/collaborator-csv";
 import { useApp } from "../lib/store";
-import { confirmDialog } from "../lib/dialogs";
+import { approveCall } from "../lib/dialogs";
 import { toast } from "sonner";
 
 function formatTime(ms: number): string {
@@ -167,20 +167,21 @@ export function CollaboratorPage(): JSX.Element {
                 size="small"
                 variant="outline"
                 disabled={unsetServer.isPending}
-                onClick={async () => {
+                onClick={() => {
                   const open = Boolean(s.domain);
-                  if (
-                    open &&
-                    !(await confirmDialog({
-                      title: "Stop using Collaborator?",
-                      description: `The channel on ${s.domain} is closed, and the ${s.payloads.length} payload address(es) minted from it will point at a server nobody polls — a late callback to them is lost.`,
-                      confirmLabel: "Stop using Collaborator",
-                      danger: true,
-                    }))
-                  )
-                    return;
+                  // With an open channel the operator is asked first, and shown the exact DELETE the
+                  // gate's token is bound to (approveCall; burpsy-react-ui-e0yq) — the request that
+                  // runs is the request they read.
+                  const approve = open
+                    ? approveCall({
+                        title: "Stop using Collaborator?",
+                        description: `The channel on ${s.domain} is closed, and the ${s.payloads.length} payload address(es) minted from it will point at a server nobody polls — a late callback to them is lost.`,
+                        confirmLabel: "Stop using Collaborator",
+                        danger: true,
+                      })
+                    : undefined;
                   unsetServer.mutate(
-                    { discardOpenChannel: open },
+                    { discardOpenChannel: open, approve },
                     {
                       onSuccess: (result) => {
                         health.reset();
@@ -190,8 +191,11 @@ export function CollaboratorPage(): JSX.Element {
                             : "Collaborator is off. Out-of-band checks will refuse until a server is set.",
                         );
                       },
-                      onError: (failure: unknown) =>
-                        toast.error(failure instanceof Error ? failure.message : "Turning Collaborator off failed"),
+                      onError: (failure: unknown) => {
+                        // A declined preview is a cancel: nothing was sent, and nothing failed.
+                        if (failure instanceof ConfirmationDeclined) return;
+                        toast.error(failure instanceof Error ? failure.message : "Turning Collaborator off failed");
+                      },
                     },
                   );
                 }}
