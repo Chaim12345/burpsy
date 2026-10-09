@@ -83,40 +83,45 @@ func (s *Server) handleRepeaterWsAttach(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	id := core.ExchangeID(*req.Socket)
-	if _, live := s.proxyServer.LiveWebSocket(id); !live {
+	conn, live := s.proxyServer.LiveWebSocket(id)
+	if !live {
 		http.Error(w, fmt.Sprintf("WebSocket #%d is not open through the proxy (it may have closed); clone it to open a new connection with the same handshake", id), http.StatusNotFound)
 		return
 	}
-	// The connection's target comes from its recorded handshake, the same row the operator picked
-	// it from — not from the request body, so an attach cannot be re-aimed.
+	// The scope decision is about the peer the relay actually dialled — the live connection's own
+	// host and port, from the relay's registry — not about what the stored row says, so the check
+	// and the socket the frame goes into cannot disagree. The scheme comes from the handshake row:
+	// the relay's plain-HTTP upgrade path does not carry a forced-TLS flag into the registry, and the
+	// row records the scheme the handshake really used. Nothing in the request body can re-aim it.
 	ex, err := s.store.GetExchange(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("WebSocket #%d's handshake exchange could not be read: %v", id, err), http.StatusNotFound)
 		return
 	}
-	if !s.scope.Contains(ex.Host, ex.Port, ex.Path, ex.TLS) {
-		http.Error(w, "refused: "+s.scope.Explain(ex.Host, ex.Port, ex.Path, ex.TLS), http.StatusForbidden)
+	if !s.scope.Contains(conn.Host, conn.Port, conn.Path, ex.TLS) {
+		http.Error(w, "refused: "+s.scope.Explain(conn.Host, conn.Port, conn.Path, ex.TLS), http.StatusForbidden)
 		return
 	}
 
-	msgID, err := s.proxyServer.InjectWsFrame(id, req.ToClient, opcode, []byte(req.Payload))
+	msgID, err := s.proxyServer.InjectWsFrame(r.Context(), id, req.ToClient, opcode, []byte(req.Payload))
 	method := "WS-ATTACH"
 	if req.ToClient {
 		method = "WS-ATTACH-TO-CLIENT"
 	}
 	if err != nil {
-		s.toolLog.Record(toollog.ToolRepeater, ex.Host, ex.Port, ex.TLS, method, ex.Path, 0, nil, 0, err.Error(), &ex.ID)
+		s.toolLog.Record(toollog.ToolRepeater, conn.Host, conn.Port, ex.TLS, method, conn.Path, 0, nil, 0, err.Error(), &ex.ID)
 		code := http.StatusBadGateway
 		switch {
 		case errors.Is(err, proxy.ErrWsNotLive):
 			code = http.StatusNotFound
-		case errors.Is(err, proxy.ErrWsDirectionEnded), errors.Is(err, proxy.ErrWsMidMessage), errors.Is(err, proxy.ErrWsBoundaryLost):
+		case errors.Is(err, proxy.ErrWsDirectionEnded), errors.Is(err, proxy.ErrWsMidMessage), errors.Is(err, proxy.ErrWsBoundaryLost),
+			errors.Is(err, proxy.ErrWsRelayStalled):
 			code = http.StatusConflict
 		}
 		http.Error(w, err.Error(), code)
 		return
 	}
-	s.toolLog.Record(toollog.ToolRepeater, ex.Host, ex.Port, ex.TLS, method, ex.Path, 0, nil, 0, "", &ex.ID)
+	s.toolLog.Record(toollog.ToolRepeater, conn.Host, conn.Port, ex.TLS, method, conn.Path, 0, nil, 0, "", &ex.ID)
 	direction := "client_to_server"
 	if req.ToClient {
 		direction = "server_to_client"

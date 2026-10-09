@@ -26,9 +26,10 @@ package proxy
 // one outcome this relay is built to never cause.
 //
 // So every write to a direction's sink goes through wsSink, which feeds the same reassembler the
-// capture path uses with exactly the bytes written, under one mutex. An injection takes that mutex
-// and writes only when the reassembler says the bytes so far end on a message boundary. If they do
-// not (a large frame half-relayed, a fragmented message open), it waits briefly for the boundary
+// capture path uses with exactly the bytes written, under one mutex. An injection only TRIES that
+// mutex — the relay may hold it across a write to a peer that has stopped reading — and writes
+// only when the reassembler says the bytes so far end on a message boundary. If they do not (a
+// large frame half-relayed, a fragmented message open, the relay stuck writing), it waits briefly
 // and then refuses with the reason rather than writing; if the reassembler has lost the frame
 // stream, it refuses outright, because a boundary we cannot locate is not one we can splice at.
 //
@@ -46,6 +47,7 @@ package proxy
 // browser never sent must not read as one it did.
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -200,6 +202,9 @@ var (
 	ErrWsBoundaryLost = errors.New("the relay has lost track of frame boundaries in that direction, so a frame cannot be inserted without corrupting the connection")
 	// ErrWsMidMessage: the direction stayed in the middle of a message for the whole wait.
 	ErrWsMidMessage = errors.New("that direction stayed in the middle of a message (a large or fragmented frame was still being relayed), so the frame was not inserted")
+	// ErrWsRelayStalled: the relay was blocked writing to that peer for the whole wait — the peer has
+	// stopped reading — so there was never a moment the frame could be inserted.
+	ErrWsRelayStalled = errors.New("the relay was blocked writing to that peer for the whole wait (the peer is not reading), so the frame was not inserted")
 )
 
 // wsInjectBoundaryWait bounds how long an injection waits for its direction to reach a message
@@ -210,7 +215,7 @@ var wsInjectBoundaryWait = 2 * time.Second
 
 // wsInjectWriteTimeout bounds the injected write itself, so a peer that stopped reading cannot
 // hold the sink's mutex — and with it the relay — indefinitely on the operator's behalf.
-const wsInjectWriteTimeout = 5 * time.Second
+var wsInjectWriteTimeout = 5 * time.Second
 
 // InjectWsFrame writes one operator-authored data frame into a live proxied connection, toward
 // the client when toClient is set and toward the server otherwise, and records it on the
@@ -218,7 +223,13 @@ const wsInjectWriteTimeout = 5 * time.Second
 //
 // The caller is responsible for authorisation (scope, confirmation); this only guarantees the
 // frame lands whole, on a message boundary, in a socket the relay holds.
-func (s *Server) InjectWsFrame(id core.ExchangeID, toClient bool, opcode core.WsOpcode, payload []byte) (core.MsgId, error) {
+//
+// It never waits on the relay: the relay holds the sink's lock across a write that has no deadline
+// (a write to a peer that has stopped reading blocks until the peer reads), so the lock is only
+// ever TRIED here, and a held lock counts as "not at a boundary yet". The wait is therefore bounded
+// by wsInjectBoundaryWait and by ctx, whichever ends first — a refused injection is refused at the
+// deadline, never queued to go out later after the operator has been told it did not.
+func (s *Server) InjectWsFrame(ctx context.Context, id core.ExchangeID, toClient bool, opcode core.WsOpcode, payload []byte) (core.MsgId, error) {
 	if opcode != core.WsOpcodeText && opcode != core.WsOpcodeBinary {
 		return 0, fmt.Errorf("only text and binary frames can be sent, not %s", opcode.Name())
 	}
@@ -241,7 +252,17 @@ func (s *Server) InjectWsFrame(id core.ExchangeID, toClient bool, opcode core.Ws
 
 	deadline := time.Now().Add(wsInjectBoundaryWait)
 	for {
-		sink.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if !sink.mu.TryLock() {
+			// The relay is mid-write. Treated exactly as "not at a boundary": wait, within the bound.
+			if time.Now().After(deadline) {
+				return 0, ErrWsRelayStalled
+			}
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
 		switch {
 		case sink.ended:
 			sink.mu.Unlock()
@@ -254,14 +275,21 @@ func (s *Server) InjectWsFrame(id core.ExchangeID, toClient bool, opcode core.Ws
 			_, werr := sink.dst.Write(frame)
 			_ = sink.dst.SetWriteDeadline(time.Time{})
 			if werr != nil {
-				// A partial write leaves the peer holding part of a frame; the stream position is
-				// unknowable from here, so nothing else may be spliced into it.
+				// A failed write may have put part of the frame on the wire, and the relay would then
+				// append the next relayed bytes after half a frame — the peer would read them as this
+				// frame's payload. There is no way to repair that stream, so the connection is ended
+				// on both sides rather than left corrupt: the peers see a closed socket, which they
+				// handle, instead of a stream that silently means something else.
 				sink.lost = true
 				sink.mu.Unlock()
-				return 0, fmt.Errorf("write the frame: %w", werr)
+				_ = c.toServer.dst.Close()
+				_ = c.toClient.dst.Close()
+				return 0, fmt.Errorf("write the frame (the connection was closed, since a partly written frame cannot be repaired): %w", werr)
 			}
-			// Recorded while the sink is still held, so the injected frame sits in history between
-			// the relayed frames it actually went out between.
+			// Recorded once the frame is on the wire. Its position in history relative to the relayed
+			// frames around it is approximate: the relay records its own frames (drainWs) after it
+			// releases the sink, so a relayed frame written just before this one can be recorded just
+			// after it. The wire order is exact; the history order is the order of recording.
 			msgID := s.config.store.AddWsMessage(&core.WsMessage{
 				Exchange:   c.exchange,
 				FromClient: !toClient,
