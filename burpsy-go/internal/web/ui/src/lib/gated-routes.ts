@@ -69,6 +69,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/intercept/newline-correction": false,
  "/api/intercept/rules/": false,
  "/api/intercept/startup": false,
+ "/api/intruder/again": true,
  "/api/intruder/attacks": false,
  "/api/intruder/attacks/": false,
  "/api/intruder/payload-files": false,

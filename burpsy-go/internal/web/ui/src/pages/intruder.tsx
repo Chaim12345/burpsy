@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, Search, Square, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRightLeft, Combine, Copy, Crosshair, Download, FileSearch, Pause, Play, Plus, Repeat2, RotateCcw, RotateCw, Search, Square, Trash2, X, Zap } from "lucide-react";
 import { toast } from "sonner";
-import { ApiError, api, copyToClipboard, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
+import { ApiError, api, copyToClipboard, json, downloadText, formatBytes, formatCount, formatDuration, statusTone } from "../lib/api";
 import { fetchRaw } from "../lib/actions";
 import {
   intruderExportFilenames,
@@ -19,6 +19,11 @@ import {
   useWordlists,
 } from "../lib/data.tools";
 import { usePools } from "../lib/data.pools";
+import { useCollaboratorInteractions } from "../lib/data.collab";
+import { hasCollaboratorAttempts, interactionsByAttempt } from "../lib/intruder-interactions";
+import { IntruderInteractionsDialog } from "../ui/intruder-interactions-dialog";
+import { IntruderTabStrip } from "../ui/intruder-tab-strip";
+import { runOf } from "../lib/intruder-tabs";
 import { useHistoryExtractors, useMessageExtractValues } from "../lib/data.extractors";
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { useMessage } from "../lib/data";
@@ -570,6 +575,15 @@ function AttackResult({
     () => intruderPayloadResolver({ report, sets, examples, snapshot }),
     [examples, report.kind, report.planned, sets, snapshot],
   );
+  // Burp's "Interactions" column (nib6): polled only while the attack carried Collaborator
+  // addresses, so a callback that lands after the attack still reaches its row.
+  const collabAttack = hasCollaboratorAttempts(report.attempts);
+  const collabRows = useCollaboratorInteractions({ enabled: collabAttack });
+  const interactions = useMemo(
+    () => interactionsByAttempt(report.attempts, collabRows.data ?? []),
+    [report.attempts, collabRows.data],
+  );
+  const [interactionsFor, setInteractionsFor] = useState<number | null>(null);
   /**
    * A stopped attack describes a *prefix* of its payload sets, and the denominator has to say so.
    *
@@ -824,6 +838,27 @@ function AttackResult({
       cell: ({ row }) => <PayloadCell parts={payloadsAt(row.original.ordinal)} ordinal={row.original.ordinal} />,
     },
     {
+      // Burp's anomaly ranking (pglp): sort ascending and the responses least like the rest come
+      // first. 0 (nothing to compare) and an older server's missing field sort last.
+      accessorFn: (attempt) => (attempt.anomaly_rank ? attempt.anomaly_rank : undefined),
+      id: "anomaly_rank",
+      header: "Anomaly rank",
+      sortUndefined: "last",
+      // One click shows rank 1 first: TanStack starts a numeric column descending.
+      sortDescFirst: false,
+      cell: ({ row }) => {
+        const rank = row.original.anomaly_rank;
+        if (!rank) return <span className="cell-dim">—</span>;
+        return rank === 1 && (view.report.variant_attributes?.length ?? 0) > 0 ? (
+          <span className="cell-num">
+            <Badge tone="warn">{rank}</Badge>
+          </span>
+        ) : (
+          <span className="cell-num">{rank}</span>
+        );
+      },
+    },
+    {
       accessorFn: (attempt) => attempt.status ?? undefined,
       id: "status",
       header: "Status",
@@ -894,6 +929,30 @@ function AttackResult({
         return v !== undefined && v > 0 ? <Badge tone="info">{v}</Badge> : <span className="cell-dim">0</span>;
       },
     })),
+    ...(collabAttack
+      ? [
+          {
+            accessorFn: (attempt: Attempt) => interactions.get(attempt.ordinal)?.length,
+            id: "interactions",
+            header: "Interactions",
+            sortUndefined: "last" as const,
+            cell: ({ row }: { row: { original: Attempt } }) => {
+              const hits = interactions.get(row.original.ordinal);
+              if (hits === undefined) return <span className="cell-dim">—</span>;
+              return (
+                <button
+                  type="button"
+                  className="button button-ghost button-sm"
+                  aria-label={`Collaborator interactions for attempt ${row.original.ordinal}: ${hits.length}`}
+                  onClick={() => setInteractionsFor(row.original.ordinal)}
+                >
+                  {hits.length > 0 ? <Badge tone="bad">{hits.length}</Badge> : <span className="cell-dim">0</span>}
+                </button>
+              );
+            },
+          },
+        ]
+      : []),
     {
       accessorFn: (attempt) => attempt.error ?? undefined,
       id: "error",
@@ -1199,6 +1258,13 @@ function AttackResult({
             shown={attemptRows.length}
             total={report.attempts.length}
           />
+          {report.variant_attributes ? (
+            <p className="cell-dim" data-testid="variant-attributes">
+              {report.variant_attributes.length
+                ? `Anomaly rank scores the attributes that varied: ${report.variant_attributes.map((a) => a.replace(/_/g, " ")).join(", ")}.`
+                : "Every response looked alike: no attribute varied, so every row shares anomaly rank 1."}
+            </p>
+          ) : null}
           {attemptRows.length ? (
             <SortableTable
               docTopic="intruder"
@@ -1212,6 +1278,14 @@ function AttackResult({
           ) : (
             <p className="cell-dim">No attempts match the filter — all {report.attempts.length} are hidden.</p>
           )}
+          {collabAttack ? (
+            <IntruderInteractionsDialog
+              ordinal={interactionsFor}
+              addresses={report.attempts.find((attempt) => attempt.ordinal === interactionsFor)?.collaborator_payloads ?? []}
+              rows={interactionsFor === null ? [] : (interactions.get(interactionsFor) ?? [])}
+              onClose={() => setInteractionsFor(null)}
+            />
+          ) : null}
         </Card>
       ) : null}
     </>
@@ -1234,6 +1308,11 @@ export function IntruderPage(): JSX.Element {
   const setStoredRun = useApp((state) => state.setIntruderRun);
   const tab = useApp((state) => state.intruderTab);
   const setTab = useApp((state) => state.setIntruderTab);
+  // Attack tabs (9bv2): the fields above are the active tab's. A report is written back to the tab
+  // that launched its attack, which need not be the one on screen when it finishes.
+  const openAttackTab = useApp((state) => state.openIntruderTab);
+  const setRunFor = useApp((state) => state.setIntruderRunFor);
+  const setTabRunning = useApp((state) => state.setIntruderTabRunning);
 
   // The menubar's Intruder menu talks to this page rather than launching attacks of its own: a
   // second copy of `onRun` in app.tsx would be a second launcher, and the two would drift. The menu
@@ -1461,9 +1540,54 @@ export function IntruderPage(): JSX.Element {
       }),
     [resultMenu, storedRun],
   );
+  // Burp's "Request item again" (burpsy-react-ui-2rw7): the attempt's stored request is re-sent
+  // and its row takes the new result, marked as requested again. The original attack's grep and
+  // capture settings are not re-applied, so the row's grep columns are cleared rather than kept stale.
+  const requestAgain = useCallback(
+    (attempt: Attempt) => {
+      if (attempt.request_id === null) return;
+      // The row belongs to the tab on screen now; the answer is written there even if the operator
+      // switches tabs before it arrives.
+      const againTab = useApp.getState().activeIntruderTabId;
+      void api<{ rows: { status: number | null; response_len: number; duration_ms: number; request_id: number | null; response_id: number | null; error: string | null }[] }>(
+        "/api/intruder/again",
+        json("POST", { target, request_ids: [attempt.request_id] }),
+      ).then(
+        ({ rows }) => {
+          const row = rows[0];
+          if (!row) return;
+          if (row.error) {
+            toast.error(`Attempt ${attempt.ordinal} was not requested again: ${row.error}`);
+            return;
+          }
+          const current = runOf(useApp.getState(), againTab);
+          const view = current?.view;
+          if (!current || !view) return;
+          setRunFor(againTab, {
+            ...current,
+            view: {
+              ...view,
+              report: {
+                ...view.report,
+                attempts: view.report.attempts.map((a) =>
+                  a.ordinal === attempt.ordinal
+                    ? // The anomaly rank described the response this replaces; it is not recomputed for one row.
+                      { ...a, status: row.status, response_len: row.response_len, duration_ms: row.duration_ms, request_id: row.request_id, response_id: row.response_id, error: null, grep_matched: null, grep_extract: null, requested_again: true, anomaly_rank: undefined }
+                    : a,
+                ),
+              },
+            },
+          });
+          toast.success(`Attempt ${attempt.ordinal} requested again: ${row.status ?? "no status"}`);
+        },
+        (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The attempt could not be requested again"),
+      );
+    },
+    [target, setRunFor],
+  );
   const attemptMenu = useCallback(
-    (attempt: Attempt) =>
-      resultMenu({
+    (attempt: Attempt): MenuGroup[] => [
+      ...resultMenu({
         requestId: attempt.request_id,
         responseId: attempt.response_id,
         label: `Intruder attempt ${attempt.ordinal}`,
@@ -1476,7 +1600,24 @@ export function IntruderPage(): JSX.Element {
           "No response was stored for this row: only the attempt that opened its bucket keeps one. Use the bucket's row.",
         ),
       }),
-    [resultMenu, storedRun],
+      {
+        id: "again",
+        actions: [
+          {
+            id: "request-again",
+            label: "Request item again",
+            icon: RotateCw,
+            disabled: attempt.request_id === null,
+            hint:
+              attempt.request_id === null
+                ? "No request was stored for this attempt, so there are no bytes to send again."
+                : "Re-sends this attempt's exact request through the scope gate; the row takes the new result.",
+            onSelect: () => requestAgain(attempt),
+          },
+        ],
+      },
+    ],
+    [resultMenu, storedRun, requestAgain],
   );
 
   // The attacks list reports `target` as bare host:port (the server's targetParts collapses the URL
@@ -1540,13 +1681,16 @@ export function IntruderPage(): JSX.Element {
     );
   };
 
-  // A send-to handoff from History or Repeater arrives through the store. It replaces only what is
-  // tied to the specific request — the base message, the target, the discovered positions — and the
-  // report, which belongs to the request that produced it. Payload sets, processing rules, grep and
-  // limits are kept: they are the operator's typed work, and a send-to is not consent to discard it.
-  // "New attack" in the header is the deliberate full reset, and it asks first.
+  // A send-to handoff from History or Repeater arrives through the store. Burp: "When you send a
+  // request to Burp Intruder, this creates a new attack tab" (9bv2) — so a tab that already holds an
+  // attack keeps it, and the request opens a tab of its own. A tab with no request and no report is
+  // a placeholder and takes the request itself. Within the receiving tab only what is tied to the
+  // specific request is replaced — the base message, the target, the discovered positions — and the
+  // report, which belongs to the request that produced it.
   useEffect(() => {
     if (!seed) return;
+    const live = useApp.getState();
+    if (live.intruder.msgId !== "" || live.intruderRun !== null) openAttackTab();
     setConfig((current) => ({
       ...current,
       msgId: seed.msgId !== null ? String(seed.msgId) : current.msgId,
@@ -1558,7 +1702,7 @@ export function IntruderPage(): JSX.Element {
     }));
     setStoredRun(null);
     setIntruderSeed(null);
-  }, [seed, setConfig, setIntruderSeed, setStoredRun]);
+  }, [seed, setConfig, setIntruderSeed, setStoredRun, openAttackTab]);
 
   // Manual markers take a payload slot exactly like a discovered point does — Burp counts every
   // mark on the request, however it was made.
@@ -1796,6 +1940,7 @@ export function IntruderPage(): JSX.Element {
   const [autoPauseError, setAutoPauseError] = useState<string | null>(null);
 
   const onRun = async () => {
+    const launchTab = useApp.getState().activeIntruderTabId;
     setStoredRun(null);
     setAutoPauseError(null);
     setMyTaskId(null);
@@ -1996,34 +2141,48 @@ export function IntruderPage(): JSX.Element {
     } else {
       body.payload_sets = payloadTexts.map(payloadList);
     }
-    run.mutate(body as unknown as IntruderRunRequest, {
-      onSuccess: (payload) => {
-        // Naming a mode always selects the full report shape, but stay defensive:
-        // an older server could still answer with the flat legacy array.
-        if (payload && typeof payload === "object" && "report" in payload) {
-          const view = payload as RunView;
-          setStoredRun({ view, legacy: null, snapshot: snapshotAtLaunch });
-          setTab("results");
-          toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}`);
-        } else {
-          setStoredRun({ view: null, legacy: payload, snapshot: snapshotAtLaunch });
-          setTab("results");
-          toast.success("Attack finished");
-        }
-      },
-      onError: (error) => {
-        // A launch refused because of auto-pause is also shown next to the expressions rather than
-        // only here. The server compiles them with RE2 and answers 400 for one that does not
-        // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
-        // nothing is the wrong place for it: the operator's next action is to edit the expression.
-        // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
-        // form, and blaming the expressions would send the operator to the wrong control.
-        if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
-          setAutoPauseError(error.message);
-        }
-        toast.error(error instanceof Error ? error.message : String(error));
-      },
-    });
+    setTabRunning(launchTab, true);
+    // mutateAsync, not mutate with per-call callbacks: those are skipped once this page unmounts, and
+    // leaving Intruder mid-attack would then lose the report and leave its tab marked running for
+    // the rest of the session. The promise settles whether or not the page is mounted, and every
+    // write below goes to the store.
+    void run
+      .mutateAsync(body as unknown as IntruderRunRequest)
+      .then(
+        (payload) => {
+          // The report goes to the tab that launched the attack. If the operator has moved to another
+          // tab meanwhile, it waits there, and the toast says where.
+          const state = useApp.getState();
+          const here = state.activeIntruderTabId === launchTab;
+          const tabName = state.intruderTabs.find((t) => t.id === launchTab)?.name ?? launchTab;
+          const where = here ? "" : ` — results are in attack tab ${tabName}`;
+          // Naming a mode always selects the full report shape, but stay defensive:
+          // an older server could still answer with the flat legacy array.
+          if (payload && typeof payload === "object" && "report" in payload) {
+            const view = payload as RunView;
+            setRunFor(launchTab, { view, legacy: null, snapshot: snapshotAtLaunch });
+            if (here) setTab("results");
+            toast.success(`${formatCount(view.report.sent)} requests sent in ${formatDuration(view.report.elapsed_ms)}${where}`);
+          } else {
+            setRunFor(launchTab, { view: null, legacy: payload, snapshot: snapshotAtLaunch });
+            if (here) setTab("results");
+            toast.success(`Attack finished${where}`);
+          }
+        },
+        (error: unknown) => {
+          // A launch refused because of auto-pause is also shown next to the expressions rather than
+          // only here. The server compiles them with RE2 and answers 400 for one that does not
+          // compile (api_tools.go's handleIntruderRun), and a toast after a launch that visibly did
+          // nothing is the wrong place for it: the operator's next action is to edit the expression.
+          // Only an auto-pause refusal is re-homed — every other 400 belongs to something else in the
+          // form, and blaming the expressions would send the operator to the wrong control.
+          if (error instanceof ApiError && error.status === 400 && /auto-pause|expression/i.test(error.body)) {
+            setAutoPauseError(error.message);
+          }
+          toast.error(error instanceof Error ? error.message : String(error));
+        },
+      )
+      .finally(() => setTabRunning(launchTab, false));
   };
 
   // The payload upload (016): the operator's wordlist goes up as the request body, and the
@@ -2188,6 +2347,7 @@ export function IntruderPage(): JSX.Element {
             </>
           }
         />
+        <IntruderTabStrip />
 
         {overBudget ? (
           <div className="notice notice-warn" style={{ marginTop: "var(--s2)" }}>

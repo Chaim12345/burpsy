@@ -459,6 +459,12 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskLocal,
 		summary: "read or set the startup interception preference: on, off, or restore-last-state",
 	},
+	"/api/intruder/again": {
+		// Burp's "Request item again" (burpsy-react-ui-2rw7): re-sends stored attempt requests to the
+		// target, each through the scope gate. riskAttack: a batch of up to 500 requests.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "re-send selected Intruder attempts' exact stored requests and answer replacement result rows",
+	},
 	"/api/intruder/attacks": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "every intruder attack this process is running, with its status; sends nothing",

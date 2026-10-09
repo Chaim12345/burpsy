@@ -68,6 +68,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/intercept/newline-correction": "riskLocal",
  "/api/intercept/rules/": "riskLocal",
  "/api/intercept/startup": "riskLocal",
+ "/api/intruder/again": "riskAttack",
  "/api/intruder/attacks": "riskRead",
  "/api/intruder/attacks/": "riskLocal",
  "/api/intruder/payload-files": "riskLocal",

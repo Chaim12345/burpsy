@@ -61,9 +61,10 @@ export function useCollaboratorStatus(): ReturnType<typeof useQuery<Collaborator
   });
 }
 
-export function useCollaboratorInteractions() {
+export function useCollaboratorInteractions(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: keys.collaboratorInteractions,
+    enabled: options.enabled ?? true,
     queryFn: ({ signal }) =>
       api<{ rows: CollaboratorInteractionRow[]; interactions: CollaboratorStatus["interactions"]; configured: boolean; state: string; hint?: string }>(
         "/api/collaborator/interactions",

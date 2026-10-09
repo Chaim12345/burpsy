@@ -127,6 +127,8 @@ export interface ErrorBucket {
 
 export interface Attempt {
   ordinal: number;
+  /** Set by the console when "Request item again" replaced this row's result (2rw7). */
+  requested_again?: boolean;
   status: number | null;
   response_len: number;
   duration_ms: number;
@@ -163,6 +165,13 @@ export interface Attempt {
    *  any other failure (connection refused, TLS failure, a guard refusal). Burp lists Timeout
    *  as its own column rather than folding it into Error. */
   timeout: boolean;
+  /** This row's place in the attack's anomaly ranking (pglp): 1 is the most unusual response, and
+   *  rows with equal scores share a rank. 0 when the attack had fewer than two rows to compare;
+   *  absent from an older server. */
+  anomaly_rank?: number;
+  /** The Collaborator addresses this attempt sent (nib6) — what ties a later out-of-band
+   *  interaction back to this row. Absent when the attack had no Collaborator payload set. */
+  collaborator_payloads?: string[];
 }
 
 /** How an attack ended. "paused" only appears on a report built from a still-live attack. */
@@ -204,6 +213,10 @@ export interface AttackReport {
   /** The Grep - Match expressions as typed (irt), in list order — the results-table headers for
    *  the per-expression count columns. Present only when a list ran. */
   grep_match_labels?: string[];
+  /** The response attributes that varied across the attack's rows (pglp, Burp's
+   *  variantAttributes) — the only ones the anomaly ranking scores. `[]` when nothing varied;
+   *  absent from an older server. */
+  variant_attributes?: string[];
   /** How many retry sends the attack made (n39) — Burp's error-handling count. Zero unless the
    *  attack configured retries. */
   retries_used: number;
