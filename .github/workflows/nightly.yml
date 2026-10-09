@@ -1,0 +1,96 @@
+name: Nightly
+
+# What the per-merge gate (go.yml) does not run, run once a day against master's tip. Both jobs were
+# listed in AGENTS.md as part of "the gate" while nothing ran them; they live here so that claim is
+# true in a weaker, stated form: nightly, not per merge. A red run here is a defect on master to
+# file and fix, not a reason to block a merge that its own checks passed.
+#
+# Not required by branch protection: a scheduled run is attached to no pull request.
+
+on:
+  schedule:
+    # 03:17 UTC. Off the hour on purpose: scheduled runs at :00 are the ones GitHub delays or drops
+    # under load.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  # e2e-go.sh builds the real binary and drives it end to end against a local Python target on
+  # 127.0.0.1 (ports 18180/18181/18199): proxy capture, history, audit, repeater, intruder,
+  # sequencer, the cookie jar, stats. It needs only go, python3 and curl, all on the runner. It
+  # reaches no host but loopback.
+  e2e-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: burpsy-go/go.mod
+          cache-dependency-path: burpsy-go/go.sum
+
+      # NO_PROXY is cleared because curl applies it even to an explicit `-x` proxy: with 127.0.0.1
+      # in NO_PROXY (as some environments set it) the suite's proxied request goes direct, nothing
+      # is captured, and four history assertions fail for a reason that is not the product's.
+      - name: e2e-go.sh
+        run: env -u NO_PROXY -u no_proxy ./e2e-go.sh
+
+      - name: burpsy log (on failure)
+        if: failure()
+        run: |
+          tail -100 /tmp/burpsy-go.log || true
+          cat /tmp/burpsy-go-e2e-build.log 2>/dev/null || true
+
+  # The race detector beyond internal/web (which go.yml's gate already runs under -race on every
+  # merge). Every package here passed `go test -race -count=1` on 2026-10-09 (locally, without
+  # Chrome, so the browser-driving tests there skipped; on this runner Chrome is present and they run).
+  #
+  # Excluded, and why — not "clean", just not shown clean yet:
+  #   internal/web      — gated per merge in go.yml.
+  #   internal/scanner  — ~8 minutes WITHOUT -race and drives Chrome; under -race a multiple of that.
+  #   internal/extscan  — needs the pinned ffuf/nuclei/interactsh install go.yml performs.
+  # Widen by deleting a line from EXCLUDE once that package has been shown race-clean.
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: burpsy-go
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: burpsy-go/go.mod
+          cache-dependency-path: burpsy-go/go.sum
+
+      # internal/report validates its Burp-XML export with xmllint and skips that test without it.
+      - name: Install xmllint
+        run: |
+          if ! command -v xmllint >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+          fi
+          xmllint --version
+
+      - name: go test -race (module minus the exclusions)
+        env:
+          EXCLUDE: |
+            github.com/burpsy-go/burpsy/internal/web
+            github.com/burpsy-go/burpsy/internal/scanner
+            github.com/burpsy-go/burpsy/internal/extscan
+        run: |
+          set -euo pipefail
+          mapfile -t pkgs < <(go list ./... | grep -vxF -f <(printf '%s\n' "$EXCLUDE" | sed '/^$/d'))
+          echo "racing ${#pkgs[@]} packages; excluded:"
+          printf '%s\n' "$EXCLUDE" | sed '/^$/d; s/^/  /'
+          go test -race -count=1 -timeout 3000s "${pkgs[@]}"

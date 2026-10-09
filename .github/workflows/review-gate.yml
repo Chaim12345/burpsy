@@ -1,0 +1,65 @@
+name: Review gate
+
+# Risk-class changes need an independent reviewer (docs/DEVELOPMENT-PROCESS.md section 7): a fresh
+# agent with the diff and the risk list, not the author. The reviewer's sign-off is the PR label
+# `agent-reviewed`. The `review-gate` check fails while a PR touches a risk path without it, fails
+# again when a labelled PR is pushed new risk-path changes (the label vouched for an older diff),
+# and fails on any change to the frozen crates/ tree, label or not. The path list and the logic are
+# in scripts/review-gate.sh, itself a risk path.
+#
+# A workflow of its own, not a job in go.yml, because it has to re-run on labeled/unlabeled: in
+# go.yml those events would also restart the half-hour gate. The check is named by the job, so
+# branch protection asks for `review-gate` either way.
+#
+# pull_request (not pull_request_target): the job reads only the repository and the event payload,
+# needs no secrets and no write access, and so never runs a PR's code with elevated rights.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer event for the same PR supersedes the older one's verdict, so cancelling it loses nothing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  review-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # On a push to master (or a manual run) there is no PR and no label to check: what landed
+      # was gated by its PR's run. The job still runs and passes so the check exists on master's
+      # commits too.
+      #
+      # For a pull request the checkout is GitHub's merge commit: HEAD^1 is the base branch it
+      # merges into, so HEAD^1..HEAD is exactly what the PR would change. On `synchronize` the
+      # payload's before/after are the PR head before and after the push.
+      - name: review gate
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABELED: ${{ contains(github.event.pull_request.labels.*.name, 'agent-reviewed') }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "review-gate: $EVENT event — no pull request to gate; passing."
+            exit 0
+          fi
+          args=(HEAD^1 HEAD)
+          if [ "$LABELED" = "true" ]; then args+=(--labeled); fi
+          if [ "$ACTION" = "synchronize" ]; then args+=(--pushed "$BEFORE" "$AFTER"); fi
+          scripts/review-gate.sh "${args[@]}"
