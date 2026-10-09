@@ -2787,6 +2787,22 @@ tbody td {
   font-size: var(--fs-md);
 }
 
+/* With the Source column (burpsy-react-ui-lxqq): the source sits between the text and the time,
+   bounded so a long crawl target cannot squeeze the detail out. */
+.event-row-sourced {
+  grid-template-columns: 8px minmax(0, 1fr) minmax(0, var(--w-sm)) auto;
+}
+
+.event-source {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.event-filters {
+  margin-bottom: var(--s2);
+}
+
 .event-row p {
   color: var(--muted);
   font-size: var(--fs-sm);

@@ -322,9 +322,16 @@ export interface ActivityRow {
 }
 
 export interface ToolEvent {
+ /** The log's own dense id (dash.Event.ID). */
+ id?: number;
  kind: string;
+ /** "info" | "warn" | "error" — the three levels dash.Severity has; an unrecognised name the
+  *  server read back is already mapped to "warn" there. */
  severity: string;
  detail: string;
+ /** The registry task the event is about; absent (Go omitempty on 0) when it is about none, e.g.
+  *  a scope edit or live audit being switched on (internal/dash/events.go Event.TaskID). */
+ task_id?: number;
  at_ms: number;
 }
 
