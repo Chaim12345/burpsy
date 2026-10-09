@@ -277,6 +277,14 @@ type Server struct {
 	// rebuilt at startup, reported by the GET rather than dropped. See
 	// WithNetAuthRestoreNotes.
 	netAuthRestoreNotes []string
+	// recordedLogins is the recorded login sequences store (burpsy-react-ui-xhtk), built lazily by
+	// recordedLoginStore() and restored from the project on first use. loginBrowser is the headless
+	// browser a recorded login replays in when no -dom engine is configured: Burp replays recorded
+	// logins in its browser "even if you have not selected Use Burp's browser for crawl and audit".
+	recordedLogins     *recordedLoginStore
+	recordedLoginsOnce sync.Once
+	loginBrowserMu     sync.Mutex
+	loginBrowser       scanner.BrowserProvider
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -605,6 +613,9 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreAuthzIdentities(p)
 		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
 		s.restoreSecretDetection(p)
+		// And the recorded login sequences, which carry credentials and must never cross from one
+		// project into another (burpsy-react-ui-xhtk).
+		s.restoreRecordedLogins(p)
 	}
 	return s
 }
@@ -1247,6 +1258,12 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/sitemap/record", s.handleSitemapRecord)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	// Recorded login sequences (burpsy-react-ui-xhtk): the library, and Burp's "Replay".
+	// The live crawl view (burpsy-react-ui-1l3x): what the crawl is fetching now, its recent fetches,
+	// and a throttled frame from the render pass.
+	s.mux.HandleFunc("/api/crawl/live", s.handleCrawlLive)
+	s.mux.HandleFunc("/api/crawl/logins", s.handleRecordedLogins)
+	s.mux.HandleFunc("/api/crawl/logins/replay", s.handleRecordedLoginReplay)
 	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is
 	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
 	// api_apiscan.go's package comment for why there is one read door and not two.

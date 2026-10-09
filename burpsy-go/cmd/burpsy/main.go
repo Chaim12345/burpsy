@@ -900,6 +900,9 @@ func main() {
 	if err := activeScanner.CloseOOBChannel(); err != nil {
 		logger.Error("Failed to close the out-of-band channel", zap.Error(err))
 	}
+	// The headless browser a recorded login replays in when no -dom engine is configured
+	// (burpsy-react-ui-xhtk) is this process's child; reap it rather than leave a Chrome behind.
+	webServer.CloseLoginBrowser()
 	// Seal the capture's tail. Sync rather than Close: handlers may still be
 	// unwinding, and Close would unmap segments they are reading spans out of.
 	if err := store.Sync(); err != nil {

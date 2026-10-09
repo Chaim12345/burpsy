@@ -5258,6 +5258,63 @@ tbody td {
   color: var(--text);
 }
 
+/* Recorded login sequences (burpsy-react-ui-xhtk): the step editor's per-kind inputs wrap in the
+   Details cell, and the replay's final-page screenshot is shown at its own size up to the panel. */
+.step-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  align-items: center;
+}
+
+.step-fields > .input,
+.step-fields > input,
+.step-fields > select {
+  min-width: 12rem;
+  flex: 1 1 12rem;
+}
+
+.replay-shot {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+
+.replay-blocked {
+  margin: var(--s1) 0 0;
+  padding-left: var(--s3);
+  max-height: 10rem;
+  overflow: auto;
+}
+
+.login-steps-table td:first-child,
+.login-steps-table th:first-child {
+  width: 3ch;
+}
+
+.login-steps-table td:nth-child(3) {
+  width: 55%;
+}
+
+/* The live crawl view (burpsy-react-ui-1l3x): the frame is shown at its own size up to the pane. */
+.crawl-live-frame {
+  margin: 0;
+}
+
+.crawl-live-frame img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+
+.crawl-live-preview {
+  display: block;
+  width: 100%;
+  height: 24rem;
+}
+
+.crawl-live-current code {
+  word-break: break-all;
+}
+
 /* An editable editor's Add row under a Headers/Query/Body/Cookies tab (11r8). */
 .typed-add {
   display: flex;

@@ -116,6 +116,9 @@ const (
 	// crawler names its events rather than inventing spellings the UI has never seen.
 	EventCrawlBounded = "crawl.bounded"
 	EventCrawlRefused = "crawl.refused"
+	// EventCrawlLogin is a crawl's recorded-login replay starting, succeeding or failing — Burp's
+	// RECORDED_SEQUENCE_STARTED / RECORDED_SEQUENCE_ERROR crawl events (burpsy-react-ui-xhtk).
+	EventCrawlLogin = "crawl.login"
 )
 
 // Event is one thing the tool did.

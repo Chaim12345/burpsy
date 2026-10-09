@@ -2054,6 +2054,97 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Crawler B (burpsy-react-ui-re16.2, 2026-10-08)
+
+### Recorded login sequences (burpsy-react-ui-xhtk) — built, with these differences from Burp
+
+- **Burp:** `scanner/authenticated-scanning/recorded-login-sequences.html` ("a JSON-based 'script' that
+  you can import"; "TOTP multi-factor authentication. WebAuthn."), `desktop/running-scans/configuring-app-logins/adding-recorded-logins.html`
+  ("Replay existing logins", "See as JSON"), the editor's six event kinds (Zf50: Click, Type, TOTP,
+  Key press, Go to, Wait), the TOTP generator (Zxf1, validated by Zhfe against `^[A-Za-z2-7]+=*$`) and
+  the status check (Zg5_/Zrs3: URL + confirmation text, "Required when using TOTP steps").
+- **burpsy:** `internal/session/recorded_login.go` (model, Burp Login Recorder and Chrome DevTools
+  Recorder importers, redacted views), `internal/session/totp.go` (RFC 6238, SHA1/256/512),
+  `internal/domexec/session.go` + `login.go` (isolated, scope-gated replay), `internal/crawler/recorded_login.go`
+  (login before the first fetch, session jar on every request, Set-Cookie absorption, re-login on detected
+  expiry within `max_relogins`, `Report.login`, stop `login-failed`), routes `/api/crawl/logins` and
+  `/api/crawl/logins/replay`, `recorded_login` on `POST /api/crawl`, and the New scan dialog's
+  "Application login" picker and library (`ui/recorded-logins.tsx`).
+- **Difference — out-of-scope hosts during the login are REFUSED.** Burp: "When running a recorded login
+  sequence, Burp Scanner can temporarily follow any out-of-scope links that are necessary to perform the
+  login sequence." burpsy enforces scope on every request the replay browser sends — Fetch interception on
+  the full URL in the tab, plus a per-browser-context proxy on the authority that also covers out-of-process
+  iframes, popups and workers (`TestTheSessionProxyStopsWhatAnOutOfProcessFrameLoads` proved Fetch alone
+  misses those). An SSO identity provider must be added to scope; every refused request is listed in the
+  replay result and in `report.login.blocked`, so the failure is named rather than mysterious.
+- **Difference — an empty scope refuses the replay** (409 on Replay, 400 on crawl start). In this build an
+  empty scope means "everything"; a browser that follows redirects on its own is not run against that.
+- **Declined — WebAuthn / passkeys.** Burp captures passkeys during recording and replays them through a
+  virtual authenticator. burpsy imports no passkey material and offers no WebAuthn step; a recorded script
+  whose login needs a passkey replays up to that point and fails at it, named. Re-open with CDP
+  `WebAuthn.addVirtualAuthenticator` + `addCredential` and a credential-import format.
+- **Declined — recording inside burpsy.** Burp's own browser has the Login Recorder extension
+  pre-installed. burpsy imports the script that extension (installed in any Chrome) copies to the
+  clipboard, plus Chrome DevTools Recorder exports, and provides the step editor, "See as JSON" and Replay.
+  There is no in-console recorder. Re-open: inject a recorder over CDP into the operator browser
+  (`internal/browser`) — `Runtime.addBinding` plus a capture script.
+- **Import fidelity:** every recorded event that does not become a step is listed in the import reply
+  (`notes`): `scroll`, `rightClick`, `userNavigate`/`clientSideRedirect` (re-happen on replay), iframe
+  and shadow-DOM elements (not replayable here), new-tab actions (the replay runs in one tab). A typed
+  6-8 digit code into a one-time-code-looking field is flagged as a probable TOTP step, as Burp DAST does.
+- **Not captured to history:** the replay's own traffic goes from the headless browser to the target,
+  scope-gated but not recorded as exchanges. The crawl's traffic after login is captured as before.
+- **Remote CDP engines** (`-dom` pointing at obscura/lightpanda) are refused for recorded logins: browser
+  contexts and per-context proxies were only verified against Chrome. Without `-dom`, burpsy starts its own
+  headless Chrome for the login, as Burp uses its browser "even if you have not selected Use Burp's browser".
+- **Rendered-DOM audit of an authenticated crawl is declined, with the reason on the report:** it renders
+  logged out, and comparing those renders with logged-in wire bodies would report false script-only
+  content. The crawl's own render pass (link discovery) does run inside the login's browser context.
+- **Burp's "Browser settings" on a TOTP step** (three switches in Zrsc) are not represented; their meaning
+  is not recoverable from the decompiled panel.
+- **Verified vs ran.** A replay is `verified` only when its status check found the confirmation text.
+  Without a status check (optional except with TOTP, as in Burp) a sequence whose password was rejected
+  still "runs every step"; the replay result, the crawl's login card and `report.login.verified` say
+  "not verified" rather than "logged in".
+- **TLS:** the replay browser follows the operator's one certificate-verification setting (Settings →
+  Network, `tls.verify`): verification on refuses a self-signed staging host on step 1, named; off accepts
+  it — applied per tab, so the shared DOM-check browser keeps verifying.
+- **Redaction:** reported URLs (per-step, final, refused) keep scheme, host, path and parameter NAMES and
+  drop query values and fragments (`code=…`, `#…`), as cookie values are never reported.
+- **Chrome's own traffic:** one `CONNECT www.google.com:443` per new browser window still appears in a
+  replay's refusal list (it is refused; no page asked for it). Chrome-internal services that produced
+  more such tunnels are switched off in `domexec.NewBrowser`.
+- **Authenticated render pass:** requests the logged-in render pass's pages make are scope-gated too;
+  refusals are reported in `report.login.render_blocked`, so a page whose script is on an out-of-scope CDN
+  renders empty with the reason stated.
+- **Burp's login crawl events** (Zwkv `RECORDED_SEQUENCE_STARTED/ERROR`, `PAGES_FOUND_AFTER_LOGIN` /
+  `NO_PAGES_FOUND_AFTER_LOGIN`): each replay is a `crawl.login` event in the task's event log, and
+  `report.login.pages_found_after_login` carries the count. `RECORDED_SEQUENCE_BROWSER_ERROR` is a 400 at
+  launch (no browser, no crawl task). The credential-login events (`ATTEMPTING_TO_LOGIN`,
+  `REGISTERING_USER`, login/registration page found) belong to burpsy-react-ui-uzil, not built here.
+
+### Live crawl view (burpsy-react-ui-1l3x) — built, with these differences from Burp
+
+- **Burp:** `desktop/running-scans/results/live-crawl-view.html` — "a rendered view of the page that Burp
+  Scanner is currently crawling, as it would normally appear in a browser."
+- **burpsy:** the crawl task's "Live crawl view" tab, fed by `GET /api/crawl/live?task=N` (riskRead):
+  the phase (starting, logging in, fetching, rendering, finished), the request in flight (a new
+  `crawler.Config.OnSend` hook — `OnFetch` fires only after capture), the last 50 fetches newest first,
+  and a viewport JPEG taken by the render pass in the same tab that read the DOM.
+- **Difference — a frame exists only when the crawl renders.** Burp's crawler is browser-driven, so every
+  page has a picture. burpsy fetches over HTTP and renders only with `-dom`; frames come from that pass,
+  throttled to one a second at the source (a render is not asked for a picture it would throw away).
+  Without a browser `frame` is `null` and `frame_note` says why, and the console shows the last HTML
+  page's WIRE bytes in a sandboxed iframe behind a deny-all Content-Security-Policy — labelled as wire
+  HTML, not as what a browser would show, and loading nothing from the target.
+- **Difference — polled, not streamed.** The console polls once a second while the crawl runs; there is
+  no SSE/WebSocket route for frames.
+- **No frame while a recorded login replays**, by design: the page on screen is credentials being typed.
+- **Frames are not retained:** the one latest frame is dropped when the crawl finishes or is evicted; the
+  fetch list stays with the run.
+- **Measured fix recorded:** in this Chromium (147, headless) `Page.captureScreenshot` in a non-front tab
+  hung until the 30 s tab timeout and failed the render; the capture now brings the tab to the front and
+  is bounded at 3 s (`domexec.captureFrame`, `TestEveryRenderThatAsksForAFrameGetsOneQuickly`).
 ## Redirect types: JavaScript-driven is refused (2026-10-08, burpsy-react-ui-z9zi)
 - **Burp:** Settings → Network → HTTP → Redirections, "Allowed redirect types": 3xx with Location,
   any status with Location, the Refresh header, the meta refresh tag, and JavaScript-driven. Defaults

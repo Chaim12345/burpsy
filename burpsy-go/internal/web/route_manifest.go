@@ -256,6 +256,22 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "GET: the last crawl's coverage report. POST: crawl from a seed URL under stated bounds",
 	},
+	"/api/crawl/live": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the live crawl view for ?task=N: the request in flight, the phase, the last 50 fetches, and a throttled frame from the render pass (null with a stated reason when there is no browser)",
+	},
+	"/api/crawl/logins": {
+		// riskCredential: a sequence carries typed passwords and TOTP secrets. GET is the redacted
+		// library (no secret on the wire); POST imports or edits one; DELETE removes one.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
+		summary: "recorded login sequences (Burp's Login Recorder or Chrome Recorder import, step editor, See as JSON): GET redacted list, POST save/import, DELETE ?id=",
+	},
+	"/api/crawl/logins/replay": {
+		// riskCredential: replays a stored login — typed passwords and a TOTP code — against the
+		// target, in a browser session gated by scope on every request.
+		methods: []string{"POST"}, risk: riskCredential,
+		summary: "Burp's Replay: run a recorded login in an isolated, scope-gated browser and report each step, the status check, blocked requests and a screenshot",
+	},
 	"/api/dashboard": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "running tasks, the activity log, and every coverage summary with its breakdown",

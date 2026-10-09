@@ -334,6 +334,16 @@ type Config struct {
 	// login page from then on. Set it and an expired session is detected and restored
 	// within the re-login budget. See session_gate.go.
 	SessionCoordinator SessionCoordinator
+	// BrowserLogin is a recorded login sequence (burpsy-react-ui-xhtk): replayed in a browser before
+	// the first fetch, its cookies carried on every request, and replayed again when the session is
+	// detected as lost, within Limits.MaxRelogins. nil is a crawl with no recorded login. See
+	// recorded_login.go.
+	BrowserLogin BrowserLogin
+	// OnSend, when set, is called with each request's method and URL immediately before it is sent
+	// — the "page the crawler is on now" half of the live crawl view (burpsy-react-ui-1l3x), which
+	// OnFetch cannot answer because it fires only after the response is captured. Synchronous on the
+	// crawl goroutine, like OnFetch, so it must return at once.
+	OnSend func(method, url string)
 	// LoginPagePattern is a regex, matched against a response body, that identifies the
 	// application's login page — the second signal (besides a 200→non-200 template flip)
 	// that the session is gone. Empty (the default) disables this signal and keeps the
@@ -737,6 +747,10 @@ type Report struct {
 	// (SkipRenderUnavailable) rather than through this block, so a missing block is never
 	// mistaken for a pass that found nothing.
 	RenderedAudit *RenderedAuditReport `json:"rendered_audit,omitempty"`
+	// Login is the recorded login's account (burpsy-react-ui-xhtk): whether the crawl was
+	// authenticated, every replay, and what the replays' scope gate refused. Absent for a crawl
+	// with no recorded login.
+	Login *LoginReport `json:"login,omitempty"`
 	// Elapsed is the crawl's wall-clock duration.
 	Elapsed time.Duration `json:"elapsed"`
 }
@@ -1009,6 +1023,8 @@ type Crawler struct {
 	// Bounded by Limits.MaxRelogins. Counted per attempt, so concurrent and sequential waves of
 	// expiry share one budget. Success or failure moves the counter; see session_gate.go.
 	relogins int
+	// login is the recorded login's jar and report, nil without Config.BrowserLogin.
+	login *loginState
 	// loginPage is the compiled LoginPagePattern, nil when none was given. The regex is compiled
 	// in New so a malformed pattern is a construction error, never a per-URL surprise.
 	loginPage *regexp.Regexp
@@ -1240,6 +1256,7 @@ func New(cfg Config) (*Crawler, error) {
 		poolConcurrency:   poolConcurrency,
 		retention:         retention,
 		loginPage:         loginPage,
+		login:             newLoginStateOrNil(cfg.BrowserLogin),
 	}
 	// Seeds enter through the same admission gates as any discovered link, minus the destructive
 	// check — see destructive.go for why the operator's own instruction is not second-guessed. They
@@ -1380,6 +1397,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	// nothing reports {"anchor":0,...} rather than null.
 	seedEdgeKinds(&rep)
 	lim := LimitReport{Limits: c.limits}
+	// The recorded login runs before anything is admitted or fetched, so the first request — the
+	// seed — already carries the session (burpsy-react-ui-xhtk).
+	c.loginBeforeCrawl(ctx, &rep, &lim)
 
 	if c.cfg.SeedsOnly {
 		// The definition is the attack surface, so the frontier starts as the definition's endpoints
@@ -1487,6 +1507,13 @@ func (c *Crawler) Run(ctx context.Context) Report {
 	rep.Limits = lim
 	rep.Skips = c.skips.Snapshot()
 	rep.SpeculativeAdmitted = c.speculativeAdmitted
+	if c.login != nil {
+		login := c.login.report
+		if login.Authenticated {
+			login.PagesFoundAfterLogin = rep.Locations
+		}
+		rep.Login = &login
+	}
 	return rep
 }
 
@@ -1767,6 +1794,9 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// hosts that were behaving.
 	global := c.limiter.Acquire()
 	host := c.limiterFor(item.url).Acquire()
+	if c.cfg.OnSend != nil {
+		c.cfg.OnSend(item.method, item.url.String())
+	}
 	res, err := as.Send(ctx, raw)
 	host.Release()
 	global.Release()
@@ -1849,6 +1879,9 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		return
 	}
 
+	// A session the application rotates is kept current from every response the crawl captured.
+	c.login.absorb(item.url, res.Raw)
+
 	rep.Fetched++
 	if item.depth > lim.DeepestDepth {
 		lim.DeepestDepth = item.depth
@@ -1918,7 +1951,7 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// whole block is inert without a coordinator: detectExpired returns "not expired" and templateOK
 	// is never consulted, so the static-Headers crawl behaves exactly as before. The robots probe
 	// carries no session and is skipped. See session_gate.go.
-	if c.cfg.SessionCoordinator != nil && !item.robots {
+	if c.sessionAware() && !item.robots {
 		template := urlTemplate(item.method, item.url, item.fieldNames)
 		if verdict := c.detectExpired(template, fetch.Status, body); verdict.yes {
 			// The expired response is real traffic and stays in history as a Fetch, but it is a login
@@ -3272,9 +3305,19 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 	// Operator headers go only to a seed origin. See Crawler.credentialOrigins for why scope is not
 	// the right gate for this: scope decides whether a request may be sent, which is a different
 	// question from whether it may carry the operator's session.
+	// The recorded login's session, by the jar's own RFC 6265 matching (burpsy-react-ui-xhtk). It
+	// replaces an operator Cookie header rather than joining it: the replay just logged in, and a
+	// static cookie from before it is the session the login exists to supersede.
+	loginCookie := c.login.cookieFor(item.url)
+	if loginCookie != "" {
+		c.login.report.RequestsWithSession++
+	}
 	if len(c.cfg.Headers) > 0 {
 		if c.credentialOrigins[originKey(item.url)] {
 			for name, value := range c.cfg.Headers {
+				if loginCookie != "" && strings.EqualFold(name, "Cookie") {
+					continue
+				}
 				b.WriteString(name)
 				b.WriteString(": ")
 				b.WriteString(value)
@@ -3293,6 +3336,11 @@ func (c *Crawler) buildRequest(item frontierItem) []byte {
 		b.WriteString(name)
 		b.WriteString(": ")
 		b.WriteString(item.headers[name])
+		b.WriteString("\r\n")
+	}
+	if loginCookie != "" {
+		b.WriteString("Cookie: ")
+		b.WriteString(loginCookie)
 		b.WriteString("\r\n")
 	}
 	if len(item.body) > 0 {

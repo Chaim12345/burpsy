@@ -319,10 +319,16 @@ const (
 	// work: StopCancelled is a crawl that stopped mid-frontier, this is one that finished its main
 	// pass and then ran out of time on the retries.
 	StopFollowUpCancelled
+	// StopLoginFailed means the crawl was given a recorded login (burpsy-react-ui-xhtk) and the replay
+	// before the first fetch did not log in. Burp runs the scan anyway ("If Burp Scanner is unable to
+	// replay a recorded login sequence during a scan then it cannot perform an authenticated crawl.
+	// However, the scan will still run."), and so does this one — but as a stop, so a crawl that was
+	// meant to be authenticated and was not can never read as done.
+	StopLoginFailed
 )
 
 // CrawlStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var CrawlStopAll = [18]CrawlStop{
+var CrawlStopAll = [19]CrawlStop{
 	StopRequestBudget,
 	StopDuration,
 	StopLocationBudget,
@@ -341,6 +347,7 @@ var CrawlStopAll = [18]CrawlStop{
 	StopPausedAuthFailures,
 	StopFollowUpBudget,
 	StopFollowUpCancelled,
+	StopLoginFailed,
 }
 
 func (s CrawlStop) String() string {
@@ -381,6 +388,8 @@ func (s CrawlStop) String() string {
 		return "follow-up-budget"
 	case StopFollowUpCancelled:
 		return "follow-up-cancelled"
+	case StopLoginFailed:
+		return "login-failed"
 	}
 	return "unknown"
 }
@@ -441,6 +450,8 @@ func (s CrawlStop) Explanation() string {
 		return "requests that failed were not retried because the request budget was spent; they remain failed in this report"
 	case StopFollowUpCancelled:
 		return "the crawl was cancelled during its follow-up pass, so some failed requests were not retried"
+	case StopLoginFailed:
+		return "the recorded login did not log in before the crawl started, so the whole crawl ran unauthenticated; the report's login block says which step failed"
 	}
 	return "unknown stop"
 }
