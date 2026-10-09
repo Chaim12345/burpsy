@@ -69,9 +69,43 @@ fi
 
 name="burpsy-run-$$"
 mem_cg="" cpu_cg="" v2_cg=""
+child=""
+
+# run_pids: every process of the run — the members of its cgroup, or just the child without one.
+# shellcheck disable=SC2329 # used by the traps
+run_pids() {
+  local d
+  for d in "$v2_cg" "$mem_cg"; do
+    if [ -n "$d" ] && [ -f "$d/cgroup.procs" ]; then cat "$d/cgroup.procs"; return; fi
+  done
+  if [ -n "$child" ]; then echo "$child"; fi
+}
+# shellcheck disable=SC2329 # used by the traps
+signal_run() {
+  local p
+  for p in $(run_pids); do kill -"$1" "$p" 2>/dev/null || true; done
+}
+
+# A signal to this wrapper (a harness killing its PID on a timeout, say) is passed on to the whole
+# run, and the wrapper then waits for the run to end before it lets go of the slot: otherwise the
+# run kept going with no supervisor and its slot free for the next one. TERM is what is passed on,
+# whatever arrived — a non-interactive shell starts background jobs with INT ignored, so a forwarded
+# INT would do nothing.
+# shellcheck disable=SC2329 # invoked by the traps
+on_signal() { signal_run TERM; }
+trap on_signal INT TERM HUP
+
 # shellcheck disable=SC2329 # invoked by the EXIT trap
 cleanup() {
-  # Leave the cgroups before removing them; a cgroup with members cannot be removed.
+  # Whatever outlived the command (a stray Chrome) is still in the cgroup, and a cgroup with members
+  # cannot be removed: end it first.
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -z "$(run_pids)" ] && break
+    signal_run KILL
+    sleep 0.2
+  done
+  [ "$i" = 10 ] && [ -n "$(run_pids)" ] && echo "capped-run: processes outlived the run and could not be ended" >&2
   for d in "$mem_cg" "$cpu_cg" "$v2_cg"; do
     [ -n "$d" ] && [ -d "$d" ] && rmdir "$d" 2>/dev/null || true
   done
@@ -109,15 +143,24 @@ export GOMEMLIMIT=$(( mem_bytes * 8 / 10 ))
 export GOFLAGS="${GOFLAGS:+$GOFLAGS }-p=$cpus"
 
 # The child joins the cgroups before exec, so everything it starts is inside them; this shell stays
-# outside to report and clean up.
+# outside to report, pass signals on and clean up. A join that fails is said out loud: the run then
+# goes ahead uncapped, and the line above would otherwise claim it was capped.
 set +e
 (
   for d in "$mem_cg" "$cpu_cg" "$v2_cg"; do
-    [ -n "$d" ] && echo "$BASHPID" > "$d/cgroup.procs"
+    if [ -n "$d" ] && ! echo "$BASHPID" > "$d/cgroup.procs"; then
+      echo "capped-run: could not join $d; this run is NOT hard-capped" >&2
+    fi
   done
   exec "$@"
-) {lockfd}>&-
-rc=$?
+) {lockfd}>&- &
+child=$!
+# wait returns early when a trapped signal arrives; keep waiting until the run itself has ended.
+while :; do
+  wait "$child"
+  rc=$?
+  kill -0 "$child" 2>/dev/null || break
+done
 set -e
 
 oom=0
