@@ -30,7 +30,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -54,15 +53,15 @@ const (
 // base64: JSON carries CR, LF and every other code point a header editor can produce, and the Inspector
 // edits text.
 type h2FieldView struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name  string `json:"name" desc:"the field name as sent, pseudo-headers included (:method, :path, …); any case"`
+	Value string `json:"value" desc:"the field value as sent; may carry CR/LF"`
 }
 
 // h2KettleReq is POST /api/http2/kettle's body.
 type h2KettleReq struct {
-	Fields []h2FieldView `json:"fields"`
+	Fields []h2FieldView `json:"fields" desc:"the HTTP/2 header list, in order"`
 	// TLS is the connection's scheme, which a :scheme value is compared against.
-	TLS bool `json:"tls"`
+	TLS bool `json:"tls" desc:"whether the connection is TLS; a :scheme value is compared against it"`
 }
 
 // kettleReasonView is one reason, as the editor's note lists it.
@@ -126,7 +125,7 @@ func (s *Server) handleHTTP2Kettle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req h2KettleReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
