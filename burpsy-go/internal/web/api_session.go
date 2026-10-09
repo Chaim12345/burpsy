@@ -247,6 +247,16 @@ type sessionActionDto struct {
 	// Nth request the rule handles. Zero is omitted from the wire, which is the pre-field behaviour
 	// and what a client reading an older server's rules sees.
 	ValidateEvery int `json:"validate_every,omitempty"`
+	// The run-macro action's "after the macro" choices (burpsy-react-ui-8gk8), under Burp's key
+	// names; see session.Action. UpdateWithCookies is a pointer for the same reason it is there: an
+	// absent value means the whole jar, as before.
+	UpdateWithParams    bool     `json:"update_with_params,omitempty"`
+	MatchParams         string   `json:"match_params,omitempty"`
+	Params              []string `json:"params,omitempty"`
+	TolerateURLMismatch bool     `json:"tolerate_url_mismatch,omitempty"`
+	UpdateWithCookies   *bool    `json:"update_with_cookies,omitempty"`
+	MatchCookies        string   `json:"match_cookies,omitempty"`
+	Cookies             []string `json:"cookies,omitempty"`
 }
 
 // sessionActionKindDto is one entry of the action palette.
@@ -567,6 +577,14 @@ func actionToDto(a *session.Action) sessionActionDto {
 		// refused by session.ValidateAction, and a rule that could not have been installed must not
 		// read back as carrying a setting.
 		ValidateEvery: validityCheckEvery(a),
+
+		UpdateWithParams:    a.UpdateWithParams,
+		MatchParams:         a.MatchParams,
+		Params:              a.Params,
+		TolerateURLMismatch: a.TolerateURLMismatch,
+		UpdateWithCookies:   a.UpdateWithCookies,
+		MatchCookies:        a.MatchCookies,
+		Cookies:             a.Cookies,
 	}
 	// A macro action's own steps are emitted only when it carries them. An empty Macro means "the
 	// rule's own Steps", and emitting the rule's steps here instead would launder that reference into
@@ -615,6 +633,14 @@ func actionsToModel(dtos []sessionActionDto) ([]*session.Action, error) {
 			ValidateEvery: d.ValidateEvery,
 			Extension:     d.Extension,
 			Script:        d.Script,
+
+			UpdateWithParams:    d.UpdateWithParams,
+			MatchParams:         d.MatchParams,
+			Params:              d.Params,
+			TolerateURLMismatch: d.TolerateURLMismatch,
+			UpdateWithCookies:   d.UpdateWithCookies,
+			MatchCookies:        d.MatchCookies,
+			Cookies:             d.Cookies,
 		}
 		for _, s := range d.Macro {
 			headers := make(map[string]string, len(s.Headers))

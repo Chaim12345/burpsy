@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import { PlatformAuthPrompt } from "./ui/platform-auth-prompt";
 import { scopeAllowsEverything } from "./lib/scope-state";
 import { appliedSectionLabels, readBundleCoverage } from "./lib/config-coverage";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -1759,6 +1760,7 @@ function App(): JSX.Element {
     ) : null}
    </Modal>
    <Toaster position="bottom-right" theme={resolveTheme(theme)} closeButton duration={3800} />
+   <PlatformAuthPrompt />
   </Tooltip.Provider>
  );
 }

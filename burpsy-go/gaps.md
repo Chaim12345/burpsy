@@ -2054,6 +2054,65 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Redirect types: JavaScript-driven is refused (2026-10-08, burpsy-react-ui-z9zi)
+- **Burp:** Settings → Network → HTTP → Redirections, "Allowed redirect types": 3xx with Location,
+  any status with Location, the Refresh header, the meta refresh tag, and JavaScript-driven. Defaults
+  (`ProjectDefaults.json`, `project_options.http.redirections`): the first, third and fourth on.
+- **burpsy:** `redirects.types` on `/api/network/settings` carries all five under Burp's key names,
+  with Burp's defaults when unset. The first four are honoured by the sender's follower; a Refresh or
+  meta-refresh hop is a bodiless GET.
+- **Divergence:** `understand_javascript_driven: true` is refused by name. Following a script-driven
+  redirect means executing the page's JavaScript, which the sender does not do; storing the flag
+  would be a promise nothing keeps.
+
+## HTTP/1 keep-alive reaches the raw send path only (2026-10-08, burpsy-react-ui-ry5n)
+- **Burp:** Settings → Network → HTTP, "Use keep-alive for HTTP/1 if the server supports it" (off by
+  default; idle connections closed after five seconds) "affects all Burp Suite tools", with per-tool
+  overrides in Repeater ("Enable HTTP/1 connection reuse") and Intruder.
+- **burpsy:** `http1.enable_keep_alive` on `/api/network/settings` drives a pool on the sender's raw
+  path (`SendRawOutcome`, which Repeater, Intruder and the scanner's raw probes use): a connection the
+  exchange left reusable is kept per authority and closed after five seconds idle. `http2.enable_http2`
+  ("Default to HTTP/2") reaches both the raw path and the typed transport.
+- **Divergence:** the typed `http.Transport` path keeps its own connection reuse whatever the switch
+  says, because that transport also carries h2 and disabling keep-alive there would close h2
+  connections too. The proxy's upstream leg is unaffected. Repeater's and Intruder's per-tool reuse
+  overrides are not offered.
+
+## Platform-authentication prompt does not replay the failed request (2026-10-08, burpsy-react-ui-3xnt)
+- **Burp:** "Prompt for credentials on platform authentication failure" displays an interactive popup
+  when a host challenges, and the request goes on with the credentials entered.
+- **burpsy:** with `prompt_on_authentication_failure` on, every Basic/Digest/NTLM/Negotiate challenge
+  that no rule answers (or that refuses the rule's credential) is recorded in netauth, where the sender
+  and the proxy already report challenges; the console shows a prompt for the most recent one and saves
+  the answer as a platform-authentication rule for that host.
+- **Divergence:** the request that failed has already returned its 401 to its client and is not held or
+  resent; the credential applies from the host's next request. A raw Repeater/Intruder send never
+  consults platform authentication (the raw path sends the bytes as written), so it never prompts.
+  Negotiate is recorded but cannot be answered by this build.
+
+## Run-macro parameter update reads HTML forms and links only (2026-10-08, burpsy-react-ui-8gk8)
+- **Burp:** after a "Run a macro" action, "update the current request with parameters matched from the
+  final macro response" and "with cookies from the session handling cookie jar", each as all-except or
+  only-the-following, plus "Tolerate URL mismatch when matching parameters".
+- **burpsy:** all five choices, under Burp's keys (`update_with_params`, `match_params`, `params`,
+  `tolerate_url_mismatch`, `update_with_cookies`, `match_cookies`, `cookies`). Parameters are derived
+  from the final response's HTML forms (input, textarea, select against the form's action) and link
+  query strings, and update only parameters the current request already carries in its query string or
+  urlencoded body. A stored action without the fields behaves as before: no parameter update, the whole
+  jar.
+- **Divergence:** values in JSON, multipart bodies, or script are not derived or updated. The cookie
+  choice applies to the re-sent current request; macro steps always carry the whole jar.
+
+## Logging: unattributed traffic is not logged, and a project switch keeps the running logger's files (2026-10-08, burpsy-react-ui-nvfl)
+- **Burp:** Project settings → Logging appends requests and/or responses from Proxy, Scanner, Repeater,
+  Intruder, Sequencer and Extender (or All tools) to files.
+- **burpsy:** `GET/PUT /api/project/logging` under Burp's keys (`requests` / `responses`, tool → absolute
+  path, blank off), persisted with the project and applied at startup; every exchange the traffic store
+  records is written by one background writer in Burp's log-file shape. The crawler counts as Scanner.
+- **Divergence:** traffic this build does not attribute to a tool (Sequencer captures and extension
+  sends among it) is not written, under All tools either. An in-console project switch does not re-apply
+  the opened project's logging settings until the next start. A full writer queue drops entries and
+  counts them (`stats.dropped`) rather than slowing the proxy.
 ## Proxy listener: in-browser interface and Miscellaneous switches (2026-10, burpsy-react-ui-beof, 0q9d)
 
 - **The in-browser interface is plain HTTP only.** `http://burpsy`, `http://burpsuite` and the

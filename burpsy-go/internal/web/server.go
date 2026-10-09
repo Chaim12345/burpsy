@@ -15,6 +15,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -26,6 +27,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/skills"
@@ -36,9 +38,13 @@ import (
 
 // Server represents the web API server.
 type Server struct {
-	store  *core.TrafficStore
-	scope  *core.Scope
-	logger *zap.Logger
+	// fileLog is Burp's Project settings → Logging writer (nvfl); nil until attached.
+	fileLog *filelog.Logger
+	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
+	serverCerts *servercerts.Store
+	store       *core.TrafficStore
+	scope       *core.Scope
+	logger      *zap.Logger
 	// proxyBind and webBind are the -proxy and -web flag values the binary was
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
@@ -805,6 +811,20 @@ func (s *Server) WithNetAuth(credentials *netauth.Credentials, certs *netauth.Cl
 // leaves a binding that was on the panel yesterday and will never be presented again.
 // Carried here rather than logged and forgotten because the operator reading the panel is
 // the person who can fix it, and they are not reading the log.
+// WithServerCerts attaches the store of certificates target servers presented (t75m), the same one
+// the sender and the proxy record into.
+// WithFileLog attaches Burp's Project settings → Logging writer (nvfl), the one main observes the
+// traffic store with.
+func (s *Server) WithFileLog(l *filelog.Logger) *Server {
+	s.fileLog = l
+	return s
+}
+
+func (s *Server) WithServerCerts(store *servercerts.Store) *Server {
+	s.serverCerts = store
+	return s
+}
+
 func (s *Server) WithNetAuthRestoreNotes(notes []string) *Server {
 	s.netAuthRestoreNotes = notes
 	return s
@@ -1170,6 +1190,9 @@ func (s *Server) setupRoutes() {
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
 	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
+	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
+	s.mux.HandleFunc("/api/network/server-certificates", s.handleServerCertificates)
+	s.mux.HandleFunc("/api/project/logging", s.handleFileLogging)
 	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)
@@ -1212,6 +1235,7 @@ func (s *Server) setupRoutes() {
 	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
 	// startup preference would let a caller set one and silently send the other.
 	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
+	s.mux.HandleFunc("/api/proxy/history-logging", s.handleProxyHistoryLogging)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).

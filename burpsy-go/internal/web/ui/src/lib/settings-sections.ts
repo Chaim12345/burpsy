@@ -141,6 +141,18 @@ export const SETTINGS_SECTIONS = [
     keywords: "p12 pfx mutual mtls smartcard",
   },
   {
+    id: "server-certificates",
+    title: "Server TLS certificates",
+    summary: "Information only: every X.509 certificate a target server presented to this tool.",
+    keywords: "x509 tls ssl certificate chain fingerprint sha256 issuer subject san",
+  },
+  {
+    id: "logging",
+    title: "Logging",
+    summary: "Per-tool request and response log files, written as traffic happens.",
+    keywords: "log file disk requests responses proxy scanner repeater intruder all tools",
+  },
+  {
     id: "appearance",
     title: "Appearance",
     summary: "Stored in this browser; it does not travel with the capture.",

@@ -20,6 +20,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -28,6 +29,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/skills"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -298,6 +300,21 @@ func main() {
 		web.InstallCaptureSinks(store, findingStore, persistStore)
 	}
 
+	// Burp's Project settings → Logging (burpsy-react-ui-nvfl): per-tool request/response log files.
+	// Observed after the restore, so the files receive new traffic only — never a replay of history.
+	fileLogger := filelog.New(store)
+	store.ObserveExchanges(fileLogger.Observe)
+	defer fileLogger.Close()
+	if persistStore != nil {
+		if saved, err := persistStore.LoadFileLogging(); err != nil {
+			log.Printf("file logging settings could not be read, so no log files are written: %v", err)
+		} else if saved != nil {
+			if err := fileLogger.Apply(*saved); err != nil {
+				log.Printf("file logging settings could not be applied, so no log files are written: %v", err)
+			}
+		}
+	}
+
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
 	// origin-facing leg and every sender built below hold this same object, so a rule edited in the
 	// console reaches both without a restart.
@@ -493,6 +510,9 @@ func main() {
 	// later, and the restore below would write into a holder the server never reads
 	// (burpsy-react-ui-o1eu).
 	proxyNetwork := proxy.NewNetworkSettings()
+	// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): one store the proxy's upstream leg,
+	// the sender and the panel share, so the panel lists what any leg was shown.
+	serverCertStore := servercerts.New()
 
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithNetworkSettings(proxyNetwork).
@@ -527,6 +547,7 @@ func main() {
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
 		WithClientCerts(clientCerts).
+		WithServerCerts(serverCertStore).
 		// What the listener relayed for the operator's browser is logged beside what burpsy's
 		// own tools sent — Logger's coverage, not just the tools' (burpsy-react-ui-6dt).
 		WithToolLog(toolLog)
@@ -575,6 +596,7 @@ func main() {
 	// connection still went out direct.
 	senderConfig := egressSenderConfig(upstreamPolicy, platformAuth, clientCerts)
 	senderConfig.UpstreamCarrier = upstreamCarrier
+	senderConfig.ServerCerts = serverCertStore
 	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
@@ -767,7 +789,9 @@ func main() {
 		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
-		WithNetAuthRestoreNotes(netAuthNotes)
+		WithNetAuthRestoreNotes(netAuthNotes).
+		WithServerCerts(serverCertStore).
+		WithFileLog(fileLogger)
 	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
 	// site-map items. Installed into the slot the proxy was built with, which is safe while it serves.
 	pageObserver.Set(webServer.ObserveProxiedPage)
@@ -1184,6 +1208,10 @@ func restoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Cred
 			record(failure)
 		}
 	}
+
+	// Burp's "Prompt for credentials on platform authentication failure" (3xnt) survives a restart
+	// whether or not the rules themselves could be read.
+	credentials.SetPromptOnFailure(store.LoadPlatformAuthPrompt())
 
 	if rows, err := store.LoadClientCerts(); err != nil {
 		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))

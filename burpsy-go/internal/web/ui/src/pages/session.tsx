@@ -19,7 +19,7 @@ import type {
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { actionPath, refusedActionPath, SCRIPT_LIMITS, SCRIPT_REFERENCE } from "../lib/session-script";
 
@@ -118,6 +118,14 @@ interface ActionDraft {
   * once it parses to a positive integer.
   */
  validateEvery: string;
+ /** A run_macro action's update choices (8gk8). The name lists are comma-separated text. */
+ updateWithParams: boolean;
+ matchParams: "all_params_except" | "specified_params";
+ params: string;
+ tolerateURLMismatch: boolean;
+ updateWithCookies: boolean;
+ matchCookies: "all_cookies_except" | "specified_cookies";
+ cookies: string;
 }
 
 const VALIDITY_FIELDS: { key: "body_contains" | "body_not_contains" | "header_present" | "header_absent"; label: string; hint: string }[] = [
@@ -221,7 +229,23 @@ function actionIn(action: SessionAction): ActionDraft {
   extension: action.extension ?? "",
   script: action.script ?? "",
   validateEvery: action.validate_every ? String(action.validate_every) : "",
+  updateWithParams: action.update_with_params === true,
+  matchParams: action.match_params ?? "all_params_except",
+  params: (action.params ?? []).join(", "),
+  tolerateURLMismatch: action.tolerate_url_mismatch === true,
+  // Absent is the whole jar, as before the field existed.
+  updateWithCookies: action.update_with_cookies !== false,
+  matchCookies: action.match_cookies ?? "all_cookies_except",
+  cookies: (action.cookies ?? []).join(", "),
  };
+}
+
+/** A comma- or newline-separated name list as the wire's array, blanks dropped. */
+function nameList(text: string): string[] {
+ return text
+  .split(/[,\n]/)
+  .map((name) => name.trim())
+  .filter(Boolean);
 }
 
 /**
@@ -269,6 +293,25 @@ function actionOut(draft: ActionDraft): SessionAction {
    // Sent as typed: whitespace and line breaks are part of the program.
    out.script = draft.script;
    break;
+  case "run_macro": {
+   // Only what differs from the absent defaults is sent, so an action nobody touched keeps the
+   // stored shape it had.
+   if (draft.updateWithParams) {
+    out.update_with_params = true;
+    const params = nameList(draft.params);
+    if (draft.matchParams === "specified_params") out.match_params = "specified_params";
+    if (params.length) out.params = params;
+    if (draft.tolerateURLMismatch) out.tolerate_url_mismatch = true;
+   }
+   if (!draft.updateWithCookies) {
+    out.update_with_cookies = false;
+   } else {
+    const cookies = nameList(draft.cookies);
+    if (draft.matchCookies === "specified_cookies") out.match_cookies = "specified_cookies";
+    if (cookies.length) out.cookies = cookies;
+   }
+   break;
+  }
   default:
    break;
  }
@@ -293,6 +336,14 @@ function emptyAction(kind: string): ActionDraft {
   extension: "",
   script: "",
   validateEvery: "",
+  // A new macro action updates the request's parameters, as Burp's editor starts out.
+  updateWithParams: kind === "run_macro",
+  matchParams: "all_params_except",
+  params: "",
+  tolerateURLMismatch: false,
+  updateWithCookies: true,
+  matchCookies: "all_cookies_except",
+  cookies: "",
  };
 }
 
@@ -894,6 +945,74 @@ function ActionCard({
       being processed — for that, use "Run a post-request macro".
      </small>
     )
+   ) : null}
+
+   {action.kind === "run_macro" ? (
+    <div className="stack-tight">
+     <Checkbox
+      label="Update current request with parameters matched from final macro response"
+      checked={action.updateWithParams}
+      disabled={disabled}
+      onCheckedChange={(on) => patch({ updateWithParams: on })}
+     />
+     {action.updateWithParams ? (
+      <Toolbar>
+       <Select
+        aria-label="Which parameters to update"
+        value={action.matchParams}
+        disabled={disabled}
+        onChange={(event) => patch({ matchParams: event.target.value as ActionDraft["matchParams"] })}
+       >
+        <option value="all_params_except">Update all parameters except for</option>
+        <option value="specified_params">Update only the following parameters</option>
+       </Select>
+       <Input
+        aria-label="Parameter names"
+        placeholder="csrf, nonce"
+        value={action.params}
+        disabled={disabled}
+        onChange={(event) => patch({ params: event.target.value })}
+       />
+       <Checkbox
+        label="Tolerate URL mismatch when matching parameters"
+        checked={action.tolerateURLMismatch}
+        disabled={disabled}
+        onCheckedChange={(on) => patch({ tolerateURLMismatch: on })}
+       />
+      </Toolbar>
+     ) : null}
+     <Checkbox
+      label="Update current request with cookies from session handling cookie jar"
+      checked={action.updateWithCookies}
+      disabled={disabled}
+      onCheckedChange={(on) => patch({ updateWithCookies: on })}
+     />
+     {action.updateWithCookies ? (
+      <Toolbar>
+       <Select
+        aria-label="Which cookies to update"
+        value={action.matchCookies}
+        disabled={disabled}
+        onChange={(event) => patch({ matchCookies: event.target.value as ActionDraft["matchCookies"] })}
+       >
+        <option value="all_cookies_except">Update all cookies except for</option>
+        <option value="specified_cookies">Update only the following cookies</option>
+       </Select>
+       <Input
+        aria-label="Cookie names"
+        placeholder="sessionid"
+        value={action.cookies}
+        disabled={disabled}
+        onChange={(event) => patch({ cookies: event.target.value })}
+       />
+      </Toolbar>
+     ) : null}
+     <small className="field-hint">
+      Parameters come from the final macro response&apos;s forms and links, and only ones this request
+      already carries (query or urlencoded body) are updated. Matched by name and the URL the response
+      points them at, unless the mismatch is tolerated.
+     </small>
+    </div>
    ) : null}
 
    {action.kind === "add_cookies_from_jar" ? (

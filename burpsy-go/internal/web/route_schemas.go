@@ -7,6 +7,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -138,6 +139,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/intercept/newline-correction": {body: typeOf[interceptNewlineCorrectionReq]()},
 	"PUT /api/intercept/rules/":             {body: typeOf[interceptListState]()},
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
+	"POST /api/proxy/history-logging":       {body: typeOf[proxyHistoryLoggingReq]()},
 
 	// ---- Scope & Sitemap ----------------------------------------------------------------------
 	"POST /api/scope":           {body: typeOf[ScopeRequest]()},
@@ -227,13 +229,17 @@ var routeSchemas = map[string]opSchema{
 		body: typeOf[map[string]json.RawMessage](), schema: networkSettingsPatchSchema,
 		keysCheckedBy: "applyNetworkSettingsPatch refuses a section or key networkPatchFields does not list, before applying any",
 	},
-	"POST /api/pools":                  {body: typeOf[pool.Pool]()},
-	"PUT /api/pools/":                  {body: typeOf[pool.Pool]()},
-	"DELETE /api/pools/":               noBody,
-	"POST /api/network/auth":           {body: typeOf[postNetworkAuthReq]()},
-	"DELETE /api/network/auth":         {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
-	"POST /api/network/client-certs":   {body: typeOf[postNetworkClientCertsReq]()},
-	"DELETE /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"POST /api/pools":                         {body: typeOf[pool.Pool]()},
+	"PUT /api/pools/":                         {body: typeOf[pool.Pool]()},
+	"DELETE /api/pools/":                      noBody,
+	"POST /api/network/auth":                  {body: typeOf[postNetworkAuthReq]()},
+	"DELETE /api/network/auth":                {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
+	"POST /api/network/client-certs":          {body: typeOf[postNetworkClientCertsReq]()},
+	"DELETE /api/network/client-certs":        {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"PUT /api/network/auth":                   {body: typeOf[putNetworkAuthPromptReq]()},
+	"DELETE /api/network/auth/failures":       {query: []queryParam{{name: "host", kind: "string", desc: "the host whose recorded failure is dismissed"}}},
+	"DELETE /api/network/server-certificates": noBody,
+	"PUT /api/project/logging":                {body: typeOf[filelog.Settings]()},
 
 	"POST /api/session/cookies":     {body: typeOf[sessionCookiesMutateReq]()},
 	"POST /api/session/login":       {body: typeOf[sessionLoginReq]()},

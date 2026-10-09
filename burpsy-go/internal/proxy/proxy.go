@@ -681,6 +681,8 @@ func validateCA(caCert *x509.Certificate, caKey *rsa.PrivateKey) error {
 
 // ProxyConfig holds all configuration for the proxy.
 type ProxyConfig struct {
+	// serverCerts records upstream certificate chains (t75m); nil records nothing.
+	serverCerts  ServerCertRecorder
 	store        *core.TrafficStore
 	tls          *TlsPolicy
 	scope        *core.Scope
@@ -975,6 +977,18 @@ func (c *ProxyConfig) WithIntercept(engine *intercept.Engine) *ProxyConfig {
 // answer to it.
 func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig {
 	c.clientCerts = source
+	return c
+}
+
+// ServerCertRecorder records the chain an origin presented on host:port (burpsy-react-ui-t75m).
+type ServerCertRecorder interface {
+	Record(host string, port uint16, chain []*x509.Certificate)
+}
+
+// WithServerCerts hands every upstream TLS handshake's certificate chain to recorder — Burp's
+// "Server TLS certificates" panel, fed by browser traffic as well as by the tools.
+func (c *ProxyConfig) WithServerCerts(recorder ServerCertRecorder) *ProxyConfig {
+	c.serverCerts = recorder
 	return c
 }
 
