@@ -56,7 +56,9 @@ func Test_links_in_proxied_pages_become_unrequested_site_map_items(t *testing.T)
 	time.Sleep(100 * time.Millisecond)
 
 	tree := get200(t, s, "/api/sitemap")
-	for _, want := range []string{`"path":"/account"`, `"path":"/search?q=1"`} {
+	// A grey item is drawn at its node (burpsy-react-ui-vc98): the link to /search?q=1 is the /search
+	// row, with q in its parameter list, the way the fold draws a requested /search?q=1.
+	for _, want := range []string{`"path":"/account"`, `"path":"/search"`} {
 		if !strings.Contains(tree, want) || !strings.Contains(tree, `"unrequested":true`) {
 			t.Errorf("site map lacks the unrequested item %s: %s", want, tree)
 		}
