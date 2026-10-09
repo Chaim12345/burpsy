@@ -99,6 +99,32 @@ func TestAProxiedRequestAgainstASessionRuleCarriesTheCookieAfterRelogin(t *testi
 			}
 		}
 		conn.Close()
+
+		if i == 0 {
+			// The flag the second request reads is set by noteProxiedResponse, which runs from
+			// record() - and record() runs AFTER the response has been relayed to the client.
+			// Reading the response therefore does not mean the template is flagged yet, and a
+			// second request sent straight away could race ahead of the flag: it then went out
+			// with no re-login, the macro ran 0 times, and the test failed on its scheduling
+			// rather than on the gate (seen on loaded CI runners and locally ~1 in 900 runs).
+			//
+			// The row landing in the store is the event to wait for: record() flags the
+			// template before it indexes the row, so once the row exists the flag does too.
+			//
+			// The window is real outside the test as well: a request that reaches the proxy in
+			// the instant between a flagged response being relayed and being recorded goes out
+			// without a re-login. This test's claim is what the gate does for a request sent
+			// after the template is flagged, so it now waits for that ordering instead of
+			// assuming it.
+			deadline := time.Now().Add(10 * time.Second)
+			for len(store.Exchanges()) == 0 && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			if len(store.Exchanges()) == 0 {
+				t.Fatal("the first request's exchange never reached history, so the template could " +
+					"not have been flagged before the second request")
+			}
+		}
 	}
 
 	if len(statuses) != 2 || statuses[0] != http.StatusOK {
