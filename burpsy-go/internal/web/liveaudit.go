@@ -154,10 +154,17 @@ type LiveAuditState struct {
 	// that folded it in would read "audited 401" for a run that gave up on 1 and took it back,
 	// and the second-chance arithmetic (gave up on N, took back M) is the honest sentence.
 	retried atomic.Uint64
-	// retryMu guards retryCursor's identity across the sweep goroutine and an operator's
-	// RetryStalled call: a rewind that races a tick must land the cursor at the id, not at
-	// wherever the tick's read moved it in between.
+	// retryMu serializes every read and write of the sweep's cursor (at, stalls, rewinds) and
+	// retryCursor's identity, across the sweep goroutine and an operator's RetryStalled call.
+	// It is NEVER held across a tick's slow work (the store walk, the audits): the tick
+	// snapshots the cursor under it, works unlocked, and commits under it only if no rewind
+	// landed in between — see readCursor and commitCursor. A rewind that races a tick
+	// therefore wins: the cursor lands at the stalled id, not wherever the tick moved it.
 	retryMu sync.Mutex
+	// midTickHook, when set (tests only), runs in the tick between its cursor snapshot and its
+	// commit, with retryMu NOT held — the seam that makes "a rewind lands mid-tick"
+	// deterministic. Nil in production.
+	midTickHook func()
 	// retryCursor is the liveAuditRun whose cursor RetryStalled rewinds. Set at loop start.
 	retryCursor *liveAuditCursor
 	// collapsed counts checks the shared ledger refused because an identical (dispatch unit, check)
@@ -502,23 +509,53 @@ func (la *LiveAuditState) attachRun(cursor *liveAuditCursor) {
 // stalled is auditable at all. Answers whether a rewind happened — false means "not currently
 // stalled" or "no sweep running", both of which the pane renders as the button standing down.
 func (la *LiveAuditState) RetryStalled() bool {
-	id, waiting := la.StalledAt()
-	if !waiting {
-		return false
-	}
 	la.retryMu.Lock()
 	defer la.retryMu.Unlock()
 	cursor := la.retryCursor
 	if cursor == nil {
 		return false
 	}
-	// Rewind under the same lock the tick's cursor operations are serialized by: a tick that
-	// advanced past the id between the StalledAt read and here would make the rewind land the
-	// cursor ahead of the stall, silently. Note the stall budget is NOT reset: the exchange
-	// has already waited its ten ticks once, and an operator retry that silently restarted
-	// the full budget would be a second, invisible thirty-second wait for the same answer.
+	// The stall is read under retryMu, the lock the tick's cursor commit (and the stall note
+	// that goes with it) holds: a tick that gave up on the id commits "advanced past it, not
+	// waiting" atomically, so this either sees the stall still standing or sees it cleared and
+	// stands down — never rewinds onto an exchange the tick has already counted as skipped.
+	id, waiting := la.StalledAt()
+	if !waiting {
+		return false
+	}
+	// Rewind, and bump the generation: a tick that snapshotted the cursor before this point is
+	// still working unlocked, and its commit sees the generation moved and discards its own
+	// cursor update — the rewind wins rather than being overwritten by the tick's stale
+	// position. Note the stall budget is NOT reset: the exchange has already waited its ten
+	// ticks once, and an operator retry that silently restarted the full budget would be a
+	// second, invisible thirty-second wait for the same answer.
 	cursor.at = core.ExchangeID(id)
 	cursor.stalls = liveAuditStallTicks
+	cursor.rewinds++
+	return true
+}
+
+// readCursor snapshots the cursor under retryMu: the position a tick works from, plus the
+// rewind generation its commit is checked against.
+func (la *LiveAuditState) readCursor(cursor *liveAuditCursor) liveAuditCursor {
+	la.retryMu.Lock()
+	defer la.retryMu.Unlock()
+	return *cursor
+}
+
+// commitCursor applies a tick's cursor update and the stall note that describes it, under
+// retryMu, only if no RetryStalled rewound the cursor since the tick's readCursor. Reports
+// whether it applied. A false answer means the operator's rewind stands and the tick's
+// position (and anything it was about to record about that position) is stale.
+func (la *LiveAuditState) commitCursor(cursor *liveAuditCursor, from liveAuditCursor, at core.ExchangeID, stalls int, stalledAt uint64, waiting bool) bool {
+	la.retryMu.Lock()
+	defer la.retryMu.Unlock()
+	if cursor.rewinds != from.rewinds {
+		return false
+	}
+	cursor.at = at
+	cursor.stalls = stalls
+	la.noteStall(stalledAt, waiting)
 	return true
 }
 
@@ -1215,6 +1252,10 @@ type liveAuditCursor struct {
 	at core.ExchangeID
 	// stalls counts consecutive ticks that made no progress from `at`.
 	stalls int
+	// rewinds is the operator-rewind generation: RetryStalled bumps it, and a tick commits its
+	// cursor update only if it is unchanged since the tick's snapshot. All three fields are
+	// guarded by LiveAuditState.retryMu.
+	rewinds uint64
 }
 
 // liveAuditStallTicks is how many consecutive no-progress ticks the sweep tolerates before it
@@ -1232,6 +1273,10 @@ const liveAuditStallTicks = 10
 // everything after it waits with it.
 func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	cursor := &run.cursor
+	// Every cursor read in this tick is of this snapshot, and every write goes through
+	// commitCursor: the operator's RetryStalled may rewind the live cursor at any point while
+	// the tick works, and the tick must neither race that write nor overwrite it.
+	from := s.liveAudit.readCursor(cursor)
 	_, total := s.store.Count()
 	// The admission bound for THIS tick, from the backlog it faces right now (burpsy-react-ui-iosv): a
 	// sweep facing a backlog admits it in one burst up to the catch-up cap, and one with nothing behind
@@ -1240,8 +1285,8 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// and a bound read from it would make every sweep start at the baseline no matter how far behind the
 	// capture already was. Recorded so the pane can say which bound produced the count it is showing.
 	behind := uint64(0)
-	if uint64(cursor.at) < uint64(total) {
-		behind = uint64(total) - uint64(cursor.at)
+	if uint64(from.at) < uint64(total) {
+		behind = uint64(total) - uint64(from.at)
 	}
 	batch := liveAuditTickBatch(behind)
 	s.liveAudit.recordBatchLimit(batch)
@@ -1266,7 +1311,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			"the live sweep's cross-run seen ledger passed its cap and was reset; re-seen request content will audit once more"))
 	}
 
-	next := cursor.at
+	next := from.at
 	// waitingOn is the id the walk stopped at because its response had not landed. Distinct from
 	// "ran out of exchanges": only the former is something the cursor can get permanently stuck on.
 	var waitingOn core.ExchangeID
@@ -1305,30 +1350,36 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// a sweep parked behind a stalled exchange while a crawl races ahead is exactly when an operator
 	// needs to see how far behind it is.
 	s.liveAudit.recordPosition(uint64(next), uint64(total))
+	if hook := s.liveAudit.midTickHook; hook != nil {
+		hook()
+	}
 
 	// A retry consumed at the top of this tick counts as work regardless of walk progress: a
 	// tick whose only batch is one taken-back exchange is a tick with work, and sending it to
 	// the stall accounting (or returning with it uncounted) would lose the second chance the
 	// skip was owed (iyqg).
-	if next == cursor.at && len(ids) == 0 {
+	if next == from.at && len(ids) == 0 {
 		// No progress. If we are parked on a response that never landed, give it a bounded number of
 		// ticks and then step over it, counting it as skipped — an exchange nobody audited is not an
 		// exchange that came back clean. Without this the sweep waits here forever.
 		if waiting {
-			cursor.stalls++
-			s.liveAudit.noteStall(uint64(waitingOn), true)
-			if cursor.stalls >= liveAuditStallTicks {
+			stalls := from.stalls + 1
+			if stalls >= liveAuditStallTicks {
+				// The give-up is committed before it is recorded: an operator retry that rewound the
+				// cursor while this tick walked has asked for exactly the opposite (wait on it again),
+				// and the skip it would record here would count an exchange the sweep is still waiting
+				// on. A discarded commit records nothing.
+				if !s.liveAudit.commitCursor(cursor, from, waitingOn+1, 0, 0, false) {
+					return
+				}
 				s.logger.Warn("live audit advancing past an exchange whose response never landed",
 					zap.Uint64("exchange", uint64(waitingOn)),
-					zap.Int("ticks_waited", cursor.stalls))
+					zap.Int("ticks_waited", stalls))
 				s.events.Record(dash.EventLiveAuditSkipped, dash.SeverityWarn, fmt.Sprintf(
 					"exchange %d never recorded a response after %d sweeps; the live audit advanced past it unaudited",
-					waitingOn, cursor.stalls))
-				cursor.at = waitingOn + 1
-				cursor.stalls = 0
+					waitingOn, stalls))
 				s.liveAudit.recordSkipped(1, waitingOn)
-				s.liveAudit.noteStall(0, false)
-			} else if cursor.stalls == 1 {
+			} else if s.liveAudit.commitCursor(cursor, from, from.at, stalls, uint64(waitingOn), true) && stalls == 1 {
 				// Once, on the tick the wait begins, rather than every tick it continues: a stall that
 				// resolves normally is unremarkable and should not fill the log.
 				s.events.Record(dash.EventLiveAuditStalled, dash.SeverityInfo, fmt.Sprintf(
@@ -1338,9 +1389,11 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 		return
 	}
 
-	cursor.at = next
-	cursor.stalls = 0
-	s.liveAudit.noteStall(uint64(waitingOn), waiting)
+	// A discarded commit (an operator rewind landed mid-tick) leaves the rewound cursor in place;
+	// the batch this tick admitted is still audited below — those exchanges were walked and
+	// admitted into the seen ledger, so the rewound walk will count them as deduplicated rather
+	// than audit them twice.
+	s.liveAudit.commitCursor(cursor, from, next, 0, uint64(waitingOn), waiting)
 	// Persist the seen ledger in small batches (apfh): a restart restores it, so
 	// REQUEST_TO_AUDIT_DEDUPLICATED survives restarts. Sixteen keys to a save bounds disk
 	// writes while keeping the restore window narrow; zero keys means the tick admitted
