@@ -533,3 +533,29 @@ export interface TriageSettingsView {
  api_key?: string;
  configured: boolean;
 }
+
+/** One skill in GET /api/skills (burpsy-react-ui-ulsy): a packaged prompt technique from the
+ * operator's -skills directory, the tools it calls, and whether this project has it on. */
+export interface SkillView {
+ name: string;
+ description: string;
+ tools: string[];
+ arguments: { name: string; description?: string; required?: boolean }[];
+ file: string;
+ available: boolean;
+ unavailable_reason?: string;
+ disabled: boolean;
+}
+
+/** GET /api/skills and the answer of PUT /api/skills/disabled. `refused` is every manifest that
+ * did not load, with why; `persisted` is false when no project database holds the disabled list. */
+export interface SkillsView {
+ configured: boolean;
+ dir?: string;
+ hint?: string;
+ skills: SkillView[];
+ refused: { file: string; error: string }[];
+ disabled: string[];
+ persisted: boolean;
+ disabled_error?: string;
+}

@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -23,8 +22,8 @@ import (
 const maxIntruderAgain = 500
 
 type intruderAgainReq struct {
-	Target     string   `json:"target"`
-	RequestIDs []uint64 `json:"request_ids"`
+	Target     string   `json:"target" desc:"the attack's target, scheme://host:port; each re-send is scope-checked against it"`
+	RequestIDs []uint64 `json:"request_ids" desc:"stored request message ids of the attempts to re-send (an attack row's request_id), 1-500"`
 }
 
 type intruderAgainRow struct {
@@ -45,7 +44,7 @@ func (s *Server) handleIntruderAgain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req intruderAgainReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Body must be {\"target\": \"https://host:port\", \"request_ids\": [...]}", http.StatusBadRequest)
 		return
 	}

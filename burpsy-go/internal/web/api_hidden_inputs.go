@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -121,14 +120,14 @@ func (h *hiddenInputRuns) list() []hiddenInputRun {
 // hiddenInputStartReq is the POST body.
 type hiddenInputStartReq struct {
 	// ExchangeID is the captured exchange to guess against. Zero is a real id (the first capture).
-	ExchangeID *core.ExchangeID `json:"exchange_id"`
+	ExchangeID *core.ExchangeID `json:"exchange_id" desc:"the captured exchange to guess against"`
 	// Kinds is any of "query", "cookie", "header". Required and non-empty: Burp's dialog makes the
 	// operator pick, and an empty list read as "everything" would send traffic nobody chose.
-	Kinds []string `json:"kinds"`
+	Kinds []string `json:"kinds" desc:"which inputs to guess, one or more of query, cookie, header; required"`
 	// MaxRequests bounds the run; 0 takes scanner.DefaultHiddenInputBudget.
-	MaxRequests int `json:"max_requests"`
+	MaxRequests int `json:"max_requests" desc:"request budget for the run, 0-5000; 0 takes the default"`
 	// CacheBuster defaults to on; false turns off the per-request cache-buster query parameter.
-	CacheBuster *bool `json:"cache_buster"`
+	CacheBuster *bool `json:"cache_buster" desc:"add a per-request cache-buster query parameter; default true"`
 }
 
 // maxHiddenInputBudget caps what a caller may ask for. A run that needs more than this on one
@@ -171,7 +170,7 @@ func (s *Server) handleHiddenInputs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHiddenInputsStart(w http.ResponseWriter, r *http.Request) {
 	var req hiddenInputStartReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}

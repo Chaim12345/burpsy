@@ -23,6 +23,7 @@ import type {
  ScannerConfigsResponse,
  ScannerCoverage,
  TriageSettingsView,
+ SkillsView,
 } from "./types.attack";
 
 /**
@@ -328,4 +329,21 @@ export function useRunAudit() {
    void client.invalidateQueries({ queryKey: keys.dashboard });
   },
  });
+}
+
+/** GET /api/skills and PUT /api/skills/disabled (burpsy-react-ui-ulsy): the operator's skill library
+ * and which skills this project turns off. The PUT sends the whole list, replacing the stored one. */
+export function useSkills() {
+ const client = useQueryClient();
+ return {
+  get: useQuery<SkillsView>({
+   queryKey: ["settings", "skills"],
+   queryFn: ({ signal }) => api<SkillsView>("/api/skills", { signal }),
+   staleTime: 30_000,
+  }),
+  setDisabled: useMutation<SkillsView, Error, string[]>({
+   mutationFn: (disabled) => api<SkillsView>("/api/skills/disabled", json("PUT", { disabled })),
+   onSuccess: (view) => client.setQueryData(["settings", "skills"], view),
+  }),
+ };
 }

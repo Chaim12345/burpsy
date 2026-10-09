@@ -163,6 +163,12 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// corpusCheckEnableReq is the request body handleCorpusCheckEnable decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type corpusCheckEnableReq struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
 // handleCorpusCheckEnable serves PUT /api/scanner/checks/enable: the per-row switch the audit
 // engine reads.
 //
@@ -176,17 +182,14 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "a check is enabled or disabled with PUT", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.scanner == nil {
-		http.Error(w, "no corpus is loaded; start with --bchecks DIR", http.StatusNotFound)
+	var body corpusCheckEnableReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
+		http.Error(w, "the body must be {\"name\": ..., \"enabled\": bool}", http.StatusBadRequest)
 		return
 	}
 
-	var body struct {
-		Name    string `json:"name"`
-		Enabled bool   `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "the body must be {\"name\": ..., \"enabled\": bool}", http.StatusBadRequest)
+	if s.scanner == nil {
+		http.Error(w, "no corpus is loaded; start with --bchecks DIR", http.StatusNotFound)
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)

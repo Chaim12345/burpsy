@@ -12,7 +12,6 @@ package web
 // sender an audit uses.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -64,9 +63,25 @@ func checkKind(c *bcheck.Check) string {
 	}
 }
 
+// checkValidateReq is POST /api/scanner/checks/validate's body.
+type checkValidateReq struct {
+	Source string `json:"source" desc:"the BCheck draft's full source text"`
+}
+
+// checkImportReq is POST /api/scanner/checks/import's body.
+type checkImportReq struct {
+	Source  string `json:"source" desc:"the BCheck's full source text; its metadata name is the check's name in the corpus"`
+	Replace bool   `json:"replace" desc:"replace a console-imported check of the same name; a check loaded from a --bchecks file is never replaced (409)"`
+}
+
+// checkTestReq is POST /api/scanner/checks/test's body.
+type checkTestReq struct {
+	Source      string   `json:"source" desc:"the BCheck draft's full source text; it is run, not loaded into the corpus"`
+	ExchangeIDs []uint64 `json:"exchange_ids" desc:"captured exchanges to run the draft against, 1-20; an active draft sends its probes to each one's target"`
+}
+
 func readCheckBody(w http.ResponseWriter, r *http.Request, into any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := json.NewDecoder(r.Body).Decode(into); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, 1<<20)).Decode(into); err != nil {
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return false
 	}
@@ -81,9 +96,7 @@ func (s *Server) handleCheckValidate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a check is validated with POST", http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		Source string `json:"source"`
-	}
+	var body checkValidateReq
 	if !readCheckBody(w, r, &body) {
 		return
 	}
@@ -129,15 +142,12 @@ func (s *Server) handleCheckImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a check is imported with POST", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.passiveScanner == nil {
-		http.Error(w, "this server has no scanner to load checks into", http.StatusServiceUnavailable)
+	var body checkImportReq
+	if !readCheckBody(w, r, &body) {
 		return
 	}
-	var body struct {
-		Source  string `json:"source"`
-		Replace bool   `json:"replace"`
-	}
-	if !readCheckBody(w, r, &body) {
+	if s.passiveScanner == nil {
+		http.Error(w, "this server has no scanner to load checks into", http.StatusServiceUnavailable)
 		return
 	}
 	c, err := s.passiveScanner.ImportCheck(body.Source, body.Replace)
@@ -265,15 +275,12 @@ func (s *Server) handleCheckTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a check is tested with POST", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.passiveScanner == nil {
-		http.Error(w, "this server has no scanner", http.StatusServiceUnavailable)
+	var body checkTestReq
+	if !readCheckBody(w, r, &body) {
 		return
 	}
-	var body struct {
-		Source      string   `json:"source"`
-		ExchangeIDs []uint64 `json:"exchange_ids"`
-	}
-	if !readCheckBody(w, r, &body) {
+	if s.passiveScanner == nil {
+		http.Error(w, "this server has no scanner", http.StatusServiceUnavailable)
 		return
 	}
 	if len(body.ExchangeIDs) == 0 || len(body.ExchangeIDs) > maxCheckTestExchanges {

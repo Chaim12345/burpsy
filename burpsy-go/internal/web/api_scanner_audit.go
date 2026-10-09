@@ -30,7 +30,7 @@ type scannerAuditReq struct {
 	ExchangeID core.ExchangeID `json:"exchange_id,omitempty"`
 	// Config names one of scanner.BuiltInConfigs to run under. Empty means the server default. An
 	// unknown name is refused rather than ignored — see Server.resolveAuditConfig.
-	Config string `json:"config,omitempty"`
+	Config string `json:"config,omitempty" desc:"a built-in scan configuration name; empty means the server default"`
 	// Pool names a saved resource pool to bound this audit's probes. Empty means unpaced, which is
 	// how every audit ran before pools existed — the audit path had no rate limit at all, which is
 	// the gap a named pool closes here.
@@ -44,6 +44,11 @@ type scannerAuditReq struct {
 	// heuristics — Burp's "actively scan this marked request". Meaningful only for a single-exchange
 	// audit, which is the only path that reads it.
 	InsertionSpans [][2]int `json:"insertion_spans,omitempty"`
+	// Async starts the audit as a dashboard task and answers 202 with its task_id at once, instead of
+	// holding the request open for the whole audit (burpsy-react-ui-wdza). GET /api/tasks/{id} reads
+	// its progress and, once it has finished, the same body the synchronous call would have answered.
+	// Only POST /api/audit/{id} honours it.
+	Async bool `json:"async,omitempty" desc:"start the audit as a task and answer 202 with task_id at once; read it with GET /api/tasks/{task_id}"`
 }
 
 // auditContext binds a named pool's limiter to this audit's context, so every probe the checks send
@@ -69,7 +74,7 @@ func (s *Server) handleScannerAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req scannerAuditReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -117,7 +122,7 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	// and malformed is an error. Decoding into a zero-valued struct and treating io.EOF as "no body"
 	// is what keeps those two apart.
 	var req scannerAuditReq
-	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil && derr != io.EOF {
+	if derr := requestJSON(w, r, nil).Decode(&req); derr != nil && derr != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -128,6 +133,10 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	}
 	// Operator-marked spans apply to this one request only (burpsy-react-ui-806w).
 	cfg.ManualSpans = req.InsertionSpans
+	if req.Async {
+		s.startAuditAsync(w, core.ExchangeID(id), cfg, named, unapplied, req.Pool)
+		return
+	}
 	ctx, perr := s.auditContext(r.Context(), req.Pool)
 	if perr != nil {
 		http.Error(w, perr.Error(), http.StatusNotFound)
@@ -135,6 +144,40 @@ func (s *Server) handleAuditByPath(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.runAudit(ctx, core.ExchangeID(id), cfg, named, unapplied))
+}
+
+// startAuditAsync runs one exchange's audit as a dashboard task and answers 202 with its id
+// (burpsy-react-ui-wdza). The task's context is the registry's own cancel primitive, so POST
+// /api/tasks/{id}/cancel stops it; the finished body is kept for GET /api/tasks/{id}.
+func (s *Server) startAuditAsync(w http.ResponseWriter, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string, poolName string) {
+	// Resolved before the task exists, so an unknown pool is a 404 rather than a failed task row.
+	if _, err := s.poolLimiter(poolName); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	s.scanner = s.activeScanner()
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
+	taskCtx, cancel := task.WithCancel(context.Background())
+	ctx, err := s.auditContext(taskCtx, poolName)
+	if err != nil {
+		cancel()
+		task.Fail(err)
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	go func() {
+		defer cancel()
+		body := s.runAuditOn(ctx, id, cfg, named, unapplied, task)
+		s.taskResults().put(task.ID(), body)
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"async":       true,
+		"task_id":     task.ID(),
+		"exchange_id": id,
+		"state":       "running",
+		"poll":        fmt.Sprintf("/api/tasks/%d", task.ID()),
+		"cancel":      fmt.Sprintf("/api/tasks/%d/cancel", task.ID()),
+	})
 }
 
 // activeScanner returns this server's active scanner, building it on first use.
@@ -197,6 +240,16 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 // change on the TypeScript side — there is no typed audit response to keep in sync.
 func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string) map[string]interface{} {
 	s.scanner = s.activeScanner()
+	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
+	// which is known up front for a single item.
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
+	return s.runAuditOn(ctx, id, cfg, named, unapplied, task)
+}
+
+// runAuditOn is runAudit against a task row the caller already started — the synchronous routes
+// start it here in runAudit, the async one before it answers 202 (burpsy-react-ui-wdza).
+func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string, task *dash.Handle) map[string]interface{} {
+	s.scanner = s.activeScanner()
 	body := map[string]interface{}{
 		"started":     true,
 		"exchange_id": id,
@@ -211,16 +264,19 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 		"config_name": named,
 		"config":      newAuditConfigView(cfg),
 	}
-	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
-	// which is known up front for a single item.
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
 	// Attached here, in the one place both audit routes and the re-audit action pass through, so no
 	// entry point can run an audit that never appears in the queue. The reply's `config` block above
 	// is deliberately rendered from the caller's cfg rather than this one: the queue is observation,
 	// not configuration, and echoing it back would suggest the operator had asked for it.
 	outcome, findings := s.scanner.AuditWithin(ctx, id, s.withAuditItems(cfg))
 	task.Advance(uint64(outcome.Considered()))
-	task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
+	if ctx.Err() != nil {
+		// Cancelled (POST /api/tasks/{id}/cancel, or the caller went away): the row says stopped, with
+		// what the audit had found, rather than claiming it finished.
+		task.Stop(outcome.Breakdown(), "cancelled: "+outcome.Summary())
+	} else {
+		task.FinishWithNote(outcome.Breakdown(), outcome.Summary())
+	}
 	body["outcome"] = outcome
 	body["dispositions"] = outcome.Dispositions()
 	body["summary"] = outcome.Summary()
@@ -312,7 +368,7 @@ func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req auditSelectedReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}

@@ -45,6 +45,12 @@ type sitemapPathDiffRow struct {
 	StatusB int `json:"status_b,omitempty"`
 }
 
+// toolsCompareSitemapsReq is the request body handleToolsCompareSitemaps decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsCompareSitemapsReq struct {
+	TaskA uint64 `json:"task_a"`
+	TaskB uint64 `json:"task_b"`
+}
+
 // handleToolsCompareSitemaps serves POST /api/tools/compare-sitemaps.
 //
 // POST rather than GET because the two task ids are a work request rather than a resource name —
@@ -55,11 +61,8 @@ func (s *Server) handleToolsCompareSitemaps(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		TaskA uint64 `json:"task_a"`
-		TaskB uint64 `json:"task_b"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	var req toolsCompareSitemapsReq
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

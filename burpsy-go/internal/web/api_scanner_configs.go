@@ -654,14 +654,14 @@ type scanConfigWriteReq struct {
 
 // scannerConfigLibraryWrite serves POST/PUT/DELETE /api/scanner/configs.
 func (s *Server) scannerConfigLibraryWrite(w http.ResponseWriter, r *http.Request) {
+	var req scanConfigWriteReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+		http.Error(w, "body must be JSON with an action and a name", http.StatusBadRequest)
+		return
+	}
 	if s.persist == nil {
 		http.Error(w, "no database is attached, so a saved scan configuration would not survive this "+
 			"process; start burpsy with -db to use the configuration library", http.StatusServiceUnavailable)
-		return
-	}
-	var req scanConfigWriteReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "body must be JSON with an action and a name", http.StatusBadRequest)
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)

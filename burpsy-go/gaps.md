@@ -2054,6 +2054,92 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## MCP surface: divergences from Burp's agent tools (2026-10, burpsy-react-ui-2jrr.1)
+
+Burp-parity entries for the MCP surface sub-epic. Each says what Burp does, what burpsy does, and why
+the two differ. Burp evidence is the decompiled agent registry
+(`/root/burp-re/out/deobf/ai_agentic/burp/agentic/`).
+
+### Collaborator long-poll wait bound (burpsy-react-ui-myr2)
+- **Burp:** `poll_for_collaborator_interactions` takes `wait_seconds` 1–300
+  (`toolargs/PollForCollaboratorInteractionsArgs.java`, `@Range(min = 1L, max = 300L)`).
+- **burpsy:** `POST /api/collaborator/poll` takes `wait_seconds` 0–60 (0 = return at once) and refuses
+  61+ with 400 (`internal/web/api_collaborator_poll.go`, `maxCollaboratorWaitSeconds`).
+- **Divergence:** a long-poll holds one HTTP request and one MCP tool call open for its whole wait;
+  60 s sits well inside every client timeout on that path, where 300 s does not. A caller that needs
+  longer polls again. burpsy also answers a fourth status, `unavailable`, when no channel is open or
+  the log cannot be read, instead of waiting out the timer and reporting `empty`.
+
+### Message windows: regex dialect and body source (burpsy-react-ui-yahm)
+- **Burp:** `inspect_http_message` takes `pattern` as a **Java** regex and `case_insensitive` as Java's
+  ASCII-only `CASE_INSENSITIVE` (`toolargs/InspectHttpMessageArgs.java`); it returns only the first
+  match.
+- **burpsy:** `GET /api/message/{id}?pattern=` compiles **RE2** (Go `regexp`): no backreferences or
+  lookaround, linear time; `case_insensitive` prefixes `(?i)`, which is Unicode-aware. It returns the
+  first match as the anchor and also lists up to 100 match offsets (`matches`) for paging. The window
+  is over the wire bytes unless `decoded=true` asks for the body with chunking and Content-Encoding
+  undone; a decode that is impossible is a 400, never a silent fall-back.
+- **Divergence:** RE2 is the regex engine every other burpsy search uses (suite search, history search,
+  scope `regex:` arms), and its linear time matters on a multi-megabyte body an agent chose the
+  pattern for. A Java-only construct is refused with the compile error rather than approximated.
+
+### Datasets: one route over burpsy's lists (burpsy-react-ui-co88)
+- **Burp:** `search_dataset` / `summarize_dataset` work on a `dataset_id` that every `get_*`/`list_*` tool
+  returns, with `pages` (1–10) × `page_size` (1–100), `wait_seconds` 1–300 and a Java regex
+  (`toolargs/SearchDatasetArgs.java`, `InspectDatasetArgs.java`).
+- **burpsy:** `GET /api/datasets/{source}` names the source directly (history, issues, sitemap,
+  tool-log, ws-history, intruder/{task_id}) instead of a dataset id minted by an earlier call; one
+  page of `limit` ≤ 500 per call; `wait_seconds` ≤ 60; RE2 regex; facets are top-20 values per column
+  with `distinct` and `other` counts.
+- **Divergence:** burpsy's lists are live views of the store, not snapshots, so there is no dataset to
+  mint and expire — the source name is the handle, and `since` gives an incremental read instead.
+  Organizer items, scan configurations and Burp's bulk-send results are not sources yet: the organizer
+  route is riskLocal and carries operator notes, and burpsy has no bulk-send engine (its scripts
+  arrive with burpsy-react-ui-wiwh). The wait bound is the one the collaborator poll states.
+
+### Structured send edits (burpsy-react-ui-vuxy)
+- **Burp:** `send_request` takes `request_id` / `url` / `host`, 15 edit ops and `http_version`
+  `auto|http_1|http_2` (`toolargs/RequestSpec.java`, `EditOperation.java`, `HttpVersionSpec.java`).
+- **burpsy:** `POST /api/repeater/send` with `from_message` / `from_exchange`, `edits`, `http_version`
+  `auto|1.1|2`, `dry_run` (`internal/reqedit`, `internal/web/repeater_edits.go`). The 15 ops plus
+  `set_json_field` (a dotted path; replaces that value's bytes or inserts the key into its parent).
+- **Divergences, each on purpose:** no `url`/`host` builder (a typed `request` with `target` already
+  does that); `set_query_param` / `set_body_param` insert the value **as written** (URL-encode it
+  yourself — an encoder would decide for you what a parameter-pollution or encoding test sends;
+  `set_form_fields` does encode); `set_header` replaces the **first** occurrence and leaves later
+  duplicates (smuggling research needs them), while `delete_header` removes all; `raw_replace` replaces
+  every occurrence and refuses when there is none; a body op on a chunked request is refused rather
+  than re-framing it. A structured send is authorised on its final bytes including the path, which is
+  stricter than the plain send's host-level gate.
+
+### Task handles and pushed notifications (burpsy-react-ui-wdza)
+- **Burp:** a 15 s sync window then a `TaskHandle` (uuid, status, `pollIntervalMs`, `ttlMs`)
+  (`task/SyncWindow.java`, `TaskHandle.java`); MCP progress notifications; finished operations and
+  High-severity issues "reported back automatically".
+- **burpsy:** the transport applies the same 15 s window to any console call that answers 202 with a
+  `task_id`, and starts an audit as such a call (`POST /api/audit/{id}` `{"async": true}`); the handle
+  is the console task id (`GET /api/tasks/{id}`, `burpsy_task_status`); progress notifications for a
+  call with a progress token; `notifications/message` for finished tasks and High/Critical issues.
+- **Divergences:** the handle has no `ttlMs` — a finished task's row lives until the registry's
+  500-row bound evicts it, and an async audit's full result body is kept for the last 64 tasks. The
+  window applies to any call answering 202 with a `task_id` (crawl, API scan, selection audit), and
+  the transport starts only `POST /api/audit/{id}` that way. Still synchronous through MCP: Intruder
+  (its run returns its own report and can be stopped through `POST /api/intruder/attacks/{task}/stop`),
+  the queue's "audit again" (`POST /api/scanner/audit-items/{id}/again`), and the legacy alias
+  `POST /api/scanner/audit` (not on the grouped surface). Push is for tasks finished and issues found *after* the session
+  started.
+
+### Skills (burpsy-react-ui-ulsy)
+- **Burp:** PortSwigger-packaged skills run with `run_skill_script` (`McpBurpTool.java`), delivering
+  files to a code-execution sandbox (`toolargs/CodeExecutionMeta.java`); listed in the client with the
+  tools they use (`desktop/burp-at/skills.html`).
+- **burpsy:** an operator-named directory of JSON manifests (`-skills DIR`, `internal/skills`), served
+  as MCP prompts with a banner naming the tools each skill calls; per-project disable in Settings.
+- **Divergence:** prompt-only skills run; a script-bearing skill is listed as unavailable with its
+  reason, because burpsy has no scripting runtime yet (burpsy-react-ui-wiwh). There is no packaged
+  library — burpsy ships the mechanism, not PortSwigger's techniques. The per-project switch is its
+  own setting (`skills.disabled`) rather than part of the per-tool policy store planned in
+  burpsy-react-ui-2jig, which arrives in the second 2jrr PR.
 ## Repeater A: editor views, tab workflow, per-tab overrides, GraphQL actions (burpsy-react-ui-i9ti.1, 2026-10-08)
 
 ### Save entire history — the file format (pznm)

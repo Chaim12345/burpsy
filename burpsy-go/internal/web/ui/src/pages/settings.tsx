@@ -6,7 +6,7 @@ import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import type { CaExportKind } from "../lib/ca-export";
 import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
 import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
-import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
+import { useScanConfigLibrary, useScannerConfigs , useSkills, useTriageSettings } from "../lib/data.attack";
 import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type {
  AddressFamily,
@@ -57,7 +57,7 @@ import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
-import type { TriageSettingsView } from "../lib/types.attack";
+import type { SkillsView, TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
@@ -3377,6 +3377,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  network: NetworkSection,
  scanner: ScannerSettingsSection,
  "llm-triage": LlmTriageSection,
+ skills: SkillsSection,
  "browser-engine": DomEngineSection,
  browser: BrowserSection,
  "upstream-proxy": UpstreamProxySection,
@@ -4393,6 +4394,105 @@ function LlmTriageSection(): JSX.Element {
      </span>
     </div>
    </div>
+  </Card>
+ );
+}
+
+/**
+ * The skill library (burpsy-react-ui-ulsy): packaged prompt techniques from the operator's -skills
+ * directory, which burpsy-mcp publishes as MCP prompts. This card is where an engagement switches a
+ * skill off — a project setting, so another project keeps its own choice. A skill that needs the
+ * scripting runtime is listed as unavailable with the reason rather than hidden, and every manifest
+ * that did not load is listed with why: a library that silently showed fewer skills than its
+ * directory holds would read as complete.
+ */
+function SkillsSection(): JSX.Element {
+ const { get, setDisabled } = useSkills();
+ const heading = (
+  <SectionHeading
+   title="Skills"
+   detail="Packaged prompt techniques from the directory burpsy was started with (-skills DIR). An MCP client lists them as prompts, each naming the tools it calls. Turn a skill off here to stop offering it in this project."
+  />
+ );
+ if (get.error) {
+  return (
+   <Card>
+    {heading}
+    <ErrorNotice error={get.error} />
+   </Card>
+  );
+ }
+ if (!get.data) {
+  return (
+   <Card>
+    {heading}
+    <LoadingPanel />
+   </Card>
+  );
+ }
+ const view: SkillsView = get.data;
+ const toggle = (name: string, on: boolean) => {
+  const next = on ? view.disabled.filter((n) => n !== name) : [...view.disabled, name];
+  setDisabled.mutate(next, {
+   onSuccess: () => toast.success(on ? `Skill ${name} enabled for this project` : `Skill ${name} disabled for this project`),
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The skill setting was refused"),
+  });
+ };
+ return (
+  <Card>
+   {heading}
+   {!view.configured ? (
+    <Empty title="No skill library is loaded" detail={view.hint ?? "Start burpsy with -skills DIR."} />
+   ) : (
+    <div className="stack">
+     <p className="field-hint">
+      Loaded from <code>{view.dir}</code>: {formatCount(view.skills.length)} skill{view.skills.length === 1 ? "" : "s"}
+      {view.refused.length > 0 ? `, ${formatCount(view.refused.length)} refused` : ""}.{" "}
+      {view.persisted ? "Which skills are off is saved with this project." : "No project database is attached, so which skills are off lasts until burpsy exits."}
+     </p>
+     {view.disabled_error ? <ErrorNotice error={new Error(`The stored list of disabled skills could not be read: ${view.disabled_error}`)} /> : null}
+     {view.skills.length === 0 ? (
+      <Empty title="The directory holds no loadable skill" detail="Add a <name>.json manifest with a name, a description and a prompt." />
+     ) : (
+      <SimpleTable headers={["Skill", "Calls", "Status", "On for this project"]}>
+       {view.skills.map((skill) => (
+        <tr key={skill.name}>
+         <td>
+          <code>{skill.name}</code>
+          <div className="cell-dim">{skill.description}</div>
+         </td>
+         <td>{skill.tools.length > 0 ? skill.tools.join(", ") : <span className="cell-dim">no tools named</span>}</td>
+         <td>
+          {skill.available ? <Badge tone="good">Available</Badge> : <Badge tone="warn">Unavailable</Badge>}
+          {skill.unavailable_reason ? <div className="cell-dim">{skill.unavailable_reason}</div> : null}
+         </td>
+         <td>
+          <Switch
+           checked={!skill.disabled}
+           onCheckedChange={(on) => {
+            if (!setDisabled.isPending) toggle(skill.name, on);
+           }}
+           label={`Skill ${skill.name}`}
+          />
+         </td>
+        </tr>
+       ))}
+      </SimpleTable>
+     )}
+     {view.refused.length > 0 ? (
+      <SimpleTable headers={["Refused manifest", "Why"]}>
+       {view.refused.map((r) => (
+        <tr key={r.file}>
+         <td>
+          <code>{r.file}</code>
+         </td>
+         <td>{r.error}</td>
+        </tr>
+       ))}
+      </SimpleTable>
+     ) : null}
+    </div>
+   )}
   </Card>
  );
 }

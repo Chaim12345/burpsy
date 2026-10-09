@@ -273,7 +273,7 @@ func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&patch); err != nil {
 		http.Error(w, "Body must be a JSON object of network setting sections", http.StatusBadRequest)
 		return
 	}

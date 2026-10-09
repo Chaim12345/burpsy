@@ -51,6 +51,17 @@ func (s *Server) mirrorTlsPassthrough() {
 	}
 }
 
+// tlsPassthroughAddReq is the request body handleTlsPassthrough decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type tlsPassthroughAddReq struct {
+	Pattern string `json:"pattern"`
+}
+
+// tlsPassthroughSwitchesReq is the request body handleTlsPassthrough decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type tlsPassthroughSwitchesReq struct {
+	ApplyOutOfScope  *bool `json:"apply_out_of_scope"`
+	AutoAddOnFailure *bool `json:"auto_add_on_failure"`
+}
+
 // handleTlsPassthrough serves GET/POST/DELETE /api/proxy/passthrough.
 func (s *Server) handleTlsPassthrough(w http.ResponseWriter, r *http.Request) {
 	// Verb dispatch comes before the policy guard: a server without a policy must
@@ -66,15 +77,13 @@ func (s *Server) handleTlsPassthrough(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(s.viewPassthrough())
 
 	case http.MethodPost:
-		if s.tlsPolicy == nil {
-			http.Error(w, "No TLS policy is attached to this server, so there is no passthrough list to manage", http.StatusServiceUnavailable)
+		var req tlsPassthroughAddReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		var req struct {
-			Pattern string `json:"pattern"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if s.tlsPolicy == nil {
+			http.Error(w, "No TLS policy is attached to this server, so there is no passthrough list to manage", http.StatusServiceUnavailable)
 			return
 		}
 		pattern := strings.TrimSpace(req.Pattern)
@@ -90,16 +99,13 @@ func (s *Server) handleTlsPassthrough(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		// The two coupling switches. A whole document, so a client sends the state it wants and reads
 		// back the confirmed one — the convention every other switch endpoint here follows.
-		if s.tlsPolicy == nil {
-			http.Error(w, "No TLS policy is attached to this server, so there is no passthrough list to manage", http.StatusServiceUnavailable)
+		var req tlsPassthroughSwitchesReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		var req struct {
-			ApplyOutOfScope  *bool `json:"apply_out_of_scope"`
-			AutoAddOnFailure *bool `json:"auto_add_on_failure"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if s.tlsPolicy == nil {
+			http.Error(w, "No TLS policy is attached to this server, so there is no passthrough list to manage", http.StatusServiceUnavailable)
 			return
 		}
 		if req.ApplyOutOfScope != nil {

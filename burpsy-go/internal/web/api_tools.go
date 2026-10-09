@@ -21,6 +21,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/query"
+	"github.com/burpsy-go/burpsy/internal/reqedit"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
 	"github.com/burpsy-go/burpsy/internal/toollog"
@@ -49,6 +50,22 @@ type repeaterSendReq struct {
 	// standing behaviour in full — the zero options are the defaults, so an absent object and an
 	// empty one mean the same thing.
 	Options *repeaterSendOptions `json:"options,omitempty"`
+
+	// The structured send (burpsy-react-ui-vuxy, repeater_edits.go): derive the request from a stored
+	// one, edit it with ordered ops instead of hand-authored bytes, pin the HTTP version, and preview
+	// it without sending.
+
+	// FromMessage is a stored request message to send (or to edit and send). With FromExchange and no
+	// request text, that exchange's own request is the base, and its host/port/scheme the default target.
+	FromMessage *core.MsgId `json:"from_message,omitempty" desc:"a stored request message id to derive the request from"`
+	// Edits run in order over the base request, each on the previous one's output. The stored base is
+	// never changed: the edited request is stored as a new message when it is sent.
+	Edits []reqedit.Op `json:"edits,omitempty" desc:"ordered edit operations applied to the base request before sending"`
+	// HTTPVersion pins the transport: "auto", "1.1" or "2". The same pin as options.protocol_preference.
+	HTTPVersion string `json:"http_version,omitempty" enum:"auto|1.1|2" desc:"force HTTP/1.1 or HTTP/2; auto follows ALPN"`
+	// DryRun answers the exact bytes that would be sent, the target and the scope verdict, and sends
+	// nothing.
+	DryRun bool `json:"dry_run,omitempty" desc:"return the edited request and the scope verdict without sending"`
 	// Note is the tab's Notes panel text (burpsy-react-ui-jva5), recorded as the new exchange's
 	// comment. Burp: "if you send a message from Repeater to another tool, your notes and
 	// highlights are copied across" — every tool that reads an exchange's notes (HTTP history's
@@ -107,6 +124,8 @@ type repeaterSendResp struct {
 	// the same decoding as a MessageView's body_base64 — so the response pane can show a binary body
 	// (a gRPC reply in the Protobuf tab, burpsy-react-ui-3pco) that `response` cannot carry.
 	ResponseBodyBase64 string `json:"response_body_base64,omitempty"`
+	// EditsApplied is what each structured edit did (burpsy-react-ui-vuxy); absent for a plain send.
+	EditsApplied []reqedit.Applied `json:"edits_applied,omitempty"`
 	// Redirects is the chain this send produced, and it is present only when the response was a 30x.
 	//
 	// `response` above stays the response to the request the operator wrote — that is the contract
@@ -422,7 +441,7 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req repeaterSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -437,6 +456,10 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validRepeaterNote("note", req.Note); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.structured() {
+		s.repeaterStructuredSend(w, r, req, request)
 		return
 	}
 	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, request, req.Options, req.FromExchange)
@@ -639,7 +662,7 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req intruderPointsReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1077,7 +1100,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req intruderRunReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1837,7 +1860,7 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(s.liveAuditStatus())
 	case http.MethodPost:
 		var req liveAuditEnableReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -1983,7 +2006,7 @@ func (s *Server) handleSequencerAnalyse(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req sequencerAnalyseReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

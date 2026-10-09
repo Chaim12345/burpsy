@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -43,27 +42,30 @@ type protoDecodeResponse struct {
 	Message  string   `json:"message,omitempty"`
 }
 
+// protobufDecodeReq is the request body handleProtobufDecode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type protobufDecodeReq struct {
+	BodyBase64 string `json:"body_base64"`
+	GRPC       bool   `json:"grpc"`
+	// Proto is optional .proto source and Message the message type to read the body as; together
+	// they turn `#1 varint 150` into `user_id (int32) 150`. Without Proto the response is the
+	// schemaless view, unchanged.
+	Proto   string `json:"proto"`
+	Message string `json:"message"`
+	// RPCPath and Direction let a gRPC body name its own type: the call path (/pkg.Service/Method)
+	// plus the schema's service block give the request and response messages, so the operator
+	// need not pick one. Direction is "request" or "response". Message, when set, wins.
+	RPCPath   string `json:"rpc_path"`
+	Direction string `json:"direction"`
+}
+
 // handleProtobufDecode serves POST /api/protobuf/decode. riskLocal.
 func (s *Server) handleProtobufDecode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		BodyBase64 string `json:"body_base64"`
-		GRPC       bool   `json:"grpc"`
-		// Proto is optional .proto source and Message the message type to read the body as; together
-		// they turn `#1 varint 150` into `user_id (int32) 150`. Without Proto the response is the
-		// schemaless view, unchanged.
-		Proto   string `json:"proto"`
-		Message string `json:"message"`
-		// RPCPath and Direction let a gRPC body name its own type: the call path (/pkg.Service/Method)
-		// plus the schema's service block give the request and response messages, so the operator
-		// need not pick one. Direction is "request" or "response". Message, when set, wins.
-		RPCPath   string `json:"rpc_path"`
-		Direction string `json:"direction"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
+	var body protobufDecodeReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"body_base64":"...","grpc":bool,"proto":"...","message":"..."}`, http.StatusBadRequest)
 		return
 	}
@@ -151,17 +153,20 @@ func annotateFields(schema *grpcproto.Schema, message string, fields []grpcproto
 	return named
 }
 
+// protobufEncodeReq is the request body handleProtobufEncode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type protobufEncodeReq struct {
+	GRPC   bool             `json:"grpc"`
+	Frames []protoFrameView `json:"frames"`
+}
+
 // handleProtobufEncode serves POST /api/protobuf/encode. riskLocal.
 func (s *Server) handleProtobufEncode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		GRPC   bool             `json:"grpc"`
-		Frames []protoFrameView `json:"frames"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
+	var body protobufEncodeReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 8<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"grpc":bool,"frames":[...]}`, http.StatusBadRequest)
 		return
 	}

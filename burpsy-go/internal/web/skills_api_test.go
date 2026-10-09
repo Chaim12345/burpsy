@@ -1,0 +1,115 @@
+package web
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/skills"
+)
+
+// burpsy-react-ui-ulsy: the skill library over HTTP.
+
+func skillsServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"a.json":   `{"name":"jwt-none","description":"Try alg=none","tools":["history","send"],"arguments":[{"name":"exchange_id","required":true}],"prompt":"Resend exchange {{exchange_id}} with alg none."}`,
+		"b.json":   `{"name":"scripted","description":"Needs a runtime","prompt":"x","script":"run.js"}`,
+		"bad.json": `{"name":"Bad Name","description":"d","prompt":"p"}`,
+	} {
+		os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600)
+	}
+	lib, err := skills.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newTestServer().WithSkills(lib)
+}
+
+func doReq(s *Server, method, path, body string) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+	return rec
+}
+
+func TestTheSkillLibraryListsAvailabilityAndRefusals(t *testing.T) {
+	s := skillsServer(t)
+	rec := doReq(s, http.MethodGet, "/api/skills", "")
+	var v struct {
+		Configured bool `json:"configured"`
+		Skills     []struct {
+			Name              string   `json:"name"`
+			Tools             []string `json:"tools"`
+			Available         bool     `json:"available"`
+			UnavailableReason string   `json:"unavailable_reason"`
+			Disabled          bool     `json:"disabled"`
+		} `json:"skills"`
+		Refused []struct {
+			File, Error string
+		} `json:"refused"`
+		Disabled  []string `json:"disabled"`
+		Persisted bool     `json:"persisted"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	if !v.Configured || len(v.Skills) != 2 || len(v.Refused) != 1 || v.Refused[0].File != "bad.json" || v.Persisted {
+		t.Fatalf("library view: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"disabled":[]`) {
+		t.Fatalf("an empty disabled list is not []: %s", rec.Body.String())
+	}
+	if v.Skills[0].Name != "jwt-none" || !v.Skills[0].Available || v.Skills[1].Available || v.Skills[1].UnavailableReason == "" {
+		t.Fatalf("availability: %+v", v.Skills)
+	}
+
+	// Rendered prompt, with its argument; a missing required argument is a 400.
+	rec = doReq(s, http.MethodGet, "/api/skills/jwt-none?exchange_id=7", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"prompt":"Resend exchange 7 with alg none."`) {
+		t.Fatalf("render: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReq(s, http.MethodGet, "/api/skills/jwt-none", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing argument answered %d", rec.Code)
+	}
+	if rec := doReq(s, http.MethodGet, "/api/skills/scripted", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("an unavailable skill answered %d", rec.Code)
+	}
+	if rec := doReq(s, http.MethodGet, "/api/skills/nope", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("an unknown skill answered %d", rec.Code)
+	}
+
+	// Disable for this project: the list says so and the prompt is refused.
+	rec = doReq(s, http.MethodPut, "/api/skills/disabled", `{"disabled":["jwt-none"]}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"disabled":["jwt-none"]`) {
+		t.Fatalf("disable: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReq(s, http.MethodGet, "/api/skills/jwt-none?exchange_id=7", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("a disabled skill rendered: %d", rec.Code)
+	}
+	if rec := doReq(s, http.MethodPut, "/api/skills/disabled", `{"disabled":["typo"]}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown name was stored: %d", rec.Code)
+	}
+}
+
+func TestTheDisabledListIsPersistedWithTheProject(t *testing.T) {
+	s, _ := newTestServerWithDB(t)
+	lib := skillsServer(t).skills
+	s.WithSkills(lib)
+	if rec := doReq(s, http.MethodPut, "/api/skills/disabled", `{"disabled":["jwt-none"]}`); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"persisted":true`) {
+		t.Fatalf("disable with a db: %d %s", rec.Code, rec.Body.String())
+	}
+	names, err := s.persist.LoadDisabledSkills()
+	if err != nil || len(names) != 1 || names[0] != "jwt-none" {
+		t.Fatalf("stored %v %v", names, err)
+	}
+}
+
+func TestNoLibrarySaysHowToLoadOne(t *testing.T) {
+	rec := doReq(newTestServer(), http.MethodGet, "/api/skills", "")
+	if !strings.Contains(rec.Body.String(), `"configured":false`) || !strings.Contains(rec.Body.String(), "-skills DIR") || !strings.Contains(rec.Body.String(), `"skills":[]`) {
+		t.Fatalf("%s", rec.Body.String())
+	}
+}

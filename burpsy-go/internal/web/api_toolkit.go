@@ -137,6 +137,14 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sitemapInsertReq is the request body sitemapInsert decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sitemapInsertReq struct {
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	TLS  bool   `json:"tls"`
+	Path string `json:"path"`
+}
+
 // sitemapInsert records one operator-added site-map node (amu).
 //
 // The response says which of the two things happened, because they are different facts an operator
@@ -145,13 +153,8 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 // was on the map for a stronger reason, and the distinction is the whole point of keeping inserts
 // separate from observations.
 func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host string `json:"host"`
-		Port uint16 `json:"port"`
-		TLS  bool   `json:"tls"`
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+	var req sitemapInsertReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"/p\"}",
 			http.StatusBadRequest)
 		return
@@ -184,18 +187,21 @@ func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(body)
 }
 
+// sitemapDeleteReq is the request body sitemapDelete decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sitemapDeleteReq struct {
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	TLS  bool   `json:"tls"`
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
 // sitemapDelete validates the node fields the UI sent and suppresses that host, branch or item.
 // A wrong-verb answer is the mux's business; a body naming no host, or a path with no kind, is a
 // 400 saying what was wrong — not a silent success that removed nothing.
 func (s *Server) sitemapDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host string `json:"host"`
-		Port uint16 `json:"port"`
-		TLS  bool   `json:"tls"`
-		Path string `json:"path"`
-		Kind string `json:"kind"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
+	var req sitemapDeleteReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
 		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"\", \"kind\": \"host\"} (path \"\" = whole host) or {.., \"path\": \"/p\", \"kind\": \"item\"|\"branch\"}", http.StatusBadRequest)
 		return
 	}
@@ -1112,7 +1118,7 @@ func (s *Server) matchReplaceGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	var set matchReplaceSetSpec
-	if err := json.NewDecoder(r.Body).Decode(&set); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&set); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1223,6 +1229,13 @@ func (s *Server) handleMatchReplaceRules(w http.ResponseWriter, r *http.Request)
 	s.matchReplaceRulesHandler(w, r)
 }
 
+// matchReplaceTestReq is the request body handleMatchReplaceTest decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type matchReplaceTestReq struct {
+	Input      string                 `json:"input"`
+	Direction  string                 `json:"direction"`
+	DraftRules []matchReplaceRuleSpec `json:"draft_rules"`
+}
+
 // handleMatchReplaceTest compiles draft rules and applies them to an input, mirroring the UI's
 // "original vs auto-modified" test.
 //
@@ -1236,12 +1249,8 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input      string                 `json:"input"`
-		Direction  string                 `json:"direction"`
-		DraftRules []matchReplaceRuleSpec `json:"draft_rules"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req matchReplaceTestReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1421,7 +1430,7 @@ type toolLogSetCaptureReq struct {
 // deliberately not recorded, and the uncaptured counters start counting them.
 func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
 	var req toolLogSetCaptureReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
 		return
 	}
@@ -1558,6 +1567,12 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// toolLogSetCommentReq is the request body toolLogSetComment decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolLogSetCommentReq struct {
+	Comment   *string `json:"comment"`
+	Highlight *string `json:"highlight"`
+}
+
 // toolLogSetComment serves PATCH /api/tools/log/{id} — Burp's log comment
 // (burpsy-react-ui-5da). The body carries the whole comment; empty clears it. Unknown ids
 // 404 rather than succeeding quietly, so a note addressed at a trimmed row cannot read as saved.
@@ -1582,11 +1597,8 @@ func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
 	// comment-only PATCH decoded the absent highlight key as "" and SetHighlight wrote it over
 	// whatever colour the row already had. A key that is absent from the body now leaves that axis
 	// alone; a key present with "" still clears it, same as before.
-	var req struct {
-		Comment   *string `json:"comment"`
-		Highlight *string `json:"highlight"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolLogSetCommentReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1666,17 +1678,20 @@ func isUTF8(b []byte) bool {
 	return strings.ToValidUTF8(string(b), "") == string(b)
 }
 
+// toolsDecodeReq is the request body handleToolsDecode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsDecodeReq struct {
+	Input    string `json:"input"`
+	Encoding string `json:"encoding"`
+	Guess    bool   `json:"guess_alphabets"`
+}
+
 func (s *Server) handleToolsDecode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input    string `json:"input"`
-		Encoding string `json:"encoding"`
-		Guess    bool   `json:"guess_alphabets"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsDecodeReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1869,16 +1884,19 @@ func plausibleDecode(before, after string) bool {
 	return float64(nonPrint)/float64(len(after)) < 0.1
 }
 
+// toolsEncodeReq is the request body handleToolsEncode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsEncodeReq struct {
+	Input    string `json:"input"`
+	Encoding string `json:"encoding"`
+}
+
 func (s *Server) handleToolsEncode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input    string `json:"input"`
-		Encoding string `json:"encoding"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsEncodeReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1945,23 +1963,26 @@ func encodableNames() []string {
 	return append(names, "ascii", "rot13")
 }
 
+// toolsHashReq is the request body handleToolsHash decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+// input_encoding / key_encoding: utf8 (default), hex or base64 (standard or URL-safe, padded or
+// not). output: hex (default), base64, or base64url (unpadded — a JWS signature). key is required
+// by the hmac-* family and refused by every other algorithm (burpsy-react-ui-wi55, -7tgt).
+type toolsHashReq struct {
+	Input         string `json:"input" desc:"the text to hash, decoded per input_encoding"`
+	InputEncoding string `json:"input_encoding" desc:"utf8 (default), hex or base64"`
+	Algorithm     string `json:"algorithm" desc:"a digest (md5, sha1, sha256, sha3-256, blake2b-256, …) or an hmac-* algorithm; empty means sha256"`
+	Key           string `json:"key" desc:"the HMAC key, decoded per key_encoding; required by hmac-* and refused otherwise"`
+	KeyEncoding   string `json:"key_encoding" desc:"utf8 (default), hex or base64"`
+	Output        string `json:"output" desc:"hex (default), base64 or base64url"`
+}
+
 func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// input_encoding / key_encoding: utf8 (default), hex or base64 (standard or URL-safe, padded or
-	// not). output: hex (default), base64, or base64url (unpadded — a JWS signature). key is required
-	// by the hmac-* family and refused by every other algorithm (burpsy-react-ui-wi55, -7tgt).
-	var req struct {
-		Input         string `json:"input"`
-		InputEncoding string `json:"input_encoding"`
-		Algorithm     string `json:"algorithm"`
-		Key           string `json:"key"`
-		KeyEncoding   string `json:"key_encoding"`
-		Output        string `json:"output"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsHashReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -2020,6 +2041,23 @@ type compareOp struct {
 	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
+// toolsCompareReq is the request body handleToolsCompare decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsCompareReq struct {
+	A string `json:"a"`
+	B string `json:"b"`
+	// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
+	// request list, which is empty unless the operator populated it — so an old client that
+	// does not send this field gets exactly the behaviour it had before the field existed.
+	Response bool `json:"response"`
+	// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
+	Granularity string `json:"granularity"`
+	// ABase64 / BBase64 carry a side as base64 instead of text (burpsy-react-ui-ppqw): a file
+	// loaded from disk can be binary, and a JSON string would replace every non-UTF-8 byte
+	// with U+FFFD before the diff ever saw it. A side may be sent one way or the other, not both.
+	ABase64 string `json:"a_base64"`
+	BBase64 string `json:"b_base64"`
+}
+
 // handleToolsCompare mirrors comparer.ts's CompareResp. The engine aligns the two inputs —
 // byte-by-byte or word-by-word, the operator's choice — and this folds consecutive differences into
 // equal/replace/insert/delete ops so the UI can render unified columns.
@@ -2033,22 +2071,8 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		A string `json:"a"`
-		B string `json:"b"`
-		// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
-		// request list, which is empty unless the operator populated it — so an old client that
-		// does not send this field gets exactly the behaviour it had before the field existed.
-		Response bool `json:"response"`
-		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
-		Granularity string `json:"granularity"`
-		// ABase64 / BBase64 carry a side as base64 instead of text (burpsy-react-ui-ppqw): a file
-		// loaded from disk can be binary, and a JSON string would replace every non-UTF-8 byte
-		// with U+FFFD before the diff ever saw it. A side may be sent one way or the other, not both.
-		ABase64 string `json:"a_base64"`
-		BBase64 string `json:"b_base64"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsCompareReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -2171,6 +2195,11 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 
 // ---- Organizer ---------------------------------------------------------------------------------
 
+// organizerReq is the request body handleOrganizer decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerReq struct {
+	Exchange int `json:"exchange"`
+}
+
 func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -2185,10 +2214,8 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 		// member was moved out).
 		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView(), "collections": s.organizer.Collections()})
 	case http.MethodPost:
-		var req struct {
-			Exchange int `json:"exchange"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2229,6 +2256,13 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// organizerItemReq is the request body handleOrganizerItem decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerItemReq struct {
+	Title     string `json:"title"`
+	Note      string `json:"note"`
+	Highlight string `json:"highlight"`
+}
+
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	idStr := strings.TrimPrefix(r.URL.Path, "/api/tools/organizer/")
 	idStr = strings.TrimSuffix(idStr, "/")
@@ -2246,12 +2280,8 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPost:
-		var req struct {
-			Title     string `json:"title"`
-			Note      string `json:"note"`
-			Highlight string `json:"highlight"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerItemReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2278,6 +2308,11 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// organizerItemStatusReq is the request body organizerItemStatus decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerItemStatusReq struct {
+	Status string `json:"status"`
+}
+
 // organizerItemStatus serves PUT /api/tools/organizer/{id}/status — the workflow-status write
 // path, separate from the POST edit form for the same reason the store keeps SetStatus apart
 // from Update: setting a status is one deliberate operator decision (Burp applies it from the
@@ -2296,10 +2331,8 @@ func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idS
 		http.Error(w, "Invalid item id", http.StatusBadRequest)
 		return
 	}
-	var req struct {
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req organizerItemStatusReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -2317,6 +2350,22 @@ func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idS
 }
 
 // ---- Organizer collections ----------------------------------------------------------------------
+
+// organizerCollectionCreateReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionCreateReq struct {
+	Name string `json:"name"`
+}
+
+// organizerInboxMoveReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerInboxMoveReq struct {
+	ItemIDs []int `json:"item_ids"`
+}
+
+// organizerCollectionUpdateReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionUpdateReq struct {
+	Name string  `json:"name"`
+	Note *string `json:"note"`
+}
 
 // handleOrganizerCollections serves the /api/tools/organizer/collections surface — Burp's
 // organizer collections (tools/organizer/collections.html): New / Rename / Duplicate / Delete,
@@ -2340,10 +2389,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 	if rest == "" {
 		switch r.Method {
 		case http.MethodPost:
-			var req struct {
-				Name string `json:"name"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var req organizerCollectionCreateReq
+			if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 				http.Error(w, "Invalid request body", http.StatusBadRequest)
 				return
 			}
@@ -2372,10 +2419,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var req struct {
-			ItemIDs []int `json:"item_ids"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerInboxMoveReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2413,11 +2458,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 	}
 	switch r.Method {
 	case http.MethodPut:
-		var req struct {
-			Name string  `json:"name"`
-			Note *string `json:"note"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerCollectionUpdateReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2534,6 +2576,12 @@ func (s *Server) nameTaken(name string) bool {
 	return false
 }
 
+// organizerCollectionItemsReq is the request body organizerCollectionItems decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionItemsReq struct {
+	ItemIDs []int `json:"item_ids"`
+	Copy    bool  `json:"copy"`
+}
+
 // organizerCollectionItems moves (or copies) a set of items into one collection. copy=true
 // duplicates each item first — the Copy Link analogue — so the source keeps its own entry.
 func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request, id int) {
@@ -2541,11 +2589,8 @@ func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		ItemIDs []int `json:"item_ids"`
-		Copy    bool  `json:"copy"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req organizerCollectionItemsReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

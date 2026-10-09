@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -472,7 +471,7 @@ func (s *Server) handleCrawlGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 	var req crawlStartReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}

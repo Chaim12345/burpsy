@@ -658,7 +658,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req collaboratorServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -730,7 +730,26 @@ func (s *Server) handleCollaboratorPoll(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+	// The body is optional: an empty POST is the original "re-read now" and answers exactly as it
+	// always did. payload_ids / wait_seconds / min_interactions are the filtered long-poll
+	// (burpsy-react-ui-myr2, api_collaborator_poll.go).
+	var req collaboratorPollReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "body must be empty or JSON {\"payload_ids\":[…],\"wait_seconds\":N,\"min_interactions\":M}", http.StatusBadRequest)
+		return
+	}
+	if req.empty() {
+		writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+		return
+	}
+	s.collaboratorLongPoll(w, r, req)
+}
+
+// collaboratorPayloadReq is the request body handleCollaboratorPayload decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type collaboratorPayloadReq struct {
+	Count                 int    `json:"count"`
+	CustomData            string `json:"custom_data"`
+	WithoutServerLocation bool   `json:"without_server_location"`
 }
 
 // handleCollaboratorPayload serves POST /api/collaborator/payload: mint one address.
@@ -764,12 +783,8 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 	var customData string
 	withoutLocation := false
 	if r.Body != nil {
-		var req struct {
-			Count                 int    `json:"count"`
-			CustomData            string `json:"custom_data"`
-			WithoutServerLocation bool   `json:"without_server_location"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		var req collaboratorPayloadReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {'count': N} or empty", http.StatusBadRequest)
 			return
 		}
@@ -1012,6 +1027,11 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// collaboratorServerUnsetReq is DELETE /api/collaborator/server's optional body.
+type collaboratorServerUnsetReq struct {
+	DiscardOpenChannel bool `json:"discard_open_channel" desc:"stop using the server even though a channel is registered, orphaning the payload addresses minted from it; without it an open channel is a 409"`
+}
+
 // handleCollaboratorServerUnset serves DELETE /api/collaborator/server: Burp's "Don't use Burp
 // Collaborator" (burpsy-react-ui-8e3n). The installation goes back to not_configured, and every
 // out-of-band check refuses again rather than reporting a clean result.
@@ -1023,11 +1043,9 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 // are dropped from this surface and counted in the reply, and the interaction counts go back to null.
 // They do not go to 0, because a payload nobody polls has no interactions to count.
 func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		DiscardOpenChannel bool `json:"discard_open_channel"`
-	}
+	var req collaboratorServerUnsetReq
 	if r.Body != nil {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil && err != io.EOF {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {\"discard_open_channel\": true} or empty", http.StatusBadRequest)
 			return
 		}

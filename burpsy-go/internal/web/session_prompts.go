@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -209,7 +208,7 @@ func (s *Server) handleSessionPromptResolve(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req sessionPromptResolveReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

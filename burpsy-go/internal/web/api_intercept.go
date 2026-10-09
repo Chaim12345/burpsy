@@ -3,7 +3,9 @@ package web
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -144,15 +146,18 @@ func (s *Server) handleIntercept(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// interceptEnableReq is the request body handleInterceptEnable decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptEnableReq struct {
+	Enabled bool `json:"enabled"`
+}
+
 func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req interceptEnableReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -165,6 +170,11 @@ func (s *Server) handleInterceptEnable(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"enabled": req.Enabled})
+}
+
+// interceptStartupReq is the request body handleInterceptStartup decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptStartupReq struct {
+	Mode string `json:"mode"`
 }
 
 // handleInterceptStartup serves GET/POST /api/intercept/startup — Burp's "Default Proxy
@@ -191,15 +201,13 @@ func (s *Server) handleInterceptStartup(w http.ResponseWriter, r *http.Request) 
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"mode": s.persist.LoadInterceptStartup()})
 	case http.MethodPost:
-		if s.persist == nil {
-			http.Error(w, "No persistence is attached to this server, so a startup preference would not survive a restart", http.StatusServiceUnavailable)
+		var req interceptStartupReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		var req struct {
-			Mode string `json:"mode"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if s.persist == nil {
+			http.Error(w, "No persistence is attached to this server, so a startup preference would not survive a restart", http.StatusServiceUnavailable)
 			return
 		}
 		switch req.Mode {
@@ -216,6 +224,11 @@ func (s *Server) handleInterceptStartup(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+// interceptInScopeOnlyReq is the request body handleInterceptInScopeOnly decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptInScopeOnlyReq struct {
+	InScopeOnly bool `json:"in_scope_only"`
+}
+
 // handleInterceptInScopeOnly serves POST /api/intercept/in-scope-only — Burp's "Only intercept
 // in-scope messages".
 //
@@ -230,10 +243,8 @@ func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		InScopeOnly bool `json:"in_scope_only"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req interceptInScopeOnlyReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -243,6 +254,12 @@ func (s *Server) handleInterceptInScopeOnly(w http.ResponseWriter, r *http.Reque
 		"in_scope_only":  req.InScopeOnly,
 		"scope_attached": s.intercept.ScopeAttached(),
 	})
+}
+
+// interceptNewlineCorrectionReq is the request body handleInterceptNewlineCorrection decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptNewlineCorrectionReq struct {
+	AddMissingBlankLine                bool `json:"add_missing_blank_line"`
+	TrimTrailingNewlinesURLEncodedBody bool `json:"trim_trailing_newlines_urlencoded_body"`
 }
 
 // handleInterceptNewlineCorrection serves GET and PUT /api/intercept/newline-correction — Burp's
@@ -259,11 +276,8 @@ func (s *Server) handleInterceptNewlineCorrection(w http.ResponseWriter, r *http
 	switch r.Method {
 	case http.MethodGet:
 	case http.MethodPut:
-		var req struct {
-			AddMissingBlankLine                bool `json:"add_missing_blank_line"`
-			TrimTrailingNewlinesURLEncodedBody bool `json:"trim_trailing_newlines_urlencoded_body"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req interceptNewlineCorrectionReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -301,6 +315,11 @@ func (s *Server) handleInterceptForwardAll(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(map[string]int{"forwarded": forwarded})
 }
 
+// interceptDropAllReq is the request body handleInterceptDropAll decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptDropAllReq struct {
+	Reason string `json:"reason"`
+}
+
 // handleInterceptDropAll serves POST /api/intercept/drop-all and resolves every
 // held message as dropped in one round trip — the queue toolbar's "Drop all".
 // The count in the answer is what the engine actually dropped on this call: a
@@ -311,10 +330,11 @@ func (s *Server) handleInterceptDropAll(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Reason string `json:"reason"`
+	var req interceptDropAllReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Reason == "" {
 		req.Reason = "dropped by operator"
 	}
@@ -434,7 +454,7 @@ func (s *Server) handleInterceptRules(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(listView(dir, s.intercept.Rules(dir), s.intercept.Enabled()))
 	case http.MethodPut:
 		var state interceptListState
-		if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&state); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -464,6 +484,12 @@ func listView(dir intercept.Direction, l intercept.List, enabled bool) intercept
 	}
 }
 
+// interceptAnnotateReq is the request body handleInterceptAnnotate decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptAnnotateReq struct {
+	Comment   string `json:"comment"`
+	Highlight string `json:"highlight"`
+}
+
 // handleInterceptAnnotate serves POST /api/intercept/{id}/annotate — the operator's
 // comment and highlight on a held message (burpsy-react-ui-5q8u). Empty highlight clears,
 // matching the shared annotation vocabulary; unknown ids 404 because a stale queue render
@@ -483,11 +509,8 @@ func (s *Server) handleInterceptAnnotate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Invalid held message id", http.StatusBadRequest)
 		return
 	}
-	var req struct {
-		Comment   string `json:"comment"`
-		Highlight string `json:"highlight"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req interceptAnnotateReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -497,6 +520,36 @@ func (s *Server) handleInterceptAnnotate(w http.ResponseWriter, r *http.Request)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// interceptForwardReq is the request body handleInterceptHeld decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptForwardReq struct {
+	// A pointer so an explicitly empty string clears the payload while an absent key
+	// forwards what was held. On a WebSocket frame an empty payload is ordinary, and the
+	// old plain string treated "" as "unchanged" — so an operator who deleted the payload
+	// got the original forwarded, answered 200, with no sign the edit was discarded.
+	Raw *string `json:"raw"`
+	// RawBase64 is the edited message's exact bytes, base64, and wins over Raw when set
+	// (burpsy-react-ui-3pco): a JSON string cannot carry a binary body, so a protobuf field edited
+	// in a held request would otherwise forward as U+FFFD-mangled bytes.
+	RawBase64        *string `json:"raw_base64"`
+	FixContentLength bool    `json:"fix_content_length"`
+	// HoldResponse arms a one-shot hold for this request's response (burpsy-react-ui-v6jw):
+	// Burp's "Do intercept > Response to this request". Refused for anything but a held
+	// request, by the engine.
+	HoldResponse bool `json:"hold_response"`
+	// Target is the operator's edited destination — Burp's "Edit target" pencil
+	// (burpsy-react-ui-akv). Absent means "send it where the client asked", which is what
+	// every caller that has no opinion sends. The three fields are separate rather than a
+	// nested object so a caller that changes only the port does not have to restate the host.
+	Host *string `json:"host"`
+	Port *uint16 `json:"port"`
+	TLS  *bool   `json:"tls"`
+}
+
+// interceptDropReq is the request body handleInterceptHeld decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type interceptDropReq struct {
+	Reason string `json:"reason"`
 }
 
 // handleInterceptHeld serves POST /api/intercept/{id}/forward and /api/intercept/{id}/drop.
@@ -519,30 +572,8 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 
 	switch parts[1] {
 	case "forward":
-		var req struct {
-			// A pointer so an explicitly empty string clears the payload while an absent key
-			// forwards what was held. On a WebSocket frame an empty payload is ordinary, and the
-			// old plain string treated "" as "unchanged" — so an operator who deleted the payload
-			// got the original forwarded, answered 200, with no sign the edit was discarded.
-			Raw *string `json:"raw"`
-			// RawBase64 is the edited message's exact bytes, base64, and wins over Raw when set
-			// (burpsy-react-ui-3pco): a JSON string cannot carry a binary body, so a protobuf field edited
-			// in a held request would otherwise forward as U+FFFD-mangled bytes.
-			RawBase64        *string `json:"raw_base64"`
-			FixContentLength bool    `json:"fix_content_length"`
-			// HoldResponse arms a one-shot hold for this request's response (burpsy-react-ui-v6jw):
-			// Burp's "Do intercept > Response to this request". Refused for anything but a held
-			// request, by the engine.
-			HoldResponse bool `json:"hold_response"`
-			// Target is the operator's edited destination — Burp's "Edit target" pencil
-			// (burpsy-react-ui-akv). Absent means "send it where the client asked", which is what
-			// every caller that has no opinion sends. The three fields are separate rather than a
-			// nested object so a caller that changes only the port does not have to restate the host.
-			Host *string `json:"host"`
-			Port *uint16 `json:"port"`
-			TLS  *bool   `json:"tls"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req interceptForwardReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -599,10 +630,11 @@ func (s *Server) handleInterceptHeld(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"forwarded": true})
 	case "drop":
-		var req struct {
-			Reason string `json:"reason"`
+		var req interceptDropReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
 		if err := s.intercept.Drop(id, req.Reason); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return

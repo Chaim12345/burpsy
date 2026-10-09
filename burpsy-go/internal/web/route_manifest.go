@@ -267,6 +267,13 @@ var manifest = map[string]route{
 		methods: []string{"DELETE"}, risk: riskDestructive,
 		summary: "clears the dashboard's event log (Burp's \"Clear event log\"); the SSE stream at /api/events is a different resource",
 	},
+	"/api/datasets/": {
+		// riskRead: a read-only table view over lists other read routes already serve
+		// (burpsy-react-ui-co88). No credential-class list is offered as a source.
+		methods: []string{"GET"}, risk: riskRead, subPath: "history",
+		summary: "one table view over a list — history, issues, sitemap, tool-log, ws-history, intruder/{task}: " +
+			"regex over columns, sort, offset/limit paging, facet counts, and a long-poll for new rows",
+	},
 	"/api/discovery": {
 		// riskAttack for the same reason /api/crawl is: a POST hands a wordlist to ffuf, which then
 		// sends one request per word — unbounded traffic at the target, chosen by a file rather than by
@@ -897,6 +904,14 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskScope,
 		summary: "the engagement scope: what every sender is allowed to reach",
 	},
+	"/api/scope/check": {
+		// riskRead, and deliberately not riskScope like /api/scope beside it: this reads the rules and
+		// answers a question about a URL; it changes nothing and sends nothing. POST takes a list, which
+		// is the only reason it is not GET alone (burpsy-react-ui-z5z3).
+		methods: []string{"GET", "POST"}, risk: riskRead,
+		summary: "is a URL in scope: GET ?url= or POST {urls:[…]} answers in_scope (retained, and sendable " +
+			"by the tools), proxy_forwards, and the rule that decided",
+	},
 	"/api/search": {
 		// riskRead, and it stays riskRead however much it scans. It sends nothing, changes nothing, and
 		// returns only offsets into messages every other read route already serves — the rows it walks
@@ -1019,6 +1034,28 @@ var manifest = map[string]route{
 			"such. DELETE: suppress a host, branch or single node from the map — a view-level removal " +
 			"that keeps the underlying exchanges and stays out across rebuilds and re-captures",
 	},
+	"/api/sitemap/record": {
+		// riskLocal, following /api/issues/record rather than /api/sitemap's riskDestructive: recording
+		// an exchange by id adds to burpsy's own view and removes nothing (burpsy-react-ui-4bfp).
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "record a captured exchange into the site map by id (Burp's add_to_sitemap): already on " +
+			"the map, or pinned past the Delete host/branch/item suppression that hid it",
+	},
+	"/api/skills": {
+		// riskRead: the library loaded from the operator's -skills directory, read-only (ulsy).
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the skill library from -skills DIR: each skill, the tools it calls, whether it is available " +
+			"and disabled for this project, and every refused manifest with why",
+	},
+	"/api/skills/": {
+		methods: []string{"GET"}, risk: riskRead, subPath: "none",
+		summary: "one skill with its prompt rendered from ?argument=value; 409 when disabled or unavailable",
+	},
+	"/api/skills/disabled": {
+		// riskLocal: a project setting naming which loaded skills are switched off; sends nothing.
+		methods: []string{"PUT"}, risk: riskLocal,
+		summary: "set which skills this project turns off: {\"disabled\":[names]}, the whole list",
+	},
 	"/api/stats": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "proxy counters, tool counts, and the DOM engine's admission state",
@@ -1031,13 +1068,16 @@ var manifest = map[string]route{
 		// riskLocal too by its route: it starts a crawl, but /api/crawl — the same act from the New
 		// scan dialog — is classified by what the crawl does after the start, which the confirmation
 		// gate already covers at its own route.
-		methods: []string{"POST", "DELETE"}, risk: riskLocal, subPath: "1",
+		// GET {id} reads one task and, for async work (POST /api/audit/{id} {"async":true}), its
+		// finished body (burpsy-react-ui-wdza). A read under riskLocal changes nothing.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
 		actionPaths: map[string][]string{
 			"1/cancel": {"POST"},
 			"pause":    {"POST"},
 			"resume":   {"POST"},
 		},
-		summary: "POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
+		summary: "GET {id}: one task's row and an async task's finished body. " +
+			"POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
 			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
 			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
 	},
