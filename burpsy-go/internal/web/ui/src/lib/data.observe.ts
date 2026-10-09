@@ -248,6 +248,10 @@ export function useFetchAPIDefinition() {
  return useMutation({
   mutationFn: (body: { url: string; auth?: Record<string, string> }) =>
    api<FetchedDefinition>("/api/apiscan/fetch", json("POST", body)),
+  // The mutation's variables hold the credential. gcTime 0 drops the finished mutation from the
+  // MutationCache at once instead of keeping the password, token or client secret there for the
+  // default five minutes (the same convention as useExportCa).
+  gcTime: 0,
  });
 }
 

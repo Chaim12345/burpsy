@@ -161,7 +161,9 @@ type fetchTarget struct {
 func parseFetchURL(what, raw string) (fetchTarget, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
-		return fetchTarget{}, fetchErr(http.StatusBadRequest, "the %s %q is not an absolute URL", what, raw)
+		// Not quoted back: a malformed URL can still hold a credential (http:/alice:pw@h/x parses with
+		// no host, so the userinfo check below never sees it), and this message is shown and logged.
+		return fetchTarget{}, fetchErr(http.StatusBadRequest, "the %s is not an absolute http(s) URL with a host", what)
 	}
 	if u.User != nil {
 		// Not quoted back: the URL holds the credential this refusal is about.
@@ -186,12 +188,37 @@ func parseFetchURL(what, raw string) (fetchTarget, error) {
 		t.port = uint16(n)
 	}
 	t.authority = u.Host
+	// The query is re-encoded rather than copied: url.Parse keeps RawQuery as typed, so "?a b" would
+	// put a space in the request line and split it into a malformed one. Every byte that may not
+	// appear in a request-target's query (RFC 3986 §3.4) is percent-encoded; an existing %XX escape
+	// and every legal byte are kept exactly, so a correctly written URL is sent unchanged.
+	u.RawQuery = encodeQuery(u.RawQuery)
+	u.ForceQuery = false
 	t.requestURI = u.RequestURI()
 	t.path = u.EscapedPath()
 	if t.path == "" {
 		t.path = "/"
 	}
 	return t, nil
+}
+
+// encodeQuery percent-encodes every byte not allowed in a URI query (RFC 3986 §3.4: pchar / "/" /
+// "?"), leaving legal bytes — including "%" — untouched.
+func encodeQuery(q string) string {
+	const hex = "0123456789ABCDEF"
+	var b strings.Builder
+	for i := 0; i < len(q); i++ {
+		c := q[i]
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') ||
+			strings.IndexByte("-._~!$&'()*+,;=:@/?%", c) >= 0 {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('%')
+		b.WriteByte(hex[c>>4])
+		b.WriteByte(hex[c&0x0f])
+	}
+	return b.String()
 }
 
 // headerSafe refuses a value that would break out of its header line.
@@ -308,28 +335,45 @@ func (s *Server) fetchSend(ctx context.Context, target fetchTarget, raw []byte, 
 			uint64(time.Since(started).Milliseconds()), "API definition fetch failed", nil)
 		return 0, nil, nil, err
 	}
+	// The request went out, so it is logged now, before any of the refusals below: an oversized or
+	// undecodable answer is still traffic this tool sent. The length is the raw response's, since
+	// the body may never be decoded.
 	resp, perr := http.ReadResponse(bufio.NewReader(bytes.NewReader(result.Raw)), nil)
+	rawLen := len(result.Raw)
+	status := 0
+	if perr == nil {
+		status = resp.StatusCode
+	}
+	s.toolLog.Record(toollog.ToolScanner, target.host, target.port, target.tls, method, target.path, status, &rawLen,
+		uint64(time.Since(started).Milliseconds()), "API definition fetch", nil)
 	if perr != nil {
 		return 0, nil, nil, fetchErr(http.StatusBadGateway, "the response could not be read as HTTP: %v", perr)
 	}
 	defer resp.Body.Close()
+	tooLarge := fetchErr(http.StatusUnprocessableEntity,
+		"the response is larger than the %d-byte limit for a fetched definition; download it and load the file instead", apiScanFetchMaxBytes)
 	body, rerr := io.ReadAll(io.LimitReader(resp.Body, apiScanFetchMaxBytes+1))
 	if rerr != nil {
 		return 0, nil, nil, fetchErr(http.StatusBadGateway, "the response body could not be read: %v", rerr)
 	}
+	if len(body) > apiScanFetchMaxBytes {
+		// Checked before any decoding: a compressed body cut at the limit is a truncated stream, and
+		// decoding it would report "corrupt" for what is really "too large".
+		return 0, nil, nil, tooLarge
+	}
 	if enc := strings.TrimSpace(resp.Header.Get("Content-Encoding")); enc != "" && !strings.EqualFold(enc, "identity") {
 		decoded, derr := httputil.DecodeBody(enc, body)
+		if errors.Is(derr, httputil.ErrDecodedTooLarge) {
+			// Past the decoder's own cap, which is above this one: a size refusal, not a decode fault.
+			return 0, nil, nil, tooLarge
+		}
 		if derr != nil {
 			return 0, nil, nil, fetchErr(http.StatusBadGateway, "the response is %s-encoded and could not be decoded: %v", enc, derr)
 		}
 		body = decoded
 	}
-	n := len(body)
-	s.toolLog.Record(toollog.ToolScanner, target.host, target.port, target.tls, method, target.path, resp.StatusCode, &n,
-		uint64(time.Since(started).Milliseconds()), "API definition fetch", nil)
 	if len(body) > apiScanFetchMaxBytes {
-		return 0, nil, nil, fetchErr(http.StatusUnprocessableEntity,
-			"the response is larger than the %d-byte limit for a fetched definition; download it and load the file instead", apiScanFetchMaxBytes)
+		return 0, nil, nil, tooLarge
 	}
 	return resp.StatusCode, resp.Header, body, nil
 }

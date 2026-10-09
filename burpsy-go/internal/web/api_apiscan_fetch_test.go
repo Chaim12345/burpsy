@@ -9,8 +9,11 @@ package web
 //   - the size and time bounds hold, redirects are not followed, and WSDL/HTML are named, not scanned.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	mrand "math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -199,5 +202,75 @@ func TestAFetchedDefinitionIsBoundedAndNamedForWhatItIs(t *testing.T) {
 	if rec := postJSON(t, s, "/api/apiscan/fetch", map[string]any{"url": srv.URL + "/spec",
 		"auth": map[string]any{"type": "bearer", "token": "x\r\nX-Injected: 1"}}); rec.Code != http.StatusBadRequest {
 		t.Errorf("header injection through the token: %d, want 400", rec.Code)
+	}
+}
+
+// Review fixes (burpsy-react-ui-fu4l): the query string — where an API key in a URL lives — never
+// reaches the tool log; a query with a space still produces a well-formed request; a malformed URL is
+// not echoed; and a compressed body over the limit is reported as too large, not as corrupt.
+func TestTheFetchKeepsTheQueryOutOfTheLogAndSendsAWellFormedRequestLine(t *testing.T) {
+	var gotURI atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI.Store(r.RequestURI)
+		w.Write([]byte(fetchTestSpec))
+	}))
+	t.Cleanup(srv.Close)
+	s := fetchServer(t, srv)
+
+	rec := postJSON(t, s, "/api/apiscan/fetch", map[string]any{"url": srv.URL + "/spec?api_key=k3y-sekret&q=a b"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fetch with a query: %d %s", rec.Code, rec.Body.String())
+	}
+	if uri, _ := gotURI.Load().(string); uri != "/spec?api_key=k3y-sekret&q=a%20b" {
+		t.Errorf("the server received request-target %q, want the query sent with its space encoded", uri)
+	}
+	logged := get200(t, s, "/api/tools/log")
+	if strings.Contains(logged, "k3y-sekret") || strings.Contains(logged, "api_key") {
+		t.Errorf("the tool log carries the query string: %s", logged)
+	}
+	if !strings.Contains(logged, "/spec") {
+		t.Errorf("the fetch is missing from the tool log: %s", logged)
+	}
+
+	rec = postJSON(t, s, "/api/apiscan/fetch", map[string]any{"url": "http:/alice:pw-in-url@h/x"})
+	if rec.Code != http.StatusBadRequest || strings.Contains(rec.Body.String(), "pw-in-url") {
+		t.Errorf("a host-less URL holding a password: %d %s, want 400 that does not repeat it", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAnOversizedCompressedDefinitionIsRefusedAsTooLargeNotCorrupt(t *testing.T) {
+	gzipOf := func(b []byte) []byte {
+		var gz bytes.Buffer
+		zw := gzip.NewWriter(&gz)
+		zw.Write(b)
+		zw.Close()
+		return gz.Bytes()
+	}
+	// Two shapes of too large: one that compresses well (small on the wire, too big decoded), and one
+	// that does not (already past the limit compressed, so the read cuts the gzip stream short —
+	// which used to be reported as "could not be decoded").
+	noise := make([]byte, apiScanFetchMaxBytes+1)
+	mrand.New(mrand.NewSource(1)).Read(noise)
+	bodies := map[string][]byte{
+		"compressible":   gzipOf(bytes.Repeat([]byte("a"), apiScanFetchMaxBytes+1)),
+		"incompressible": gzipOf(noise),
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Write(body)
+			}))
+			t.Cleanup(srv.Close)
+			s := fetchServer(t, srv)
+
+			rec := postJSON(t, s, "/api/apiscan/fetch", map[string]any{"url": srv.URL + "/spec"})
+			if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "larger than") {
+				t.Fatalf("oversized gzip definition: %d %s, want 422 naming the size limit", rec.Code, rec.Body.String())
+			}
+			if logged := get200(t, s, "/api/tools/log"); !strings.Contains(logged, "/spec") {
+				t.Errorf("a fetch refused for size is missing from the tool log, though it was sent: %s", logged)
+			}
+		})
 	}
 }
