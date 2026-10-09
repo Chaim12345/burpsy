@@ -86,6 +86,9 @@ risk=(
   "scripts/review-gate.sh|CI gate code"
   "scripts/review-verdict.sh|CI gate code"
   "scripts/beads-lint.py|CI gate code"
+  "scripts/ci-shard.sh|CI gate code"
+  "scripts/ci-install-tools.sh|CI gate code/pinned hashes"
+  ".buildkite/*|CI pipeline/agent image"
   # What the `ui` job runs (package.json's `check` script) and what it installs (lockfile, bun
   # config, the TypeScript settings tsc --noEmit checks against): editing these edits the UI gate.
   "burpsy-go/internal/web/ui/package.json|CI gate code/dependencies"
