@@ -5560,3 +5560,32 @@ tbody td.burp-hotkeys-reason {
   text-transform: none;
   letter-spacing: normal;
 }
+
+/* The API scan's review tables (burpsy-react-ui-vuw7): a definition can describe hundreds of
+   endpoints, so each table scrolls inside the dialog rather than pushing the launch button off it. */
+.apiscan-review-scroll {
+  max-height: min(40vh, 22rem);
+  overflow: auto;
+}
+
+/* Sized to content, as .burp-hotkeys is: the shared fixed layout gave the endpoint and the two
+   selects equal slices and clipped all three. */
+.apiscan-review-scroll table {
+  table-layout: auto;
+}
+
+.apiscan-review-scroll td .input {
+  min-width: 7rem;
+}
+
+.apiscan-review-scroll td .select {
+  width: auto;
+}
+
+.apiscan-removed td {
+  color: var(--muted);
+}
+
+.apiscan-removed code {
+  text-decoration: line-through;
+}

@@ -253,3 +253,25 @@ func TestADocumentDescribingNoOperationIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// A formData override reaches the urlencoded body it is sent in, not only the reported parameter
+// (vuw7): the review step showed the operator's value while the wire carried the document's.
+func TestAFormDataOverrideIsSentInTheBody(t *testing.T) {
+	doc, err := Parse([]byte(`{"swagger":"2.0","info":{"title":"x","version":"1"},"host":"h.example","paths":{"/f":{"post":{` +
+		`"consumes":["application/x-www-form-urlencoded"],"parameters":[` +
+		`{"name":"a","in":"formData","type":"string","default":"one"},{"name":"b","in":"formData","type":"string","default":"keep"}],` +
+		`"responses":{"200":{"description":"ok"}}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := &doc.Operations[0]
+	if !op.SetParameter("formData", "a", "two & three") {
+		t.Fatal("the formData parameter was not found")
+	}
+	if got := string(op.Body); got != "a=two+%26+three&b=keep" {
+		t.Errorf("body = %q, want the override re-rendered and b untouched", got)
+	}
+	if op.Parameters[0].Source != ValueOperator {
+		t.Errorf("source = %q, want operator", op.Parameters[0].Source)
+	}
+}

@@ -262,6 +262,31 @@ export interface APIScanOperation {
  method: string;
  template: string;
  path: string;
+ /** "METHOD template" — the name the review step's exclude and override lists use (vuw7). */
+ key: string;
+ /** The path, query, header and formData values this endpoint sends, each with where it came from.
+  *  Never null on the wire; a run recorded before vuw7 may lack the field, hence optional. */
+ parameters?: APIScanParameter[];
+}
+
+/**
+ * Where a parameter's value came from: the document's own `example`, `default` or first `enum`
+ * value, a `placeholder` this build invented because the document gave nothing, or the `operator`'s
+ * override from the review step.
+ */
+export type APIScanValueSource = "example" | "default" | "enum" | "placeholder" | "operator";
+
+/** One parameter of one endpoint, as apidoc.Parameter serialises it. */
+export interface APIScanParameter {
+ name: string;
+ /** path | query | header | formData */
+ in: string;
+ value: string;
+ source: APIScanValueSource;
+ type?: string;
+ format?: string;
+ enum?: string[];
+ required?: boolean;
 }
 
 /**
