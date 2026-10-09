@@ -1012,7 +1012,8 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 // WithPageObserver is called with every exchange the listener records and the response bytes the
 // listener holds (burpsy-react-ui-t3zk). The web server uses it for the live passive crawl, reading
 // links out of proxied pages without reaching back into the store from its append path. Called
-// synchronously after the record, so it must be quick.
+// synchronously after the record, so it must be quick. Like every hook here it must be set before
+// NewServer; an observer that only exists once the proxy is serving goes through a PageObserverSlot.
 func (c *ProxyConfig) WithPageObserver(fn func(ex *core.Exchange, response []byte)) *ProxyConfig {
 	c.pageObserver = fn
 	return c
