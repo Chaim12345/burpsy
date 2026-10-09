@@ -53,6 +53,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/extensions/unload": false,
  "/api/findings": false,
  "/api/headers/uninteresting": false,
+ "/api/hidden-inputs": true,
  "/api/history": false,
  "/api/history/extract": false,
  "/api/history/extractors": false,

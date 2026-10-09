@@ -12,6 +12,7 @@ import {
  FolderTree,
  Globe,
  Highlighter,
+ KeyRound,
  Link2,
  Map,
  MessageSquarePlus,
@@ -254,6 +255,7 @@ export function useExchangeActions(): {
  const setComparerSlot = useApp((state) => state.setComparerSlot);
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
+ const setHiddenInputsTarget = useApp((state) => state.setHiddenInputsTarget);
  const annotate = useAnnotateExchange();
  // Record an issue (burpsy-react-ui-4qqz): POST /api/issues/record with the exchange the menu
  // was invoked on. The issues list invalidates by key prefix after any triage write, so the
@@ -912,6 +914,11 @@ const showResponseInBrowser = (exchange: Exchange) => {
    actions: [
     { id: "scope", label: `Add ${exchange.host} to scope`, icon: ShieldCheck, onSelect: () => void addToScope(exchange) },
     { id: "audit", label: `Audit exchange #${exchange.id}`, icon: Radar, onSelect: () => void auditExchange(exchange) },
+    // Burp's Param Miner "Guess params" (burpsy-react-ui-wlz8): opens the app-level dialog, which
+    // picks the kinds and starts the run. A blind tunnel has no request to add names to.
+    ...(exchange.request === null
+     ? []
+     : [{ id: "guess-inputs", label: "Guess hidden inputs…", icon: KeyRound, onSelect: () => setHiddenInputsTarget(exchange) }]),
     { id: "crawl-branch", label: "Actively scan this branch (crawl)", icon: Waypoints, onSelect: () => void crawlFrom(exchange, "branch") },
     { id: "crawl-host", label: "Actively scan this host (crawl)", icon: ScanSearch, onSelect: () => void crawlFrom(exchange, "host") },
    ],

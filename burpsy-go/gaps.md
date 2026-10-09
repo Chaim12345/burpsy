@@ -1593,14 +1593,28 @@ honest one and is the smaller.
 Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than
 Burp rather than wider:
 
-- **A check that declares a disabled method is withheld whole.** Burp keeps a check while any of its
-  (type, method) pairs is enabled and gates the rest inside the check (`Zwy6.java:170-184`). Every
-  burpsy check declares exactly one method today, where the two rules agree; a future check declaring
-  two will be withheld whole when either is disabled, until it can gate one alone.
+- **A check is withheld only when every (type, method) pair it registers is disabled.** FIXED
+  2026-10-08 (saq3.2.1): burpsy used to withhold a check on ANY declared-disabled method, which
+  agreed with Burp (`Zwy6.java:170-184`) only while every check declared one method. The
+  SQL-injection check now declares its five implemented methods on one descriptor, so the rule
+  is Burp's own — kept while any pair is enabled — and the disabled METHOD's granularity is the
+  probe gate (`ProbeHarness.withhold`), which declines it by name with the count of probes it
+  withheld.
 - **Detection methods burpsy does not implement cannot run**, whatever a configuration enables:
-  Burp Infiltrator everywhere; for SQL injection everything but Error messages; for OS command and PHP
-  code injection Time delays and Collaborator. They are declined by name
+  Burp Infiltrator everywhere; for SQL injection Collaborator plus the Oracle and MySQL timing
+  banks — their payload text is inside ZKM string decoders this tree does not run, so burpsy
+  sends none rather than a guess (2026-10-08, saq3.2.1: Error messages, Boolean conditions,
+  Time delays, PostgreSQL specific and SQL Server specific ARE implemented now, gated per
+  technique inside the one SQL-injection check). They are declined by name
   (`AuditConfig.DeclinedDetectionMethods`, `AuditOutcome.MethodsDeclined`), never silently ignored.
+- **SQL injection detection without a database**, by construction: the vulnapp blind endpoints
+  recognise the SHAPE of an injected condition or sleep directive, never burpsy's own payload
+  text, and the boolean differential the classifier needs is true-half-identical /
+  false-half-different. A finding on the timing bank is a delay against the baseline, so an
+  endpoint that sleeps for ANY reason can produce one; the confidence stays `firm` and the
+  detail names the exact request. Recovered Burp payload banks are limited to PostgreSQL
+  (`Zxpy`) and SQL Server (`Zuyg`) — see sqli_techniques.go's header for what is recovered
+  versus documented.
 - **Skip lists from a Burp file**: Burp's value is a list of match rules
   (`{parameter, item, match_type, expression}`). burpsy honours parameter NAMES set through
   `/api/scanner/configs`; a file's empty rule list is honoured and a non-empty one is reported unapplied.
@@ -1619,6 +1633,64 @@ Burp rather than wider:
 - **The hop budget and cookie replay of a followed chain are the engagement's network settings**
   (`redirects.max_hops`, default 5; `redirects.replay_cookies`), because Burp's scan configuration names
   neither.
+- **Timeout overrides apply to the probes a run sends while it runs.** The deferred phase
+  (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
+  engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
+  at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## AMF bodies are not parsed — declined (2026-10-08, burpsy-react-ui-6v4d)
+- **Burp:** classes `ContentType.AMF` / `MimeType.LEGACY_SER_AMF` and audits `PARAM_AMF` insertion
+  points inside Action Message Format bodies (BlazeDS / GraniteDS, Flash and Flex remoting).
+- **burpsy:** no AMF codec; an AMF body is opaque, and gets no parameter-level audit — only the
+  entire-body point, which carries the scanner's payloads as raw bytes.
+- **Decision: declined.** Flash reached end of life in 2020 and AMF remoting endpoints are now rare
+  enough that an AMF0/AMF3 codec (object graphs, references, externalizable types) is not worth its
+  maintenance. **Re-open** when an engagement brings a live AMF endpoint; the codec would slot in as a
+  nested-point container beside JSON and XML in `bcheck/insertion.go`.
+
+## Hidden-input guessing: where burpsy differs from Param Miner (2026-10-08, burpsy-react-ui-wlz8)
+- **Burp:** Param Miner is a BApp (Extensions > Param Miner > Guess params: GET parameters, cookie
+  parameters, headers, everything). Confirmed inputs are logged to its Output tab and raised as
+  "Secret input" issues. burpsy builds it in as an on-demand row action ("Guess hidden inputs…",
+  `POST /api/hidden-inputs`), never as part of an audit. The issues are filed as "Secret input: query
+  parameter" / "Secret input: cookie" / "Secret input: header", Information severity, and resolve to
+  the catalogue's Extension generated issue type (0x08000000). That type is the one Burp gives any
+  extension's issue.
+- **Wordlist:** about 450 hand-assembled names (229 query, 93 cookie, 135 header;
+  `scanner/hidden_inputs_wordlist.go`). This is not Param Miner's list, which is far larger. Param
+  Miner also mines names from the target (scope, responses, JS). burpsy does no mining, so it cannot
+  find an input whose name is not on its list. The run summary says so.
+- **Method:** two identical baselines must match, or the run stops ("the response varies on its own").
+  Then, per kind:
+  - A control batch of random names. If it changes the response, the kind stops and its names are
+    counted as never sent.
+  - Batches of 40 query parameters, 30 cookies or 20 headers.
+  - Bisection of any batch that changes the response.
+  - Confirmation of each candidate: with it the response differs, without it the baseline returns,
+    and a second send with a fresh value differs again.
+
+  Param Miner's own heuristics (attribute-level response diffing, its "fuzzy" mode, value-type
+  guessing) are not ported. The fingerprint is status, Content-Type, Location and the
+  whitespace-normalised body, with every run token stripped. A change confined to another response
+  header (for example Set-Cookie or Vary) is missed.
+- **Confidence:** Firm when both confirming sends changed the response identically. Tentative when both
+  changed it but differently. A value that comes back in the response is also reported as Firm, but only
+  after two single-name sends and only when the control's values did not come back. This grading is
+  burpsy's. Param Miner's own confidence rules were not available to transcribe.
+- **Cache safety:** on by default, a fresh `burpsycb=<random>` query parameter on every request,
+  baselines included. It keys each guess to a cache entry nobody else requests, so a guessed unkeyed
+  header cannot poison a shared cache. An application that rejects unknown query parameters can have it
+  turned off in the dialog. Param Miner's cache-poisoning detection is not ported. The fixtures do not
+  exercise a cache.
+- **Bounds:** 500 requests by default (route cap 5000). A run that hits the bound says so (state
+  `budget`) and counts the names it never sent. A scope refusal or a failed request stops the run
+  instead of being counted as tested. Framing and routing headers (Host, Content-Length,
+  Transfer-Encoding, Connection, TE, Upgrade, Expect, Proxy-*, …) and Cookie and Authorization are never
+  sent as guesses. Method-override headers are sent only with random values, never a real verb.
+- **Not built:** guessing body parameters (form or JSON). Param Miner offers "Guess body params"; the
+  bead and Burp's tutorial name only the three kinds above. Also not built: multi-request
+  selection (Burp lets one launch cover several selected requests; burpsy guesses one exchange per
+  run).
 - **Timeout overrides apply to every probe a run sends, its deferred phase included.** `FinishScan`
   (stored re-fetch, then the stored-DOM render) takes the run's configuration and re-fetches through the
   run's derived sender (saq3.3.4). Out-of-band polling sends nothing, so it has no timeout to apply. A

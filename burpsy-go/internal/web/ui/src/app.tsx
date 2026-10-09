@@ -68,6 +68,7 @@ import { ProjectSwitcher } from "./ui/project-switcher";
 import { DialogHost } from "./ui/dialog-host";
 import { promptDialog } from "./lib/dialogs";
 import { SearchDialog } from "./ui/search-dialog";
+import { HiddenInputsDialog } from "./ui/hidden-inputs-dialog";
 import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
 import { ClickbanditDialog } from "./ui/clickbandit-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
@@ -1570,6 +1571,7 @@ function App(): JSX.Element {
 
    <CataloguePalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <HiddenInputsDialog />
    <CsrfPocDialog />
    <ClickbanditDialog open={clickbanditOpen} onOpenChange={setClickbanditOpen} />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />

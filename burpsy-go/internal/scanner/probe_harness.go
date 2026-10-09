@@ -258,7 +258,16 @@ func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSende
 // (sender.FollowRedirectsAfterPolicy), metered as an attempt with its outcome, and counted against the
 // run's request budget. A hop the scope refused is a refusal on the probe's own gate.
 func (h *ProbeHarness) SendFollowing(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
-	mutated, err := point.Apply(h.reqBytes, payload, false)
+	return h.SendFollowingOpts(ctx, point, payload, bcheck.ApplyOptions{})
+}
+
+// SendFollowingOpts is SendFollowing with the apply options (burpsy-react-ui-79ld): the decoding
+// variants send payload bytes that must reach the wire verbatim — a percent-escape the
+// application is meant to decode, an overlong or invalid UTF-8 sequence — so their probes pass
+// ApplyOptions.Raw and every other behaviour of SendFollowing is unchanged.
+func (h *ProbeHarness) SendFollowingOpts(ctx context.Context, point bcheck.InsertionPoint, payload string,
+	opts bcheck.ApplyOptions) (ProbeResponse, error) {
+	mutated, err := point.ApplyOpts(h.reqBytes, payload, false, opts)
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
 	}
@@ -323,6 +332,38 @@ func (h *ProbeHarness) follow(ctx context.Context, gate *sender.AuthorisedSender
 // Send places payload at point and dispatches the resulting request.
 func (h *ProbeHarness) Send(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
 	return h.guidedSend(&point, payload, ctx)
+}
+
+// SendHTMLUpload re-sends a multipart file part as an HTML document — filename newName,
+// Content-Type text/html, content the payload — Burp's file-upload HTML variant (kzt7).
+func (h *ProbeHarness) SendHTMLUpload(ctx context.Context, point bcheck.InsertionPoint, payload, newName string) (ProbeResponse, error) {
+	mutated, err := point.ApplyHTMLUpload(h.reqBytes, payload, newName)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	resp, err := h.send(ctx, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	return resp, nil
+}
+
+// SendAppending is Send with the payload appended to the point's original value rather than
+// replacing it — the blind SQL probes' placement: a condition or a sleep only parses in the
+// statement when it follows the value the application put there (`5 and 1=1`, `seed' and '1'='1`).
+// An empty payload re-sends the original request, the baseline re-fetch a confirmation needs.
+func (h *ProbeHarness) SendAppending(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	mutated, err := point.Apply(h.reqBytes, payload, true)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	resp, err := h.send(ctx, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	return resp, nil
 }
 
 // guidedSend applies the payload, sends, and folds the response into the coverage
@@ -478,6 +519,28 @@ func (h *ProbeHarness) ProbeTiming(ctx context.Context, point bcheck.InsertionPo
 
 	if h.withhold(MethodTimeDelays, 1) {
 		return withheldProbe(point, payload, MethodTimeDelays)
+	}
+	return h.probe(ctx, point, payload,
+		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
+			ev := ClassifyTimingEvidence(baseline.Duration, injected.Duration, delay)
+			return ev, fmt.Sprintf("baseline %s, injected %s, requested %s: %s",
+				baseline.Duration, injected.Duration, delay, ev)
+		})
+}
+
+// ProbeTimingUnder sends a time-based probe gated by every method that governs it — the
+// generic Time delays switch plus the dialect-specific one when the payload is dialect-only
+// (burpsy-react-ui-saq3.2.1). A PostgreSQL pg_sleep probe is withheld when either PostgreSQL
+// specific or Time delays is disabled, because Burp's UI offers both switches over the same
+// request; withholding on the first disabled method found keeps the decline legible (one
+// reason, not a list) while the count still says how many requests did not leave.
+func (h *ProbeHarness) ProbeTimingUnder(ctx context.Context, point bcheck.InsertionPoint,
+	payload string, delay time.Duration, methods []string) InjectionProbe {
+
+	for _, method := range methods {
+		if h.withhold(method, 1) {
+			return withheldProbe(point, payload, method)
+		}
 	}
 	return h.probe(ctx, point, payload,
 		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {

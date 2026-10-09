@@ -156,9 +156,14 @@ var burpIssueDetectionMethods = map[uint32][]string{
 // not listed here is declined by name, because burpsy will not run it.
 //
 // Every entry was read from the check it describes, not inferred from the row name:
-//   - SQL injection sends quote fragments and reads database error signatures only
-//     (checkSQLInjectionCore → ProbeErrorSignatures); it has no boolean, timing, Collaborator or
-//     database-specific variant, and ProbeTiming has no production caller at all.
+//   - SQL injection's check sends three probe banks, each with its own method gate at the probe
+//     (saq3.2.1): the error bank (ProbeErrorSignatures, "Error messages"), the boolean
+//     differential (ProbeBoolean, "Boolean conditions") and the timing probes (ProbeTimingUnder,
+//     "Time delays"; PostgreSQL pg_sleep and SQL Server waitfor — the two dialect banks
+//     recoverable from the decompile — additionally under their dialect's own method). MySQL and
+//     Oracle timing remain declined by name: their payload banks are inside ZKM string decoders
+//     this tree does not run. Collaborator-based SQLi is likewise not implemented. The check
+//     itself is withheld only when every declared method is disabled, per Zwy6's rule above.
 //   - OS command, PHP, SSI and server-side template injection prove execution by an echoed marker
 //     or arithmetic result (ProbeEvaluation): Burp's "String echo".
 //   - Path traversal and XXE read a known file's content back in band: "File retrieval".
@@ -176,22 +181,22 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - External service interaction plants an interactsh domain: Burp's "Burp Collaborator".
 //   - A loaded corpus check is a BCheck's active half: "Active checks".
 var burpsyDetectionMethods = map[uint32][]string{
-	0x00100100:               {MethodStringEcho},             // OS command injection
-	0x00100200:               {MethodErrorMessages},          // SQL injection
-	0x00100300:               {MethodFileRetrieval},          // File path traversal
-	0x00100400:               {MethodFileRetrieval},          // XML external entity injection
-	0x00100500:               {MethodBooleanConditions},      // LDAP injection
-	0x00100600:               {MethodErrorMessages},          // XPath injection
-	0x00100700:               {MethodErrorMessages},          // XML injection
-	0x00100850:               {MethodResponseDiffing},        // Broken access control
-	0x00100c00:               {MethodStringEcho},             // PHP code injection
-	0x00101080:               {MethodStringEcho},             // Server-side template injection
-	0x00101100:               {MethodStringEcho},             // SSI injection
-	0x00200100:               {MethodInBand},                 // Cross-site scripting (stored)
-	0x00200140:               {MethodBackEndSocketPoisoning}, // HTTP request smuggling
-	0x00200300:               {MethodClientSide},             // Cross-site scripting (reflected)
-	0x00300200:               {MethodCollaborator},           // External service interaction (DNS)
-	0x00300210:               {MethodCollaborator},           // External service interaction (HTTP)
+	0x00100100:               {MethodStringEcho},                                                                                                  // OS command injection
+	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific}, // SQL injection
+	0x00100300:               {MethodFileRetrieval},                                                                                               // File path traversal
+	0x00100400:               {MethodFileRetrieval},                                                                                               // XML external entity injection
+	0x00100500:               {MethodBooleanConditions},                                                                                           // LDAP injection
+	0x00100600:               {MethodErrorMessages},                                                                                               // XPath injection
+	0x00100700:               {MethodErrorMessages},                                                                                               // XML injection
+	0x00100850:               {MethodResponseDiffing},                                                                                             // Broken access control
+	0x00100c00:               {MethodStringEcho},                                                                                                  // PHP code injection
+	0x00101080:               {MethodStringEcho},                                                                                                  // Server-side template injection
+	0x00101100:               {MethodStringEcho},                                                                                                  // SSI injection
+	0x00200100:               {MethodInBand},                                                                                                      // Cross-site scripting (stored)
+	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                      // HTTP request smuggling
+	0x00200300:               {MethodClientSide},                                                                                                  // Cross-site scripting (reflected)
+	0x00300200:               {MethodCollaborator},                                                                                                // External service interaction (DNS)
+	0x00300210:               {MethodCollaborator},                                                                                                // External service interaction (HTTP)
 	BCheckGeneratedTypeIndex: {MethodActiveChecks},
 }
 
@@ -581,12 +586,14 @@ func (cfg AuditConfig) issueTypeDisabled(typeIndex uint32) bool {
 // filterBySelection is the second stage of Burp's two-stage dispatch (Zwy6.java:36-75): the
 // whitelist when scan_only_selected_issues put one in force, then the per-type overrides.
 //
-// Then the method rule. Burp keeps a check while ANY (type, method) pair it registers is enabled
-// (Zwy6.java:170-184) and gates the rest inside the check. burpsy withholds a check when ANY method
-// it declares is disabled: every burpsy check declares one method today, where the two rules agree,
-// and a check that declared two could not withhold one of them by itself — running it would send
-// the probes the operator turned off. A method a check does NOT declare is gated at the probe
-// instead (ProbeHarness.withhold), which is where an undeclared timing probe would be caught.
+// Then the method rule, which is Burp's own (Zwy6.java:36-75, the per-pair predicate at
+// :170-184): a check is kept while ANY (type, method) pair it registers is enabled, and withheld
+// only when EVERY declared method is disabled. Burpsy first withheld on any single disabled
+// method, which was only unchanged while every check declared one method; with the SQL-injection
+// type's five implemented methods on one check (saq3.2.1), any-single would withhold the error
+// probes an operator left on. The granularity for the disabled pair is the probe gate
+// (ProbeHarness.withhold): a disabled method's probes are not sent and are counted in the item's
+// methods_declined, which is where Burp's own multi-method checks gate too.
 func filterBySelection(checks []activeCheck, cfg AuditConfig) []activeCheck {
 	checks = filterByIssueTypes(checks, cfg.IssueTypes)
 	if len(cfg.DisabledIssueTypes) == 0 && len(cfg.DisabledDetectionMethods) == 0 {
@@ -597,7 +604,10 @@ func filterBySelection(checks []activeCheck, cfg AuditConfig) []activeCheck {
 		if c.typeIndex != 0 && cfg.issueTypeDisabled(c.typeIndex) {
 			continue
 		}
-		if disabled := cfg.disabledMethodsFor(c.typeIndex); disabled != nil && anyDisabled(c.methods, disabled) {
+		// A check that registers types only (no methods) is selected by type alone (Zwy6), so the
+		// two states — no declaration, and an empty DISABLED declaration — both read as untouched.
+		if disabled := cfg.disabledMethodsFor(c.typeIndex); disabled != nil && len(c.methods) > 0 &&
+			everyDisabled(c.methods, disabled) {
 			continue
 		}
 		out = append(out, c)
@@ -605,11 +615,14 @@ func filterBySelection(checks []activeCheck, cfg AuditConfig) []activeCheck {
 	return out
 }
 
-func anyDisabled(methods []string, disabled map[string]bool) bool {
+// everyDisabled reports whether nothing enabled is left: the check's registered set intersects
+// the disabled set over every name, so a check whose methods are all disabled has no enabled
+// (type, method) pair and is withheld whole (Zwy6).
+func everyDisabled(methods []string, disabled map[string]bool) bool {
 	for _, m := range methods {
-		if disabled[m] {
-			return true
+		if !disabled[m] {
+			return false
 		}
 	}
-	return false
+	return true
 }

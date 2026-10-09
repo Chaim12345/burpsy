@@ -1471,7 +1471,7 @@ var builtInConfigKeys = []struct {
 	{
 		name:       "selected_issues",
 		burpKey:    "scanner/issues_reported/selected_issues",
-		what:       "partly applied: in per-issue mode an entry with enabled false removes that issue type from the run, and under scan_only_selected_issues the enabled entries are the whole run. A detection method set false is withheld for that issue type — a check that uses it is not dispatched, and a probe of it is not sent and is counted in the item's methods_declined. A method set true that burpsy's check does not implement (Burp Infiltrator always; for SQL injection everything but Error messages) cannot run, and is named in declined_detection_methods with the reason. Outside per-issue mode Burp ignores the list, and a non-empty one is reported unapplied",
+		what:       "partly applied: in per-issue mode an entry with enabled false removes that issue type from the run, and under scan_only_selected_issues the enabled entries are the whole run. A detection method set false is withheld for that issue type: its probes are not sent and the withheld count is in the item's methods_declined, while a check stays dispatched while any method it registers is left enabled for it (Zwy6's per-pair rule) and is withheld whole only when the set is exhausted. A method set true that burpsy's check does not implement (Burp Infiltrator always; for SQL injection Collaborator plus the Oracle and MySQL timing banks) cannot run, and is named in declined_detection_methods with the reason. Outside per-issue mode Burp ignores the list, and a non-empty one is reported unapplied",
 		listShaped: true,
 		applies:    true,
 	},
