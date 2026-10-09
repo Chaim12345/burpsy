@@ -2096,8 +2096,10 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 
 	// The in-browser interface (beof): http://burpsuite, http://burpsy, or the listener's own address.
 	// Answered here, before the listener's redirect, the scope gate and the dial, because none of them
-	// apply to the proxy describing itself, and forwarding a request for the listener would loop.
-	if s.isWebInterfaceTarget(host, port, clientConn) {
+	// apply to the proxy describing itself, and forwarding a request for the listener would loop. The
+	// own-address match is skipped on a redirecting listener, whose clients name the listener on every
+	// request and must be redirected, not shown this page; isWebInterfaceTarget says why.
+	if s.isWebInterfaceTarget(host, port, clientConn, spec) {
 		s.serveWebInterface(clientConn, method, path)
 		return
 	}

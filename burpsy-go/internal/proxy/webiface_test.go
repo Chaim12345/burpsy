@@ -141,3 +141,70 @@ func TestHTTP10SwitchesRewriteTheVersionTowardsServerAndClient(t *testing.T) {
 		t.Errorf("server switch: the origin received %s, want HTTP/1.0", gotProto)
 	}
 }
+
+// newLiveInterfaceProxy is newInterfaceProxy served through ListenAndServe, which AddListener needs.
+func newLiveInterfaceProxy(t *testing.T) (*Server, *core.TrafficStore) {
+	t.Helper()
+	store := core.NewTrafficStore()
+	srv := NewServer(NewProxyConfig(store).WithScope(testScope()).WithLogger(zap.NewNop()))
+	startLiveProxy(t, srv)
+	return srv, store
+}
+
+// A redirecting listener that a thick client hits directly (PR #311 review): the client is not
+// proxy-aware, so every request it sends names the listener itself in the Host header, and the
+// listener's redirect is what carries it to the real origin. The listener's-own-address match must not
+// swallow those requests into the interface page; the magic names still reach the interface there.
+func TestARedirectingListenerHitDirectlyIsRedirectedNotShownTheInterface(t *testing.T) {
+	srv, store := newLiveInterfaceProxy(t)
+	host, port := originSaying(t, "reached-the-redirect-origin")
+	on := true
+	added, err := srv.AddListener(ListenerSpec{
+		Bind:         "127.0.0.1:0",
+		RedirectHost: host,
+		RedirectPort: port,
+		Invisible:    &on,
+	})
+	if err != nil {
+		t.Fatalf("AddListener: %v", err)
+	}
+	self := added.BoundAddr
+
+	got := rawExchange(t, self, "GET /probe HTTP/1.1\r\nHost: "+self+"\r\nConnection: close\r\n\r\n")
+	if !bytes.Contains(got, []byte("reached-the-redirect-origin")) {
+		t.Fatalf("a request naming the redirecting listener's own address was not redirected; got %q", got)
+	}
+	if bytes.Contains(got, []byte("burpsy proxy interface")) || bytes.Contains(got, []byte("burpsy proxy listener")) {
+		t.Errorf("the interface answered a request the listener should have redirected: %q", got)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(store.Exchanges()); n != 1 {
+		t.Errorf("%d exchange(s) recorded for the redirected request, want 1", n)
+	}
+
+	// The explicit names still address the proxy, redirect or not.
+	if page := rawExchange(t, self, "GET http://burpsuite/ HTTP/1.1\r\nHost: burpsuite\r\n\r\n"); !bytes.Contains(page, []byte("burpsy proxy listener")) {
+		t.Errorf("http://burpsuite/ on a redirecting listener did not reach the interface: %q", page)
+	}
+}
+
+// The control for the test above: an invisible listener with no redirect forwards by the Host header,
+// so a request whose Host is the listener itself would be relayed straight back into the listener. It
+// keeps getting the interface rather than looping.
+func TestAnInvisibleListenerWithoutRedirectStillAnswersItsOwnAddress(t *testing.T) {
+	srv, store := newLiveInterfaceProxy(t)
+	on := true
+	added, err := srv.AddListener(ListenerSpec{Bind: "127.0.0.1:0", Invisible: &on})
+	if err != nil {
+		t.Fatalf("AddListener: %v", err)
+	}
+	self := added.BoundAddr
+	got := rawExchange(t, self, "GET /probe HTTP/1.1\r\nHost: "+self+"\r\nConnection: close\r\n\r\n")
+	if !bytes.HasPrefix(got, []byte("HTTP/1.1 404")) || !bytes.Contains(got, []byte("burpsy proxy interface has no page at /probe")) {
+		t.Errorf("a non-redirecting listener's own address was not answered by the interface: %q", got)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := len(store.Exchanges()); n != 0 {
+		t.Errorf("%d exchange(s) recorded: the request for the listener itself was forwarded", n)
+	}
+}

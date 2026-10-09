@@ -26,7 +26,18 @@ var webInterfaceHosts = map[string]bool{"burpsuite": true, "burpsy": true}
 // isWebInterfaceTarget reports whether a request addresses the interface: a magic name on port 80, or
 // the listener's own address (the browser was pointed at the listener directly). Forwarding the latter
 // would loop the proxy into itself.
-func (s *Server) isWebInterfaceTarget(host string, port uint16, clientConn net.Conn) bool {
+//
+// The own-address half does not apply on a listener that redirects. There a client that is not
+// proxy-aware (a thick client pointed at the listener, invisible proxying on) names the listener
+// itself as the authority on every request, because the listener is the only server it knows about,
+// and the redirect is what sends those requests on to the real origin. Answering them with this page
+// would break exactly the setup "Redirect to host" / "Redirect to port" exist for, and nothing loops:
+// the bytes go to the redirect target, not back to the listener. The magic names still reach the
+// interface on such a listener, since they name the proxy and no origin.
+//
+// An invisible listener that does NOT redirect keeps the own-address match: it forwards by the Host
+// header, so a request whose Host is the listener would be relayed back into the listener itself.
+func (s *Server) isWebInterfaceTarget(host string, port uint16, clientConn net.Conn, spec ListenerSpec) bool {
 	if s.config.options.Get(OptDisableWebInterface) {
 		return false
 	}
@@ -34,7 +45,7 @@ func (s *Server) isWebInterfaceTarget(host string, port uint16, clientConn net.C
 	if webInterfaceHosts[h] && (port == 80 || port == 0) {
 		return true
 	}
-	if clientConn == nil || clientConn.LocalAddr() == nil {
+	if spec.redirects() || clientConn == nil || clientConn.LocalAddr() == nil {
 		return false
 	}
 	lhost, lport, err := net.SplitHostPort(clientConn.LocalAddr().String())
