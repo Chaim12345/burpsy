@@ -203,11 +203,21 @@ func isChunkedBody(raw []byte, msg *core.StoredMessage) bool {
 // and the attack driver names that reason in the report's skipped row rather
 // than reinventing one — the same text the scanner's check reports for the same
 // payload at the same point (burpsy-react-ui-194b).
+//
+// An appending nested point (escapeBcheckAppend) asks for the whole rebuilt outer
+// value with the payload after the inner value; every other appending point is a
+// zero-length span and takes the plain escape, its base bytes left as captured.
 func escapePayload(p *InsertionPoint, payload []byte) ([]byte, error) {
-	if p.escape != escapeBcheck {
+	var v string
+	var err error
+	switch p.escape {
+	case escapeBcheck:
+		v, err = p.bc.WireValue(string(payload))
+	case escapeBcheckAppend:
+		v, err = p.bc.WireValueAppend(string(payload))
+	default:
 		return payload, nil
 	}
-	v, err := p.bc.WireValue(string(payload))
 	if err != nil {
 		return nil, err
 	}

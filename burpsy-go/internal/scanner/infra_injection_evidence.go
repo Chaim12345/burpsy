@@ -339,6 +339,10 @@ type InjectionProbe struct {
 	Context  QuotingContext
 	Evidence InjectionEvidence
 	Detail   string
+	// Withheld marks a probe the harness did NOT send because its detection method is disabled for
+	// this issue type (burpsy-react-ui-2hze). Its Evidence is None, and it must never be read as a
+	// clean answer: nothing was asked, so nothing was answered.
+	Withheld bool
 }
 
 // BestEvidence returns the strongest probe in a set, and whether anything confirmed.

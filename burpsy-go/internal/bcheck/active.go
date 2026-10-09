@@ -48,6 +48,8 @@ const (
 	// ModAppend extends the component (`appending path`, `appending queries`,
 	// `appending body`).
 	ModAppend
+	// ModRemove deletes the component (`removing headers: "Origin"`, `removing body`) — movb.
+	ModRemove
 )
 
 // RequestModifier is one `send request` clause. Target names the component
@@ -159,6 +161,8 @@ func boundResponseField(f *messageFields, rest []string) (string, bool) {
 			return f.byName[strings.ToLower(rest[1])], true
 		}
 		return f.headers, true
+	case "http_version":
+		return firstField(f.first), true
 	}
 	return "", false
 }
@@ -192,6 +196,8 @@ func boundRequestField(r *core.RequestEdit, rest []string) (string, bool) {
 		return r.Query, true
 	case "path":
 		return r.Path, true
+	case "http_version":
+		return r.Version, true
 	}
 	return "", false
 }
@@ -473,6 +479,30 @@ func cloneRequestEdit(e *core.RequestEdit) *core.RequestEdit {
 // refused, matching the parser's structural tolerance of v2-beta extensions.
 func applyModifier(r *core.RequestEdit, m RequestModifier, ctx *Context) {
 	txt := func(v Value) string { return ctx.resolveValue(v) }
+	if m.Op == ModRemove {
+		// Burp's reference (movb): headers and queries name what to remove; the rest remove the
+		// component outright. `removing path` "removes all path parameters" — the path becomes "/"
+		// and the query stays; `removing queries` drops each named parameter, name and value.
+		switch m.Target {
+		case "headers", "header":
+			for _, v := range m.Values {
+				r.RemoveHeader(txt(v))
+			}
+		case "queries", "query":
+			for _, v := range m.Values {
+				r.RemoveQuery(txt(v))
+			}
+		case "query_string":
+			r.Query = ""
+		case "path":
+			r.Path = "/"
+		case "method":
+			r.Method = ""
+		case "body":
+			r.Body = nil
+		}
+		return
+	}
 	switch m.Target {
 	case "method":
 		if len(m.Values) > 0 {
@@ -497,11 +527,23 @@ func applyModifier(r *core.RequestEdit, m RequestModifier, ctx *Context) {
 		}
 	case "query_string":
 		if len(m.Values) > 0 {
-			r.Query = strings.TrimPrefix(txt(m.Values[0]), "?")
+			v := strings.TrimPrefix(txt(m.Values[0]), "?")
+			if m.Op == ModAppend {
+				// "Appends the specified query string to the existing query" — it used to replace it.
+				r.AddQuery(v)
+			} else {
+				r.Query = v
+			}
 		}
 	case "queries":
 		for _, v := range m.Values {
-			r.AddQuery(txt(v))
+			if m.Op == ModReplace {
+				// "Replaces the value of the specified query parameter(s) … If there are no queries
+				// with the specified name then a new query is appended" — it used to always append.
+				r.SetQuery(txt(v))
+			} else {
+				r.AddQuery(txt(v))
+			}
 		}
 	case "headers":
 		for i := 0; i+1 < len(m.Values); i += 2 {

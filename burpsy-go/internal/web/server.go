@@ -86,8 +86,12 @@ type Server struct {
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
-	advisories         *advisory.Catalogue
-	sitemap            *sitemap.SiteMap
+	advisories *advisory.Catalogue
+	sitemap    *sitemap.SiteMap
+	// repeaterH2 is Repeater's HTTP/2 connection reuse pool (adkx), made on first use by
+	// repeaterH2Sessions; repeaterH2Once guards that.
+	repeaterH2         *sender.H2Sessions
+	repeaterH2Once     sync.Once
 	sessionCoordinator *session.Coordinator
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
@@ -122,6 +126,13 @@ type Server struct {
 	// webAddr is the address ListenAndServe bound, so the DOM auditor can tell its extension where to
 	// report. Empty in tests, which never serve.
 	webAddr string
+	// poc is the one-shot PoC page host for "Test in browser" (burpsy-react-ui-0z10): a
+	// listener on its own loopback port, deliberately NOT part of s.mux or the route
+	// manifest, because its whole reason to exist is that generated PoCs are served off
+	// the console origin. Nil until the first PoC URL is minted; pocMu guards that
+	// lazy start.
+	poc   *pocHost
+	pocMu sync.Mutex
 	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
 	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
 	scanBaseline *scanner.ScanConfig
@@ -187,6 +198,8 @@ type Server struct {
 	// discoveries retains recent content-discovery runs, keyed by task id for the same reason crawls
 	// are — see api_discovery.go.
 	discoveries *discoveryRuns
+	// hiddenInputs retains recent hidden-input guessing runs (burpsy-react-ui-wlz8), keyed by task id.
+	hiddenInputs *hiddenInputRuns
 	// externalTools is the operator's -tools allowlist, the one that also gates `run tool` bchecks.
 	// Nil means external delegation is off, and /api/discovery refuses and says which name is missing
 	// rather than answering with an empty result. The server never builds one: which binary may be
@@ -224,7 +237,10 @@ type Server struct {
 	// The channel itself lives on the ActiveScanner and is deliberately NOT duplicated here — see
 	// api_collaborator.go on why a second registration would show interactions no finding correlates
 	// with. Lazy for the same reasons as captures above.
-	collaborator     *collaboratorHub
+	collaborator *collaboratorHub
+	// collabStateBase is -collaborator-state-dir: where a channel installed from the console keeps its
+	// identity, one directory per server (d657). Empty keeps a fresh identity per process.
+	collabStateBase  string
 	collaboratorOnce sync.Once
 	// extensions is the plugin host: the operator's -plugins allowlist and the child processes it
 	// admits. Lazily replaced by an empty host on first use (extensionOnce), so a Server built without
@@ -294,6 +310,7 @@ func NewServer(store *core.TrafficStore, scope *core.Scope) *Server {
 		schedules:          schedule.NewRunner(),
 		crawls:             newCrawlRuns(),
 		discoveries:        newDiscoveryRuns(),
+		hiddenInputs:       newHiddenInputRuns(),
 		events:             dash.NewEventLog(),
 		live:               newEventHub(),
 		domInvader:         dominvader.NewStore(),
@@ -425,6 +442,13 @@ func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 		scan = scan.WithPace(pool.ContextPacer{}).WithSuiteGate(s.tasks.GateCheck)
 	}
 	s.scanner = scan
+	return s
+}
+
+// WithCollaboratorStateDir sets where a Collaborator channel installed from the console keeps its
+// identity across restarts (-collaborator-state-dir, burpsy-react-ui-d657).
+func (s *Server) WithCollaboratorStateDir(dir string) *Server {
+	s.collabStateBase = dir
 	return s
 }
 
@@ -1013,6 +1037,8 @@ func (s *Server) setupRoutes() {
 	// and Find references, Burp's three site-map searches, computed over stored responses.
 	// One subtree pattern because the kind IS the path's last segment.
 	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
+	s.mux.HandleFunc("/api/engagement/clickbandit.js", s.handleClickbandit)
+	s.mux.HandleFunc("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
 	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
 	s.mux.HandleFunc("/api/exchange/in-browser/", s.handleExchangeInBrowserByID)
@@ -1031,6 +1057,10 @@ func (s *Server) setupRoutes() {
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a
 	// smuggling or desync test performable from Repeater at all.
 	s.mux.HandleFunc("/api/repeater/send-group", s.handleRepeaterSendGroup)
+	// Repeater's "Save entire history" (pznm): a tab's history as one file, bytes exported by id.
+	s.mux.HandleFunc("/api/repeater/history-export", s.handleRepeaterHistoryExport)
+	// Save GraphQL queries to site map (7v1e): an introspection answer's operations, recorded unsent.
+	s.mux.HandleFunc("/api/graphql/sitemap", s.handleGraphQLSitemap)
 	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
@@ -1054,13 +1084,23 @@ func (s *Server) setupRoutes() {
 	// resumed or stopped from anywhere — see api_intruder_control.go.
 	s.mux.HandleFunc("/api/intruder/attacks", s.handleIntruderAttacks)
 	s.mux.HandleFunc("/api/intruder/attacks/", s.handleIntruderAttackAction)
+	s.mux.HandleFunc("/api/intruder/again", s.handleIntruderAgain)
 	s.mux.HandleFunc("/api/scanner/live", s.handleScannerLive)
 	s.mux.HandleFunc("/api/scanner/coverage", s.handleScannerCoverage)
 	// The Custom scan checks leaf (burpsy-react-ui-kdqj): the corpus as rows, and the per-row switch
 	// the audit engine reads.
 	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
 	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
+	// Console authoring of custom scan checks (kbu1): Validate, Import, source (Export/Delete), Reload, Run test.
+	s.mux.HandleFunc("/api/scanner/checks/validate", s.handleCheckValidate)
+	s.mux.HandleFunc("/api/scanner/checks/import", s.handleCheckImport)
+	s.mux.HandleFunc("/api/scanner/checks/source", s.handleCheckSource)
+	s.mux.HandleFunc("/api/scanner/checks/reload", s.handleCheckReload)
+	s.mux.HandleFunc("/api/scanner/checks/test", s.handleCheckTest)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
+	// The catalogue the per-issue selection is chosen from, by name, with each type's detection
+	// methods and which of them burpsy runs (burpsy-react-ui-saq3.3.1).
+	s.mux.HandleFunc("/api/scanner/issue-types", s.handleScannerIssueTypes)
 	s.mux.HandleFunc("/api/scanner/audit", s.handleScannerAudit) // legacy alias for /api/audit/{id}
 	// The audit queue, and the one action on a queued item. Two patterns because they are two
 	// operations on two shapes: the exact path lists the queue, the subtree acts on one item. Note the
@@ -1097,6 +1137,8 @@ func (s *Server) setupRoutes() {
 	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
 	// uploaded — so Intruder's file source and content discovery both point once.
 	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
+	// Burp's "Run health check" (8e3n). Like /payload it may register the channel: an explicit click.
+	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealth)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)
@@ -1189,6 +1231,9 @@ func (s *Server) setupRoutes() {
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.
 	s.mux.HandleFunc("/api/discovery", s.handleDiscovery)
+	// Hidden-input guessing: Burp's Param Miner "Guess params", built in (burpsy-react-ui-wlz8). The
+	// other half of the same question — discovery guesses paths, this guesses the inputs one path reads.
+	s.mux.HandleFunc("/api/hidden-inputs", s.handleHiddenInputs)
 
 	// The blind-XSS callback channel: the listener's state, and minting a correlation payload to plant.
 	// Two patterns because they are two operations, and the mint is a POST because it changes what the

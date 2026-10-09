@@ -136,3 +136,21 @@ export function tabColour(
  const group = groups.find((entry) => entry.id === tab.groupId);
  return group?.color ? { color: group.color, from: "group" } : { color: "", from: undefined };
 }
+
+/**
+ * Burp's "Open tab search" over Repeater tabs (burpsy-react-ui-qqcn): the tabs whose name or target
+ * contains every word of the query, case-insensitively, in strip order.
+ *
+ * Every word, not the phrase: "login staging" finds the tab named "login" whose target is the
+ * staging host, which is how an operator with forty tabs remembers one — by two facts about it,
+ * neither of which is the whole name. An empty query matches every tab rather than none, so
+ * opening the search shows the full list to narrow rather than a blank box that reads as "no tabs".
+ */
+export function filterTabs<T extends { name: string; target?: string }>(tabs: T[], query: string): T[] {
+ const words = query.toLowerCase().split(/\s+/).filter((word) => word !== "");
+ if (words.length === 0) return tabs;
+ return tabs.filter((tab) => {
+  const haystack = `${tab.name}\n${tab.target ?? ""}`.toLowerCase();
+  return words.every((word) => haystack.includes(word));
+ });
+}

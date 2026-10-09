@@ -14,8 +14,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/sender"
@@ -101,6 +103,95 @@ func TestTheGateStopsProbingAPlaceThatHasProvenInert(t *testing.T) {
 	if offJudged != 0 {
 		t.Errorf("a run with the gate OFF judged %d place(s) ineffective; the key is the only "+
 			"thing that may turn the gate on, so an off configuration must judge nothing", offJudged)
+	}
+}
+
+// burpsy-react-ui-saq3.2.2: the prior is keyed per CHECK, and the five interpreted-language
+// code-injection checks all used to file their silence under the OS command injection check's
+// own id ("OSCommandInjection"), so the Python check's probes at a place also counted against
+// the Ruby check there — two silent probes by one language retired another that had looked
+// once, a gate dropping a check on the strength of probes it never sent.
+//
+// The run seeds three items over the same parameter against an inert origin, with the dispatch
+// whitelisted to Python and Ruby code injection only, and the follow-up passes pinned to zero
+// so each check dispatches exactly once per item — without that pin a check's own two passes
+// fill its prior inside item 1, which is the retry machinery's doing, not the partition's.
+// Traffic is attributed per item by PATH (the probe kinds are query/body/cookie/header, so a
+// probe mutates the query and never the path, while a gated dispatch still pays its one
+// baseline). With per-row names the sequence is: item 1 both probe (each prior reaches 1),
+// item 2 both STILL probe at full price (each prior is at 1, under the threshold of 2), item 3
+// both are gated (each prior reached 2 on its own evidence). Under the shared name, items 2
+// and 3 are both baseline-only after item 1 filled one prior for both — the exact defect.
+func TestOneLanguagesSilenceCannotRetireAnotherLanguagesCheck(t *testing.T) {
+	var mu sync.Mutex
+	perPath := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		perPath[r.URL.Path]++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "nothing interesting")
+	}))
+	t.Cleanup(srv.Close)
+	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split target address: %v", err)
+	}
+	var port uint16
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("parse target port: %v", err)
+	}
+
+	store := core.NewTrafficStore()
+	ids := make([]core.ExchangeID, 0, 3)
+	for i := 0; i < 3; i++ {
+		// One path per item: the item's identity a probe cannot destroy, because no probe
+		// kind touches the path.
+		ids = append(ids, seedAuditExchange(t, store, host, port,
+			fmt.Sprintf("/r%d?a=1", i), "nothing interesting"))
+	}
+
+	python, ok := ByName("Python code injection")
+	if !ok {
+		t.Fatal("Python code injection is absent from the catalog")
+	}
+	ruby, ok := ByName("Ruby code injection")
+	if !ok {
+		t.Fatal("Ruby code injection is absent from the catalog")
+	}
+
+	cfg := DefaultAuditConfig()
+	cfg.IssueTypes = []uint32{python.TypeIndex, ruby.TypeIndex}
+	// One dispatch per check per item: the follow-up pass would fill each check's own prior
+	// inside item 1 and gate item 2 for a reason that has nothing to do with the partition.
+	cfg.FollowUpPasses = SomeUint32(0)
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(nil)).
+		WithConfig(&ScanConfig{MaxConcurrency: 1, Timeout: time.Minute, CheckActiveInjection: true})
+	_, _ = scan.AuditSession(context.Background(), ids, cfg)
+
+	mu.Lock()
+	defer mu.Unlock()
+	item1, item2, item3 := perPath["/r0"], perPath["/r1"], perPath["/r2"]
+	if item1 == 0 {
+		t.Fatalf("item 1 received no requests at all (%v): the whitelisted code-injection checks "+
+			"never ran, so nothing below proves anything", perPath)
+	}
+	if item2 != item1 {
+		t.Fatalf("item 1 received %d request(s), item 2 received %d: with per-check priors each "+
+			"language holds ONE silent probe after item 1, so item 2 must pay item 1's full price "+
+			"for BOTH checks (equal or fewer means one language's silence gated the other's probes, "+
+			"burpsy-react-ui-saq3.2.2)", item1, item2)
+	}
+	if item2 <= item3 {
+		t.Fatalf("item 2 received %d request(s), item 3 received %d: item 3 is where each check's "+
+			"own prior reaches two and the gate must fire; equal counts mean the gate fired a whole "+
+			"item early — on a prior another check filled (per-item counts %v)", item2, item3, perPath)
+	}
+	if item3 == 0 {
+		t.Fatalf("item 3 received %d request(s), want at least the gated dispatch's baselines: the "+
+			"gate must fire on each check's OWN second silent probe, not never (per-item counts %v)",
+			item3, perPath)
 	}
 }
 

@@ -62,6 +62,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"path"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -146,6 +147,15 @@ type InsertionPoint struct {
 	// refuse is set for containers with no escape: the payload is spliced raw and
 	// refused outright when it carries the sequence that would end the container.
 	refuse refusal
+	// upload is set on a multipart file part's CONTENT point (kzt7): the spans the
+	// upload-as-HTML rewrite needs. Nil on every other point.
+	upload *multipartUpload
+}
+
+// multipartUpload is where a file part's filename and header block sit in the body.
+type multipartUpload struct {
+	head     [2]int
+	fileSpan [2]int
 }
 
 // locKind enumerates which component of the base request a point addresses.
@@ -162,6 +172,9 @@ const (
 	// locSyntheticHeader appends a fresh header named by InsertionPoint.Name
 	// rather than splicing an existing range (Java addNewReferHeaderInsertionPoint).
 	locSyntheticHeader
+	// locSyntheticQueryName appends a bare query parameter name — `?1`, no `=` — Burp's
+	// addPhpFileRequestInsertionPoint (burpsy-react-ui-i7i5).
+	locSyntheticQueryName
 	// locRelocateBodyToQuery removes the body clause [start,end) and appends it
 	// to the query as name=<payload> — the parameter now lives in the query ONLY.
 	locRelocateBodyToQuery
@@ -196,6 +209,10 @@ type loc struct {
 	// nested points (coding == codingNested). Zero for all other points.
 	innerStart int
 	innerEnd   int
+	// wrapOpen and wrapClose surround the payload when it is spliced: a self-closing XML element's
+	// point (burpsy-react-ui-lzzz) replaces its "/>" with ">" + payload + "</name>". Empty for every
+	// other point.
+	wrapOpen, wrapClose string
 }
 
 // coding describes how a payload must be escaped so the surrounding container
@@ -375,6 +392,11 @@ const (
 	// parameter skip list and an engine-judged ineffective point are two different
 	// decisions, and the operator reading the queue needs to know which one applies.
 	DeclinedIneffectiveWhat = "insertion points judged ineffective"
+	// DeclinedSkippedServerSideWhat names the points a server-side-injection check did not probe
+	// because the operator exempted their parameter from those checks — Burp's
+	// scanner.ignored_insertion_points skip_server_side_injection_for_parameters (Zwh1). Distinct
+	// from DeclinedSkippedParamWhat: the parameter is still tested by every other check.
+	DeclinedSkippedServerSideWhat = "insertion points on parameters exempted from server-side injection checks"
 )
 
 // EnumerateOptions is the per-run tuning an audit configuration carries into the
@@ -417,13 +439,16 @@ type EnumerateOptions struct {
 	// Declined: an audit that skipped a parameter it was told to skip must say so, or
 	// the operator's own exemption reads as "nothing to test here".
 	//
-	// Burp has a second, softer list — skip_server_side_injection_for_parameters —
-	// which exempts a parameter from injection checks only, leaving passive/evidence
-	// checks running. burpsy's check families do not yet partition into
-	// server-side-injection versus rest, so that tier is declined rather than
-	// half-built: a list that exempted a parameter from checks this engine cannot
-	// name would be a control that silently tests more than it claims to skip.
+	// Burp's softer list, skip_server_side_injection_for_parameters, is the field below.
 	SkipAllTestsForParameters []string
+	// SkipServerSideInjectionForParameters names parameters an operator exempted from the
+	// server-side injection checks only — Burp's
+	// scanner.ignored_insertion_points.skip_server_side_injection_for_parameters. The scanner
+	// sets it ONLY on the enumeration a server-side-injection check makes (CheckDescriptor's
+	// ServerSideInjection class), never on the run-wide options, so a reflected-input or
+	// redirect check still probes the parameter. Matched like the skip-all list, and the drop is
+	// its own Declined.
+	SkipServerSideInjectionForParameters []string
 	// PointEffective is the per-insertion-point effectiveness oracle behind Burp's
 	// `scanner/audit_optimization/skip_ineffective_checks` (burpsy-react-ui-y4om).
 	//
@@ -612,6 +637,20 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 				coding:    codingForm,
 			})
 		}
+	}
+
+	// Burp's PHP file-request point (Zuq.addPhpFileRequestInsertionPoint, called from the
+	// new-parameter-name stage when the URL's file extension is php): a bare parameter NAME "1"
+	// after the path, `/page.php?1`. PHP reads a bare name as a key with an empty value, so the
+	// name is where a payload reaches code that iterates $_GET's keys (burpsy-react-ui-i7i5).
+	if want(IpParamNameURL) && strings.EqualFold(path.Ext(e.Path), ".php") {
+		out = append(out, InsertionPoint{
+			Kind:      IpParamNameURL,
+			Name:      "1",
+			BaseValue: "1",
+			loc:       loc{kind: locSyntheticQueryName},
+			coding:    codingForm,
+		})
 	}
 
 	if want(IpParamNameBody) {
@@ -823,6 +862,17 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 		})
 	}
 
+	// The server-side-injection exemption (burpsy-react-ui-gmdk), beside the skip-all list for the
+	// same before-the-cap reason. Present only when the enumerating check is a server-side
+	// injection check; every other check's options leave it empty.
+	if skipped := skipNamedPoints(&out, opts.SkipServerSideInjectionForParameters); skipped > 0 {
+		declined = append(declined, Declined{
+			What: DeclinedSkippedServerSideWhat,
+			Reason: fmt.Sprintf("%d point(s) were not probed by this server-side injection check: their parameter is on the operator's skip-server-side-injection list",
+				skipped),
+		})
+	}
+
 	// The per-point effectiveness gate (burpsy-react-ui-y4om, Burp's
 	// skip_ineffective_checks). Placed after the operator's skip list and before nested
 	// expansion for the same reason the cap sits there: a point the gate drops must not
@@ -1005,12 +1055,22 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 	}
 
 	// An XML body is enumerated by structure, not by Content-Type alone: a
-	// document posted as text/plain is the same document. A body whose scan
-	// finds no text node and no attribute value (`<a/>`) has genuinely nowhere to
-	// inject — that is an empty enumeration, like a form with no pairs, not a
-	// refusal.
+	// document posted as text/plain is the same document. An empty element
+	// (`<a/>`) is a point of its own, as in Burp: the payload opens the element
+	// around itself (burpsy-react-ui-lzzz).
 	if strings.Contains(ctype, "xml") || looksLikeXML(trimmed) {
 		for _, xp := range xmlPoints(body) {
+			if xp.closeTag != "" {
+				// A self-closing element (lzzz): no value to keep, and the splice opens the element.
+				*out = append(*out, InsertionPoint{
+					Kind:      IpXML,
+					Name:      xp.name,
+					BaseValue: "",
+					loc:       loc{kind: locBody, start: xp.start, end: xp.end, wrapOpen: ">", wrapClose: "</" + xp.closeTag + ">"},
+					coding:    codingXML,
+				})
+				continue
+			}
 			*out = append(*out, InsertionPoint{
 				Kind:      IpXML,
 				Name:      xp.name,
@@ -1087,14 +1147,18 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		if label == "" {
 			label = "part[" + strconv.Itoa(i) + "]"
 		}
-		*out = append(*out, InsertionPoint{
+		content := InsertionPoint{
 			Kind:      IpBody,
 			Name:      label,
 			BaseValue: body[part.content[0]:part.content[1]],
 			loc:       loc{kind: locBody, start: part.content[0], end: part.content[1]},
 			coding:    codingRawSafe,
 			refuse:    refusal{seq: delim},
-		})
+		}
+		if part.hasFile {
+			content.upload = &multipartUpload{head: part.headSpan, fileSpan: part.fileSpan}
+		}
+		*out = append(*out, content)
 		if part.hasName {
 			*out = append(*out, InsertionPoint{
 				Kind:      IpMultipartAttr,
@@ -1146,6 +1210,9 @@ type multipartPart struct {
 	fileSpan [2]int
 	hasFile  bool
 	content  [2]int
+	// headSpan is the part's header block (no trailing blank line), for the upload-as-HTML
+	// rewrite that replaces its Content-Type (burpsy-react-ui-kzt7).
+	headSpan [2]int
 }
 
 // multipartParts splits a multipart body into its parts. ok is false when the
@@ -1209,7 +1276,7 @@ func multipartParts(body, boundary string) ([]multipartPart, bool) {
 		if next < 0 {
 			return nil, false
 		}
-		part := multipartPart{content: [2]int{contentStart, contentStart + next}}
+		part := multipartPart{content: [2]int{contentStart, contentStart + next}, headSpan: [2]int{headStart, headEnd}}
 		readDisposition(body[headStart:headEnd], headStart, &part)
 		parts = append(parts, part)
 		cursor = contentStart + next + skip
@@ -1322,6 +1389,9 @@ func headerParams(s string) []headerParam {
 type xmlPoint struct {
 	name       string
 	start, end int
+	// closeTag is set for a self-closing element's point (lzzz): the element name to close when
+	// the "/>" at [start,end) is opened into ">" + payload + "</name>".
+	closeTag string
 }
 
 // xmlFrame is one open element during an XML scan: the path a finding reports
@@ -1452,6 +1522,15 @@ func xmlPoints(s string) []xmlPoint {
 			end, selfClosing := xmlAttrs(s, j, path, &out)
 			if !selfClosing {
 				stack = append(stack, xmlFrame{path: path})
+			} else if end >= 2 && s[end-1] == '>' && s[end-2] == '/' {
+				// Burp's standalone-tag point (Zuq addStandaloneTagInsertionPoint): an empty
+				// element has no text node to inject into, so the "/>" — with any spaces before it —
+				// is the point, and a payload opens the element around itself.
+				slash := end - 2
+				for slash > j && isXMLSpace(s[slash-1]) {
+					slash--
+				}
+				out = append(out, xmlPoint{name: path, start: slash, end: end, closeTag: name})
 			}
 			textStart = end
 			i = end
@@ -1650,6 +1729,21 @@ func clauseRemovalSep(s string, start, end int, sep byte) (int, int) {
 	return s0, s1
 }
 
+// ApplyOptions tunes how Apply places a payload (burpsy-react-ui-79ld).
+//
+// Raw is the decoding-variant escape policy: a payload whose bytes ARE the probe — a
+// percent-escape the application is meant to decode, an overlong or invalid UTF-8 sequence —
+// must reach the wire verbatim, because percentEscape's own `%`→`%25` and non-ASCII escaping
+// would hand the application a different payload than the check wrote (the URL-decoding
+// variant double-encoded; the UTF-8 variants never arrive as bytes at all). What Raw keeps is
+// everything the REQUEST needs to stay parseable: the `k=v` structural separators and the
+// request-line-unsafe bytes. A container that re-encodes by design — a JSON string literal, an
+// XML text node — is not loosened by Raw: a raw 0xC0 byte inside a JSON string is not a
+// "decoding variant", it is a malformed document, and no check asks for it.
+type ApplyOptions struct {
+	Raw bool
+}
+
 // Apply splices payload into this point of req, which must be the request the
 // point was enumerated from. appending keeps the existing value and adds to it;
 // otherwise it is overwritten. The new raw request is returned.
@@ -1662,6 +1756,11 @@ func clauseRemovalSep(s string, start, end int, sep byte) (int, int) {
 // Everything else in the request is untouched, which is what makes a resulting
 // finding attributable to the point's name.
 func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]byte, error) {
+	return p.ApplyOpts(req, payload, appending, ApplyOptions{})
+}
+
+// ApplyOpts is Apply with options. See ApplyOptions for what Raw changes.
+func (p *InsertionPoint) ApplyOpts(req []byte, payload string, appending bool, opts ApplyOptions) ([]byte, error) {
 	// A manual point splices into the RAW request bytes at its marked span, bypassing the component
 	// parser entirely — the operator marked a byte range, not a parsed parameter (burpsy-react-ui-806w).
 	if p.loc.kind == locManualRaw {
@@ -1693,7 +1792,11 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 	var escaped string
 	switch p.coding {
 	case codingForm:
-		escaped = percentEscape(payload)
+		// Raw loosens only THIS escape (79ld): the decoding-variant payloads live in `k=v`
+		// containers, and every other coding either splices verbatim already (cookie, raw-safe)
+		// or re-encodes by the grammar of its container (JSON, XML), which Raw deliberately
+		// does not loosen — see ApplyOptions.
+		escaped = percentEscapeOpts(payload, opts.Raw)
 	case codingJson:
 		escaped = jsonEscape(payload)
 	case codingXML:
@@ -1727,6 +1830,9 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 	if appending {
 		newVal = p.BaseValue + escaped
 	}
+	if p.loc.wrapClose != "" {
+		newVal = p.loc.wrapOpen + newVal + p.loc.wrapClose
+	}
 
 	switch p.loc.kind {
 	case locQuery:
@@ -1759,6 +1865,8 @@ func (p *InsertionPoint) Apply(req []byte, payload string, appending bool) ([]by
 		b = append(b, newVal...)
 		b = append(b, e.Body[end:]...)
 		e.Body = b
+	case locSyntheticQueryName:
+		e.AddQuery(newVal)
 	case locSyntheticHeader:
 		// The header does not exist on the base request, so there is nothing to
 		// splice — a fresh header of the point's name is appended after every
@@ -2046,12 +2154,35 @@ func jsonStringValues(s string) []jsonValue {
 // ASCII — space included — cannot appear in a request line at all. Everything
 // else is passed through, so an injection payload arrives looking like itself.
 func percentEscape(s string) string {
+	return percentEscapeOpts(s, false)
+}
+
+// percentEscapeOpts is percentEscape with the Raw policy (burpsy-react-ui-79ld).
+//
+// Raw drops exactly the two escapes that rewrite a decoding-variant payload rather than
+// transport it: `%` is left alone, so a variant's own percent-escape (`%3C`) is not turned into
+// `%253C` on the wire — one container decode too many, the "double-encoded" payload the
+// application never sees as the check wrote it; and bytes >= 0x7f are left alone, so an
+// overlong or invalid UTF-8 sequence reaches the target as the bytes it is, not as the ASCII
+// text spelling of its hex. What Raw keeps is every escape the REQUEST itself needs: the
+// `k=v` separators (`&`, `=`, `+`, `;`, `#`) and the bytes that cannot appear in a request
+// line. Control bytes stay escaped even under Raw — a raw 0x01 is not a decoding variant, it
+// is a broken request line, and no payload this option exists for needs one.
+func percentEscapeOpts(s string, raw bool) string {
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
-			c <= 0x20 || c >= 0x7f {
+		var escaped bool
+		switch {
+		case raw:
+			// Structural and request-line safety only: `%` and the high bytes pass through.
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20
+		default:
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
+				c <= 0x20 || c >= 0x7f
+		}
+		if escaped {
 			fmt.Fprintf(&sb, "%%%02X", c)
 		} else {
 			sb.WriteByte(c)
@@ -2578,8 +2709,8 @@ func (p InsertionPoint) BodyWindow() (start, end int, code ContainerCode, ok boo
 // WireValue returns the full wire value the point carries once payload has been
 // spliced in: the payload escaped for its container (JSON string, XML text node
 // or attribute value, MIME quoted-string), or — for a nested point — the whole
-// outer wire value rebuilt from decode → splice → re-encode. appending is not
-// modelled: Intruder replaces the window rather than appending to the base value.
+// outer wire value rebuilt from decode → splice → re-encode. It replaces the
+// window; WireValueAppend is the "Append to base parameter value" form.
 //
 // A payload the container cannot represent is an error rather than a rewritten
 // payload, so Intruder refuses exactly what the scanner's Apply refuses.
@@ -2606,19 +2737,125 @@ func (p InsertionPoint) WireValue(payload string) (string, error) {
 		}
 		return payload, nil
 	case codingNested:
-		lvl1 := containerDecode(p.containerCoding, p.BaseValue)
-		inner, err := nestedDecode(p.nested, lvl1)
-		if err != nil {
-			return "", err
-		}
-		innerNew := spliceStr(inner, p.loc.innerStart, p.loc.innerEnd,
-			escapeForNested(p.nested, payload))
-		wire := containerEncode(p.containerCoding, nestedEncode(p.nested, innerNew))
-		if err := p.refuseValue(wire); err != nil {
-			return "", err
-		}
-		return wire, nil
+		return p.nestedWireValue(payload, false)
 	default:
 		return "", fmt.Errorf("intruder point: unsupported coding %d", p.coding)
 	}
+}
+
+// AppendRebuildsValue reports whether appending a payload to this point's base
+// value rebuilds the whole wire value. It does for a nested point only: the base
+// value there is decoded, extended in its inner buffer and re-encoded (base64
+// cannot be extended by concatenating onto its encoded text), so Intruder must
+// replace the full window with WireValueAppend. Every other container keeps its
+// base bytes exactly as captured, and appending is the escaped payload
+// (WireValue) spliced at the end of the window.
+func (p InsertionPoint) AppendRebuildsValue() bool { return p.coding == codingNested }
+
+// WireValueAppend is WireValue for Intruder's "Append to base parameter value"
+// (burpsy-react-ui-1krs): the full wire value the point carries once payload is
+// appended to its base value. For a nested point this is applyNested's
+// appending branch — the payload lands after the inner value, inside the
+// decoded buffer, and the outer value is re-encoded. For every other container
+// it is the base wire bytes followed by the escaped payload, which is
+// byte-for-byte what splicing WireValue(payload) at the end of the window
+// produces; the refusals are WireValue's own, so Intruder refuses exactly what
+// the scanner's Apply(…, appending=true) refuses.
+func (p InsertionPoint) WireValueAppend(payload string) (string, error) {
+	if p.coding == codingNested {
+		return p.nestedWireValue(payload, true)
+	}
+	escaped, err := p.WireValue(payload)
+	if err != nil {
+		return "", err
+	}
+	return p.BaseValue + escaped, nil
+}
+
+// nestedWireValue rebuilds a nested point's outer wire value with payload
+// spliced into the decoded inner buffer — over the inner value, or after it when
+// appending. The rebuilt value is what the refusal checks, as in applyNested.
+func (p InsertionPoint) nestedWireValue(payload string, appending bool) (string, error) {
+	lvl1 := containerDecode(p.containerCoding, p.BaseValue)
+	inner, err := nestedDecode(p.nested, lvl1)
+	if err != nil {
+		return "", err
+	}
+	innerNew := escapeForNested(p.nested, payload)
+	if appending {
+		innerNew = inner[p.loc.innerStart:p.loc.innerEnd] + innerNew
+	}
+	innerNew = spliceStr(inner, p.loc.innerStart, p.loc.innerEnd, innerNew)
+	wire := containerEncode(p.containerCoding, nestedEncode(p.nested, innerNew))
+	if err := p.refuseValue(wire); err != nil {
+		return "", err
+	}
+	return wire, nil
+}
+
+// UploadFilename returns the filename of the multipart file part this content point belongs to,
+// and whether it is one (burpsy-react-ui-kzt7).
+func (p *InsertionPoint) UploadFilename(req []byte) (string, bool) {
+	if p.upload == nil {
+		return "", false
+	}
+	e, err := core.ParseRequestEdit(req)
+	if err != nil {
+		return "", false
+	}
+	start, end := clampOffsets(p.upload.fileSpan[0], p.upload.fileSpan[1], len(e.Body))
+	return string(e.Body[start:end]), true
+}
+
+// ApplyHTMLUpload is Burp's file-upload HTML variant (FILE_UPLOAD_FILE_EXTENSION_HTML_*,
+// burp.Zc3y): the file part is re-sent as an HTML document — its filename becomes newName, its
+// Content-Type text/html, and its content the payload — so an upload the application stores and
+// serves back is tested as the HTML page a victim would be sent to. Only a file part's content
+// point carries the spans; any other point is refused.
+func (p *InsertionPoint) ApplyHTMLUpload(req []byte, payload, newName string) ([]byte, error) {
+	if p.upload == nil {
+		return nil, fmt.Errorf("%s %q is not a multipart file part", p.Kind, p.Name)
+	}
+	if err := p.refuseValue(payload); err != nil {
+		return nil, err
+	}
+	if strings.ContainsAny(newName, "\"\r\n\x00") {
+		return nil, fmt.Errorf("filename %q cannot be written into a Content-Disposition header", newName)
+	}
+	e, err := core.ParseRequestEdit(req)
+	if err != nil {
+		return nil, err
+	}
+	body := string(e.Body)
+	hs, he := clampOffsets(p.upload.head[0], p.upload.head[1], len(body))
+	fs, fe := clampOffsets(p.upload.fileSpan[0], p.upload.fileSpan[1], len(body))
+	cs, ce := clampOffsets(p.loc.start, p.loc.end, len(body))
+	if !(hs <= fs && fe <= he && he <= cs && cs <= ce) {
+		return nil, fmt.Errorf("multipart part spans are out of order")
+	}
+	// The header block with the filename swapped, and its Content-Type replaced (or added).
+	head := body[hs:fs] + newName + body[fe:he]
+	lines := strings.Split(head, "\n")
+	replaced := false
+	for i, line := range lines {
+		if name, _, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(name), "content-type") {
+			lines[i] = "Content-Type: text/html" + func() string {
+				if strings.HasSuffix(line, "\r") {
+					return "\r"
+				}
+				return ""
+			}()
+			replaced = true
+		}
+	}
+	head = strings.Join(lines, "\n")
+	if !replaced {
+		eol := "\r\n"
+		if !strings.Contains(head, "\r\n") {
+			eol = "\n"
+		}
+		head += eol + "Content-Type: text/html"
+	}
+	e.Body = []byte(body[:hs] + head + body[he:cs] + payload + body[ce:])
+	return e.ToRaw(), nil
 }

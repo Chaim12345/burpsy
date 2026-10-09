@@ -4,6 +4,7 @@ import { formatFoundAt, foundAtTitle } from "../lib/issue-provenance";
 import { ChevronDown, ChevronRight, Copy, Download, ExternalLink, FileDown, Globe, Combine, SlidersHorizontal, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
+import { confirmDialog, promptDialog } from "../lib/dialogs";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { useDebounced, useHistory, useMessage } from "../lib/data";
 import { useIssueLLMTriage, useIssueTriage, useIssuesDetailed } from "../lib/data.attack";
@@ -17,6 +18,13 @@ import { HttpEditor } from "../ui/editor";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
 import { LoadingPanel, PageHeader, RefreshButton, SplitPane } from "../ui/layout";
 import { ConsolidationDialog } from "../ui/consolidation-dialog";
+import {
+ DEFAULT_REPORT_SETTINGS,
+ ReportSettingsDialog,
+ reportSettingsActive,
+ reportSettingsQuery,
+ type ReportSettings,
+} from "../ui/report-settings-dialog";
 import {
  Badge,
  Button,
@@ -44,6 +52,7 @@ const CONFIDENCES = ["Certain", "Firm", "Tentative"];
 const SEVERITY_RANK: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1, Informational: 0 };
 const REPORT_FORMATS = [
  { format: "html", label: "HTML" },
+ { format: "xml", label: "XML" },
  { format: "json", label: "JSON" },
  { format: "sarif", label: "SARIF" },
 ];
@@ -182,6 +191,11 @@ export function ScannerPage(): JSX.Element {
  const [confidences, setConfidences] = useState<Set<string>>(new Set());
  const [hideFalsePositives, setHideFalsePositives] = useState(false);
  const [consolidationOpen, setConsolidationOpen] = useState(false);
+ // Report settings (burpsy-react-ui-a9qy): Burp's reporting-wizard choices,
+ // applied to the export links below. Session state, like the wizard - each
+ // export is configured for itself, not persisted as a tool preference.
+ const [reportSettings, setReportSettings] = useState<ReportSettings>(DEFAULT_REPORT_SETTINGS);
+ const [reportSettingsOpen, setReportSettingsOpen] = useState(false);
  // The source facet (burpsy-react-ui-exiu): which producer raised a finding. Two states only —
  // see lib/issue-source-filter for why this does not split BCheck from a native check.
  const [sourceFilter, setSourceFilter] = useState<IssueSourceFilter>("");
@@ -214,7 +228,18 @@ export function ScannerPage(): JSX.Element {
 
  /** Deletion is the one irreversible triage act, so it asks — Burp's own "Delete issue" does. */
  const removeFinding = (finding: FindingDetail) => {
-  if (!window.confirm(`Delete "${findingName(finding)}" on ${finding.host}? A re-audit of the same endpoint will re-raise it.`)) return;
+  void confirmDialog({
+   title: `Delete "${findingName(finding)}"?`,
+   description: `On ${finding.host}. A re-audit of the same endpoint will re-raise it.`,
+   confirmLabel: "Delete issue",
+   cancelLabel: "Keep it",
+   danger: true,
+  }).then((confirmed) => {
+   if (confirmed) deleteFinding(finding);
+  });
+ };
+
+ const deleteFinding = (finding: FindingDetail) => {
   triage.remove.mutate(finding.id, {
    onSuccess: () => {
     toast.success("Issue deleted");
@@ -225,9 +250,17 @@ export function ScannerPage(): JSX.Element {
  };
 
  const editComment = (finding: FindingDetail) => {
-  const next = window.prompt(`Comment on "${findingName(finding)}"`, finding.comment);
-  if (next === null || next === finding.comment) return;
-  applyTriage(finding, { comment: next.trim() }, next.trim() === "" ? "Comment cleared" : "Comment saved");
+  void promptDialog({
+   title: `Comment on "${findingName(finding)}"`,
+   description: "An empty comment clears it.",
+   label: "Comment",
+   initial: finding.comment,
+   confirmLabel: "Save comment",
+   allowEmpty: true,
+  }).then((next) => {
+   if (next === null || next === finding.comment) return;
+   applyTriage(finding, { comment: next.trim() }, next.trim() === "" ? "Comment cleared" : "Comment saved");
+  });
  };
 
  const debouncedTerm = useDebounced(term, 260);
@@ -333,6 +366,15 @@ export function ScannerPage(): JSX.Element {
   const qs = params.toString();
   return qs ? `?${qs}` : "";
  }, [severities, hostReportFilter, hideFalsePositives]);
+ // One href per format: the filter query the tree already builds, plus the
+ // report settings this format actually consumes (title, organisation and
+ // TOC depth are HTML-only; sections and messages reach XML too).
+ const exportHrefQuery = (format: string) => {
+  const filterQS = reportQuery.replace(/^\?/, "");
+  const settingsQS = reportSettingsQuery(reportSettings, format);
+  const qs = [filterQS, settingsQS].filter(Boolean).join("&");
+  return qs ? "?" + qs : "";
+ };
 
  const exchange = useMemo(() => {
   const id = selected?.occurrence?.exchange_id;
@@ -559,7 +601,7 @@ export function ScannerPage(): JSX.Element {
             </div>
             {pathOpen
              ? path.leaves.map((leaf) => (
-              <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)}>
+              <ContextMenu key={leaf.key} groups={menuForLeaf(leaf)} docTopic="issues">
                <div
                 role="treeitem"
                 aria-level={3}
@@ -863,12 +905,20 @@ export function ScannerPage(): JSX.Element {
         placeholder="report host filter…"
         style={{ maxWidth: "var(--w-sm)" }}
        />
+       <Button variant="outline" size="small" onClick={() => setReportSettingsOpen(true)}>
+        <SlidersHorizontal size={13} />
+        Report settings{reportSettingsActive(reportSettings) ? " *" : ""}
+       </Button>
        {REPORT_FORMATS.map((f) => (
         <LinkButton
          key={f.format}
-         href={`/api/report/${f.format}${reportQuery}`}
+         // The settings this format consumes, composed with the filter query:
+         // title, organisation and TOC depth are HTML-only; the sections and
+         // the message choices reach the XML export too. JSON and SARIF take
+         // neither - a parameter that quietly did nothing is worse than absent.
+         href={`/api/report/${f.format}${exportHrefQuery(f.format)}`}
          download
-         title={`Exports ${rows.length.toLocaleString()} finding(s) — ${exportScope}${hostReportFilter.trim() ? ` on hosts matching “${hostReportFilter.trim()}”` : ""}`}
+         title={`Exports ${rows.length.toLocaleString()} finding(s) — ${exportScope}${hostReportFilter.trim() ? ` on hosts matching “${hostReportFilter.trim()}”` : ""}${reportSettingsActive(reportSettings) ? " - report settings applied" : ""}`}
         >
          <Download size={13} />
          {f.label}
@@ -928,7 +978,13 @@ export function ScannerPage(): JSX.Element {
 
    <SplitPane storageId="issues" orientation="horizontal" defaultMasterSize="34" minMasterSize="20" master={treePane} detail={advisory} />
 
-   <ConsolidationDialog
+   <ReportSettingsDialog
+   open={reportSettingsOpen}
+   onOpenChange={setReportSettingsOpen}
+   settings={reportSettings}
+   onApply={setReportSettings}
+  />
+  <ConsolidationDialog
     open={consolidationOpen}
     onOpenChange={setConsolidationOpen}
     issueNames={[...new Set((issues?.findings ?? []).flatMap((finding) => (finding.check_name ? [finding.check_name] : [])))].sort()}

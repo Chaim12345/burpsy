@@ -896,9 +896,9 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 				}
 				got, wantSet, wantUnset = uint64(applied.resolvedMaxItemsInProgress()), want, 0
 			case "scan_only_selected_issues", "select_individual_issues", "selected_issues":
-				// Field-less by design: this engine has no per-issue selection, the row reports
-				// Applies false, and Apply reports the key unapplied. Nothing on the applied config
-				// to check beyond that it must not have been treated as a scalar.
+				// The booleans choose Burp's mode and carry no value of their own onto the run
+				// (applyIssueSelection reads them; issue_selection_test.go covers what each mode
+				// does). Nothing on the applied config to compare to a scalar here.
 				got, wantSet, wantUnset = 1, 1, 1
 			case "relocate_body_to_url", "relocate_body_to_cookie", "relocate_url_to_body",
 				"relocate_url_to_cookie", "relocate_cookie_to_body", "relocate_cookie_to_url":
@@ -939,6 +939,13 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
 				}
 				got, wantSet, wantUnset = 0, 0, 0
+			case "skip_server_side_injection_for_parameters":
+				// The same list shape as the skip-all key (burpsy-react-ui-gmdk), checked the same way.
+				if len(applied.SkipServerSideInjectionForParameters) != 0 {
+					t.Errorf("preset %q reported %s as applied but a preset cannot carry a "+
+						"list-valued key; the value is set on the run, not the preset", c.Name, k.Name)
+				}
+				got, wantSet, wantUnset = 0, 0, 0
 			case "scan_speed":
 				// The per-check mutation-set selector (burpsy-react-ui-ev7y). Named here because the
 				// guard below refuses an applying key this oracle cannot check, and the check is the
@@ -949,6 +956,23 @@ func Test_a_configs_reported_keys_are_exactly_what_apply_overlays(t *testing.T) 
 			case "scan_accuracy":
 				// The mutation-token count (4/8/10). Same contract as scan_speed above.
 				got = uint64(applied.ScanAccuracy.Value)
+				wantSet = uint64(k.Value)
+				wantUnset = 0
+			case "follow_redirections", "audit_connect_timeout", "audit_normal_timeout",
+				"javascript_use_static_analysis", "javascript_use_dynamic_analysis",
+				"javascript_max_static_time_per_item", "javascript_max_dynamic_time_per_item":
+				// The per-run project overrides (o2p3) and javascript_analysis keys (9mti): each row's
+				// value reaches its own OptUint32 field, spelled here by hand.
+				field := map[string]OptUint32{
+					"follow_redirections":                  applied.FollowRedirects,
+					"audit_connect_timeout":                applied.ConnectTimeout,
+					"audit_normal_timeout":                 applied.NormalTimeout,
+					"javascript_use_static_analysis":       applied.JavaScriptStaticAnalysis,
+					"javascript_use_dynamic_analysis":      applied.JavaScriptDynamicAnalysis,
+					"javascript_max_static_time_per_item":  applied.MaxStaticTimePerItem,
+					"javascript_max_dynamic_time_per_item": applied.MaxDynamicTimePerItem,
+				}[k.Name]
+				got = uint64(field.Value)
 				wantSet = uint64(k.Value)
 				wantUnset = 0
 			default:

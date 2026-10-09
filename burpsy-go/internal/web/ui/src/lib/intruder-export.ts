@@ -12,6 +12,7 @@
  * export always matches what the operator is looking at.
  */
 import { csvCell } from "./api";
+import { describeCaptureFilter } from "./intruder-capture";
 import {
   assignmentAt,
   planSetLengths,
@@ -121,6 +122,20 @@ export function intruderReportToCSV(
     capped
       ? `# detail_limit: ${report.detail_limit} — per-attempt rows beyond this were not kept`
       : `# detail_limit: ${report.detail_limit}`,
+    // Store requests / responses (nqww): an empty Response ID column is the attack's own setting.
+    ...(report.requests_stored === false || report.responses_stored === false
+      ? [
+          `# stored: requests ${report.requests_stored === false ? "no" : "yes"}, responses ${
+            report.responses_stored === false ? "no" : "yes"
+          } — empty ids below are the attack's storage setting, not missing responses`,
+        ]
+      : []),
+    // The capture filter (ip2b): the rows below are the captured items only, and this says so.
+    ...(report.capture_filter
+      ? [
+          `# capture_filter: ${describeCaptureFilter(report.capture_filter)}; discarded: ${report.discarded ?? 0} — counted in sent/failed, not written below`,
+        ]
+      : []),
   ];
   const headers = [
     "Ordinal",

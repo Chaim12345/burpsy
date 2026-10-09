@@ -312,6 +312,12 @@ type RedirectSettings struct {
 	// throwaway cookies is the other reason: without a switch, following its redirects would keep
 	// resending them.
 	ReplayCookies bool `json:"replay_cookies"`
+	// CrossDomainProtocol is the protocol a hop to ANOTHER host must use (burpsy-react-ui-adkx —
+	// Burp's "Use selected protocol for cross-domain redirects" / "Enforce protocol choice on
+	// cross-domain redirections"). ProtocolPreferenceAuto, the zero value and Burp's default, lets
+	// each hop negotiate as normal. A per-send choice, never a stored setting: it is not serialised,
+	// so a network-settings document can neither carry nor persist it.
+	CrossDomainProtocol ProtocolPreference `json:"-"`
 }
 
 // ContinueSettings makes the 100-continue handling explicit.

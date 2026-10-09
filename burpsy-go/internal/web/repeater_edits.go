@@ -185,6 +185,15 @@ func (s *Server) repeaterStructuredSend(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "refused: "+verdict.Explanation, http.StatusForbidden)
 		return
 	}
+	// The tab's note, Override SNI and h2 reuse key ride a structured send exactly as they ride a raw
+	// one (handleRepeaterSend validated the note before branching here).
+	spec.Note = req.Note
+	if err := validRepeaterSNI("sni", req.SNI, spec.TLS); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.SNI = req.SNI
+	spec.TabID = req.TabID
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

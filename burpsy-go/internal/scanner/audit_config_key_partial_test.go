@@ -49,46 +49,71 @@ func TestTheSkipListKeyIsNotReportedAsUnsupported(t *testing.T) {
 		"rather than misdescribed, which is the same defect wearing a different hat")
 }
 
-// A preset whose SOURCE FILE named a partial key must not have that key reported as unapplied.
+// A file that set a partial key must have it accounted for: honoured when the value is one this
+// engine can act on, and reported when it is not — never left out of both answers, which is what the
+// old blanket skip of every partial row did to a parsed selected_issues (burpsy-react-ui-saq3.1).
 //
-// The unapplied list is built from two sources: the rows whose read is nil, and whatever the
-// parser could not deliver. A row that names a partial key and then falls through to the generic
-// "read == nil" arm lands in the list and the operator is told the control is unsupported — which
-// is the pre-fix defect reached by a different route, and which the first partial test could not
-// catch because that preset set no keys at all.
-func TestAPartialKeyStaysOutOfTheUnappliedListEvenWhenAPresetNamesIt(t *testing.T) {
-	preset := BuiltInConfig{
-		Name:                "a shipped configuration that names the skip list",
-		UnrepresentableKeys: []string{"skip_all_tests_for_parameters"},
+// This test used to assert the opposite for a key RECORDED with no value: that a partial row stayed out
+// of the unapplied list whatever the source carried. That rule is the hole. The parser now decodes a
+// partial key's value, and a value it cannot use is reported by name.
+func TestAPartialKeyIsAccountedForWhateverTheFileCarried(t *testing.T) {
+	empty, err := ParseBurpConfig([]byte(`{"scanner":{"ignored_insertion_points":{"skip_all_tests_for_parameters":[]}}}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, unapplied := preset.ApplyWithReport(AuditConfig{})
-	for _, name := range unapplied {
-		if name == "skip_all_tests_for_parameters" {
-			t.Errorf("a preset naming the skip list got it reported as unapplied (%v); the control IS "+
-				"honoured, through a different value shape, and a console reading this list would say "+
-				"otherwise", unapplied)
-		}
+	_, rep := empty.applyWithAccounting(AuditConfig{})
+	if !containsString(rep.Applied, "skip_all_tests_for_parameters") || containsString(rep.Unapplied, "skip_all_tests_for_parameters") {
+		t.Errorf("an empty skip list: applied %v unapplied %v; it asks for nothing and is honoured", rep.Applied, rep.Unapplied)
+	}
+	recorded := BuiltInConfig{UnrepresentableKeys: []string{"skip_all_tests_for_parameters"}}
+	_, rep = recorded.applyWithAccounting(AuditConfig{})
+	if !containsString(rep.Unapplied, "skip_all_tests_for_parameters") {
+		t.Errorf("a recorded key with no value: unapplied %v; it did nothing and must be named", rep.Unapplied)
 	}
 }
 
-// And the row's own name and the name a preset would use are the same string, so the check above is
-// testing the key the operator sees rather than a near-miss spelling.
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// And the row's own name and the name the report uses are the same string, so the checks above are
+// testing the key the operator sees rather than a near-miss spelling. Each partial row is driven from
+// a file carrying a value the engine honours, and must come back applied under the row's own name.
 func TestThePartialRowAndTheUnappliedListShareOneSpelling(t *testing.T) {
+	files := map[string]string{
+		"selected_issues":                           `{"scanner":{"issues_reported":{"select_individual_issues":true,"selected_issues":[]}}}`,
+		"skip_all_tests_for_parameters":             `{"scanner":{"ignored_insertion_points":{"skip_all_tests_for_parameters":[]}}}`,
+		"skip_server_side_injection_for_parameters": `{"scanner":{"ignored_insertion_points":{"skip_server_side_injection_for_parameters":[]}}}`,
+	}
+	partials := 0
 	for _, k := range BuiltInConfigKeys() {
 		if !k.Partial {
 			continue
 		}
-		preset := BuiltInConfig{Name: "naming it", UnrepresentableKeys: []string{k.Name}}
-		_, unapplied := preset.ApplyWithReport(AuditConfig{})
-		for _, got := range unapplied {
-			if got == k.Name {
-				t.Errorf("%q is both a partial row and a member of the unapplied list, so the two "+
-					"answers are true at once", k.Name)
-			}
+		partials++
+		doc, ok := files[k.Name]
+		if !ok {
+			t.Errorf("partial row %q has no fixture here; add one so its spelling is checked", k.Name)
+			continue
 		}
-		return
+		cfg, err := ParseBurpConfig([]byte(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, rep := cfg.applyWithAccounting(AuditConfig{})
+		if !containsString(rep.Applied, k.Name) || containsString(rep.Unapplied, k.Name) {
+			t.Errorf("%q: applied %v unapplied %v; a value the engine honours must be accounted applied "+
+				"under the row's own name", k.Name, rep.Applied, rep.Unapplied)
+		}
 	}
-	t.Fatal("no partial row exists, so nothing can be said about the three-state contract")
+	if partials == 0 {
+		t.Fatal("no partial row exists, so nothing can be said about the three-state contract")
+	}
 }
 
 // The unapplied list is what a console shows as "not supported". A partial key must not be in it.

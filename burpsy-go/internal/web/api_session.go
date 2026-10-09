@@ -45,6 +45,10 @@ type sessionExtractDto struct {
 	// Absent means the body, matching the UI's optional field.
 	From json.RawMessage `json:"from,omitempty"`
 	How  json.RawMessage `json:"how"`
+	// Burp's custom-parameter fields (burpsy-react-ui-355h); see session.Extraction.
+	Prefix     string `json:"prefix,omitempty"`
+	Suffix     string `json:"suffix,omitempty"`
+	URLEncoded *bool  `json:"url_encoded,omitempty"`
 }
 
 // wholeValuePattern is how the UI's `how: "whole"` is expressed to an extractor that only knows
@@ -145,7 +149,7 @@ func (d sessionExtractDto) extractHow() (extractHowSpec, error) {
 // extractionToDto is the inverse: what a stored extraction looks like on the wire, so a rule the
 // operator saved reads back as the rule they typed.
 func extractionToDto(ex *session.Extraction) sessionExtractDto {
-	d := sessionExtractDto{Name: ex.Name}
+	d := sessionExtractDto{Name: ex.Name, Prefix: ex.Prefix, Suffix: ex.Suffix, URLEncoded: ex.URLEncoded}
 	if ex.From == "header" {
 		d.From = json.RawMessage(mustJSON(map[string]string{"header": ex.Header}))
 	} else {
@@ -790,6 +794,7 @@ func dtoToRule(dto sessionRuleDto) (*session.SessionRule, error) {
 			}
 			ex.Header = header
 			ex.Step = i
+			ex.Prefix, ex.Suffix, ex.URLEncoded = e.Prefix, e.Suffix, e.URLEncoded
 			rule.Extractions = append(rule.Extractions, ex)
 		}
 	}

@@ -3,10 +3,12 @@ package sender
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
@@ -74,7 +76,7 @@ func h2RequestFromRaw(raw []byte) (h2Request, error) {
 }
 
 // sendOverH2 runs one request over an already-negotiated h2 connection and returns the response in the
-// HTTP/1-shaped rendering the store indexes.
+// HTTP/1-shaped rendering the store indexes. The connection is used for this one exchange and closed.
 func sendOverH2(ctx context.Context, conn net.Conn, req h2Request) ([]byte, error) {
 	tr := &http2.Transport{}
 	clientConn, err := tr.NewClientConn(conn)
@@ -82,7 +84,12 @@ func sendOverH2(ctx context.Context, conn net.Conn, req h2Request) ([]byte, erro
 		return nil, fmt.Errorf("h2 client conn: %w", err)
 	}
 	defer clientConn.Close()
+	return h2RoundTrip(ctx, clientConn, conn, req)
+}
 
+// h2RoundTrip runs one request on an h2 client connection. conn is the socket under it, which a
+// per-send streaming window (of0z) re-arms once the response head says the body is an event stream.
+func h2RoundTrip(ctx context.Context, clientConn *http2.ClientConn, conn net.Conn, req h2Request) ([]byte, error) {
 	var body io.Reader
 	if len(req.Body) > 0 {
 		body = bytes.NewReader(req.Body)
@@ -104,12 +111,40 @@ func sendOverH2(ctx context.Context, conn net.Conn, req h2Request) ([]byte, erro
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
+	window, streamed := streamingOverride(ctx)
+	streamed = streamed && h2IsEventStream(httpResp.Header.Get("Content-Type"))
+	if streamed {
+		// An h2 stream has no "unframed" case — END_STREAM always ends it — so the event stream is the
+		// one shape a streaming window applies to here.
+		_ = conn.SetReadDeadline(streamingDeadline(ctx, window))
+	}
+	var reader io.Reader = httpResp.Body
+	if streamed {
+		// The same cap a streamed HTTP/1 body has; an ordinary response reads whole, as it always did.
+		reader = io.LimitReader(httpResp.Body, maxStreamingBodyBytes)
+	}
+	respBody, err := io.ReadAll(reader)
+	if err != nil && !(streamed && isTimeout(err)) {
 		return nil, fmt.Errorf("h2 read body: %w", err)
 	}
 	headers := burpsyhttp2.HeadersFromHTTP(httpResp.Header)
 	return burpsyhttp2.RenderResponse(httpResp.StatusCode, headers, respBody), nil
+}
+
+// h2IsEventStream reports whether a Content-Type value is text/event-stream, ignoring parameters.
+func h2IsEventStream(contentType string) bool {
+	mt, _, _ := strings.Cut(contentType, ";")
+	return strings.EqualFold(strings.TrimSpace(mt), "text/event-stream")
+}
+
+// isTimeout reports whether err is a deadline expiry anywhere in its chain — the expected end of a
+// streamed read.
+func isTimeout(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, os.ErrDeadlineExceeded) || strings.Contains(err.Error(), "i/o timeout")
 }
 
 // renderHTTP1 writes the HTTP/1.1 bytes an h2-shaped request becomes, for the one case that needs it: a

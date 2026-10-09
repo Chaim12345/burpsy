@@ -156,7 +156,7 @@ func (s *Server) startAuditAsync(w http.ResponseWriter, id core.ExchangeID, cfg 
 		return
 	}
 	s.scanner = s.activeScanner()
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
 	taskCtx, cancel := task.WithCancel(context.Background())
 	ctx, err := s.auditContext(taskCtx, poolName)
 	if err != nil {
@@ -242,7 +242,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	s.scanner = s.activeScanner()
 	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
 	// which is known up front for a single item.
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
 	return s.runAuditOn(ctx, id, cfg, named, unapplied, task)
 }
 
@@ -251,9 +251,11 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string, task *dash.Handle) map[string]interface{} {
 	s.scanner = s.activeScanner()
 	body := map[string]interface{}{
-		"started":       true,
-		"exchange_id":   id,
-		"active_checks": s.scanner.ActiveCheckCount(),
+		"started":     true,
+		"exchange_id": id,
+		// The check set THIS run dispatches, so it equals outcome.considered for a dispatched item. The
+		// configuration-free count overstated it whenever the run's configuration removed checks.
+		"active_checks": s.scanner.ActiveCheckCountUnder(cfg),
 		"unimplemented": s.scanner.UnimplementedCheckCount(),
 		// The configuration this run actually used. Reported for SCAN-03: a reply that looked the same
 		// whether or not a named preset was honoured could not be told apart from one that accepted the
@@ -303,7 +305,7 @@ func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner
 	// second-pass traffic at all: a stored re-fetch is real traffic to the target, and paying it when
 	// no claim could settle would be a request the operator never got value from.
 	if s.scanner.PendingCount() > 0 {
-		deferred, completion := s.scanner.FinishScan(ctx)
+		deferred, completion := s.scanner.FinishScan(ctx, cfg)
 		body["deferred"] = completion
 		for _, f := range deferred {
 			s.findings.Add(s.activeFinding(f, task.ID()))
@@ -451,7 +453,7 @@ func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target str
 	// re-fetch pass mid-flight. The stored re-fetch needs the live context, so it runs first and
 	// its findings land on the same task row the audit's did.
 	if active.PendingCount() > 0 {
-		deferred, completion := active.FinishScan(ctx)
+		deferred, completion := active.FinishScan(ctx, cfg)
 		s.events.RecordFor(task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
 			"deferred phase of %s: %s (outstanding: %d)", target, completion.Pending, len(completion.Outstanding)))
 		for _, f := range deferred {

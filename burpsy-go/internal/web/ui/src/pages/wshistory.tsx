@@ -65,7 +65,7 @@ function ConnectionRow({
    <Badge>{conn.messages}</Badge>
   </button>
  );
- return <ContextMenu groups={menuGroups}>{row}</ContextMenu>;
+ return <ContextMenu groups={menuGroups} docTopic="websockets">{row}</ContextMenu>;
 }
 
 /** Renders one frame's payload. A frame is one of three disjoint shapes on the wire — text, hex, or
@@ -545,6 +545,7 @@ export function WebSocketPage(): JSX.Element {
      </Toolbar>
      <VirtualTable
       ariaLabel="WebSocket frames"
+      docTopic="websockets"
       data={rows}
       columns={columns}
       getRowId={(row) => String(row.id)}
