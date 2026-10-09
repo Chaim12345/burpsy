@@ -11,6 +11,7 @@
 // command has to deal with them and a per-editor menu never does: a selection can belong to a
 // read-only message, and two editors on screen can each be holding one.
 import { EditorView } from "@codemirror/view";
+import { selectionText, selectionTransformSpec } from "./editor-eol";
 
 /** One candidate editor, reduced to the three facts the choice turns on. */
 export interface CandidateEditor<V> {
@@ -128,27 +129,26 @@ export function liveSelectionChoice(root: ParentNode = document): SelectionChoic
   return chooseSelectionTarget(candidateEditors(root));
 }
 
-/** The selected text, as the read-only path needs it: the main range, like the editor's own dialog. */
+/**
+ * The selected text, as the read-only path needs it: the main range, like the editor's own dialog.
+ * Read as the message's real text, CR bytes included — CodeMirror's document has every CRLF as a
+ * lone "\n" (lib/editor-eol.ts, burpsy-react-ui-eslt).
+ */
 export function selectedText(view: EditorView): string {
-  const range = view.state.selection.main;
-  return view.state.sliceDoc(range.from, range.to);
+  return selectionText(view.state);
 }
 
 /**
  * Rewrite every non-empty selected range through `transform`, and report the result.
  *
- * The same shape as `transformSelection` in ui/editor.tsx — all ranges, not just the main one, so
- * a multi-cursor selection converts the way the editor's own menu converts it.
+ * The same spec as `transformSelection` in ui/editor.tsx (selectionTransformSpec) — all ranges, not
+ * just the main one, read as real text and written back verbatim, so a multi-cursor selection and a
+ * selection across a CRLF convert the way the editor's own menu converts them.
  */
 export function transformSelectionIn(view: EditorView, transform: (input: string) => string): string {
-  const ranges = view.state.selection.ranges.filter((range) => !range.empty);
-  if (ranges.length === 0) return "";
-  const changes = ranges.map((range) => ({
-    from: range.from,
-    to: range.to,
-    insert: transform(view.state.sliceDoc(range.from, range.to)),
-  }));
-  view.dispatch({ changes });
+  const spec = selectionTransformSpec(view.state, transform);
+  if (!spec) return "";
+  view.dispatch(spec);
   view.focus();
-  return changes.map((change) => change.insert).join("\n");
+  return spec.changes.map((change) => change.insert).join("\n");
 }
