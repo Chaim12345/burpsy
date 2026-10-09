@@ -1,6 +1,7 @@
 import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
+import { normalizeEol, realText, realTextOf, reconcile, selectionText, selectionTransformSpec } from "../lib/editor-eol";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
@@ -434,15 +435,12 @@ const editorTheme = EditorView.theme({
  * convention. Matching Burp is the point.
  */
 function transformSelection(view: EditorView, transform: (input: string) => string): boolean {
- const changes = view.state.selection.ranges
-  .filter((range) => !range.empty)
-  .map((range) => ({
-   from: range.from,
-   to: range.to,
-   insert: transform(view.state.sliceDoc(range.from, range.to)),
-  }));
- if (!changes.length) return false;
- view.dispatch({ changes, scrollIntoView: true });
+ // Reads each range as the message's real text and writes the output back verbatim
+ // (burpsy-react-ui-eslt): the document has no CR bytes, so a selection across a CRLF header
+ // break read through sliceDoc was converted, and written back, without them.
+ const spec = selectionTransformSpec(view.state, transform);
+ if (!spec) return false;
+ view.dispatch({ ...spec, scrollIntoView: true });
  return true;
 }
 
@@ -507,7 +505,8 @@ const burpEditorKeys = Prec.high(
    if (event.altKey && !event.shiftKey && event.code === "KeyC") {
     event.preventDefault();
     const sel = view.state.selection.main;
-    const text = sel.empty ? prettyMessage(view.state.doc.toString()) : view.state.sliceDoc(sel.from, sel.to);
+    // Real text, CR bytes included (burpsy-react-ui-eslt): the document alone has every CRLF as "\n".
+    const text = sel.empty ? prettyMessage(realTextOf(view.state) ?? view.state.doc.toString()) : selectionText(view.state);
     void copyToClipboard(text).then(() => toast.success(sel.empty ? "Copied the message, prettified" : "Copied the selection"));
     return true;
    }
@@ -845,6 +844,9 @@ export function HttpEditor({
     },
    ),
    burpEditorKeys,
+   // The message's real text beside CodeMirror's CR-less document, for every read and write that
+   // must keep its line endings (lib/editor-eol.ts, burpsy-react-ui-eslt).
+   realText.of(rawTextRef),
    EditorView.contentAttributes.of({ "aria-label": label }),
    // Keeps the codec menu entries honest about whether they have anything to act on.
    EditorView.updateListener.of((update) => {
@@ -1148,6 +1150,35 @@ export function HttpEditor({
  // whole extension set on every keystroke. This must stay outside that useMemo: its factory
  // runs on mount, before this line exists, which is a first-render TDZ crash.
  rawTextRef.current = shown;
+ const shownDoc = useMemo(() => normalizeEol(shown), [shown]);
+ // Raw edits are the bytes; a Pretty edit is the operator editing the readable form, written back
+ // through compactMessage so the wire keeps the body compacted exactly as it was
+ // (burpsy-react-ui-dmf) — the same deal Burp offers ("In this tab, you can access all the same
+ // functionality as in the Raw tab"), and the reason the sent request never silently grows to the
+ // pretty layout. A mid-edit JSON parse failure passes the operator's text through untouched, and
+ // Raw then shows precisely what they typed. Never fires while charsetActive: the document on
+ // screen is the reinterpreted body, not the real bytes, and writing it back through onChange
+ // would send whatever the chosen charset happened to produce as if the operator had typed it.
+ //
+ // CodeMirror's own string has every line ending flattened to "\n", so taking it as the message
+ // turned a CRLF request into an LF one on any edit at all (burpsy-react-ui-eslt). The
+ // transactions are replayed onto the real text instead (lib/editor-eol.ts reconcile); only when
+ // that text no longer matches the document does the document's string stand in, as it always did.
+ const writeDoc = charsetActive
+  ? undefined
+  : active === "pretty" && editable
+   ? "pretty"
+   : active === "raw"
+    ? "raw"
+    : undefined;
+ const cmOnChange = useMemo(() => {
+  if (!writeDoc || !onChange) return undefined;
+  return (doc: string, update: ViewUpdate) => {
+   const next = reconcile(rawTextRef.current, update.transactions) ?? doc;
+   rawTextRef.current = next;
+   onChange(writeDoc === "pretty" ? compactMessage(next) : next);
+  };
+ }, [writeDoc, onChange]);
  rawSelectionRef.current = { report: onRawSelection, rawView: active === "raw" && !charsetActive, value };
  // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
  // operator pasting into a ticket wants, and it is why message.ts's read-only
@@ -1223,10 +1254,8 @@ export function HttpEditor({
   // document holds a lone "\n" for each, and URL-encoding a selection across a header break must
   // give %0D%0A, as the bytes are (burpsy-react-ui-ngao). Pretty and charset views have no such
   // mapping and convert what is on screen.
-  const raw = rawSelectionRef.current;
-  const input = raw.rawView
-   ? raw.value.slice(docPosToValuePos(raw.value, sel.from), docPosToValuePos(raw.value, sel.to))
-   : cm.state.sliceDoc(sel.from, sel.to);
+  // selectionText maps through the real text of whichever view is showing (lib/editor-eol.ts).
+  const input = selectionText(cm.state);
   setConversionResult({ label, output: transform(input) });
  }, []);
 
@@ -1845,27 +1874,11 @@ export function HttpEditor({
       <AttributesTab raw={value} />
      ) : (
       <CodeMirror
-       value={shown}
-       onChange={
-        // Raw edits are the bytes; a Pretty edit is the operator editing the
-        // readable form, written back through compactMessage so the wire keeps
-        // the body compacted exactly as it was (burpsy-react-ui-dmf) — the same
-        // deal Burp offers ("In this tab, you can access all the same
-        // functionality as in the Raw tab"), and the reason the sent request
-        // never silently grows to the pretty layout. A mid-edit JSON parse
-        // failure passes the operator's text through untouched, and Raw then
-        // shows precisely what they typed.
-        // Never fires while charsetActive: the document on screen is the reinterpreted body,
-        // not the real bytes, and writing it back through onChange would send whatever the
-        // chosen charset happened to produce as if the operator had typed it.
-        charsetActive
-         ? undefined
-         : active === "pretty" && editable
-          ? (next) => onChange?.(compactMessage(next))
-          : active === "raw"
-           ? onChange
-           : undefined
-       }
+       // The CR-less form CodeMirror builds its document from anyway. Handing it the CRLF text made
+       // its value sync see a mismatch on every render; with the real text now kept through edits
+       // (cmOnChange) that would replace the whole document, and the caret with it, after each keystroke.
+       value={shownDoc}
+       onChange={cmOnChange}
        editable={editable && !charsetActive && !hiding && (active === "raw" || active === "pretty")}
        readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}
        height="100%"
