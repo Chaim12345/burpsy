@@ -1162,6 +1162,10 @@ type Server struct {
 	serveCtx      context.Context
 	listenerMu    sync.Mutex
 	rebindMu      sync.Mutex
+
+	// wsLive is every WebSocket this relay is pumping right now, by handshake exchange, so Repeater
+	// can attach to one (burpsy-react-ui-wuwf). See ws_live.go.
+	wsLive wsLiveRegistry
 }
 
 // NewServer creates a new proxy server.

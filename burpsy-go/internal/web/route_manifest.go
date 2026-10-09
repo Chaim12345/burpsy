@@ -798,8 +798,18 @@ var manifest = map[string]route{
 		// To-client is answered 400 with the reason rather than attempted, so an unattended caller
 		// cannot reach the browser-facing half by omitting the direction.
 		methods: []string{"POST"}, risk: riskEgress,
-		summary: "resend one WebSocket frame on a freshly dialled connection, recording the handshake " +
-			"exchange and the reply frames; to-client is refused with its reason",
+		summary: "resend one WebSocket frame on a freshly dialled connection (or, with clone, one opened " +
+			"with a captured connection's own handshake), recording the handshake exchange and the reply " +
+			"frames; to-client is refused with its reason",
+	},
+	"/api/repeater/ws-attach": {
+		// riskEgress, the same class as ws-send: one operator-authored frame, into one connection. It
+		// dials nothing — the socket must be one the proxy is relaying right now, looked up by its
+		// WebSocket ID in the relay's own registry — and the connection's handshake target must be
+		// in scope. To-client is allowed here, because an attached connection has a client.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "write one WebSocket frame into a connection open through the proxy (Repeater attach), " +
+			"to the server or to the client; scope-gated on the connection's target, recorded on its history",
 	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
