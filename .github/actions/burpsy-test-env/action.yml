@@ -1,0 +1,26 @@
+name: burpsy test environment
+description: >
+  Go from go.mod, plus the external tools the Go test gate exercises (Chrome check, xmllint,
+  pinned ffuf / nuclei / interactsh-client and the nuclei template corpus). Every test shard in
+  go.yml uses this, so the shards cannot drift apart in what they test against.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: burpsy-go/go.mod
+        cache-dependency-path: burpsy-go/go.sum
+
+    # Only the DOWNLOAD is cached: scripts/ci-install-tools.sh re-checks every archive against the
+    # SHA-256 pinned in it, and fetches again on a mismatch. Keyed on that script, so bumping a pin
+    # starts a fresh cache rather than reusing an archive for the old one.
+    - name: Restore the pinned tool and template archives
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/burpsy-ci-downloads
+        key: burpsy-ci-downloads-${{ runner.os }}-${{ hashFiles('scripts/ci-install-tools.sh') }}
+
+    - name: Install the pinned test tools
+      shell: bash
+      run: scripts/ci-install-tools.sh

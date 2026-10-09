@@ -55,7 +55,7 @@ for the UI bundle and warns when bun or Go differ from what CI uses.
 |---|---|---|---|---|
 | T1 | implementing agent | before reporting | `gofmt -l`, `go vet`, and `go test -count=1 -timeout 30m` on the packages `scripts/affected-go-tests.sh origin/master` prints (changed packages + every package whose tests import one); `bun run check` if `burpsy-go/internal/web/ui/` changed; a negative control for each new test (revert the fix, watch it fail) | local |
 | T2 | lead | merging an item into the round branch | the same on the merge result, plus `go build ./...` | local |
-| T3 | CI | every PR into master (in practice the round PR) and every push to master | `gate`: gofmt, `go build`, `go vet`, full `go test ./... -count=1`, `go test -race ./internal/web/`; `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`: `scripts/beads-lint.py`; `review-gate`: `scripts/review-gate.sh` | `.github/workflows/go.yml`, `review-gate.yml` |
+| T3 | CI | every PR into master (in practice the round PR) and every push to master | `gate` (aggregates `lint` and the `test` shard matrix): `lint` runs gofmt, `go build`, `go vet`; `test` runs the full `go test ./... -count=1` and `go test -race ./internal/web/` split into parallel shards by `scripts/ci-shard.sh` (`ci-shard.sh all` lists them; their union is every test); `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`: `scripts/beads-lint.py`; `review-gate`: `scripts/review-gate.sh` | `.github/workflows/go.yml`, `review-gate.yml` |
 | Nightly | CI | 03:17 UTC, and on demand | `e2e-go.sh`; `go test -race` on every package except `internal/web` (T3 covers it), `internal/scanner` and `internal/extscan` (not yet shown race-clean) | `.github/workflows/nightly.yml` |
 | Manual | whoever changed the console | before reporting a UI change | the live browser pass: `./ui-live.sh`, driven per `burpsy-go/docs/UI-VERIFICATION.md` | local |
 
@@ -68,7 +68,10 @@ The script reads the import graph of the checked-out tree. It cannot see a test 
 directory's file without importing it, except through the explicit rules in its header, and it
 cannot see merge skew (two branches that pass alone and fail together). T3 runs the whole suite on
 the exact tree that lands for exactly that reason; the affected set narrows the inner loop and is
-never the gate.
+never the gate. To reproduce one red T3 shard locally, run `scripts/ci-shard.sh <shard>` from the
+repository root.
+`.buildkite/` runs the same shards on Buildkite for comparison; it is optional and never a
+required check (see `.buildkite/README.md`).
 
 Whole-module and Chrome-heavy runs take `flock /tmp/burpsy-heavy.lock` — one per machine. A local
 full suite is a diagnostic for a red T3, not a gate. `go test ./...` without `-timeout 30m` is not
@@ -244,7 +247,8 @@ The PR that introduced this document could not do these; they are the lead's, in
 1. **The `review-gate` status needs no setup** beyond this workflow being on master. (An earlier
    draft used an `agent-reviewed` label; labels are not used.)
 2. **Branch protection on `master`**, once each requirement has been reported at least once
-   (GitHub only offers a check it has seen). Required: the `gate`, `ui` and `beads` checks and the
+   (GitHub only offers a check it has seen). `gate` is the aggregator over `lint` and every `test`
+   shard, so the shard list can change without touching protection. Required: the `gate`, `ui` and `beads` checks and the
    `review-gate` commit status, each bound to the GitHub Actions app (`app_id` 15368) so that no
    other app can satisfy it; strict (branch up to date before merging); enforced for admins; no
    force-push, no deletion:
