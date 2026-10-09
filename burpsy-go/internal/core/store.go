@@ -495,6 +495,13 @@ type Exchange struct {
 	// It exists because a rebindable listener and several configured listeners are both reachable
 	// now, and with neither recorded there was no way to tell which one captured a row.
 	ListenerPort uint16
+	// ClientIP is the address of the client that sent the request to the proxy listener, Burp's
+	// InterceptedHttpMessage.sourceIpAddress() (burpsy-react-ui-3bkn). With several browsers or
+	// devices on one listener it is what tells their requests apart. Empty when the producer was not a
+	// listener, which covers Repeater, Intruder, the crawler and the scanner, the same rows whose
+	// ListenerPort is zero. Like ListenerPort, it describes a socket that is closed by the time a row is
+	// listed, so it is recorded at capture or not at all.
+	ClientIP string
 
 	// The earlier stages of this exchange's own bytes, retained so history can show what a
 	// transformation did rather than only that one happened (burpsy-react-ui-c05, under epic mrjw).
@@ -750,6 +757,11 @@ const (
 	// It is kept distinct from SourceProxy for the same reason Repeater is: history must not claim the
 	// operator's own client sent a request that in fact arrived from a colleague's session or a CI run.
 	SourceImport Source = "import"
+	// SourceSchema is a request generated from an API schema and recorded WITHOUT being sent — Burp's
+	// "Save GraphQL queries to site map" (burpsy-react-ui-7v1e), whose items reach the site map as
+	// unrequested. It has a request and no response, and it must never read as traffic: nothing
+	// went on the wire.
+	SourceSchema Source = "schema"
 )
 
 // Attributed reports whether a producer named this exchange's origin.

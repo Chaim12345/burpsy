@@ -59,6 +59,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/web"
@@ -136,7 +137,30 @@ type Options struct {
 	// In and Out are the stdio ends. Nil means os.Stdin / os.Stdout.
 	In  io.Reader
 	Out io.Writer
+	// Surface picks the tool list: SurfaceGrouped (the default) or SurfaceRoutes.
+	Surface Surface
+	// MaxConcurrent bounds the tools/call handled at once. 0 means 8.
+	MaxConcurrent int
+	// SyncWindow is how long a call that started a console task waits for it before answering with a
+	// task handle instead. 0 means 15 s, Burp's own window.
+	SyncWindow time.Duration
+	// NoNotifications turns off the console watcher that pushes task completion and High findings as
+	// notifications/message.
+	NoNotifications bool
 }
+
+// Surface is which tool list tools/list publishes.
+type Surface string
+
+const (
+	// SurfaceGrouped is the default: capability-grouped tools (groups.go), each fronting a few
+	// operations of one risk class, with no asset routes and no subtree spellings.
+	SurfaceGrouped Surface = "grouped"
+	// SurfaceRoutes is one tool per manifest pattern, named by normalising the pattern
+	// ("/api/history" -> "api_history"). Kept for debugging and for clients pinned to those names;
+	// it lists every route, the console's own assets included.
+	SurfaceRoutes Surface = "routes"
+)
 
 // Server is a stdio MCP server over one burpsy console.
 type Server struct {
@@ -144,6 +168,7 @@ type Server struct {
 	http    *http.Client
 	in      io.Reader
 	out     io.Writer
+	surface Surface
 
 	// routes is the exposed manifest, in the order it will be listed.
 	routes []web.MCPRouteInfo
@@ -152,6 +177,23 @@ type Server struct {
 	tools     []tool
 	byName    map[string]tool
 	byPattern map[string]web.MCPRouteInfo
+
+	// The concurrent session (burpsy-react-ui-wdza).
+	enc        *json.Encoder
+	writeMu    sync.Mutex
+	slots      chan struct{}
+	inflightMu sync.Mutex
+	inflight   map[string]context.CancelFunc
+	session    context.Context
+	syncWindow time.Duration
+	// events is the client for the console's SSE stream: no timeout, because the stream never ends;
+	// its lifetime is the session's context.
+	events    *http.Client
+	notify    bool
+	watchOnce sync.Once
+	watchers  sync.WaitGroup
+	levelMu   sync.Mutex
+	level     string
 }
 
 // New builds a server. It validates the options that would otherwise fail on the first tool call,
@@ -200,19 +242,47 @@ func New(opts Options) (*Server, error) {
 		out = os.Stdout
 	}
 
+	surface := opts.Surface
+	switch surface {
+	case "":
+		surface = SurfaceGrouped
+	case SurfaceGrouped, SurfaceRoutes:
+	default:
+		return nil, fmt.Errorf("mcp: unknown tool surface %q (want %q or %q)", surface, SurfaceGrouped, SurfaceRoutes)
+	}
+
+	maxConc := opts.MaxConcurrent
+	if maxConc <= 0 {
+		maxConc = 8
+	}
+	window := opts.SyncWindow
+	if window <= 0 {
+		window = 15 * time.Second
+	}
+
 	s := &Server{
-		baseURL:   base,
-		http:      client,
-		in:        in,
-		out:       out,
-		routes:    routes,
-		byName:    make(map[string]tool, len(routes)+1),
-		byPattern: make(map[string]web.MCPRouteInfo, len(routes)),
+		slots:      make(chan struct{}, maxConc),
+		syncWindow: window,
+		events:     &http.Client{},
+		notify:     !opts.NoNotifications,
+		level:      "info",
+		baseURL:    base,
+		http:       client,
+		in:         in,
+		out:        out,
+		surface:    surface,
+		routes:     routes,
+		byName:     make(map[string]tool, len(routes)+1),
+		byPattern:  make(map[string]web.MCPRouteInfo, len(routes)),
 	}
 	for _, r := range routes {
 		s.byPattern[r.Pattern] = r
 	}
-	s.tools = s.buildTools()
+	tools, err := s.buildTools()
+	if err != nil {
+		return nil, err
+	}
+	s.tools = tools
 	return s, nil
 }
 
@@ -223,21 +293,54 @@ func (s *Server) BaseURL() string { return s.baseURL }
 // banner so an operator can see the surface is the real one.
 func (s *Server) RouteCount() int { return len(s.routes) }
 
+// ToolCount is how many tools tools/list publishes on this server's surface, burpsy_confirm included.
+func (s *Server) ToolCount() int { return len(s.tools) }
+
+// ToolNames lists the published tool names in tools/list order.
+func (s *Server) ToolNames() []string {
+	out := make([]string, 0, len(s.tools))
+	for _, t := range s.tools {
+		out = append(out, t.Name)
+	}
+	return out
+}
+
+// Surface is the tool surface this server publishes.
+func (s *Server) Surface() Surface { return s.surface }
+
 // Serve reads newline-delimited JSON-RPC from in and writes replies to out until the input closes
 // or ctx is cancelled. It returns the read error, if any.
+//
+// # Concurrency (burpsy-react-ui-wdza)
+//
+// tools/call is dispatched on its own goroutine, bounded by MaxConcurrent, so a long call — an audit
+// inside its sync window, a long-poll — does not stop the session answering ping, tools/list or
+// another call. Every other method is answered inline, in arrival order. All writes go through one
+// mutex-serialised encoder, because replies and notifications now come from several goroutines and
+// two interleaved writes would be one corrupt line. At end of input Serve waits for the calls in
+// flight to answer before it returns, so no reply is lost to a closing stream.
 func (s *Server) Serve(ctx context.Context) error {
 	in := s.in
 	if in == nil {
 		return fmt.Errorf("mcp: no input stream")
 	}
-	out := s.out
-	if out == nil {
+	if s.out == nil {
 		return fmt.Errorf("mcp: no output stream")
 	}
+	s.enc = json.NewEncoder(s.out)
+
+	sessionCtx, stopSession := context.WithCancel(ctx)
+	defer stopSession()
+	s.session = sessionCtx
 
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxMessageBytes)
-	encoder := json.NewEncoder(out)
+	var calls sync.WaitGroup
+	defer func() {
+		calls.Wait()
+		stopSession()
+		s.watchers.Wait()
+	}()
 
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -254,7 +357,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		if err := json.Unmarshal(line, &req); err != nil {
 			// The id is unreadable by construction, so the reply carries null: the spec's
 			// requirement is that a parse error is still answered, not that it is attributable.
-			if werr := encoder.Encode(response{
+			if werr := s.send(response{
 				JSONRPC: "2.0",
 				ID:      json.RawMessage("null"),
 				Error:   &rpcError{Code: codeParseError, Message: "parse error: " + err.Error()},
@@ -264,18 +367,93 @@ func (s *Server) Serve(ctx context.Context) error {
 			continue
 		}
 
-		reply, ok := s.handle(ctx, req)
+		if req.isNotification() {
+			s.notification(req)
+			continue
+		}
+		if req.Method == "tools/call" {
+			callCtx, cancel := context.WithCancel(sessionCtx)
+			key := string(req.ID)
+			s.track(key, cancel)
+			calls.Add(1)
+			s.slots <- struct{}{}
+			go func(req request) {
+				defer calls.Done()
+				defer func() { <-s.slots }()
+				defer s.untrack(key)
+				defer cancel()
+				reply := s.callTool(callCtx, req)
+				if callCtx.Err() != nil && sessionCtx.Err() == nil {
+					// notifications/cancelled: the spec says not to answer a cancelled request.
+					return
+				}
+				_ = s.send(reply)
+			}(req)
+			continue
+		}
+		reply, ok := s.handle(sessionCtx, req)
 		if !ok {
 			continue
 		}
-		if err := encoder.Encode(reply); err != nil {
+		if err := s.send(reply); err != nil {
 			return err
 		}
 	}
 	return scanner.Err()
 }
 
-// handle answers one message. ok is false for a notification, which by definition gets no reply.
+// send writes one message under the write lock.
+func (s *Server) send(v any) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.enc == nil {
+		return fmt.Errorf("mcp: not serving")
+	}
+	return s.enc.Encode(v)
+}
+
+// track and untrack keep the cancel function of each call in flight, keyed by its JSON-RPC id, for
+// notifications/cancelled.
+func (s *Server) track(key string, cancel context.CancelFunc) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	if s.inflight == nil {
+		s.inflight = map[string]context.CancelFunc{}
+	}
+	s.inflight[key] = cancel
+}
+
+func (s *Server) untrack(key string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.inflight, key)
+}
+
+// notification handles a message that expects no reply. Only two mean anything here:
+// notifications/initialized starts the console watcher (task completion and High findings, pushed as
+// notifications/message), and notifications/cancelled cancels the named call in flight — which, for a
+// call waiting on a console task, also cancels that task.
+func (s *Server) notification(req request) {
+	switch req.Method {
+	case "notifications/initialized":
+		s.startWatcher()
+	case "notifications/cancelled":
+		var p struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(req.Params, &p) != nil || len(p.RequestID) == 0 {
+			return
+		}
+		s.inflightMu.Lock()
+		cancel := s.inflight[string(p.RequestID)]
+		s.inflightMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}
+}
+
+// handle answers one request. ok is false for a notification, which by definition gets no reply.
 func (s *Server) handle(ctx context.Context, req request) (response, bool) {
 	// Every notification is ignored, before any method dispatch. A notification is not a request
 	// with a missing reply — it is a message no reply is expected for, and answering one (a)
@@ -297,6 +475,12 @@ func (s *Server) handle(ctx context.Context, req request) (response, bool) {
 		return s.listTools(req), true
 	case "tools/call":
 		return s.callTool(ctx, req), true
+	case "logging/setLevel":
+		return s.setLevel(req), true
+	case "prompts/list":
+		return s.listPrompts(ctx, req), true
+	case "prompts/get":
+		return s.getPrompt(ctx, req), true
 	default:
 		return s.fail(req, codeMethodNotFound, "method %q is not implemented", req.Method), true
 	}
@@ -334,6 +518,11 @@ type initializeResult struct {
 
 type capabilities struct {
 	Tools toolsCapability `json:"tools"`
+	// Logging is advertised when the console watcher is on: task completion and High findings arrive
+	// as notifications/message, and logging/setLevel filters them.
+	Logging *struct{} `json:"logging,omitempty"`
+	// Prompts publishes the console's skill library (burpsy-react-ui-ulsy).
+	Prompts promptsCapability `json:"prompts"`
 }
 
 type toolsCapability struct {
@@ -353,7 +542,7 @@ type initializeParams struct {
 // told how the risk classes and the confirmation flow work before it calls anything, so it says
 // what the classes mean and what a refusal means — and it says plainly that minting a confirmation
 // is the caller's own act.
-const instructions = `burpsy is an HTTP testing proxy with a risk-gated API. Every tool is one route of that API and carries the route's risk class: read, local-write, egress, attack, scope, credential, destructive, asset, execute.
+const instructions = `burpsy is an HTTP testing proxy with a risk-gated API. Every tool reaches routes of that API and carries their risk class: read, local-write, egress, attack, scope, credential, destructive, asset, execute. A grouped tool fronts several operations of ONE risk class; pick one with "op", spelled "VERB /route" exactly as the tool lists it, and give a subtree operation (route ending in "/") its "id" or "path".
 
 Calling a tool is calling the route. Nothing here is simulated: an "attack" tool sends real traffic to the engagement target, and a "destructive" tool discards evidence.
 
@@ -378,7 +567,7 @@ func (s *Server) initialize(req request) response {
 	}
 	return s.ok(req, initializeResult{
 		ProtocolVersion: version,
-		Capabilities:    capabilities{Tools: toolsCapability{ListChanged: false}},
+		Capabilities:    s.capabilities(),
 		ServerInfo:      serverInfo{Name: "burpsy", Version: Version},
 		Instructions:    instructions,
 	})

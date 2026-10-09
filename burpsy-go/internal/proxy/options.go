@@ -180,6 +180,24 @@ const (
 	// determinism most sessions do not need. When on, both directions close
 	// after one exchange.
 	OptSetConnectionClose OptionKey = "set_connection_close"
+	// OptUseHTTP10ToServer sends every forwarded request with an HTTP/1.0 request line, Burp's "Use
+	// HTTP/1.0 in requests to server" (burpsy-react-ui-0q9d), for a legacy origin that mishandles 1.1.
+	// Only the version token changes: a request whose body is chunked keeps its framing, which an
+	// HTTP/1.0 origin may refuse, and that refusal is the origin's answer to the operator's choice.
+	OptUseHTTP10ToServer OptionKey = "use_http10_to_server"
+	// OptUseHTTP10ToClient answers the browser with an HTTP/1.0 status line, Burp's "Use HTTP/1.0 in
+	// responses to client" (0q9d). Applied with the other response options, so history records the
+	// response the browser received.
+	OptUseHTTP10ToClient OptionKey = "use_http10_to_client"
+	// OptSuppressErrorMessages stops burpsy sending its own explanatory error responses to the browser
+	// (a refused scope or egress, a failed CONNECT, an unattributable request), Burp's "Suppress Burp
+	// error messages in browser" (0q9d). The connection is closed instead, and the event is still
+	// logged and counted where it was before.
+	OptSuppressErrorMessages OptionKey = "suppress_error_messages"
+	// OptDisableWebInterface turns off the in-browser interface at http://burpsuite (and http://burpsy,
+	// and the listener's own address), Burp's "Disable web interface at http://burpsuite"
+	// (burpsy-react-ui-beof). Useful on a listener bound to an unprotected interface.
+	OptDisableWebInterface OptionKey = "disable_web_interface"
 )
 
 // OptionKeys is every editable option, in the order the panel renders them.
@@ -202,6 +220,10 @@ var OptionKeys = []OptionKey{
 	OptInvisibleProxy,
 	OptStripProxyHeaders,
 	OptSetConnectionClose,
+	OptUseHTTP10ToServer,
+	OptUseHTTP10ToClient,
+	OptSuppressErrorMessages,
+	OptDisableWebInterface,
 }
 
 // KnownOption reports whether a wire-name key is one of the editable options. The
@@ -582,6 +604,55 @@ func (o *Options) ApplyResponse(raw []byte) []byte {
 	if o == nil {
 		return raw
 	}
+	out := o.applyResponseRules(raw)
+	if o.Get(OptUseHTTP10ToClient) {
+		ruled := out
+		out = withHTTPVersion(out, "HTTP/1.0", true)
+		// Counted like any other response rewrite, so the panel's Modified total agrees with history.
+		// A response the rules already rewrote was counted there and is not counted twice.
+		if !bytes.Equal(out, ruled) && bytes.Equal(ruled, raw) {
+			o.considered.Add(1)
+			o.modified.Add(1)
+		}
+	}
+	return out
+}
+
+// withHTTPVersion rewrites the version token of a message's first line: the third token of a request
+// line, or the first token of a status line. A message whose first line does not carry an HTTP/1.x
+// version is returned unchanged.
+func withHTTPVersion(raw []byte, version string, response bool) []byte {
+	nl := bytes.IndexByte(raw, '\n')
+	if nl < 0 {
+		return raw
+	}
+	line := string(raw[:nl])
+	cr := strings.HasSuffix(line, "\r")
+	line = strings.TrimSuffix(line, "\r")
+	var rewritten string
+	if response {
+		ver, rest, ok := strings.Cut(line, " ")
+		if !ok || !strings.HasPrefix(ver, "HTTP/1.") || ver == version {
+			return raw
+		}
+		rewritten = version + " " + rest
+	} else {
+		i := strings.LastIndexByte(line, ' ')
+		if i < 0 || !strings.HasPrefix(line[i+1:], "HTTP/1.") || line[i+1:] == version {
+			return raw
+		}
+		rewritten = line[:i+1] + version
+	}
+	if cr {
+		rewritten += "\r"
+	}
+	out := make([]byte, 0, len(raw)-len(line)+len(rewritten))
+	out = append(out, rewritten...)
+	return append(out, raw[nl:]...)
+}
+
+// applyResponseRules is the response options other than the version switch.
+func (o *Options) applyResponseRules(raw []byte) []byte {
 
 	o.mu.RLock()
 	enabled := make(map[OptionKey]bool, len(responseRules))
@@ -1154,6 +1225,9 @@ func (o *Options) ApplyRequestEgress(raw []byte) []byte {
 	}
 	if o.Get(OptSetConnectionClose) {
 		out = forceConnectionClose(out)
+	}
+	if o.Get(OptUseHTTP10ToServer) {
+		out = withHTTPVersion(out, "HTTP/1.0", false)
 	}
 	return out
 }

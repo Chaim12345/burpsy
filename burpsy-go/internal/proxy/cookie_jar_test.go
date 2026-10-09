@@ -137,3 +137,65 @@ func mustPort(t *testing.T, portStr string) uint16 {
 	}
 	return uint16(n)
 }
+
+// The browser's own cookies reach the jar too (burpsy-react-ui-sm1k), Burp's "the Proxy also inspects
+// incoming requests from the browser". A persistent cookie the browser already held never arrives in a
+// Set-Cookie during the visit, and before this the jar never learned it. A Set-Cookie in the same
+// exchange is newer than the browser's value, so it wins.
+func TestTheBrowsersRequestCookiesFillTheJarAndSetCookieWins(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/rotate" {
+			w.Header().Add("Set-Cookie", "sessid=fresh; Path=/")
+		}
+		io.WriteString(w, "ok")
+	}))
+	defer origin.Close()
+	host, portStr, _ := net.SplitHostPort(strings.TrimPrefix(origin.URL, "http://"))
+	port := mustPort(t, portStr)
+
+	coord := session.NewCoordinator(zap.NewNop())
+	store := core.NewTrafficStore()
+	srv := NewServer(NewProxyConfig(store).
+		WithScope(testScope()).
+		WithLogger(zap.NewNop()).
+		WithCookieJar(coord))
+	proxyAddr := startProxy(t, srv)
+
+	send := func(path, cookie string) {
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s:%s%s", host, portStr, path), nil)
+		req.Header.Set("Cookie", cookie)
+		client := &http.Client{Transport: &http.Transport{
+			Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: proxyAddr}), DisableKeepAlives: true,
+		}}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		awaitExchangeFor(t, store, path, "proxy")
+	}
+
+	send("/page", "remember=persisted-token; sessid=old")
+	got := coord.CookieHeader(host, port, false, "/")
+	for _, want := range []string{"remember=persisted-token", "sessid=old"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("after a request carrying the browser's cookies the jar sends %q, missing %q", got, want)
+		}
+	}
+	if n := coord.Observation().RequestCookiesAbsorbed; n != 2 {
+		t.Errorf("RequestCookiesAbsorbed = %d, want 2", n)
+	}
+
+	send("/rotate", "sessid=old")
+	if got := coord.CookieHeader(host, port, false, "/"); !strings.Contains(got, "sessid=fresh") || strings.Contains(got, "sessid=old") {
+		t.Errorf("after the origin rotated sessid the jar sends %q: the Set-Cookie must win over the request value", got)
+	}
+
+	// Switched off for the proxy, request cookies are counted nowhere and absorbed nothing.
+	coord.SetMonitoredSources([]string{"repeater"})
+	send("/page", "other=x")
+	if strings.Contains(coord.CookieHeader(host, port, false, "/"), "other=x") {
+		t.Error("an unmonitored proxy still fed the jar from request cookies")
+	}
+}

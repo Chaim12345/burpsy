@@ -162,11 +162,27 @@ func eventStreamPromoter(ctx context.Context, conn net.Conn, settings NetworkSet
 		if !httputil.ResponseIsFrameless(head) && !httputil.ResponseIsChunked(head) {
 			return false
 		}
-		if _, has := ctx.Deadline(); !has {
+		if !hasOwnBound(ctx) {
 			if window := time.Duration(settings.Streaming.TimeoutMS) * time.Millisecond; window > 0 {
 				_ = conn.SetReadDeadline(time.Now().Add(window))
 			}
 		}
+		return true
+	}
+}
+
+// overridePromoter is readResponse's promote hook for a send that carries its own streaming window
+// (of0z). It promotes a text/event-stream response that is chunked or unframed — whatever the network
+// setting says, because the operator set a streaming window on THIS tab — and any unframed
+// read-until-close response, which is what a held long-poll looks like; then re-arms the read with
+// the tab's window. A framed response is never promoted: it says where it ends.
+func overridePromoter(ctx context.Context, conn net.Conn, window time.Duration) func([]byte) bool {
+	return func(head []byte) bool {
+		frameless := httputil.ResponseIsFrameless(head)
+		if !frameless && !(headDeclaresEventStream(head) && httputil.ResponseIsChunked(head)) {
+			return false
+		}
+		_ = conn.SetReadDeadline(streamingDeadline(ctx, window))
 		return true
 	}
 }

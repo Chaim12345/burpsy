@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 
@@ -53,6 +52,11 @@ func (s *Server) restoreSecretDetection(p *persist.Store) {
 	s.passiveScanner.SetSecretDetection(on)
 }
 
+// scannerSecretsReq is the request body handleScannerSecrets decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type scannerSecretsReq struct {
+	Enabled *bool `json:"enabled"`
+}
+
 // handleScannerSecrets serves GET/PUT /api/scanner/secrets. riskLocal: the scan reads responses
 // burpsy already holds and sends nothing; the switch changes which findings future captures file.
 func (s *Server) handleScannerSecrets(w http.ResponseWriter, r *http.Request) {
@@ -60,15 +64,13 @@ func (s *Server) handleScannerSecrets(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.viewSecretDetection())
 	case http.MethodPut:
-		if s.passiveScanner == nil {
-			http.Error(w, "No passive scanner is attached to this server, so there is nothing to switch", http.StatusServiceUnavailable)
+		var body scannerSecretsReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.Enabled == nil {
+			http.Error(w, `the body must be {"enabled":true|false}`, http.StatusBadRequest)
 			return
 		}
-		var body struct {
-			Enabled *bool `json:"enabled"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil || body.Enabled == nil {
-			http.Error(w, `the body must be {"enabled":true|false}`, http.StatusBadRequest)
+		if s.passiveScanner == nil {
+			http.Error(w, "No passive scanner is attached to this server, so there is nothing to switch", http.StatusServiceUnavailable)
 			return
 		}
 		s.passiveScanner.SetSecretDetection(*body.Enabled)

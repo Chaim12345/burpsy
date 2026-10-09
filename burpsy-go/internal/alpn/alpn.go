@@ -180,6 +180,13 @@ type Dialer struct {
 	// identifies the peer, so the only place the host is still known is out here, where Dial was
 	// given it. A single shared tls.Config physically cannot do per-host selection for that reason.
 	ClientCerts ClientCertSource
+	// SNI, when set, is the server name sent in the ClientHello instead of Dial's serverName — Burp
+	// Repeater's "Override SNI" (burpsy-react-ui-k011), used to reproduce an SNI-based external
+	// service interaction with a Collaborator domain in the SNI. It changes only that one field of the
+	// handshake: the certificate is still verified against serverName (the authority actually
+	// dialled), and a client certificate is still chosen for serverName, because the override is a
+	// probe value aimed at the server's SNI handling, not a claim about who the peer is.
+	SNI string
 }
 
 // Dial connects to addr, offering exactly the protocols in offer, and returns the connection with the
@@ -197,6 +204,17 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 		InsecureSkipVerify: d.InsecureSkipVerify,
 		RootCAs:            d.RootCAs,
 		MinVersion:         d.MinVersion,
+	}
+	if d.SNI != "" && d.SNI != serverName {
+		cfg.ServerName = d.SNI
+		if !d.InsecureSkipVerify {
+			// crypto/tls verifies against ServerName, which is now the probe value. Verification is
+			// therefore done here, against the authority dialled, with the same roots — skipping the
+			// built-in check is what lets the ClientHello carry a name the certificate was not issued for
+			// without dropping verification altogether.
+			cfg.InsecureSkipVerify = true
+			cfg.VerifyConnection = verifyAgainst(serverName, d.RootCAs)
+		}
 	}
 	if len(offer) > 0 {
 		cfg.NextProtos = offer
@@ -259,4 +277,24 @@ func (d Dialer) Dial(ctx context.Context, serverName, addr string, offer []strin
 		return nil, "", fmt.Errorf("tls dial to %s returned a %T, not a TLS connection", addr, conn)
 	}
 	return tlsConn, tlsConn.ConnectionState().NegotiatedProtocol, nil
+}
+
+// verifyAgainst verifies a handshake's certificate chain for name, with roots (nil = the system pool):
+// what crypto/tls would have done had ServerName been name.
+func verifyAgainst(name string, roots *x509.CertPool) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("tls: the server presented no certificate")
+		}
+		intermediates := x509.NewCertPool()
+		for _, cert := range cs.PeerCertificates[1:] {
+			intermediates.AddCert(cert)
+		}
+		_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+			DNSName:       name,
+			Roots:         roots,
+			Intermediates: intermediates,
+		})
+		return err
+	}
 }

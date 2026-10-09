@@ -128,6 +128,14 @@ type ExchangeView struct {
 	// not come from a listener — Repeater, Intruder, the crawler, the scanner. Same reasoning as
 	// ServerIP for being unconditional (burpsy-react-ui-he81).
 	ListenerPort uint16 `json:"listener_port"`
+	// ClientIP is the address of the client that sent the request to the listener (3bkn), "" for
+	// every exchange that did not come from a listener. Unconditional for ServerIP's reason.
+	ClientIP string `json:"client_ip"`
+	// Source is the surface that produced this row (core.Exchange.Source), omitted when unattributed.
+	// Carried for one decision the console cannot make otherwise: a "schema" row (Save GraphQL queries
+	// to site map, 7v1e) has no status because nothing was sent, and must read "not sent" rather than
+	// "pending" — which would claim a response is on its way.
+	Source string `json:"source,omitempty"`
 	// Variants says which of Burp's three readings this row can actually show, per direction, so the
 	// history viewer offers exactly the views that have bytes behind them (burpsy-react-ui-c05).
 	//
@@ -296,6 +304,8 @@ func exchangeView(ex *core.Exchange) *ExchangeView {
 		// uint16 on the wire so the column cannot render a negative or out-of-range port; the
 		// engine's own field is the same width for the same reason.
 		ListenerPort: ex.ListenerPort,
+		ClientIP:     ex.ClientIP,
+		Source:       string(ex.Source),
 		Variants:     variantView(ex),
 	}
 }

@@ -75,6 +75,17 @@ func BuiltinWordlistNames() []string {
 	return append([]string(nil), wordlistNames...)
 }
 
+// BuiltinWordlistLines reads one bundled list as payload lines: blank lines and
+// column-zero '#' comment lines (the provenance header) are not payloads.
+//
+// Exported for the content-discovery session builder (burpsy-react-ui-dgbi),
+// which merges selected built-in lists with observed names into one wordlist
+// file for ffuf. Exported rather than duplicated because the comment-skip rule
+// is this package's contract — a second reader would drift from it.
+func BuiltinWordlistLines(name string) ([]string, error) {
+	return builtinWordlistLines(name)
+}
+
 // builtinWordlistLines reads one bundled list, splitting payload lines: blank lines and
 // column-zero '#' comment lines (the provenance header) are not payloads.
 func builtinWordlistLines(name string) ([]string, error) {

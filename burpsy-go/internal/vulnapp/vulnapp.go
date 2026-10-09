@@ -343,6 +343,11 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/note", safeEvalNote)
 	mux.HandleFunc("/safe/include", safeIncludePage)
 
+	// Run-configuration fixtures: served, deliberately not in the manifest (vulnapp_runconfig.go).
+	registerRunConfigFixtures(mux)
+	// Hidden-input guesser fixtures: served, deliberately not in the manifest (vulnapp_hidden_inputs.go).
+	registerHiddenInputFixtures(mux)
+
 	for _, r := range familyRegistrars {
 		r(mux)
 	}

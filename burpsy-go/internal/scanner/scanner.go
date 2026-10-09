@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -268,6 +269,25 @@ type Finding struct {
 	// target is where the token was seen, and one weak key seen on 200 pages is one finding, not 200.
 	// Empty — the behaviour for every other row — means the target is the key.
 	MergeKey string
+	// DecodingVariants names the Burp decoding variants (burpsy-react-ui-79ld) that carried a
+	// confirmed breakout at this point — "URL decoding", "overlong UTF-8 decoding", … — in
+	// Burp's own vocabulary. Empty for every finding no variant produced, which is the honest
+	// shape: an empty list marshals as [] rather than null, because a console reading "no
+	// variants" out of a null would be reading the absence of a list as a clean one.
+	DecodingVariants DecodingVariants `json:"decoding_variants"`
+}
+
+// DecodingVariants is a finding's decoding-variant evidence list (burpsy-react-ui-79ld). The
+// MarshalJSON rule is the one MethodDeclines established: an empty list is an empty list, never
+// a null.
+type DecodingVariants []string
+
+// MarshalJSON keeps an empty list an empty list.
+func (d DecodingVariants) MarshalJSON() ([]byte, error) {
+	if d == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(d))
 }
 
 // TriageNote is one LLM triage verdict attached to a finding (ei0v).
@@ -475,12 +495,27 @@ func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true
 // from here, so attaching the pacer at this one construction point bounds all of them. A fresh
 // AuthorisedSender per call is fine and the shared limiter is the whole point: the senders are
 // per-exchange, the bound is per-pool.
-func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
+//
+// # The run's own sender (burpsy-react-ui-o2p3)
+//
+// ctx is how a run's project-option overrides reach the gate. An audit configuration that carries
+// scanner/audit_project_option_overrides/{connect_timeout,normal_timeout} gets a sender derived for
+// that run alone (sender.DeriveWithTimeouts, built once per run in auditRunSender) and it rides the
+// dispatch context; this is the one place that reads it. The derived sender is still wrapped in an
+// AuthorisedSender bound to the same scope handle, so it is the same chokepoint with different
+// timeouts rather than a second way out of the process — and the engagement sender, which Repeater,
+// Intruder and every other run share, is never touched. A context with no run sender (no override,
+// or a send outside a dispatched audit) gets the engagement sender, exactly as before.
+func (s *ActiveScanner) probeGate(ctx context.Context, exchange *core.Exchange) *sender.AuthorisedSender {
 	var gate sender.ScopeChecker = noEngagementScope{}
 	if s.scope != nil {
 		gate = s.scope
 	}
-	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
+	net := s.sender
+	if run := runSenderFrom(ctx); run != nil {
+		net = run
+	}
+	return sender.NewAuthorisedSender(gate, net, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
 }
 
 // sendTestRequest dispatches a crafted test request through the sender when
@@ -536,7 +571,7 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 	if s.sender != nil {
 		meter := meterFrom(ctx)
 		meter.attempt()
-		gate := s.probeGate(exchange)
+		gate := s.probeGate(ctx, exchange)
 		resp, err := gate.SendRequest(ctx, &sender.Request{
 			Method: exchange.Method,
 			Host:   exchange.Host,
@@ -597,7 +632,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,
@@ -655,7 +690,7 @@ func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,
@@ -761,6 +796,21 @@ type PassiveScanner struct {
 	report   LoadReport
 	coverage *CoverageTracker
 
+	// setsMu guards the check sets above (passive, active, insertion, tools, report, coverage) and
+	// entries: the console can import, remove and reload checks while scans run (kbu1). Readers take a
+	// snapshot under RLock; a change rebuilds every set from entries and swaps them in together, so a
+	// scan never sees a passive list from one generation and a coverage table from another.
+	setsMu sync.RWMutex
+	// entries are every loaded check with its source text and where it came from, in load order —
+	// the --bchecks directory's files first, then console imports (custom_checks.go).
+	entries []checkEntry
+	// dir is the --bchecks directory, for Reload; fromDir records that this scanner was built from
+	// one, which is what makes Scan run the corpus instead of the built-in header and cookie checks.
+	dir      string
+	fromDir  bool
+	dirErrs  []LoadError
+	dirFiles int
+
 	findings   []*Finding
 	findingsMu sync.RWMutex
 
@@ -769,6 +819,44 @@ type PassiveScanner struct {
 	// Capture around this one scanner. Off by default: a module that always ran would be a surface
 	// reporting findings nobody enabled.
 	secrets atomic.Bool
+
+	// runConfig is where capture-time scanning reads the engagement's run configuration
+	// (burpsy-react-ui-saq3.3.3). Every Capture handle is built around this one scanner, so setting it
+	// here reaches proxy, crawl, Repeater and API-scan capture alike. Nil keeps the old, unconfigured
+	// behaviour.
+	runConfig atomic.Pointer[RunConfigSource]
+}
+
+// RunConfigSource is what capture-time scanning reads its configuration from: the audit run
+// configuration, and the scan-wide issue whitelist that admitsIssue intersects it with. ActiveScanner
+// is the production source, so proxy capture and an audit read one configuration.
+type RunConfigSource interface {
+	AuditConfig() AuditConfig
+	ConfigSnapshot() ScanConfig
+}
+
+// WithRunConfigSource makes every capture that runs this scanner honour src's run configuration:
+// scan_type_passive, the per-issue selection and detection methods, and the JavaScript static-analysis
+// keys (saq3.3.3).
+func (s *PassiveScanner) WithRunConfigSource(src RunConfigSource) *PassiveScanner {
+	if s != nil && src != nil {
+		s.runConfig.Store(&src)
+	}
+	return s
+}
+
+// captureRunConfig returns the run configuration and scan-wide whitelist capture applies, and false
+// when no source is set.
+func (s *PassiveScanner) captureRunConfig() (AuditConfig, []uint32, bool) {
+	if s == nil {
+		return AuditConfig{}, nil, false
+	}
+	p := s.runConfig.Load()
+	if p == nil {
+		return AuditConfig{}, nil, false
+	}
+	src := *p
+	return src.AuditConfig(), src.ConfigSnapshot().IssueTypes, true
 }
 
 // SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.
@@ -798,7 +886,7 @@ func NewPassiveScanner(store *core.TrafficStore, logger *zap.Logger) *PassiveSca
 
 // Scan performs passive scanning on an exchange.
 func (s *PassiveScanner) Scan(exchange *core.Exchange) []*Finding {
-	if s.coverage != nil {
+	if s.fromDir {
 		return s.scanBChecks(exchange)
 	}
 
@@ -818,6 +906,11 @@ func (s *PassiveScanner) Scan(exchange *core.Exchange) []*Finding {
 	s.findings = append(s.findings, findings...)
 	s.findingsMu.Unlock()
 
+	// Checks imported from the console (kbu1) run on top of the built-ins: importing one custom
+	// check must not switch the built-in header and cookie checks off.
+	if s.Loaded() > 0 {
+		findings = append(findings, s.scanBChecks(exchange)...)
+	}
 	return findings
 }
 

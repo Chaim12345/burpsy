@@ -1,12 +1,17 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/session"
 )
+
+// sessionMacroStepsReq is the request body handleSessionMacroSteps decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sessionMacroStepsReq struct {
+	Exchanges []uint64 `json:"exchanges"`
+	Variant   string   `json:"variant"`
+}
 
 // handleSessionMacroSteps serves POST /api/session/macro-steps: Burp's Macro Recorder.
 //
@@ -50,11 +55,8 @@ func (s *Server) handleSessionMacroSteps(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "The exchange store is not wired, so no history row can be read", http.StatusServiceUnavailable)
 		return
 	}
-	var body struct {
-		Exchanges []uint64 `json:"exchanges"`
-		Variant   string   `json:"variant"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var body sessionMacroStepsReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

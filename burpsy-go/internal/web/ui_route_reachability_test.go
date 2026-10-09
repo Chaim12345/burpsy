@@ -74,6 +74,16 @@ var uiRouteExempt = map[string]string{
 		"it. A compatibility shim has no business gaining a caller in this console — the current " +
 		"path is the one to use, and a second caller would make the alias load-bearing",
 	"/api/findings": "legacy alias for /api/issues, same reasoning as /api/exchanges/",
+	"/api/sitemap/record": "agent-facing (Burp's add_to_sitemap MCP tool, served as sitemap_record, " +
+		"burpsy-react-ui-4bfp): the console's history rows are already on the map because the map " +
+		"follows the store, and the console's own Add to site map uses POST /api/sitemap",
+	"/api/datasets/": "agent-facing table view (Burp's search_dataset / summarize_dataset, served as the " +
+		"datasets MCP tool, burpsy-react-ui-co88); the console pages each list through its own route",
+	"/api/skills/": "renders one skill's prompt for an MCP client's prompts/get (burpsy-react-ui-ulsy); the " +
+		"console's Skills card lists and switches skills through /api/skills and /api/skills/disabled",
+	"/api/scope/check": "an agent- and extension-facing query (Burp's Montoya Scope.isInScope, served " +
+		"through the MCP scope_check tool, burpsy-react-ui-z5z3); the console already renders an " +
+		"in_scope verdict on every history row and edits the rules through /api/scope",
 }
 
 // uiRouteMissingSurface holds routes that *should* be operator-facing and are not — real gaps, each

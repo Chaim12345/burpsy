@@ -344,6 +344,12 @@ type RedirectSettings struct {
 	// JavaScript), so a settings document written before this existed behaves as Burp does. A pointer
 	// because the zero value of the struct would be "follow nothing".
 	Types *RedirectTypes `json:"types,omitempty"`
+	// CrossDomainProtocol is the protocol a hop to ANOTHER host must use (burpsy-react-ui-adkx —
+	// Burp's "Use selected protocol for cross-domain redirects" / "Enforce protocol choice on
+	// cross-domain redirections"). ProtocolPreferenceAuto, the zero value and Burp's default, lets
+	// each hop negotiate as normal. A per-send choice, never a stored setting: it is not serialised,
+	// so a network-settings document can neither carry nor persist it.
+	CrossDomainProtocol ProtocolPreference `json:"-"`
 }
 
 // RedirectTypes are Burp's five redirect kinds, under Burp's own key names.

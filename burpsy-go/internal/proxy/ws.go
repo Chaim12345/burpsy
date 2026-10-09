@@ -125,6 +125,8 @@ type wsPeer struct {
 	port uint16
 	tls  bool
 	path string
+	// clientIP is the browser end's address (3bkn), carried so a held frame says who sent it.
+	clientIP string
 }
 
 // stripWsHandshake removes the client's Sec-WebSocket-Extensions offer from an
@@ -254,6 +256,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 
 		ServerIP:     serverIPOf(upstream),
 		ListenerPort: listenerPortOf(clientConn),
+		ClientIP:     clientIPOf(clientConn),
 
 		// A handshake the operator edited in the hold is "Edited" in history, by the same rule as
 		// every other row (burpsy-react-ui-sd0d).
@@ -300,7 +303,7 @@ func (s *Server) handleWebSocketUpgrade(clientConn net.Conn, clientReader *bufio
 func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn, clientReader *bufio.Reader, upstreamConn net.Conn, upstreamReader *bufio.Reader, host string, port uint16, tls bool, path string, capture *wsCapture) {
 	var stats wsCaptureStats
 	faults := make([]string, 2)
-	peer := wsPeer{host: host, port: port, tls: tls, path: path}
+	peer := wsPeer{host: host, port: port, tls: tls, path: path, clientIP: clientIPOf(clientConn)}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -754,6 +757,7 @@ func (s *Server) wsOfferMessage(dir intercept.Direction, opcode core.WsOpcode, p
 			Path:      peer.path,
 			Opcode:    opcode.Name(),
 			Raw:       payload,
+			ClientIP:  peer.clientIP,
 		})
 	}
 	if held == nil {

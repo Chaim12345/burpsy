@@ -989,6 +989,59 @@ export function addBodyParam(raw: string, name: string, value: string): string {
   return fixContentLength(`${raw.slice(0, at)}${text}${raw.slice(at)}`);
 }
 
+/* ---- reordering (burpsy-react-ui-ybmd) ------------------------------------ */
+
+/**
+ * Swap the text of two non-overlapping spans, leaving every other byte where it was.
+ *
+ * Reordering is a swap of span TEXT, never a re-render of the list: what sits between the two
+ * spans (a header's own line ending, which may be CRLF on one line and bare LF on the next; the
+ * "&" or "; " or ", " that joins two pairs) stays exactly as it was, a repeated name keeps its
+ * own spelling, and nothing outside the two spans moves. Header order is a smuggling and desync
+ * variable, so a reorder that also normalised a line ending would be changing a second variable
+ * behind the operator's back.
+ */
+function swapSpans(raw: string, a: Span, b: Span): string {
+  const [first, second] = a.start < b.start ? [a, b] : [b, a];
+  if (first.end > second.start) return raw;
+  return (
+    raw.slice(0, first.start) +
+    raw.slice(second.start, second.end) +
+    raw.slice(first.end, second.start) +
+    raw.slice(first.start, first.end) +
+    raw.slice(second.end)
+  );
+}
+
+/** Which span list a reorder moves within. */
+export type ReorderDomain = "header" | "query" | "cookie" | "body";
+
+function spansOf(raw: string, domain: ReorderDomain): Span[] {
+  switch (domain) {
+    case "header":
+      return headerSpans(raw);
+    case "query":
+      return querySpans(raw);
+    case "cookie":
+      return cookieSpans(raw);
+    case "body":
+      return bodyParamSpans(raw);
+  }
+}
+
+/**
+ * Move item `index` of a domain one place up (-1) or down (+1). A move off either end returns
+ * the message unchanged rather than wrapping. A body reorder keeps the body's length, so
+ * Content-Length still tells the truth without being touched.
+ */
+export function moveItem(raw: string, domain: ReorderDomain, index: number, direction: -1 | 1): string {
+  const spans = spansOf(raw, domain);
+  const from = spans[index];
+  const to = spans[index + direction];
+  if (!from || !to) return raw;
+  return swapSpans(raw, from, to);
+}
+
 /**
  * Return `head` (a message's headers plus the blank-line separator) with its Content-Length set to
  * `bodyLength`, when it carries a Content-Length at all (burpsy-react-ui-3x2g). A head with none is

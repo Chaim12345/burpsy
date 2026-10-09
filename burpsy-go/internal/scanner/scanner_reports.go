@@ -112,7 +112,7 @@ func (s *ActiveScanner) Export(e ExportFormat, scope *core.Scope) *ExportResult 
 		// seven checks that can return a verdict is exactly the coverage claim the audit engine's
 		// DispositionUnsupported bucket exists to contradict.
 		ActiveSummary: fmt.Sprintf("%d active checks configured, %d of them unimplemented",
-			s.ActiveCheckCount(), s.UnimplementedCheckCount()),
+			s.ActiveCheckCountUnder(s.AuditConfig()), s.UnimplementedCheckCount()),
 	}
 
 	switch e {

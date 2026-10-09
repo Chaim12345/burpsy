@@ -36,6 +36,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
 
@@ -55,10 +56,10 @@ type activeCheck struct {
 	// made against the catalogue and one made against the UI are the same selection rather than two
 	// vocabularies that have to be kept in step (burpsy-react-ui-kvmx).
 	//
-	// Zero for a check the catalogue does not describe — a synthesized corpus entry with no type
-	// index of its own. Such a check is NOT selectable and NOT excludable by a list, and the doc on
-	// SelectedIssueTypes says so, because "a list that silently did not apply to half the check set"
-	// is the failure this exists to remove.
+	// Zero for a check the catalogue does not describe. Such a check is NOT selectable and NOT
+	// excludable by a list, because "a list that silently did not apply to half the check set" is the
+	// failure this exists to remove. A loaded corpus check is not one of them: it carries
+	// BCheckGeneratedTypeIndex, the row Burp files and selects every BCheck under.
 	typeIndex uint32
 	scope     DispatchScope
 	enabled   func(*ScanConfig) bool
@@ -76,6 +77,12 @@ type activeCheck struct {
 	// turns every active tier off still runs them — a passive check cannot change server state,
 	// which is the property the intrusive tier exists to protect.
 	passive bool
+	// methods are the Burp detection methods this check uses (CheckDescriptor.DetectionMethods). A run
+	// whose configuration disabled one of them for typeIndex does not dispatch the check.
+	methods []string
+	// dynamicJS marks a check that drives the browser (the DOM families): it runs on the item's
+	// dynamic JavaScript clock and leaves the set when the run turns dynamic analysis off.
+	dynamicJS bool
 	// run executes the check. The error is the evaluator's refusal, not a transport detail: a
 	// check the evaluator cannot run at all returns errCheckUnsupported so the audit engine
 	// counts it DispositionUnsupported (Skipped) rather than a clean miss, and any other error
@@ -157,6 +164,14 @@ func filterByIssueTypes(checks []activeCheck, selected []uint32) []activeCheck {
 // AuditOutcome.Considered must equal for a dispatched item.
 func (s *ActiveScanner) ActiveCheckCount() int { return len(s.enabledChecks()) }
 
+// ActiveCheckCountUnder is the size of the check set a run under cfg dispatches — what
+// AuditOutcome.Considered equals for a dispatched item of that run. ActiveCheckCount ignores the
+// run's configuration, so a reply quoting it beside a run whose configuration removed issue types
+// stated a larger check set than the one it accounted for (burpsy-react-ui-saq3.1).
+func (s *ActiveScanner) ActiveCheckCountUnder(cfg AuditConfig) int {
+	return len(s.enabledChecksUnder(cfg))
+}
+
 // auditLevelPassiveFamilies are the ScanConfig switches the passive check families hang from. They
 // are what `scanner/issues_reported/scan_type_passive` gates: a shipped configuration that turns
 // passive checking off zeroes exactly these, and a check survives only if its own family switch
@@ -171,24 +186,6 @@ var auditLevelPassiveFamilies = []string{
 
 // auditLevelJavaScriptFamilies is the DOM family.
 var auditLevelJavaScriptFamilies = []string{"CheckDOM"}
-
-// auditLevelNotesText is the honest statement of where the issues_reported overlay bends, reported
-// beside the resolved configuration so an operator comparing burpsy against Burp's own preview of
-// the same preset sees the difference explained rather than discovered.
-//
-// The light/medium/intrusive tiers are no longer part of it: each check carries a rank and each key
-// selects its own set. What remains is the per-issue selection trio, which has no representation in
-// this engine.
-const auditLevelNotesText = tieredEngineNote
-
-// auditLevelNotes reports the approximation text when the configuration narrows the check set, and
-// nothing when it does not — a run under the base switches has nothing to disclaim.
-func auditLevelNotes(cfg AuditConfig) string {
-	if cfg.hasAuditLevelGate() {
-		return auditLevelNotesText
-	}
-	return ""
-}
 
 // enabledChecksUnder is the check set one run dispatches under an audit-level overlay: the base
 // switch set from ScanConfig, narrowed by the `scanner/issues_reported/*` keys the run's
@@ -205,6 +202,11 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	if cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0 {
 		zeroFamilies(&base, auditLevelJavaScriptFamilies)
 	}
+	// use_dynamic_analysis false (burpsy-react-ui-9mti): every DOM family check drives the browser, so
+	// all of them leave the set. The static pass is not a check and is governed by its own key.
+	if !cfg.dynamicJavaScriptOn() {
+		zeroFamilies(&base, auditLevelJavaScriptFamilies)
+	}
 	// activeTiers returns nil when no tier key was set, which leaves the base switches alone; a
 	// non-nil set is three independent selections rather than one collapsed gate.
 	//
@@ -212,7 +214,12 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	// the second stage of Burp's two-stage dispatch, and a configuration may set either alone, both,
 	// or neither.
 	checks := s.enabledChecksInTiers(base, activeTiers(cfg), cfg.ScanSpeed)
-	return filterByIssueTypes(checks, cfg.IssueTypes)
+	// The scanner's OWN selection (ScanConfig.IssueTypes, set through /api/scanner/config) narrows
+	// this path exactly as it narrows the ungated one in enabledChecks. It was missing here, so any run
+	// configuration with a gate — now including an imported deny-only selection — silently dropped an
+	// operator's whitelist and dispatched every type.
+	checks = filterByIssueTypes(checks, base.IssueTypes)
+	return filterBySelection(checks, cfg)
 }
 
 // hasAuditLevelGate reports whether the configuration narrows the check set at all.
@@ -231,11 +238,22 @@ func (cfg AuditConfig) hasAuditLevelGate() bool {
 	if len(cfg.IssueTypes) > 0 {
 		return true
 	}
+	// The deny half of the selection narrows the set exactly as the whitelist does, and leaving it out
+	// of this predicate would be kvmx again: an imported "all except time-based" configuration would
+	// take the ungated shortcut and dispatch the five issue types it removed.
+	if len(cfg.DisabledIssueTypes) > 0 || len(cfg.DisabledDetectionMethods) > 0 {
+		return true
+	}
 	if cfg.ScanSpeed.Set {
 		// A speed selector narrows the check set on its own axis, so a configuration that sets ONLY
 		// scan_speed still needs the gated path (burpsy-react-ui-ev7y). Without this the ungated
 		// shortcut returns before the speed filter is ever consulted, and the key reaches the queue
 		// row while every check still runs — a preset that reads as applied and changes nothing.
+		return true
+	}
+	// use_dynamic_analysis false narrows the set by the DOM families (burpsy-react-ui-9mti); leaving it
+	// out of this predicate would be kvmx again — the ungated shortcut would dispatch them.
+	if !cfg.dynamicJavaScriptOn() {
 		return true
 	}
 	return cfg.JavaScriptAnalysis.Set && cfg.JavaScriptAnalysis.Value == 0
@@ -365,11 +383,18 @@ func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInva
 		}
 		out = append(out, c)
 	}
-	if cfg.CheckCorpus {
-		// Corpus checks are loaded by the operator rather than declared in the registry, so they
-		// carry no rank. They join every tier: a preset that narrows the built-in checks has not
-		// said anything about an operator's own corpus, and dropping it would silently change what
-		// the corpus switch means.
+	// Corpus checks are ranked where Burp ranks every BCheck: BCHECK_GENERATED carries the INTRUSIVE
+	// scan type alone (/root/burp-re/out/deobf_merged/burp/Zcot.java:1189-1191), and in scan-type
+	// mode a type runs only when every scan type it carries is enabled (Zx9y.java:24-58). The one
+	// exception Burp makes is a BCheck's PASSIVE method under scan_type_passive (Zx9y.java:60-65),
+	// and these are the corpus's ACTIVE checks.
+	//
+	// They used to join every tier on the reading that a preset "has not said anything about an
+	// operator's own corpus". Burp's own presets do say: "Audit checks - passive" dispatched the
+	// operator's active BChecks — probes against the target — under a configuration named for not
+	// sending any (burpsy-react-ui-saq3.1). A tier map that never set the intrusive key (nil) still
+	// leaves the corpus alone, as it leaves the built-in checks alone.
+	if cfg.CheckCorpus && (tiers == nil || tiers[TierIntrusive]) {
 		out = append(out, s.corpusActiveChecks(s.corpusChecksEnabled(corpus))...)
 	}
 	return out
@@ -545,6 +570,13 @@ type auditRun struct {
 	cfg      AuditConfig
 	deadline time.Time
 	ledger   *AuditLedger
+
+	// sender is the run's own derived sender when its configuration overrides the engagement's
+	// timeouts (burpsy-react-ui-o2p3), nil otherwise. senderErr is why an override could not be
+	// applied; every item of such a run is refused with it rather than run under the engagement's
+	// timeouts the configuration said not to use.
+	sender    *sender.Sender
+	senderErr error
 
 	// lightAudit is the light-audit tier's per-run state (burpsy-react-ui-7bkj): how many
 	// CLEAN same-(kind, host) points each type has produced this run. Burp's Zq5 bank calls
@@ -921,6 +953,18 @@ type AuditOutcome struct {
 	// Error names why an item was refused before any dispatch. Non-empty exactly for
 	// ItemStateOutOfScope and ItemStateUnauditable.
 	Error string `json:"error,omitempty"`
+	// MethodsDeclined is every detection method a dispatched check of this item did not run, each
+	// with its reason (burpsy-react-ui-2hze): a method the configuration disabled, with the probes
+	// that were withheld because of it, and a method the configuration enabled that burpsy's check
+	// does not implement — "Burp Infiltrator" above all. A qualifier on the checks that ran, not a
+	// tenth disposition: the check was considered and dispatched, and what it did not do is listed
+	// here rather than folded into a count that would read as a clean result. Marshals as [].
+	MethodsDeclined MethodDeclines `json:"methods_declined"`
+	// JavaScriptAnalysisSkips names each JavaScript-analysis pass of this item that a
+	// javascript_analysis time limit cut short or never let start (burpsy-react-ui-9mti): the static
+	// pass once, and each browser-driven check or tier by name. The checks it names are also counted
+	// in Skipped — this is the reason beside the count, Burp's per-item alert. Marshals as [].
+	JavaScriptAnalysisSkips JSAnalysisSkips `json:"javascript_analysis_skips"`
 }
 
 // Considered is every check that reached a disposition. Equals the size of the enabled check set
@@ -1016,6 +1060,9 @@ func (o AuditOutcome) Summary() string {
 	if o.FindingsDropped > 0 {
 		fmt.Fprintf(&b, "; %d finding(s) dropped for want of a probe response", o.FindingsDropped)
 	}
+	if n := len(o.MethodsDeclined); n > 0 {
+		fmt.Fprintf(&b, "; %d detection method(s) declined", n)
+	}
 	if o.Error != "" {
 		fmt.Fprintf(&b, " (%s)", o.Error)
 	}
@@ -1054,6 +1101,9 @@ type SessionOutcome struct {
 	Paused bool `json:"paused"`
 	// TimedOut is true when the time budget stopped at least one item.
 	TimedOut bool `json:"timed_out"`
+	// StartOrder is the order items were started in, by priority score (ftk2), with each item's score.
+	// Items is still in the order requested.
+	StartOrder []AuditPriority `json:"start_order"`
 }
 
 // Completed counts items that ran every check they were given.
@@ -1165,6 +1215,8 @@ func (s *ActiveScanner) WithScope(scope *core.Scope) *ActiveScanner {
 // operator who clicks audit again means it.
 func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.ExchangeID, cfg AuditConfig) (AuditOutcome, []*Finding) {
 	run := newAuditRun(cfg)
+	run.sender, run.senderErr = s.runSenderFor(cfg)
+	defer run.sender.CloseIdleConnections()
 	checks := s.enabledChecksUnder(cfg)
 	// Queued before dispatch, not after it answers. An audit of a slow host holds this goroutine for
 	// up to the whole time budget, and a queue that only showed items once they finished would be
@@ -1195,7 +1247,7 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 // regression dressed up as parity. The ledger and both breakers are therefore mutex-guarded, so the
 // resident set and the failure counts stay exact.
 //
-// Items are *started* in the order given — a fixed pool of workers pulls from an ordered queue,
+// Items are *started* in priority order (ftk2) — a fixed pool of workers pulls from an ordered queue,
 // rather than every item racing for a semaphore — so with one worker this is exactly the Rust
 // behaviour, and with more it is as close as concurrency allows. What is not deterministic above one
 // worker is which of two items covering the same dispatch unit gets admitted and which is refused as
@@ -1205,6 +1257,10 @@ func (s *ActiveScanner) AuditWithin(ctx context.Context, exchangeID core.Exchang
 func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.ExchangeID, cfg AuditConfig) (*SessionOutcome, []*Finding) {
 	checks := s.enabledChecksUnder(cfg)
 	run := newAuditRun(cfg)
+	// Built once per run, never per probe: a derived sender owns a transport, and one per probe would
+	// throw away connection reuse for exactly the runs that set tight timeouts.
+	run.sender, run.senderErr = s.runSenderFor(cfg)
+	defer run.sender.CloseIdleConnections()
 	breaker := newSessionBreaker(cfg)
 	out := &SessionOutcome{Items: make([]ItemOutcome, len(exchangeIDs))}
 
@@ -1220,12 +1276,18 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 			workers = len(exchangeIDs)
 		}
 	}
+	// Started in priority order (burpsy-react-ui-ftk2, audit_priority.go): Burp's audit queue orders
+	// items by attack-surface exposure and interest, so a time-bounded run spends its budget on the
+	// items that expose the most, not on whatever was submitted first.
+	order, priorities := s.priorityOrder(exchangeIDs, cfg)
+	out.StartOrder = priorities
+
 	// Every item joins the queue as Pending before any worker starts, which is what makes the queue a
 	// queue rather than a log of finished work: a batch of 200 is 200 Pending rows the instant the
 	// sweep tick begins, and they move to Auditing and then to a terminal state as workers reach
-	// them. Enqueued in the order requested, so the queue's own order is the caller's order.
-	for _, id := range exchangeIDs {
-		cfg.Items.Enqueue(id, len(checks))
+	// them. Enqueued in start order, so the queue's own order is the order items will run.
+	for _, slot := range order {
+		cfg.Items.Enqueue(exchangeIDs[slot], len(checks))
 	}
 
 	queue := make(chan int)
@@ -1270,10 +1332,10 @@ func (s *ActiveScanner) AuditSession(ctx context.Context, exchangeIDs []core.Exc
 			}
 		}()
 	}
-	// Fed in order. A cancelled context is not a reason to stop feeding: an item nobody looked at
-	// must still come back with its check set attributed, and the refusals above are what do that.
-	for i := range exchangeIDs {
-		queue <- i
+	// Fed in priority order. A cancelled context is not a reason to stop feeding: an item nobody looked
+	// at must still come back with its check set attributed, and the refusals above are what do that.
+	for _, slot := range order {
+		queue <- slot
 	}
 	close(queue)
 	wg.Wait()
@@ -1409,9 +1471,11 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		run.cfg.Items.Resolve(exchangeID, ex, refused, run.cfg, auditItemNote(refused, run.cfg))
 		return refused, nil
 	}
-	if len(checks) == 0 {
+	if len(checks) == 0 && !s.javascriptTailRuns(run.cfg) {
 		// Nothing was enabled, so nothing was declined either. Audited with zero considered is the
-		// honest reading, and it is what the Rust original returns for an empty check set.
+		// honest reading, and it is what the Rust original returns for an empty check set. A run whose
+		// only DOM work is the static pass (use_dynamic_analysis false removed every DOM check) is not
+		// such a run: the pass still has an item to read (burpsy-react-ui-9mti).
 		o.State = ItemStateAudited
 		run.cfg.Items.Resolve(exchangeID, nil, o, run.cfg, "")
 		return o, nil
@@ -1425,6 +1489,11 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// and BEFORE scope, because a cancelled item is still a real item about a real request: the row
 	// must carry its host and path so the queue can show which URL the operator reclaimed, and a
 	// cancel that arrived before the engine got here must not lose the identity to save one lookup.
+	// A run whose timeout override cannot be applied runs nothing (o2p3): the operator named the
+	// bounds, and probing under the engagement's instead would be a run they did not configure.
+	if run.senderErr != nil {
+		return refuse(ex, ItemStateUnauditable, run.senderErr.Error())
+	}
 	if run.cfg.Items.Cancelled(exchangeID) {
 		// The row already holds ItemStateCancelled from Cancel, so this returns the state the
 		// operator asked for rather than a second, differently-worded one.
@@ -1523,7 +1592,13 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		}
 	}
 
-	ictx := withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg)
+	// The item's detection-method ledger (2hze): every check this item dispatches records into it,
+	// both the probes a disabled method withheld and the enabled methods the check cannot run.
+	methodDeclines := NewMethodDeclineLedger()
+	ictx := withMethodDeclines(withRunConfig(withLightAudit(withMeter(ctx, meter), lightHandle), itemCfg), methodDeclines)
+	// The run's own sender, when its configuration overrides the engagement's timeouts. probeGate is
+	// the one reader, so every probe this item sends — and nothing else — leaves through it.
+	ictx = withRunSender(ictx, run.sender)
 	// The effectiveness ledger rides the context ONLY when the gate is on. A run with
 	// skip_ineffective_checks set to zero must not even BUILD a prior: recording evidence
 	// nobody will act on is not free, and the count it produced would then be reported
@@ -1532,6 +1607,10 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 		ictx = withPointEffectiveness(ictx, &run.pointEffectiveness)
 	}
 	breaker := newItemBreaker(run.cfg)
+	// The item's dynamic JavaScript clock (burpsy-react-ui-9mti): one per item, started by its first
+	// browser use, shared by its DOM checks and the confirmation tier, and the record of every pass a
+	// javascript_analysis limit cut short.
+	domClock := newDOMTimeBudget(itemCfg)
 
 	// The plan is built before anything is dispatched, so "how much did we not do" is answerable at
 	// every point rather than reconstructed afterwards.
@@ -1700,11 +1779,41 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				// host for the item's entire duration and a cap of N would admit N items rather than N
 				// probes. This region is deliberately linear, with no `continue` between the acquire and
 				// the release, which is what makes the pairing safe here rather than only apparently safe.
+				// The methods this configuration ENABLED for the check's type that burpsy's check does
+				// not implement are declined on every item the check runs on, so an item's outcome says
+				// what its SQL injection check did not try, not only what the configuration said.
+				for _, d := range run.cfg.DeclinedDetectionMethods {
+					if d.Method != "" && d.TypeIndex == checks[check].typeIndex {
+						methodDeclines.Record(d)
+					}
+				}
+				// A browser-driven check under a spent max_dynamic_time_per_item does not start: counted
+				// Skipped with the reason, never clean (burpsy-react-ui-9mti).
+				if checks[check].dynamicJS && domClock.spent() {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+					domClock.skip(checks[check].name, domClock.dynamicLimitReason(false))
+					continue
+				}
+				runCtx, stopClock := ictx, func() {}
+				if checks[check].dynamicJS {
+					runCtx, stopClock = domClock.ctx(ictx)
+				}
 				run.perHostInFlight(ctx, ex.Host)
 				before := meter.snapshot()
-				verdict, runErr := checks[check].run(s, ictx, ex)
+				verdict, runErr := checks[check].run(s, runCtx, ex)
+				stopClock()
 				d := meter.since(before)
 				run.releasePerHostInFlight(ex.Host)
+
+				// Stopped by the item's dynamic time limit rather than by the target: Skipped with the
+				// reason, BEFORE the failure branch, because a limit the run imposed on itself must not
+				// trip the breaker that abandons units for a failing target.
+				if runErr != nil && checks[check].dynamicJS && domClock.spent() && ictx.Err() == nil {
+					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+					o.FindingsDropped += len(verdict)
+					domClock.skip(checks[check].name, domClock.dynamicLimitReason(true))
+					continue
+				}
 
 				// A check the evaluator declined is in the same position as one with no implementation:
 				// nothing ran and nothing proved. Counted as Skipped (DispositionUnsupported) so the
@@ -1877,21 +1986,19 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 			zap.Int("checks", len(checks)))
 	}
 
-	// Phase 12: the DOM dynamic confirmation tier (burpsy-react-ui-m97j), the half dom.go's
-	// header promised and never had. It re-runs the STATIC DOM analysis on this exchange's own
-	// response — the same free-standing pass Capture.ScanExchange runs — so the confirm sees the
-	// same flows the passive path reported, then plants a canary in each URL-kind flow's source
-	// and loads the page in the scan's browser. Promoted/retired verdicts ride the finding;
-	// without a browser attached (or on an unsupported source kind) the finding stays tentative
-	// AND SAYS SO in its evidence, because a caveat only in the operator's memory is the failure
-	// DOM-03 exists to prevent. Only when the DOM families are enabled: the tier confirms THIS
-	// pass's candidates, and running it with the families off would observe pages no static
-	// finding came from.
-	if s.DOMCapabilityConfigured() && s.config != nil && s.config.CheckDOM {
-		if confirmed := s.confirmDOMFindingsFor(ex); len(confirmed) > 0 {
-			found = append(found, confirmed...)
+	// Phase 12: the item's JavaScript analysis tail — the static DOM pass over its own response and
+	// the browser confirmation of what it found (burpsy-react-ui-m97j), now under the run's
+	// javascript_analysis keys and issue selection (burpsy-react-ui-9mti; js_analysis.go). Only when
+	// the DOM families are enabled for this run: scan_type_javascript_analysis false used to remove
+	// the DOM checks and leave this tail running the browser anyway. The confirmation still needs a
+	// browser; the static pass does not, so a run with dynamic analysis off reports its static
+	// candidates without one.
+	if s.javascriptTailRuns(run.cfg) {
+		if jsFound := s.javascriptAnalysisFor(ictx, ex, itemCfg, domClock); len(jsFound) > 0 {
+			found = append(found, jsFound...)
 		}
 	}
+	o.JavaScriptAnalysisSkips = domClock.list()
 
 	// The tier's per-item skip count, folded once (7bkj): the checks ran and answered;
 	// this number says how many points they did not test, and rides the outcome beside the
@@ -1901,6 +2008,7 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// and summed into the run's outcome, because the gate's evidence is spread across the
 	// items that probed and the items whose places it then dropped.
 	o.PointsJudgedIneffective += run.pointEffectiveness.Count()
+	o.MethodsDeclined = methodDeclines.List()
 	if len(found) > 0 {
 		s.findingsMu.Lock()
 		s.findings = append(s.findings, found...)

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, GitCompare, Hash, Network, Type , Trash2 } from "lucide-react";
+import { ArrowLeftRight, Braces, ChevronLeft, ChevronRight, Download, FileUp, GitCompare, Hash, Network, Type , Trash2, WrapText } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes } from "../lib/api";
 import { useCompare, useLoadMessage } from "../lib/data.workbench";
+import { classifyFileBytes, liveBytes, sideField, type BinarySide } from "../lib/comparer-file";
 import { useCrawls } from "../lib/data.observe";
 import { useCompareSitemaps } from "../lib/data.observe";
 import { comparableRuns, sideLabel, type SitemapDiffResponse } from "../lib/sitemap-diff";
@@ -92,18 +93,20 @@ function Pane({
   side,
   segments,
   currentHunk,
+  wrap,
 }: {
   label: string;
   side: "a" | "b";
   segments: Segment[];
   currentHunk: number;
+  wrap: boolean;
 }): JSX.Element {
   return (
     <div className="diff-pane">
       <div className="editor-bar">
         <span className="editor-label-inline">{label}</span>
       </div>
-      <div className="diff-pane-body">
+      <div className={wrap ? "diff-pane-body" : "diff-pane-body diff-pane-nowrap"}>
         {segments.map((segment) => {
           const text = side === "a" ? segment.a : segment.b;
           if (segment.kind === "equal") return <span key={segment.key}>{text}</span>;
@@ -347,6 +350,31 @@ export function ComparerPage(): JSX.Element {
    * label.
    */
   const [granularity, setGranularity] = useState<"bytes" | "words">("bytes");
+  /**
+   * A side loaded from a binary file (ppqw): its real bytes, valid only while the editor still shows
+   * exactly what was loaded — an edit makes them stale and the text is compared instead.
+   */
+  const [binA, setBinA] = useState<BinarySide | null>(null);
+  const [binB, setBinB] = useState<BinarySide | null>(null);
+  const liveA = liveBytes(binA, a);
+  const liveB = liveBytes(binB, b);
+  const anyBinary = liveA !== null || liveB !== null;
+  /** Burp's "Enable/Disable line wrapping" on the results (2vuk). Wrapped by default, as before. */
+  const [wrap, setWrapState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("burpsy.comparer.wrap") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const setWrap = (next: boolean) => {
+    setWrapState(next);
+    try {
+      window.localStorage.setItem("burpsy.comparer.wrap", next ? "on" : "off");
+    } catch {
+      // storage unavailable (private window): the toggle still works for this view
+    }
+  };
   const paneRef = useRef<HTMLDivElement>(null);
 
   const compare = useCompare();
@@ -385,8 +413,8 @@ export function ComparerPage(): JSX.Element {
 
   // Encoded once per side rather than per op the way byteSlice does, since the hex view walks
   // every op's byte range instead of just the ones a text render touches.
-  const aBytes = useMemo(() => new TextEncoder().encode(a), [a]);
-  const bBytes = useMemo(() => new TextEncoder().encode(b), [b]);
+  const aBytes = useMemo(() => liveA ?? new TextEncoder().encode(a), [a, liveA]);
+  const bBytes = useMemo(() => liveB ?? new TextEncoder().encode(b), [b, liveB]);
   const emptyHexView = useMemo(() => ({ rows: [], shown: 0, total: 0 }), []);
   // Deferred until the operator actually asks for hex: building it costs a pass over every op's
   // real bytes, which the memory-lean ethos this console holds to says not to pay for a mode
@@ -435,8 +463,11 @@ export function ComparerPage(): JSX.Element {
 
   const run = () => {
     setCurrentHunk(-1);
+    // A binary side compares in Hex: its text rendering is one char per byte, not UTF-8, so the
+    // text view's byte offsets would land in the wrong place.
+    if (anyBinary) setView("hex");
     compare.mutate(
-      { a, b, response: side === "response", granularity },
+      { ...sideField("a", a, binA), ...sideField("b", b, binB), response: side === "response", granularity },
       {
         onSuccess: (response) =>
           response.identical
@@ -454,7 +485,38 @@ export function ComparerPage(): JSX.Element {
   const swap = () => {
     setA(b);
     setB(a);
+    setBinA(binB);
+    setBinB(binA);
     setCurrentHunk(-1);
+    compare.reset();
+  };
+
+  const fileInputA = useRef<HTMLInputElement>(null);
+  const fileInputB = useRef<HTMLInputElement>(null);
+  // Burp's "Load: Add an item from a file" (ppqw). A text file becomes the side like a paste and is
+  // kept in the side's list; a binary file is compared by its real bytes and shown in Hex.
+  const loadFile = async (slot: "a" | "b", file: File | undefined) => {
+    if (!file) return;
+    const loaded = classifyFileBytes(new Uint8Array(await file.arrayBuffer()));
+    if (loaded.kind === "refused") {
+      toast.error(`Could not load ${file.name}: ${loaded.reason}`);
+      return;
+    }
+    const setText = slot === "a" ? setA : setB;
+    const setBin = slot === "a" ? setBinA : setBinB;
+    if (loaded.kind === "text") {
+      setBin(null);
+      const item = newComparerItem(`file: ${file.name}`, loaded.text);
+      addComparerItem(slot, item);
+      (slot === "a" ? setSelectedA : setSelectedB)(item.id);
+      setText(loaded.text);
+      toast.success(`${file.name} loaded into slot ${slot.toUpperCase()}`);
+    } else {
+      setBin(loaded.binary);
+      setText(loaded.binary.shownAs);
+      setView("hex");
+      toast.success(`${file.name} is binary: compared byte-for-byte and shown in Hex (editing the side drops the file bytes)`);
+    }
     compare.reset();
   };
 
@@ -486,7 +548,28 @@ export function ComparerPage(): JSX.Element {
             <Download size={13} />
             Load
           </Button>
-          <Badge>{formatBytes(new TextEncoder().encode(value).length)}</Badge>
+          <input
+            ref={slot === "a" ? fileInputA : fileInputB}
+            type="file"
+            hidden
+            aria-hidden="true"
+            tabIndex={-1}
+            onChange={(event) => {
+              void loadFile(slot, event.target.files?.[0]);
+              event.target.value = "";
+            }}
+          />
+          <Button
+            variant="outline"
+            size="small"
+            title={`Load slot ${slot.toUpperCase()} from a file on this machine`}
+            onClick={() => (slot === "a" ? fileInputA : fileInputB).current?.click()}
+          >
+            <FileUp size={13} />
+            Load file
+          </Button>
+          {(slot === "a" ? liveA : liveB) ? <Badge tone="info">binary file</Badge> : null}
+          <Badge>{formatBytes((slot === "a" ? liveA : liveB)?.length ?? new TextEncoder().encode(value).length)}</Badge>
         </Toolbar>
         {list.length > 0 ? (
           <div className="stack-tight" style={{ marginBottom: 8 }}>
@@ -585,13 +668,30 @@ export function ComparerPage(): JSX.Element {
               <Type size={13} />
               Words
             </Button>
-            <Button variant={view === "text" ? "primary" : "outline"} size="small" aria-pressed={view === "text"} onClick={() => setView("text")}>
+            <Button
+              variant={view === "text" ? "primary" : "outline"}
+              size="small"
+              aria-pressed={view === "text"}
+              disabled={anyBinary}
+              title={anyBinary ? "A side holds a binary file; its bytes are shown in Hex" : undefined}
+              onClick={() => setView("text")}
+            >
               <Braces size={13} />
               Text
             </Button>
             <Button variant={view === "hex" ? "primary" : "outline"} size="small" aria-pressed={view === "hex"} onClick={() => setView("hex")}>
               <Hash size={13} />
               Hex
+            </Button>
+            <Button
+              variant={wrap ? "primary" : "outline"}
+              size="small"
+              aria-pressed={wrap}
+              title={wrap ? "Disable line wrapping" : "Enable line wrapping"}
+              onClick={() => setWrap(!wrap)}
+            >
+              <WrapText size={13} />
+              Wrap
             </Button>
             <Button variant="outline" onClick={swap} disabled={!a && !b}>
               <ArrowLeftRight size={14} />
@@ -794,8 +894,8 @@ export function ComparerPage(): JSX.Element {
               <div className="diff-panes" ref={paneRef}>
                 {view === "text" ? (
                   <>
-                    <Pane label="A" side="a" segments={segments} currentHunk={currentHunk} />
-                    <Pane label="B" side="b" segments={segments} currentHunk={currentHunk} />
+                    <Pane label="A" side="a" segments={segments} currentHunk={currentHunk} wrap={wrap} />
+                    <Pane label="B" side="b" segments={segments} currentHunk={currentHunk} wrap={wrap} />
                   </>
                 ) : (
                   <>

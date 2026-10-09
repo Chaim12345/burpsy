@@ -188,7 +188,11 @@ type SequencerReport struct {
 	// FIPS battery's, byte-for-byte the Rust reference's. effective.go states in
 	// full what the number is and, at more length, what it is not.
 	EffectiveEntropy EffectiveEntropyReport `json:"effective_entropy"`
-	Grade            Grade                  `json:"grade"`
+	// FipsPositions is the FIPS battery at each bit position across tokens, Burp's bit-level
+	// analysis (burpsy-react-ui-c0k3). Additive like the two above: `fips_positions.affects_grade` is
+	// false. fips_position.go states the statistical method.
+	FipsPositions FipsPositionReport `json:"fips_positions"`
+	Grade         Grade              `json:"grade"`
 	// Verdict is one sentence an operator can act on, with the numbers in it.
 	Verdict string `json:"verdict"`
 	// Warnings is everything that limits how far the verdict can be trusted.
@@ -569,6 +573,7 @@ func analyse(tokens []string, opts Options) (SequencerReport, error) {
 		Fips:             fips,
 		Advanced:         advancedFor(tokens, enc, bitStream, opts.DisabledTests),
 		EffectiveEntropy: effective,
+		FipsPositions:    AnalyseFipsPositions(tokens, enc, opts.DisabledTests),
 		Grade:            grade,
 		Verdict:          verdict,
 		Warnings:         warnings,

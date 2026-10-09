@@ -1,13 +1,19 @@
 package web
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 )
@@ -287,4 +293,116 @@ func portOf(authority string) uint16 {
 	var p uint16
 	fmt.Sscanf(port, "%d", &p)
 	return p
+}
+
+// ---- per-send response timeout (burpsy-react-ui-mmca) ---------------------------------------------
+
+// silentListener accepts connections, reads what arrives and never answers — the slow, time-based
+// probe's target, as far as a read is concerned. accepts counts the sockets it took.
+func silentListener(t *testing.T) (addr string, accepts *atomic.Int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	accepts = &atomic.Int64{}
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done); ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepts.Add(1)
+			go func(c net.Conn) {
+				defer c.Close()
+				go io.Copy(io.Discard, c)
+				<-done
+			}(c)
+		}
+	}()
+	return ln.Addr().String(), accepts
+}
+
+// postJSONWithin is postJSON under a context deadline, returning how long the request took. The
+// deadline is the bound a regression hits, so an assertion on elapsed time fails instead of hanging.
+func postJSONWithin(t *testing.T, s *Server, path string, body any, within time.Duration) (*httptest.ResponseRecorder, time.Duration) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	started := time.Now()
+	s.mux.ServeHTTP(rec, req)
+	return rec, time.Since(started)
+}
+
+// A Repeater tab's response timeout bounds that one send, and nothing about the network settings
+// changes. The request context's 5s deadline stands in for the standing 30s read bound a regression
+// would fall back to.
+func TestARepeaterResponseTimeoutBoundsOneSend(t *testing.T) {
+	s := newTestServer()
+	before := s.sender.Network()
+	addr, _ := silentListener(t)
+	rec, elapsed := postJSONWithin(t, s, "/api/repeater/send", map[string]any{
+		"target":  addr,
+		"request": "GET /sleep HTTP/1.1\r\nHost: x\r\n\r\n",
+		"options": map[string]any{"response_timeout_ms": 200},
+	}, 5*time.Second)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("a send to a silent target = %d (%s), want 502", rec.Code, rec.Body.String())
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("response_timeout_ms=200 did not bound the send: it took %s", elapsed)
+	}
+	if !strings.Contains(rec.Body.String(), "response timeout") {
+		t.Fatalf("the failure %q does not name the tab's own response timeout", rec.Body.String())
+	}
+	if after := s.sender.Network(); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a per-send response timeout changed the shared network settings")
+	}
+}
+
+// The timeout is refused, naming its key, when it cannot mean a bound — and nothing is sent.
+func TestARepeaterResponseTimeoutOfZeroIsRefusedByName(t *testing.T) {
+	s := newTestServer()
+	addr, accepts := silentListener(t)
+	rec := postJSON(t, s, "/api/repeater/send", map[string]any{
+		"target":  addr,
+		"request": "GET / HTTP/1.1\r\nHost: x\r\n\r\n",
+		"options": map[string]any{"response_timeout_ms": 0},
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "response_timeout_ms") {
+		t.Fatalf("got %d (%s), want 400 naming response_timeout_ms", rec.Code, rec.Body.String())
+	}
+	time.Sleep(20 * time.Millisecond)
+	if accepts.Load() != 0 {
+		t.Fatal("a refused send reached the target")
+	}
+}
+
+// On one shared connection every request shares one deadline, so tabs that disagree about the
+// response timeout are refused by name rather than having all but one tab's setting dropped.
+func TestASingleConnectionGroupRefusesTabsThatDisagreeOnTheResponseTimeout(t *testing.T) {
+	s := newTestServer()
+	addr, accepts := silentListener(t)
+	rec := postJSON(t, s, "/api/repeater/send-group", map[string]any{
+		"mode": "sequence_single_conn",
+		"items": []map[string]any{
+			{"tab_id": "a", "target": addr, "request": "GET /a HTTP/1.1\r\nHost: x\r\n\r\n", "options": map[string]any{"response_timeout_ms": 200}},
+			{"tab_id": "b", "target": addr, "request": "GET /b HTTP/1.1\r\nHost: x\r\n\r\n"},
+		},
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "response timeout") {
+		t.Fatalf("got %d (%s), want 400 naming the response timeout", rec.Code, rec.Body.String())
+	}
+	time.Sleep(20 * time.Millisecond)
+	if accepts.Load() != 0 {
+		t.Fatal("a refused group reached the target")
+	}
 }

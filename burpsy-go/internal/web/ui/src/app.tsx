@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { PlatformAuthPrompt } from "./ui/platform-auth-prompt";
+import { scopeAllowsEverything } from "./lib/scope-state";
 import { appliedSectionLabels, readBundleCoverage } from "./lib/config-coverage";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -30,14 +31,15 @@ import {
  ShieldCheck,
  Square,
  Sun,
+ MousePointerClick,
  Unplug,
  Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { useHotkeys } from "react-hotkeys-hook";
 import { Toaster, toast } from "sonner";
-import { api, copyToClipboard, gatedFetch, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
+import { api, copyToClipboard, gatedFetch, json, downloadText, formatBytes, formatCount, historyToCSV, relativeTime, requestFromUrl, templateRequest } from "./lib/api";
 import { queryClient, useConnection, useEventStream, useIntercept, useProject, useProjectEpoch, useRenameProject, useScope, useStats } from "./lib/data";
 import { useScannerLive } from "./lib/data.attack";
 import { useCrawls } from "./lib/data.observe";
@@ -53,8 +55,10 @@ import { settingsPaletteActions } from "./lib/settings-sections";
 import { editorFontStack, emptyIntruderConfig, intruderLaunchBlocker, resolveTheme, uiScaleFactor, useApp } from "./lib/store";
 import { THEME_SLOTS, themeTokenVars } from "./lib/theme-import";
 import type { Exchange, MessageView } from "./lib/types";
-import { chordKeys, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
-import { useChord, useKeymap } from "./lib/keymap";
+import { chordKeys, SHORTCUT_ACTIONS, shortcutGroups, type ShortcutAction } from "./lib/shortcuts";
+import { useChord, useCommandChord, useKeymap } from "./lib/keymap";
+import { commandsVersion, hasCommand, runCommand, subscribeCommands, unavailableReason, useCommandHandler } from "./lib/commands";
+import { catalogueCommands } from "./lib/palette-commands";
 import { usePluginHotkeys } from "./lib/plugin-hotkeys";
 import { clearHiddenToolTabs, readHiddenToolTabs, writeHiddenToolTabs } from "./lib/tool-tabs";
 import { NAV_LEAVES, TOOLS, entryLeaf, findLeaf, toolOf } from "./nav";
@@ -62,7 +66,12 @@ import { ErrorBoundary } from "./ui/layout";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
+import { DialogHost } from "./ui/dialog-host";
+import { promptDialog } from "./lib/dialogs";
 import { SearchDialog } from "./ui/search-dialog";
+import { HiddenInputsDialog } from "./ui/hidden-inputs-dialog";
+import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
+import { ClickbanditDialog } from "./ui/clickbandit-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
@@ -216,6 +225,75 @@ function useHashRoute(): void {
  }, [route]);
 }
 
+/**
+ * Every catalogue chord, bound once (2czi). Each is a literal so keymap-installed.test.ts can see
+ * the wire; each runs whichever component registered the action (lib/commands.ts) and leaves the
+ * key to the browser when none has.
+ */
+function CatalogueHotkeys(): null {
+ useCommandChord("nav.switchDashboard");
+ useCommandChord("nav.switchTarget");
+ useCommandChord("nav.switchProxy");
+ useCommandChord("nav.switchIntruder");
+ useCommandChord("nav.switchRepeater");
+ useCommandChord("nav.switchLogger");
+ useCommandChord("nav.switchOrganizer");
+ useCommandChord("nav.search");
+ useCommandChord("nav.settings");
+ useCommandChord("tasks.toggle");
+ useCommandChord("intruder.startAttack");
+ useCommandChord("proxy.forwardAll");
+ useCommandChord("proxy.dropAll");
+ useCommandChord("proxy.interceptResponse");
+ useCommandChord("repeater.historyBack");
+ useCommandChord("repeater.historyForward");
+ useCommandChord("tab.close");
+ useCommandChord("tab.reopen");
+ useCommandChord("tab.duplicate");
+ useCommandChord("tab.next");
+ useCommandChord("tab.prev");
+ useCommandChord("tab.rename");
+ useCommandChord("editor.togglePretty");
+ useCommandChord("editor.toggleWrap");
+ useCommandChord("editor.toggleNonPrinting");
+ useCommandChord("editor.toggleHideHeaders");
+ useCommandChord("editor.insertCollaborator");
+ useCommandChord("editor.toggleSidebar");
+ useCommandChord("editor.cycleLayout");
+ useCommandChord("table.goToEntry");
+ return null;
+}
+
+/**
+ * The command palette plus Burp's action catalogue (2czi): every registry row flagged `palette`,
+ * runnable when a mounted component has registered it and otherwise listed with its owner's
+ * reason or where it lives. "Search across tools" is one of these (nav.search) — the menu bar is
+ * hidden on narrow viewports, so the palette still has to reach it.
+ *
+ * Its own component so that only it subscribes to the command bridge. The bridge changes on every
+ * page mount and every editor focus; subscribed from App, each change re-rendered the whole
+ * console, which measured as a palette jump to Logger taking roughly twice as long.
+ */
+function CataloguePalette({
+ open,
+ onOpenChange,
+ actions,
+}: {
+ open: boolean;
+ onOpenChange: (open: boolean) => void;
+ actions: PaletteAction[];
+}): JSX.Element {
+ const keymap = useKeymap();
+ const tick = useSyncExternalStore(subscribeCommands, commandsVersion, commandsVersion);
+ const all = useMemo(
+  () => [...actions, ...catalogueCommands(SHORTCUT_ACTIONS, keymap, hasCommand, (id) => void runCommand(id), unavailableReason)],
+  // `tick` is the dependency that matters: it changes when availability does.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [actions, keymap, tick],
+ );
+ return <CommandPalette open={open} onOpenChange={onOpenChange} actions={all} />;
+}
+
 function App(): JSX.Element {
  const route = useApp((state) => state.route);
  const setRoute = useApp((state) => state.setRoute);
@@ -223,12 +301,16 @@ function App(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const tableStripes = useApp((state) => state.tableStripes);
+ const setTableStripes = useApp((state) => state.setTableStripes);
  const paletteOpen = useApp((state) => state.paletteOpen);
  const setPaletteOpen = useApp((state) => state.setPaletteOpen);
  const shortcutsOpen = useApp((state) => state.shortcutsOpen);
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const repeaterTabCount = useApp((state) => state.repeaterTabs.length);
  const setShortcutsOpen = useApp((state) => state.setShortcutsOpen);
+ // Burp's top-level Clickbandit (burpsy-react-ui-g67w).
+ const [clickbanditOpen, setClickbanditOpen] = useState(false);
  // Burp puts Search on the tab bar, and it is shell state rather than a page's: it crosses tools,
  // so no single tool owns it. Local rather than in the store because nothing outside the shell
  // opens it — the command palette and the menu item are both built here.
@@ -292,6 +374,29 @@ function App(): JSX.Element {
    )
    .catch((error) => toast.error(`Save copy failed: ${String(error)}`));
  }, [project.data?.backupable]);
+ // Rename, from the Project menu and from the palette: one handler, through the shell's themed
+ // prompt (bea3). A blank name cannot be submitted — the dialog says so under the field — which
+ // replaces the old pair of checks (silent return in one caller, a toast in the other).
+ const renameProjectViaDialog = useCallback(() => {
+  if (!project.data?.persisted) {
+   toast.info("A project name lives in the database file, and this instance has none — start burpsy with -db.");
+   return;
+  }
+  const current = project.data?.name ?? "";
+  void promptDialog({
+   title: "Rename project",
+   description: "The name is stored in the project database, so it survives a restart.",
+   label: "Project name",
+   initial: current === "Unnamed" ? "" : current,
+   confirmLabel: "Rename",
+  }).then((name) => {
+   if (name === null || name.trim() === "") return;
+   renameProject.mutate(name.trim(), {
+    onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
+    onError: (error) => toast.error(`Rename refused: ${String(error)}`),
+   });
+  });
+ }, [project.data?.persisted, project.data?.name, renameProject]);
  const live = useConnection((state) => state.live);
  const lastEventAt = useConnection((state) => state.lastEventAt);
  const eventCount = useConnection((state) => state.eventCount);
@@ -435,6 +540,45 @@ function App(): JSX.Element {
  );
 
  useHotkeys(shortcutsChord, () => setShortcutsOpen(true), { enableOnFormTags: false }, [shortcutsChord]);
+
+ // Burp's action catalogue (2czi). The shell owns the actions that need no page: switching tools,
+ // search, settings, the task pause, the Inspector sidebar and Intruder's Start (through the
+ // Intruder menu's own launch path below). Pages register their own (lib/commands.ts); every
+ // chord is bound once, in CatalogueHotkeys, whichever component handles it.
+ const switchTo = useCallback(
+  (toolId: string) => {
+   const target = TOOLS.find((entry) => entry.id === toolId);
+   if (target) navigate(entryLeaf(target));
+  },
+  [navigate],
+ );
+ useCommandHandler("nav.switchDashboard", () => switchTo("dashboard"));
+ useCommandHandler("nav.switchTarget", () => switchTo("target"));
+ useCommandHandler("nav.switchProxy", () => switchTo("proxy"));
+ useCommandHandler("nav.switchIntruder", () => switchTo("intruder"));
+ useCommandHandler("nav.switchRepeater", () => switchTo("repeater"));
+ useCommandHandler("nav.switchLogger", () => switchTo("logger"));
+ useCommandHandler("nav.switchOrganizer", () => switchTo("organizer"));
+ useCommandHandler("nav.search", () => setSearchOpen(true));
+ useCommandHandler("nav.settings", () => navigate("settings"));
+ const setInspectorPanelState = useApp((state) => state.setInspectorPanelState);
+ const inspectorPanelState = useApp((state) => state.inspectorPanelState);
+ useCommandHandler("editor.toggleSidebar", () => {
+  const next = inspectorPanelState === "collapsed" ? "auto" : "collapsed";
+  setInspectorPanelState(next);
+  toast.info(next === "collapsed" ? "Inspector collapsed" : "Inspector shown");
+ });
+ // Burp's TOGGLE_TASK_EXECUTION: the dashboard's Pause all tasks / Resume, read fresh from the
+ // server each time so a chord pressed after another client paused does the right thing.
+ useCommandHandler("tasks.toggle", () => {
+  void api<{ paused?: boolean }>("/api/dashboard")
+   .then((board) => api<{ paused: boolean; running: number }>(`/api/tasks/${board.paused ? "resume" : "pause"}`, json("POST", {})))
+   .then((result) => {
+    toast.success(result.paused ? `Tasks paused (${result.running} running)` : "Tasks resumed");
+    void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+   })
+   .catch((failure: unknown) => toast.error(`Could not toggle task execution: ${failure instanceof Error ? failure.message : String(failure)}`));
+ });
  useHotkeys(
   themeChord,
   (event) => {
@@ -559,6 +703,10 @@ function App(): JSX.Element {
  const setIntruderConfig = useApp((state) => state.setIntruder);
  const setIntruderRun = useApp((state) => state.setIntruderRun);
  const intruderStatus = useApp((state) => state.intruderStatus);
+ const openIntruderTab = useApp((state) => state.openIntruderTab);
+ const closeAllIntruderTabs = useApp((state) => state.closeAllIntruderTabs);
+ const reopenIntruderTab = useApp((state) => state.reopenIntruderTab);
+ const closedIntruderTabs = useApp((state) => state.closedIntruderTabs);
  const requestIntruderCommand = useApp((state) => state.requestIntruderCommand);
  const attackInputRef = useRef<HTMLInputElement>(null);
  const [attackLoadError, setAttackLoadError] = useState<string | null>(null);
@@ -653,6 +801,40 @@ function App(): JSX.Element {
    : "The running attack has not been identified yet — its controls appear in the Intruder header once it is named.";
 
  const INTRUDER_MENU: MenuGroup[] = [
+  {
+   // Attack tabs (9bv2): Burp's managing-tabs actions, on the menu as well as the strip's own.
+   id: "tabs",
+   actions: [
+    {
+     id: "new-tab",
+     label: "New attack tab",
+     icon: Plus,
+     hint: "Open an empty attack tab; the attacks in the other tabs are kept as they are.",
+     onSelect: () => {
+      openIntruderTab();
+      navigate("intruder");
+     },
+    },
+    {
+     id: "close-all-tabs",
+     label: "Close all tabs",
+     disabled: attackRunning,
+     hint: attackRunning ? "An attack is running; its report needs its tab to land in." : "Close every attack tab. Reopen closed tab brings them back one at a time.",
+     onSelect: closeAllIntruderTabs,
+    },
+    {
+     id: "reopen-tab",
+     label: closedIntruderTabs.length ? `Reopen closed tab (${closedIntruderTabs.length})` : "Reopen closed tab",
+     icon: RotateCcw,
+     disabled: closedIntruderTabs.length === 0,
+     hint: closedIntruderTabs.length ? "Bring back the most recently closed attack tab with its configuration and results." : "No attack tab has been closed this session.",
+     onSelect: () => {
+      reopenIntruderTab();
+      navigate("intruder");
+     },
+    },
+   ],
+  },
   {
    id: "attack",
    actions: [
@@ -798,6 +980,17 @@ function App(): JSX.Element {
   },
  ];
 
+ // Burp's INTRUDER_START_ATTACK, through exactly the Intruder menu's Start entry: the same blocker
+ // refuses it with the same words, and the launch itself is still the page's.
+ useCommandHandler("intruder.startAttack", () => {
+  if (startBlocker !== null) {
+   toast.error(startBlocker);
+   return;
+  }
+  navigate("intruder");
+  requestIntruderCommand("start");
+ });
+
  const hotkeyTools = useMemo(() => TOOLS.filter((entry) => entry.hotkey), []);
  useHotkeys(
   hotkeyTools.map((entry) => `alt+${entry.hotkey}`).join(","),
@@ -813,6 +1006,8 @@ function App(): JSX.Element {
   [hotkeyTools, navigate],
  );
 
+ const requestRepeaterTabSearch = useApp((state) => state.requestRepeaterTabSearch);
+ const repeaterTabSearchChord = useChord("repeater.tabSearch");
  const paletteActions = useMemo<PaletteAction[]>(() => {
   const navigation: PaletteAction[] = TOOLS.flatMap((entry) =>
    entry.leaves.map((child) => ({
@@ -832,9 +1027,20 @@ function App(): JSX.Element {
     id: "cmd:theme",
     label: `Switch to ${resolveTheme(theme) === "dark" ? "light" : "dark"} theme`,
     group: "Appearance",
-    shortcut: "mod+shift+L",
+    shortcut: themeChord || undefined,
     icon: resolveTheme(theme) === "dark" ? Sun : Moon,
     run: toggleTheme,
+   },
+   {
+    id: "cmd:stripes",
+    label: tableStripes ? "Use plain table rows (no zebra stripe)" : "Use zebra-striped table rows",
+    group: "Appearance",
+    keywords: "zebra stripe striping rows table appearance",
+    icon: Rows3,
+    run: () => {
+     setTableStripes(!tableStripes);
+     toast.success(tableStripes ? "Table rows are plain" : "Table rows are zebra-striped");
+    },
    },
    {
     id: "cmd:density",
@@ -847,16 +1053,18 @@ function App(): JSX.Element {
     },
    },
    {
-    id: "cmd:search",
-    // The menu bar is hidden on narrow viewports and this dialog lives on it, so the palette
-    // has to reach the same action or Search would simply be unavailable on a small screen.
-    label: "Search across tools…",
-    // Its own group rather than "Go to": the Go-to heading is built by flat-mapping the tools
-    // over their leaves, so a facility filed under it would read as a route that is not one.
+    // Burp's OPEN_TAB_SEARCH (qqcn): with forty named Repeater tabs, the palette is where an operator
+    // already goes to find things. Navigates to Repeater and asks the page to open its search.
+    id: "cmd:repeater-tab-search",
+    label: "Open tab search (Repeater)",
     group: "Search",
-    keywords: "find grep suite-wide proxy repeater organizer",
+    keywords: "repeater tabs find filter named",
+    shortcut: repeaterTabSearchChord || undefined,
     icon: Search,
-    run: () => setSearchOpen(true),
+    run: () => {
+     navigate("repeater");
+     requestRepeaterTabSearch();
+    },
    },
    {
     id: "cmd:shortcuts",
@@ -892,19 +1100,7 @@ function App(): JSX.Element {
     group: "Help",
     keywords: "project name rename file db database",
     icon: PencilLine,
-    run: () => {
-     if (!project.data?.persisted) {
-      toast.info("A project name lives in the database file, and this instance has none — start burpsy with -db.");
-      return;
-     }
-     const current = project.data?.name ?? "";
-     const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
-     if (name === null || name.trim() === "") return;
-     renameProject.mutate(name.trim(), {
-      onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
-      onError: (error) => toast.error(`Rename refused: ${String(error)}`),
-     });
-    },
+    run: renameProjectViaDialog,
    },
    {
     id: "cmd:project-open",
@@ -930,7 +1126,7 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [navigate, theme, toggleTheme, density, setDensity, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, saveProjectCopy, setProjectsOpen]);
+ }, [themeChord, navigate, requestRepeaterTabSearch, repeaterTabSearchChord, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
 
@@ -956,6 +1152,13 @@ function App(): JSX.Element {
       { id: "palette", label: "Command palette", shortcut: "mod+K", icon: Command, onSelect: () => setPaletteOpen(true) },
       { id: "search", label: "Search across tools…", icon: Search, onSelect: () => setSearchOpen(true) },
       { id: "keys", label: "Keyboard shortcuts", shortcut: "?", icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
+     ],
+    },
+    {
+     id: "tools",
+     actions: [
+      // Burp's top-level "Burp Clickbandit" (burpsy-react-ui-g67w).
+      { id: "clickbandit", label: "Clickbandit", icon: MousePointerClick, onSelect: () => setClickbanditOpen(true) },
      ],
     },
     {
@@ -1028,19 +1231,7 @@ function App(): JSX.Element {
        hint: project.data?.persisted
         ? "Name the project; the name is stored in the database, so it survives a restart."
         : "A project name lives in the database file, and this instance has none.",
-       onSelect: () => {
-        const current = project.data?.name ?? "";
-        const name = window.prompt("Project name", current === "Unnamed" ? "" : current);
-        if (name === null) return;
-        if (name.trim() === "") {
-         toast.error("A project name must not be blank.");
-         return;
-        }
-        renameProject.mutate(name.trim(), {
-         onSuccess: (confirmed) => toast.success(`Project renamed to ${confirmed.name}`),
-         onError: (error) => toast.error(`Rename refused: ${String(error)}`),
-        });
-       },
+       onSelect: renameProjectViaDialog,
       },
      ],
     },
@@ -1109,15 +1300,21 @@ function App(): JSX.Element {
        id: "paste-url",
        label: "Paste host / URL as request",
        icon: ClipboardPaste,
-       onSelect: () => {
-        // window.prompt rather than a modal, for the reason lib/actions.ts's addComment
-        // records: this menu is built by a plain factory on every open, so a modal would
-        // need state threaded through the menubar to reach it.
+       onSelect: async () => {
+        // The shell's themed prompt (lib/dialogs.ts, bea3): this menu is built by a plain
+        // factory on every open, and promptDialog is how a factory asks for a string without
+        // threading modal state through the menubar.
         //
         // The clipboard is not read directly. navigator.clipboard.readText needs a
         // permission the operator has to grant, and a menu item that silently does
         // nothing on refusal is worse than one that shows them what it is about to use.
-        const pasted = window.prompt("Paste host or URL", "");
+        const pasted = await promptDialog({
+         title: "Paste host or URL as request",
+         description: "A host (example.com), host:port, or a full URL. Opens a new Repeater tab with a GET for it.",
+         label: "Host or URL",
+         placeholder: "https://example.com/path",
+         confirmLabel: "Open in Repeater",
+        });
         if (pasted === null) return;
         const built = requestFromUrl(pasted);
         if (!built) {
@@ -1176,7 +1373,7 @@ function App(): JSX.Element {
       {
        id: "theme-toggle",
        label: `${resolveTheme(theme) === "dark" ? "Light" : "Dark"} theme`,
-       shortcut: "mod+shift+L",
+       shortcut: themeChord || undefined,
        icon: resolveTheme(theme) === "dark" ? Sun : Moon,
        onSelect: toggleTheme,
       },
@@ -1191,6 +1388,12 @@ function App(): JSX.Element {
     {
      id: "density",
      actions: [
+      {
+       id: "stripes-toggle",
+       label: "Zebra-striped table rows",
+       checked: tableStripes,
+       onSelect: () => setTableStripes(!tableStripes),
+      },
       {
        id: "density-toggle",
        label: `${density === "compact" ? "Comfortable" : "Compact"} table rows`,
@@ -1275,6 +1478,8 @@ function App(): JSX.Element {
         // cannot disagree about what is showing.
         <ContextMenu
          key={entry.id}
+         // A tool tab's menu is Burp's detach/hide trio, which carries no documentation entry.
+         docTopic={null}
          groups={[
           {
            id: "tab",
@@ -1401,7 +1606,7 @@ function App(): JSX.Element {
       {formatCount(stats.data?.exchanges)} exchanges
      </span>
      <span>{formatCount(stats.data?.messages)} messages</span>
-     <span>{scope.data?.allow_all ? "scope: everything" : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
+     <span>{scopeAllowsEverything(scope.data) ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}` : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
      {caAvailable ? (
       <a className="status-link" href="/ca.crt" download>
        <ShieldCheck size={11} />
@@ -1419,10 +1624,16 @@ function App(): JSX.Element {
     </footer>
    </div>
 
-   <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
+   <CataloguePalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <HiddenInputsDialog />
+   <CsrfPocDialog />
+   <ClickbanditDialog open={clickbanditOpen} onOpenChange={setClickbanditOpen} />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+   {/* Every confirm/prompt in the console (lib/dialogs.ts, bea3). Mounted once, here. */}
+   <DialogHost />
+   <CatalogueHotkeys />
    {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the
           chosen file. Cleared after every change so picking the same file twice still fires. */}
    <input

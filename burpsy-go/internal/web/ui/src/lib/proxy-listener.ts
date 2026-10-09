@@ -21,10 +21,12 @@ export interface ListenerDraft {
   redirectPort: string;
   forceTLS: boolean;
   invisible: InvisibleChoice;
+  /** "Support HTTP/2" (34rd). On unless the operator turns it off. */
+  supportHTTP2: boolean;
 }
 
 export function emptyListenerDraft(): ListenerDraft {
-  return { bind: "", redirectHost: "", redirectPort: "", forceTLS: false, invisible: "inherit" };
+  return { bind: "", redirectHost: "", redirectPort: "", forceTLS: false, invisible: "inherit", supportHTTP2: true };
 }
 
 export function draftFromListener(row: ProxyListenerRow): ListenerDraft {
@@ -34,6 +36,7 @@ export function draftFromListener(row: ProxyListenerRow): ListenerDraft {
     redirectPort: row.redirect_port ? String(row.redirect_port) : "",
     forceTLS: row.force_tls,
     invisible: row.invisible === null ? "inherit" : row.invisible ? "on" : "off",
+    supportHTTP2: row.support_http2 !== false,
   };
 }
 
@@ -86,6 +89,8 @@ export function listenerDraftToBody(draft: ListenerDraft): DraftResult {
       redirect_port: redirectPort,
       force_tls: draft.forceTLS,
       invisible: draft.invisible === "inherit" ? null : draft.invisible === "on",
+      // Sent only when off, so a listener the operator never touched keeps the default on the wire.
+      ...(draft.supportHTTP2 ? {} : { support_http2: false }),
     },
   };
 }
@@ -108,13 +113,16 @@ export function describeListener(row: ProxyListenerRow, globalInvisible: boolean
   if (row.force_tls) {
     parts.push("reaches the destination over TLS whatever the client used to get here");
   }
+  if (row.support_http2 === false) {
+    parts.push("holds clients to HTTP/1.1, never offering HTTP/2");
+  }
   const invisible = row.invisible === null ? globalInvisible : row.invisible;
   parts.push(
     invisible
       ? `accepts origin-form requests from clients that were never told about a proxy${row.invisible === null ? " (inherited from the switch below)" : ""}`
       : `refuses an origin-form request it cannot attribute${row.invisible === null ? " (inherited from the switch below)" : ""}`,
   );
-  if (parts.length === 1 && !row.redirect_host && !row.redirect_port && !row.force_tls) {
+  if (parts.length === 1 && !row.redirect_host && !row.redirect_port && !row.force_tls && row.support_http2 !== false) {
     return `An ordinary proxy listener: it ${parts[0]}, and forwards everything else to the destination the client named.`;
   }
   return `This listener ${parts.join(", and ")}.`;

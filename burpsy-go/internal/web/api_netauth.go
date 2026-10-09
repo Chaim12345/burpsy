@@ -9,7 +9,6 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -149,14 +148,19 @@ func (s *Server) getNetworkAuth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// putNetworkAuthPromptReq is the request body putNetworkAuthPrompt decodes (named for its published schema).
+type putNetworkAuthPromptReq struct {
+	PromptOnFailure *bool `json:"prompt_on_authentication_failure"`
+}
+
 // putNetworkAuthPrompt sets Burp's "Prompt for credentials on platform authentication failure".
 // The body is that one key; anything else is refused by name.
 func (s *Server) putNetworkAuthPrompt(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		PromptOnFailure *bool `json:"prompt_on_authentication_failure"`
-	}
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	var req putNetworkAuthPromptReq
+	// Strict for every caller, not only an agent: the body is one key, and a misspelled one would
+	// otherwise decode to "no value" and be refused for the wrong reason.
+	dec := requestJSON(w, r, nil)
+	dec.dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil || req.PromptOnFailure == nil {
 		http.Error(w, "PUT takes {\"prompt_on_authentication_failure\": true|false}; rules are added with POST", http.StatusBadRequest)
 		return
@@ -195,15 +199,18 @@ func (s *Server) handleNetworkAuthFailures(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// postNetworkAuthReq is the request body postNetworkAuth decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type postNetworkAuthReq struct {
+	Host     string `json:"host"`
+	Scheme   string `json:"scheme"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Realm    string `json:"realm"`
+}
+
 func (s *Server) postNetworkAuth(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host     string `json:"host"`
-		Scheme   string `json:"scheme"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Realm    string `json:"realm"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req postNetworkAuthReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -312,13 +319,16 @@ func (s *Server) getNetworkClientCerts(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// postNetworkClientCertsReq is the request body postNetworkClientCerts decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type postNetworkClientCertsReq struct {
+	Host       string `json:"host"`
+	Path       string `json:"path"`
+	Passphrase string `json:"passphrase"`
+}
+
 func (s *Server) postNetworkClientCerts(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host       string `json:"host"`
-		Path       string `json:"path"`
-		Passphrase string `json:"passphrase"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req postNetworkClientCertsReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

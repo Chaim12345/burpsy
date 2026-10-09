@@ -1,6 +1,7 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
 import * as DropdownPrimitive from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronRight } from "lucide-react";
+import { BookOpen, Check, ChevronRight } from "lucide-react";
+import { docEntryLabel, openDocs, type DocTopic } from "../lib/docs";
 import type { ComponentType, ReactNode } from "react";
 
 export interface MenuAction {
@@ -158,8 +159,35 @@ function renderItems(groups: MenuGroup[], parts: MenuParts): ReactNode {
   ));
 }
 
-/** Right-click menu wrapper. `groups` is rebuilt per open, so it can close over row data. */
-export function ContextMenu({ groups, children }: { groups: MenuGroup[]; children: ReactNode }): JSX.Element {
+/**
+ * The menu's trailing "<Tool> documentation" entry (u9zz), after a separator, as Burp ends its
+ * table and editor menus (Zr2s.java, Zs7j.java). Only added to a menu that has entries of its
+ * own: a documentation link is not a reason to give a row a menu it did not have.
+ */
+export function withDocs(groups: MenuGroup[], topic: DocTopic | null): MenuGroup[] {
+  if (topic === null || !hasMenuActions(groups)) return groups;
+  return [
+    ...groups,
+    { id: "docs", actions: [{ id: "docs", label: docEntryLabel(topic), icon: BookOpen, onSelect: () => openDocs(topic) }] },
+  ];
+}
+
+/**
+ * Right-click menu wrapper. `groups` is rebuilt per open, so it can close over row data.
+ *
+ * `docTopic` is required so every call site decides: a table or editor menu names its tool's
+ * documentation topic (lib/docs.ts), anything else passes null.
+ */
+export function ContextMenu({
+  groups: own,
+  docTopic,
+  children,
+}: {
+  groups: MenuGroup[];
+  docTopic: DocTopic | null;
+  children: ReactNode;
+}): JSX.Element {
+  const groups = withDocs(own, docTopic);
   if (!hasMenuActions(groups)) return <>{children}</>;
   return (
     <ContextMenuPrimitive.Root>

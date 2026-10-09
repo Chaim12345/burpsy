@@ -29,7 +29,7 @@ func (t *scannerTransport) Do(ctx context.Context, req graphqlmap.Request) (*gra
 	if s.sender == nil {
 		return nil, fmt.Errorf("graphql transport: no sender; a GraphQL probe cannot be sent")
 	}
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	if gate == nil {
 		return nil, fmt.Errorf("graphql transport: no authorised sender")
 	}

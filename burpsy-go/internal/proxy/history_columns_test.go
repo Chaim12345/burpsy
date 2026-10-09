@@ -60,8 +60,12 @@ func TestAProxiedExchangeRecordsTheServerIPAndListenerPort(t *testing.T) {
 
 	// Driven through THIS test's listener rather than driveThroughProxy's, because the port it
 	// records is the whole subject of the second assertion below.
+	//
+	// The client dials from 127.0.0.2, so its address differs from the origin's 127.0.0.1 and the
+	// client-IP assertion (3bkn) cannot be satisfied by a helper that read the wrong socket.
 	client := &http.Client{Transport: &http.Transport{
-		Proxy: http.ProxyURL(&url.URL{Scheme: "http", Host: ln.Addr().String()}),
+		Proxy:       http.ProxyURL(&url.URL{Scheme: "http", Host: ln.Addr().String()}),
+		DialContext: (&net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}).DialContext,
 	}}
 	resp, err := client.Get("http://" + net.JoinHostPort(ohost, strconv.Itoa(oport)) + "/page")
 	if err != nil {
@@ -89,6 +93,10 @@ func TestAProxiedExchangeRecordsTheServerIPAndListenerPort(t *testing.T) {
 	if int(ex.ListenerPort) == oport {
 		t.Errorf("ListenerPort = %d, which is the ORIGIN's port; the column must name the listener", ex.ListenerPort)
 	}
+	// The client that sent it (3bkn): the address the listener saw, not the origin's.
+	if ex.ClientIP != "127.0.0.2" {
+		t.Errorf("ClientIP = %q, want 127.0.0.2 (the client's own address as the listener saw it)", ex.ClientIP)
+	}
 }
 
 // The helpers must not invent an answer. A producer with no socket in hand records neither field,
@@ -100,5 +108,8 @@ func TestTheSocketHelpersRefuseToGuess(t *testing.T) {
 	}
 	if got := listenerPortOf(nil); got != 0 {
 		t.Errorf("listenerPortOf(nil) = %d, want 0", got)
+	}
+	if got := clientIPOf(nil); got != "" {
+		t.Errorf("clientIPOf(nil) = %q, want empty", got)
 	}
 }

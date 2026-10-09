@@ -82,6 +82,11 @@ export interface SessionExtraction {
  name: string;
  from?: SessionExtractFrom;
  how: SessionExtractHow;
+ /** Burp's custom-parameter fields (355h): prefix and suffix wrap the extracted value. */
+ prefix?: string;
+ suffix?: string;
+ /** "Extracted value is URL-encoded". Absent is literal substitution; false percent-encodes it. */
+ url_encoded?: boolean;
 }
 
 export interface SessionMacroStep {

@@ -11,16 +11,19 @@ import { keys, useInvalidate, useResource } from "./data";
 import type { InterceptTarget } from "./intercept-target";
 import type { IssueTriagePatch } from "./issue-triage";
 import type {
+ AuditConfigSettings,
  AuditResult,
  CorpusChecks,
  InterceptListState,
  InterceptStateDetail,
  IssuesDetail,
+ IssueTypeCatalogue,
  LLMTriageRun,
  LiveAuditState,
  ScannerConfigsResponse,
  ScannerCoverage,
  TriageSettingsView,
+ SkillsView,
 } from "./types.attack";
 
 /**
@@ -242,11 +245,24 @@ export const useScannerConfigs = () => useResource<ScannerConfigsResponse>(keys.
 export function useScanConfigLibrary() {
  const invalidate = useInvalidate();
  return useMutation({
-  mutationFn: (body: { action: "save" | "clone" | "rename" | "delete"; name: string; from?: string }) =>
+  // `settings` overlays the operator's own values on what the save starts from (saq3.3.1). Only the
+  // keys it carries are written; an absent key leaves the saved value alone.
+  mutationFn: (body: {
+   action: "save" | "clone" | "rename" | "delete";
+   name: string;
+   from?: string;
+   settings?: AuditConfigSettings;
+  }) =>
    api<Record<string, unknown>>("/api/scanner/configs", json(body.action === "delete" ? "DELETE" : "POST", body)),
   onSuccess: () => invalidate([keys.scannerConfigs]),
  });
 }
+
+/** GET /api/scanner/issue-types — the issue catalogue a configuration's per-issue selection is chosen
+ * from, by name, with each type's detection methods and which of them burpsy runs (saq3.3.1). A
+ * static table the binary carries, so it is not polled and nothing invalidates it. */
+export const useScannerIssueTypes = (enabled = true) =>
+ useResource<IssueTypeCatalogue>(keys.scannerIssueTypes, "/api/scanner/issue-types", enabled);
 
 export const useScannerCoverage = () => useResource<ScannerCoverage>(keys.scannerCoverage, "/api/scanner/coverage");
 
@@ -313,4 +329,21 @@ export function useRunAudit() {
    void client.invalidateQueries({ queryKey: keys.dashboard });
   },
  });
+}
+
+/** GET /api/skills and PUT /api/skills/disabled (burpsy-react-ui-ulsy): the operator's skill library
+ * and which skills this project turns off. The PUT sends the whole list, replacing the stored one. */
+export function useSkills() {
+ const client = useQueryClient();
+ return {
+  get: useQuery<SkillsView>({
+   queryKey: ["settings", "skills"],
+   queryFn: ({ signal }) => api<SkillsView>("/api/skills", { signal }),
+   staleTime: 30_000,
+  }),
+  setDisabled: useMutation<SkillsView, Error, string[]>({
+   mutationFn: (disabled) => api<SkillsView>("/api/skills/disabled", json("PUT", { disabled })),
+   onSuccess: (view) => client.setQueryData(["settings", "skills"], view),
+  }),
+ };
 }
