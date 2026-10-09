@@ -1,0 +1,13 @@
+{
+    "description": {
+        "featured": false,
+        "uuid": "34582844-9bdf-454f-918e-763497edff64"
+    },
+    "crawler":{
+        "crawl_optimization":{
+            "await_navigation_timeout":200,
+            "dom_idle_threshold":200,
+            "network_idle_threshold":200
+        }
+    }
+}

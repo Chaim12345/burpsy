@@ -234,14 +234,16 @@ func (s *Server) writeNetworkProxy(w http.ResponseWriter) {
 // The default is applied before the rule so a body carrying both leaves the policy in the state the
 // operator described, rather than in one where a refused rule has already moved the default.
 func (s *Server) updateNetworkProxy(w http.ResponseWriter, r *http.Request) {
+	// The body is read before the dependency check so a malformed one is refused for what it is
+	// whatever this process carries, and so the schema sweep can reach the decode (burpsy-react-ui-3zw0).
+	var req networkProxyUpdate
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 	if s.upstreamProxy == nil {
 		http.Error(w, "No upstream proxy policy is wired into this process, so a rule stored here would "+
 			"be consulted by nothing", http.StatusServiceUnavailable)
-		return
-	}
-	var req networkProxyUpdate
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	pattern := strings.TrimSpace(req.Pattern)

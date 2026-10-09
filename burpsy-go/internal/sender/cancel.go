@@ -91,7 +91,9 @@ func explainCancellation(ctx context.Context, err error) error {
 	}
 	cause := ctx.Err()
 	if cause == nil {
-		return err
+		// A live context: a deadline error here is either the standing read timeout or this send's
+		// own response timeout, and the latter is named as the operator's bound (sendopts.go).
+		return explainResponseTimeout(ctx, err)
 	}
 	// Only a deadline error is reinterpreted. A cancellation that arrived after a read had already
 	// failed for its own reason — a connection reset, a malformed response — must keep the real

@@ -681,6 +681,8 @@ func validateCA(caCert *x509.Certificate, caKey *rsa.PrivateKey) error {
 
 // ProxyConfig holds all configuration for the proxy.
 type ProxyConfig struct {
+	// serverCerts records upstream certificate chains (t75m); nil records nothing.
+	serverCerts  ServerCertRecorder
 	store        *core.TrafficStore
 	tls          *TlsPolicy
 	scope        *core.Scope
@@ -978,6 +980,18 @@ func (c *ProxyConfig) WithClientCerts(source alpn.ClientCertSource) *ProxyConfig
 	return c
 }
 
+// ServerCertRecorder records the chain an origin presented on host:port (burpsy-react-ui-t75m).
+type ServerCertRecorder interface {
+	Record(host string, port uint16, chain []*x509.Certificate)
+}
+
+// WithServerCerts hands every upstream TLS handshake's certificate chain to recorder — Burp's
+// "Server TLS certificates" panel, fed by browser traffic as well as by the tools.
+func (c *ProxyConfig) WithServerCerts(recorder ServerCertRecorder) *ProxyConfig {
+	c.serverCerts = recorder
+	return c
+}
+
 // WithStripWsExtensions controls whether a WebSocket handshake's
 // Sec-WebSocket-Extensions offer is removed before the request is forwarded.
 //
@@ -1012,7 +1026,8 @@ func (c *ProxyConfig) WithStripWsExtensions(strip bool) *ProxyConfig {
 // WithPageObserver is called with every exchange the listener records and the response bytes the
 // listener holds (burpsy-react-ui-t3zk). The web server uses it for the live passive crawl, reading
 // links out of proxied pages without reaching back into the store from its append path. Called
-// synchronously after the record, so it must be quick.
+// synchronously after the record, so it must be quick. Like every hook here it must be set before
+// NewServer; an observer that only exists once the proxy is serving goes through a PageObserverSlot.
 func (c *ProxyConfig) WithPageObserver(fn func(ex *core.Exchange, response []byte)) *ProxyConfig {
 	c.pageObserver = fn
 	return c
@@ -1038,6 +1053,9 @@ type CookieAbsorber interface {
 	// AbsorbResponseCookies folds every Set-Cookie header in `response` into the jar for this
 	// authority, returning how many it found.
 	AbsorbResponseCookies(src session.AbsorptionSource, host string, port uint16, tls bool, response []byte) int
+	// AbsorbRequestCookies folds the browser's own request Cookie headers into the jar (sm1k), Burp's
+	// "the Proxy also inspects incoming requests from the browser".
+	AbsorbRequestCookies(src session.AbsorptionSource, host string, port uint16, tls bool, request []byte) int
 	// AttachAbsorptionSource records that this surface feeds the jar, so an empty jar can be told
 	// apart from a jar nothing is watching.
 	AttachAbsorptionSource(src session.AbsorptionSource)
@@ -1462,7 +1480,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	}
 
 	intercepting := s.config.intercept != nil && s.config.intercept.Enabled()
-	offer := AlpnOffer(clientOffer, intercepting)
+	// A listener with "Support HTTP/2" off (34rd) narrows the offer exactly as interception does: the
+	// client is answered over HTTP/1.1 whatever it asked for.
+	offer := AlpnOffer(clientOffer, intercepting || !spec.http2Allowed())
 	if len(clientOffer) > 0 && len(offer) == 0 {
 		s.config.logger.Warn("client ALPN offer cannot be carried",
 			zap.String("host", host),
@@ -1492,6 +1512,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 	// operator scrolling history must not have to infer the downgrade from one row and assume the
 	// rest share it.
 	downgrade := DowngradeNote(clientOffer, negotiated)
+	if downgrade != "" && !intercepting && !spec.http2Allowed() {
+		downgrade = "client offered HTTP/2; this listener's Support HTTP/2 switch is off, so it was carried over HTTP/1.1"
+	}
 	if downgrade != "" {
 		s.config.logger.Info("interception carried an HTTP/2 client over HTTP/1.1",
 			zap.String("host", host), zap.Strings("offered", clientOffer))
@@ -1591,9 +1614,9 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		reqStages.auto = requestData
 		// Intercept: hold the decrypted request before it is forwarded upstream.
 		if s.config.intercept != nil {
-			if held := s.config.intercept.Hold(intercept.ParseMessage(
+			if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 				intercept.DirectionRequest, reqHost, reqPort, true, method, path, requestData,
-			)); held != nil {
+			))); held != nil {
 				action, raw, edited, heldEdited := held.Wait()
 				requestEdited = heldEdited
 				if action == intercept.ActionDrop {
@@ -1650,7 +1673,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// response to HTTPS client" — a TLS error, which is the one report that would send the
 		// operator looking at certificates instead of at their scope list.
 		if !s.config.scope.AuthoriseRequest(reqHost, reqPort, path, reqTLS) {
-			tlsClient.Write(scopeDropResponse(reqHost, reqPort, path, reqTLS, s.config.scope))
+			s.writeProxyError(tlsClient, scopeDropResponse(reqHost, reqPort, path, reqTLS, s.config.scope))
 			return
 		}
 
@@ -1669,7 +1692,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			if core.IsWsUpgradeRequest(requestData) {
 				s.config.logger.Warn("refused to retarget a WebSocket upgrade",
 					zap.String("host", reqHost), zap.Uint16("port", reqPort))
-				tlsClient.Write(wsRetargetRefusalResponse())
+				s.writeProxyError(tlsClient, wsRetargetRefusalResponse())
 				continue
 			}
 			responseData, serverIP, firstByte, err := s.forwardRequest(requestData, reqHost, reqPort, reqTLS)
@@ -1752,6 +1775,7 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 
 					ServerIP:     serverIPOf(upstream),
 					ListenerPort: listenerPortOf(clientConn),
+					ClientIP:     clientIPOf(clientConn),
 
 					// A handshake the operator edited in the hold is "Edited" in history, by the same rule
 					// as every other row (burpsy-react-ui-sd0d).
@@ -1896,9 +1920,9 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 	// half this function was handed.
 	var responseEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
-		)); held != nil {
+		))); held != nil {
 			// A response has no destination of its own to retarget: the bytes already came back from
 			// one. The target is therefore ignored here rather than applied, and the engine only ever
 			// sets it on a forward.
@@ -1955,6 +1979,7 @@ func (s *Server) handleTLSResponse(clientConn net.Conn, method string, host stri
 
 			ServerIP:     serverIP,
 			ListenerPort: listenerPortOf(clientConn),
+			ClientIP:     clientIPOf(clientConn),
 
 			// Either direction being the operator's own work makes this row "Edited", which is Burp's
 			// reading of the flag (burpsy-react-ui-sd0d). Deliberately not a comparison of the recorded
@@ -1977,7 +2002,7 @@ func (s *Server) tunnelConnection(clientConn net.Conn, target string) {
 	// somewhere other than where the client asked.
 	upstreamConn, err := s.dialUpstreamAddr(context.Background(), target)
 	if err != nil {
-		clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		s.writeProxyError(clientConn, []byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		return
 	}
 	defer upstreamConn.Close()
@@ -2091,7 +2116,17 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	}
 
 	if host == "" {
-		clientConn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		s.writeProxyError(clientConn, []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return
+	}
+
+	// The in-browser interface (beof): http://burpsuite, http://burpsy, or the listener's own address.
+	// Answered here, before the listener's redirect, the scope gate and the dial, because none of them
+	// apply to the proxy describing itself, and forwarding a request for the listener would loop. The
+	// own-address match is skipped on a redirecting listener, whose clients name the listener on every
+	// request and must be redirected, not shown this page; isWebInterfaceTarget says why.
+	if s.isWebInterfaceTarget(host, port, clientConn, spec) {
+		s.serveWebInterface(clientConn, method, path)
 		return
 	}
 
@@ -2171,9 +2206,9 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// intercept.Held.userEdited for why it is read from the hold and not recomputed from the bytes.
 	var requestEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionRequest, host, port, scheme, method, path, requestData,
-		)); held != nil {
+		))); held != nil {
 			action, raw, retarget, heldEdited := held.Wait()
 			requestEdited = heldEdited
 			if action == intercept.ActionDrop {
@@ -2257,7 +2292,7 @@ func (s *Server) handleHTTP(clientConn net.Conn, reader *bufio.Reader, requestLi
 	// that branch forwards: a request refused at egress must not reach the origin by the
 	// retention path either.
 	if !s.config.scope.AuthoriseRequest(host, port, path, scheme) {
-		clientConn.Write(scopeDropResponse(host, port, path, scheme, s.config.scope))
+		s.writeProxyError(clientConn, scopeDropResponse(host, port, path, scheme, s.config.scope))
 		return
 	}
 
@@ -2350,9 +2385,9 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 	// other half of the same flag.
 	var responseEdited bool
 	if s.config.intercept != nil {
-		if held := s.config.intercept.Hold(intercept.ParseMessage(
+		if held := s.config.intercept.Hold(withClientIP(clientConn, intercept.ParseMessage(
 			intercept.DirectionResponse, host, port, tls, method, path, responseData,
-		)); held != nil {
+		))); held != nil {
 			// The destination is ignored for a response, by the same reasoning as
 			// handleTLSResponse's: it has already been reached.
 			action, raw, _, heldEdited := held.Wait()
@@ -2419,6 +2454,7 @@ func (s *Server) completeResponse(clientConn net.Conn, method string, host strin
 
 		ServerIP:     serverIP,
 		ListenerPort: listenerPortOf(clientConn),
+		ClientIP:     clientIPOf(clientConn),
 
 		// Either direction being the operator's own work makes this row "Edited" (burpsy-react-ui-sd0d).
 		UserEdited: requestEdited || responseEdited,
@@ -2598,6 +2634,11 @@ func withDowngradeNote(existing *string, downgrade string) *string {
 // host no tool will ever address is inert; refusing to absorb it would instead mean an operator who
 // narrowed scope mid-engagement silently stops accumulating the session they are logged in to.
 func (s *Server) record(x scanner.CapturedExchange) *core.Exchange {
+	// The browser's cookies first, then the origin's: a Set-Cookie in this response is newer than the
+	// value the browser sent with the request, so it must be the one the jar keeps (sm1k).
+	if s.config.cookieJar != nil && len(x.Request) > 0 {
+		s.config.cookieJar.AbsorbRequestCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Request)
+	}
 	if s.config.cookieJar != nil && len(x.Response) > 0 {
 		s.config.cookieJar.AbsorbResponseCookies(session.SourceProxy, x.Host, x.Port, x.TLS, x.Response)
 	}
@@ -3073,6 +3114,33 @@ func serverIPOf(conn net.Conn) string {
 // construction — asking the Server for its configured bind would answer with whatever it is bound
 // to now, and a rebind (burpsy-react-ui-77m) makes that a different port from the one this request
 // arrived on.
+// withClientIP stamps the client's address on an intercept message (3bkn), so a held item says which
+// browser or device sent it.
+func withClientIP(conn net.Conn, m *intercept.Message) *intercept.Message {
+	if m != nil {
+		m.ClientIP = clientIPOf(conn)
+	}
+	return m
+}
+
+// clientIPOf is the peer address of the client connection a request arrived on (3bkn), or "" when the
+// connection has none. The address the listener saw, never a header: X-Forwarded-For is whatever the
+// client chose to send.
+func clientIPOf(conn net.Conn) string {
+	if conn == nil || conn.RemoteAddr() == nil {
+		return ""
+	}
+	return hostOfAddr(conn.RemoteAddr().String())
+}
+
+// hostOfAddr strips the port from a host:port address, returning the input when it has none.
+func hostOfAddr(addr string) string {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
 func listenerPortOf(conn net.Conn) uint16 {
 	if conn == nil {
 		return 0

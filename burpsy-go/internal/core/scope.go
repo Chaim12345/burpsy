@@ -427,6 +427,14 @@ type Scope struct {
 	// every session mid-flight for operators who never touched the setting. Burp defaults it
 	// off for the same reason.
 	dropOutOfScope bool
+	// dropScope is Burp's "Use custom scope" arm of out-of-scope request handling
+	// (burpsy-react-ui-47ed): when set, the drop gate asks it instead of the suite scope, so an
+	// engagement can drop by a narrower (or different) fence than the one that decides what is kept
+	// and audited. It carries rules only; its own drop switch is unused. dropCustom says whether it is
+	// in force: "Use suite scope" keeps the custom rules, as Burp's panel does, so choosing the custom
+	// scope again does not mean typing them again.
+	dropScope  *Scope
+	dropCustom bool
 }
 
 // NewScope creates a new empty scope.
@@ -488,6 +496,32 @@ func (s *Scope) SetDropOutOfScope(on bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropOutOfScope = on
+}
+
+// SetDropScope installs the custom scope's rules (nil for none) and whether the drop gate uses them
+// (Burp's "Use custom scope") or the suite scope. The scope passed is owned by this one afterwards.
+func (s *Scope) SetDropScope(custom *Scope, use bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropScope = custom
+	s.dropCustom = use && custom != nil
+}
+
+// DropScope returns the custom drop scope's rules (nil when none were ever set) and whether the drop
+// gate uses them.
+func (s *Scope) DropScope() (*Scope, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.dropScope, s.dropCustom
+}
+
+// activeDropScope is the custom scope when the drop gate uses it, else nil.
+func (s *Scope) activeDropScope() *Scope {
+	custom, use := s.DropScope()
+	if !use {
+		return nil
+	}
+	return custom
 }
 
 // DropOutOfScope reports whether out-of-scope requests are refused at egress.
@@ -774,7 +808,14 @@ func (s *Scope) Contains(host string, port uint16, path string, isTLS bool) bool
 //
 // It returned a bare Contains for some time, which made the switch inert everywhere it was read
 // and left the setting describing an enforcement that did not exist (burpsy-react-ui-ckqx).
+//
+// With a custom drop scope (47ed) and the switch on, the custom scope alone decides: it is the fence
+// the operator chose for egress, and a request the suite scope would keep but the custom scope
+// leaves out is dropped.
 func (s *Scope) AuthoriseRequest(host string, port uint16, path string, isTLS bool) bool {
+	if custom := s.activeDropScope(); custom != nil && s.DropOutOfScope() {
+		return custom.Contains(host, port, path, isTLS)
+	}
 	if s.Contains(host, port, path, isTLS) {
 		return true
 	}
@@ -993,6 +1034,12 @@ func (s *Scope) AuthoriseRaw(host string, port uint16, isTLS bool, raw []byte) e
 			return errors.New("dropped: out-of-scope request handling is set to drop; " + s.Explain(host, port, path, isTLS))
 		}
 		return errors.New(s.Explain(host, port, path, isTLS))
+	}
+	// A custom drop scope (47ed) is a second fence on top of the suite scope for a composed request:
+	// in suite scope is required either way, and with the drop switch on the custom scope must agree.
+	if custom := s.activeDropScope(); custom != nil && s.DropOutOfScope() && !custom.Contains(host, port, path, isTLS) {
+		return errors.New("dropped: out-of-scope request handling uses a custom scope; " +
+			custom.Explain(host, port, path, isTLS))
 	}
 	return nil
 }

@@ -75,3 +75,16 @@ func TestBurpsyCheckNamesResolve(t *testing.T) {
 		}
 	}
 }
+
+// The guesser's three issue names resolve to Burp's extension-generated type, which is where Param
+// Miner's "Secret input" issues land in Burp (burpsy-react-ui-wlz8). Spelled as the scanner files
+// them, so a rename on either side fails here rather than blanking the advisory panel.
+func TestSecretInputIssuesResolveToTheExtensionGeneratedType(t *testing.T) {
+	c, _ := Load()
+	for _, name := range []string{"Secret input: query parameter", "Secret input: cookie", "Secret input: header"} {
+		def, _ := c.Resolve(name)
+		if def == nil || def.Name != "Extension generated issue" {
+			t.Errorf("Resolve(%q) = %v, want the Extension generated issue definition", name, def)
+		}
+	}
+}

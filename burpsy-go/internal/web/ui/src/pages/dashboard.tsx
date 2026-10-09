@@ -727,7 +727,16 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     recorded_login: recordedLogin || undefined,
    },
    {
-    onSuccess: () => toast.success(`${verb} started on ${seed.trim()}`),
+    onSuccess: (started) => {
+     // Seeds the scope refused (us6r.3): the crawl runs from the rest, and the operator is told which
+     // were left out and why, instead of the run silently being smaller than what was typed.
+     const refused = started.out_of_scope_seeds ?? [];
+     if (refused.length) {
+      toast.warning(`${verb} started without ${refused.length} out-of-scope URL(s): ${refused.map((r) => `${r.url} — ${r.reason}`).join("; ")}`);
+     } else {
+      toast.success(`${verb} started on ${seed.trim()}`);
+     }
+    },
     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : `Starting the ${verb.toLowerCase()} failed`),
    },
   );

@@ -129,7 +129,7 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req repeaterWsSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

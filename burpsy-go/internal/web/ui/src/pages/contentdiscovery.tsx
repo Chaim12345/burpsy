@@ -9,6 +9,7 @@ import {
   useDiscoveryRuns,
   useStartDiscovery,
   type Discovery,
+  type DiscoveryListEntry,
   type DiscoveryRun,
   type DiscoveryToolState,
 } from "../lib/data.discovery";
@@ -20,6 +21,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Empty,
   ErrorNotice,
   Field,
@@ -145,16 +147,31 @@ function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
   const [extensions, setExtensions] = useState("");
   const [matchCodes, setMatchCodes] = useState("");
   const [rate, setRate] = useState("");
+  // The session controls (dgbi) — Burp's content-discovery Config tab: the
+  // built-in lists, the recursion depth, the observed-name and derivation
+  // toggles, and the backup-file variant extensions.
+  const runsQuery = useDiscoveryRuns();
+  const [selectedLists, setSelectedLists] = useState<Set<string>>(new Set());
+  const [recurseDepth, setRecurseDepth] = useState("0");
+  const [observedNames, setObservedNames] = useState(false);
+  const [derivations, setDerivations] = useState(false);
+  const [variantExtensions, setVariantExtensions] = useState("");
 
-  const ready = target.trim() !== "" && wordlist.trim() !== "";
+  const ready = target.trim() !== "" && (wordlist.trim() !== "" || selectedLists.size > 0);
 
   const submit = () => {
     if (!ready) return;
     const parsedRate = Number.parseInt(rate, 10);
+    const parsedDepth = Number.parseInt(recurseDepth, 10);
     start.mutate(
       {
         target: target.trim(),
-        wordlist: wordlist.trim(),
+        wordlist: wordlist.trim() || undefined,
+        lists: selectedLists.size > 0 ? [...selectedLists] : undefined,
+        recurse_depth: Number.isFinite(parsedDepth) && parsedDepth > 0 ? parsedDepth : undefined,
+        observed_names: observedNames || undefined,
+        derivations: derivations || undefined,
+        variant_extensions: variantExtensions.trim() || undefined,
         extensions: extensions.trim() || undefined,
         match_codes: matchCodes.trim() || undefined,
         // Only sent when it parses to a positive number. Zero is ffuf's uncapped
@@ -235,7 +252,53 @@ function StartSweep({ tool }: { tool: DiscoveryToolState }): JSX.Element {
             <Input id={id} value={rate} inputMode="numeric" placeholder="uncapped" onChange={(event) => setRate(event.target.value)} />
           )}
         </Field>
+        <Field label="Subdirectory levels" hint="Burp's 'how many levels of subdirectory to look for'. Each level is a separate sweep per discovered directory, scope-checked before it runs.">
+          {(id) => (
+            <Select id={id} value={recurseDepth} onChange={(event) => setRecurseDepth(event.target.value)}>
+              <option value="0">No recursion (one flat sweep)</option>
+              <option value="1">1 level</option>
+              <option value="2">2 levels</option>
+              <option value="3">3 levels</option>
+            </Select>
+          )}
+        </Field>
+        <Field label="Variant extensions" hint="Burp's 'Test these variant extensions on discovered files': retest discovered files' stems, e.g. bak,old — the backup-copy check.">
+          {(id) => (
+            <Input id={id} value={variantExtensions} placeholder="bak,old" onChange={(event) => setVariantExtensions(event.target.value)} />
+          )}
+        </Field>
       </div>
+      <Field label="Built-in lists" hint="Burp's Filenames settings: the lists PortSwigger bundles with Burp itself, merged with any wordlist path above.">
+       {() => (
+        <div className="stack-tight">
+          {(runsQuery.data?.lists ?? []).map((list: DiscoveryListEntry) => (
+           <Checkbox
+            key={list.name}
+            checked={selectedLists.has(list.name)}
+            label={`${list.name} (${list.words.toLocaleString()} words)`}
+            onCheckedChange={(on) =>
+             setSelectedLists((current) => {
+              const next = new Set(current);
+              if (on) next.add(list.name);
+              else next.delete(list.name);
+              return next;
+             })
+            }
+           />
+          ))}
+          <Checkbox
+           checked={observedNames}
+           label="Names observed in use on target site — directory names and filename stems the capture store has seen on this host"
+           onCheckedChange={setObservedNames}
+          />
+          <Checkbox
+           checked={derivations}
+           label="Derivations based on discovered items — numeric suffix (+1, +2), _old, .bak and case variants of what each sweep finds"
+           onCheckedChange={setDerivations}
+          />
+        </div>
+       )}
+      </Field>
       <Toolbar>
         <Button onClick={submit} disabled={!ready || start.isPending}>
           <Play size={13} />
@@ -269,6 +332,17 @@ function RunCounts({ run }: { run: DiscoveryRun }): JSX.Element {
         detail={run.looked ? undefined : "an empty result here means nothing was checked, not that nothing is there"}
       />
       <Metric label="Outcome" value={run.outcome} detail={run.exit_code >= 0 ? `exit ${run.exit_code}` : undefined} />
+      {(run.levels ?? []).length > 0 ? (
+        <Metric
+          label="Recursion levels"
+          value={String(run.levels.length)}
+          detail={run.levels
+            .map((level) =>
+              `level ${level.level}: ${level.discovered} found, ${level.skipped} skipped (out of scope), ${level.runs} run(s)`,
+            )
+            .join("; ")}
+        />
+      ) : null}
     </div>
   );
 }
@@ -398,8 +472,11 @@ function DiscoveryRows({ rows }: { rows: Discovery[] }): JSX.Element {
 }
 
 function RunCard({ run }: { run: DiscoveryRun }): JSX.Element {
+  // ?? [] : the server has serialised by_status as [] since the first e2e sweep
+  // caught a running run crashing here on null (dgbi); the guard stays so an
+  // older server's wire shape cannot take the whole page down.
   const byStatus = useMemo(
-    () => run.counts.by_status.slice().sort((a, b) => a.status - b.status),
+    () => (run.counts.by_status ?? []).slice().sort((a, b) => a.status - b.status),
     [run.counts.by_status],
   );
 

@@ -20,7 +20,6 @@ package web
 // configured-but-unwanted endpoint is a surprise bill and an on-but-unconfigured switch is
 // a silent no-op.
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,13 +62,13 @@ func (s *Server) handleTriageSettings(w http.ResponseWriter, r *http.Request) {
 			Configured: cfg.APIKey != "",
 		})
 	case http.MethodPut:
-		if s.persist == nil {
-			http.Error(w, "persistence is not attached to this process: the triage endpoint cannot be stored", http.StatusServiceUnavailable)
+		var v triageSettingsView
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&v); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		var v triageSettingsView
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&v); err != nil {
-			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		if s.persist == nil {
+			http.Error(w, "persistence is not attached to this process: the triage endpoint cannot be stored", http.StatusServiceUnavailable)
 			return
 		}
 		// A PUT without a key keeps the stored one: the UI sends the shape it read from GET

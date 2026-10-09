@@ -235,7 +235,7 @@ func (s *Server) handleConfigImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var bundle configBundle
-	if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&bundle); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

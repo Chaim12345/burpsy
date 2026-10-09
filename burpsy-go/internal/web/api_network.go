@@ -148,6 +148,44 @@ var networkPatchFields = map[string]map[string]func(*sender.NetworkSettings, jso
 		"replay_cookies": func(n *sender.NetworkSettings, raw json.RawMessage) error {
 			return patchBool(raw, &n.Redirects.ReplayCookies)
 		},
+		// Burp's "Allowed redirect types" (burpsy-react-ui-z9zi), as one object under Burp's own key
+		// names. A partial object changes only the kinds it names: it is merged onto the types in force,
+		// which are Burp's defaults until something set them. An unknown member is refused by name, so
+		// a misspelled kind is not a silent no-op.
+		"types": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			types := n.Redirects.EffectiveTypes()
+			if err := strictUnmarshal(raw, &types); err != nil {
+				return fmt.Errorf("wants an object of the five redirect kinds (understand_3xx_status_code, "+
+					"understand_any_status_code_with_location_header, understand_refresh_header, "+
+					"understand_meta_refresh_tag, understand_javascript_driven), each true or false: %v", err)
+			}
+			n.Redirects.Types = &types
+			return nil
+		},
+	},
+	// Burp's project-wide protocol defaults (burpsy-react-ui-ry5n), under Burp's section and key names.
+	"http1": {
+		"enable_keep_alive": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			v := sender.HTTP1Settings{}
+			if n.HTTP1 != nil {
+				v = *n.HTTP1
+			}
+			if err := patchBool(raw, &v.EnableKeepAlive); err != nil {
+				return err
+			}
+			n.HTTP1 = &v
+			return nil
+		},
+	},
+	"http2": {
+		"enable_http2": func(n *sender.NetworkSettings, raw json.RawMessage) error {
+			v := sender.HTTP2Settings{EnableHTTP2: n.DefaultToHTTP2()}
+			if err := patchBool(raw, &v.EnableHTTP2); err != nil {
+				return err
+			}
+			n.HTTP2 = &v
+			return nil
+		},
 	},
 	"continue": {
 		"understand_100_continue": func(n *sender.NetworkSettings, raw json.RawMessage) error {
@@ -258,7 +296,14 @@ func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "No sender is attached to this server, so there are no network settings to manage", http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, http.StatusOK, networkSettingsView{Settings: s.sender.Network(), Accepted: networkAccepted()})
+		live := s.sender.Network()
+		// The redirect types in force are always on the wire, defaults included, so the panel shows
+		// the five boxes as the sender reads them rather than guessing what an absent object means.
+		types := live.Redirects.EffectiveTypes()
+		live.Redirects.Types = &types
+		live.HTTP1 = &sender.HTTP1Settings{EnableKeepAlive: live.KeepAliveHTTP1()}
+		live.HTTP2 = &sender.HTTP2Settings{EnableHTTP2: live.DefaultToHTTP2()}
+		writeJSON(w, http.StatusOK, networkSettingsView{Settings: live, Accepted: networkAccepted()})
 	case http.MethodPut:
 		if s.sender == nil {
 			http.Error(w, "No sender is attached to this server, so there are no network settings to manage", http.StatusServiceUnavailable)
@@ -273,7 +318,7 @@ func (s *Server) handleNetworkSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) applyNetworkSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&patch); err != nil {
 		http.Error(w, "Body must be a JSON object of network setting sections", http.StatusBadRequest)
 		return
 	}

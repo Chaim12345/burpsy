@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { scopeBadge } from "../lib/scope-state";
 import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen, BookMarked, Library } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeView, useUpdateScope, useUpdateScopeLibrary, type ScopeLibraryEntry } from "../lib/data.policy";
@@ -12,6 +13,8 @@ import {
  scopeRuleCount,
 } from "../lib/scope-library";
 import { describeScopeRule, parseScopePaste, type ScopeRuleArms } from "../lib/scope-paste";
+import { dropRulesFrom, dropRulesInclude } from "../lib/drop-scope";
+import type { DropScopeRule } from "../lib/types.policy";
 import {
  decodeHostArm,
  decodePathArm,
@@ -108,6 +111,8 @@ export function ScopePage(): JSX.Element {
  // page's rules, and the operator has to be able to see the table they are about to replace.
  const updateLibrary = useUpdateScopeLibrary();
  const [saving, setSaving] = useState(false);
+ // Clearing every rule widens the scope to every host, so it asks first (us6r.1), as Settings' copy does.
+ const [confirmClear, setConfirmClear] = useState(false);
  const [libraryName, setLibraryName] = useState("");
  const [browsing, setBrowsing] = useState(false);
  // The second step of a load or a delete: the entry the operator picked, held so the dialog can
@@ -183,6 +188,38 @@ export function ScopePage(): JSX.Element {
      toast.error(failure instanceof Error ? failure.message : "The scope library could not be deleted"),
    },
   );
+ };
+
+ // Burp's "Use suite scope" / "Use custom scope" for the drop switch (47ed). The custom rules are
+ // re-sent whole on every change, with each rule's arms as the server reported them.
+ const dropMode = data?.drop_scope?.mode ?? "suite";
+ const dropRules = dropRulesFrom(data?.drop_scope?.rules ?? []);
+ const [dropHost, setDropHost] = useState("");
+ const [dropKind, setDropKind] = useState<"include" | "exclude">("include");
+ const sendDropScope = (rules: DropScopeRule[], message: string) => {
+  if (!dropRulesInclude(rules)) {
+   toast.error("A custom drop scope needs at least one enabled include rule: without one it would admit every request and drop nothing.");
+   return false;
+  }
+  run({ action: "drop_scope", mode: "custom", drop_rules: rules }, message);
+  return true;
+ };
+ const chooseSuiteDropScope = () =>
+  run({ action: "drop_scope", mode: "suite" }, "Out-of-scope requests are judged by the suite scope");
+ const addDropRule = () => {
+  const host = dropHost.trim();
+  if (!host) return;
+  if (sendDropScope([...dropRules, { action: dropKind, pattern: host, enabled: true }], `Custom drop scope: ${dropKind} ${host}`)) {
+   setDropHost("");
+  }
+ };
+ const removeDropRule = (index: number) => {
+  const next = dropRules.filter((_, i) => i !== index);
+  if (next.length === 0 || !dropRulesInclude(next)) {
+   toast.error("That would leave the custom drop scope with no include rule. Add another include first, or switch to the suite scope.");
+   return;
+  }
+  sendDropScope(next, "Custom drop scope rule removed");
  };
 
  const setDropOutOfScope = (on: boolean) =>
@@ -525,19 +562,39 @@ export function ScopePage(): JSX.Element {
      description="What the proxy, scanner and crawler are allowed to touch. Changes persist immediately."
      actions={
       <>
-       {data ? <Badge tone={data.allow_all ? "warn" : "good"}>{data.allow_all ? "everything in scope" : "restricted"}</Badge> : null}
+       {data ? <Badge tone={scopeBadge(data).tone}>{scopeBadge(data).label}</Badge> : null}
        <Button
         variant="outline"
         size="small"
-        onClick={() => {
-         setSelected(null);
-         run({ action: "clear" }, "Scope cleared");
-        }}
+        onClick={() => setConfirmClear(true)}
         disabled={!data || data.empty}
        >
         <Trash2 size={13} />
         Clear scope
        </Button>
+       <Modal
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear every scope rule?"
+        description="With no include rules left, every host is in scope: the proxy records it, the scanner may audit it and Repeater may send to it."
+       >
+        <div className="page-actions">
+         <Button variant="outline" onClick={() => setConfirmClear(false)}>
+          Cancel
+         </Button>
+         <Button
+          variant="danger"
+          onClick={() => {
+           setSelected(null);
+           run({ action: "clear" }, "Scope cleared — every host is now in scope");
+           setConfirmClear(false);
+          }}
+         >
+          <Trash2 size={13} />
+          Clear scope
+         </Button>
+        </div>
+       </Modal>
        {/* Burp's "Save to library" and its counterpart, beside Clear scope because those three are
            the operations on the rule set as a whole. Save is disabled with nothing to save: a
            library holding no rules is an empty scope, which allows every host, and storing one
@@ -707,6 +764,80 @@ export function ScopePage(): JSX.Element {
       onCheckedChange={setDropOutOfScope}
      />
     </Toolbar>
+    <div role="radiogroup" aria-label="Which scope decides what is dropped" className="stack">
+     <label style={{ display: "flex", alignItems: "center", gap: "var(--s1)" }}>
+      <input type="radio" name="drop-scope-mode" checked={dropMode === "suite"} onChange={chooseSuiteDropScope} />
+      <span>
+       Use suite scope <span className="field-hint">— drop what the rules below leave out</span>
+      </span>
+     </label>
+     <label style={{ display: "flex", alignItems: "center", gap: "var(--s1)" }}>
+      <input
+       type="radio"
+       name="drop-scope-mode"
+       checked={dropMode === "custom"}
+       onChange={() => {
+        if (dropRules.length === 0) {
+         toast.info("Add an include rule for the custom scope below; it takes effect with the first one.");
+        } else {
+         run({ action: "drop_scope", mode: "custom" }, "Out-of-scope requests are judged by the custom scope");
+        }
+       }}
+      />
+      <span>
+       Use custom scope <span className="field-hint">— drop by a separate set of rules</span>
+      </span>
+     </label>
+    </div>
+    {dropMode === "suite" && dropRules.length > 0 && (
+     <p className="field-hint">The custom scope's rules are kept, not in force, until Use custom scope is chosen again.</p>
+    )}
+    {dropRules.length > 0 && (
+     <ul className="stack" aria-label="Custom drop scope rules" style={{ listStyle: "none", padding: 0 }}>
+      {dropRules.map((rule, index) => (
+       <li key={`${rule.action}-${rule.pattern}-${rule.path ?? ""}-${rule.port ?? ""}-${index}`} style={{ display: "flex", alignItems: "center", gap: "var(--s2)" }}>
+        <Badge>{rule.action === "include" ? "Include" : "Exclude"}</Badge>
+        <span className="mono">
+         {rule.protocol ? `${rule.protocol}://` : ""}
+         {rule.pattern}
+         {rule.port ? `:${rule.port}` : ""}
+         {rule.path ?? ""}
+        </span>
+        {rule.enabled === false && <span className="field-hint">disabled</span>}
+        <Button variant="outline" size="small" onClick={() => removeDropRule(index)} aria-label={`Remove custom drop rule ${rule.pattern}`}>
+         <Trash2 size={13} />
+        </Button>
+       </li>
+      ))}
+     </ul>
+    )}
+    <Toolbar>
+     <Field label="Custom scope rule" hint="Saving switches the drop gate to the custom scope">
+      {(id) => (
+       <Select id={id} value={dropKind} onChange={(event) => setDropKind(event.target.value as "include" | "exclude")} style={{ maxWidth: "var(--w-xs)" }}>
+        <option value="include">Include</option>
+        <option value="exclude">Exclude</option>
+       </Select>
+      )}
+     </Field>
+     <Field label="Host" hint="Same patterns as the suite scope">
+      {(id) => (
+       <Input
+        id={id}
+        value={dropHost}
+        placeholder="*.client.example"
+        onChange={(event) => setDropHost(event.target.value)}
+        onKeyDown={(event) => {
+         if (event.key === "Enter") addDropRule();
+        }}
+       />
+      )}
+     </Field>
+     <Button variant="outline" onClick={addDropRule} disabled={!dropHost.trim()}>
+      <Plus size={14} />
+      Add to custom scope
+     </Button>
+    </Toolbar>
    </Card>
 
    <Card className="card-fill">
@@ -726,8 +857,15 @@ export function ScopePage(): JSX.Element {
       </>
      }
     />
+    {data && data.rules.length === 0 ? (
+     <p className="notice notice-warn" role="note">
+      No scope rules: every host is in scope, so the proxy records it, the scanner may audit it and Repeater may
+      send to it. Add an include rule to restrict the scope.
+     </p>
+    ) : null}
     <VirtualTable
      ariaLabel="Scope rules"
+     docTopic="scope"
      data={rows}
      columns={columns}
      getRowId={rowKey}

@@ -371,7 +371,7 @@ func (s *Server) handleScannerAuditItemAction(w http.ResponseWriter, r *http.Req
 	// The body is optional, exactly as it is on /api/audit/{id}: absent means the server default, and
 	// only a present-but-malformed body is an error.
 	var req scannerAuditReq
-	if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil && derr != io.EOF {
+	if derr := requestJSON(w, r, nil).Decode(&req); derr != nil && derr != io.EOF {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

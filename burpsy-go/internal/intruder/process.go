@@ -456,7 +456,19 @@ func URLEncodeSet(ps *PayloadSet, chars string) {
 		}
 		return out.Bytes()
 	}
+	// The pre-encoding items are kept for Grep - Payloads' "Match against pre-URL-encoded payloads"
+	// (7qc3), and only once an item actually changes: the slice is allocated at the first changed
+	// item, by which point every earlier item was unchanged, so copying Items then copies originals.
+	// Strings share their bytes, so the cost is one slice of headers, and nothing for a set the
+	// encoding left alone.
+	var unencoded []string
 	for i, item := range ps.Items {
-		ps.Items[i] = string(encode([]byte(item)))
+		enc := string(encode([]byte(item)))
+		if enc != item && unencoded == nil {
+			unencoded = make([]string, len(ps.Items))
+			copy(unencoded, ps.Items)
+		}
+		ps.Items[i] = enc
 	}
+	ps.Unencoded = unencoded
 }

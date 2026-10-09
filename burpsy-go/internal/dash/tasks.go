@@ -70,6 +70,10 @@ const (
 	// KindPassiveBranch is a passive re-scan of one site-map branch's already-captured exchanges. It
 	// sends nothing: unlike KindAudit it re-reads responses the store already holds.
 	KindPassiveBranch Kind = "passive-branch"
+	// KindHiddenInputs is one hidden-input guessing run against one captured exchange — Burp's Param
+	// Miner "Guess params" (burpsy-react-ui-wlz8). It sends traffic, like KindAudit, but it is not an
+	// audit: no check set is dispatched, and its unit of work is a guessed name, not a check.
+	KindHiddenInputs Kind = "hidden-inputs"
 )
 
 // TaskState is where a task ended up, or that it has not ended.
@@ -785,4 +789,19 @@ func (h *Handle) Fail(err error) {
 		why = err.Error()
 	}
 	h.finish(TaskFailed, Breakdown{Errored: 1}, why)
+}
+
+// FailWith is Fail for work that had already produced counts when it broke (burpsy-react-ui-wlz8): a
+// hidden-input run that filed findings and was then refused by the scope must not report found 0,
+// and the names it never sent must stay in Gated. A result that would read as complete gets one
+// Errored unit, because a failed run is never the whole answer.
+func (h *Handle) FailWith(result Breakdown, err error) {
+	why := "failed"
+	if err != nil {
+		why = err.Error()
+	}
+	if result.Complete() {
+		result.Errored++
+	}
+	h.finish(TaskFailed, result, why)
 }

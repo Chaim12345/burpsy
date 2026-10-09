@@ -468,7 +468,7 @@ func (s *Server) handleSequencerCaptureStart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req sequencerCaptureReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

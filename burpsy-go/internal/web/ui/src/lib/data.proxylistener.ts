@@ -30,6 +30,8 @@ export interface ProxyListenerRow {
   redirect_port: number;
   force_tls: boolean;
   invisible: boolean | null;
+  /** "Support HTTP/2" (34rd): null and true offer h2 to the client, false holds it to HTTP/1.1. */
+  support_http2?: boolean | null;
   removable: boolean;
 }
 
@@ -46,6 +48,8 @@ export interface ProxyListenerBody {
   redirect_port: number;
   force_tls: boolean;
   invisible: boolean | null;
+  /** Sent only as false; absent keeps the listener's HTTP/2 support on. */
+  support_http2?: boolean;
 }
 
 export function useProxyListener(): ReturnType<typeof useQuery<ProxyListenerState>> {

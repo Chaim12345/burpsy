@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -320,8 +321,17 @@ type Extraction struct {
 	// Added after Pattern existed, so an extraction saved before this field did loads with it empty and
 	// goes on being a regex extraction.
 	JSONPath string `json:"json_path,omitempty"`
-	re       *regexp.Regexp
-	path     jsonPath
+	// Prefix, Suffix and URLEncoded are Burp's "Define Custom Parameter" fields for a macro item's
+	// custom parameter (burpsy-react-ui-355h): "Parameter value prefix (optional)", "Parameter
+	// value suffix (optional)" and "Extracted value is URL-encoded" (url_encoded). The value a later
+	// step receives is prefix + extracted + suffix. URLEncoded is a pointer so a rule saved before it
+	// existed keeps substituting the value literally: true says the value is already URL-encoded
+	// (literal, as before); false says it is raw, so it is percent-encoded where it is substituted.
+	Prefix     string `json:"prefix,omitempty"`
+	Suffix     string `json:"suffix,omitempty"`
+	URLEncoded *bool  `json:"url_encoded,omitempty"`
+	re         *regexp.Regexp
+	path       jsonPath
 }
 
 func NewExtraction(name, from, pattern string, group int) (*Extraction, error) {
@@ -505,6 +515,19 @@ func (e *Extraction) Run(hdrs map[string]string, body []byte) string {
 
 // RunResult runs the extraction and says exactly what happened.
 func (e *Extraction) RunResult(hdrs map[string]string, body []byte) ExtractResult {
+	out := e.runRaw(hdrs, body)
+	if e != nil && out.Outcome.Resolved() && out.Value != "" {
+		value := e.Prefix + out.Value + e.Suffix
+		if e.URLEncoded != nil && !*e.URLEncoded {
+			value = url.QueryEscape(value)
+		}
+		out.Value = value
+	}
+	return out
+}
+
+// runRaw is RunResult before the custom-parameter prefix, suffix and encoding are applied.
+func (e *Extraction) runRaw(hdrs map[string]string, body []byte) ExtractResult {
 	if e == nil {
 		return ExtractResult{Outcome: ExtractInert, Detail: "there is no extraction to run"}
 	}
@@ -925,6 +948,34 @@ func pathMatches(cookiePath, requestPath string) bool {
 // set writes one cookie, replacing any previous value for the name. Same lock discipline as
 // absorb: the jar's own mutex, because a concurrent response absorb and an operator edit race
 // on the same map.
+// updateSent sets the value of every cookie named name that this jar would send with a request to
+// (host, port, tls, path), by cookieHeaderPairs' matching rules. It reports whether any matched.
+func (j *cookieJar) updateSent(host string, port uint16, tls bool, path, name, value string) bool {
+	j.Lock()
+	defer j.Unlock()
+	now := time.Now()
+	found := false
+	for k, c := range j.m {
+		if k[strings.LastIndex(k, "\x01")+1:] != name {
+			continue
+		}
+		if c.Domain == "" {
+			if !strings.EqualFold(strings.TrimSpace(host), j.host) || port != j.port || tls != j.tls {
+				continue
+			}
+		} else if !domainMatches(c.Domain, host) {
+			continue
+		}
+		if !pathMatches(c.Path, path) || (!c.Expires.IsZero() && !now.Before(c.Expires)) || (c.Secure && !tls) {
+			continue
+		}
+		c.Value = value
+		j.m[k] = c
+		found = true
+	}
+	return found
+}
+
 func (j *cookieJar) set(name, value string) {
 	j.Lock()
 	j.m[jarKey("", "/", name)] = jarCookie{Value: value, Path: "/"}
@@ -1151,6 +1202,36 @@ func (cjm *CookieJarManager) AbsorbSetCookie(host string, port uint16, tls bool,
 // writer-side value here is exactly what AbsorbSetCookie would have stored from a response's
 // Set-Cookie: name -> value, attributes deliberately dropped (the same disclosed
 // simplification — see the attribute note on the jar).
+// AbsorbRequestCookie records one cookie the browser sent on a request to (host, port, tls, path)
+// (sm1k). Every jar cookie that would be sent with this request under this name takes the browser's
+// value and keeps its attributes. When none would be, the cookie is added to the authority's own jar,
+// host-only at Path=/.
+func (cjm *CookieJarManager) AbsorbRequestCookie(host string, port uint16, tls bool, path, name, value string) {
+	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
+	cjm.mu.Lock()
+	jar := cjm.jars[key]
+	if jar == nil {
+		jar = newCookieJar(host, port, tls)
+		cjm.jars[key] = jar
+	}
+	all := make([]*cookieJar, 0, len(cjm.jars))
+	for _, j := range cjm.jars {
+		if j != nil {
+			all = append(all, j)
+		}
+	}
+	cjm.mu.Unlock()
+	updated := false
+	for _, j := range all {
+		if j.updateSent(host, port, tls, path, name, value) {
+			updated = true
+		}
+	}
+	if !updated {
+		jar.set(name, value)
+	}
+}
+
 func (cjm *CookieJarManager) SetCookie(host string, port uint16, tls bool, name, value string) {
 	key := fmt.Sprintf("%s:%d_%v", host, port, tls)
 	cjm.mu.Lock()

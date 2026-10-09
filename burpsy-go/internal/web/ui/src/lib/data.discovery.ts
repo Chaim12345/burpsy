@@ -73,6 +73,26 @@ export interface DiscoveryRun {
   discoveries: Discovery[];
   counts: DiscoveryCounts;
   summary: string;
+  /** One entry per recursion depth that ran (dgbi). Empty — never null — for a flat run. */
+  levels: DiscoveryLevel[];
+  /** Echoes of what the session was configured to do, so a run reads without its POST. */
+  recurse_depth: number;
+  variant_extensions?: string;
+}
+
+/** One recursion depth's honest tally (dgbi): found, dropped, skipped, and how many runs it took. */
+export interface DiscoveryLevel {
+  level: number;
+  discovered: number;
+  out_of_scope: number;
+  skipped: number;
+  runs: number;
+}
+
+/** One built-in list the Filenames settings can name, with the words it would add. */
+export interface DiscoveryListEntry {
+  name: string;
+  words: number;
 }
 
 /**
@@ -93,17 +113,30 @@ export interface DiscoveryToolState {
 export interface DiscoveryIndex {
   tool: DiscoveryToolState;
   runs: DiscoveryRun[];
+  /** The built-in list inventory (dgbi), for the Filenames checkboxes. */
+  lists: DiscoveryListEntry[];
   /** How many runs the server retains; older ones are gone, not hidden. */
   retained: number;
 }
 
 export interface StartDiscoveryRequest {
   target: string;
-  wordlist: string;
+  /** Optional now that the built-in lists exist (dgbi): either a path or at least one list. */
+  wordlist?: string;
   extensions?: string;
   match_codes?: string;
   threads?: number;
   rate?: number;
+  /** Built-in list names, as the server's inventory spells them. */
+  lists?: string[];
+  /** How many levels of subdirectory to sweep inside discovered directories. */
+  recurse_depth?: number;
+  /** Add the names observed in use on the target site to the wordlist. */
+  observed_names?: boolean;
+  /** Run the derivation pass over each directory's discoveries. */
+  derivations?: boolean;
+  /** Retest discovered files' stems with these extensions (the backup check). */
+  variant_extensions?: string;
 }
 
 export interface StartDiscoveryResponse {

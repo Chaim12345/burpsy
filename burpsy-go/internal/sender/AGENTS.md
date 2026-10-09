@@ -27,6 +27,8 @@ never reached on refusal.
 | `protocol.go` | ALPN/protocol negotiation, downgrade and rewrite reporting, and the per-`Sender` `ProtocolCache`. `planH2` decides whether raw HTTP/1 bytes can be carried as HTTP/2 |
 | `pipeline.go` | `SendPipelined`, `SendKeepAlive`, `TimedRead` — HTTP/1.1-only single-socket sends for request-smuggling / desync probes. `dialOne` offers only HTTP/1.1 on TLS so h2 cannot silently turn a probe into a no-op |
 | `h2.go` | `h2Request` — minimal h2 request extracted from raw bytes and rendered for a single h2 exchange |
+| `sendopts.go` | `SendOptions`, `WithSendOptions` — per-send overrides carried on the context. `ResponseTimeout` replaces the network read bound for one send, clamped to an earlier context deadline; `setDeadline` reads it, so `NetworkSettings` is never mutated per send (mmca) |
+| `connpool.go` | `ConnPool`, `AuthorisedSender.SendReusing` — HTTP/1 connection reuse for a stream of independent sends (Intruder's "HTTP/1 connection reuse", xhqr). Live connections bounded at the pool's max; a connection is reused only after a cleanly delimited, non-`Connection: close`, HTTP/1.1, final response; h2 is never pooled |
 | `h2program.go` | `SendFrameProgram` — authorises and sends an `http2.H2FrameProgram`, gating per-request or host-only depending on what the program can be decided to address |
 
 ## For AI Agents

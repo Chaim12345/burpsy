@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"io"
 	"net/http"
 	"net/url"
@@ -31,6 +32,9 @@ type RedirectHop struct {
 	// Reason names why an unfollowed hop was not followed: the policy that filtered it, the scope that
 	// refused it, the budget that ran out, or the Location that could not be read. Empty when Followed.
 	Reason string `json:"reason,omitempty"`
+	// Protocol is what carried a followed hop ("HTTP/1.1" or "HTTP/2"), empty when it was not sent —
+	// the fact an operator enforcing a protocol on cross-domain hops (adkx) has to be able to check.
+	Protocol string `json:"protocol,omitempty"`
 
 	// RequestRaw and ResponseRaw capture what this hop put on the wire and what came back, set when the
 	// hop was followed and nil when it was not — a hop that was never sent has no bytes, and inventing
@@ -149,14 +153,14 @@ func (a *AuthorisedSender) FollowRedirectsAfterPolicy(
 	// Answered before the request bytes are parsed, because this runs on every send a caller makes and
 	// the overwhelming majority are not redirects. redirectLocation is the one place that decides what
 	// counts as one, so short-circuiting here reuses that decision rather than restating it.
-	if _, isRedirect := redirectLocation(resp); !isRedirect {
+	if _, isRedirect := redirectLocation(resp, policy.EffectiveTypes()); !isRedirect {
 		result.Complete = true
 		return result, nil
 	}
 
 	req, rerr := requestFromRaw(raw, a)
 	if rerr != nil {
-		if location, isRedirect := redirectLocation(resp); isRedirect {
+		if location, isRedirect := redirectLocation(resp, policy.EffectiveTypes()); isRedirect {
 			result.Hops = append(result.Hops, RedirectHop{
 				From:     formatAuthority(a.host, a.port, a.tls),
 				Status:   resp.StatusCode,
@@ -203,7 +207,7 @@ func (a *AuthorisedSender) followChain(
 
 	for {
 		from := absoluteURL(current, target)
-		location, isRedirect := redirectLocation(resp)
+		location, isRedirect := redirectLocation(resp, policy.EffectiveTypes())
 		if !isRedirect {
 			result.Complete = true
 			return
@@ -268,7 +272,7 @@ func (a *AuthorisedSender) followChain(
 		// the hop is authorised on the same terms as a first request. Reusing `current` would not work
 		// and must not be made to — a request naming another authority is exactly what makes a
 		// cross-authority hop deliberate, and the render below is where that naming becomes bytes.
-		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS)
+		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS).WithPace(a.pace)
 
 		// The hop's request is rendered exactly once: these bytes are what the scope gate reads and
 		// what the transport writes, so the gate's decision and the wire cannot disagree. They are also
@@ -316,7 +320,14 @@ func (a *AuthorisedSender) followChain(
 		// transparent gzip — and the bytes that come back are the bytes that arrived, which is the whole
 		// point of following. The gate is unchanged: SendAs runs AuthoriseRaw on exactly these rendered
 		// bytes for the authority it is bound to.
-		hopRes, err := hopSender.SendAs(ctx, rendered, ProtocolPreferenceAuto)
+		// Each hop negotiates as normal unless the caller enforces its protocol on a hop to another
+		// host (adkx) — "cross-domain" meaning a different host name than the request that started
+		// the chain, which is the case Burp's setting names.
+		hopPref := ProtocolPreferenceAuto
+		if !strings.EqualFold(nextHost, a.host) {
+			hopPref = policy.CrossDomainProtocol
+		}
+		hopRes, err := hopSender.SendAs(ctx, rendered, hopPref)
 		if err != nil {
 			// The hop cleared every gate and then failed at the transport. That is not a refusal and not
 			// a completed chain: Final stays the 30x that named it, and the reason says what happened.
@@ -325,6 +336,7 @@ func (a *AuthorisedSender) followChain(
 			return
 		}
 		hop.Followed = true
+		hop.Protocol = hopRes.Outcome.Protocol.VersionToken()
 		hop.RequestRaw = rendered
 		hop.ResponseRaw = hopRes.Raw
 		parsed, perr := responseFromRaw(hopRes.Raw)
@@ -364,7 +376,16 @@ func (a *AuthorisedSender) followChain(
 // request is sent. Headers are flattened to the map sender.Response carries; a repeated header keeps
 // the first value, matching redirectLocation's own "first Location wins" reading.
 func responseFromRaw(raw []byte) (*Response, error) {
-	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+	// An h2 response is stored in the HTTP/1-shaped rendering, whose status line says "HTTP/2" —
+	// which net/http's parser refuses as a malformed version ("HTTP/2.0" is the form it reads). Read
+	// through a copy with that one token widened; Raw below stays the bytes as rendered. Without this
+	// every h2 send reported "the response cannot be read well enough to decide a redirect from", and
+	// a chain stopped at its first h2 hop (found by adkx's cross-domain tests).
+	parseable := raw
+	if bytes.HasPrefix(raw, []byte("HTTP/2 ")) {
+		parseable = append([]byte("HTTP/2.0 "), raw[len("HTTP/2 "):]...)
+	}
+	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(parseable)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -446,19 +467,51 @@ func filterHop(mode RedirectMode, from *AuthorisedSender, host string, port uint
 // server has several representations and is not nominating one, so picking its Location — which is
 // optional there and merely "preferred" — would be this tool choosing a resource the operator did not.
 // A 304 Not Modified is not a redirect at all despite living in the same century of status codes.
-func redirectLocation(resp *Response) (string, bool) {
+//
+// Which responses count beyond the 30x is Burp's "Allowed redirect types" (types, z9zi): any status
+// with a Location header, the Refresh header, and the meta refresh tag in an HTML body. A Refresh or
+// meta-refresh hop is followed as a bodiless GET, as a browser navigates it.
+func redirectLocation(resp *Response, types RedirectTypes) (string, bool) {
+	header := func(want string) (string, bool) {
+		for name, value := range resp.Headers {
+			if strings.EqualFold(name, want) {
+				return strings.TrimSpace(value), true
+			}
+		}
+		return "", false
+	}
 	switch resp.StatusCode {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
 		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-	default:
-		return "", false
-	}
-	for name, value := range resp.Headers {
-		if strings.EqualFold(name, "Location") {
-			return strings.TrimSpace(value), true
+		if types.Understand3xx {
+			loc, _ := header("Location")
+			return loc, true
 		}
 	}
-	return "", true
+	// The other kinds name their target or they are not redirects at all: a 300 or a 304 is never
+	// one, and a response without the header or tag is just a response.
+	if resp.StatusCode != http.StatusMultipleChoices && resp.StatusCode != http.StatusNotModified {
+		if types.UnderstandAnyLocation {
+			if loc, ok := header("Location"); ok && loc != "" {
+				return loc, true
+			}
+		}
+		if types.UnderstandRefreshHeader {
+			if v, ok := header("Refresh"); ok {
+				if target, ok := httputil.RefreshTarget(v); ok {
+					return target, true
+				}
+			}
+		}
+		if types.UnderstandMetaRefresh {
+			if ct, _ := header("Content-Type"); strings.Contains(strings.ToLower(ct), "html") {
+				if target, ok := httputil.MetaRefreshTarget(resp.Body); ok {
+					return target, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // redirectRequest builds the next hop's request from the one that produced the 30x.

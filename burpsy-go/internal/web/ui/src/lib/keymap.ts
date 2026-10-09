@@ -15,6 +15,8 @@
  * block storage all throw on access, and a hotkey table is not worth a blank page.
  */
 import { useEffect, useState } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
+import { hasCommand, runCommand } from "./commands";
 import { KEYMAP_STORAGE_KEY, chordFor, type Chord, type Keymap } from "./shortcuts";
 
 let current: Keymap = load();
@@ -124,6 +126,27 @@ export function chordFromEvent(event: KeyboardEvent | React.KeyboardEvent): stri
     parts.push(key.length === 1 ? key.toLowerCase() : key.toLowerCase());
   }
   return parts.join("+");
+}
+
+/**
+ * Bind an action's chord to whichever component registered a handler for it (lib/commands.ts).
+ *
+ * Installed once, in the shell, for every catalogue action; the pages only register handlers.
+ * The key is claimed (preventDefault) only when a handler exists, so a chord whose action is not
+ * available here — Close tab outside Repeater — still reaches the browser instead of dying.
+ */
+export function useCommandChord(id: string): void {
+  const chord = useChord(id);
+  useHotkeys(
+    chord,
+    (event) => {
+      if (!hasCommand(id)) return;
+      event.preventDefault();
+      runCommand(id);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [chord, id],
+  );
 }
 
 /** A stable no-op, for binding an action whose handler is not on this page. */

@@ -105,6 +105,12 @@ export const SETTINGS_SECTIONS = [
     keywords: "llm ai triage second look endpoint model openai",
   },
   {
+    id: "skills",
+    title: "Skills",
+    summary: "The skill library loaded with -skills DIR: packaged prompt techniques an MCP client invokes, the tools each one calls, and which this project turns off.",
+    keywords: "skills prompts mcp agent techniques library disable",
+  },
+  {
     id: "browser-engine",
     title: "Browser engine",
     summary: "Which headless browser runs the DOM-based checks. Changing it takes a restart.",
@@ -133,6 +139,18 @@ export const SETTINGS_SECTIONS = [
     title: "Client TLS certificates",
     summary: "PKCS#12 identities presented when a host asks for a client certificate.",
     keywords: "p12 pfx mutual mtls smartcard",
+  },
+  {
+    id: "server-certificates",
+    title: "Server TLS certificates",
+    summary: "Information only: every X.509 certificate a target server presented to this tool.",
+    keywords: "x509 tls ssl certificate chain fingerprint sha256 issuer subject san",
+  },
+  {
+    id: "logging",
+    title: "Logging",
+    summary: "Per-tool request and response log files, written as traffic happens.",
+    keywords: "log file disk requests responses proxy scanner repeater intruder all tools",
   },
   {
     id: "appearance",

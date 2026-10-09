@@ -451,3 +451,33 @@ func sendThroughProxy(t *testing.T, proxyAddr, host string, port uint16, authori
 	}
 	return strings.TrimSpace(line)
 }
+
+// Burp's "Prompt for credentials on platform authentication failure" (burpsy-react-ui-3xnt): with the
+// prompt on, a 401 challenge from a host no rule covers, seen on browser traffic through the proxy, is
+// recorded for the console to ask about. With it off, nothing is recorded.
+func TestAProxiedPlatformAuthFailureIsRecordedForThePrompt(t *testing.T) {
+	origin := startAuthOrigin(t, 5)
+	host, port := origin.hostPort(t)
+
+	creds := netauth.NewCredentials()
+	store := core.NewTrafficStore()
+	srv := NewServer(NewProxyConfig(store).
+		WithScope(core.NewScopeAllowEverything()).
+		WithPlatformAuth(creds).
+		WithLogger(zap.NewNop()).
+		WithScanner(scanner.NewPassiveScanner(store, zap.NewNop())))
+	proxyAddr := startProxyListener(t, srv)
+
+	sendThroughProxy(t, proxyAddr, host, port, "")
+	if n := len(creds.Failures()); n != 0 {
+		t.Fatalf("with the prompt off %d failure(s) were recorded", n)
+	}
+
+	creds.SetPromptOnFailure(true)
+	sendThroughProxy(t, proxyAddr, host, port, "")
+	failures := creds.Failures()
+	if len(failures) != 1 || failures[0].Host != host || failures[0].Scheme != "Digest" ||
+		failures[0].Realm != "test" || failures[0].Reason != netauth.FailureNoCredential {
+		t.Fatalf("failures = %+v, want one Digest no_credential failure for %s in realm test", failures, host)
+	}
+}

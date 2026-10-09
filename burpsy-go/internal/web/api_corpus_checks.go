@@ -32,6 +32,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -59,6 +60,10 @@ type corpusCheckView struct {
 	Severity    string `json:"severity,omitempty"`
 	Author      string `json:"author,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Origin is "console" for a check imported or written in the console (kbu1) — the ones Delete and
+	// the editor's Save apply to — and "file" for one loaded from the --bchecks directory, named by File.
+	Origin string `json:"origin"`
+	File   string `json:"file,omitempty"`
 }
 
 // handleCorpusChecks serves GET /api/scanner/checks: the loaded corpus as rows, both buckets,
@@ -93,6 +98,26 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 		disabled = s.scanner.DisabledChecks()
 	}
 
+	origins := map[string]string{}
+	if s.passiveScanner != nil {
+		for _, e := range s.passiveScanner.Entries() {
+			if _, seen := origins[e.Name]; !seen {
+				origins[e.Name] = e.Origin
+			}
+		}
+	}
+	setOrigin := func(row *corpusCheckView) {
+		o, ok := origins[row.Name]
+		switch {
+		case !ok:
+			row.Origin = "file"
+		case o == scanner.OriginConsole:
+			row.Origin = "console"
+		default:
+			row.Origin, row.File = "file", filepath.Base(o)
+		}
+	}
+
 	rows := make([]corpusCheckView, 0, len(corpus))
 	for _, c := range corpus {
 		row := corpusCheckView{
@@ -107,6 +132,7 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 		if cov, ok := coverageByName[c.Name]; ok {
 			row.RunCount = cov.Ran
 		}
+		setOrigin(&row)
 		rows = append(rows, row)
 	}
 
@@ -117,12 +143,14 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 	if s.passiveScanner != nil {
 		rep := s.passiveScanner.Coverage()
 		for _, c := range rep.Checks {
-			rows = append(rows, corpusCheckView{
+			row := corpusCheckView{
 				Name:     c.Name,
 				Passive:  true,
 				Loaded:   true,
 				RunCount: c.Ran,
-			})
+			}
+			setOrigin(&row)
+			rows = append(rows, row)
 		}
 	}
 
@@ -133,6 +161,12 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 		"active_count":  len(corpus),
 		"checks":        rows,
 	})
+}
+
+// corpusCheckEnableReq is the request body handleCorpusCheckEnable decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type corpusCheckEnableReq struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
 }
 
 // handleCorpusCheckEnable serves PUT /api/scanner/checks/enable: the per-row switch the audit
@@ -148,17 +182,14 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "a check is enabled or disabled with PUT", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.scanner == nil {
-		http.Error(w, "no corpus is loaded; start with --bchecks DIR", http.StatusNotFound)
+	var body corpusCheckEnableReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
+		http.Error(w, "the body must be {\"name\": ..., \"enabled\": bool}", http.StatusBadRequest)
 		return
 	}
 
-	var body struct {
-		Name    string `json:"name"`
-		Enabled bool   `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "the body must be {\"name\": ..., \"enabled\": bool}", http.StatusBadRequest)
+	if s.scanner == nil {
+		http.Error(w, "no corpus is loaded; start with --bchecks DIR", http.StatusNotFound)
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
