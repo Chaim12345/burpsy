@@ -44,9 +44,11 @@ unless --allow-partial); 2 usage or environment error.
 import argparse
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 
 JSONL = ".beads/issues.jsonl"
 # The key order bd's exporter uses, derived from every record in the file (no record disagrees).
@@ -159,7 +161,16 @@ def main():
     lines = raw.split(b"\n")[:-1]
     index = {}
     for n, line in enumerate(lines):
-        index[json.loads(line)["id"]] = n
+        try:
+            rec = json.loads(line)
+            bid = rec["id"] if isinstance(rec, dict) else None
+        except ValueError as e:
+            print(f"{a.jsonl}:{n + 1}: not JSON ({e}); refusing to edit the file (run scripts/beads-lint.py)", file=sys.stderr)
+            return 2
+        if not isinstance(bid, str) or bid in index:
+            print(f"{a.jsonl}:{n + 1}: missing or duplicate id; refusing to edit the file (run scripts/beads-lint.py)", file=sys.stderr)
+            return 2
+        index[bid] = n
 
     def resolve(token):
         if token in index:
@@ -235,8 +246,21 @@ def main():
         print("not written: resolve the problems above, or pass --allow-partial", file=sys.stderr)
         return 1
     out = [changed.get(n, line) for n, line in enumerate(lines)]
-    with open(a.jsonl, "wb") as f:
-        f.write(b"\n".join(out) + b"\n")
+    # Write a sibling temp file and rename it over the original: an interrupted write leaves the old
+    # file intact, never a truncated tracker (a zero-length export once wiped it — see .gitattributes).
+    d = os.path.dirname(os.path.abspath(a.jsonl))
+    fd, tmp = tempfile.mkstemp(prefix=".issues.", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(b"\n".join(out) + b"\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, os.stat(a.jsonl).st_mode & 0o777)
+        os.replace(tmp, a.jsonl)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     print(f"wrote {a.jsonl}: {len(changed)} line(s) rewritten in place, {len(lines) - len(changed)} untouched")
     return 1 if problems else 0
 

@@ -49,7 +49,11 @@ git rev-parse --verify --quiet "$head^{commit}" >/dev/null || { echo "$0: unknow
 
 mod=$(go list -m)
 # Every package that exists in the checked-out tree, as a directory relative to burpsy-go/.
-mapfile -t pkgdirs < <(go list -f '{{.Dir}}' ./... | sed "s#^$gotree/\{0,1\}##; s#^\$#.#")
+# Command substitutions, not process substitutions, throughout: under set -e a failing `go list`
+# or `git diff` then stops the script, instead of reading as "no packages" / "no changes" and
+# printing an empty — and wrongly reassuring — test set.
+dirs=$(go list -f '{{.Dir}}' ./...)
+mapfile -t pkgdirs <<<"$(sed "s#^$gotree/\{0,1\}##; s#^\$#.#" <<<"$dirs")"
 declare -A ispkg=()
 for d in "${pkgdirs[@]}"; do ispkg["$d"]=1; done
 
@@ -63,7 +67,8 @@ reads() { readers["$mod/$1"]=1; }
 all=0
 
 # Repo-root-relative paths (deleted files included: a deletion can break the package it left).
-mapfile -t files < <(git -C "$repo" diff --name-only --no-renames "$base...$head")
+changed=$(git -C "$repo" diff --name-only --no-renames "$base...$head")
+mapfile -t files <<<"$changed"
 
 for f in "${files[@]}"; do
   [ -n "$f" ] || continue
@@ -114,7 +119,8 @@ fi
 
 # Keep only packages that exist now (a deleted package has nothing left to test).
 declare -A exists=()
-while read -r p; do exists["$p"]=1; done < <(go list ./...)
+all_pkgs=$(go list ./...)
+while read -r p; do exists["$p"]=1; done <<<"$all_pkgs"
 for p in "${!want[@]}"; do
   if [ -z "${exists[$p]:-}" ]; then
     echo "note: $p no longer exists — dropped" >&2

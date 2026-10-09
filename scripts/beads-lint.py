@@ -76,6 +76,17 @@ def parse(raw, where, errors):
         if rec["id"] in beads:
             errors.append(f"{where}:{n}: duplicate id {rec['id']}")
             continue
+        # The fields the rules read must have the types the rules assume. A wrong type is reported
+        # against the bead and the field is set aside, so one bad record yields an error line, not a
+        # traceback that hides every other result.
+        for field, ok in (("status", str), ("close_reason", str), ("issue_type", str), ("dependencies", list)):
+            if field in rec and rec[field] is not None and not isinstance(rec[field], ok):
+                errors.append(f"{where}:{n}: {rec['id']}: field {field!r} is {type(rec[field]).__name__}, want {ok.__name__}")
+                rec[field] = None
+        deps = rec.get("dependencies") or []
+        if any(not isinstance(d, dict) for d in deps):
+            errors.append(f"{where}:{n}: {rec['id']}: a dependency entry is not an object")
+            rec["dependencies"] = [d for d in deps if isinstance(d, dict)]
         beads[rec["id"]] = rec
     return beads
 
@@ -131,7 +142,7 @@ def main():
     children = {}
     for rec in beads.values():
         for d in rec.get("dependencies") or []:
-            if d.get("type") == "parent-child" and d.get("depends_on_id"):
+            if d.get("type") == "parent-child" and isinstance(d.get("depends_on_id"), str):
                 children.setdefault(d["depends_on_id"], []).append(rec)
 
     newly = fixed = nofix = epics = 0

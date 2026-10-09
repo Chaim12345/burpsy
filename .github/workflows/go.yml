@@ -262,7 +262,9 @@ jobs:
       # Pinned exactly: dist/app.js is byte-reproducible only with the same bun (two rebuilds with
       # 1.4.2 were identical; another version emits different bytes and the freshness step below
       # would fail every PR). scripts/dev-setup.sh warns a developer whose bun differs.
-      - uses: oven-sh/setup-bun@v2
+      # The action itself is pinned by commit, not tag: it downloads and runs the toolchain that
+      # builds the shipped bundle, and a tag can be moved. 0c5077e5 is v2.2.0 (= v2 on 2026-10-09).
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
 
