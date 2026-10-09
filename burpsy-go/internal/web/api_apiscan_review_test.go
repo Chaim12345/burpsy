@@ -174,3 +174,29 @@ func TestAPostmanPathOverrideIsRefused(t *testing.T) {
 		t.Errorf("a Postman query override = %d %s; want 200 with x=2 in the path", rec.Code, rec.Body.String())
 	}
 }
+
+// The auth method replaces a header of the same name the document declares, rather than going out
+// beside it: two Authorization headers on one request is not what either party asked for (vuw7).
+func TestTheAuthMethodReplacesADeclaredHeaderOfTheSameName(t *testing.T) {
+	var mu sync.Mutex
+	var seen [][]string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Values("Authorization"))
+		mu.Unlock()
+		w.Write([]byte("ok"))
+	}))
+	t.Cleanup(target.Close)
+	s := newTestServer()
+	s.scope.AddInclude("127.0.0.1")
+	doc := fmt.Sprintf(`{"openapi":"3.0.3","info":{"title":"A","version":"1"},"servers":[{"url":%q}],"paths":{"/me":{"get":{`+
+		`"parameters":[{"name":"Authorization","in":"header","schema":{"type":"string","example":"Bearer from-the-doc"}}],`+
+		`"responses":{"200":{"description":"ok"}}}}}}`, target.URL)
+	apiScan(t, s, map[string]any{"definition": doc, "audit": false, "auth": map[string]any{"type": "bearer", "token": "t0k"}})
+	waitForTaskKind(t, s, "api-scan")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || len(seen[0]) != 1 || seen[0][0] != "Bearer t0k" {
+		t.Errorf("Authorization headers on the wire = %q; want exactly one, the review's", seen)
+	}
+}

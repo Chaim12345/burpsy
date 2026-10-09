@@ -429,6 +429,19 @@ func (s *Server) prepareAPIScan(req apiScanReq) ([]crawler.SeedRequest, *apiScan
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// The review's authentication method replaces a header of the same name the document declares,
+	// as Burp's does. The crawl engine writes its configured headers beside each request's own, so
+	// without this a definition declaring an Authorization parameter went out with two (vuw7).
+	if req.Auth != nil {
+		name, _, _ := req.Auth.header()
+		for i := range requests {
+			for h := range requests[i].Headers {
+				if strings.EqualFold(h, name) {
+					delete(requests[i].Headers, h)
+				}
+			}
+		}
+	}
 	summary := &apiScanSummary{
 		Format:            string(doc.Format),
 		Title:             doc.Title,
