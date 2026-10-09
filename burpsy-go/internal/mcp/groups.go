@@ -165,10 +165,10 @@ var groupedTools = []groupSpec{
 	// ---- Scanning & Auditing -------------------------------------------------------------------
 	{
 		name: "scan", group: groupScanning,
-		short: "Starts audits, crawls, API scans, content discovery, hidden-input guessing, BCheck draft test runs and the live audit — real traffic at the target.",
+		short: "Starts audits, crawls, API scans, content discovery, hidden-input guessing, MCP-server scans, BCheck draft test runs and the live audit — real traffic at the target.",
 		ops: []string{
 			"POST /api/audit/", "POST /api/audit/selected", "GET /api/crawl", "POST /api/crawl",
-			"POST /api/apiscan", "GET /api/discovery", "POST /api/discovery",
+			"POST /api/apiscan", "GET /api/discovery", "POST /api/discovery", "POST /api/mcpscan",
 			"GET /api/hidden-inputs", "POST /api/hidden-inputs", "POST /api/scanner/checks/test",
 			"GET /api/scanner/live", "POST /api/scanner/live", "POST /api/scanner/audit-items/",
 		},

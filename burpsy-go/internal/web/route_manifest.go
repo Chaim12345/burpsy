@@ -395,6 +395,16 @@ var manifest = map[string]route{
 		summary: "GET: retained hidden-input guessing runs. POST: guess hidden query parameters, cookies " +
 			"and headers against one captured exchange (Burp's Param Miner \"Guess params\")",
 	},
+	"/api/mcpscan": {
+		// riskAttack (burpsy-react-ui-wflj): it connects to an MCP server and, for every tool the
+		// operator names in probe_tools, invokes that tool — whose effect is whatever the server's
+		// author made it. The traffic is bounded (paginated lists capped, at most 20 tool calls, one
+		// deadline) and every message passes the AuthorisedSender scope gate, but "call this tool" is
+		// exactly the act the confirmation gate exists to put a human in front of.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "scan a Model Context Protocol server as a target: handshake, enumerate its tools, " +
+			"resources and prompts, call only the tools named in probe_tools, and file MCP findings",
+	},
 	"/api/history": {
 		// DELETE is Burp's "Delete items"/"Clear (tool)" (r6li): a tombstone on the operator's
 		// view, not on the stored bytes — positional ids stay stable, so the read route's contract

@@ -333,7 +333,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 		// Hidden-input guessing sends a request budget's worth of guessed names at a captured target —
 		// an attack in the same sense as an audit, so it is gated like one (burpsy-react-ui-wlz8).
 		"/api/hidden-inputs",
-		"/api/intruder/again", "/api/intruder/run", "/api/scanner/audit",
+		"/api/intruder/again", "/api/intruder/run",
+		// An MCP-server scan connects to the target and invokes every tool the operator names in
+		// probe_tools — a call whose effect only the target's author knows (burpsy-react-ui-wflj).
+		"/api/mcpscan",
+		"/api/scanner/audit",
 		// "Audit again" belongs here for the same reason /api/audit/ does: it re-runs the whole check set
 		// against a live target through runAudit. That it is spelled as an action on an existing queue
 		// row does not make it cheaper than a first audit — AuditWithin gives it a fresh admission

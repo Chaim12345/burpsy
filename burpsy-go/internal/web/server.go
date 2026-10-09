@@ -1276,6 +1276,9 @@ func (s *Server) setupRoutes() {
 	// Hidden-input guessing: Burp's Param Miner "Guess params", built in (burpsy-react-ui-wlz8). The
 	// other half of the same question — discovery guesses paths, this guesses the inputs one path reads.
 	s.mux.HandleFunc("/api/hidden-inputs", s.handleHiddenInputs)
+	// MCP-target scanning (burpsy-react-ui-wflj): burpsy as the client testing a Model Context
+	// Protocol server — handshake, enumeration, operator-named tool calls, MCP checks.
+	s.mux.HandleFunc("/api/mcpscan", s.handleMCPScan)
 
 	// The blind-XSS callback channel: the listener's state, and minting a correlation payload to plant.
 	// Two patterns because they are two operations, and the mint is a POST because it changes what the

@@ -104,6 +104,11 @@ var uiRouteExempt = map[string]string{
 // has been fixed, and TestNoKnownGapWasQuietlyFixed is what refused to let the entry stay behind
 // afterwards. Both directions of the list have now done their job on a real case.
 var uiRouteMissingSurface = map[string]string{
+	// The MCP-target scanner's server half landed first (burpsy-react-ui-wflj, salvaged from the
+	// review-collab-fix snapshot under burpsy-react-ui-a4ir); the console page that posts an endpoint,
+	// a credential and the tools to call, and renders the inventory, list outcomes and findings, is the
+	// remaining half of wflj. An operator can reach it today only through the MCP scan tool or curl.
+	"/api/mcpscan": "burpsy-react-ui-wflj",
 	// Empty since the intruder control half of burpsy-react-ui-wub landed (44f4111): intruder.tsx
 	// carries an AbortController on its run mutation and pause/resume/stop buttons wired to
 	// /api/intruder/attacks/{task_id}/{pause|resume|stop}, so those two entries came off this list —
