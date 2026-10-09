@@ -1160,7 +1160,8 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	}
 	findings := s.findings.All()
 	views := make([]issueFindingView, 0, len(findings))
-	includeIsolated := r.URL.Query().Get("include_isolated") == "1"
+	// truthy, not == "1": the route declares a boolean, so an agent sends "true" (route_schemas.go).
+	includeIsolated := truthy(r.URL.Query().Get("include_isolated"))
 	for _, f := range findings {
 		// Burp: "Results from isolated scans do not appear in ... Dashboard > All issues" (13uw). A
 		// task's own view asks for them with include_isolated=1 and gets them flagged.

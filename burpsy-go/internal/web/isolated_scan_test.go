@@ -37,6 +37,11 @@ func TestIsolatedFindingsStayOffAllIssuesButATaskCanAsk(t *testing.T) {
 	if !strings.Contains(with, "only isolated") || !strings.Contains(with, `"isolated":true`) {
 		t.Errorf("include_isolated must return it flagged: %s", with)
 	}
+	// The route declares include_isolated a boolean for the MCP surface, so "true" — what an agent
+	// sends for a boolean — must mean what "1" means.
+	if agent := get(t, s, "/api/issues?include_isolated=true").Body.String(); !strings.Contains(agent, "only isolated") {
+		t.Errorf("include_isolated=true must return the isolated finding: %s", agent)
+	}
 }
 
 func TestAnIsolatedCrawlStaysOffTheSiteMap(t *testing.T) {
