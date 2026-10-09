@@ -14,7 +14,7 @@ import {
   type CheckTestRun,
   type CheckValidation,
 } from "../lib/data.customchecks";
-import { Badge, Button, Input, Modal, Textarea } from "./primitives";
+import { Badge, Button, Input, Modal, NeedsValueButton, Textarea } from "./primitives";
 import { SimpleTable } from "./table";
 
 export interface EditorTarget {
@@ -151,9 +151,14 @@ export function CustomCheckEditor({ target, onClose }: { target: EditorTarget | 
             placeholder="Exchange ids to test against, e.g. 3, 7, 12"
           />
         </div>
-        <Button variant="outline" onClick={onTest} disabled={test.isPending}>
+        <NeedsValueButton
+          variant="outline"
+          onClick={onTest}
+          disabled={test.isPending}
+          missing={parseIds(idsText).length ? null : "needs an exchange id"}
+        >
           {test.isPending ? "Testing…" : "Run test"}
-        </Button>
+        </NeedsValueButton>
       </div>
       <p className="field-hint">
         An active check sends its probes to each exchange's target through the scope gate; nothing is filed.

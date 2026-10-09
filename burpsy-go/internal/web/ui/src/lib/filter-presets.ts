@@ -60,6 +60,13 @@ export const FILTER_DEFAULTS: Record<FilterTable, FilterSettings> = {
     annotatedOnly: false,
     method: "",
     statusClass: "",
+    // Burp Logger's view filter axes (uvpb), added after the first logger presets were saved: a
+    // preset written before them lacks these keys and loads with them at these defaults (3dyy).
+    viewScopeOnly: false,
+    viewHasResponse: false,
+    viewParameterized: false,
+    viewMime: "",
+    viewExt: "",
   },
   organizer: {
     term: "",

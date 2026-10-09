@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { useClearDomInvaderHits, useDomInvader, useSetDomInvader, type DomInvaderHit } from "../lib/data.dominvader";
 import { LoadingPanel, PageHeader, RefreshButton } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, Input, Switch } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, Input, NeedsValueButton, Switch } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /**
@@ -76,9 +76,15 @@ export function DomInvaderPage(): JSX.Element {
         {(id) => (
          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Input id={id} value={effectiveCanary} onChange={(event) => setCanary(event.target.value)} style={{ maxWidth: "var(--w-md)" }} />
-          <Button variant="outline" size="small" onClick={saveCanary} disabled={set.isPending}>
+          <NeedsValueButton
+           variant="outline"
+           size="small"
+           onClick={saveCanary}
+           disabled={set.isPending}
+           missing={effectiveCanary.trim() ? null : "needs a canary"}
+          >
            Save
-          </Button>
+          </NeedsValueButton>
           <Button
            variant="quiet"
            size="small"
