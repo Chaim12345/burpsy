@@ -76,8 +76,10 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
  */
 export interface ConfirmedCallPreview {
  method: string;
- /** The path plus the canonical query: the form the gate compares. */
+ /** The path plus the canonical query, secret-looking query values withheld (listed in `redacted` as "?name"). For reading. */
  url: string;
+ /** The decoded path exactly as bound, never redacted. */
+ path?: string;
  body_bytes: number;
  body_sha256: string;
  body_kind: "none" | "json" | "text" | "binary";

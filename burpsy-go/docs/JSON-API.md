@@ -74,9 +74,13 @@ POST <route, trailing slash trimmed>/confirm
 
 (`body_base64` instead of `body` for a body that is not UTF-8; omit both for no body.) The answer is
 `{token, route, expires_in, confirm_with, binding, call}`, where `call` is the server's preview of the
-request the token authorises — `method`, `url`, `body_kind`, `body` (pretty-printed; JSON members
-named like passwords, secrets, tokens, keys or cookies withheld and listed in `redacted`),
-`body_bytes` and `body_sha256`. Send the call with `X-Burpsy-Confirm: <token>`. The token is
+request the token authorises — `method`, `url`, `path`, `body_kind`, `body` (pretty-printed; JSON
+members, query parameters and `{"name","value"}` header pairs named like passwords, secrets, tokens,
+keys, signatures or cookies have their values withheld and listed in `redacted`), `body_bytes` and
+`body_sha256`. A JSON body in which any object names a member twice — compared the way
+`encoding/json` matches struct fields, case-insensitively with Unicode folding — is refused (400) at
+the mint and at the gate: the handler would read whichever came last, and member order is what
+canonical comparison ignores. Send the call with `X-Burpsy-Confirm: <token>`. The token is
 single-use, lives 60 seconds, and is refused and burned when the call's method, path, query or body
 differs from the described one (burpsy-react-ui-e0yq). JSON bodies and queries are compared in
 canonical form, so key order and whitespace do not matter; anything that decodes differently does.

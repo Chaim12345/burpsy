@@ -455,13 +455,17 @@ func TestBurpsyConfirmPreviewsTheCallAndItsTokenAuthorisesNoOtherCall(t *testing
 	}
 }
 
-// The refusal hands the agent the exact burpsy_confirm arguments for the refused call, so confirming
-// "this call" needs no reconstruction — and a reconstruction that drifted would be refused anyway.
-func TestTheRefusalNamesTheExactConfirmArgumentsForTheCall(t *testing.T) {
+// The refusal tells the agent how to confirm this call — the tool and which arguments to resend —
+// without echoing their values: a body can carry a password, and the refusal is transcript text.
+func TestTheRefusalNamesTheToolAndArgumentKeysWithoutEchoingValues(t *testing.T) {
 	_, base := newConsole(t)
-	res := call(t, base, "api_audit", map[string]any{"path": "/api/audit/7"})
-	if !res.IsError || !strings.Contains(textOf(res), `{"arguments":{"path":"/api/audit/7"},"tool":"api_audit"}`) {
-		t.Fatalf("the refusal does not print the confirm arguments for this call:\n%s", textOf(res))
+	res := call(t, base, "api_audit", map[string]any{"path": "/api/audit/7", "body": map[string]any{"note": "s3cr3t-in-body"}})
+	text := textOf(res)
+	if !res.IsError || !strings.Contains(text, `"tool": "api_audit"`) || !strings.Contains(text, `("path", "body")`) {
+		t.Fatalf("the refusal does not name the tool and the argument keys:\n%s", text)
+	}
+	if strings.Contains(text, "s3cr3t-in-body") {
+		t.Fatalf("the refusal echoes the call's body:\n%s", text)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -40,8 +41,7 @@ import (
 // minted for call A cannot authorise call B on the same route: not a different body, not a different
 // subtree path, not a different query, not a different verb.
 //
-// Canonical, not byte-exact, in exactly two places, and both only where the handler cannot tell the
-// difference either:
+// Canonical, not byte-exact, in exactly two places:
 //   - a JSON body is compared as its re-encoded value (object keys sorted, insignificant whitespace
 //     gone, numbers kept as their literal spelling). An MCP host is free to re-serialise the
 //     arguments it holds between the confirm call and the real one; a byte comparison would refuse
@@ -49,8 +49,16 @@ import (
 //   - a query string is compared as its parsed-then-re-encoded form, for the same reason (the MCP
 //     transport builds it from a map).
 //
-// Anything that does not parse is compared as its raw bytes, so canonicalisation can only ever
-// equate two spellings that decode to the same value — never two that decode differently.
+// Sorting keys is only sound while no object names one member twice. The handlers decode into
+// structs, and encoding/json matches a struct field case-insensitively — with Unicode folding, so
+// "ſ" is "s" and the Kelvin sign is "k" — with the LAST matching key winning. So
+// {"kind":"key","Kind":"cert"} and {"Kind":"cert","kind":"key"} sort to one canonical text yet
+// decode to kind=cert and kind=key: one approval, two different calls (the review finding on
+// burpsy-react-ui-e0yq — a certificate-export confirmation exported the CA private key). A body in
+// which any object, at any depth, names two members that fold to the same name is therefore
+// refused outright, at the mint and at the gate: no console or MCP call sends one, and there is no
+// order-free reading of it to approve. Anything that does not parse as JSON is compared as its raw
+// bytes. With both rules, canonicalisation equates only spellings that decode to the same value.
 //
 // # What is not bound
 //
@@ -122,9 +130,14 @@ func newCallBinding(method, path, rawQuery string, body []byte) callBinding {
 
 // canonicalBody is the form a body is compared in. A JSON value is re-encoded (sorted keys, no
 // insignificant whitespace, numbers as spelled); anything else — including invalid UTF-8, which the
-// JSON decoder would silently replace, and so equate with other bytes — is itself.
+// JSON decoder would silently replace, and so equate with other bytes — is itself. A JSON body with
+// a duplicated member name (see foldedDuplicateMember) is also itself: the mint and the gate refuse
+// such a body before this matters, and byte-exactness is the safe answer if anything reaches here.
 func canonicalBody(raw []byte) []byte {
 	if len(raw) == 0 || !utf8.Valid(raw) || !json.Valid(raw) {
+		return raw
+	}
+	if _, dup := foldedDuplicateMember(raw); dup {
 		return raw
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -138,6 +151,108 @@ func canonicalBody(raw []byte) []byte {
 		return raw
 	}
 	return out
+}
+
+// errAmbiguousBody is a JSON body whose objects name a member twice under encoding/json's
+// case-folding, so which value a handler reads depends on member order the canonical form erases.
+var errAmbiguousBody = errors.New("the JSON body names the same member twice (encoding/json matches member names " +
+	"case-insensitively, so the handler would read whichever comes last); send each member once")
+
+// jsonFoldName is encoding/json's own member-name folding (fold.go, foldName): ASCII letters
+// upper-cased, every other rune replaced by the smallest rune of its Unicode simple-fold orbit. Two
+// names fold equal exactly when encoding/json would match them to the same struct field — which is
+// why this is a copy of that rule and not strings.ToLower, which misses "ſ" (s) and "K" (Kelvin, k).
+func jsonFoldName(name string) string {
+	out := make([]rune, 0, len(name))
+	for _, r := range name {
+		if r < utf8.RuneSelf {
+			if 'a' <= r && r <= 'z' {
+				r -= 'a' - 'A'
+			}
+			out = append(out, r)
+			continue
+		}
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				r = next
+				break
+			}
+			r = next
+		}
+		out = append(out, r)
+	}
+	return string(out)
+}
+
+// foldedDuplicateMember reports the first member name that some object in raw, at any depth, names
+// twice under jsonFoldName (an exact repeat included). It walks the token stream, because decoding
+// into a map is exactly the step that loses the duplicate. raw must already be valid JSON.
+func foldedDuplicateMember(raw []byte) (string, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	// One frame per open container: the folded member names seen so far for an object, nil for an
+	// array; expectKey says whether the next string token in an object is a member name.
+	type frame struct {
+		seen      map[string]bool
+		expectKey bool
+	}
+	var stack []*frame
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", false // io.EOF at the end; valid JSON produces no other error
+		}
+		var top *frame
+		if len(stack) > 0 {
+			top = stack[len(stack)-1]
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				if top != nil && top.seen != nil {
+					top.expectKey = true // the object is this member's value
+				}
+				stack = append(stack, &frame{seen: map[string]bool{}, expectKey: true})
+			case '[':
+				if top != nil && top.seen != nil {
+					top.expectKey = true
+				}
+				stack = append(stack, &frame{})
+			default:
+				stack = stack[:len(stack)-1]
+			}
+		case string:
+			if top != nil && top.seen != nil && top.expectKey {
+				folded := jsonFoldName(t)
+				if top.seen[folded] {
+					return t, true
+				}
+				top.seen[folded] = true
+				top.expectKey = false
+				continue
+			}
+			if top != nil && top.seen != nil {
+				top.expectKey = true
+			}
+		default:
+			if top != nil && top.seen != nil {
+				top.expectKey = true
+			}
+		}
+	}
+}
+
+// checkUnambiguous refuses a JSON body that names a member twice; anything else passes.
+func checkUnambiguous(body []byte) error {
+	if len(body) == 0 || !utf8.Valid(body) || !json.Valid(body) {
+		return nil
+	}
+	if name, dup := foldedDuplicateMember(body); dup {
+		return fmt.Errorf("%w (member %q)", errAmbiguousBody, name)
+	}
+	return nil
 }
 
 // canonicalQuery is a query string in sorted, re-encoded form, or the raw string when it does not
@@ -203,6 +318,9 @@ func (c confirmCall) resolve(pattern string) (callBinding, error) {
 			return callBinding{}, fmt.Errorf(`"body_base64" is not standard base64: %v`, err)
 		}
 	}
+	if err := checkUnambiguous(body); err != nil {
+		return callBinding{}, err
+	}
 	return newCallBinding(method, u.Path, u.RawQuery, body), nil
 }
 
@@ -221,6 +339,9 @@ func bindingOfRequest(r *http.Request) (callBinding, []byte, error) {
 			return callBinding{}, nil, fmt.Errorf("the body is over %d bytes", maxRequestBodyBytes)
 		}
 	}
+	if err := checkUnambiguous(body); err != nil {
+		return callBinding{}, nil, err
+	}
 	return newCallBinding(r.Method, r.URL.Path, r.URL.RawQuery, body), body, nil
 }
 
@@ -235,8 +356,11 @@ func (c *confirmStore) burn(token string) {
 type confirmPreview struct {
 	Method string `json:"method"`
 	// URL is the path plus the canonical query — the form that is bound, so two spellings of one
-	// query preview identically and the preview is never a summary the binding disagrees with.
+	// query preview identically — with the values of secret-looking parameters withheld (they are
+	// listed in Redacted, as "?name"). It is for reading, not comparing.
 	URL string `json:"url"`
+	// Path is the decoded path exactly as bound, never redacted: what a client compares.
+	Path string `json:"path"`
 	// BodyBytes is the size of the body as described; BodySHA256 is the hash of its canonical form,
 	// which is the value in the binding.
 	BodyBytes  int    `json:"body_bytes"`
@@ -253,8 +377,13 @@ type confirmPreview struct {
 	Redacted []string `json:"redacted,omitempty"`
 }
 
-// secretMember matches the JSON member names a preview withholds the value of.
-var secretMember = regexp.MustCompile(`(?i)(pass(word|phrase)?|secret|token|api[_-]?key|private[_-]?key|credential|cookie|authorization)`)
+// secretMember matches the JSON member, query parameter and header names a preview withholds the
+// value of. Over-matching costs a hidden value in a preview (the hash still binds it); under-matching
+// echoes a secret into a dialog, an MCP transcript or a log.
+var secretMember = regexp.MustCompile(`(?i)(pass(word|phrase)?|secret|token|api[_-]?key|private[_-]?key|credential|cookie|authorization|signature|(^|[_.-])(key|sig)$)`)
+
+// redactedValue replaces a withheld value in a preview.
+const redactedValue = "«redacted»"
 
 // preview renders the binding for a human.
 func (b callBinding) preview() confirmPreview {
@@ -265,8 +394,9 @@ func (b callBinding) preview() confirmPreview {
 		BodySHA256: hex.EncodeToString(b.bodySum[:]),
 		BodyKind:   "none",
 	}
+	p.Path = b.path
 	if b.query != "" {
-		p.URL += "?" + b.query
+		p.URL += "?" + redactQuery(b.query, &p.Redacted)
 	}
 	if len(b.body) == 0 {
 		return p
@@ -290,7 +420,6 @@ func (b callBinding) preview() confirmPreview {
 			for k := range redacted {
 				p.Redacted = append(p.Redacted, k)
 			}
-			sort.Strings(p.Redacted)
 		}
 		if text == "" {
 			text = string(b.body)
@@ -307,7 +436,27 @@ func (b callBinding) preview() confirmPreview {
 		text, p.BodyTruncated = text[:cut], true
 	}
 	p.Body = text
+	sort.Strings(p.Redacted)
 	return p
+}
+
+// redactQuery renders a canonical query with secret-looking parameters' values withheld, noting
+// each as "?name" in redacted. The canonical query is already sorted and encoded, so it is rebuilt
+// pair by pair rather than re-encoded (which would percent-encode the marker).
+func redactQuery(canonical string, redacted *[]string) string {
+	pairs := strings.Split(canonical, "&")
+	for i, pair := range pairs {
+		name, _, _ := strings.Cut(pair, "=")
+		decoded, err := url.QueryUnescape(name)
+		if err != nil {
+			decoded = name
+		}
+		if secretMember.MatchString(decoded) {
+			pairs[i] = name + "=" + redactedValue
+			*redacted = append(*redacted, "?"+decoded)
+		}
+	}
+	return strings.Join(pairs, "&")
 }
 
 // redactSecrets replaces the value of every secret-named member, at any depth, with a marker, and
@@ -320,11 +469,19 @@ func redactSecrets(v any, seen map[string]bool) any {
 				if s, ok := val.(string); ok && s == "" {
 					continue // an empty value withholds nothing, and showing it is informative
 				}
-				t[k] = "«redacted»"
+				t[k] = redactedValue
 				seen[k] = true
 				continue
 			}
 			t[k] = redactSecrets(val, seen)
+		}
+		// A header written as {"name": "Authorization", "value": "..."} — the shape session rules
+		// and request edits carry — names its secret in a value, not a member: withhold "value".
+		if name, ok := t["name"].(string); ok && secretMember.MatchString(name) {
+			if value, ok := t["value"].(string); ok && value != "" {
+				t["value"] = redactedValue
+				seen[name] = true
+			}
 		}
 		return t
 	case []any:

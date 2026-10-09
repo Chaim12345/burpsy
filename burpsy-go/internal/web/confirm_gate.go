@@ -195,8 +195,12 @@ func (s *Server) confirmationGate(h, confirmMux http.Handler) http.Handler {
 		call, body, err := bindingOfRequest(r)
 		if err != nil {
 			// The token is burned as a spend would burn it: a presented token whose call cannot be
-			// read is not left live for a second attempt.
+			// read — or cannot be read one way only — is not left live for a second attempt.
 			s.confirms.burn(token)
+			if errors.Is(err, errAmbiguousBody) {
+				http.Error(w, "refused: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 			http.Error(w, "could not read the request body to check it against its confirmation: "+err.Error(), http.StatusRequestEntityTooLarge)
 			return
 		}
