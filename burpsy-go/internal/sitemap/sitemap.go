@@ -91,6 +91,37 @@ type SiteMap struct {
 	// suppression that was in force when it was made, survives Sync rebuilds, and is dropped by a
 	// LATER suppression that covers it, because that is the newer decision.
 	pinned map[core.ExchangeID]pin
+	// nodes counts, per map node, the stored path keys that fold onto it: key is
+	// insertKey(host, port, tls, NodePath(path)), value the number of raw keys in hosts[..].Paths
+	// with that identity (burpsy-react-ui-u6f8). The observed tree is keyed on the path as captured,
+	// query included, so "/search?q=1" and "/search?q=2" are two path keys — but one node, which is
+	// how the web layer folds them and what an operator reads. "Is this already observed?" is a
+	// question about the node, and answering it from the raw keys left a linked /search?q=1 grey
+	// after /search?q=1 itself was requested. Counted rather than a set so a Suppress that drops one
+	// raw key leaves the node observed while another still holds it.
+	nodes map[string]int
+}
+
+// NodePath is the identity a path has on the map: the path with any query string removed,
+// a leading slash, and no trailing slash, so "/search?q=1", "/search?q=2", "/search" and "/search/"
+// are the one node (burpsy-react-ui-u6f8). This is the rule GET /api/sitemap folds the observed
+// tree by — two requests differing only in query string are one node and the query strings become
+// that node's parameter list — and the rule every "already observed?" check uses, so an item is
+// cleared by exactly the traffic that makes its node requested.
+func NodePath(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" {
+		return "/"
+	}
+	if p[0] != '/' {
+		p = "/" + p
+	}
+	for len(p) > 1 && p[len(p)-1] == '/' {
+		p = p[:len(p)-1]
+	}
+	return p
 }
 
 // MaxUnrequested bounds the unrequested set: a site that links to a calendar or a search with a fresh
@@ -108,15 +139,21 @@ type UnrequestedNode struct {
 	Seen time.Time
 }
 
-// AddUnrequested records a linked-but-never-requested URL. It reports false when the URL is already
-// observed, inserted, suppressed, already known as unrequested, or the set is full.
+// AddUnrequested records a linked-but-never-requested URL. It reports false when the URL's node is
+// already observed, or the URL is inserted, suppressed, already known as unrequested, or the set is
+// full. "Observed" is by node (NodePath): a link to /search?q=2 is not recorded once /search?q=1 has
+// been requested, because both are the requested /search node and its parameter list.
+//
+// Unrequested items are keyed by the URL as linked, query included, so two links differing only in
+// query are two grey items until their node is requested; GET /api/sitemap applies the same
+// NodePath rule at merge time to drop items whose node was requested after they were recorded.
 func (sm *SiteMap) AddUnrequested(host string, port uint16, tls bool, path, from string, seen time.Time) bool {
 	if host == "" || path == "" {
 		return false
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if observedLocked(sm.hosts, host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
+	if sm.observedLocked(host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
 		return false
 	}
 	key := insertKey(host, port, tls, path)
@@ -175,6 +212,7 @@ func New() *SiteMap {
 
 		unrequested: make(map[string]*UnrequestedNode),
 		pinned:      make(map[core.ExchangeID]pin),
+		nodes:       make(map[string]int),
 	}
 }
 
@@ -232,7 +270,7 @@ func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if observedLocked(sm.hosts, host, port, tls, path) {
+	if sm.observedLocked(host, port, tls, path) {
 		return true
 	}
 	key := insertKey(host, port, tls, path)
@@ -243,17 +281,26 @@ func (sm *SiteMap) Insert(host string, port uint16, tls bool, path string, added
 	return false
 }
 
-// observedLocked reports whether the observed tree already holds that exact node. Callers hold sm.mu.
-func observedLocked(hosts map[string]*HostNode, host string, port uint16, tls bool, path string) bool {
-	hn := hosts[hostKey(host, port, tls)]
-	if hn == nil {
-		return false
-	}
+// observedLocked reports whether the observed tree already holds that node: the host for path "",
+// otherwise any captured path with the same NodePath. Callers hold sm.mu.
+func (sm *SiteMap) observedLocked(host string, port uint16, tls bool, path string) bool {
 	if path == "" {
-		return true
+		return sm.hosts[hostKey(host, port, tls)] != nil
 	}
-	_, ok := hn.Paths[path]
-	return ok
+	return sm.nodes[insertKey(host, port, tls, NodePath(path))] > 0
+}
+
+// countNodeLocked moves the per-node count for one raw path key of hn by delta. Callers hold sm.mu.
+func (sm *SiteMap) countNodeLocked(hn *HostNode, rawPath string, delta int) {
+	if sm.nodes == nil {
+		sm.nodes = make(map[string]int)
+	}
+	k := insertKey(hn.Host, hn.Port, hn.TLS, NodePath(rawPath))
+	if n := sm.nodes[k] + delta; n > 0 {
+		sm.nodes[k] = n
+	} else {
+		delete(sm.nodes, k)
+	}
 }
 
 // Inserts returns every operator-added node, in a stable order so the UI and the API agree on what
@@ -310,6 +357,7 @@ func (sm *SiteMap) Sync(store *core.TrafficStore) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.hosts = make(map[string]*HostNode)
+	sm.nodes = make(map[string]int)
 	for _, ex := range exchanges {
 		sm.addExchangeLocked(ex)
 	}
@@ -376,6 +424,7 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 			Mimes:    make(map[string]struct{}),
 		}
 		hn.Paths[ex.Path] = pn
+		sm.countNodeLocked(hn, ex.Path, 1)
 	}
 	// The id decides whether this exchange is new to the node, and it is checked
 	// before any counter moves: a path already holding this id has already had
@@ -468,6 +517,11 @@ func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
 		sm.suppressed[hostKey] = struct{}{}
 		// Dropping the host drops its whole subtree from the in-memory tree now; suppressing each
 		// path individually is not needed — the host key answers for all of them.
+		if hn, ok := sm.hosts[hostKey]; ok {
+			for p := range hn.Paths {
+				sm.countNodeLocked(hn, p, -1)
+			}
+		}
 		delete(sm.hosts, hostKey)
 		return
 	}
@@ -479,10 +533,12 @@ func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
 			for p := range hn.Paths {
 				if p == path || strings.HasPrefix(p, path+"/") {
 					delete(hn.Paths, p)
+					sm.countNodeLocked(hn, p, -1)
 				}
 			}
-		} else {
+		} else if _, ok := hn.Paths[path]; ok {
 			delete(hn.Paths, path)
+			sm.countNodeLocked(hn, path, -1)
 		}
 		// A host with nothing left shows an empty branch forever; drop it too.
 		if len(hn.Paths) == 0 {
