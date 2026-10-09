@@ -1588,6 +1588,93 @@ work: record the discovered-but-not-queued subresource hosts as an explicit cove
 report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
 honest one and is the smaller.
 
+## Scan-configuration selection: where burpsy diverges from Burp (saq3.1, 2hze, gmdk — 2026-10-07)
+
+Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than
+Burp rather than wider:
+
+- **A check that declares a disabled method is withheld whole.** Burp keeps a check while any of its
+  (type, method) pairs is enabled and gates the rest inside the check (`Zwy6.java:170-184`). Every
+  burpsy check declares exactly one method today, where the two rules agree; a future check declaring
+  two will be withheld whole when either is disabled, until it can gate one alone.
+- **Detection methods burpsy does not implement cannot run**, whatever a configuration enables:
+  Burp Infiltrator everywhere; for SQL injection everything but Error messages; for OS command and PHP
+  code injection Time delays and Collaborator. They are declined by name
+  (`AuditConfig.DeclinedDetectionMethods`, `AuditOutcome.MethodsDeclined`), never silently ignored.
+- **Skip lists from a Burp file**: Burp's value is a list of match rules
+  (`{parameter, item, match_type, expression}`). burpsy honours parameter NAMES set through
+  `/api/scanner/configs`; a file's empty rule list is honoured and a non-empty one is reported unapplied.
+- **Server-side-injection class, PROBABLE rows**: Perl, Ruby, Python and unidentified code injection
+  take the code-injection family's class (`Zsn3.java:74-76`); their own Burp runner was not located.
+- **No console route imports a Burp configuration file.** The import path is the `-scan-config` flag;
+  the web console lists the six transcribed presets and saved configurations only.
+
+## Per-run project-option overrides: where burpsy differs from Burp (o2p3 — 2026-10-07)
+
+- **`follow_redirections` follows for the reflected-XSS check only.** Burp's documentation names that
+  check as the reason for the setting; its per-check "where necessary" predicate was not located in the
+  decompiled tree. Following inside every probe would break open redirection and header injection, which
+  read the 30x itself. Reopen if Burp's predicate is found to cover other checks (stored XSS, error-based
+  injection on an error page reached by redirect).
+- **The hop budget and cookie replay of a followed chain are the engagement's network settings**
+  (`redirects.max_hops`, default 5; `redirects.replay_cookies`), because Burp's scan configuration names
+  neither.
+- **Timeout overrides apply to every probe a run sends, its deferred phase included.** `FinishScan`
+  (stored re-fetch, then the stored-DOM render) takes the run's configuration and re-fetches through the
+  run's derived sender (saq3.3.4). Out-of-band polling sends nothing, so it has no timeout to apply. A
+  normal timeout plus a connect timeout above twenty minutes combined is capped at the sender's
+  ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## JavaScript analysis keys: where burpsy differs from Burp (9mti — 2026-10-07)
+
+- **Zero means no limit**, from Burp's documentation ("zero or a blank value"); Burp's settings panel
+  itself bounds the fields at 1 and above (`Zrde.java:36-37`).
+- **A limit keeps the partial result and counts the stop** (`javascript_analysis_skips`, and Skipped for
+  a stopped DOM check). Burp "truncates analysis" and raises an alert naming the item; there is no
+  separate alert channel here.
+- **Reached by these keys since saq3.3.3 and saq3.3.4:**
+  - the capture-time static pass (`Capture.ScanExchange`) obeys `use_static_analysis` and
+    `max_static_time_per_item`, using the engagement's run configuration;
+  - the deferred stored-DOM render in `FinishScan` refuses the browser when the run sets
+    `use_dynamic_analysis` false, and counts the pages it declined (`Render.DeclinedByRun` in the deferred block).
+- **Still not reached:** the crawl's rendered-location pass honours `use_dynamic_analysis` but not
+  `max_dynamic_time_per_item`, because it has its own location cap.
+- **`fetch_out_of_scope_resources` and `request_missing_dependencies` remain unapplied**, as before.
+
+## Audit queue priority: Burp's documented rule, burpsy's constants (2026-10, burpsy-react-ui-ftk2)
+
+`AuditSession` starts items in priority order (`internal/scanner/audit_priority.go`). The score is
+0.8 × attack-surface exposure + 0.2 × interest level, the rule `scanner/auditing.html` documents.
+Outcomes still come back in the order requested, and `start_order` reports the order and each item's
+score. Where burpsy's version differs from Burp's:
+
+- **The constants are burpsy's.** The decompiled tree has no readable scoring class.
+  - Exposure is an item's new insertion points, identified by host, path, kind and name, as a share of
+    the most any remaining item adds.
+  - Interest is the mean of three factors: a state-changing method, structured content, and
+    authentication (an Authorization or Cookie header).
+- **Recalculation happens once per placement within a batch.** It is not repeated each time the crawl
+  adds an item. Above 2,000 items, scoring is a single pass.
+- **No cross-session memory.** Burp discounts points already audited in the current scan. burpsy does
+  so only within one session, so a later sweep tick does not discount what an earlier tick covered.
+
+## Light-audit tier: the response-shape half of "repetitive behaviour" (2026-10, burpsy-react-ui-vjjs)
+
+7bkj implemented the type-occurrence half of Burp's "Skipped due to repetitive behavior" (`Zq5`) and
+declined the content half, because the engine could not then say what it had compared. The probe
+harness now records each probe's response shape. A point raises its type's repetition prior only when
+both of these hold:
+- it was clean, meaning no probe found evidence;
+- every probe's response matched the baseline's status, with a body length within 2% or 32 bytes,
+  whichever is larger (`ProbeHarness.inertSince`).
+
+A point whose input changed the status or the page is behaving rather than repeating. It no longer
+counts toward skipping later points of its type (`TestAPointWhoseInputChangesTheResponseIsNotRepetitive`).
+Where this differs from Burp:
+- **Shape, not content.** Status and length are compared, not a structural diff. Echoing the input back
+  is repetition, the same behaviour for every point, so reflection alone does not break it.
+- **The constants are burpsy's.** Burp's similarity measure is not in the readable decompiled tree.
+
 ## Platform decisions: Burp capability families mapped and declined (2026-10, burpsy-react-ui-4ep5)
 
 This section is a **Burp-parity** ledger, not a Rust-parity one: it records Burp Suite capability

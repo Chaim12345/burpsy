@@ -67,7 +67,7 @@ func (k *bcheckSink) Send(target *bcheck.Target, raw []byte) ([]byte, error) {
 		return nil, errors.New("no sender configured for active bcheck probes")
 	}
 	k.meter.attempt()
-	gate := k.sc.probeGate(k.ex)
+	gate := k.sc.probeGate(k.ctx, k.ex)
 	resp, err := sendProbe(k.ctx, gate, raw, k.probeBudget)
 	if gate.Refused() > 0 {
 		// A refusal counts as a failure too: nothing left the process, so the
@@ -128,8 +128,15 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 		}
 		cc := c
 		out = append(out, activeCheck{
-			name:  cc.Name,
-			scope: scope,
+			name: cc.Name,
+			// A loaded corpus check IS a BCheck, and Burp files and selects every BCheck finding
+			// under one catalogue row (BCHECK_GENERATED, 0x09000000). With no type index the
+			// check was unselectable: "Audit checks - BChecks only.json" whitelists exactly that
+			// row, and a whitelist drops a check it cannot name, so the configuration named for
+			// running BChecks ran none of them (burpsy-react-ui-saq3.1).
+			typeIndex: BCheckGeneratedTypeIndex,
+			methods:   []string{MethodActiveChecks},
+			scope:     scope,
 			enabled: func(cfg *ScanConfig) bool {
 				return cfg != nil && cfg.CheckCorpus
 			},

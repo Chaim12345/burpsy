@@ -69,6 +69,10 @@ type Sender struct {
 	// with it: an operator who configured a proxy must not have their traffic go out direct because
 	// the configuration was unusable. See NewSender.
 	upstreamErr error
+	// strictBounds marks a sender derived for one scan run (DeriveWithTimeouts). Its own bounds are
+	// the run's configured timeouts, so a context deadline may only tighten them: see deadlineFor.
+	// False on every sender NewSender builds, where the context's deadline has always won outright.
+	strictBounds bool
 }
 
 // SenderConfig holds configuration for the sender.
@@ -1163,13 +1167,8 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 // not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
 // read instantly.
 func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-		return
-	}
-	if bound := s.Network().readTimeout(host); bound > 0 {
-		conn.SetDeadline(time.Now().Add(bound))
-	}
+	deadline, ok := ctx.Deadline()
+	s.applyDeadline(conn, deadline, ok, host)
 }
 
 // WithTimeout sets the total timeout for the sender, rebuilding the transport so the change reaches

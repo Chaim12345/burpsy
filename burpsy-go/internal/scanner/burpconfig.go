@@ -77,6 +77,14 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 			setBurpConfigField(&out, k.name, SomeUint32(rank))
 			return nil
 		}
+		// Burp writes -1 for an audit project-option override that is not set (Zbuj.java:27-28) and
+		// reads `> -1` as set (:19-22), so a file Burp itself exported with no override carries -1.
+		// Refusing it would reject Burp's own output; reading it as a number it is not would install an
+		// override nobody asked for. It is recorded as asked-for-nothing and reported applied.
+		if strings.HasPrefix(k.burpKey, "scanner/audit_project_option_overrides/") && isMinusOne(raw) {
+			out.InheritedOverrides = append(out.InheritedOverrides, k.name)
+			return nil
+		}
 		if isNumericBurpKey(k.burpKey) {
 			n, err := burpConfigUint(raw)
 			if err != nil {
@@ -103,7 +111,11 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 	}
 
 	apply := func(fullKey string, raw json.RawMessage) error {
+		out.ParsedKeys = append(out.ParsedKeys, strings.TrimPrefix(fullKey, "scanner/"))
 		row, ok := byBurpKey[fullKey]
+		if ok && builtInConfigKeys[row].listShaped {
+			return setListShaped(&out, builtInConfigKeys[row].name, fullKey, raw)
+		}
 		if !ok || builtInConfigKeys[row].read == nil {
 			out.UnrepresentableKeys = append(out.UnrepresentableKeys, strings.TrimPrefix(fullKey, "scanner/"))
 			return nil
@@ -130,6 +142,49 @@ func ParseBurpConfig(data []byte) (BuiltInConfig, error) {
 	return out, nil
 }
 
+// setListShaped decodes a key whose Burp value is a list rather than a scalar, into the typed field
+// its handler reads. These keys never go to UnrepresentableKeys: their rows are accounted by
+// applyIssueSelection and accountIgnoredParameterRules, which say applied or unapplied for each.
+func setListShaped(out *BuiltInConfig, name, fullKey string, raw json.RawMessage) error {
+	switch {
+	case name == "selected_issues":
+		issues, err := parseSelectedIssues(raw)
+		if err != nil {
+			return fmt.Errorf("burp scan configuration: %s: %w", fullKey, err)
+		}
+		out.SelectedIssues = issues
+		out.SelectedIssuesSet = true
+		return nil
+	case strings.HasPrefix(fullKey, "scanner/ignored_insertion_points/"):
+		var rules []json.RawMessage
+		if err := json.Unmarshal(raw, &rules); err != nil {
+			return fmt.Errorf("burp scan configuration: %s: expected a list of rules: %w", fullKey, err)
+		}
+		if out.IgnoredParameterRules == nil {
+			out.IgnoredParameterRules = map[string]int{}
+		}
+		out.IgnoredParameterRules[name] = len(rules)
+		return nil
+	}
+	// A list-shaped row this parser has no decoder for is recorded, so the report still names it.
+	out.UnrepresentableKeys = append(out.UnrepresentableKeys, strings.TrimPrefix(fullKey, "scanner/"))
+	return nil
+}
+
+// ApplyBurpConfigFile is the import path for one of Burp's own scan-configuration files: parse it,
+// overlay it on base, and return every key the file set that this engine could not apply.
+//
+// It exists so the CLI's -scan-config and anything else that imports a file share ONE path, and so a
+// test can drive exactly that path rather than a re-assembly of it.
+func ApplyBurpConfigFile(base AuditConfig, data []byte) (AuditConfig, []string, error) {
+	parsed, err := ParseBurpConfig(data)
+	if err != nil {
+		return base, nil, err
+	}
+	applied, unapplied := parsed.ApplyWithReport(base)
+	return applied, unapplied, nil
+}
+
 // isNumericBurpKey reports whether the key carries a count or a duration rather than a boolean.
 // The error-handling keys are failure counts and the audit-optimization key is minutes; every
 // insertion_point_types and issues_reported key is a boolean in Burp's shipped files.
@@ -147,8 +202,31 @@ func isNumericBurpKey(burpKey string) bool {
 	if burpKey == "scanner/audit_optimization/skip_ineffective_checks" {
 		return false
 	}
+	// follow_redirections is the same section's other boolean (Zhd_.java:41 reads it with the boolean
+	// getter). Before it had a reader the key never reached this function; with one, the section rule
+	// would read `"follow_redirections": true` as a number and reject four of Burp's shipped files.
+	if burpKey == "scanner/audit_optimization/follow_redirections" {
+		return false
+	}
+	// The javascript_analysis section is booleans beside two per-item limits in seconds
+	// (Zxc3.java:29-31 read them with the int getter). Named, like the two exceptions above: without
+	// this a limit falls to the boolean decoder, which reads 600 as "true" and stores 1.
+	switch burpKey {
+	case "scanner/javascript_analysis/max_static_time_per_item",
+		"scanner/javascript_analysis/max_dynamic_time_per_item":
+		return true
+	}
 	return strings.HasPrefix(burpKey, "scanner/error_handling/") ||
-		strings.HasPrefix(burpKey, "scanner/audit_optimization/")
+		strings.HasPrefix(burpKey, "scanner/audit_optimization/") ||
+		// Whole seconds (Zbuj.java:19-22). Without this they would fall to the boolean decoder, which
+		// accepts a number as "non-zero" — a 10-second override would load as 1.
+		strings.HasPrefix(burpKey, "scanner/audit_project_option_overrides/")
+}
+
+// isMinusOne reports whether a raw JSON value is the integer -1.
+func isMinusOne(raw json.RawMessage) bool {
+	var n float64
+	return json.Unmarshal(raw, &n) == nil && n == -1
 }
 
 // setBurpConfigField is the parse-side field map, keyed by row name. It exists so the parser does
@@ -206,6 +284,10 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.JavaScriptAnalysis = val
 	case "store_issues_within_queue_items":
 		c.StoreQueueItems = val
+	case "select_individual_issues":
+		c.SelectIndividualIssues = val
+	case "scan_only_selected_issues":
+		c.ScanOnlySelectedIssues = val
 	case "relocate_body_to_url":
 		c.RelocateBodyToURL = val
 	case "relocate_body_to_cookie":
@@ -218,6 +300,44 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.RelocateCookieToBody = val
 	case "relocate_cookie_to_url":
 		c.RelocateCookieToURL = val
+	// The nine below had rows with readers and no entry here, so a loaded file's value was parsed,
+	// validated and then dropped: the row read unset, and the report named the key in neither list
+	// (found by TestEveryShippedConfigurationAccountsForEveryScannerKeyItNames, saq3.1). "Audit
+	// coverage - maximum" sets all eight quick_scan keys; two shipped files set the follow-up count.
+	case "number_of_follow_up_passes":
+		c.FollowUpPasses = val
+	case "quick_scan_url_params":
+		c.QuickScanURLParams = val
+	case "quick_scan_body_params":
+		c.QuickScanBodyParams = val
+	case "quick_scan_cookies":
+		c.QuickScanCookies = val
+	case "quick_scan_http_headers":
+		c.QuickScanHTTPHeaders = val
+	case "quick_scan_param_name":
+		c.QuickScanParamName = val
+	case "quick_scan_url_path_filename":
+		c.QuickScanURLPathFilename = val
+	case "quick_scan_url_path_folders":
+		c.QuickScanURLPathFolders = val
+	case "quick_scan_entire_body":
+		c.QuickScanEntireBody = val
+	// The three per-run project overrides (burpsy-react-ui-o2p3).
+	case "follow_redirections":
+		c.FollowRedirections = val
+	case "audit_connect_timeout":
+		c.AuditConnectTimeout = val
+	case "audit_normal_timeout":
+		c.AuditNormalTimeout = val
+	// The javascript_analysis keys (burpsy-react-ui-9mti).
+	case "javascript_use_static_analysis":
+		c.JSUseStaticAnalysis = val
+	case "javascript_use_dynamic_analysis":
+		c.JSUseDynamicAnalysis = val
+	case "javascript_max_static_time_per_item":
+		c.JSMaxStaticSecondsPerItem = val
+	case "javascript_max_dynamic_time_per_item":
+		c.JSMaxDynamicSecondsPerItem = val
 	}
 }
 

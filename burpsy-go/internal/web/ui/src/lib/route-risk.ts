@@ -111,6 +111,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/scanner/config": "riskScope",
  "/api/scanner/configs": "riskLocal",
  "/api/scanner/coverage": "riskRead",
+ "/api/scanner/issue-types": "riskRead",
  "/api/scanner/live": "riskAttack",
  "/api/scanner/passive-branch": "riskLocal",
  "/api/scanner/secrets": "riskLocal",

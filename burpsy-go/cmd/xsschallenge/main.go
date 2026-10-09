@@ -291,7 +291,7 @@ func blindScan(base, host string, port uint16, all []xcase) map[string]map[strin
 
 	// The deferred phase is where a stored flow can surface: the canary is planted during an audit,
 	// so no response that audit saw could contain it.
-	deferred, completion := scan.FinishScan(ctx)
+	deferred, completion := scan.FinishScan(ctx, scanner.DefaultAuditConfig())
 	if completion.RefetchError != "" {
 		fmt.Printf("  deferred re-fetch error: %s\n", completion.RefetchError)
 	}

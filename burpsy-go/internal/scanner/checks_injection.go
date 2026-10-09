@@ -92,7 +92,15 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 			continue
 		}
 		pointStart := len(probes)
+		shapes := h.shapeMark()
 		probes = append(probes, perPoint(h, point)...)
+		// A point whose probes were all WITHHELD (their detection method is disabled, 2hze) asked
+		// the target nothing, so it is neither clean nor answered: recording it either way would
+		// raise the light tier's repetition prior, or the effectiveness ledger's, on evidence nobody
+		// gathered.
+		if !anySent(probes[pointStart:]) {
+			continue
+		}
 		// A point whose probes all came back without evidence is CLEAN for the tier's
 		// purposes — a signal (an error signature, a differential, an OOB hit) means this
 		// type on this host deserves full price again, so the prior must not rise.
@@ -104,7 +112,12 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 					break
 				}
 			}
-			if clean {
+			// Clean is necessary but not sufficient (burpsy-react-ui-vjjs): the point's responses must
+			// also have been indistinguishable from the baseline. A point whose input changed the
+			// status, the page's size or what it echoed is behaving, not repeating, even when no rule
+			// called it a vulnerability, and counting it would skip later points of the type on a
+			// behaviour nobody observed.
+			if clean && h.inertSince(shapes) {
 				light.RecordCleanPoint(string(point.Kind), cc.Exchange.Host)
 			}
 		}
@@ -135,6 +148,13 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 			break
 		}
 	}
+	// Every probe this check would have sent was withheld: the check did not run in any sense that
+	// produces a verdict, and a nil result here would read as a clean one. Refused as unsupported,
+	// which the engine counts as Skipped, and the ledger already holds the reason.
+	if len(probes) > 0 && !anySent(probes) {
+		return injectionResult{}, fmt.Errorf("%s: every probe was withheld because its detection method is disabled for this issue type: %w",
+			checkName, errCheckUnsupported)
+	}
 	best, confirmed := BestEvidence(probes)
 	cov := h.Coverage(probes, tested-skippedRepetitive)
 	cov.PointsCapped = capped
@@ -145,6 +165,16 @@ func runInjection(ctx context.Context, cc *CheckContext, checkName string, kinds
 		cov.PointsJudgedIneffective = pe.Count()
 	}
 	return injectionResult{best: best, confirmed: confirmed, coverage: cov}, nil
+}
+
+// anySent reports whether at least one probe in the set was actually sent.
+func anySent(probes []InjectionProbe) bool {
+	for _, p := range probes {
+		if !p.Withheld {
+			return true
+		}
+	}
+	return false
 }
 
 // effectivenessFrom returns the run's per-point effectiveness ledger, or nil when there is

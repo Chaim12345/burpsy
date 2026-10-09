@@ -2681,6 +2681,60 @@ tbody td {
  overflow-y: auto;
 }
 
+/* A scan configuration's issue selection (burpsy-react-ui-saq3.3.1). Every catalogue type is a row,
+   so the table is bounded in HEIGHT inside the card, the same bound the event log uses, rather than
+   sliced: every row stays reachable by search and by scrolling. The bound is on a focusable wrapper
+   (see settings.scanconfig.tsx) so the region scrolls by keyboard even when every box is disabled. The index column is narrow and
+   fixed; the name and the detection methods share the rest. */
+.scan-selection-scroll {
+ max-height: min(60vh, 34rem);
+ overflow-y: auto;
+ scrollbar-width: thin;
+}
+
+.scan-selection-scroll:focus-visible {
+ outline: var(--border-strong) solid var(--accent);
+ outline-offset: -2px;
+}
+
+.scan-selection-table th:nth-child(1) {
+ width: 32%;
+}
+
+.scan-selection-table th:nth-child(2) {
+ width: 16ch;
+}
+
+/* The declines table's reason IS the content — an ellipsis there hides the one sentence that says why
+   a method does not run — so its cells wrap instead of truncating. */
+.scan-config-declines tbody td {
+ white-space: normal;
+ vertical-align: top;
+}
+
+.scan-config-declines th:nth-child(3) {
+ width: 55%;
+}
+
+.scan-config-exemptions {
+ display: grid;
+ grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-md)), 1fr));
+ gap: var(--gap);
+}
+
+.scan-config-exemptions ul {
+ list-style: none;
+ padding: 0;
+ margin: 0;
+}
+
+/* A parameter name is shown as typed. The badge's uppercase would render csrf_token as CSRF_TOKEN —
+   the same match (it is case-insensitive) but not what the operator saved. */
+.scan-config-exemptions .badge {
+ text-transform: none;
+ letter-spacing: normal;
+}
+
 .event-row {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;

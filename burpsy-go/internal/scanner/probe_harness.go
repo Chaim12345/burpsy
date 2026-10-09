@@ -29,10 +29,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/sender"
 )
 
 // DefaultProbeInsertionKinds is the point set an injection evaluator walks when it does not
@@ -45,6 +48,23 @@ type ProbeResponse struct {
 	Body     string
 	Status   int
 	Duration time.Duration
+	// Followed is the page a redirect chain landed on, when this probe was sent with SendFollowing,
+	// the run follows redirects (follow_redirections, burpsy-react-ui-o2p3) and the response was a
+	// redirect the policy let it follow at least one hop of. Nil otherwise — including when the chain
+	// was refused or filtered at its first hop, where the 30x above is all there is.
+	Followed *ProbeResponse
+	// FollowedTo is the absolute URL Followed came from. Empty when Followed is nil.
+	FollowedTo string
+}
+
+// landing is the response a browser would render for this probe: the end of a followed redirect
+// chain when there is one, the response itself otherwise. A browser following a 30x never renders
+// the 30x's own body, so a check that asks "would this execute" asks it of the landing page.
+func (r ProbeResponse) landing() ProbeResponse {
+	if r.Followed != nil {
+		return *r.Followed
+	}
+	return r
 }
 
 // ProbeHarness holds one exchange's baseline and insertion points for a run of payloads.
@@ -63,6 +83,65 @@ type ProbeHarness struct {
 	// place than a minimise_false_negatives run (accuracy=4), which is the whole
 	// point of the trade-off.
 	accuracy int
+
+	// The detection-method selection this check runs under (burpsy-react-ui-2hze): its catalogue
+	// row, the methods the run disabled for that row, and where a withheld probe is counted.
+	typeIndex uint32
+	issue     string
+	disabled  map[string]bool
+	declines  *MethodDeclineLedger
+
+	// shapes records each probe's response shape in send order (burpsy-react-ui-vjjs), so the light
+	// tier can ask whether a point's input changed anything before it counts the point as repetitive.
+	shapesMu sync.Mutex
+	shapes   []probeShape
+}
+
+// probeShape is what the repetitive-behaviour rule compares a probe's response on: its shape, not its
+// content. An application that echoes every value back behaves the same way for every point of the
+// type, which is repetition, so reflection alone does not break it.
+type probeShape struct {
+	status  int
+	bodyLen int
+}
+
+// shapeMark is the position a caller reads probe shapes from.
+func (h *ProbeHarness) shapeMark() int {
+	h.shapesMu.Lock()
+	defer h.shapesMu.Unlock()
+	return len(h.shapes)
+}
+
+// inertSince reports whether every probe response since mark was indistinguishable from the baseline:
+// the same status and a body length within inertLengthTolerance. That is the response-shape half of
+// Burp's "Skipped due to repetitive behavior". A point whose input changed what
+// the application answered is not repetitive behaviour, whatever the evidence rules concluded. A point
+// with no recorded probe is not inert either, because nothing was compared.
+func (h *ProbeHarness) inertSince(mark int) bool {
+	h.shapesMu.Lock()
+	defer h.shapesMu.Unlock()
+	if mark >= len(h.shapes) {
+		return false
+	}
+	base := len(h.baseline.Body)
+	tol := inertLengthTolerance(base)
+	for _, sh := range h.shapes[mark:] {
+		d := sh.bodyLen - base
+		if d < 0 {
+			d = -d
+		}
+		if sh.status != h.baseline.Status || d > tol {
+			return false
+		}
+	}
+	return true
+}
+
+// inertLengthTolerance is how far a body length may move and still read as the same page: 2% of the
+// baseline or 32 bytes, whichever is larger. That is room for a timestamp or a CSRF token, not for an
+// error message or a different template.
+func inertLengthTolerance(baseLen int) int {
+	return max(32, baseLen/50)
 }
 
 // NewProbeHarness captures the baseline and enumerates insertion points.
@@ -93,6 +172,7 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 	if cc.ScanAccuracy.Set {
 		h.accuracy = CheckAccuracy(cc.ScanAccuracy.Value).Attempts()
 	}
+	h.typeIndex, h.issue, h.disabled, h.declines = cc.CheckTypeIndex, cc.CheckIssue, cc.DisabledMethods, cc.MethodDeclines
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)
@@ -121,21 +201,29 @@ func (h *ProbeHarness) DeclinedPoints() []bcheck.Declined { return h.declined }
 // become a way around the scope chokepoint. A scope refusal is metered as a refusal, not a
 // generic failure, so the audit's refusal ledger stays accurate.
 func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, error) {
-	gate := h.scanner.probeGate(h.exchange)
+	gate := h.scanner.probeGate(ctx, h.exchange)
 	if gate == nil {
 		return ProbeResponse{}, errors.New("no authorised sender")
 	}
+	resp, _, err := h.sendVia(ctx, gate, raw)
+	return resp, err
+}
+
+// sendVia is send through a gate the caller holds, returning the wire bytes as well as the readable
+// response — a redirect follower needs the bytes as they arrived and the same gate the probe left
+// through, so its hops are refused and counted on the counters the probe's own refusal would be.
+func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSender, raw []byte) (ProbeResponse, []byte, error) {
 	meter := meterFrom(ctx)
 	meter.attempt()
 	refusedBefore := gate.Refused()
 	res, err := gate.Send(ctx, raw)
 	if gate.Refused() > refusedBefore {
 		meter.refusal()
-		return ProbeResponse{}, fmt.Errorf("refused: outside the engagement scope: %w", err)
+		return ProbeResponse{}, nil, fmt.Errorf("refused: outside the engagement scope: %w", err)
 	}
 	if err != nil {
 		meter.failure()
-		return ProbeResponse{}, err
+		return ProbeResponse{}, nil, err
 	}
 	meter.succeeded()
 
@@ -157,7 +245,79 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 	if out.Status == 429 || out.Status == 503 {
 		meter.rateLimited(out.Status)
 	}
-	return out, nil
+	return out, res.Raw, nil
+}
+
+// SendFollowing is Send for a check that needs the page a redirect lands on (burpsy-react-ui-o2p3):
+// when the run follows redirects and the probe's response is one, the chain is followed and its
+// landing page rides the result as Followed. The 30x stays the response, so nothing the check reads
+// from it changes; a run that does not follow returns exactly what Send would.
+//
+// Every hop is a request the run sent, so it is treated like one: authorised on its own rendered
+// bytes by a fresh AuthorisedSender sharing the probe's scope handle and resource pool
+// (sender.FollowRedirectsAfterPolicy), metered as an attempt with its outcome, and counted against the
+// run's request budget. A hop the scope refused is a refusal on the probe's own gate.
+func (h *ProbeHarness) SendFollowing(ctx context.Context, point bcheck.InsertionPoint, payload string) (ProbeResponse, error) {
+	mutated, err := point.Apply(h.reqBytes, payload, false)
+	if err != nil {
+		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
+	}
+	gate := h.scanner.probeGate(ctx, h.exchange)
+	if gate == nil {
+		return ProbeResponse{}, errors.New("no authorised sender")
+	}
+	resp, wire, err := h.sendVia(ctx, gate, mutated)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(&point, payload, resp)
+	policy, follow := h.scanner.redirectPolicy(ctx)
+	if !follow || resp.Status < 300 || resp.Status >= 400 {
+		return resp, nil
+	}
+	h.follow(ctx, gate, mutated, wire, policy, &resp)
+	return resp, nil
+}
+
+// follow walks the redirect chain that starts at a probe's response and attaches the landing page.
+// A chain that cannot be followed is not an error: the 30x is the response, which is the truthful
+// result, and the reason sits on the hop the follower recorded.
+func (h *ProbeHarness) follow(ctx context.Context, gate *sender.AuthorisedSender, raw, wire []byte,
+	policy sender.RedirectSettings, resp *ProbeResponse) {
+
+	meter := meterFrom(ctx)
+	refusedBefore := gate.Refused()
+	result, err := gate.FollowRedirectsAfterPolicy(ctx, raw, wire, policy)
+	for i := gate.Refused() - refusedBefore; i > 0; i-- {
+		meter.attempt()
+		meter.refusal()
+	}
+	if err != nil || result == nil {
+		return
+	}
+	// The landing page is the LAST followed hop's own bytes, read off the hop rather than off
+	// result.Final: a hop whose answer could not be parsed is still followed and keeps its bytes, but
+	// Final stays the response before it, and attaching that would present a 30x as the landing page.
+	var landedOn string
+	var landedRaw []byte
+	for _, hop := range result.Hops {
+		switch {
+		case hop.Followed:
+			meter.attempt()
+			meter.succeeded()
+			landedOn, landedRaw = hop.To, hop.ResponseRaw
+		case strings.HasPrefix(hop.Reason, "the hop was authorised but could not be sent"):
+			meter.attempt()
+			meter.failure()
+		}
+	}
+	if landedOn == "" || len(landedRaw) == 0 {
+		return
+	}
+	readable, _ := readableResponse(landedRaw)
+	landing := ProbeResponse{Raw: readable, Body: responseBody(string(readable)), Status: responseStatus(string(readable))}
+	resp.Followed = &landing
+	resp.FollowedTo = landedOn
 }
 
 // Send places payload at point and dispatches the resulting request.
@@ -191,6 +351,11 @@ func (h *ProbeHarness) guidedSend(point *bcheck.InsertionPoint, payload string, 
 // the ledgers (a zero ActiveScanner) is a no-op, not an error — the harness is
 // usable offline without the guidance machinery.
 func (h *ProbeHarness) recordCoverage(point *bcheck.InsertionPoint, payload string, resp ProbeResponse) {
+	if point != nil {
+		h.shapesMu.Lock()
+		h.shapes = append(h.shapes, probeShape{status: resp.Status, bodyLen: len(resp.Body)})
+		h.shapesMu.Unlock()
+	}
 	if h.scanner == nil || h.scanner.pathCov == nil {
 		return
 	}
@@ -234,6 +399,29 @@ func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, p
 	return out
 }
 
+// withhold is the detection-method gate every probe kind passes through (burpsy-react-ui-2hze). It
+// answers whether a probe of this method may be sent for this check's issue type, and when it may
+// not, it records the decline with the number of requests withheld — so a run under "all except
+// time-based detection methods" can show that its timing probes were withheld, not that they ran
+// clean.
+//
+// Keyed by the check's type because Burp resolves a method name inside its type (Zwx_.java:43-61):
+// "Time delays" disabled for request smuggling says nothing about SQL injection.
+func (h *ProbeHarness) withhold(method string, probes int) bool {
+	if h == nil || !h.disabled[method] {
+		return false
+	}
+	h.declines.Record(MethodDecline{TypeIndex: h.typeIndex, Issue: h.issue, Method: method,
+		Reason: methodDisabledReason, ProbesWithheld: probes})
+	return true
+}
+
+// withheldProbe is the marker a gated probe returns in place of a sent one.
+func withheldProbe(point bcheck.InsertionPoint, payload, method string) InjectionProbe {
+	return InjectionProbe{Payload: payload, Withheld: true, Evidence: InjectionEvidenceNone,
+		Detail: fmt.Sprintf("%s %q: not sent — %s is disabled for this issue type", point.Kind, point.Name, method)}
+}
+
 // ProbeErrorSignatures sends each payload and looks for signatures the baseline did not have.
 //
 // The list is coverage-guided (burpsy-react-ui-6c90): payloads that have opened new
@@ -245,6 +433,12 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 
 	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
+	if h.withhold(MethodErrorMessages, len(payloads)) {
+		for _, payload := range payloads {
+			out = append(out, withheldProbe(point, payload, MethodErrorMessages))
+		}
+		return out
+	}
 	payloads = h.orderPayloads(point, payloads)
 	for _, payload := range payloads {
 		out = append(out, h.probe(ctx, point, payload,
@@ -266,6 +460,9 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 func (h *ProbeHarness) ProbeEvaluation(ctx context.Context, point bcheck.InsertionPoint,
 	payload, expected string) InjectionProbe {
 
+	if h.withhold(MethodStringEcho, 1) {
+		return withheldProbe(point, payload, MethodStringEcho)
+	}
 	return h.probe(ctx, point, payload,
 		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 			ev := ClassifyEvaluation(baseline.Body, injected.Body, payload, expected)
@@ -279,6 +476,9 @@ func (h *ProbeHarness) ProbeEvaluation(ctx context.Context, point bcheck.Inserti
 func (h *ProbeHarness) ProbeTiming(ctx context.Context, point bcheck.InsertionPoint,
 	payload string, delay time.Duration) InjectionProbe {
 
+	if h.withhold(MethodTimeDelays, 1) {
+		return withheldProbe(point, payload, MethodTimeDelays)
+	}
 	return h.probe(ctx, point, payload,
 		func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 			ev := ClassifyTimingEvidence(baseline.Duration, injected.Duration, delay)
@@ -293,6 +493,9 @@ func (h *ProbeHarness) ProbeBoolean(ctx context.Context, point bcheck.InsertionP
 	truePayload, falsePayload string) InjectionProbe {
 
 	out := InjectionProbe{Payload: truePayload + " / " + falsePayload}
+	if h.withhold(MethodBooleanConditions, 2) {
+		return withheldProbe(point, out.Payload, MethodBooleanConditions)
+	}
 	whenTrue, err := h.Send(ctx, point, truePayload)
 	if err != nil {
 		out.Evidence = InjectionEvidenceInconclusive
@@ -341,6 +544,9 @@ type ProbeCoverage struct {
 	// fell is legible: without it, points the gate later drops read as points that were never
 	// enumerated.
 	PointsJudgedIneffective int
+	// PayloadsWithheld counts probes not sent because their detection method is disabled for this
+	// issue type (burpsy-react-ui-2hze). They are not in PayloadsSent: a withheld probe asked nothing.
+	PayloadsWithheld int
 }
 
 // Coverage summarises a probe set for reporting.
@@ -348,9 +554,13 @@ func (h *ProbeHarness) Coverage(probes []InjectionProbe, pointsTested int) Probe
 	cov := ProbeCoverage{
 		PointsTested:   pointsTested,
 		PointsDeclined: len(h.declined),
-		PayloadsSent:   len(probes),
 	}
 	for _, p := range probes {
+		if p.Withheld {
+			cov.PayloadsWithheld++
+			continue
+		}
+		cov.PayloadsSent++
 		if p.Evidence == InjectionEvidenceInconclusive {
 			cov.Inconclusive++
 		}

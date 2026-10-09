@@ -475,12 +475,27 @@ func (noEngagementScope) MayContainHost(string, uint16, bool) bool { return true
 // from here, so attaching the pacer at this one construction point bounds all of them. A fresh
 // AuthorisedSender per call is fine and the shared limiter is the whole point: the senders are
 // per-exchange, the bound is per-pool.
-func (s *ActiveScanner) probeGate(exchange *core.Exchange) *sender.AuthorisedSender {
+//
+// # The run's own sender (burpsy-react-ui-o2p3)
+//
+// ctx is how a run's project-option overrides reach the gate. An audit configuration that carries
+// scanner/audit_project_option_overrides/{connect_timeout,normal_timeout} gets a sender derived for
+// that run alone (sender.DeriveWithTimeouts, built once per run in auditRunSender) and it rides the
+// dispatch context; this is the one place that reads it. The derived sender is still wrapped in an
+// AuthorisedSender bound to the same scope handle, so it is the same chokepoint with different
+// timeouts rather than a second way out of the process — and the engagement sender, which Repeater,
+// Intruder and every other run share, is never touched. A context with no run sender (no override,
+// or a send outside a dispatched audit) gets the engagement sender, exactly as before.
+func (s *ActiveScanner) probeGate(ctx context.Context, exchange *core.Exchange) *sender.AuthorisedSender {
 	var gate sender.ScopeChecker = noEngagementScope{}
 	if s.scope != nil {
 		gate = s.scope
 	}
-	return sender.NewAuthorisedSender(gate, s.sender, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
+	net := s.sender
+	if run := runSenderFrom(ctx); run != nil {
+		net = run
+	}
+	return sender.NewAuthorisedSender(gate, net, exchange.Host, exchange.Port, exchange.TLS).WithPace(s.pace)
 }
 
 // sendTestRequest dispatches a crafted test request through the sender when
@@ -536,7 +551,7 @@ func (s *ActiveScanner) sendTestRequest(ctx context.Context, exchange *core.Exch
 	if s.sender != nil {
 		meter := meterFrom(ctx)
 		meter.attempt()
-		gate := s.probeGate(exchange)
+		gate := s.probeGate(ctx, exchange)
 		resp, err := gate.SendRequest(ctx, &sender.Request{
 			Method: exchange.Method,
 			Host:   exchange.Host,
@@ -597,7 +612,7 @@ func (s *ActiveScanner) sendTestRequestFull(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,
@@ -655,7 +670,7 @@ func (s *ActiveScanner) sendTestRequestBody(ctx context.Context, exchange *core.
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  method,
 		Host:    exchange.Host,
@@ -769,6 +784,44 @@ type PassiveScanner struct {
 	// Capture around this one scanner. Off by default: a module that always ran would be a surface
 	// reporting findings nobody enabled.
 	secrets atomic.Bool
+
+	// runConfig is where capture-time scanning reads the engagement's run configuration
+	// (burpsy-react-ui-saq3.3.3). Every Capture handle is built around this one scanner, so setting it
+	// here reaches proxy, crawl, Repeater and API-scan capture alike. Nil keeps the old, unconfigured
+	// behaviour.
+	runConfig atomic.Pointer[RunConfigSource]
+}
+
+// RunConfigSource is what capture-time scanning reads its configuration from: the audit run
+// configuration, and the scan-wide issue whitelist that admitsIssue intersects it with. ActiveScanner
+// is the production source, so proxy capture and an audit read one configuration.
+type RunConfigSource interface {
+	AuditConfig() AuditConfig
+	ConfigSnapshot() ScanConfig
+}
+
+// WithRunConfigSource makes every capture that runs this scanner honour src's run configuration:
+// scan_type_passive, the per-issue selection and detection methods, and the JavaScript static-analysis
+// keys (saq3.3.3).
+func (s *PassiveScanner) WithRunConfigSource(src RunConfigSource) *PassiveScanner {
+	if s != nil && src != nil {
+		s.runConfig.Store(&src)
+	}
+	return s
+}
+
+// captureRunConfig returns the run configuration and scan-wide whitelist capture applies, and false
+// when no source is set.
+func (s *PassiveScanner) captureRunConfig() (AuditConfig, []uint32, bool) {
+	if s == nil {
+		return AuditConfig{}, nil, false
+	}
+	p := s.runConfig.Load()
+	if p == nil {
+		return AuditConfig{}, nil, false
+	}
+	src := *p
+	return src.AuditConfig(), src.ConfigSnapshot().IssueTypes, true
 }
 
 // SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.

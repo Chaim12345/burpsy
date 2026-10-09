@@ -64,6 +64,7 @@ import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, I
 import { SimpleTable } from "../ui/table";
 import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
 import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
+import { ScanConfigDetail } from "./settings.scanconfig";
 
 const THEMES: { value: Theme; label: string }[] = [
  { value: "system", label: "Follow the system" },
@@ -801,7 +802,9 @@ function DomEngineSection(): JSX.Element {
 // The audit-family switches Burp keeps under Scanner -> Options -> Scan issues moved to the
 // Scanner page (burpsy-react-ui-1yd): Burp puts scan configuration in the scan-launch dialogue,
 // and a switch's effect - what the next audit sends - is only readable next to the thing that
-// launches one. Settings keeps the read-only shipped-config table.
+// launches one. Settings keeps the configuration library: the shipped presets read-only, and the
+// operator's own saved configurations, whose issue selection and parameter exemptions are edited in
+// the panel a row opens (burpsy-react-ui-saq3.3.1).
 function ScannerSettingsSection(): JSX.Element {
  const configs = useScannerConfigs();
  // Burp's Configuration library (burpsy-react-ui-uxcs). One name box serves both "save as" and
@@ -809,11 +812,15 @@ function ScannerSettingsSection(): JSX.Element {
  const configLibrary = useScanConfigLibrary();
  const [configName, setConfigName] = useState("");
  const [configFrom, setConfigFrom] = useState("");
+ // Which configuration the detail panel shows, by name, so a refetch that brings a newer saved
+ // version re-renders the panel with it rather than with a stale copy held here.
+ const [opened, setOpened] = useState<string | null>(null);
+ const openedConfig = (configs.data?.configs ?? []).find((c) => c.name === opened && !c.damaged) ?? null;
  return (
   <Card>
    <SectionHeading
     title="Scanner"
-    detail="Shipped audit configurations and their concrete settings. Read-only."
+    detail="Audit configurations: the shipped presets, read-only, and your own saved ones, whose issue selection and parameter exemptions you can edit."
     actions={
      <RefreshButton onClick={() => void configs.refetch()} loading={configs.isFetching} />
     }
@@ -836,6 +843,19 @@ function ScannerSettingsSection(): JSX.Element {
         { label: "Consecutive unit failures (fail item)", value: configs.data.default.consecutive_unit_failures_to_fail_item },
         { label: "Pause session after failed items", value: configs.data.default.pause_session_after_failed_items },
         { label: "Pause at failed item %", value: configs.data.default.pause_session_at_failed_item_percentage + "%" },
+        {
+         label: "Issue selection",
+         value: (configs.data.default.issue_types ?? []).length > 0
+          ? `only ${formatCount((configs.data.default.issue_types ?? []).length)} selected issue types`
+          : "every issue type",
+        },
+        { label: "Issue types disabled", value: formatCount((configs.data.default.disabled_issue_types ?? []).length) },
+        { label: "Detection methods disabled", value: formatCount((configs.data.default.disabled_detection_methods ?? []).length) },
+        { label: "Skip all tests for", value: (configs.data.default.skip_all_tests_for_parameters ?? []).join(", ") || "no parameters" },
+        {
+         label: "Skip server-side injection for",
+         value: (configs.data.default.skip_server_side_injection_for_parameters ?? []).join(", ") || "no parameters",
+        },
        ]} />
       </div>
      ) : null}
@@ -894,13 +914,32 @@ function ScannerSettingsSection(): JSX.Element {
            <Badge>saved</Badge>
           )}
          </td>
-         <td><span className="cell-num">{c.keys.length}</span></td>
-         <td>{c.keys.map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
+         {/* `?? []` because a saved or damaged row carried "keys": null until saq3.3.1, and reading
+             .length off it took the whole Settings page down the moment one configuration was saved. */}
+         <td><span className="cell-num">{(c.keys ?? []).length}</span></td>
+         <td>{(c.keys ?? []).map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
          <td>
           {c.shipped ? (
-           <span className="cell-dim" title="burpsy ships this configuration; clone it under another name to edit it">—</span>
+           <Button
+            variant="outline"
+            size="small"
+            aria-pressed={opened === c.name}
+            onClick={() => setOpened(opened === c.name ? null : c.name)}
+           >
+            View
+           </Button>
           ) : (
            <div className="toolbar">
+            {c.damaged ? null : (
+             <Button
+              variant="outline"
+              size="small"
+              aria-pressed={opened === c.name}
+              onClick={() => setOpened(opened === c.name ? null : c.name)}
+             >
+              Edit
+             </Button>
+            )}
             <Button
              variant="outline"
              size="small"
@@ -938,6 +977,9 @@ function ScannerSettingsSection(): JSX.Element {
        ))}
       </SimpleTable>
      </div>
+     {openedConfig ? (
+      <ScanConfigDetail key={openedConfig.name} config={openedConfig} onClose={() => setOpened(null)} />
+     ) : null}
     </>
    ) : configs.isLoading ? <LoadingPanel label="Loading scanner configurations" /> : null}
    {configs.data ? <p className="field-hint">{configs.data.applies_to_server}</p> : null}

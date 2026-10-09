@@ -375,6 +375,11 @@ const (
 	// parameter skip list and an engine-judged ineffective point are two different
 	// decisions, and the operator reading the queue needs to know which one applies.
 	DeclinedIneffectiveWhat = "insertion points judged ineffective"
+	// DeclinedSkippedServerSideWhat names the points a server-side-injection check did not probe
+	// because the operator exempted their parameter from those checks — Burp's
+	// scanner.ignored_insertion_points skip_server_side_injection_for_parameters (Zwh1). Distinct
+	// from DeclinedSkippedParamWhat: the parameter is still tested by every other check.
+	DeclinedSkippedServerSideWhat = "insertion points on parameters exempted from server-side injection checks"
 )
 
 // EnumerateOptions is the per-run tuning an audit configuration carries into the
@@ -417,13 +422,16 @@ type EnumerateOptions struct {
 	// Declined: an audit that skipped a parameter it was told to skip must say so, or
 	// the operator's own exemption reads as "nothing to test here".
 	//
-	// Burp has a second, softer list — skip_server_side_injection_for_parameters —
-	// which exempts a parameter from injection checks only, leaving passive/evidence
-	// checks running. burpsy's check families do not yet partition into
-	// server-side-injection versus rest, so that tier is declined rather than
-	// half-built: a list that exempted a parameter from checks this engine cannot
-	// name would be a control that silently tests more than it claims to skip.
+	// Burp's softer list, skip_server_side_injection_for_parameters, is the field below.
 	SkipAllTestsForParameters []string
+	// SkipServerSideInjectionForParameters names parameters an operator exempted from the
+	// server-side injection checks only — Burp's
+	// scanner.ignored_insertion_points.skip_server_side_injection_for_parameters. The scanner
+	// sets it ONLY on the enumeration a server-side-injection check makes (CheckDescriptor's
+	// ServerSideInjection class), never on the run-wide options, so a reflected-input or
+	// redirect check still probes the parameter. Matched like the skip-all list, and the drop is
+	// its own Declined.
+	SkipServerSideInjectionForParameters []string
 	// PointEffective is the per-insertion-point effectiveness oracle behind Burp's
 	// `scanner/audit_optimization/skip_ineffective_checks` (burpsy-react-ui-y4om).
 	//
@@ -819,6 +827,17 @@ func EnumerateWith(req []byte, kinds []string, opts EnumerateOptions) ([]Inserti
 		declined = append(declined, Declined{
 			What: DeclinedSkippedParamWhat,
 			Reason: fmt.Sprintf("%d point(s) were not audited: their parameter is on the operator's skip-all-tests list",
+				skipped),
+		})
+	}
+
+	// The server-side-injection exemption (burpsy-react-ui-gmdk), beside the skip-all list for the
+	// same before-the-cap reason. Present only when the enumerating check is a server-side
+	// injection check; every other check's options leave it empty.
+	if skipped := skipNamedPoints(&out, opts.SkipServerSideInjectionForParameters); skipped > 0 {
+		declined = append(declined, Declined{
+			What: DeclinedSkippedServerSideWhat,
+			Reason: fmt.Sprintf("%d point(s) were not probed by this server-side injection check: their parameter is on the operator's skip-server-side-injection list",
 				skipped),
 		})
 	}

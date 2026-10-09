@@ -37,9 +37,13 @@ func Test_parse_burp_config_maps_keys_and_reports_the_rest(t *testing.T) {
 	if !cfg.MaximumAuditTimeMinutes.Set || cfg.MaximumAuditTimeMinutes.Value != 15 {
 		t.Errorf("maximum_audit_time_minutes = %+v, want set 15", cfg.MaximumAuditTimeMinutes)
 	}
+	// The per-issue booleans are fields now (burpsy-react-ui-saq3.1), not unrepresentable records.
+	if !cfg.ScanOnlySelectedIssues.Set || cfg.ScanOnlySelectedIssues.Value != 1 {
+		t.Errorf("scan_only_selected_issues = %+v, want set true", cfg.ScanOnlySelectedIssues)
+	}
 	reported := strings.Join(cfg.UnrepresentableKeys, ",")
-	if !strings.Contains(reported, "scan_only_selected_issues") || !strings.Contains(reported, "totally_unknown_key") {
-		t.Errorf("UnrepresentableKeys = %v, want the per-issue key and the unknown key", cfg.UnrepresentableKeys)
+	if strings.Contains(reported, "scan_only_selected_issues") || !strings.Contains(reported, "totally_unknown_key") {
+		t.Errorf("UnrepresentableKeys = %v, want the unknown key and not the per-issue key", cfg.UnrepresentableKeys)
 	}
 }
 
@@ -79,7 +83,10 @@ func Test_apply_with_report_names_unapplied_keys(t *testing.T) {
 
 	// And a key that IS honoured stays out of that list, even when a file named it — which is the
 	// half of the old test above that no longer holds.
-	perIssue := BuiltInConfig{UnrepresentableKeys: []string{"scan_only_selected_issues"}}
+	perIssue, err := ParseBurpConfig([]byte(`{"scanner":{"issues_reported":{"scan_only_selected_issues":true}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, perIssueUnapplied := perIssue.ApplyWithReport(DefaultAuditConfig())
 	for _, name := range perIssueUnapplied {
 		if name == "scan_only_selected_issues" {
