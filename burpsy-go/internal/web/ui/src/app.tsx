@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import { scopeAllowsEverything } from "./lib/scope-state";
 import { appliedSectionLabels, readBundleCoverage } from "./lib/config-coverage";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -29,6 +30,7 @@ import {
  ShieldCheck,
  Square,
  Sun,
+ MousePointerClick,
  Unplug,
  Zap,
 } from "lucide-react";
@@ -66,6 +68,8 @@ import { ProjectSwitcher } from "./ui/project-switcher";
 import { DialogHost } from "./ui/dialog-host";
 import { promptDialog } from "./lib/dialogs";
 import { SearchDialog } from "./ui/search-dialog";
+import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
+import { ClickbanditDialog } from "./ui/clickbandit-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
@@ -303,6 +307,8 @@ function App(): JSX.Element {
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const repeaterTabCount = useApp((state) => state.repeaterTabs.length);
  const setShortcutsOpen = useApp((state) => state.setShortcutsOpen);
+ // Burp's top-level Clickbandit (burpsy-react-ui-g67w).
+ const [clickbanditOpen, setClickbanditOpen] = useState(false);
  // Burp puts Search on the tab bar, and it is shell state rather than a page's: it crosses tools,
  // so no single tool owns it. Local rather than in the store because nothing outside the shell
  // opens it — the command palette and the menu item are both built here.
@@ -1093,6 +1099,13 @@ function App(): JSX.Element {
      ],
     },
     {
+     id: "tools",
+     actions: [
+      // Burp's top-level "Burp Clickbandit" (burpsy-react-ui-g67w).
+      { id: "clickbandit", label: "Clickbandit", icon: MousePointerClick, onSelect: () => setClickbanditOpen(true) },
+     ],
+    },
+    {
      id: "state",
      actions: [
       { id: "dashboard", label: "Dashboard", icon: Gauge, onSelect: () => navigate("dashboard") },
@@ -1537,7 +1550,7 @@ function App(): JSX.Element {
       {formatCount(stats.data?.exchanges)} exchanges
      </span>
      <span>{formatCount(stats.data?.messages)} messages</span>
-     <span>{scope.data?.allow_all ? "scope: everything" : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
+     <span>{scopeAllowsEverything(scope.data) ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}` : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
      {caAvailable ? (
       <a className="status-link" href="/ca.crt" download>
        <ShieldCheck size={11} />
@@ -1557,6 +1570,8 @@ function App(): JSX.Element {
 
    <CataloguePalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <CsrfPocDialog />
+   <ClickbanditDialog open={clickbanditOpen} onOpenChange={setClickbanditOpen} />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
    {/* Every confirm/prompt in the console (lib/dialogs.ts, bea3). Mounted once, here. */}

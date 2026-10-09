@@ -47,7 +47,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -98,7 +100,22 @@ type Options struct {
 	// Timeout bounds how long NewClient waits for the client to announce its registered
 	// payload domain. Zero means 30s.
 	Timeout time.Duration
+	// StateDir, when set, makes the client's identity outlive this process: Burp's
+	// restoreClient(SecretKey) / getSecretKey (burpsy-react-ui-d657). The interactsh session
+	// (correlation id and keys) is kept in StateDir/session.yaml and resumed by the next client,
+	// so a payload minted before a restart is still polled after it, and the interactions it
+	// caused while burpsy was down are delivered on the first poll. Each run's interaction log is
+	// kept beside it, and Interactions reads all of them, because interactsh-client truncates its
+	// -o file and the previous run's log is the only record of what that run saw. Empty keeps the
+	// old behaviour: a fresh identity per process and a temporary log removed on Close.
+	StateDir string
 }
+
+// sessionFileName is the interactsh-client -sf file inside a StateDir.
+const sessionFileName = "session.yaml"
+
+// logPrefix names each run's interaction log inside a StateDir.
+const logPrefix = "interactions-"
 
 // Client owns one running interactsh-client subprocess and the temp file it appends
 // interactions to.
@@ -107,6 +124,11 @@ type Client struct {
 	cancel  context.CancelFunc
 	outPath string
 	domain  string
+	// stateDir is Options.StateDir. When set, Close stops the subprocess gracefully so it saves
+	// the session, and keeps the logs.
+	stateDir string
+	// resumed is true when this client took over a session a previous run saved.
+	resumed bool
 
 	// stderrMu guards stderr, which a copier goroutine writes while NewClient's
 	// registration poll reads it.
@@ -148,18 +170,72 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 		timeout = 30 * time.Second
 	}
 
-	outFile, err := os.CreateTemp("", "burpsy-oob-*.jsonl")
-	if err != nil {
-		return nil, fmt.Errorf("creating the interaction log: %w", err)
+	if opts.StateDir == "" {
+		outFile, err := os.CreateTemp("", "burpsy-oob-*.jsonl")
+		if err != nil {
+			return nil, fmt.Errorf("creating the interaction log: %w", err)
+		}
+		outPath := outFile.Name()
+		// The subprocess opens and appends to this path itself; our handle is only needed to
+		// reserve the name.
+		_ = outFile.Close()
+		c := &Client{outPath: outPath}
+		if err := c.start(ctx, bin, opts.ServerURL, "", timeout); err != nil {
+			_ = os.Remove(outPath)
+			return nil, err
+		}
+		return c, nil
 	}
-	outPath := outFile.Name()
-	// The subprocess opens and appends to this path itself; our handle is only needed to
-	// reserve the name.
-	_ = outFile.Close()
 
-	args := []string{"-json", "-o", outPath}
-	if opts.ServerURL != "" {
-		args = append(args, "-server", opts.ServerURL)
+	if err := os.MkdirAll(opts.StateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating the collaborator state directory: %w", err)
+	}
+	session := filepath.Join(opts.StateDir, sessionFileName)
+	_, statErr := os.Stat(session)
+	c := &Client{stateDir: opts.StateDir, resumed: statErr == nil}
+	c.outPath = c.newLogPath()
+	if err := c.start(ctx, bin, opts.ServerURL, session, timeout); err != nil {
+		return nil, err
+	}
+	if c.resumed {
+		return c, nil
+	}
+	// interactsh-client writes the session file only when it exits cleanly. A burpsy that is killed
+	// would then lose a session it had already handed payloads out from. So a brand-new session is
+	// saved straight away: stop the client gracefully, which writes the file, and resume from it. That
+	// costs one restart per new session and makes the identity survive a crash from the first payload on.
+	if err := c.stop(true); err != nil {
+		return nil, fmt.Errorf("saving the new collaborator session: %w", err)
+	}
+	if _, err := os.Stat(session); err != nil {
+		return nil, fmt.Errorf("saving the new collaborator session: %s did not write %s on exit", binaryName, session)
+	}
+	c.resumed = true
+	c.closeOnce = sync.Once{}
+	c.outPath = c.newLogPath()
+	if err := c.start(ctx, bin, opts.ServerURL, session, timeout); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// newLogPath names a fresh per-run interaction log in the state directory.
+func (c *Client) newLogPath() string {
+	return filepath.Join(c.stateDir, fmt.Sprintf("%s%d.jsonl", logPrefix, time.Now().UnixNano()))
+}
+
+// Resumed reports whether this client took over a saved session, so payloads minted before the
+// last restart are still polled.
+func (c *Client) Resumed() bool { return c.resumed }
+
+// start launches the subprocess and blocks until it announces a payload domain.
+func (c *Client) start(ctx context.Context, bin, serverURL, session string, timeout time.Duration) error {
+	args := []string{"-json", "-o", c.outPath}
+	if serverURL != "" {
+		args = append(args, "-server", serverURL)
+	}
+	if session != "" {
+		args = append(args, "-sf", session)
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -168,16 +244,17 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
 		cancel()
-		_ = os.Remove(outPath)
-		return nil, fmt.Errorf("wiring the client's stderr: %w", err)
+		return fmt.Errorf("wiring the client's stderr: %w", err)
 	}
 
-	c := &Client{cmd: cmd, cancel: cancel, outPath: outPath}
+	c.stderrMu.Lock()
+	c.stderr.Reset()
+	c.stderrMu.Unlock()
+	c.cmd, c.cancel = cmd, cancel
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		_ = os.Remove(outPath)
-		return nil, fmt.Errorf("starting %s: %w", bin, err)
+		return fmt.Errorf("starting %s: %w", bin, err)
 	}
 
 	go func() {
@@ -203,23 +280,57 @@ func NewClient(ctx context.Context, opts Options) (*Client, error) {
 	for {
 		if domain := c.scanDomain(); domain != "" {
 			c.domain = domain
-			return c, nil
+			return nil
 		}
 		if time.Now().After(deadline) {
 			c.stderrMu.Lock()
 			got := c.stderr.String()
 			c.stderrMu.Unlock()
-			_ = c.Close()
-			return nil, fmt.Errorf("no out-of-band interaction channel: %s did not announce a payload domain within %s; its output was: %s",
+			_ = c.stop(false)
+			return fmt.Errorf("no out-of-band interaction channel: %s did not announce a payload domain within %s; its output was: %s",
 				binaryName, timeout, strings.TrimSpace(got))
 		}
 		select {
 		case <-runCtx.Done():
-			_ = c.Close()
-			return nil, fmt.Errorf("no out-of-band interaction channel: cancelled while waiting for %s to register: %w", binaryName, runCtx.Err())
+			_ = c.stop(false)
+			return fmt.Errorf("no out-of-band interaction channel: cancelled while waiting for %s to register: %w", binaryName, runCtx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// gracefulStopWait bounds how long a graceful stop waits for the client to save its session.
+var gracefulStopWait = 5 * time.Second
+
+// stop ends the subprocess. Graceful sends SIGINT first, which is what makes interactsh-client write
+// its -sf session file, and only kills it if it has not exited within gracefulStopWait.
+func (c *Client) stop(graceful bool) error {
+	if c.cmd == nil {
+		return nil
+	}
+	if graceful && c.cmd.Process != nil {
+		done := make(chan struct{})
+		go func() { _ = c.cmd.Wait(); close(done) }()
+		if err := c.cmd.Process.Signal(os.Interrupt); err == nil {
+			select {
+			case <-done:
+				c.cancel()
+				c.cmd = nil
+				return nil
+			case <-time.After(gracefulStopWait):
+			}
+		}
+		c.cancel()
+		<-done
+		c.cmd = nil
+		return nil
+	}
+	c.cancel()
+	// The kill we just requested surfaces here as an error; it is the expected outcome of a stop,
+	// not a failure to report.
+	_ = c.cmd.Wait()
+	c.cmd = nil
+	return nil
 }
 
 // scanDomain looks for the registration announcement in whatever stderr holds so far.
@@ -247,7 +358,30 @@ func (c *Client) Domain() string { return c.domain }
 // expected operation, not corruption. Treating it as an error would turn a routine race
 // into a spurious "OOB channel broken".
 func (c *Client) Interactions() ([]Interaction, error) {
-	f, err := os.Open(c.outPath)
+	if c.stateDir == "" {
+		return readInteractionLog(c.outPath)
+	}
+	// Every run's log, oldest first. The previous runs' logs are the only record of what those runs
+	// received, because each run's client truncates its own -o file.
+	logs, err := filepath.Glob(filepath.Join(c.stateDir, logPrefix+"*.jsonl"))
+	if err != nil {
+		return nil, fmt.Errorf("listing the interaction logs: %w", err)
+	}
+	sort.Strings(logs)
+	var out []Interaction
+	for _, path := range logs {
+		got, err := readInteractionLog(path)
+		out = append(out, got...)
+		if err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// readInteractionLog parses one JSONL interaction log.
+func readInteractionLog(path string) ([]Interaction, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -323,14 +457,13 @@ func Deduplicate(in []Interaction) []Interaction {
 // more than once.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
-		if c.cancel != nil {
-			c.cancel()
+		if c.stateDir != "" {
+			// Gracefully, so the client saves the session the next run resumes, and the logs
+			// stay: they are the record of what this identity has received.
+			_ = c.stop(true)
+			return
 		}
-		if c.cmd != nil {
-			// The kill we just requested surfaces here as an error; it is the expected
-			// outcome of Close, not a failure to report.
-			_ = c.cmd.Wait()
-		}
+		_ = c.stop(false)
 		if c.outPath != "" {
 			if err := os.Remove(c.outPath); err != nil && !os.IsNotExist(err) {
 				c.closeErr = fmt.Errorf("removing the interaction log: %w", err)
@@ -338,4 +471,40 @@ func (c *Client) Close() error {
 		}
 	})
 	return c.closeErr
+}
+
+// Forget closes the client and deletes its state directory: the saved session and every run's
+// interaction log. It is the "discard" half of "Don't use Collaborator". Afterwards nothing can
+// poll the payloads minted from this identity, which is what the operator chose.
+func (c *Client) Forget() error {
+	err := c.Close()
+	if c.stateDir != "" {
+		if rmErr := os.RemoveAll(c.stateDir); rmErr != nil && err == nil {
+			err = fmt.Errorf("removing the collaborator state: %w", rmErr)
+		}
+	}
+	return err
+}
+
+// StateDirFor is where a server's identity is kept under base: one directory per interaction
+// server, so switching servers never resumes another server's session. "" stays "" (no
+// persistence).
+func StateDirFor(base, serverURL string) string {
+	if base == "" {
+		return ""
+	}
+	name := "public"
+	if serverURL != "" {
+		var b strings.Builder
+		for _, r := range strings.ToLower(serverURL) {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '-':
+				b.WriteRune(r)
+			default:
+				b.WriteByte('_')
+			}
+		}
+		name = "server-" + b.String()
+	}
+	return filepath.Join(base, name)
 }

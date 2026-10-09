@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
+import { TargetAnalyzerView } from "../ui/target-analyzer-view";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data";
@@ -331,7 +332,8 @@ export function SiteMapPage(): JSX.Element {
   * and a remembered "crawl paths" would greet them with an empty panel on a session where nothing
   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
   */
- const [view, setView] = useState<"urls" | "paths" | "engagement">("urls");
+ const [view, setView] = useState<"urls" | "paths" | "engagement" | "analyzer">("urls");
+ const [analyzerSeed, setAnalyzerSeed] = useState<EngagementSeed | undefined>(undefined);
  /**
   * The search a right-click on the tree asked for (burpsy-react-ui-gupj), or undefined when the
   * Engagement tools view was opened by its own button. Held here rather than inside the view
@@ -371,6 +373,10 @@ export function SiteMapPage(): JSX.Element {
      );
      setRoute("settings");
      requestSettingsSection("scheduled-tasks");
+    },
+    analyzeTarget: (seed) => {
+     setAnalyzerSeed(seed);
+     setView("analyzer");
     },
    },
    url,
@@ -1178,6 +1184,8 @@ export function SiteMapPage(): JSX.Element {
     <CrawlPathsView runs={crawls.data?.crawls ?? []} />
    ) : view === "engagement" ? (
     <EngagementView seed={engagementSeed} />
+   ) : view === "analyzer" ? (
+    <TargetAnalyzerView seed={analyzerSeed} />
    ) : (
     <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}
