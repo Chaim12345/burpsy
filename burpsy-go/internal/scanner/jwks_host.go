@@ -33,6 +33,19 @@ type hostedMaterial struct {
 	fetched  atomic.Bool
 	fetchLog []string
 	mu       sync.Mutex
+	// contentType and body are the document served, replaceable by Serve; guarded by mu.
+	contentType string
+	body        []byte
+}
+
+// Serve replaces the document at the same URL. The token's header names that URL before the
+// material it points at exists, so the listener has to stay up while the material is created:
+// closing it and listening again on the same port (as this once did) let any other listener in the
+// process take the port in between, and the check then failed with no fetch to show.
+func (h *hostedMaterial) Serve(contentType string, body []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.contentType, h.body = contentType, body
 }
 
 // hostMaterial starts a listener serving body at a random path, on all interfaces so a target
@@ -43,16 +56,17 @@ func hostMaterial(contentType string, body []byte) (*hostedMaterial, error) {
 		return nil, fmt.Errorf("jwks host: cannot listen: %w", err)
 	}
 	path := "/" + strings.ToLower(domCanary("jwks")) + ".json"
-	h := &hostedMaterial{}
+	h := &hostedMaterial{contentType: contentType, body: body}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		h.fetched.Store(true)
 		h.mu.Lock()
 		h.fetchLog = append(h.fetchLog, r.RemoteAddr+" "+r.UserAgent())
+		ct, b := h.contentType, h.body
 		h.mu.Unlock()
-		w.Header().Set("Content-Type", contentType)
-		_, _ = w.Write(body)
+		w.Header().Set("Content-Type", ct)
+		_, _ = w.Write(b)
 	})
 	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 
@@ -139,13 +153,8 @@ func jwtHostedCheck(row string, jwks bool) CheckRunner {
 		if err != nil {
 			return nil, nil
 		}
-		// Re-host with the real material now that it exists, at the same URL.
-		host.Close()
-		host2, err := hostMaterialAt(host.url, contentType, material)
-		if err != nil {
-			return nil, err
-		}
-		defer host2.Close()
+		// Serve the real material now that it exists, from the same listener at the same URL.
+		host.Serve(contentType, material)
 
 		accepted, detail, sendErr := jwtForgeryAccepted(ctx, cc, original, forged)
 		if sendErr != nil {
@@ -155,7 +164,7 @@ func jwtHostedCheck(row string, jwks bool) CheckRunner {
 		// The target has to have fetched the document for the header to have been honoured.
 		// Acceptance without a fetch is some other reason the response matched, and saying
 		// so is the difference between a finding and a guess.
-		if !host2.Fetched() {
+		if !host.Fetched() {
 			return nil, fmt.Errorf("%s: the target never fetched %s, so the header could not be shown to be honoured (a target that cannot reach this scanner will always look this way)",
 				row, host.url)
 		}
@@ -164,38 +173,6 @@ func jwtHostedCheck(row string, jwks bool) CheckRunner {
 		}
 		return []*Finding{buildHeaderFinding(cc, row, "high", "certain", forged,
 			fmt.Sprintf("the target fetched key material from %s and accepted a token signed against it (%s); fetchers: %s",
-				host.url, detail, strings.Join(host2.FetchLog(), "; ")))}, nil
+				host.url, detail, strings.Join(host.FetchLog(), "; ")))}, nil
 	}
-}
-
-// hostMaterialAt re-serves a document at an already-chosen URL, so the forged token's header and
-// the listener agree.
-func hostMaterialAt(rawURL, contentType string, body []byte) (*hostedMaterial, error) {
-	idx := strings.LastIndex(rawURL, "/")
-	if idx < 0 {
-		return nil, fmt.Errorf("jwks host: malformed url %q", rawURL)
-	}
-	path := rawURL[idx:]
-	hostPort := strings.TrimPrefix(rawURL[:idx], "http://")
-	_, port, err := net.SplitHostPort(hostPort)
-	if err != nil {
-		return nil, fmt.Errorf("jwks host: malformed authority %q: %w", hostPort, err)
-	}
-	ln, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		return nil, fmt.Errorf("jwks host: cannot re-listen on %s: %w", port, err)
-	}
-	h := &hostedMaterial{url: rawURL}
-	mux := http.NewServeMux()
-	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-		h.fetched.Store(true)
-		h.mu.Lock()
-		h.fetchLog = append(h.fetchLog, r.RemoteAddr)
-		h.mu.Unlock()
-		w.Header().Set("Content-Type", contentType)
-		_, _ = w.Write(body)
-	})
-	h.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = h.srv.Serve(ln) }()
-	return h, nil
 }

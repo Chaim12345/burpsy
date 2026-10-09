@@ -268,6 +268,12 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 			execOpts = append(execOpts, chromedp.UserAgent(opts.UserAgent))
 		}
 
+		// chromedp gives Chrome its own 20s to print the DevTools URL, and that fired first: a browser
+		// that took 20-30s to start (a loaded CI runner, under -race) failed with "websocket url
+		// timeout reached" inside the bound below, and a Timeout above 20s was silently capped at 20s.
+		// The one startup bound is ours.
+		execOpts = append(execOpts, chromedp.WSURLReadTimeout(timeout))
+
 		allocCtx, allocCancel = chromedp.NewExecAllocator(ctx, execOpts...)
 	}
 
