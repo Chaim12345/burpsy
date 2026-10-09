@@ -1552,7 +1552,17 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// On the dashboard for the duration of the attack (DASH-01). The total is the plan's length —
 	// what will actually be sent — not the combination count, which is what the plan's bound already
 	// refused; the refusal shows up as the gated bucket on the result instead.
-	task := s.tasks.Start(dash.KindIntruder, fmt.Sprintf("%s %s:%d", kind, host, port), uint64(plan.Len()))
+	//
+	// Started inside s.attacks.register, so the dashboard row and the control routes' entry for this
+	// attack appear together; see register for the window that a separate add left open.
+	task := s.attacks.register(func() (*dash.Handle, *runningAttack) {
+		task := s.tasks.Start(dash.KindIntruder, fmt.Sprintf("%s %s:%d", kind, host, port), uint64(plan.Len()))
+		return task, &runningAttack{
+			taskID: task.ID(), kind: kind.String(), planned: plan.Len(),
+			target: fmt.Sprintf("%s:%d", host, port), control: control,
+		}
+	})
+	defer s.attacks.remove(task.ID())
 
 	// Cancellable, at last. dash.Handle.WithCancel's own doc has named "intruder attack stop" as one
 	// of its three consumers since it was written, and this handler never called it — so
@@ -1573,13 +1583,8 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	defer close(attackDone)
 	control.StopOnContext(taskCtx, attackDone, "stopped from the dashboard")
 
-	// Registered for the duration, so /api/intruder/attacks/{id}/{pause|resume|stop} can reach it
-	// while this request is still holding the attack's response open.
-	s.attacks.add(&runningAttack{
-		taskID: task.ID(), kind: kind.String(), planned: plan.Len(),
-		target: fmt.Sprintf("%s:%d", host, port), control: control,
-	})
-	defer s.attacks.remove(task.ID())
+	// Registered above for the duration, so /api/intruder/attacks/{id}/{pause|resume|stop} can reach
+	// it while this request is still holding the attack's response open.
 
 	// HTTP/1 connection reuse (xhqr) is bounded by the attack's own concurrency, read off the attack
 	// after every adjustment above, so the pool can never hold more sockets than the attack can use.

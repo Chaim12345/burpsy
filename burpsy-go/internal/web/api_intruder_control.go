@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 )
 
@@ -56,13 +57,24 @@ type attackRegistry struct {
 
 func newAttackRegistry() *attackRegistry { return &attackRegistry{m: map[uint64]*runningAttack{}} }
 
-func (r *attackRegistry) add(a *runningAttack) {
-	if r == nil || a == nil || a.taskID == 0 {
-		return
-	}
+// register starts the attack's dashboard task and records the attack in one step, under the
+// registry's write lock, and returns the task. start runs with the lock held: it is where the caller
+// calls tasks.Start and builds the attack from the new task's id.
+//
+// Two separate steps left a window in which the task was on the dashboard — with its id, which is the
+// handle the control routes take — while GET /api/intruder/attacks did not list it and
+// /api/intruder/attacks/{id}/stop answered 404 (burpsy-react-ui-h68z; it surfaced as
+// TestIntruderAttacksListsARunningAttackAndStopEndsIt failing under -race's slower scheduling).
+// Holding the lock across both closes it: a reader that saw the task and then asks this registry
+// blocks on the lock until the attack is in it.
+func (r *attackRegistry) register(start func() (*dash.Handle, *runningAttack)) *dash.Handle {
 	r.mu.Lock()
-	r.m[a.taskID] = a
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	task, a := start()
+	if a != nil && a.taskID != 0 {
+		r.m[a.taskID] = a
+	}
+	return task
 }
 
 // remove drops an attack that has ended. Called from the run handler's defer, so an attack that
