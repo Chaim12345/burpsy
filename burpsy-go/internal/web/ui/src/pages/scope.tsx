@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { scopeBadge } from "../lib/scope-state";
 import { Plus, Trash2, Pencil, ClipboardPaste, FolderOpen, BookMarked, Library } from "lucide-react";
 import { toast } from "sonner";
 import { useScopeView, useUpdateScope, useUpdateScopeLibrary, type ScopeLibraryEntry } from "../lib/data.policy";
@@ -108,6 +109,8 @@ export function ScopePage(): JSX.Element {
  // page's rules, and the operator has to be able to see the table they are about to replace.
  const updateLibrary = useUpdateScopeLibrary();
  const [saving, setSaving] = useState(false);
+ // Clearing every rule widens the scope to every host, so it asks first (us6r.1), as Settings' copy does.
+ const [confirmClear, setConfirmClear] = useState(false);
  const [libraryName, setLibraryName] = useState("");
  const [browsing, setBrowsing] = useState(false);
  // The second step of a load or a delete: the entry the operator picked, held so the dialog can
@@ -525,19 +528,39 @@ export function ScopePage(): JSX.Element {
      description="What the proxy, scanner and crawler are allowed to touch. Changes persist immediately."
      actions={
       <>
-       {data ? <Badge tone={data.allow_all ? "warn" : "good"}>{data.allow_all ? "everything in scope" : "restricted"}</Badge> : null}
+       {data ? <Badge tone={scopeBadge(data).tone}>{scopeBadge(data).label}</Badge> : null}
        <Button
         variant="outline"
         size="small"
-        onClick={() => {
-         setSelected(null);
-         run({ action: "clear" }, "Scope cleared");
-        }}
+        onClick={() => setConfirmClear(true)}
         disabled={!data || data.empty}
        >
         <Trash2 size={13} />
         Clear scope
        </Button>
+       <Modal
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear every scope rule?"
+        description="With no include rules left, every host is in scope: the proxy records it, the scanner may audit it and Repeater may send to it."
+       >
+        <div className="page-actions">
+         <Button variant="outline" onClick={() => setConfirmClear(false)}>
+          Cancel
+         </Button>
+         <Button
+          variant="danger"
+          onClick={() => {
+           setSelected(null);
+           run({ action: "clear" }, "Scope cleared — every host is now in scope");
+           setConfirmClear(false);
+          }}
+         >
+          <Trash2 size={13} />
+          Clear scope
+         </Button>
+        </div>
+       </Modal>
        {/* Burp's "Save to library" and its counterpart, beside Clear scope because those three are
            the operations on the rule set as a whole. Save is disabled with nothing to save: a
            library holding no rules is an empty scope, which allows every host, and storing one
@@ -726,6 +749,12 @@ export function ScopePage(): JSX.Element {
       </>
      }
     />
+    {data && data.rules.length === 0 ? (
+     <p className="notice notice-warn" role="note">
+      No scope rules: every host is in scope, so the proxy records it, the scanner may audit it and Repeater may
+      send to it. Add an include rule to restrict the scope.
+     </p>
+    ) : null}
     <VirtualTable
      ariaLabel="Scope rules"
      data={rows}
