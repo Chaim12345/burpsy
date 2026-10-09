@@ -14,10 +14,12 @@ export function hasCollaboratorAttempts(attempts: readonly Attempt[]): boolean {
 
 /**
  * Each attempt's interactions, by ordinal, one per observable event. A repeat of the same callback
- * (same protocol, query type and client — one lookup's fan-out, oob.Deduplicate's key) is collapsed
- * WITHIN the attempt. The log's own `collapsed` flag is not used: the server computes it across the
- * whole log, so the same resolver calling back for two different payloads would count for only the
- * first attempt. Address comparison ignores case; the server attributes case-insensitively too.
+ * for the same payload (same payload, protocol, query type and client — one lookup's fan-out; the
+ * server's collaboratorEventKey) is collapsed WITHIN the attempt. An attempt that carried two
+ * addresses keeps one event per address even when the same resolver looked both up (vfqy). The
+ * log's own `collapsed` flag is not used: an attempt sees only its own addresses' rows, and a row the
+ * log collapsed into one sent by an earlier attempt is still this attempt's first callback. Address
+ * comparison ignores case; the server attributes case-insensitively too.
  */
 export function interactionsByAttempt(
   attempts: readonly Attempt[],
@@ -41,7 +43,7 @@ export function interactionsByAttempt(
       .flatMap((address) => byAddress.get(address) ?? [])
       .sort((a, b) => a.at_ms - b.at_ms || a.id - b.id);
     for (const row of ordered) {
-      const event = `${row.type}|${row.q_type ?? ""}|${row.client_ip}`;
+      const event = `${(row.payload ?? "").toLowerCase()}|${row.type}|${row.q_type ?? ""}|${row.client_ip}`;
       if (events.has(event)) continue;
       events.add(event);
       hits.push(row);

@@ -76,6 +76,14 @@ func Test_links_in_proxied_pages_become_unrequested_site_map_items(t *testing.T)
 	if tree := get200(t, s, "/api/sitemap"); strings.Count(tree, `"unrequested":true`) != 1 {
 		t.Errorf("after /account was requested, want exactly one unrequested item left (/search): %s", tree)
 	}
+
+	// A link carrying a query is cleared by requesting that URL (burpsy-react-ui-u6f8): the proxied
+	// exchange is stored as /search?q=1, and the grey item must not survive beside it.
+	get("/search?q=1")
+	time.Sleep(100 * time.Millisecond)
+	if tree := get200(t, s, "/api/sitemap"); strings.Contains(tree, `"unrequested":true`) {
+		t.Errorf("after /search?q=1 was requested, an unrequested item is left: %s", tree)
+	}
 }
 
 func get200(t *testing.T, s *Server, path string) string {

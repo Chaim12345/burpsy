@@ -27,7 +27,7 @@ import {
  type PathArmMode,
 } from "../lib/scope-arms";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, Select, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, Input, Modal, NeedsValueButton, Select, Textarea, Toolbar } from "../ui/primitives";
 import { VirtualTable, type Column } from "../ui/table";
 
 /** One row of the rules table: the exact tuple the wire reports, keyed for selection. */
@@ -917,9 +917,13 @@ export function ScopePage(): JSX.Element {
       <Button variant="outline" onClick={() => setSaving(false)}>
        Cancel
       </Button>
-      <Button disabled={updateLibrary.isPending || libraryName.trim() === ""} onClick={saveLibrary}>
+      <NeedsValueButton
+       disabled={updateLibrary.isPending}
+       missing={libraryName.trim() === "" ? "needs a name" : null}
+       onClick={saveLibrary}
+      >
        {existingLibrary ? "Replace library" : "Save library"}
-      </Button>
+      </NeedsValueButton>
      </div>
     </div>
    </Modal>

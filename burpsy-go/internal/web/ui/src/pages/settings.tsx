@@ -60,7 +60,7 @@ import type { FrameProgramResponse } from "../lib/types.policy";
 import type { SkillsView, TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, NeedsValueButton, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
 import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
@@ -280,6 +280,10 @@ function ProtocolSection(): JSX.Element {
 
  const downgrades = Object.entries(data?.downgrades ?? {});
 
+ // Shown beside the disabled Probe button (z2l5): the host placeholder is an example, not a value.
+ const probePort = Number(port.trim());
+ const probeMissing = !host.trim() ? "needs a host" : !Number.isInteger(probePort) || probePort <= 0 ? "needs a port" : null;
+
  const runProbe = () => {
   const parsedPort = Number(port.trim());
   if (!host.trim() || !Number.isInteger(parsedPort) || parsedPort <= 0) {
@@ -389,10 +393,10 @@ function ProtocolSection(): JSX.Element {
     <Field label="TLS" htmlFor="protocol-probe-tls">
      <Switch id="protocol-probe-tls" label="Use TLS for the probe" checked={tls} onCheckedChange={setTls} />
     </Field>
-    <Button onClick={runProbe} disabled={probe.isPending}>
+    <NeedsValueButton onClick={runProbe} disabled={probe.isPending} missing={probeMissing}>
      <Radar size={13} />
      {probe.isPending ? "Probing…" : "Probe negotiation"}
-    </Button>
+    </NeedsValueButton>
    </Toolbar>
    {result ? (
     <>
@@ -3096,10 +3100,14 @@ function UpstreamProxySection(): JSX.Element {
        />
       )}
      </Field>
-     <Button onClick={addRule} disabled={busy}>
+     <NeedsValueButton
+      onClick={addRule}
+      disabled={busy}
+      missing={!pattern.trim() ? "needs a host pattern" : !proxy.trim() ? "needs a proxy URL" : null}
+     >
       <Plus size={13} />
       Add rule
-     </Button>
+     </NeedsValueButton>
     </Toolbar>
    ) : null}
 

@@ -237,12 +237,15 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	// re-walking every finding at every node would be quadratic in a map that only needs building
 	// once.
 	issues := s.issuesByNode()
-	var tree []sitemapNodeView
 	var nodeCount int
 
 	// One snapshot serves both the observed tree and the dedupe of inserted and unrequested items
 	// below, so the two agree with each other and the map is cloned once per request.
 	hosts := s.sitemap.Hosts()
+	// Allocated, never nil: an empty map is "tree":[] on the wire, not null (burpsy-react-ui-9n01).
+	// The UI types the field as an array, and a null there breaks any client that iterates it where
+	// it should have rendered an empty site map.
+	tree := make([]sitemapNodeView, 0, len(hosts))
 	for _, host := range hosts {
 		if hostFilter != "" && host.Host != hostFilter {
 			continue
@@ -274,6 +277,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:       []string{},
 			Statuses:      []int{},
 			Mimes:         sortedSetKeys(hostMimes),
+			Params:        []string{},
 			LastExchange:  lastEx,
 			Recent:        []core.ExchangeID{},
 			SubtreeIssues: hostIssues,
@@ -321,6 +325,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:  []string{},
 			Statuses: []int{},
 			Mimes:    []string{},
+			Params:   []string{},
 			Recent:   []core.ExchangeID{},
 			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
 		})
@@ -353,6 +358,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:     []string{},
 			Statuses:    []int{},
 			Mimes:       []string{},
+			Params:      []string{},
 			Recent:      []core.ExchangeID{},
 			InScope:     s.scope.Contains(un.Host, un.Port, pathOrRoot(un.Path), un.TLS),
 		})
@@ -370,10 +376,18 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // observedIndex answers whether the observed tree already holds a path under its host, for the
-// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its clean form
-// is a stored path key, or when it names a folder that anything observed sits beneath: the fold
-// synthesises ancestor folders, so an insert naming /api/ would otherwise produce a second /api/ node
-// beside the synthesised one. "/" is observed under any host that has a path at all.
+// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its node
+// (sitemap.NodePath: query removed, normalised) is the node of any stored path key, or when it names
+// a folder that anything observed sits beneath: the fold synthesises ancestor folders, so an insert
+// naming /api/ would otherwise produce a second /api/ node beside the synthesised one. "/" is
+// observed under any host that has a path at all.
+//
+// Node against node, never node against raw key (burpsy-react-ui-u6f8): the stored keys keep the
+// query ("/search?q=1") and comparing the item's stripped path to them left a linked /search?q=1
+// grey after /search?q=1 was requested. A request for /search?q=1 also clears a linked
+// /search?q=2: the fold draws both as the one requested /search node with q in its parameter list,
+// so a grey /search?q=2 beside it would be a second row for a node the map already shows as
+// requested — the per-query sibling leaf the fold was written to remove.
 type observedIndex map[observedHostKey]*observedHost
 
 type observedHostKey struct {
@@ -383,7 +397,8 @@ type observedHostKey struct {
 }
 
 type observedHost struct {
-	// keys are the stored path keys, exactly as the site map holds them.
+	// keys are the nodes of the stored path keys: sitemap.NodePath of each, so "/search?q=1" is held
+	// as "/search".
 	keys map[string]struct{}
 	// folders holds every clean observed path's prefixes that end in "/" ("/", "/a/", "/a/b/" for
 	// /a/b/c), which is the set a folder query X matches as HasPrefix(path, X+"/").
@@ -400,10 +415,10 @@ func newObservedIndex(hosts []*sitemap.HostNode) observedIndex {
 			oh = &observedHost{keys: map[string]struct{}{}, folders: map[string]struct{}{}}
 			idx[k] = oh
 		}
-		for key, pn := range h.Paths {
-			oh.keys[key] = struct{}{}
+		for key := range h.Paths {
+			cleanPath := sitemap.NodePath(key)
+			oh.keys[cleanPath] = struct{}{}
 			oh.any = true
-			cleanPath, _ := splitPathQuery(pn.Path)
 			for i := 0; i < len(cleanPath); i++ {
 				if cleanPath[i] == '/' {
 					oh.folders[cleanPath[:i+1]] = struct{}{}
@@ -419,7 +434,7 @@ func (idx observedIndex) has(in *sitemap.InsertedNode) bool {
 	if oh == nil {
 		return false
 	}
-	clean, _ := splitPathQuery(in.Path)
+	clean := sitemap.NodePath(in.Path)
 	if _, ok := oh.keys[clean]; ok {
 		return true
 	}
@@ -475,7 +490,7 @@ func mergeInsertedIntoTree(tree []sitemapNodeView, inserts []sitemapNodeView, no
 				Port:     in.Port,
 				TLS:      in.TLS,
 				Depth:    0,
-				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Recent: []core.ExchangeID{},
+				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Params: []string{}, Recent: []core.ExchangeID{},
 			}, paths: map[string]sitemapNodeView{}}
 			byHost[key] = g
 			order = append(order, key)
@@ -573,6 +588,7 @@ func graftInserted(host *sitemapNodeView, in sitemapNodeView, nodeCount *int) {
 				Methods:    []string{},
 				Statuses:   []int{},
 				Mimes:      []string{},
+				Params:     []string{},
 				Recent:     []core.ExchangeID{},
 				ChildCount: len(ancestors) - depth - 1,
 			})
@@ -741,7 +757,7 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			Mimes:         sortedSetKeys(a.mimes),
 			Params:        sortedSetKeys(a.params),
 			LastExchange:  lastExchangeForPath(host.Host, a.ids),
-			Recent:        lastN(a.ids, 20),
+			Recent:        nonNilIDs(lastN(a.ids, 20)),
 			Issues:        own,
 			SubtreeIssues: own,
 			WorstSeverity: severityName(ownWorst),
@@ -796,27 +812,15 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 }
 
 // splitPathQuery separates the path component from the query string and normalises the path, so the
-// tree is built from path structure alone.
+// tree is built from path structure alone. The path half is sitemap.NodePath — a leading slash and no
+// trailing one, so `/a`, `/a/` and a stored `a` are the one node an operator reads them as — and is
+// the same identity the site map's own "already observed?" checks use (burpsy-react-ui-u6f8).
 func splitPathQuery(p string) (string, string) {
+	query := ""
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		return normalisePath(p[:i]), p[i+1:]
+		query = p[i+1:]
 	}
-	return normalisePath(p), ""
-}
-
-// normalisePath gives every path a leading slash and no trailing one, so `/a`, `/a/` and a stored
-// `a` are the one node an operator reads them as.
-func normalisePath(p string) string {
-	if p == "" {
-		return "/"
-	}
-	if p[0] != '/' {
-		p = "/" + p
-	}
-	for len(p) > 1 && p[len(p)-1] == '/' {
-		p = p[:len(p)-1]
-	}
-	return p
+	return sitemap.NodePath(p), query
 }
 
 // parentOfPath returns the folder one segment up, or "" for a top-level path.
@@ -938,6 +942,16 @@ func statusInts(statuses map[int]int) []int {
 		}
 	}
 	return out
+}
+
+// nonNilIDs is ids, or an empty slice for a folder synthesised to hold children: it holds no
+// exchanges of its own, and a nil slice would reach the wire as "recent_exchanges":null
+// (burpsy-react-ui-9n01).
+func nonNilIDs(ids []core.ExchangeID) []core.ExchangeID {
+	if ids == nil {
+		return []core.ExchangeID{}
+	}
+	return ids
 }
 
 func lastN(ids []core.ExchangeID, n int) []core.ExchangeID {

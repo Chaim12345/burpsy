@@ -107,3 +107,77 @@ describe("defaults", () => {
     for (const key of HISTORY_POPOVER_KEYS) expect(key in FILTER_DEFAULTS.history, key).toBe(true);
   });
 });
+
+// Logger's view filter axes (uvpb) joined the logger preset after presets shipped (3dyy).
+describe("logger presets carry the view filter axes", () => {
+  const loggerTuned = {
+    ...FILTER_DEFAULTS.logger,
+    tool: "repeater",
+    statusClass: "4",
+    viewScopeOnly: true,
+    viewHasResponse: true,
+    viewParameterized: true,
+    viewMime: "text/html,application/json",
+    viewExt: "js,json",
+  };
+
+  test("the five view axes are part of the logger schema", () => {
+    expect(FILTER_DEFAULTS.logger).toMatchObject({
+      viewScopeOnly: false,
+      viewHasResponse: false,
+      viewParameterized: false,
+      viewMime: "",
+      viewExt: "",
+    });
+  });
+
+  test("round-trips through the file and through browser storage", () => {
+    const text = serializePreset("logger", "Scoped JSON", loggerTuned, new Date("2026-10-09T00:00:00Z"));
+    expect(parsePreset(text, "logger")).toEqual({ ok: true, name: "Scoped JSON", settings: loggerTuned, skipped: [] });
+    const list = upsertPreset([], "Scoped JSON", loggerTuned, "logger");
+    const storage = { getItem: () => JSON.stringify(list) };
+    expect(readPresets(storage, "logger")[0]?.settings).toEqual(loggerTuned);
+  });
+
+  test("a preset saved before the view axes existed still loads, with them at their defaults", () => {
+    const old = JSON.stringify({
+      burpsy_filter_preset: 1,
+      table: "logger",
+      name: "Old",
+      saved_at: "2026-10-01T00:00:00Z",
+      settings: { tool: "proxy", term: "admin", annotatedOnly: true, method: "POST", statusClass: "5" },
+    });
+    const parsed = parsePreset(old, "logger");
+    expect(parsed).toEqual({
+      ok: true,
+      name: "Old",
+      skipped: [],
+      settings: {
+        tool: "proxy",
+        term: "admin",
+        annotatedOnly: true,
+        method: "POST",
+        statusClass: "5",
+        viewScopeOnly: false,
+        viewHasResponse: false,
+        viewParameterized: false,
+        viewMime: "",
+        viewExt: "",
+      },
+    });
+    const storage = { getItem: () => JSON.stringify([{ name: "Old", saved_at: "", settings: { tool: "proxy" } }]) };
+    expect(readPresets(storage, "logger")[0]?.settings.viewScopeOnly).toBe(false);
+  });
+
+  test("a wrong-typed view axis falls back and is reported", () => {
+    const { settings, skipped } = sanitizeSettings("logger", { viewScopeOnly: "yes", viewMime: 3 });
+    expect(settings.viewScopeOnly).toBe(false);
+    expect(settings.viewMime).toBe("");
+    expect(skipped).toEqual(["viewScopeOnly", "viewMime"]);
+  });
+
+  test("turning on one view axis differs from the defaults", () => {
+    expect(differsFromDefaults("logger", { ...FILTER_DEFAULTS.logger, viewParameterized: true })).toBe(true);
+    expect(differsFromDefaults("logger", FILTER_DEFAULTS.logger)).toBe(false);
+  });
+});

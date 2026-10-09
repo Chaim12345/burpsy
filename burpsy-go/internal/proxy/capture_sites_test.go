@@ -170,9 +170,16 @@ func TestNoProxyCaptureCanStallACursorWalkingTheIndex(t *testing.T) {
 
 	get(fmt.Sprintf("http://%s:%s/last", goodHost, goodPortStr))
 
-	// Wait for the last row: capture happens after the client has its bytes. This also checks every row
+	// Wait for every row the assertions below read, not just the last one (burpsy-react-ui-49rg). An
+	// HTTP/1 exchange is recorded by its own connection's goroutine after the response has been written
+	// to the client, so the client returning — and /last landing — says nothing about whether /first has
+	// been recorded yet; awaiting /last alone failed under load with /first missing from history. The
+	// handshake row (/chat) is recorded before the 101 is relayed today, but it is awaited by name too,
+	// so a walk can never pass without having walked over it. awaitExchangeFor also checks every row
 	// recorded so far for a stored response, which is the property the walk below depends on.
-	awaitExchangeFor(t, store, "/last", "proxy")
+	for _, path := range []string{"/first", "/chat", "/last"} {
+		awaitExchangeFor(t, store, path, "proxy")
+	}
 
 	reached, stalled := walkLikeLiveAudit(t, store)
 	if stalled != nil {

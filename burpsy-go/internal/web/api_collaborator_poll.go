@@ -26,8 +26,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/burpsy-go/burpsy/internal/oob"
 )
 
 // collaboratorPollReq is POST /api/collaborator/poll's optional body.
@@ -58,7 +56,7 @@ type collaboratorPollView struct {
 	WaitSeconds     int      `json:"wait_seconds"`
 	WaitedMs        int64    `json:"waited_ms"`
 	// Received is how many interactions in the log are attributable to those payloads; Distinct counts
-	// them after oob.Deduplicate collapses one lookup's resolver fan-out.
+	// them after one lookup's resolver fan-out is collapsed, per payload (collaboratorEventKey).
 	Received int `json:"received"`
 	Distinct int `json:"distinct"`
 	// Interactions are their index rows (no raw bytes — fetch one with GET
@@ -160,15 +158,17 @@ func (s *Server) collaboratorLongPoll(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		all, _ := s.collaboratorInteractions()
-		var mine []oob.Interaction
 		for _, row := range collaboratorRows(all, minted) {
 			if row.Payload != "" && want[row.Payload] {
 				view.Interactions = append(view.Interactions, row)
-				mine = append(mine, all[row.ID])
+				// Collapsed is scoped to the row's own payload (collaboratorEventKey), and every
+				// row of a wanted payload is in this view, so the row it folds into is counted here.
+				if !row.Collapsed {
+					view.Distinct++
+				}
 			}
 		}
 		view.Received = len(view.Interactions)
-		view.Distinct = len(oob.Deduplicate(mine))
 		done := view.Received >= minWant
 		expired := req.WaitSeconds == 0 || !time.Now().Before(deadline)
 		if done || expired || r.Context().Err() != nil {
