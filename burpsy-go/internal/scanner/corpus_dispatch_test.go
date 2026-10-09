@@ -184,3 +184,35 @@ func Test_a_given_host_corpus_check_dispatches_once_across_a_session(t *testing.
 		t.Errorf("dispatch units = %d, want 1", session.DispatchUnits)
 	}
 }
+
+// The run's skip list reaches a corpus check's insertion points as it reaches the built-ins': with
+// two query parameters and one exempted, the check probes only the other. Before the corpus path
+// enumerated under the run's options, the BCheck attacked the exempted parameter too.
+func Test_a_corpus_insertion_point_check_honours_the_runs_skip_list(t *testing.T) {
+	store := core.NewTrafficStore()
+	port := reflectingTarget(t)
+	id := seedAuditExchange(t, store, "127.0.0.1", port, "/search?xss=1&token=abc", "<html>seed</html>")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{MaxConcurrency: 1}).
+		WithCorpusChecks([]*bcheck.Check{corpusCheck(t, `given query insertion point then
+  send payload:
+    appending: "VULN"
+  if "VULN" in {latest.response.body} then
+    report issue:
+      severity: high
+      confidence: certain
+  end if
+`)})
+
+	cfg := DefaultAuditConfig()
+	cfg.SkipAllTestsForParameters = []string{"token"}
+	outcome, findings := scan.AuditWithin(context.Background(), id, cfg)
+
+	if outcome.RequestsSent != 1 {
+		t.Errorf("requests sent = %d, want 1: xss probed, token exempted by the skip list", outcome.RequestsSent)
+	}
+	if len(findings) != 1 {
+		t.Errorf("findings = %d, want 1 from the xss reflection", len(findings))
+	}
+}

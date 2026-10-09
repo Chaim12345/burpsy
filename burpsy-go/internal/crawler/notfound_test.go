@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/core"
 )
 
 // Not-found detection (burpsy-react-ui-s92h): a site that answers a missing page with a 200 "not found"
@@ -92,5 +94,34 @@ func TestHonest404sAndSeedsAreNeverJudged(t *testing.T) {
 	}
 	if fetchedPaths(rep)["/route"] == 0 {
 		t.Errorf("the shell's link was not walked: %v", fetchedPaths(rep))
+	}
+}
+
+// An isolated scan's not-found probe carries the isolated source like its other fetches (13uw): the
+// probe is traffic the scan created, and a crawl-sourced probe would put a random sibling into the
+// site map an isolated scan promises to leave alone.
+func TestANotFoundProbeCarriesTheCrawlsCaptureSource(t *testing.T) {
+	srv := softNotFoundSite(t)
+	h := newHarness()
+	cfg := h.config(srv.URL + "/")
+	cfg.NoNotFoundProbe = false
+	cfg.Capture.Source = core.SourceIsolatedScan
+	rep := run(t, cfg)
+
+	probes := 0
+	for _, f := range rep.Fetches {
+		ex, err := h.store.GetExchange(f.ExchangeID)
+		if err != nil || ex == nil {
+			t.Fatalf("fetch %s has no stored exchange: %v", f.URL, err)
+		}
+		if f.NotFoundProbe {
+			probes++
+		}
+		if ex.Source != core.SourceIsolatedScan {
+			t.Errorf("%s (probe=%v) stored with source %q, want %q", f.URL, f.NotFoundProbe, ex.Source, core.SourceIsolatedScan)
+		}
+	}
+	if probes == 0 {
+		t.Fatal("no not-found probe ran, so the test proves nothing")
 	}
 }

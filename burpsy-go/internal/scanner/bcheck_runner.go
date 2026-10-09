@@ -205,6 +205,17 @@ func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, chec
 	if req, err := s.store.Get(core.MsgOrZero(ex.Request)); err == nil {
 		bctx.Request = req.Raw()
 	}
+	// A dispatched audit's configuration reaches the corpus check's insertion points, as it reaches
+	// every built-in check's through CheckContext: without it a BCheck enumerated with the engine
+	// default and attacked a parameter the operator's skip list — or an API scan's review, which
+	// marks a parameter Fixed (vuw7) — had exempted. The effectiveness predicate is left off: its
+	// prior is recorded by the built-in injection checks only, so a corpus check consulting it would
+	// lose points on evidence nobody gathered for it.
+	if cfg, ok := runConfigFrom(ctx); ok {
+		opts := cfg.enumerateOptions()
+		opts.PointEffective, opts.CheckName = nil, check.Name
+		bctx.EnumerateOptions = &opts
+	}
 	sink := &bcheckSink{sc: s, ctx: ctx, ex: ex, meter: meterFrom(ctx), probeBudget: probeBudgetFor(s), check: check.Name}
 	defer func() {
 		trial.Sent, trial.Refused = sink.sent, sink.refused

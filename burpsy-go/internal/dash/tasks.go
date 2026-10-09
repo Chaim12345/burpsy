@@ -133,6 +133,13 @@ type Task struct {
 	// task cannot report a count on the dashboard without reporting what it did not look at.
 	Result Breakdown `json:"result"`
 
+	// Pausable is set when the task's loop consults the gate (Handle.Pausable), so a per-task Pause
+	// button appears only where pausing does something (burpsy-react-ui-g0ba).
+	Pausable bool `json:"pausable"`
+	// Paused is this task's own pause — Burp's per-task "Pause task" — distinct from the suite-wide
+	// gate, which TaskPaused reports. Cleared when the task finishes.
+	Paused bool `json:"paused"`
+
 	// cancel stops the work, when its author asked for that by calling Handle.WithCancel. Unexported,
 	// so it never reaches the wire; Cancellable is what the dashboard reads.
 	//
@@ -631,13 +638,90 @@ func (r *Registry) GateCheck(ctx context.Context) {
 	if r == nil {
 		return
 	}
-	for r.paused.Load() {
+	ids := tasksFromContext(ctx)
+	for r.paused.Load() || r.anyPaused(ids) {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// taskCtxKey carries the ids of the tasks whose work a context belongs to (g0ba). A list, not one id:
+// a crawl's audit feed runs on a context derived from the crawl's, and pausing either row must hold it.
+type taskCtxKey struct{}
+
+// ContextWithTask records that ctx is the work of task id, so GateCheck honours that task's own pause.
+func ContextWithTask(ctx context.Context, id uint64) context.Context {
+	prev := tasksFromContext(ctx)
+	ids := make([]uint64, 0, len(prev)+1)
+	ids = append(ids, prev...)
+	return context.WithValue(ctx, taskCtxKey{}, append(ids, id))
+}
+
+func tasksFromContext(ctx context.Context) []uint64 {
+	if ctx == nil {
+		return nil
+	}
+	ids, _ := ctx.Value(taskCtxKey{}).([]uint64)
+	return ids
+}
+
+func (r *Registry) anyPaused(ids []uint64) bool {
+	if len(ids) == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, id := range ids {
+		if t := r.findLocked(id); t != nil && t.Paused && t.Running() {
+			return true
+		}
+	}
+	return false
+}
+
+// Pausable marks the task as one whose loop consults the gate and returns ctx tagged with its id, so
+// the per-task Pause reaches it. Call it on the context the task's work runs under.
+func (h *Handle) Pausable(ctx context.Context) context.Context {
+	if h == nil {
+		return ctx
+	}
+	h.update(func(t *Task) { t.Pausable = true })
+	return ContextWithTask(ctx, h.id)
+}
+
+// PauseErr explains why a per-task pause or resume did nothing.
+type PauseErr string
+
+func (e PauseErr) Error() string { return string(e) }
+
+const (
+	ErrNoSuchTask     PauseErr = "no task with that id"
+	ErrTaskNotRunning PauseErr = "the task is not running"
+	ErrNotPausable    PauseErr = "this kind of task does not stop between units of work, so it cannot be paused; cancel it instead"
+)
+
+// SetTaskPaused pauses or resumes one task (Burp's per-task Pause/Resume, g0ba). Like PauseAll it
+// touches only the flag: the task finishes the unit of work it is in, then waits at its next gate.
+func (r *Registry) SetTaskPaused(id uint64, paused bool) error {
+	if r == nil {
+		return ErrNoSuchTask
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t := r.findLocked(id)
+	switch {
+	case t == nil:
+		return ErrNoSuchTask
+	case !t.Running():
+		return ErrTaskNotRunning
+	case !t.Pausable:
+		return ErrNotPausable
+	}
+	t.Paused = paused
+	return nil
 }
 
 // RunningCount reports how many tasks are running, for pause/resume reporting.
@@ -720,6 +804,7 @@ func (h *Handle) finish(state TaskState, result Breakdown, note string) {
 		if !t.Running() {
 			return
 		}
+		t.Paused = false
 		t.State = state
 		t.Result = result
 		if note != "" {

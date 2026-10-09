@@ -406,10 +406,11 @@ var groupedTools = []groupSpec{
 	// ---- Utilities -----------------------------------------------------------------------------
 	{
 		name: "decoder", group: groupUtilities,
-		short: "Encodes, decodes, hashes and diffs values, diffs site maps, and tests a match/replace rule.",
+		short: "Encodes, decodes, hashes and diffs values, diffs site maps, tests a match/replace rule, and says whether an HTTP/2 header list is kettled.",
 		ops: []string{
 			"POST /api/tools/decode", "POST /api/tools/encode", "POST /api/tools/hash",
 			"POST /api/tools/compare", "POST /api/tools/compare-sitemaps", "POST /api/tools/rules/test",
+			"POST /api/http2/kettle",
 		},
 	},
 	{
