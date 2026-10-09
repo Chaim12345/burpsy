@@ -45,6 +45,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -594,6 +595,23 @@ func (a *Attack) WithSetConnectionClose(b bool) *Attack {
 	return a
 }
 
+// collaboratorPayloads picks the Collaborator addresses out of one ordinal's slots, nil when none
+// of its sets is a Collaborator set.
+func (a *Attack) collaboratorPayloads(slots []Slot) []string {
+	var out []string
+	for _, sl := range slots {
+		if sl.Set < 0 || sl.Set >= len(a.Sets) || a.Sets[sl.Set].Kind != "collaborator" ||
+			sl.Payload < 0 || sl.Payload >= len(a.setBytes[sl.Set]) {
+			continue
+		}
+		v := string(a.setBytes[sl.Set][sl.Payload])
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // WithStorePayloads attaches Burp's "Store full payloads" setting. See Attack.StorePayloads for
 // what it costs and what it buys.
 func (a *Attack) WithStorePayloads(b bool) *Attack {
@@ -777,6 +795,10 @@ type Attempt struct {
 	// report rather than about the request. A reader that cannot tell them apart would label the
 	// baseline and every row of a frugal attack the same way.
 	Payloads []string `json:"payloads,omitempty"`
+	// CollaboratorPayloads are the Collaborator addresses this attempt sent (nib6), whatever
+	// StorePayloads says: they are what ties a later out-of-band interaction back to this row —
+	// Burp's "Interactions" results column. Absent when the attack had no Collaborator payload set.
+	CollaboratorPayloads []string `json:"collaborator_payloads,omitempty"`
 	// Cookies are the names Set-Cookie carried in this attempt's response — Burp: "any cookies
 	// received in the response". Names only, never values: an attack report is a document that gets
 	// pasted into tickets, and a session token belongs in the stored response (ResponseID above), not
@@ -790,10 +812,17 @@ type Attempt struct {
 	// a pattern worth seeing at a glance, and folding it into free-text error strings buries it behind
 	// having to read every row.
 	Timeout bool `json:"timeout"`
+	// AnomalyRank is this row's place in the attack's anomaly ranking (pglp, anomaly.go): 1 is the
+	// most unusual response; equal scores share a rank. Zero when the attack had fewer than two
+	// detail rows to compare.
+	AnomalyRank int `json:"anomaly_rank"`
 }
 
 // AttackReport is the answer to "what happened".
 type AttackReport struct {
+	// VariantAttributes are the response attributes that varied across the attack's detail rows
+	// (Burp's variantAttributes, pglp); the anomaly ranking scores only these. Never null.
+	VariantAttributes []string   `json:"variant_attributes"`
 	Kind              AttackKind `json:"kind"`
 	Combinations      uint64     `json:"combinations"`
 	CombinationsExact bool       `json:"combinations_exact"`
@@ -912,11 +941,16 @@ type outcome struct {
 	// nothing per outcome. Set on refusals and guard failures too: the payload a container would
 	// not hold is exactly the one an operator needs named. See Attempt.Payloads.
 	payloads []string
+	// collab are the Collaborator addresses this ordinal carried (nib6). See
+	// Attempt.CollaboratorPayloads.
+	collab []string
 }
 
 // collector reduces a stream of outcomes into the report. Buckets are keyed by behaviour, not
 // accumulated: the count lives here and the exemplar is stored once, through the recorder.
 type collector struct {
+	// attrs are each detail row's response attributes, by ordinal, for the anomaly ranking.
+	attrs        map[int]map[string]string
 	record       RecordFn
 	request      func([]byte) uint64
 	recordDetail bool
@@ -969,6 +1003,7 @@ func newCollector(a *Attack, record RecordFn) *collector {
 		errorIndex:      map[string]int{},
 		errors:          []ErrorBucket{},
 		attempts:        []Attempt{},
+		attrs:           map[int]map[string]string{},
 		detailLimit:     a.DetailLimit,
 		maxBuckets:      mb,
 		capture:         a.Capture,
@@ -1015,6 +1050,11 @@ func (c *collector) absorb(o outcome) {
 		c.captured++
 		if c.detailRow(o.ordinal) {
 			e := o.err.Error()
+			outcome := "error"
+			if isTimeout(o.err) {
+				outcome = "timeout"
+			}
+			c.attrs[o.ordinal] = map[string]string{"outcome": outcome}
 			c.attempts = append(c.attempts, Attempt{
 				// Cookies is []string{}, not nil: a failed send never reached a response, but the
 				// field's wire contract (types.tools.ts declares Attempt.cookies non-nullable) does
@@ -1023,6 +1063,7 @@ func (c *collector) absorb(o outcome) {
 				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
 				Cookies: []string{}, GrepMatchCounts: []int{}, ReflectedCounts: []int{}, Payloads: o.payloads,
+				CollaboratorPayloads: o.collab,
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -1116,6 +1157,7 @@ func (c *collector) absorb(o outcome) {
 		c.unbucketed++
 	}
 	if detailRow {
+		c.attrs[o.ordinal] = responseAttributes(h.raw, h.status, h.length, h.cookies)
 		c.attempts = append(c.attempts, Attempt{
 			Ordinal: o.ordinal, Status: h.status, ResponseLen: h.length, DurationMS: h.durationMS,
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
@@ -1123,6 +1165,7 @@ func (c *collector) absorb(o outcome) {
 			GrepMatchCounts: emptyCounts(h.grepCounts),
 			ReflectedCounts: emptyCounts(h.reflectedCounts),
 			TimeOfDay:       o.sentAt, Cookies: h.cookies, Payloads: o.payloads,
+			CollaboratorPayloads: o.collab,
 		})
 	}
 }
@@ -1177,6 +1220,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 	sort.SliceStable(c.attempts, func(i, j int) bool {
 		return c.attempts[i].Ordinal < c.attempts[j].Ordinal
 	})
+	variant := rankAnomalies(c.attempts, c.attrs)
 	var pool *string
 	if p := limiter.PoolName(); p != "" {
 		pool = &p
@@ -1188,7 +1232,7 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		Sent: c.sent, Failed: c.failed,
 		ElapsedMS: elapsed.Milliseconds(),
 		Buckets:   c.buckets, BucketsTruncated: c.unbucketed > 0, Unbucketed: c.unbucketed,
-		Errors: c.errors, Attempts: c.attempts,
+		Errors: c.errors, Attempts: c.attempts, VariantAttributes: variant,
 		DetailLimit: c.detailLimit, GrepMatched: c.grepMatched,
 		Pool: pool, AutoThrottleEngaged: limiter.AutoThrottleEngaged(),
 		AutoPaused: a.AutoPauseFired(),
@@ -1360,16 +1404,17 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			// send, the refusal and the guard failure — so a report that names payloads names them
 			// on the rows where the operator most needs them. nil when the attack did not ask.
 			stored := a.storedPayloads(payloads)
+			collab := a.collaboratorPayloads(asg.Slots)
 			if len(refusals) > 0 {
 				permit.Release()
-				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored}
+				results <- outcome{ordinal: baselineShift(a) + i, err: errPayloadRefused(refusals), sentAt: time.Now(), payloads: stored, collab: collab}
 				continue
 			}
 			req = a.egress(req)
 			if a.Guard != nil {
 				if err := a.Guard(req); err != nil {
 					permit.Release()
-					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now(), payloads: stored}
+					results <- outcome{ordinal: baselineShift(a) + i, err: err, sentAt: time.Now(), payloads: stored, collab: collab}
 					continue
 				}
 			}
@@ -1384,14 +1429,14 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				sentAt := time.Now()
 				defer func() {
 					if r := recover(); r != nil {
-						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored}
+						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored, collab: collab}
 					}
 				}()
 				h, err := doSend(a, limiter, send, raw, probes, ctx)
 				if h != nil {
 					h.request = raw
 				}
-				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored}
+				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored, collab: collab}
 			}(baselineShift(a)+i, req, probes, stored, permit)
 		}
 		wg.Wait()

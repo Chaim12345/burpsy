@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { RepeaterSendOptions } from "./types";
+import type { Exchange, RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
+import * as intruderTabOps from "./intruder-tabs";
+import type { IntruderTabSlot } from "./intruder-tabs";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
 import type { ImportedTheme } from "./theme-import";
@@ -558,6 +560,8 @@ export function mergePersistedWorkspace<T extends { intruder: IntruderConfig }>(
  if (saved.intruder && typeof saved.intruder === "object") {
   merged.intruder = { ...emptyIntruderConfig(), ...saved.intruder };
  }
+ // A workspace saved before attack tabs existed, or one whose active id names no tab (9bv2).
+ Object.assign(merged, intruderTabOps.repairIntruderTabs(saved as Partial<intruderTabOps.IntruderTabsState>));
  return merged;
 }
 
@@ -626,6 +630,9 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Zebra-striped table rows (69p0): Burp's user_interface.table_appearance.zebra_striping, which
+  *  ships true — so this does too. */
+ tableStripes: boolean;
  /** Whether to ask before the console tab is closed or reloaded (burpsy-react-ui-fyua), Burp's
   *  suppress_confirm_on_close inverted to a positive opt-in. Off by default — a proxy console is
   *  not a document with unsaved edits, so the prompt is a preference, not a safety default. */
@@ -730,6 +737,9 @@ interface AppState {
  /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
   *  page on mount (fhp). Session-only: a seed from yesterday is a request from yesterday. */
  sequencerSeed: SequencerSeed | null;
+ /** Exchanges sent to the custom scan check editor (kbu1) — the messages its Run test uses, as Burp's
+  *  "Send to Custom scan checks editor" collects them. Session-only. */
+ customCheckTestIds: number[];
  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
  intruder: IntruderConfig;
  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
@@ -737,6 +747,15 @@ interface AppState {
  intruderRun: IntruderRun | null;
  /** Which Intruder sub-tab is open, so returning to the page lands where it was left. */
  intruderTab: string;
+ /** Attack tabs (9bv2). The three fields above are the ACTIVE tab's live state; every other tab's
+  *  state is parked in its slot. lib/intruder-tabs.ts holds the rules. Persisted. */
+ intruderTabs: IntruderTabSlot[];
+ activeIntruderTabId: string;
+ intruderTabCounter: number;
+ /** Reopen stack. Session-only, like closedRepeaterTabs. */
+ closedIntruderTabs: IntruderTabSlot[];
+ /** Tabs with an attack in flight, for the strip's indicator. Session-only: a reload ends the wait. */
+ intruderRunningTabs: string[];
  /** A pending menubar instruction for the Intruder page (burpsy-react-ui-yinb). Session-only and
   *  cleared on arrival: it is a one-shot command, not a setting, and a stale one replayed after a
   *  reload would launch an attack nobody asked for. */
@@ -756,6 +775,10 @@ interface AppState {
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
  decoderSeed: { label: string; input: string } | null;
+ /** The exchange the "Guess hidden inputs" dialog is open for, or null when it is closed
+  *  (burpsy-react-ui-wlz8). One app-level dialog rather than one per page, because the row menu
+  *  that opens it is shared by every table. */
+ hiddenInputsTarget: Exchange | null;
  /** Set when another page asks History to focus one exchange. */
  historyFocus: number | null;
  /** Set when another page pushes a filter expression into History. */
@@ -778,6 +801,7 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setTableStripes: (on: boolean) => void;
  setConfirmOnClose: (confirmOnClose: boolean) => void;
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
@@ -820,16 +844,28 @@ interface AppState {
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
  setSequencerSeed: (seed: SequencerSeed | null) => void;
+ addCustomCheckTestId: (id: number) => void;
+ setCustomCheckTestIds: (ids: number[]) => void;
  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
  setIntruderTab: (tab: string) => void;
+ openIntruderTab: () => void;
+ switchIntruderTab: (id: string) => void;
+ closeIntruderTab: (id: string) => void;
+ closeAllIntruderTabs: () => void;
+ reopenIntruderTab: () => void;
+ renameIntruderTab: (id: string, name: string) => void;
+ /** Store a report in the tab that launched the attack, whichever tab is active now. */
+ setIntruderRunFor: (id: string, run: IntruderRun | null) => void;
+ setIntruderTabRunning: (id: string, running: boolean) => void;
  /** Ask the Intruder page to start or stop its attack (burpsy-react-ui-yinb). The PAGE decides
   *  whether it can — the menubar cannot size an attack, so it asks rather than asserts. */
  requestIntruderCommand: (kind: IntruderCommand["kind"]) => void;
  clearIntruderCommand: () => void;
  setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
+ setHiddenInputsTarget: (exchange: Exchange | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  /** Append one item to a side's list (yy2): send-to adds; the comparison runs on the selected
   * item from each list, so sending no longer discards what was there. */
@@ -856,6 +892,7 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  tableStripes: state.tableStripes,
   confirmOnClose: state.confirmOnClose,
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
@@ -892,6 +929,11 @@ export function persistedWorkspace(state: AppState) {
   intruder: state.intruder,
   intruderRun: state.intruderRun,
   intruderTab: state.intruderTab,
+  // Every open attack tab is work in the same sense; each parked slot carries its own report, and
+  // the strip is capped (INTRUDER_TAB_CAP) so this stays bounded.
+  intruderTabs: state.intruderTabs,
+  activeIntruderTabId: state.activeIntruderTabId,
+  intruderTabCounter: state.intruderTabCounter,
   // Deliberately absent: closedRepeaterTabs, and every *Seed / focus / query flag. A reopen stack
   // that survived a reload would resurrect drafts the operator closed days ago, and a persisted
   // intruderSeed would re-seed Intruder on every load, overwriting the attack above.
@@ -909,6 +951,7 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   tableStripes: true,
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
@@ -939,13 +982,20 @@ export const useApp = create<AppState>()(
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
+  customCheckTestIds: [],
   sequencerSeed: null,
    intruder: emptyIntruderConfig(),
    intruderRun: null,
    intruderTab: "positions",
+   intruderTabs: [{ id: "i1", name: "1", parked: null }],
+   activeIntruderTabId: "i1",
+   intruderTabCounter: 1,
+   closedIntruderTabs: [],
+   intruderRunningTabs: [],
  intruderCommand: null,
  intruderStatus: null,
    decoderSeed: null,
+   hiddenInputsTarget: null,
    comparerSlots: { a: "", b: "" },
  comparerItems: { a: [], b: [] },
    historyFocus: null,
@@ -956,6 +1006,7 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   setTableStripes: (tableStripes) => set({ tableStripes }),
    confirmOnClose: false,
    setConfirmOnClose: (confirmOnClose) => set({ confirmOnClose }),
    markCollaboratorRead: (id) =>
@@ -1180,16 +1231,33 @@ export const useApp = create<AppState>()(
 
    setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
    setSequencerSeed: (sequencerSeed) => set({ sequencerSeed }),
+   addCustomCheckTestId: (id) =>
+    set((state) => ({ customCheckTestIds: state.customCheckTestIds.includes(id) ? state.customCheckTestIds : [...state.customCheckTestIds, id].slice(-20) })),
+   setCustomCheckTestIds: (customCheckTestIds) => set({ customCheckTestIds }),
    setIntruder: (next) =>
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),
    setIntruderTab: (intruderTab) => set({ intruderTab }),
+   openIntruderTab: () => set((state) => intruderTabOps.openIntruderTab(state)),
+   switchIntruderTab: (id) => set((state) => intruderTabOps.switchIntruderTab(state, id)),
+   closeIntruderTab: (id) => set((state) => intruderTabOps.closeIntruderTab(state, id)),
+   closeAllIntruderTabs: () => set((state) => intruderTabOps.closeAllIntruderTabs(state)),
+   reopenIntruderTab: () => set((state) => intruderTabOps.reopenIntruderTab(state)),
+   renameIntruderTab: (id, name) => set((state) => intruderTabOps.renameIntruderTab(state, id, name)),
+   setIntruderRunFor: (id, run) => set((state) => intruderTabOps.withRunFor(state, id, run)),
+   setIntruderTabRunning: (id, running) =>
+    set((state) => ({
+     intruderRunningTabs: running
+      ? [...state.intruderRunningTabs.filter((t) => t !== id), id]
+      : state.intruderRunningTabs.filter((t) => t !== id),
+    })),
    // The nonce counts instructions, so two identical clicks are two commands rather than one
    // ignored repeat. Reusing the existing `sequence` counter keeps one source of monotonic ids.
    requestIntruderCommand: (kind) => set({ intruderCommand: { kind, nonce: ++sequence } }),
    clearIntruderCommand: () => set({ intruderCommand: null }),
    setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
+   setHiddenInputsTarget: (hiddenInputsTarget) => set({ hiddenInputsTarget }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
  addComparerItem: (slot, item) =>
   set({

@@ -1339,6 +1339,10 @@ type toolLogEntry struct {
 	// never 0: the traffic store counts rows from zero, so 0 is a real exchange and a null-less zero
 	// would show the viewer the wrong message pair.
 	Exchange *uint64 `json:"exchange"`
+	// Mime is the response media type the row was recorded with (toollog.Entry.Mime), projected so the
+	// MIME view filter and a MIME column can read it. Null when no type was measured — a transport
+	// failure or a whole-run row — and "" when a response declared none; the two are different facts.
+	Mime *string `json:"mime"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
@@ -1470,6 +1474,7 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := q.Get("filter")
 	search := q.Get("search")
+	view := parseToolLogView(q)
 	limit := 0
 	if raw := q.Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -1489,21 +1494,21 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	}
 	matched := make([]*toollog.Entry, 0, len(entries))
 	for _, e := range entries {
-		if !toolLogMatches(e, filter, search) {
+		if !toolLogMatches(e, filter, search) || !s.toolLogViewMatches(e, view) {
 			continue
 		}
 		matched = append(matched, e)
 		counts[e.Tool.String()]++
 	}
 
-	view := make([]toolLogEntry, 0, len(matched))
+	rows := make([]toolLogEntry, 0, len(matched))
 	if limit > 0 {
-		for i := len(matched) - 1; i >= 0 && len(view) < limit; i-- {
-			view = append(view, toolLogEntryView(matched[i]))
+		for i := len(matched) - 1; i >= 0 && len(rows) < limit; i-- {
+			rows = append(rows, toolLogEntryView(matched[i]))
 		}
 	} else {
 		for _, e := range matched {
-			view = append(view, toolLogEntryView(e))
+			rows = append(rows, toolLogEntryView(e))
 		}
 	}
 
@@ -1529,10 +1534,10 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
 		Total:           len(matched),
-		Shown:           len(view),
+		Shown:           len(rows),
 		Dropped:         s.toolLog.Dropped(),
 		Counts:          counts,
-		Entries:         view,
+		Entries:         rows,
 		Capturing:       capturing,
 		Uncaptured:      uncaptured,
 		UncapturedTotal: uncapturedTotal,
@@ -1945,34 +1950,51 @@ func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// input_encoding / key_encoding: utf8 (default), hex or base64 (standard or URL-safe, padded or
+	// not). output: hex (default), base64, or base64url (unpadded — a JWS signature). key is required
+	// by the hmac-* family and refused by every other algorithm (burpsy-react-ui-wi55, -7tgt).
 	var req struct {
-		Input     string `json:"input"`
-		Algorithm string `json:"algorithm"`
+		Input         string `json:"input"`
+		InputEncoding string `json:"input_encoding"`
+		Algorithm     string `json:"algorithm"`
+		Key           string `json:"key"`
+		KeyEncoding   string `json:"key_encoding"`
+		Output        string `json:"output"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	h := tools.NewHasher()
-	var digest string
-	// Named exhaustively, with no default branch. An unknown algorithm used to fall through to SHA-256
-	// while the reply echoed back the algorithm that was *asked for*, so a caller storing
-	// {algorithm, output} recorded a digest under a name that did not produce it — and a typo in the
-	// field ("sha-256", "sha265") silently returned a plausible-looking hash rather than a complaint.
-	// An empty algorithm still means SHA-256, because that is the documented default and every existing
-	// caller that omits the field relies on it; a *stated* algorithm now has to be one this can compute.
-	switch strings.ToLower(strings.TrimSpace(req.Algorithm)) {
-	case "md5":
-		digest = h.MD5(req.Input)
-	case "sha1":
-		digest = h.SHA1(req.Input)
-	case "sha512":
-		digest = h.SHA512(req.Input)
-	case "sha256", "":
-		digest = h.SHA256(req.Input)
-	default:
-		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of md5, sha1, sha256, sha512",
-			req.Algorithm), http.StatusBadRequest)
+	// Named exhaustively by the tools table, with no fallback. An unknown algorithm used to fall
+	// through to SHA-256 while the reply echoed back the algorithm that was *asked for*, so a caller
+	// storing {algorithm, output} recorded a digest under a name that did not produce it. An empty
+	// algorithm still means SHA-256, the documented default every caller that omits the field relies on.
+	alg, ok := tools.LookupDigest(req.Algorithm)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of %s",
+			req.Algorithm, strings.Join(tools.DigestAlgorithmNames(), ", ")), http.StatusBadRequest)
+		return
+	}
+	data, err := tools.DecodeDigestInput(req.Input, req.InputEncoding)
+	if err != nil {
+		http.Error(w, "input: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var key []byte
+	if req.Key != "" {
+		if key, err = tools.DecodeDigestInput(req.Key, req.KeyEncoding); err != nil {
+			http.Error(w, "key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	sum, err := tools.ComputeDigest(alg, data, key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	digest, err := tools.EncodeDigest(sum, req.Output)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -2020,12 +2042,35 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		Response bool `json:"response"`
 		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
 		Granularity string `json:"granularity"`
+		// ABase64 / BBase64 carry a side as base64 instead of text (burpsy-react-ui-ppqw): a file
+		// loaded from disk can be binary, and a JSON string would replace every non-UTF-8 byte
+		// with U+FFFD before the diff ever saw it. A side may be sent one way or the other, not both.
+		ABase64 string `json:"a_base64"`
+		BBase64 string `json:"b_base64"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
+	for _, side := range []struct {
+		name, text, b64 string
+		into            *[]byte
+	}{{"a", req.A, req.ABase64, &a}, {"b", req.B, req.BBase64, &b}} {
+		if side.b64 == "" {
+			continue
+		}
+		if side.text != "" {
+			http.Error(w, fmt.Sprintf("side %s was sent both as %q and as %q; send one", side.name, side.name, side.name+"_base64"), http.StatusBadRequest)
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(side.b64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%s_base64 is not standard base64: %v", side.name, err), http.StatusBadRequest)
+			return
+		}
+		*side.into = raw
+	}
 	granularity := strings.ToLower(strings.TrimSpace(req.Granularity))
 	if granularity == "" {
 		granularity = "bytes"

@@ -100,6 +100,12 @@ func main() {
 		`Interactsh server for out-of-band interactions, or "public" for interactsh's own pool. Unset disables the Collaborator tool`)
 	collaboratorClient := flag.String("collaborator-client", "",
 		"path to the interactsh-client binary (default: look it up on PATH)")
+	// Burp's restoreClient(SecretKey) (burpsy-react-ui-d657): the channel's identity is kept here, one
+	// directory per interaction server, so a payload minted before a restart is still polled after it.
+	// Empty keeps a fresh identity per process.
+	collaboratorStateDir := flag.String("collaborator-state-dir",
+		filepath.Join(filepath.Dir(proxy.DefaultCADir()), "collaborator"),
+		`directory keeping the Collaborator client identity across restarts, per server ("" = a fresh identity each run)`)
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -382,6 +388,7 @@ func main() {
 		oobProvider = scanner.NewLazyOOBProvider(oob.Options{
 			ServerURL:  serverURL,
 			BinaryPath: *collaboratorClient,
+			StateDir:   oob.StateDirFor(*collaboratorStateDir, serverURL),
 		})
 	}
 
@@ -420,6 +427,19 @@ func main() {
 		}
 	} else {
 		passiveScanner = scanner.NewPassiveScanner(store, logger)
+	}
+	// Custom scan checks imported in the console (kbu1) come back with the project, after the
+	// directory's, before anything reads the corpus.
+	if persistStore != nil {
+		if sources, err := persistStore.LoadCustomScanChecks(); err != nil {
+			logger.Warn("custom scan checks not restored", zap.Error(err))
+		} else {
+			for _, src := range sources {
+				if _, err := passiveScanner.ImportCheck(src, true); err != nil {
+					logger.Warn("a saved custom scan check no longer loads", zap.Error(err))
+				}
+			}
+		}
 	}
 
 	// Create proxy config.
@@ -630,6 +650,10 @@ func main() {
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
+	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
+	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
+	// API-scan capture.
+	passiveScanner.WithRunConfigSource(activeScanner)
 
 	// Persisted scan-config overrides still apply last, after the flag chain — but through
 	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level
@@ -670,6 +694,7 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		WithCollaboratorStateDir(*collaboratorStateDir).
 		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
 		// because it is the scanner the web server audits with — so the channel the Collaborator tab
 		// displays and the channel a check plants in a payload are the same registration. Nil (no flag)
@@ -817,10 +842,12 @@ func main() {
 	// run that opened a channel leaves an interactsh-client behind, holding a registration and a temp
 	// file. Closed here rather than through CloseCapabilities because this is the provider this process
 	// built, and it is the one thing on this path with a subprocess to collect.
-	if oobProvider != nil {
-		if err := oobProvider.Close(); err != nil {
-			logger.Error("Failed to close the out-of-band channel", zap.Error(err))
-		}
+	//
+	// The scanner's current provider, not the start-up one: the console can install a different one
+	// (POST /api/collaborator/server), and a channel that keeps its identity has to be stopped
+	// gracefully for the next run to resume it (d657).
+	if err := activeScanner.CloseOOBChannel(); err != nil {
+		logger.Error("Failed to close the out-of-band channel", zap.Error(err))
 	}
 	// Seal the capture's tail. Sync rather than Close: handlers may still be
 	// unwinding, and Close would unmap segments they are reading spans out of.
@@ -894,7 +921,7 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		}
 		fmt.Printf("\n%d of the %d configurations Burp ships are transcribed above; %d of them set at\n"+
 			"least one key this engine honours, so loading one of those files takes effect. The others\n"+
-			"set crawl tuning, per-issue selection or DOM analysis this engine has no equivalent of:\n"+
+			"set only crawl tuning or DOM analysis this engine has no equivalent of:\n"+
 			"every such key is attributed rather than dropped, listed by `-scan-config list-unapplied`.\n"+
 			"A Burp configuration file can be loaded directly by passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount,
@@ -917,11 +944,10 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		if err != nil {
 			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
 		}
-		parsed, perr := scanner.ParseBurpConfig(data)
+		applied, unapplied, perr := scanner.ApplyBurpConfigFile(base, data)
 		if perr != nil {
 			return base, fmt.Errorf("-scan-config: %w", perr)
 		}
-		applied, unapplied := parsed.ApplyWithReport(base)
 		if len(unapplied) > 0 {
 			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
 		}

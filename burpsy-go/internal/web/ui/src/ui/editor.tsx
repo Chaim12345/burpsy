@@ -1,5 +1,5 @@
 import { EditorView, Decoration, ViewPlugin, WidgetType, hoverTooltip, highlightSpecialChars, type DecorationSet, type ViewUpdate } from "@codemirror/view";
-import { getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
+import { findNext, findPrevious, getSearchQuery, openSearchPanel, searchPanelOpen, SearchCursor } from "@codemirror/search";
 import { Prec, RangeSetBuilder, type Extension } from "@codemirror/state";
 import CodeMirror from "@uiw/react-codemirror";
 import { toast } from "sonner";
@@ -37,6 +37,8 @@ const CONSTRUCT_DIALECTS: Record<ConstructDialect, string> = {
  sql_mysql: "SQL for MySQL",
 };
 import { cn } from "../lib/cn";
+import { registerCommand } from "../lib/commands";
+import { paragraphTarget } from "../lib/editor-paragraph";
 import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
@@ -457,16 +459,89 @@ const PAIRS: Record<string, { plain: (input: string) => string; shifted: (input:
  b: { plain: base64Encode, shifted: base64Decode },
 };
 
+/** The editor that currently holds the EDITOR_TOGGLE_* commands (see claimEditorCommands). */
+let topEditor: symbol | null = null;
+
+/**
+ * Delete the line(s) the main selection touches, newline included — Burp's EDITOR_DELETE_LINE.
+ * Written here rather than imported from @codemirror/commands, which this package only has as a
+ * transitive dependency of @uiw/react-codemirror.
+ */
+function deleteLine(view: EditorView): boolean {
+ const { state } = view;
+ const sel = state.selection.main;
+ const first = state.doc.lineAt(sel.from);
+ const last = state.doc.lineAt(sel.to);
+ let from = first.from;
+ let to = last.to;
+ if (to < state.doc.length) to += 1; // take the line break after
+ else if (from > 0) from -= 1; // last line: take the break before instead
+ view.dispatch({ changes: { from, to }, selection: { anchor: Math.min(from, state.doc.length - (to - from)) }, scrollIntoView: true, userEvent: "delete.line" });
+ return true;
+}
+
+/** Move the main cursor to a paragraph boundary (lib/editor-paragraph.ts), extending with shift. */
+function moveParagraph(view: EditorView, direction: "up" | "down", extend: boolean): boolean {
+ const { state } = view;
+ const head = state.selection.main.head;
+ const fromLine = state.doc.lineAt(head).number;
+ const lines: string[] = [];
+ for (let n = 1; n <= state.doc.lines; n += 1) lines.push(state.doc.line(n).text);
+ const target = state.doc.line(paragraphTarget(lines, fromLine, direction));
+ const pos = direction === "down" && target.number === state.doc.lines && target.text.trim() !== "" ? target.to : target.from;
+ view.dispatch({
+  selection: extend ? { anchor: state.selection.main.anchor, head: pos } : { anchor: pos },
+  scrollIntoView: true,
+ });
+ return true;
+}
+
 const burpEditorKeys = Prec.high(
  EditorView.domEventHandlers({
   keydown(event, view) {
-   if (!(event.ctrlKey || event.metaKey) || event.altKey) return false;
+   if (!(event.ctrlKey || event.metaKey)) return false;
    const key = event.key.toLowerCase();
+
+   // Burp's EDITOR_COPY_PRETTIFIED, Ctrl+Alt+C (2czi). A selection is copied as it reads on screen
+   // (Pretty's selection is already pretty); with none, the whole message is copied prettified.
+   if (event.altKey && !event.shiftKey && event.code === "KeyC") {
+    event.preventDefault();
+    const sel = view.state.selection.main;
+    const text = sel.empty ? prettyMessage(view.state.doc.toString()) : view.state.sliceDoc(sel.from, sel.to);
+    void copyToClipboard(text).then(() => toast.success(sel.empty ? "Copied the message, prettified" : "Copied the selection"));
+    return true;
+   }
+   if (event.altKey) return false;
 
    if (key === "s") {
     event.preventDefault();
     openSearchPanel(view);
     return true;
+   }
+
+   // Burp's previous/next search match, Ctrl+Comma / Ctrl+Period. With no search yet there is
+   // nothing to step through, so the search panel opens instead of the key doing nothing.
+   if (event.code === "Comma" || event.code === "Period") {
+    event.preventDefault();
+    if (!getSearchQuery(view.state).valid) {
+     openSearchPanel(view);
+     return true;
+    }
+    return event.code === "Comma" ? findPrevious(view) : findNext(view);
+   }
+
+   // Burp's EDITOR_DELETE_LINE, Ctrl+D — only in an editable editor. A read-only pane leaves the
+   // key alone, so it stays the browser's bookmark key there, as everywhere outside an editor.
+   if (key === "d" && !event.shiftKey) {
+    if (view.state.readOnly) return false;
+    event.preventDefault();
+    return deleteLine(view);
+   }
+
+   // Burp's paragraph navigation, Ctrl+Up / Ctrl+Down, Shift to extend.
+   if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+    event.preventDefault();
+    return moveParagraph(view, event.key === "ArrowUp" ? "up" : "down", event.shiftKey);
    }
 
    const pair = PAIRS[key];
@@ -1358,8 +1433,57 @@ export function HttpEditor({
   [menuGroups, selectionGroups],
  );
 
+ // Burp's EDITOR_TOGGLE_* actions and Insert Collaborator payload (2czi), for whichever message
+ // editor the operator used last: an editor takes the commands when focus enters it and holds them
+ // until another editor does or it unmounts (lib/commands.ts stacks them). The handlers are read
+ // through a ref so a re-render never re-registers — only a focus change does.
+ const editorCommands = useRef<Record<string, () => void>>({});
+ editorCommands.current = {
+  "editor.togglePretty": () => {
+   if (!canPretty) {
+    toast.info(`${label}: Pretty would show the same bytes as Raw for this message`);
+    return;
+   }
+   pick(active === "pretty" ? "raw" : "pretty");
+  },
+  "editor.toggleWrap": () => setWrap((on) => !on),
+  "editor.toggleNonPrinting": () => setShowNonPrinting((on) => !on),
+  "editor.toggleHideHeaders": () => {
+   if (hideList.length === 0) {
+    toast.info("No headers are listed to hide — add them under Settings › Message editor");
+    return;
+   }
+   if (active !== "pretty") pick("pretty");
+   setHidePicked(!(hidePicked ?? hideHeadersByDefault));
+  },
+  "editor.insertCollaborator": () => {
+   if (!editable) {
+    toast.info(`${label} is read-only; a Collaborator payload can only be inserted into an editable message`);
+    return;
+   }
+   insertCollaboratorPayload();
+  },
+ };
+ const commandRegistrations = useRef<(() => void)[]>([]);
+ const editorToken = useRef<symbol>(Symbol("editor"));
+ const claimEditorCommands = useCallback(() => {
+  if (topEditor === editorToken.current) return;
+  for (const off of commandRegistrations.current) off();
+  topEditor = editorToken.current;
+  commandRegistrations.current = Object.keys(editorCommands.current).map((id) =>
+   registerCommand(id, () => editorCommands.current[id]?.()),
+  );
+ }, []);
+ useEffect(
+  () => () => {
+   for (const off of commandRegistrations.current) off();
+   if (topEditor === editorToken.current) topEditor = null;
+  },
+  [],
+ );
+
  return (
-  <div className={cn("editor-shell", className)}>
+  <div className={cn("editor-shell", className)} onFocusCapture={claimEditorCommands}>
    <div className="editor-bar">
     <span className="editor-label-inline">{label}</span>
     {available.length || pluginTabs.entries.length ? (
@@ -1600,7 +1724,7 @@ export function HttpEditor({
           controls keep the browser's menu, and the Render view keeps it too — that iframe is
           sandboxed attacker-controlled HTML, and putting a Radix trigger over it would replace
           the browser's own "open image in new tab" affordances on rendered content for no gain. */}
-   <ContextMenu groups={active === "render" ? [] : allGroups}>
+   <ContextMenu groups={active === "render" ? [] : allGroups} docTopic="message-editor">
     <div className="editor-body" style={{ height }}>
      {pluginTabs.openKey !== null && pluginTabs.content ? (
       // A plugin's editor tab: read-only by contract (KindEditorTab is the read-only half of

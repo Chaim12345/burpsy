@@ -12,6 +12,7 @@ import {
  FolderTree,
  Globe,
  Highlighter,
+ KeyRound,
  Link2,
  Map,
  MessageSquarePlus,
@@ -30,8 +31,11 @@ import { editableBodyBase64 } from "./message";
 import { api, copyToClipboard, downloadText, json } from "./api";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding as convertBody, type BodyEncoding } from "./body-encoding";
 import { useAnnotateExchange } from "./data";
+import { formDialog, promptDialog } from "./dialogs";
+import { manyMenuGroups } from "./actions-many";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
+import { useCsrfPoc } from "./csrf-poc";
 import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { MenuGroup } from "../ui/menu";
@@ -239,6 +243,10 @@ export function useExchangeActions(): {
   *  against this exchange (burpsy-react-ui-4qqz). */
  recordIssue: (exchange: Exchange) => void;
  menu: (exchange: Exchange, extra?: MenuGroup[]) => MenuGroup[];
+ /** The multi-row menu (fe16): what a right-click inside a selection of two or more rows offers. */
+ menuMany: (exchanges: Exchange[], extra?: MenuGroup[]) => MenuGroup[];
+ /** Add each host to scope as an include rule, one request per host, and say which failed. */
+ addHostsToScope: (hosts: string[]) => Promise<void>;
 } {
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const setRoute = useApp((state) => state.setRoute);
@@ -247,6 +255,7 @@ export function useExchangeActions(): {
  const setComparerSlot = useApp((state) => state.setComparerSlot);
  const setHistoryQuery = useApp((state) => state.setHistoryQuery);
  const setDecoderSeed = useApp((state) => state.setDecoderSeed);
+ const setHiddenInputsTarget = useApp((state) => state.setHiddenInputsTarget);
  const annotate = useAnnotateExchange();
  // Record an issue (burpsy-react-ui-4qqz): POST /api/issues/record with the exchange the menu
  // was invoked on. The issues list invalidates by key prefix after any triage write, so the
@@ -409,6 +418,69 @@ const addToSiteMap = async (exchange: Exchange) => {
    toast.error(`Could not scope ${exchange.host}: ${error instanceof Error ? error.message : String(error)}`);
   }
  };
+
+ const addHostsToScope = async (hosts: string[]) => {
+  const failed: string[] = [];
+  // Sequential, not parallel: the scope store is one ordered rule list, and N concurrent writes
+  // to it would race for the order an operator then reads back on the Scope page.
+  for (const host of hosts) {
+   try {
+    await api<unknown>("/api/scope", json("POST", { action: "include", pattern: host }));
+   } catch {
+    failed.push(host);
+   }
+  }
+  void queryClient.invalidateQueries({ queryKey: ["scope"] });
+  const added = hosts.length - failed.length;
+  if (failed.length === 0) toast.success(hosts.length === 1 ? `${hosts[0]} added to scope` : `${added} hosts added to scope: ${hosts.join(", ")}`);
+  else if (added === 0) toast.error(`Could not scope ${failed.join(", ")}`);
+  else toast.warning(`${added} of ${hosts.length} hosts added to scope; refused: ${failed.join(", ")}`);
+ };
+
+ const compareTwo = async (a: Exchange, b: Exchange) => {
+  try {
+   const [left, right] = await Promise.all([fetchRaw(a.request), fetchRaw(b.request)]);
+   setComparerSlot("a", left);
+   setComparerSlot("b", right);
+   setRoute("comparer");
+   toast.success(`#${a.id} loaded into A and #${b.id} into B`);
+  } catch (error) {
+   toast.error(`Could not load request bytes: ${error instanceof Error ? error.message : String(error)}`);
+  }
+ };
+
+ const copyUrls = async (exchanges: Exchange[]) => {
+  await copyToClipboard(exchanges.map((exchange) => exchangeUrl(exchange)).join("\n"));
+  toast.success(`Copied ${exchanges.length} URL${exchanges.length === 1 ? "" : "s"}`);
+ };
+
+ const addAllToOrganizer = async (exchanges: Exchange[]) => {
+  let added = 0;
+  const failed: number[] = [];
+  for (const exchange of exchanges) {
+   try {
+    await api<unknown>("/api/tools/organizer", { method: "POST", body: JSON.stringify({ exchange: exchange.id }) });
+    added += 1;
+   } catch {
+    failed.push(exchange.id);
+   }
+  }
+  void queryClient.invalidateQueries({ queryKey: ["organizer"] });
+  if (failed.length === 0) toast.success(`${added} exchanges added to Organizer`);
+  else toast.warning(`${added} of ${exchanges.length} added to Organizer; refused: ${failed.map((id) => `#${id}`).join(", ")}`);
+ };
+
+ const menuMany = (exchanges: Exchange[], extra: MenuGroup[] = []): MenuGroup[] =>
+  manyMenuGroups(
+   exchanges,
+   {
+    compare: (a, b) => void compareTwo(a, b),
+    copyUrls: (list) => void copyUrls(list),
+    addHostsToScope: (hosts) => void addHostsToScope(hosts),
+    addAllToOrganizer: (list) => void addAllToOrganizer(list),
+   },
+   extra,
+  );
 
  const auditExchange = async (exchange: Exchange) => {
   try {
@@ -617,17 +689,13 @@ const showResponseInBrowser = (exchange: Exchange) => {
   }
  };
 
- const generateCSRF = async (exchange: Exchange) => {
-  try {
-   const view = await api<{ html: string; notes: string[] }>(`/api/exchange/${exchange.id}/csrf`);
-   // Opened as a blob page rather than copied to the clipboard: the PoC IS an auto-submitting
-   // page, so rendering it is both the review surface and the proof.
-   const blob = new Blob([view.html], { type: "text/html" });
-   window.open(URL.createObjectURL(blob), "_blank", "noopener");
-   for (const note of view.notes ?? []) toast.info(note);
-  } catch (error) {
-   toast.error(`Could not generate the CSRF PoC: ${error instanceof Error ? error.message : String(error)}`);
-  }
+ const generateCSRF = (exchange: Exchange) => {
+  // Opens the PoC dialog (burpsy-react-ui-0z10) instead of a blob page: a blob URL inherits
+  // the console's origin, and a generated PoC — attacker-shaped HTML built from captured
+  // bytes — is the one thing that must never run there. The dialog shows the HTML and the
+  // technique choice, and its "Test in browser" opens the one-shot URL the server mints on
+  // the PoC host's own port.
+  useCsrfPoc.getState().open(exchange);
  };
 
  /**
@@ -650,56 +718,82 @@ const showResponseInBrowser = (exchange: Exchange) => {
   * Burp's "Add comment", seeded with whatever note the row already carries so the menu entry
   * edits rather than replaces.
   *
-  * `window.prompt` rather than a modal: the menu factory is a plain function called on every
-  * right-click from six different pages, and a dialog would mean every one of those pages
-  * owning open/target/draft state for a single-line string. The trade is real and is why the
-  * detail pane's textarea stays — that is where a multi-line note belongs. Cancel returns null
-  * and is left alone; clearing the box to empty is a deliberate "remove the note" and is sent
-  * as null, which is what the PATCH endpoint takes for "unset".
+  * Through the shell's themed prompt (lib/dialogs.ts, bea3), not window.prompt: the menu factory
+  * is a plain function with no React subtree of its own, which is exactly what promptDialog is
+  * for — it awaits an answer from the one host mounted in the shell. The detail pane's textarea
+  * stays the place for a multi-line note. Cancel resolves null and is left alone; clearing the box
+  * to empty is a deliberate "remove the note" and is sent as null, which is what the PATCH
+  * endpoint takes for "unset".
   */
  const addComment = (exchange: Exchange) => {
   const existing = exchange.notes ?? "";
-  const next = window.prompt(`Comment on exchange #${exchange.id}`, existing);
-  if (next === null) return;
-  const trimmed = next.trim();
-  if (trimmed === existing) return;
-  annotate.mutate(
-   { id: exchange.id, notes: trimmed === "" ? null : trimmed },
-   {
-    onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
-    onError: (error) =>
-     toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
-   },
-  );
+  void promptDialog({
+   title: existing ? `Edit comment on exchange #${exchange.id}` : `Comment on exchange #${exchange.id}`,
+   description: `${exchange.method} ${exchange.host}${exchange.path}. An empty comment removes it.`,
+   label: "Comment",
+   initial: existing,
+   confirmLabel: "Save comment",
+   allowEmpty: true,
+  }).then((next) => {
+   if (next === null) return;
+   const trimmed = next.trim();
+   if (trimmed === existing) return;
+   annotate.mutate(
+    { id: exchange.id, notes: trimmed === "" ? null : trimmed },
+    {
+     onSuccess: () => toast.success(trimmed === "" ? `Comment cleared on #${exchange.id}` : `Comment saved on #${exchange.id}`),
+     onError: (error) =>
+      toast.error(`Could not save the comment: ${error instanceof Error ? error.message : String(error)}`),
+    },
+   );
+  });
  };
 
  // Record an issue (burpsy-react-ui-4qqz): Burp's "Record an issue" context-menu action. The
  // operator names and grades the finding; the exchange they invoked the menu on is attached as
- // the occurrence, so the issue is jumpable to the bytes that demonstrate it. The description
- // is asked for in a second prompt so the name stays the report heading, not a paragraph.
+ // the occurrence, so the issue is jumpable to the bytes that demonstrate it.
+ //
+ // One form, not the three chained window.prompt calls it used to be (bea3). The severity was a
+ // free-text box then, and the server folds anything it does not recognise to Informational
+ // (core.ParseSeverity) — so a typo like "hihg" silently recorded an informational issue. A select
+ // over the server's own five values makes that impossible.
  const recordIssue = (exchange: Exchange) => {
-  const name = window.prompt("Record an issue — name", "");
-  if (name === null) return;
-  if (!name.trim()) {
-   toast.error("An issue needs a name — it is the report heading");
-   return;
-  }
-  const description = window.prompt("Record an issue — description (optional)", "");
-  if (description === null) return;
-  const severity = window.prompt("Record an issue — severity (info, low, medium, high, critical)", "low");
-  if (severity === null) return;
-  record.mutate(
-   {
-    name: name.trim(),
-    description: description.trim(),
-    severity: severity.trim().toLowerCase(),
-    exchange_id: exchange.id,
-   },
-   {
-    onSuccess: (result) => toast.success(`Issue #${result.id} recorded against #${exchange.id}`),
-    onError: (cause) => toast.error(`Could not record the issue: ${cause instanceof Error ? cause.message : String(cause)}`),
-   },
-  );
+  void formDialog({
+   title: "Record an issue",
+   description: `Against exchange #${exchange.id}: ${exchange.method} ${exchange.host}${exchange.path}`,
+   confirmLabel: "Record issue",
+   fields: [
+    { id: "name", label: "Name", kind: "text", required: true, hint: "The report heading" },
+    { id: "description", label: "Description", kind: "textarea" },
+    {
+     id: "severity",
+     label: "Severity",
+     kind: "select",
+     initial: "low",
+     options: [
+      { value: "critical", label: "Critical" },
+      { value: "high", label: "High" },
+      { value: "medium", label: "Medium" },
+      { value: "low", label: "Low" },
+      { value: "info", label: "Information" },
+     ],
+    },
+   ],
+  }).then((values) => {
+   if (values === null) return;
+   record.mutate(
+    {
+     name: (values.name ?? "").trim(),
+     description: (values.description ?? "").trim(),
+     severity: values.severity ?? "low",
+     exchange_id: exchange.id,
+    },
+    {
+     onSuccess: (result) => toast.success(`Issue #${result.id} recorded against #${exchange.id}`),
+     onError: (cause) => toast.error(`Could not record the issue: ${cause instanceof Error ? cause.message : String(cause)}`),
+    },
+   );
+  });
  };
 
  const menu = (exchange: Exchange, extra: MenuGroup[] = []): MenuGroup[] => [
@@ -711,6 +805,17 @@ const showResponseInBrowser = (exchange: Exchange) => {
     { id: "sequencer", label: "Send to Sequencer", icon: Activity, shortcut: "Q", onSelect: () => void sendToSequencer(exchange) },
     { id: "compare-a", label: "Send to Comparer (A)", icon: Combine, onSelect: () => void sendToComparer(exchange, "a") },
     { id: "compare-b", label: "Send to Comparer (B)", icon: ArrowRightLeft, onSelect: () => void sendToComparer(exchange, "b") },
+    // Burp's "Send to Custom scan checks editor" (kbu1): the exchange joins the editor's test set.
+    {
+     id: "custom-check",
+     label: "Send to custom scan check editor",
+     icon: FileCode2,
+     onSelect: () => {
+      useApp.getState().addCustomCheckTestId(exchange.id);
+      setRoute("scannerchecks");
+      toast.success(`Exchange #${exchange.id} added to the custom scan check test set`);
+     },
+    },
     // Decoder is a client-side transform pipeline, so this is a seed hand-off, not a wire call.
     { id: "decoder", label: "Send to Decoder", icon: FileOutput, onSelect: () => void sendToDecoder(exchange) },
    ],
@@ -823,6 +928,11 @@ const showResponseInBrowser = (exchange: Exchange) => {
    actions: [
     { id: "scope", label: `Add ${exchange.host} to scope`, icon: ShieldCheck, onSelect: () => void addToScope(exchange) },
     { id: "audit", label: `Audit exchange #${exchange.id}`, icon: Radar, onSelect: () => void auditExchange(exchange) },
+    // Burp's Param Miner "Guess params" (burpsy-react-ui-wlz8): opens the app-level dialog, which
+    // picks the kinds and starts the run. A blind tunnel has no request to add names to.
+    ...(exchange.request === null
+     ? []
+     : [{ id: "guess-inputs", label: "Guess hidden inputs…", icon: KeyRound, onSelect: () => setHiddenInputsTarget(exchange) }]),
     { id: "crawl-branch", label: "Actively scan this branch (crawl)", icon: Waypoints, onSelect: () => void crawlFrom(exchange, "branch") },
     { id: "crawl-host", label: "Actively scan this host (crawl)", icon: ScanSearch, onSelect: () => void crawlFrom(exchange, "host") },
    ],
@@ -865,6 +975,8 @@ const showResponseInBrowser = (exchange: Exchange) => {
   setHighlight,
   addComment,
   menu,
+  menuMany,
+  addHostsToScope,
  };
 }
 

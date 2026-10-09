@@ -21,7 +21,7 @@ const HOST_NODE: EngagementSeed = { host: "shop.test", path: "" };
 const BRANCH_NODE: EngagementSeed = { host: "shop.test", path: "/checkout" };
 
 function noopHandlers(): EngagementHandlers {
-  return { runSearch: () => undefined, discoverContent: () => undefined, scheduleTask: () => undefined };
+  return { runSearch: () => undefined, discoverContent: () => undefined, scheduleTask: () => undefined, analyzeTarget: () => undefined };
 }
 
 /** The submenu's rows, which is where every disposition under test lives. */
@@ -45,13 +45,10 @@ describe("every row either acts or says why it cannot", () => {
     }
   });
 
-  test("Target analyzer is greyed and its reason names what burpsy has instead", () => {
+  test("Target analyzer is live and analyses the right-clicked branch", () => {
     const analyzer = items(BRANCH_NODE).find((item) => item.id === "target-analyzer");
-    expect(analyzer?.disabled, "Target analyzer must not be offered as if it worked").toBe(true);
-    expect(
-      analyzer?.hint ?? "",
-      "the reason must point at the material burpsy does hold, not just report the absence",
-    ).toContain("site map");
+    expect(analyzer?.disabled, "the analyzer exists now (dnvi), so the row must act").toBeFalsy();
+    expect(analyzer?.hint ?? "").toContain(BRANCH_NODE.path);
   });
 
   test("Manual simulator is absent, not greyed", () => {
@@ -139,11 +136,12 @@ describe("the rows that hand a target to another page hand it a usable one", () 
       runSearch: () => undefined,
       discoverContent: (target) => seen.push(`discover:${target}`),
       scheduleTask: (target) => seen.push(`schedule:${target}`),
+      analyzeTarget: (seed) => seen.push(`analyze:${seed.host}${seed.path}`),
     };
-    for (const id of ["discover-content", "schedule-task"]) {
+    for (const id of ["discover-content", "schedule-task", "target-analyzer"]) {
       items(BRANCH_NODE, handlers).find((item) => item.id === id)?.onSelect();
     }
-    expect(seen).toEqual(["discover:https://shop.test/checkout", "schedule:https://shop.test/checkout"]);
+    expect(seen).toEqual(["discover:https://shop.test/checkout", "schedule:https://shop.test/checkout", "analyze:shop.test/checkout"]);
   });
 
   test("Schedule task's hint admits the form is not seeded", () => {

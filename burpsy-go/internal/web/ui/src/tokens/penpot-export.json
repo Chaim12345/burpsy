@@ -36,6 +36,7 @@
   "_pendingPenpot": {
     "_what": "Token types Penpot supports that this design does not yet use. These values were read out of src/styles.css — they are what the app already does — and are expressed here in the shape Penpot's token types require so that someone with the plugin open can create them in one pass. THIS BLOCK IS NOT EXPORTED DESIGN DATA: it is the one place the repo, not Penpot, is currently canonical. gen-tokens.mjs emits it to src/tokens/pending.css with a header saying so. Once the tokens exist in Penpot and have been re-exported, they move into the arrays above and this block empties.",
     "_shadowAlphaNote": "Penpot's shadow token carries exactly color, inset, offsetX, offsetY, spread and blur (see tokens_lib.cljc, which select-keys's those six) — there is no alpha field, so a shadow's transparency has to come from the colour it references. It can: Penpot's colour tokens DO accept 8-digit #RRGGBBAA. The plugin API typedoc claims a colour token value is 'a rgb color or a reference', but that is a docs simplification — the resolver validates colours through tinycolor, whose wrapper has alpha/set-alpha and explicitly handles the `hex8` format, and the StyleDictionary transform group includes `ts/color/css/hexrgba`. So each shadow gets one scrim colour token carrying its own alpha, which is both simpler than splitting hue from opacity and the only version that renders correctly on the Penpot canvas — a shadow token pointing at an opaque hue would draw a solid black shadow there. Note the alpha is now quantised to a byte: 0x29/255 = 0.1608 where the hand-authored CSS said 16%, and 0x42/255 = 0.2588 where it said 26%. Both are under a tenth of a percent off and Penpot is canonical for them now. The remaining `opacity` tokens below are for genuine element opacity, not shadows.",
+    "_stripeNote": "Table zebra striping (69p0; Burp's user_interface.table_appearance.zebra_striping, default true). A stripe row is color.ink mixed into color.paper-raised at this opacity. Two values because the themes need opposite headroom: dark's muted text (#B2B2B2) clears 4.5:1 on paper-raised by a hair (4.57:1), so the stripe must darken it — ink at 20% gives #3D4041, muted 4.95:1, body 5.46:1 — while light has room to spare and 4% (#F7F7F7, muted 4.77:1) is already a visible band. Penpot has no per-mode opacity token, so the pair is named by mode and styles.css picks one per theme.",
     "_borderWidthNote": "Three stroke widths, named for what they do rather than for one of the places they appear. 2px was going to be called border.focus-ring, but of the 15 sites that use it only three are focus rings — the rest are active/selected tab indicators and the spinner ring — and a token whose name describes one twelfth of its call sites is the same synonym trap the semantic alias layer is careful to avoid. border.status is the 3px severity stripe down the left edge of a notice, which is a distinct role, not a thicker version of border.strong.",
     "_trackingNote": "Penpot's letterSpacing token is px-only — its value is documented as 'a number or a reference' with a numeric resolvedValue, so there is nowhere to put a unit. Fixed px tracking is wrong under a fluid type scale: it stays put while the glyphs grow, so one token reads correctly at one viewport and loose at another. styles.css had 11 distinct em tracking values, which is a scale nobody chose; they are cut to the 4 roles below, the em figure is stored as a plain `number` token so Penpot stays canonical for it, and gen-tokens.mjs supplies the `em`. The consolidation is a real rendering change, not a pure refactor, so here is the whole of it: -0.04 and -0.01 -> tracking.tight (-0.03); 0.02, 0.06, 0.07 and 0.1 -> tracking.caps (0.08); 0.13 and 0.16 -> tracking.caps-loose (0.12); -0.03, 0.08 and 0.12 were already exact. Every delta is 0.02em or less except 0.02 -> 0.08 on the tool tabs and 0.16 -> 0.12 on two uppercase mono labels; at the 11-14px sizes involved that is a shift of roughly a half pixel at the widest, and in every case the old value and the new one were serving the same role.",
     "tokens": [
@@ -112,6 +113,16 @@
         "name": "opacity.faint",
         "type": "opacity",
         "value": "0.55"
+      },
+      {
+        "name": "opacity.stripe-dark",
+        "type": "opacity",
+        "value": "0.2"
+      },
+      {
+        "name": "opacity.stripe-light",
+        "type": "opacity",
+        "value": "0.04"
       },
       {
         "name": "shadow.scrim-menu",

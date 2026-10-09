@@ -32,6 +32,7 @@ export const ROUTES: Route[] = [
   { id: "scanner", label: "Issues", h1: "Issues", tool: "target" },
   { id: "auditqueue", label: "Audit queue", h1: "Audit queue", tool: "target" },
   { id: "advisories", label: "Issue definitions", h1: "Issue definitions", tool: "target" },
+  { id: "contentdiscovery", label: "Content discovery", h1: "Content discovery", tool: "target" },
   { id: "scope", label: "Scope", h1: "Scope", tool: "target" },
   { id: "intercept", label: "Intercept", h1: "Intercept", tool: "proxy", hotkey: "3" },
   { id: "history", label: "HTTP history", h1: "HTTP history", tool: "proxy" },

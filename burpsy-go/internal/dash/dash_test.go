@@ -369,3 +369,21 @@ func TestTaskJSONCarriesItsDerivedProgress(t *testing.T) {
 		t.Errorf("state marshalled as %s, want \"running\"", got["state"])
 	}
 }
+
+// FailWith keeps the counts a run produced before it broke (burpsy-react-ui-wlz8): a failed run that
+// had found things must not read as found 0, and a result that would claim completeness is marked
+// as not the whole answer.
+func TestFailWithKeepsTheBreakdownAndNeverReadsComplete(t *testing.T) {
+	r := NewRegistry()
+	h := r.Start(KindHiddenInputs, "shop.test", 500)
+	h.FailWith(Breakdown{Found: 2, Gated: 40}, errors.New("refused by scope"))
+	got := r.Snapshot()[0]
+	if got.State != TaskFailed || got.Result.Found != 2 || got.Result.Gated != 40 || got.Result.Errored != 0 {
+		t.Errorf("task = %+v; want failed with found 2 and gated 40 kept", got)
+	}
+	h2 := r.Start(KindHiddenInputs, "shop.test", 500)
+	h2.FailWith(Breakdown{Found: 1}, errors.New("boom"))
+	if res := r.Snapshot()[0].Result; res.Complete() || res.Errored != 1 {
+		t.Errorf("result %+v reads complete; a failed run is never the whole answer", res)
+	}
+}

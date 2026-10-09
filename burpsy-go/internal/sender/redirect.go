@@ -271,7 +271,7 @@ func (a *AuthorisedSender) followChain(
 		// the hop is authorised on the same terms as a first request. Reusing `current` would not work
 		// and must not be made to — a request naming another authority is exactly what makes a
 		// cross-authority hop deliberate, and the render below is where that naming becomes bytes.
-		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS)
+		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS).WithPace(a.pace)
 
 		// The hop's request is rendered exactly once: these bytes are what the scope gate reads and
 		// what the transport writes, so the gate's decision and the wire cannot disagree. They are also

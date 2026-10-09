@@ -37,7 +37,7 @@ func TestAStoredRowIsUndecidedDuringTheAuditAndConfirmedAfterTheSecondLook(t *te
 		t.Fatal("no claim was registered, so the planted canaries would never be looked for again")
 	}
 
-	deferred, completion := scan.FinishScan(context.Background())
+	deferred, completion := scan.FinishScan(context.Background(), DefaultAuditConfig())
 	if completion.RefetchError != "" {
 		t.Fatalf("the second look did not happen: %s", completion.RefetchError)
 	}
@@ -67,7 +67,7 @@ func TestWithoutASecondLookTheStoredClaimsAreOutstandingRatherThanClean(t *testi
 
 	// Remove the capability the second look needs, exactly as a scan with no sender would.
 	scan.sender = nil
-	_, completion := scan.FinishScan(context.Background())
+	_, completion := scan.FinishScan(context.Background(), DefaultAuditConfig())
 	if completion.RefetchError == "" {
 		t.Error("FinishScan reported a successful second look with no sender configured")
 	}
@@ -133,7 +133,7 @@ func TestAStoredClaimIsNotSettledByAnotherExchangesCanary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetExchange: %v", err)
 	}
-	gate := scan.probeGate(ex)
+	gate := scan.probeGate(context.Background(), ex)
 	if gate == nil {
 		t.Fatal("no authorised sender, so nothing could be submitted")
 	}

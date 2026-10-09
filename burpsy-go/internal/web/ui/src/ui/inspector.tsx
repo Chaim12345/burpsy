@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { copyToClipboard, formatBytes } from "../lib/api";
 import {
@@ -1000,6 +1000,23 @@ export function Inspector({
             {switchLabel}
           </Button>
         ) : null}
+        {/* Burp's Inspector "Expand all" / "Collapse all" (BurpClass9725, 9744; txnw). Explicit
+            toggles for every section, so they win over the panel's Start-collapsed default the
+            same way a click on one section does. */}
+        <IconButton
+          label="Expand all sections"
+          size="small"
+          onClick={() => setToggled(Object.fromEntries(sections.map((section) => [section.id, true])))}
+        >
+          <ChevronsUpDown size={13} />
+        </IconButton>
+        <IconButton
+          label="Collapse all sections"
+          size="small"
+          onClick={() => setToggled(Object.fromEntries(sections.map((section) => [section.id, false])))}
+        >
+          <ChevronsDownUp size={13} />
+        </IconButton>
         <div className="inspector-settings-anchor" ref={settingsRef}>
           <IconButton label="Inspector settings" size="small" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((open) => !open)}>
             <Settings2 size={13} />

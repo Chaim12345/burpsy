@@ -3,6 +3,11 @@ package bcheck
 
 import (
 	"context"
+	"crypto/md5"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -379,6 +384,10 @@ type Context struct {
 	Port      uint16
 	TLS       bool
 	Path      string
+	// UserAgent is the reserved `{user_agent}` — Burp's "Returns Burp's user agent", here the
+	// User-Agent the scanner's sender puts on requests that carry none (u411). Empty falls back to the
+	// base request's own User-Agent, and a context with neither leaves the reference unresolved.
+	UserAgent string
 
 	// sink performs the outbound half of `send request` and `send payload`. Nil means the check
 	// is being evaluated passively, where a send is a no-op — RunPassive never sets it, RunActive
@@ -582,6 +591,21 @@ func (ctx *Context) resolveRef(name string) string {
 		// `other/tokens/jwt-none-algorithm.bcheck:15` sends a JWT header that
 		// is silently empty. Translate before substitution.
 		return re.ReplaceAllString(subject, javaBackrefs(repl))
+	// The hash functions (u411) answer lowercase hex, as Burp's reference examples do. Those examples
+	// hash "Hello" yet show the digests of "hello" (aaf4c61d…, 2cf24dba…, 5d41402a…); the input is
+	// hashed as given here — a check that lowercases first can say so with to_lower. The reference
+	// spells one example MD5(…), so the name is matched case-insensitively.
+	case hasCallPrefix(name, "sha1("):
+		sum := sha1.Sum([]byte(ctx.resolveCallArg(innerCall(name, name[:len("sha1(")]))))
+		return hex.EncodeToString(sum[:])
+	case hasCallPrefix(name, "sha256("):
+		sum := sha256.Sum256([]byte(ctx.resolveCallArg(innerCall(name, name[:len("sha256(")]))))
+		return hex.EncodeToString(sum[:])
+	case hasCallPrefix(name, "md5("):
+		sum := md5.Sum([]byte(ctx.resolveCallArg(innerCall(name, name[:len("md5(")]))))
+		return hex.EncodeToString(sum[:])
+	case strings.HasPrefix(name, "base64_encode(") && strings.HasSuffix(name, ")"):
+		return base64.StdEncoding.EncodeToString([]byte(ctx.resolveCallArg(innerCall(name, "base64_encode("))))
 	case strings.HasPrefix(name, "random_str(") && strings.HasSuffix(name, ")"):
 		n, err := strconv.Atoi(ctx.resolveCallArg(innerCall(name, "random_str(")))
 		if err != nil {
@@ -839,6 +863,17 @@ func (ctx *Context) resolvePathOpt(p string) (string, bool) {
 			return ctx.Path, true
 		}
 		return "", false
+	case "user_agent":
+		if len(parts) != 1 {
+			return "", false
+		}
+		if ctx.UserAgent != "" {
+			return ctx.UserAgent, true
+		}
+		if ua := ctx.requestFields().byName["user-agent"]; ua != "" {
+			return ua, true
+		}
+		return "", false
 	}
 	// A tool binding is `{<called>.stdout|stderr|exit_code}` — the run recorded
 	// under that name. Only the three tool fields take this branch: a send and a
@@ -884,6 +919,20 @@ func (ctx *Context) resolvePathOpt(p string) (string, bool) {
 	b := ctx.bound(bind)
 	if b == nil {
 		return "", false
+	}
+	// Every send goes to the scanned exchange's own authority (see target), so a sent request's
+	// scheme and port are that authority's — the request bytes carry neither reliably: an
+	// origin-form target has no scheme, and a Host header may omit the port (u411).
+	if len(rest) == 2 && rest[0] == "url" {
+		switch rest[1] {
+		case "protocol":
+			return ctx.baseURLField([]string{"protocol"}), true
+		case "port":
+			if v, ok := b.field(side, rest); ok && v != "" {
+				return v, true
+			}
+			return ctx.baseURLField([]string{"port"}), true
+		}
 	}
 	return b.field(side, rest)
 }
@@ -995,6 +1044,8 @@ func (ctx *Context) baseResponseField(rest []string) string {
 		return f.headers
 	case "url":
 		return ctx.baseURLField(rest[1:])
+	case "http_version":
+		return firstField(f.first)
 	case "method":
 		// Not meaningful for a response, but harmless to answer.
 		return f.first
@@ -1030,6 +1081,12 @@ func (ctx *Context) baseRequestField(rest []string) string {
 		return ctx.Path
 	case "url":
 		return ctx.baseURLField(rest[1:])
+	case "http_version":
+		// The request line's third token: "GET /x HTTP/1.1" → HTTP/1.1 (u411).
+		if parts := strings.Fields(f.first); len(parts) >= 3 {
+			return parts[2]
+		}
+		return ""
 	}
 	return ""
 }
@@ -1051,7 +1108,12 @@ func (ctx *Context) baseURLField(rest []string) string {
 	if len(rest) == 0 {
 		return base + ctx.Path
 	}
+	// Burp's reference: path "/catalog/product", file "/catalog/product?productId=1", query
+	// "productId=1", protocol "https" (u411). ctx.Path is the request target, query included.
+	path, query, _ := strings.Cut(ctx.Path, "?")
 	switch rest[0] {
+	case "protocol":
+		return scheme
 	case "host":
 		return ctx.Host
 	case "port":
@@ -1059,7 +1121,9 @@ func (ctx *Context) baseURLField(rest []string) string {
 	case "file":
 		return ctx.Path
 	case "path":
-		return ctx.Path
+		return path
+	case "query", "query_string":
+		return query
 	}
 	return ""
 }
@@ -1097,6 +1161,16 @@ func (ctx *Context) interpolate(s string) string {
 					i++
 				case 't':
 					out.WriteByte('\t')
+					i++
+				// Burp's "Special characters" (movb): \s space, \b backspace, \f form feed.
+				case 's':
+					out.WriteByte(' ')
+					i++
+				case 'b':
+					out.WriteByte('\b')
+					i++
+				case 'f':
+					out.WriteByte('\f')
 					i++
 				case '\\':
 					out.WriteByte('\\')
@@ -1556,4 +1630,10 @@ func contains(s, substr string) bool {
 	// strings.Contains uses a tuned search (Rabin-Karp for long needles); the
 	// hand-rolled O(n*m) loop it replaced was the slow path for large bodies.
 	return strings.Contains(s, substr)
+}
+
+// hasCallPrefix reports whether name is a call of fn, matching the function name without regard to
+// case (Burp's reference writes MD5(…) and md5(…) alike).
+func hasCallPrefix(name, fn string) bool {
+	return len(name) > len(fn) && strings.EqualFold(name[:len(fn)], fn) && strings.HasSuffix(name, ")")
 }

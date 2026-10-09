@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns3, Combine, Crosshair, ExternalLink, Folder, FolderOpen, Globe, Repeat2, Search, ShieldCheck, X } from "lucide-react";
+import { TargetAnalyzerView } from "../ui/target-analyzer-view";
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, copyToClipboard, formatBytes, formatDuration, json, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { useDebounced, useInvalidate, useHistory, useMessage } from "../lib/data";
@@ -23,6 +24,7 @@ import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Moda
 import { BucketMenu } from "../ui/column-visibility-menu";
 import { Checkbox } from "../ui/primitives";
 import { ContextMenu, type MenuGroup } from "../ui/menu";
+import { collectBranch, setExpandedKeys } from "../lib/tree-expand";
 import { MenuRow, SimpleTable, VirtualTable, type Column } from "../ui/table";
 import { CrawlPathsView } from "../ui/crawlpaths";
 import { EngagementView, type EngagementSeedRequest } from "./engagement";
@@ -214,7 +216,7 @@ function TreeRow({
  // too, and hosts — where the decision actually gets made — say it in visible text.
  const outOfScope = !node.in_scope;
  return (
-  <ContextMenu groups={getMenuGroups?.(row) ?? []}>
+  <ContextMenu groups={getMenuGroups?.(row) ?? []} docTopic="site-map">
    <div
     role="treeitem"
     aria-level={depth + 1}
@@ -330,7 +332,8 @@ export function SiteMapPage(): JSX.Element {
   * and a remembered "crawl paths" would greet them with an empty panel on a session where nothing
   * has crawled yet — which reads as a broken site map rather than as a remembered preference.
   */
- const [view, setView] = useState<"urls" | "paths" | "engagement">("urls");
+ const [view, setView] = useState<"urls" | "paths" | "engagement" | "analyzer">("urls");
+ const [analyzerSeed, setAnalyzerSeed] = useState<EngagementSeed | undefined>(undefined);
  /**
   * The search a right-click on the tree asked for (burpsy-react-ui-gupj), or undefined when the
   * Engagement tools view was opened by its own button. Held here rather than inside the view
@@ -370,6 +373,10 @@ export function SiteMapPage(): JSX.Element {
      );
      setRoute("settings");
      requestSettingsSection("scheduled-tasks");
+    },
+    analyzeTarget: (seed) => {
+     setAnalyzerSeed(seed);
+     setView("analyzer");
     },
    },
    url,
@@ -451,6 +458,9 @@ export function SiteMapPage(): JSX.Element {
  };
 
  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  // A key in a node's context menu (a portal, but a React child of the tree) is not the tree's —
+  // see VirtualTable's onKeyDown for the bug this guards against.
+  if (!event.currentTarget.contains(event.target as Node)) return;
   const current = cursorIndex >= 0 ? rows[cursorIndex] : undefined;
   switch (event.key) {
    case "ArrowDown":
@@ -692,7 +702,41 @@ export function SiteMapPage(): JSX.Element {
         // exchange the operator had to find under it first. Passive scan sends nothing (it re-reads
         // the store); add-to-scope and active crawl hit the server in the same shapes the
         // exchange-level menu already uses, so both share one code path with the row menu.
+        // Burp's Expand branch / Collapse branch (siteMapTreeExpandBranchMenuItem, txnw). The tree
+        // is loaded whole, so expanding needs no fetch — but it is capped (lib/tree-expand.ts), and
+        // the toast says how many branches stayed closed rather than implying all opened.
+        const branch = collectBranch(target.node, (node) => node.children, nodeKey);
+        const treeGroup: MenuGroup = {
+         id: "node-tree",
+         actions: [
+          {
+           id: "expand-branch",
+           label: target.depth === 0 ? "Expand host" : "Expand branch",
+           icon: ChevronsUpDown,
+           disabled: branch.total === 0,
+           hint: branch.total === 0 ? "Nothing under this node to expand" : undefined,
+           onSelect: () => {
+            setExpanded((current) => setExpandedKeys(current, branch.keys, true));
+            if (branch.truncated) {
+             toast.warning(`Expanded ${branch.keys.length.toLocaleString()} of ${branch.total.toLocaleString()} folders — the rest stay closed so the tree stays responsive`);
+            }
+           },
+          },
+          {
+           id: "collapse-branch",
+           label: target.depth === 0 ? "Collapse host" : "Collapse branch",
+           icon: ChevronsDownUp,
+           disabled: branch.total === 0,
+           onSelect: () => {
+            // Collapsing is never capped: every key, not just the first EXPAND_CAP.
+            const all = collectBranch(target.node, (node) => node.children, nodeKey, Number.POSITIVE_INFINITY);
+            setExpanded((current) => setExpandedKeys(current, all.keys, false));
+           },
+          },
+         ],
+        };
         return [
+         treeGroup,
          {
           id: "node-scope",
           actions: [
@@ -1006,6 +1050,7 @@ export function SiteMapPage(): JSX.Element {
      ) : (
       <VirtualTable
        ariaLabel={`Requests under ${selected.node.path}`}
+       docTopic="site-map"
        data={nodeExchanges}
        columns={columns}
        getRowId={(row) => String(row.id)}
@@ -1013,6 +1058,8 @@ export function SiteMapPage(): JSX.Element {
        onSelect={(row) => setSelectedExchange(row.id)}
        onActivate={(row) => void actions.sendToRepeater(row)}
        menuGroups={(row) => actions.menu(row, [exchangeEngagement(row)])}
+       multiSelect
+       menuGroupsMany={(rows) => actions.menuMany(rows)}
        rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
       />
      )
@@ -1142,6 +1189,8 @@ export function SiteMapPage(): JSX.Element {
     <CrawlPathsView runs={crawls.data?.crawls ?? []} />
    ) : view === "engagement" ? (
     <EngagementView seed={engagementSeed} />
+   ) : view === "analyzer" ? (
+    <TargetAnalyzerView seed={analyzerSeed} />
    ) : (
     <SplitPane storageId="sitemap" orientation="horizontal" defaultMasterSize="28" minMasterSize="16" master={treePane} detail={contentPane} />
    )}

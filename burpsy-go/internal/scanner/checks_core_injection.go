@@ -39,6 +39,7 @@ package scanner
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 	"time"
@@ -47,19 +48,23 @@ import (
 )
 
 // checkSQLInjectionCore reports SQL injection confirmed by a database error the baseline did not
-// produce.
+// produce, a boolean differential, or a time-based response delay (saq3.2.1).
 //
-// Error evidence only, deliberately. Boolean and timing differentials for this row would duplicate
-// what the dedicated injection family already does with better classification; this row's job is
-// the case Burp reports as plain "SQL injection" — a quote that reaches a query and comes back as
-// a parser error.
+// The techniques were error-only before, and ProbeTiming had no production caller — meaning blind
+// SQLi (no error, no echo) was invisible. They run inside ONE insertion-point walk
+// (blindInjectionPointProbes in sqli_techniques.go) rather than as three checks of the same type,
+// because the audit's check set is one descriptor per catalog TypeIndex and a point's coverage,
+// effectiveness prior and light-audit record would otherwise be charged three times for probes
+// that answer the same question. Each technique still carries its own method gate at the probe:
+// a disabled family is withheld and counted, and the remaining techniques still run.
 func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-			return h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			probes := h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			return append(probes, blindInjectionPointProbes(ctx, h, p)...)
 		})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", sqlInjectionIssue, err)
@@ -162,6 +167,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		points = points[:MaxInjectionPointsPerCheck]
 	}
 
+	// One finding per fact: a breakout stops the walk (the first confirmed point is the
+	// finding, as before), while a decoding-without-breakout is a lesser fact that does not,
+	// and is collected here so a later point's breakout cannot lose it.
+	var findings []*Finding
+
 	for _, point := range points {
 		var evidence XSSEvidence
 
@@ -180,7 +190,13 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// breakout follows, which is the honest half of the result.
 		observed := newXSSCanary()
 		var contexts []xssContext
-		if res, err := h.Send(ctx, point, observed); err == nil {
+		// landedOn names the page a followed redirect reached when the breakout was found there
+		// (follow_redirections, burpsy-react-ui-o2p3) — Burp's own example for the setting is XSS in an
+		// error message returned only after a redirect. Everything below reads the page a browser
+		// would render: the landing page when the run followed, the response itself otherwise.
+		landedOn := ""
+		if sent, err := h.SendFollowing(ctx, point, observed); err == nil {
+			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
 			if strings.Contains(res.Body, observed) {
 				evidence |= XSSEvidenceReflected
@@ -193,12 +209,19 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// Each distinct context gets the payload that actually works there. Distinct, because a
 		// value echoed into both a text node and an attribute is ordinary, and the two need
 		// different payloads.
-		for _, payload := range xssPayloadsForContexts(contexts) {
+		bank := xssPayloadsForContexts(contexts)
+		// viaDecoding names the Burp decoding variants (burpsy-react-ui-79ld) whose encoded
+		// form of the primary payload confirmed a breakout at this point; decodedOnly names
+		// the variants whose payload came back DECODED but neutralized — the transformation
+		// half, reported on its own row below.
+		var viaDecoding, decodedOnly []string
+		for _, payload := range bank {
 			canary := newXSSCanary()
-			res, err := h.Send(ctx, point, payload.build(canary))
+			sent, err := h.SendFollowing(ctx, point, payload.build(canary))
 			if err != nil {
 				continue
 			}
+			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
 			if !strings.Contains(res.Body, canary) {
 				continue
@@ -228,7 +251,98 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 					xssHTMLBreakoutMarker(canary), xssScriptBreakoutMarker(canary))
 			}
 			if xssBreakoutConfirmed(evidence) {
+				landedOn = sent.FollowedTo
 				break
+			}
+		}
+
+		// The decoding variants (burpsy-react-ui-79ld), in Burp's own order (Zguu.java:63-77:
+		// plain APPEND, plain REPLACE, and only then the variant list, breaking on the first
+		// confirmation). They run only where the plain bank failed while the canary still
+		// reflected — the XSS that fires only after the application decodes its input — which
+		// is also what bounds the cost: at most five probes per reflected-but-unbroken point,
+		// under the same per-check point cap as everything above.
+		//
+		// The primary payload is the bank's first, the most specific attempt the point's
+		// context chose; encoding the whole bank would re-ask a question one probe answers.
+		if evidence&XSSEvidenceReflected != 0 && !xssBreakoutConfirmed(evidence) && len(bank) > 0 {
+			primary := bank[0]
+			for _, variant := range xssDecodingVariants() {
+				canary := newXSSCanary()
+				plain := primary.build(canary)
+				sent, err := h.SendFollowingOpts(ctx, point, variant.encode(plain), bcheck.ApplyOptions{Raw: true})
+				if err != nil {
+					continue
+				}
+				res := sent.landing()
+				contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+				if !strings.Contains(res.Body, canary) {
+					continue
+				}
+				evidence |= XSSEvidenceReflected
+				bit := primary.bit
+				if bit == 0 {
+					bit = XSSEvidenceHTMLBreakout
+				}
+				if rendersAsMarkup(contentType) && primary.confirm != nil && primary.confirm(res.Body, canary) {
+					evidence |= bit
+					viaDecoding = append(viaDecoding, variant.name)
+					landedOn = sent.FollowedTo
+					break
+				}
+				// No live markup. The variant's transformMarker is the byte-level signal that
+				// the application performed the decoding anyway — Burp's
+				// UNEXPECTED_TRANSFORMATION half, reported on the row that exists for it.
+				if variant.transformMarker != nil {
+					if marker := variant.transformMarker(plain, canary); marker != "" && strings.Contains(res.Body, marker) {
+						decodedOnly = append(decodedOnly, variant.name)
+					}
+				}
+			}
+		}
+
+		// Burp's file-upload HTML variant (FILE_UPLOAD_FILE_EXTENSION_HTML, burpsy-react-ui-kzt7): a
+		// file part whose name is not already .html is re-sent as an HTML document — filename
+		// <original><3 random chars>.html, Content-Type text/html, the payload as its content — so an
+		// upload the application serves back by its extension is tested as the page a victim would
+		// open. Only when the plain bank and the variants did not already break out at this point.
+		if !xssBreakoutConfirmed(evidence) && len(bank) > 0 {
+			if name, ok := point.UploadFilename(h.reqBytes); ok && !strings.HasSuffix(strings.ToLower(name), ".html") {
+				// The uploaded file IS the document, so its content is parsed as page content: the
+				// text-node breakout is the payload, whatever context the plain probes guessed.
+				primary := xssPayloadsForContexts([]xssContext{{Kind: xssCtxText}})[0]
+				canary := newXSSCanary()
+				newName := name + randomLetters(3) + ".html"
+				if sent, err := h.SendHTMLUpload(ctx, point, primary.build(canary), newName); err == nil {
+					res := sent
+					contentType := rawHeaderValue(string(res.Raw), "Content-Type")
+					if strings.Contains(res.Body, canary) {
+						evidence |= XSSEvidenceReflected
+						if rendersAsMarkup(contentType) && primary.confirm != nil && primary.confirm(res.Body, canary) {
+							bit := primary.bit
+							if bit == 0 {
+								bit = XSSEvidenceHTMLBreakout
+							}
+							evidence |= bit
+							viaDecoding = append(viaDecoding, "file upload as "+newName)
+						}
+					}
+				}
+			}
+		}
+
+		if len(decodedOnly) > 0 {
+			// "Suspicious input transformation (reflected)" is a catalogue row with its own
+			// descriptor (checks_final.go); the finding is filed under THAT row rather than a
+			// new name, because the transformation is a different (and lesser) fact than the
+			// breakout this check exists for, and the row is where an operator already reads it.
+			if definition, ok := ByName("Suspicious input transformation (reflected)"); ok {
+				findings = append(findings, buildHeaderFinding(cc, "Suspicious input transformation (reflected)",
+					definition.TypicalSeverity, "firm",
+					fmt.Sprintf("the application decoded the payload before output-encoding it (%s)", strings.Join(decodedOnly, ", ")),
+					fmt.Sprintf("a value submitted in %s %q is reflected here after the application decoded it — "+
+						"the breakout did not confirm, but the decoding is itself worth reviewing",
+						point.Kind, point.Name)))
 			}
 		}
 
@@ -241,24 +355,37 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			remediation = definition.Remediation
 		}
 		detail := fmt.Sprintf("%s %q: %s", point.Kind, point.Name, xssEvidenceText(evidence))
+		if landedOn != "" {
+			detail += "; the breakout was on " + landedOn + ", reached by following the probe's redirect (follow_redirections)"
+		}
 		if capped > 0 {
 			detail += fmt.Sprintf("; %d further insertion point(s) were NOT probed (cap %d reached)",
 				capped, MaxInjectionPointsPerCheck)
 		}
-		return []*Finding{{
-			Name:        xssReflectedIssue,
-			Severity:    severity,
-			Confidence:  "firm",
-			Description: "Reflected XSS evidence: " + detail,
-			URL:         cc.Exchange.Path,
-			Method:      cc.Exchange.Method,
-			Evidence:    xssEvidenceText(evidence),
-			Solution:    remediation,
-			ExchangeID:  cc.Exchange.ID,
-			Timestamp:   nowUTC(),
-		}}, nil
+		// The evidence names the decoding when a variant carried the breakout: "markup
+		// breakout via URL decoding" says what the plain payload could not — that the
+		// application decodes this input before reflecting it.
+		evidenceText := xssEvidenceText(evidence)
+		if len(viaDecoding) > 0 {
+			evidenceText += " via " + strings.Join(viaDecoding, ", ")
+			detail += "; the plain payload did not break out, the encoded one did"
+		}
+		findings = append(findings, &Finding{
+			Name:             xssReflectedIssue,
+			Severity:         severity,
+			Confidence:       "firm",
+			Description:      "Reflected XSS evidence: " + detail,
+			URL:              cc.Exchange.Path,
+			Method:           cc.Exchange.Method,
+			Evidence:         evidenceText,
+			Solution:         remediation,
+			ExchangeID:       cc.Exchange.ID,
+			Timestamp:        nowUTC(),
+			DecodingVariants: DecodingVariants(viaDecoding),
+		})
+		break
 	}
-	return nil, nil
+	return findings, nil
 }
 
 // checkFilePathTraversalCore reports a traversal sequence that escaped the intended directory,
@@ -315,6 +442,11 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // callers already set them; only the implementation behind each changed.
 func coreInjectionDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
+		// ONE SQL-injection descriptor, as the registry's one-per-catalog-type invariant demands.
+		// Its three techniques (error, boolean, timing; saq3.2.1) run inside the check and are
+		// gated per technique at the probe; the descriptor's declared method set comes from
+		// burpsyDetectionMethods, which lists all five implemented methods, and the dispatch rule
+		// (Zwy6) withholds the check only when every one of them is disabled.
 		nativeDescriptor(sqlInjectionIssue, DispatchScopePerUrl,
 			func(c *ScanConfig) bool { return c != nil && c.CheckSqli }, checkSQLInjectionCore),
 		nativeDescriptor(xssReflectedIssue, DispatchScopePerUrl,
@@ -322,4 +454,17 @@ func coreInjectionDescriptors() []CheckDescriptor {
 		nativeDescriptor("File path traversal", DispatchScopePerUrl,
 			func(c *ScanConfig) bool { return c != nil && c.CheckPathTraversal }, checkFilePathTraversalCore),
 	}
+}
+
+// randomLetters returns n random lowercase letters, for the upload variant's filename.
+func randomLetters(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return strings.Repeat("x", n)
+	}
+	for i := range b {
+		b[i] = letters[int(b[i])%len(letters)]
+	}
+	return string(b)
 }

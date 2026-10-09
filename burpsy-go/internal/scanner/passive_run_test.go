@@ -43,7 +43,7 @@ func TestRunPassiveChecksRunsExactlyTheTwoPassiveFamilies(t *testing.T) {
 	ex := passiveFixtureExchange(t, store, "app.test", 80, rawReq, rawResp)
 	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: true, CheckPassiveAnalysis: true})
 
-	findings := s.RunPassiveChecks(context.Background(), ex)
+	findings := s.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig())
 	if len(findings) == 0 {
 		t.Fatal("the passive families produced nothing for a cleartext password form — the whole point of the pass")
 	}
@@ -89,7 +89,7 @@ func TestRunPassiveChecksHonoursTheFamilySwitches(t *testing.T) {
 
 	// Posture OFF: no cleartext-password finding (it is a posture row).
 	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: false, CheckPassiveAnalysis: true})
-	for _, f := range s.RunPassiveChecks(context.Background(), ex) {
+	for _, f := range s.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig()) {
 		if f.Name == "Cleartext submission of password" {
 			t.Fatal("a posture row ran with CheckPassivePosture off — the operator's switch is decorative")
 		}
@@ -102,15 +102,15 @@ func TestRunPassiveChecksReadsTheCapturedExchangeOnly(t *testing.T) {
 	reqID, _ := store.Put([]byte("GET /x HTTP/1.1\r\nHost: app.test\r\n\r\n"), core.DirectionRequest)
 	ex := &core.Exchange{Request: core.MsgPtr(reqID), Response: nil, Host: "app.test", Port: 80, Method: "GET", Path: "/x"}
 	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: true, CheckPassiveAnalysis: true})
-	if got := s.RunPassiveChecks(context.Background(), ex); len(got) != 0 {
+	if got := s.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig()); len(got) != 0 {
 		t.Fatalf("an exchange with no response produced %d findings — a passive row read bytes that do not exist", len(got))
 	}
 	// nil-safe on both sides
 	var nilScanner *ActiveScanner
-	if got := nilScanner.RunPassiveChecks(context.Background(), ex); got != nil {
+	if got := nilScanner.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig()); got != nil {
 		t.Fatal("nil scanner produced findings")
 	}
-	if got := s.RunPassiveChecks(context.Background(), nil); got != nil {
+	if got := s.RunPassiveChecks(context.Background(), nil, DefaultAuditConfig()); got != nil {
 		t.Fatal("nil exchange produced findings")
 	}
 }
@@ -122,8 +122,8 @@ func TestRunPassiveChecksIsIdempotentPerExchange(t *testing.T) {
 	ex := passiveFixtureExchange(t, store, "app.test", 80, rawReq, rawResp)
 	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: true, CheckPassiveAnalysis: true})
 
-	first := s.RunPassiveChecks(context.Background(), ex)
-	second := s.RunPassiveChecks(context.Background(), ex)
+	first := s.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig())
+	second := s.RunPassiveChecks(context.Background(), ex, DefaultAuditConfig())
 	if len(first) != len(second) {
 		t.Fatalf("the runner is stateful: first run produced %d, second %d — the sweep must be able to re-run an exchange without changing the answer", len(first), len(second))
 	}
@@ -141,3 +141,37 @@ func TestRunPassiveChecksIsIdempotentPerExchange(t *testing.T) {
 }
 
 // Silence the unused-import guard for httptest (used by the e2e form below when extended).
+
+// burpsy-react-ui-saq3.3.2: the passive pass reads the run configuration through the same selection
+// the audit dispatch reads — a deselected type and scan_type_passive false both stop it.
+func TestRunPassiveChecksHonoursTheRunConfigurationSelection(t *testing.T) {
+	store := core.NewTrafficStore()
+	rawReq := "POST /login HTTP/1.1\r\nHost: app.test\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nuser=a&password=secret"
+	rawResp := "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nSet-Cookie: sid=abc; Path=/\r\n\r\n<form action=\"http://app.test/login\" method=\"POST\"><input type=\"password\" name=\"password\"></form>"
+	ex := passiveFixtureExchange(t, store, "app.test", 80, rawReq, rawResp)
+	s := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{CheckPassivePosture: true, CheckPassiveAnalysis: true})
+
+	names := func(fs []*Finding) map[string]bool {
+		out := map[string]bool{}
+		for _, f := range fs {
+			out[f.Name] = true
+		}
+		return out
+	}
+
+	deny := DefaultAuditConfig()
+	deny.DisabledIssueTypes = []uint32{0x00300100} // Cleartext submission of password
+	got := names(s.RunPassiveChecks(context.Background(), ex, deny))
+	if got["Cleartext submission of password"] {
+		t.Error("a deselected passive type still raised its finding")
+	}
+	if !got["Cookie without HttpOnly flag set"] {
+		t.Error("control: the undeselected passive type raised nothing")
+	}
+
+	off := DefaultAuditConfig()
+	off.PassiveChecks = SomeUint32(0)
+	if fs := s.RunPassiveChecks(context.Background(), ex, off); len(fs) != 0 {
+		t.Errorf("scan_type_passive false still ran the passive families: %v", names(fs))
+	}
+}
