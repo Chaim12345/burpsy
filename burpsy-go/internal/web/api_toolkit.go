@@ -1248,7 +1248,7 @@ func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 		}
 		rule, err := matchreplace.NewRule(target, cat, spec.StringMatch, spec.StringReplace, spec.Comment)
 		if err != nil {
-			http.Error(w, "Invalid rule: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("Rule %d: invalid rule: %s", i, err.Error()), http.StatusBadRequest)
 			return
 		}
 		rule.Enabled = spec.Enabled
@@ -1380,7 +1380,7 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		}
 		rule, err := matchreplace.NewRule(target, cat, spec.StringMatch, spec.StringReplace, spec.Comment)
 		if err != nil {
-			http.Error(w, "Invalid rule: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("Draft rule %d: invalid rule: %s", i, err.Error()), http.StatusBadRequest)
 			return
 		}
 		rule.Enabled = spec.Enabled
