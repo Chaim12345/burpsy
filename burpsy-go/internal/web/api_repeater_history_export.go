@@ -46,21 +46,21 @@ const historyExportFormat = "burpsy-repeater-history/1"
 type historyExportEntryReq struct {
 	// RequestMsgID and ResponseMsgID are the ids the send returned. Pointers because message 0 is a
 	// real message and absence means "this entry has none" — a WebSocket entry sends neither.
-	RequestMsgID  *uint64          `json:"request_msg_id"`
-	ResponseMsgID *uint64          `json:"response_msg_id"`
-	ExchangeID    *core.ExchangeID `json:"exchange_id,omitempty"`
+	RequestMsgID  *uint64          `json:"request_msg_id" desc:"the request message id the send returned; null for an entry with none"`
+	ResponseMsgID *uint64          `json:"response_msg_id" desc:"the response message id the send returned; null for an entry with none"`
+	ExchangeID    *core.ExchangeID `json:"exchange_id,omitempty" desc:"the exchange the send recorded, carried into the file"`
 	// Kind is "http" or "ws"; a ws entry is skipped with its reason rather than refused, because a
 	// tab's history may mix both and the operator asked for the whole of it.
-	Kind string `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty" enum:"http|ws" desc:"http, or ws for a WebSocket send (skipped with its reason)"`
 	// SentAt is the browser's clock at send time, carried through as the entry's label.
-	SentAt string `json:"sent_at,omitempty"`
+	SentAt string `json:"sent_at,omitempty" desc:"the send time as the caller labels it, carried through"`
 }
 
 type historyExportReq struct {
-	Tab     string                  `json:"tab"`
-	Target  string                  `json:"target"`
-	Note    string                  `json:"note,omitempty"`
-	Entries []historyExportEntryReq `json:"entries"`
+	Tab     string                  `json:"tab" desc:"the Repeater tab's name, used in the file and its filename"`
+	Target  string                  `json:"target" desc:"the tab's target, carried into the file"`
+	Note    string                  `json:"note,omitempty" desc:"a free-text note carried into the file"`
+	Entries []historyExportEntryReq `json:"entries" desc:"the tab's history in order, at most 10000 entries"`
 }
 
 type historyExportEntry struct {
@@ -104,7 +104,7 @@ func (s *Server) handleRepeaterHistoryExport(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req historyExportReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

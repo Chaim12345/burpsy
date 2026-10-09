@@ -91,8 +91,8 @@ Two rules are enforced by tests rather than by review:
    DELETE: that is why `DELETE /api/history`, which the manifest classes `read`
    (burpsy-react-ui-gf68), is its own `history_delete` tool rather than an op of `history`.
 
-Size, measured on this branch: the grouped surface is 64 tools and about 224 KB of `tools/list`
-JSON with every body and query typed; the route surface is 155 tools and about 326 KB typed; before
+Size, measured on this branch: the grouped surface is 64 tools and about 234 KB of `tools/list`
+JSON with every body and query typed; the route surface is 168 tools and about 350 KB typed; before
 this work the route surface was 148 tools and about 226 KB with untyped bodies. Grouping buys the tool
 count, and typing spends roughly what grouping saved.
 

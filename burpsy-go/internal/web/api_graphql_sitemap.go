@@ -32,7 +32,7 @@ import (
 type graphqlSitemapReq struct {
 	// ExchangeID is the exchange whose response is the introspection answer and whose request names
 	// the endpoint. A pointer because exchange 0 is a real exchange.
-	ExchangeID *core.ExchangeID `json:"exchange_id"`
+	ExchangeID *core.ExchangeID `json:"exchange_id" desc:"the exchange whose response is an introspection answer; its request supplies the endpoint and headers"`
 }
 
 type graphqlSitemapOp struct {
@@ -62,7 +62,7 @@ func (s *Server) handleGraphQLSitemap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req graphqlSitemapReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ExchangeID == nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil || req.ExchangeID == nil {
 		http.Error(w, `body must be JSON {"exchange_id": n} naming the exchange whose response is the introspection answer`, http.StatusBadRequest)
 		return
 	}

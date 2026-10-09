@@ -57,10 +57,11 @@ var groupedTools = []groupSpec{
 	// ---- Requests & Responses ------------------------------------------------------------------
 	{
 		name: "history", group: groupRequests,
-		short: "Reads captured proxy traffic: the history list, one exchange, a stored message, a suite-wide search, and counters.",
+		short: "Reads captured proxy traffic: the history list, one exchange, a stored message, a suite-wide search, counters, the Target analyzer, and a Repeater tab's history as one export.",
 		ops: []string{
 			"GET /api/history", "GET /api/message/", "GET /api/search", "GET /api/stats",
-			"GET /api/engagement/", "GET /api/exchange/in-browser/",
+			"GET /api/engagement/", "GET /api/exchange/in-browser/", "GET /api/target/analyze",
+			"POST /api/repeater/history-export",
 		},
 	},
 	{
@@ -73,11 +74,11 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "history_annotate", group: groupRequests,
-		short: "Reads or annotates one exchange (notes, highlight), manages history extractors, imports a HAR, and sets the uninteresting-header list.",
+		short: "Reads or annotates one exchange (notes, highlight), manages history extractors, imports a HAR, saves an exchange's GraphQL introspection queries to the site map unsent, and sets the uninteresting-header list.",
 		ops: []string{
 			"GET /api/exchange/", "PATCH /api/exchange/",
 			"GET /api/history/extractors", "PUT /api/history/extractors", "POST /api/history/extract",
-			"POST /api/history/import/har",
+			"POST /api/history/import/har", "POST /api/graphql/sitemap",
 			"GET /api/headers/uninteresting", "PUT /api/headers/uninteresting",
 		},
 	},
@@ -136,10 +137,10 @@ var groupedTools = []groupSpec{
 	// ---- Issues --------------------------------------------------------------------------------
 	{
 		name: "issues", group: groupIssues,
-		short: "Reads scanner issues, the issue-definition catalogue, report exports and coverage.",
+		short: "Reads scanner issues, the issue-definition catalogue, the selectable issue types and their detection methods, report exports and coverage.",
 		ops: []string{
 			"GET /api/issues", "GET /api/advisories", "GET /api/advisories/", "GET /api/report/",
-			"GET /api/scanner/coverage",
+			"GET /api/scanner/coverage", "GET /api/scanner/issue-types",
 		},
 	},
 	{
@@ -164,10 +165,11 @@ var groupedTools = []groupSpec{
 	// ---- Scanning & Auditing -------------------------------------------------------------------
 	{
 		name: "scan", group: groupScanning,
-		short: "Starts audits, crawls, API scans, content discovery and the live audit — real traffic at the target.",
+		short: "Starts audits, crawls, API scans, content discovery, hidden-input guessing, BCheck draft test runs and the live audit — real traffic at the target.",
 		ops: []string{
 			"POST /api/audit/", "POST /api/audit/selected", "GET /api/crawl", "POST /api/crawl",
 			"POST /api/apiscan", "GET /api/discovery", "POST /api/discovery",
+			"GET /api/hidden-inputs", "POST /api/hidden-inputs", "POST /api/scanner/checks/test",
 			"GET /api/scanner/live", "POST /api/scanner/live", "POST /api/scanner/audit-items/",
 		},
 	},
@@ -200,15 +202,17 @@ var groupedTools = []groupSpec{
 	// ---- Scan Checks ---------------------------------------------------------------------------
 	{
 		name: "scan_checks", group: groupScanChecks,
-		short: "Lists the scan checks in the corpus.",
-		ops:   []string{"GET /api/scanner/checks"},
+		short: "Lists the scan checks in the corpus, and validates a BCheck draft without loading it.",
+		ops:   []string{"GET /api/scanner/checks", "POST /api/scanner/checks/validate"},
 	},
 	{
 		name: "scan_checks_edit", group: groupScanChecks,
-		short: "Enables or disables corpus checks, sets the passive branch, and reads or sets secret-scanning rules.",
+		short: "Imports, exports, deletes, reloads, enables or disables corpus checks, sets the passive branch, and reads or sets secret-scanning rules.",
 		ops: []string{
 			"PUT /api/scanner/checks/enable", "POST /api/scanner/passive-branch",
 			"GET /api/scanner/secrets", "PUT /api/scanner/secrets",
+			"POST /api/scanner/checks/import", "GET /api/scanner/checks/source", "DELETE /api/scanner/checks/source",
+			"POST /api/scanner/checks/reload",
 		},
 	},
 	{
@@ -315,8 +319,8 @@ var groupedTools = []groupSpec{
 	// ---- Fuzzing -------------------------------------------------------------------------------
 	{
 		name: "intruder", group: groupFuzzing,
-		short: "Launches an Intruder attack against the target with the chosen payloads.",
-		ops:   []string{"POST /api/intruder/run"},
+		short: "Launches an Intruder attack against the target with the chosen payloads, or re-sends chosen attempts' stored requests.",
+		ops:   []string{"POST /api/intruder/run", "POST /api/intruder/again"},
 	},
 	{
 		name: "intruder_read", group: groupFuzzing,
@@ -365,13 +369,13 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "collaborator_payload", group: groupCollaborator,
-		short: "Generates Collaborator payload addresses to embed in test traffic.",
-		ops:   []string{"POST /api/collaborator/payload"},
+		short: "Generates Collaborator payload addresses to embed in test traffic, and runs the interaction server's health check.",
+		ops:   []string{"POST /api/collaborator/payload", "POST /api/collaborator/health"},
 	},
 	{
 		name: "collaborator_server", group: groupCollaborator,
-		short: "Chooses which interaction server receives this engagement's out-of-band callbacks.",
-		ops:   []string{"POST /api/collaborator/server"},
+		short: "Chooses which interaction server receives this engagement's out-of-band callbacks, or stops using one.",
+		ops:   []string{"POST /api/collaborator/server", "DELETE /api/collaborator/server"},
 	},
 	{
 		name: "blind_xss", group: groupCollaborator,
@@ -449,8 +453,10 @@ var groupedTools = []groupSpec{
 //
 // The route surface (-surface routes) still lists all of them, for debugging.
 var notExposed = map[string]string{
-	"GET /":         "the console's own index.html and SPA catch-all — an asset, not an operation",
-	"GET /ca.crt":   "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
+	"GET /":       "the console's own index.html and SPA catch-all — an asset, not an operation",
+	"GET /ca.crt": "the proxy CA certificate as a download for a browser's trust store; proxy_ca reports its status and fingerprint",
+	"GET /api/engagement/clickbandit.js": "the Clickbandit script served as text/javascript for the operator to paste into a " +
+		"browser's developer console — an asset that runs in a browser, not an operation",
 	"GET /reissue/": "a one-shot URL the operator's own browser navigates to; fetching it from an agent would spend the browser's token",
 	"GET /api/events": "the SSE change stream: it never ends, so it cannot be one tool result. The transport " +
 		"itself is the stream's agent-side consumer",

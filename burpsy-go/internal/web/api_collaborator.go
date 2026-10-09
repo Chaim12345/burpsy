@@ -1027,6 +1027,11 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// collaboratorServerUnsetReq is DELETE /api/collaborator/server's optional body.
+type collaboratorServerUnsetReq struct {
+	DiscardOpenChannel bool `json:"discard_open_channel" desc:"stop using the server even though a channel is registered, orphaning the payload addresses minted from it; without it an open channel is a 409"`
+}
+
 // handleCollaboratorServerUnset serves DELETE /api/collaborator/server: Burp's "Don't use Burp
 // Collaborator" (burpsy-react-ui-8e3n). The installation goes back to not_configured, and every
 // out-of-band check refuses again rather than reporting a clean result.
@@ -1038,9 +1043,7 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 // are dropped from this surface and counted in the reply, and the interaction counts go back to null.
 // They do not go to 0, because a payload nobody polls has no interactions to count.
 func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		DiscardOpenChannel bool `json:"discard_open_channel"`
-	}
+	var req collaboratorServerUnsetReq
 	if r.Body != nil {
 		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {\"discard_open_channel\": true} or empty", http.StatusBadRequest)

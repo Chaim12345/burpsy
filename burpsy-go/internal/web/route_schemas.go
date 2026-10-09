@@ -52,6 +52,7 @@ var routeSchemas = map[string]opSchema{
 		{name: "name", kind: "string", desc: "one extension's console"},
 		{name: "limit", kind: "integer", desc: "most lines to return"},
 	}},
+	"GET /api/hidden-inputs": {query: []queryParam{{name: "task", kind: "integer", desc: "one guessing run by task id; omitted lists the retained runs"}}},
 	"GET /api/history": {query: []queryParam{
 		{name: "limit", kind: "integer", desc: "most rows to return, newest first (default 300)"},
 		{name: "q", kind: "string", desc: "a burpsy-query filter expression over host/path/method/status"},
@@ -74,7 +75,8 @@ var routeSchemas = map[string]opSchema{
 		{name: "host", kind: "string", desc: "only issues on this host"},
 		{name: "exclude_false_positives", kind: "boolean"},
 	}},
-	"GET /api/scanner/audit-items": {query: []queryParam{{name: "limit", kind: "integer"}}},
+	"GET /api/scanner/audit-items":   {query: []queryParam{{name: "limit", kind: "integer"}}},
+	"GET /api/scanner/checks/source": {query: []queryParam{{name: "name", kind: "string", desc: "the loaded check's name; required"}}},
 	"GET /api/search": {query: []queryParam{
 		{name: "q", kind: "string", desc: "the search term"},
 		{name: "case", kind: "boolean", desc: "case-sensitive"},
@@ -87,6 +89,13 @@ var routeSchemas = map[string]opSchema{
 	"GET /api/sitemap": {query: []queryParam{
 		{name: "host", kind: "string", desc: "one host's subtree"},
 		{name: "path", kind: "string", desc: "one path's node"},
+	}},
+	"GET /api/target/analyze": {query: []queryParam{
+		{name: "host", kind: "string", desc: "the host to analyze; required"},
+		{name: "path", kind: "string", desc: "limit the report to the branch under this path (starts with /)"},
+		{name: "port", kind: "integer", desc: "only this port, 1-65535"},
+		{name: "tls", kind: "boolean", desc: "only https (true) or only http (false)"},
+		{name: "format", kind: "string", desc: "json (default), or html for the saveable report", enum: []string{"json", "html"}},
 	}},
 	"GET /api/tools/log": {query: []queryParam{
 		{name: "limit", kind: "integer"},
@@ -103,12 +112,13 @@ var routeSchemas = map[string]opSchema{
 	}},
 
 	// ---- Requests & Responses -----------------------------------------------------------------
-	"DELETE /api/history":            {body: typeOf[historyDeleteReq](), optional: true},
-	"PATCH /api/exchange/":           {body: typeOf[exchangePatchReq]()},
-	"PUT /api/history/extractors":    {body: typeOf[historyExtractorsReq]()},
-	"POST /api/history/extract":      {body: typeOf[historyExtractReq]()},
-	"POST /api/history/import/har":   {raw: "an HTTP Archive (HAR 1.2) JSON document, as a browser or proxy exports it; its members are the producer's, so unknown ones are ignored"},
-	"PUT /api/headers/uninteresting": {body: typeOf[uninterestingHeadersReq]()},
+	"DELETE /api/history":               {body: typeOf[historyDeleteReq](), optional: true},
+	"PATCH /api/exchange/":              {body: typeOf[exchangePatchReq]()},
+	"PUT /api/history/extractors":       {body: typeOf[historyExtractorsReq]()},
+	"POST /api/history/extract":         {body: typeOf[historyExtractReq]()},
+	"POST /api/history/import/har":      {raw: "an HTTP Archive (HAR 1.2) JSON document, as a browser or proxy exports it; its members are the producer's, so unknown ones are ignored"},
+	"PUT /api/headers/uninteresting":    {body: typeOf[uninterestingHeadersReq]()},
+	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
 
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
@@ -130,13 +140,14 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
 
 	// ---- Scope & Sitemap ----------------------------------------------------------------------
-	"POST /api/scope":          {body: typeOf[ScopeRequest]()},
-	"GET /api/scope/check":     {query: []queryParam{{name: "url", kind: "string", desc: "an absolute http:// or https:// URL"}}},
-	"POST /api/scope/check":    {body: typeOf[scopeCheckReq]()},
-	"POST /api/sitemap":        {body: typeOf[sitemapInsertReq]()},
-	"DELETE /api/sitemap":      {body: typeOf[sitemapDeleteReq]()},
-	"PUT /api/skills/disabled": {body: typeOf[skillsDisabledReq]()},
-	"POST /api/sitemap/record": {body: typeOf[sitemapRecordReq]()},
+	"POST /api/scope":           {body: typeOf[ScopeRequest]()},
+	"GET /api/scope/check":      {query: []queryParam{{name: "url", kind: "string", desc: "an absolute http:// or https:// URL"}}},
+	"POST /api/scope/check":     {body: typeOf[scopeCheckReq]()},
+	"POST /api/sitemap":         {body: typeOf[sitemapInsertReq]()},
+	"DELETE /api/sitemap":       {body: typeOf[sitemapDeleteReq]()},
+	"PUT /api/skills/disabled":  {body: typeOf[skillsDisabledReq]()},
+	"POST /api/sitemap/record":  {body: typeOf[sitemapRecordReq]()},
+	"POST /api/graphql/sitemap": {body: typeOf[graphqlSitemapReq]()},
 
 	// ---- Issues -------------------------------------------------------------------------------
 	"PUT /api/issues/":              {body: typeOf[issueTriageReq](), optional: true},
@@ -154,6 +165,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/crawl":          {body: typeOf[crawlStartReq]()},
 	"POST /api/apiscan":        {body: typeOf[apiScanReq]()},
 	"POST /api/discovery":      {body: typeOf[discoveryStartReq]()},
+	"POST /api/hidden-inputs":  {body: typeOf[hiddenInputStartReq]()},
 	"POST /api/scanner/live":   {body: typeOf[liveAuditEnableReq]()},
 	"POST /api/scanner/audit-items/": {variants: map[string]reflect.Type{
 		"0/again":  typeOf[scannerAuditReq](),
@@ -166,15 +178,20 @@ var routeSchemas = map[string]opSchema{
 	"DELETE /api/tasks/":     noBody,
 
 	// ---- Scan Checks / Configuration -----------------------------------------------------------
-	"PUT /api/scanner/checks/enable":   {body: typeOf[corpusCheckEnableReq]()},
-	"POST /api/scanner/passive-branch": {body: typeOf[passiveBranchReq]()},
-	"PUT /api/scanner/secrets":         {body: typeOf[scannerSecretsReq]()},
-	"PUT /api/dominvader":              {body: typeOf[domInvaderReq]()},
-	"POST /api/dominvader/hit":         {body: typeOf[dominvader.Hit]()},
-	"DELETE /api/dominvader/hits":      noBody,
-	"POST /api/scanner/configs":        {body: typeOf[scanConfigWriteReq]()},
-	"PUT /api/scanner/configs":         {body: typeOf[scanConfigWriteReq]()},
-	"DELETE /api/scanner/configs":      {body: typeOf[scanConfigWriteReq]()},
+	"PUT /api/scanner/checks/enable":    {body: typeOf[corpusCheckEnableReq]()},
+	"POST /api/scanner/checks/validate": {body: typeOf[checkValidateReq]()},
+	"POST /api/scanner/checks/import":   {body: typeOf[checkImportReq]()},
+	"POST /api/scanner/checks/test":     {body: typeOf[checkTestReq]()},
+	"POST /api/scanner/checks/reload":   noBody,
+	"DELETE /api/scanner/checks/source": {query: []queryParam{{name: "name", kind: "string", desc: "the console-imported check to delete; a file-loaded check is refused with 409"}}},
+	"POST /api/scanner/passive-branch":  {body: typeOf[passiveBranchReq]()},
+	"PUT /api/scanner/secrets":          {body: typeOf[scannerSecretsReq]()},
+	"PUT /api/dominvader":               {body: typeOf[domInvaderReq]()},
+	"POST /api/dominvader/hit":          {body: typeOf[dominvader.Hit]()},
+	"DELETE /api/dominvader/hits":       noBody,
+	"POST /api/scanner/configs":         {body: typeOf[scanConfigWriteReq]()},
+	"PUT /api/scanner/configs":          {body: typeOf[scanConfigWriteReq]()},
+	"DELETE /api/scanner/configs":       {body: typeOf[scanConfigWriteReq]()},
 	"PUT /api/scanner/config": {
 		body: typeOf[map[string]json.RawMessage](), schema: scannerConfigPatchSchema,
 		keysCheckedBy: "applyScannerConfigPatch refuses a key in none of scannerConfigBoolKeys, scannerConfigIntMSKeys or max_concurrency",
@@ -244,6 +261,7 @@ var routeSchemas = map[string]opSchema{
 
 	// ---- Fuzzing ------------------------------------------------------------------------------
 	"POST /api/intruder/run":           {body: typeOf[intruderRunReq]()},
+	"POST /api/intruder/again":         {body: typeOf[intruderAgainReq]()},
 	"POST /api/intruder/points":        {body: typeOf[intruderPointsReq]()},
 	"POST /api/intruder/attacks/":      noBody,
 	"POST /api/intruder/payload-files": {raw: "the wordlist file's bytes, one payload per line (not JSON)"},
@@ -255,10 +273,12 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/sequencer/settings":      {body: typeOf[sequencer.SettingsEdit]()},
 
 	// ---- Collaborator -------------------------------------------------------------------------
-	"POST /api/collaborator/payload": {body: typeOf[collaboratorPayloadReq](), optional: true},
-	"POST /api/collaborator/poll":    {body: typeOf[collaboratorPollReq](), optional: true},
-	"POST /api/collaborator/server":  {body: typeOf[collaboratorServerRequest]()},
-	"POST /api/blindxss/payload":     noBody,
+	"POST /api/collaborator/payload":  {body: typeOf[collaboratorPayloadReq](), optional: true},
+	"POST /api/collaborator/poll":     {body: typeOf[collaboratorPollReq](), optional: true},
+	"POST /api/collaborator/server":   {body: typeOf[collaboratorServerRequest]()},
+	"DELETE /api/collaborator/server": {body: typeOf[collaboratorServerUnsetReq](), optional: true},
+	"POST /api/collaborator/health":   noBody,
+	"POST /api/blindxss/payload":      noBody,
 
 	// ---- Utilities ----------------------------------------------------------------------------
 	"POST /api/tools/decode":                {body: typeOf[toolsDecodeReq]()},
