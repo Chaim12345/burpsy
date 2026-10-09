@@ -920,16 +920,38 @@ func chooseMethod(r web.MCPRouteInfo, args callArgs) (string, error) {
 // is the evidence, and it carries the route, the risk class and the header name — and the
 // instruction this transport adds is what to do with it: confirm THIS call, by its tool and its
 // arguments, because the token is bound to the request they resolve to.
+//
+// It names the argument keys and never echoes their values: a body may carry a password (a PKCS#12
+// export) or a credential rule, and a refusal is text an MCP host shows, logs and keeps in its
+// transcript. The caller already holds the arguments; it needs to be told to resend them unchanged.
 func refusalText(r web.MCPRouteInfo, toolName string, args callArgs, gate string) string {
-	args.Confirm = ""
-	confirmArgs, _ := json.Marshal(map[string]any{"tool": toolName, "arguments": args})
 	return fmt.Sprintf(`%s
 burpsy refused this call: a mutating call to a route whose risk class is %q needs a one-time confirmation of this exact call.
-Next step, as its own visible action: call the %s tool with %s. It returns a preview of the request and a token bound to it.
+Next step, as its own visible action: call the %s tool with "tool": %q and "arguments": the same arguments you just sent (%s), without "confirm". It returns a preview of the request and a token bound to it.
 Then re-issue this call, unchanged, with "confirm" set to that token. The token is single-use, expires in %d seconds, and is refused on any call whose method, path, query or body differs.
 Minting is a POST to %s.
 Only do this when a human has asked for this specific action.`,
-		gate, r.Risk, confirmToolName, confirmArgs, web.MCPConfirmTTLSeconds(), web.MCPConfirmEndpoint(r.Pattern))
+		gate, r.Risk, confirmToolName, toolName, argumentKeys(args), web.MCPConfirmTTLSeconds(), web.MCPConfirmEndpoint(r.Pattern))
+}
+
+// argumentKeys names the arguments a call carried, in the order the tool schema lists them.
+func argumentKeys(args callArgs) string {
+	var keys []string
+	for _, k := range []struct {
+		name string
+		set  bool
+	}{
+		{"op", args.Op != ""}, {"id", args.ID != ""}, {"method", args.Method != ""}, {"path", args.Path != ""},
+		{"query", len(args.Query) > 0}, {"body", len(args.Body) > 0},
+	} {
+		if k.set {
+			keys = append(keys, `"`+k.name+`"`)
+		}
+	}
+	if len(keys) == 0 {
+		return "none"
+	}
+	return strings.Join(keys, ", ")
 }
 
 // mintDescription is the body of a mint request: the call a confirmation is for, as the console's
@@ -948,6 +970,7 @@ type mintPreview struct {
 	Call    struct {
 		Method        string   `json:"method"`
 		URL           string   `json:"url"`
+		Path          string   `json:"path"`
 		BodyBytes     int      `json:"body_bytes"`
 		BodySHA256    string   `json:"body_sha256"`
 		BodyKind      string   `json:"body_kind"`
@@ -1033,12 +1056,14 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	if truncated || json.Unmarshal(payload, &minted) != nil || minted.Token == "" {
 		return s.ok(req, errResult(b.String()+"\nthe console's answer is not a mint result; no token is usable from it"))
 	}
-	// The drift check this layer can make: the console must have bound the token to the request this
-	// layer will send. A disagreement would be a token for a call nobody is going to make — or a
-	// preview that is not of the call — and either way it is not handed out as if it were fine.
-	if minted.Call.Method != rc.method || minted.Call.URL != canonicalURL(rc.url) {
+	// The drift check this layer can make: the console must have bound the token to the method and
+	// path this layer will send. (The preview's url withholds secret query values, so the unredacted
+	// path is what is compared; the query and body are bound by the console from this layer's own
+	// description of them.) A disagreement is a token for a call nobody is going to make, and it is
+	// not handed out as if it were fine.
+	if want := canonicalPath(rc.url); minted.Call.Method != rc.method || minted.Call.Path != want {
 		return s.ok(req, errResult(fmt.Sprintf("%s\nthe console bound the token to %s %s, but this call sends %s %s; not using it",
-			b.String(), minted.Call.Method, minted.Call.URL, rc.method, canonicalURL(rc.url))))
+			b.String(), minted.Call.Method, minted.Call.Path, rc.method, want)))
 	}
 
 	p := minted.Call
@@ -1066,20 +1091,14 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	return s.ok(req, callResult{Content: []contentBlock{{Type: "text", Text: b.String()}}})
 }
 
-// canonicalURL is a relative URL with its query in sorted, re-encoded form — the form the console's
-// preview reports — so the drift check compares like with like.
-func canonicalURL(raw string) string {
-	path, query, found := strings.Cut(raw, "?")
+// canonicalPath is the decoded path of a relative URL — the form the console's preview reports in
+// its path field — so the drift check compares like with like.
+func canonicalPath(raw string) string {
+	path, _, _ := strings.Cut(raw, "?")
 	if decoded, err := url.PathUnescape(path); err == nil {
-		path = decoded // the console reports the decoded path, as the gate compares it
+		return decoded
 	}
-	if !found || query == "" {
-		return path
-	}
-	if v, err := url.ParseQuery(query); err == nil {
-		query = v.Encode()
-	}
-	return path + "?" + query
+	return path
 }
 
 // readCapped reads at most limit bytes and reports whether there was more. Reading one byte over

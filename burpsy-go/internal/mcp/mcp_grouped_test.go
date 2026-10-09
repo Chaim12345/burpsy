@@ -258,7 +258,7 @@ func TestAGroupedGatedOperationIsRefusedThenConfirmedOnce(t *testing.T) {
 	args := map[string]any{"op": "POST /api/audit/", "id": "999999"}
 
 	refused := callGrouped(t, base, "scan", args)
-	if !refused.IsError || !strings.Contains(textOf(refused), "HTTP 428") || !strings.Contains(textOf(refused), `{"arguments":{"op":"POST /api/audit/","id":"999999"},"tool":"scan"}`) {
+	if !refused.IsError || !strings.Contains(textOf(refused), "HTTP 428") || !strings.Contains(textOf(refused), `"tool": "scan"`) || !strings.Contains(textOf(refused), `("op", "id")`) {
 		t.Fatalf("the unconfirmed audit was not refused by the gate with the next step:\n%s", textOf(refused))
 	}
 

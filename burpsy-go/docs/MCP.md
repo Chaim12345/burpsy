@@ -194,8 +194,10 @@ hash from the request it is about to admit and refuses — and burns — a token
 other request. A token minted for `POST /api/audit/41` does not authorise `POST /api/audit/42`; one
 minted to export the CA certificate does not export its private key. JSON bodies and queries are
 compared in canonical form (sorted keys/parameters, no insignificant whitespace), so a host that
-re-serialises the arguments between the two calls is not refused; nothing that decodes differently
-is ever equated.
+re-serialises the arguments between the two calls is not refused. A body whose objects name a member
+twice under `encoding/json`'s case folding is refused outright, because the handler reads whichever
+comes last and canonical order would hide which. The refusal names the tool and the argument keys to
+resend, never their values.
 
 `burpsy_confirm` is a separate tool precisely so the escalation is one visible, approvable call in
 the host's transcript rather than a field a model fills in silently. Its description states the limit
