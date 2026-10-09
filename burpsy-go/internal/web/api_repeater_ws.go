@@ -72,6 +72,17 @@ type repeaterWsSendReq struct {
 	// below exists to prevent, so both spellings mean the same thing.
 	ToClient      bool `json:"to_client,omitempty"`
 	ToClientCamel bool `json:"toClient,omitempty"`
+	// Clone is Burp's "clone" of a connection (burpsy-react-ui-wuwf): the new connection is opened
+	// with the captured handshake of the connection Socket names — its cookies, Origin,
+	// Authorization and subprotocol offer — rather than the minimal handshake a plain resend
+	// builds, so the target treats it as the same client. Only the nonce and the extension offer
+	// change (wsclient.CloneHandshake says why). Requires Socket, and refuses Target: the cloned
+	// bytes carry the original Host, and dialling them at a different authority would send a
+	// request that names one host to another.
+	Clone bool `json:"clone,omitempty"`
+	// Socket is the WebSocket ID (the handshake exchange) to clone. A pointer because exchange 0
+	// is a real id: an absent field and the store's first connection must not read the same.
+	Socket *uint64 `json:"socket,omitempty"`
 }
 
 // repeaterWsSendResp is the reply.
@@ -144,14 +155,15 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	host, port, tls, path, subprotocol, opcode, payload, code, err := s.prepareWsSend(req)
+	plan, code, err := s.prepareWsSend(req)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
+	host, port, tls, path, opcode, payload := plan.host, plan.port, plan.tls, plan.path, plan.opcode, plan.payload
 
 	started := time.Now()
-	reply, err := wsclient.SendFrame(r.Context(), s.sender, host, port, tls, path, subprotocol, wsclient.Frame{Opcode: opcode, Payload: payload})
+	reply, err := wsclient.SendFrameWithHandshake(r.Context(), s.sender, host, port, tls, plan.handshake, wsclient.Frame{Opcode: opcode, Payload: payload})
 	elapsed := time.Since(started).Milliseconds()
 	if err != nil {
 		// The tool log row is written for the same reason the HTTP send writes one: a send
@@ -162,10 +174,39 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.recordWsSend(host, port, tls, path, opcode, payload, reply, started)
+	resp := s.recordWsSend(host, port, tls, path, plan.handshake, opcode, payload, reply, started)
 	resp.ElapsedMs = elapsed
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// wsSendPlan is a resolved, authorised WebSocket send: where it goes, the exact handshake bytes
+// the gates passed (which are the bytes sent and the bytes recorded), and the frame.
+type wsSendPlan struct {
+	host      string
+	port      uint16
+	tls       bool
+	path      string
+	handshake []byte
+	opcode    core.WsOpcode
+	payload   []byte
+}
+
+// wsOpcodeOf parses the opcode a send may carry: data frames only.
+func wsOpcodeOf(name, payload string) (core.WsOpcode, error) {
+	var opcode core.WsOpcode
+	switch name {
+	case "text":
+		opcode = core.WsOpcodeText
+	case "binary":
+		opcode = core.WsOpcodeBinary
+	default:
+		return 0, fmt.Errorf("opcode must be text or binary, got %q", name)
+	}
+	if strings.TrimSpace(payload) == "" && opcode == core.WsOpcodeText {
+		return 0, errors.New("a text frame needs a payload")
+	}
+	return opcode, nil
 }
 
 // prepareWsSend resolves the frame's target and payload, and applies the two scope gates.
@@ -177,33 +218,34 @@ func (s *Server) handleRepeaterWsSend(w http.ResponseWriter, r *http.Request) {
 // overrides the host — the operator may be resending at a different instance — but the
 // payload and opcode always come from the request body, which is the edited text the
 // operator sees in the pane.
-func (s *Server) prepareWsSend(req repeaterWsSendReq) (
-	host string, port uint16, tls bool, path, subprotocol string, opcode core.WsOpcode, payload []byte, code int, err error,
-) {
-	switch req.Opcode {
-	case "text":
-		opcode = core.WsOpcodeText
-	case "binary":
-		opcode = core.WsOpcodeBinary
-	default:
-		return "", 0, false, "", "", 0, nil, http.StatusBadRequest,
-			fmt.Errorf("opcode must be text or binary, got %q", req.Opcode)
+func (s *Server) prepareWsSend(req repeaterWsSendReq) (plan wsSendPlan, code int, err error) {
+	var (
+		host        string
+		port        uint16
+		tls         bool
+		path        string
+		subprotocol string
+		opcode      core.WsOpcode
+	)
+	opcode, err = wsOpcodeOf(req.Opcode, req.Payload)
+	if err != nil {
+		return wsSendPlan{}, http.StatusBadRequest, err
 	}
-	if strings.TrimSpace(req.Payload) == "" && opcode == core.WsOpcodeText {
-		return "", 0, false, "", "", 0, nil, http.StatusBadRequest, errors.New("a text frame needs a payload")
+	if req.Clone {
+		return s.prepareWsClone(req, opcode)
 	}
 
 	if req.Message != 0 {
 		m, merr := s.store.WsMessage(core.MsgId(req.Message))
 		if merr != nil {
-			return "", 0, false, "", "", 0, nil, http.StatusNotFound, fmt.Errorf("no ws message %d", req.Message)
+			return wsSendPlan{}, http.StatusNotFound, fmt.Errorf("no ws message %d", req.Message)
 		}
 		if opcode == 0 {
 			opcode = m.Opcode
 		}
 		ex, exErr := s.store.GetExchange(m.Exchange)
 		if exErr != nil {
-			return "", 0, false, "", "", 0, nil, http.StatusNotFound,
+			return wsSendPlan{}, http.StatusNotFound,
 				fmt.Errorf("the frame's handshake exchange %d could not be read: %v", m.Exchange, exErr)
 		}
 		host, port, tls, path = ex.Host, ex.Port, ex.TLS, ex.Path
@@ -222,11 +264,11 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 		// path where ws:// is what the operator meant.
 		wsTarget, wsTLS, wsErr := wsSchemeTarget(req.Target)
 		if wsErr != nil {
-			return "", 0, false, "", "", 0, nil, http.StatusBadRequest, wsErr
+			return wsSendPlan{}, http.StatusBadRequest, wsErr
 		}
 		h, p, t, terr := targetParts(wsTarget)
 		if terr != nil {
-			return "", 0, false, "", "", 0, nil, http.StatusBadRequest, terr
+			return wsSendPlan{}, http.StatusBadRequest, terr
 		}
 		if wsTLS {
 			t = true
@@ -237,7 +279,7 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 		tls = true
 	}
 	if host == "" {
-		return "", 0, false, "", "", 0, nil, http.StatusBadRequest,
+		return wsSendPlan{}, http.StatusBadRequest,
 			errors.New("give the frame a target: a wshistory message id, or an explicit host:port")
 	}
 	if path == "" {
@@ -247,7 +289,7 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 	// to whatever target they type, and the scope they set to constrain outbound traffic is
 	// not bypassable by framing instead of requesting.
 	if !s.scope.MayContainHost(host, port, tls) {
-		return "", 0, false, "", "", 0, nil, http.StatusForbidden,
+		return wsSendPlan{}, http.StatusForbidden,
 			errors.New("refused: " + s.scope.Explain(host, port, path, tls))
 	}
 	// The raw-bytes gate, the second layer: the handshake's bytes about to go out are
@@ -256,21 +298,24 @@ func (s *Server) prepareWsSend(req repeaterWsSendReq) (
 	// the bytes about to be written can be trusted.
 	handshake, herr := wsclient.HandshakeRequest(host, port, tls, path, subprotocol)
 	if herr != nil {
-		return "", 0, false, "", "", 0, nil, http.StatusInternalServerError, herr
+		return wsSendPlan{}, http.StatusInternalServerError, herr
 	}
 	if aerr := s.scope.AuthoriseRaw(host, port, tls, handshake); aerr != nil {
-		return "", 0, false, "", "", 0, nil, http.StatusForbidden, fmt.Errorf("refused: %v", aerr)
+		return wsSendPlan{}, http.StatusForbidden, fmt.Errorf("refused: %v", aerr)
 	}
-	payload = []byte(req.Payload)
-	return host, port, tls, path, subprotocol, opcode, payload, 0, nil
+	return wsSendPlan{host: host, port: port, tls: tls, path: path, handshake: handshake,
+		opcode: opcode, payload: []byte(req.Payload)}, 0, nil
 }
 
 // recordWsSend stores the resend as its own conversation: the handshake exchange through the
 // ordinary Put, the operator's frame and every reply as WsMessages on it.
+//
+// handshake is the request that actually went out. It used to be rebuilt here with a new key and
+// no subprotocol, so the recorded request was not the one sent — and for a clone, whose whole
+// point is the original's headers, the record would have hidden exactly what was replayed.
 func (s *Server) recordWsSend(
-	host string, port uint16, tls bool, path string, opcode core.WsOpcode, payload []byte, reply wsclient.Reply, started time.Time,
+	host string, port uint16, tls bool, path string, handshake []byte, opcode core.WsOpcode, payload []byte, reply wsclient.Reply, started time.Time,
 ) repeaterWsSendResp {
-	handshake, _ := wsclient.HandshakeRequest(host, port, tls, path, "")
 	// The actual 101 is in reply.RawHandshake; fall back to the request we would have sent
 	// only if the target answered with bytes we did not keep (which cannot happen today, but
 	// the row must never reference a response that does not exist).

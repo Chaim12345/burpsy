@@ -35,6 +35,7 @@
 package wsclient
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -85,6 +86,86 @@ func HandshakeRequest(host string, port uint16, tls bool, path, subprotocol stri
 	fmt.Fprintf(&b, "User-Agent: burpsy-repeater\r\n")
 	fmt.Fprintf(&b, "\r\n")
 	return []byte(b.String()), nil
+}
+
+// CloneHandshake rebuilds a captured upgrade request for a new connection (burpsy-react-ui-wuwf):
+// Burp's "clone" of an open connection, which opens a fresh socket with the same negotiation
+// request. Everything the original carried — Cookie, Origin, Authorization, the subprotocol
+// offer, any application header — is kept byte for byte, because those are what make the target
+// treat the clone as the same client. Three things change, each for a protocol reason:
+//
+//   - Sec-WebSocket-Key gets a fresh value: RFC 6455 §4.1 requires a new random nonce per
+//     handshake, and replaying one invites a cache or a strict server to refuse it.
+//   - Sec-WebSocket-Extensions is removed, for the reason HandshakeRequest gives: a deflate
+//     negotiation would make every frame this package writes a DEFLATE stream.
+//   - An absolute-form request target (what a browser sends to a proxy) becomes origin-form,
+//     which is what an origin is sent directly.
+//
+// Anything after the head is dropped: an upgrade GET has no body, and a stored one that claims
+// one is not a handshake to replay. A request that is not a GET upgrade is refused rather than
+// sent, because "clone" of something that never opened a WebSocket names no connection.
+func CloneHandshake(original []byte) ([]byte, error) {
+	end := bytes.Index(original, []byte("\r\n\r\n"))
+	if end < 0 {
+		return nil, errors.New("the captured handshake has no complete header block")
+	}
+	lines := strings.Split(string(original[:end]), "\r\n")
+	reqLine := strings.SplitN(lines[0], " ", 3)
+	if len(reqLine) != 3 || reqLine[0] != "GET" {
+		return nil, fmt.Errorf("the captured handshake is not a GET upgrade: %q", lines[0])
+	}
+	target := reqLine[1]
+	if rest, ok := cutScheme(target); ok {
+		target = "/"
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			target = rest[i:]
+		} else if i := strings.IndexByte(rest, '?'); i >= 0 {
+			target = "/" + rest[i:]
+		}
+	}
+	keyBytes := make([]byte, 16)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return nil, fmt.Errorf("generate Sec-WebSocket-Key: %w", err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "GET %s %s\r\n", target, reqLine[2])
+	upgrade, sawKey := false, false
+	for _, line := range lines[1:] {
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, fmt.Errorf("the captured handshake has a malformed header line: %q", line)
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "sec-websocket-key":
+			if sawKey {
+				continue
+			}
+			sawKey = true
+			fmt.Fprintf(&b, "%s: %s\r\n", name, base64.StdEncoding.EncodeToString(keyBytes))
+			continue
+		case "sec-websocket-extensions":
+			continue
+		case "upgrade":
+			upgrade = strings.EqualFold(strings.TrimSpace(value), "websocket")
+		}
+		b.WriteString(line)
+		b.WriteString("\r\n")
+	}
+	if !upgrade || !sawKey {
+		return nil, errors.New("the captured request is not a WebSocket upgrade (no Upgrade: websocket or no Sec-WebSocket-Key)")
+	}
+	b.WriteString("\r\n")
+	return []byte(b.String()), nil
+}
+
+// cutScheme strips an absolute-form request target's scheme, reporting whether it had one.
+func cutScheme(target string) (string, bool) {
+	for _, scheme := range []string{"http://", "https://", "ws://", "wss://"} {
+		if len(target) >= len(scheme) && strings.EqualFold(target[:len(scheme)], scheme) {
+			return target[len(scheme):], true
+		}
+	}
+	return target, false
 }
 
 // authorityOf renders the Host header's authority: the host, plus the port when it is not the
@@ -138,6 +219,14 @@ func SendFrame(ctx context.Context, s *sender.Sender, host string, port uint16, 
 	if err != nil {
 		return Reply{}, err
 	}
+	return SendFrameWithHandshake(ctx, s, host, port, tls, handshake, frame)
+}
+
+// SendFrameWithHandshake is SendFrame over a handshake the caller already built — the clone of a
+// captured one (CloneHandshake), whose bytes the caller has authorised and will record. The
+// caller passes the exact bytes it checked, so what is authorised, what is sent and what is
+// recorded cannot drift apart.
+func SendFrameWithHandshake(ctx context.Context, s *sender.Sender, host string, port uint16, tls bool, handshake []byte, frame Frame) (Reply, error) {
 	up, err := s.SendUpgrade(ctx, host, port, tls, handshake)
 	if err != nil {
 		return Reply{}, err

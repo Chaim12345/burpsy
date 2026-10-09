@@ -127,6 +127,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
 	"POST /api/repeater/ws-send":         {body: typeOf[repeaterWsSendReq]()},
+	"POST /api/repeater/ws-attach":       {body: typeOf[repeaterWsAttachReq]()},
 	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
 	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},
 
