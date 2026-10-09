@@ -2,22 +2,29 @@ name: Review gate
 
 # Risk-class changes need an independent reviewer (docs/DEVELOPMENT-PROCESS.md section 7): a fresh
 # agent with the diff and the risk list, not the author. The reviewer's sign-off is the PR label
-# `agent-reviewed`. The `review-gate` check fails while a PR touches a risk path without it, fails
-# again when a labelled PR is pushed new risk-path changes (the label vouched for an older diff),
-# and fails on any change to the frozen crates/ tree, label or not. The path list and the logic are
-# in scripts/review-gate.sh, itself a risk path.
+# `agent-reviewed`, and the label means "reviewed since the last risk-path change": a push that
+# touches a risk path removes it (this workflow does that) and the check fails until a reviewer
+# re-applies it. Changes to the frozen crates/ tree fail regardless. Path list and rules:
+# scripts/review-gate.sh.
 #
-# A workflow of its own, not a job in go.yml, because it has to re-run on labeled/unlabeled: in
-# go.yml those events would also restart the half-hour gate. The check is named by the job, so
-# branch protection asks for `review-gate` either way.
+# pull_request_target, not pull_request, so that the workflow AND the script are the default
+# branch's: a PR cannot weaken the gate it is judged by. That event runs with a token that can write,
+# so this job never checks out, builds or executes PR code. It fetches the PR's commits as git
+# objects (data) and diffs them; the only program it runs is scripts/review-gate.sh read from the
+# default branch's commit (GITHUB_SHA). Every event-derived value reaches the shell through env:,
+# never through an expression inside run:.
 #
-# pull_request (not pull_request_target): the job reads only the repository and the event payload,
-# needs no secrets and no write access, and so never runs a PR's code with elevated rights.
+# Consequence: the PR that ADDS this workflow is not checked by it (the default branch does not have
+# it yet), and a PR that changes this file or the script is judged by the old version. Both are
+# reviewed by hand, and are risk paths themselves.
+#
+# A workflow of its own, not a job in go.yml, because it must re-run on labeled/unlabeled; in go.yml
+# those events would restart the half-hour gate.
 
 on:
   push:
     branches: [master]
-  pull_request:
+  pull_request_target:
     branches: [master]
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
@@ -25,41 +32,74 @@ on:
 permissions:
   contents: read
 
-# A newer event for the same PR supersedes the older one's verdict, so cancelling it loses nothing.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# No concurrency group. GitHub keeps at most one PENDING run per group and drops the others, so a
+# label event queued behind a push could silently drop the push's run — the one that revokes a
+# stale label. These runs take seconds; letting them all run is the safe choice.
 
 jobs:
   review-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # pull-requests: write is needed only to remove a stale `agent-reviewed` label, and only here.
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
+      # The default branch (GITHUB_SHA under pull_request_target). Never the PR's head. Credentials
+      # stay configured so the fetches below work on a private repository; nothing from the PR runs
+      # in this job, so nothing PR-controlled can read them.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # On a push to master (or a manual run) there is no PR and no label to check: what landed
-      # was gated by its PR's run. The job still runs and passes so the check exists on master's
-      # commits too.
-      #
-      # For a pull request the checkout is GitHub's merge commit: HEAD^1 is the base branch it
-      # merges into, so HEAD^1..HEAD is exactly what the PR would change. On `synchronize` the
-      # payload's before/after are the PR head before and after the push.
+      # On a push to master (or a manual run) there is no PR and no label to check: what landed was
+      # gated by its PR's run. The job still runs and passes so the check exists on master's commits.
       - name: review gate
         env:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           LABELED: ${{ contains(github.event.pull_request.labels.*.name, 'agent-reviewed') }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$EVENT" != "pull_request" ]; then
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request_target" ]; then
             echo "review-gate: $EVENT event — no pull request to gate; passing."
             exit 0
           fi
-          args=(HEAD^1 HEAD)
+          case "$PR" in ''|*[!0-9]*) echo "::error::bad PR number"; exit 2 ;; esac
+
+          # The PR's commits, as objects only. refs/pull/N/head is GitHub's copy of the head, so this
+          # works for forks too. BEFORE may be unreachable after a force-push; the script treats a
+          # missing BEFORE as "everything changed".
+          git fetch --no-tags --quiet origin "+refs/pull/$PR/head:refs/remotes/pr/head"
+          if [ "$ACTION" = "synchronize" ] && [ -n "$BEFORE" ]; then
+            git fetch --no-tags --quiet origin "$BEFORE" 2>/dev/null || true
+          fi
+
+          gate="$RUNNER_TEMP/review-gate.sh"
+          git show "$GITHUB_SHA:scripts/review-gate.sh" > "$gate"
+
+          args=("$BASE_SHA" "$HEAD_SHA")
           if [ "$LABELED" = "true" ]; then args+=(--labeled); fi
-          if [ "$ACTION" = "synchronize" ]; then args+=(--pushed "$BEFORE" "$AFTER"); fi
-          scripts/review-gate.sh "${args[@]}"
+          case "$ACTION" in
+            synchronize) args+=(--pushed "$BEFORE" "$AFTER") ;;
+            reopened) args+=(--reopened) ;;
+          esac
+
+          rc=0
+          bash "$gate" "${args[@]}" || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            # Revoke the stale sign-off. If this call fails the job fails too (set -e): the label
+            # would then still be present, and the failure is the visible signal to remove it.
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/agent-reviewed" --silent
+            echo "::error::Removed 'agent-reviewed': it predates the latest risk-path change."
+            exit 1
+          fi
+          exit "$rc"
