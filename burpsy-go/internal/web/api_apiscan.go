@@ -29,6 +29,7 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,11 @@ type apiScanOperation struct {
 	Method   string `json:"method"`
 	Template string `json:"template"`
 	Path     string `json:"path"`
+	// Key is "METHOD template", the name the review step's exclude and override lists use (vuw7).
+	Key string `json:"key"`
+	// Parameters are the values this endpoint will send, with where each came from, for the review
+	// step's parameters table. Never null.
+	Parameters []apidoc.Parameter `json:"parameters"`
 }
 
 // apiScanSummary describes the definition a run was built from.
@@ -122,6 +128,117 @@ type apiScanReq struct {
 	// credential headers a crawl does.
 	UserAgent string            `json:"user_agent"`
 	Headers   map[string]string `json:"headers"`
+	// The API-details review step (burpsy-react-ui-vuw7), Burp's endpoints / parameters / auth tables.
+	// ExcludeEndpoints are "METHOD template" keys to leave out ("Delete endpoints").
+	ExcludeEndpoints []string `json:"exclude_endpoints,omitempty"`
+	// Parameters override values; a "fixed" one is also kept out of the audit's insertion points.
+	Parameters []apiScanParamOverride `json:"parameters,omitempty"`
+	// Auth is one authentication method applied to every request ("Add authentication method").
+	Auth *apiScanAuth `json:"auth,omitempty"`
+}
+
+// apiScanParamOverride is one row of the review step's parameters table. Endpoint "" applies to every
+// endpoint carrying the parameter.
+type apiScanParamOverride struct {
+	Endpoint string `json:"endpoint,omitempty"`
+	In       string `json:"in"`
+	Name     string `json:"name"`
+	Value    string `json:"value"`
+	// Mode is Burp's Fixed / Dynamic: "fixed" keeps the value and exempts the parameter from the
+	// audit; "dynamic" (or empty) sends the value and audits it as any other.
+	Mode string `json:"mode,omitempty"`
+}
+
+// apiScanAuth is Burp's Basic / Bearer / header authentication method.
+type apiScanAuth struct {
+	Type     string `json:"type"` // basic | bearer | header
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+	Token    string `json:"token,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Value    string `json:"value,omitempty"`
+}
+
+// header renders the method as the one header it sends.
+func (a *apiScanAuth) header() (string, string, error) {
+	switch a.Type {
+	case "basic":
+		if a.Username == "" {
+			return "", "", errors.New("basic authentication needs a username")
+		}
+		return "Authorization", "Basic " + base64.StdEncoding.EncodeToString([]byte(a.Username+":"+a.Password)), nil
+	case "bearer":
+		if a.Token == "" {
+			return "", "", errors.New("bearer authentication needs a token")
+		}
+		return "Authorization", "Bearer " + a.Token, nil
+	case "header":
+		if a.Name == "" {
+			return "", "", errors.New("header authentication needs a header name")
+		}
+		return a.Name, a.Value, nil
+	}
+	return "", "", fmt.Errorf("unknown authentication type %q: expected basic, bearer or header", a.Type)
+}
+
+// applyReview applies the review step to the parsed document: excluded endpoints are dropped, and
+// overridden values replace the document's. Unknown endpoints and parameters are refused by name — a
+// review row that matched nothing is a typo the operator should hear about, not a silent no-op.
+func applyReview(doc *apidoc.Document, req apiScanReq) error {
+	if len(req.ExcludeEndpoints) > 0 {
+		drop := map[string]bool{}
+		for _, k := range req.ExcludeEndpoints {
+			drop[k] = true
+		}
+		kept := doc.Operations[:0]
+		matched := map[string]bool{}
+		for _, op := range doc.Operations {
+			if drop[op.Key()] {
+				matched[op.Key()] = true
+				continue
+			}
+			kept = append(kept, op)
+		}
+		for k := range drop {
+			if !matched[k] {
+				return fmt.Errorf("exclude_endpoints names %q, which the definition does not describe", k)
+			}
+		}
+		if len(kept) == 0 {
+			return errors.New("every endpoint was excluded, so there is nothing to scan")
+		}
+		doc.Operations = kept
+	}
+	for _, o := range req.Parameters {
+		if o.Mode != "" && o.Mode != "fixed" && o.Mode != "dynamic" {
+			return fmt.Errorf("parameter %s mode %q: expected fixed or dynamic", o.Name, o.Mode)
+		}
+		hit := false
+		for i := range doc.Operations {
+			op := &doc.Operations[i]
+			if o.Endpoint != "" && op.Key() != o.Endpoint {
+				continue
+			}
+			if op.SetParameter(o.In, o.Name, o.Value) {
+				hit = true
+			}
+		}
+		if !hit {
+			return fmt.Errorf("no endpoint has a %s parameter named %q", o.In, o.Name)
+		}
+	}
+	return nil
+}
+
+// fixedParameters are the names the review marked Fixed, for the audit's skip list.
+func fixedParameters(req apiScanReq) []string {
+	var out []string
+	for _, o := range req.Parameters {
+		if o.Mode == "fixed" {
+			out = append(out, o.Name)
+		}
+	}
+	return out
 }
 
 // handleAPIScan serves POST /api/apiscan. There is no GET: a run started here is retained in the same
@@ -240,7 +357,7 @@ func (s *Server) startAPIScan(req apiScanReq) (uint64, *apiScanSummary, error) {
 			// Before Finish, for the reason the crawl's audit half is: the audit's own task id is
 			// handed to the findings it produces, and the sweep's row stays open while it runs, so the
 			// two rows read as one scan's two halves — which is what the operator launched.
-			s.auditFetchedExchanges(ctx, &rep, "API scan of "+base.Host)
+			s.auditFetchedExchanges(ctx, &rep, "API scan of "+base.Host, fixedParameters(req)...)
 		}
 		task.Finish(dash.Breakdown{})
 		// changeHistory covers the exchanges the sweep just produced and every traffic-derived count;
@@ -276,6 +393,14 @@ func (s *Server) prepareAPIScan(req apiScanReq) ([]crawler.SeedRequest, *apiScan
 	doc, err := apidoc.Parse([]byte(source))
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if err := applyReview(doc, req); err != nil {
+		return nil, nil, nil, err
+	}
+	if req.Auth != nil {
+		if _, _, err := req.Auth.header(); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	base, err := resolveBaseURL(doc, req.BaseURL)
 	if err != nil {
@@ -383,7 +508,11 @@ func resolveOperations(doc *apidoc.Document, base *url.URL) ([]crawler.SeedReque
 			Body:        op.Body,
 			ContentType: op.ContentType,
 		})
-		operations = append(operations, apiScanOperation{Method: op.Method, Template: op.Template, Path: path})
+		params := op.Parameters
+		if params == nil {
+			params = []apidoc.Parameter{}
+		}
+		operations = append(operations, apiScanOperation{Method: op.Method, Template: op.Template, Path: path, Key: op.Key(), Parameters: params})
 	}
 	return requests, operations, nil
 }
@@ -502,7 +631,7 @@ func (s *Server) apiScanConfig(req apiScanReq, requests []crawler.SeedRequest, l
 		RequestsPerSecond: req.RequestsPerSecond,
 		Pool:              poolLimit,
 		UserAgent:         req.UserAgent,
-		Headers:           req.Headers,
+		Headers:           apiScanHeaders(req),
 		Logger:            s.logger,
 		// The re-login seam, for the same reason the crawl config has it (burpsy-react-ui-nc9s): an
 		// API scan walks exactly the routes a crawl would, and a session that dies partway through
@@ -512,4 +641,20 @@ func (s *Server) apiScanConfig(req apiScanReq, requests []crawler.SeedRequest, l
 		SessionCoordinator: s.crawlSessionCoordinator(),
 		LoginPagePattern:   req.LoginPagePattern,
 	}
+}
+
+// apiScanHeaders are the crawl engine's per-request headers: the operator's own, plus the review
+// step's authentication method (validated in prepareAPIScan).
+func apiScanHeaders(req apiScanReq) map[string]string {
+	if req.Auth == nil {
+		return req.Headers
+	}
+	out := make(map[string]string, len(req.Headers)+1)
+	for k, v := range req.Headers {
+		out[k] = v
+	}
+	if name, value, err := req.Auth.header(); err == nil {
+		out[name] = value
+	}
+	return out
 }
