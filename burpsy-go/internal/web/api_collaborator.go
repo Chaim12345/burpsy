@@ -423,7 +423,8 @@ func collaboratorRows(all []oob.Interaction, minted []mintedPayload) []collabora
 	rows := make([]collaboratorInteractionRow, 0, len(all))
 	seen := make(map[string]struct{}, len(all))
 	for i, in := range all {
-		key := in.Protocol + "|" + in.QType + "|" + in.RemoteAddress
+		payload := attributeTo(in.RawRequest, minted)
+		key := collaboratorEventKey(in, payload)
 		_, collapsed := seen[key]
 		seen[key] = struct{}{}
 		rows = append(rows, collaboratorInteractionRow{
@@ -433,23 +434,45 @@ func collaboratorRows(all []oob.Interaction, minted []mintedPayload) []collabora
 			ClientIP:      in.RemoteAddress,
 			AtMs:          msOf(in.Timestamp),
 			QType:         in.QType,
-			Payload:       attributeTo(in.RawRequest, minted),
+			Payload:       payload,
 			Collapsed:     collapsed,
 		})
 	}
 	return rows
 }
 
+// collaboratorEventKey is what makes two interactions one observable event: oob.Deduplicate's
+// (protocol, query type, remote address), scoped to the minted payload the interaction carries.
+//
+// oob.Deduplicate is handed one payload's interactions by its callers, so its key needs no payload.
+// The log here holds every payload's, and the same resolver looking up two different payloads gives
+// two rows identical on Deduplicate's key — two events, one per payload, which the unscoped key folded
+// into the first payload's and so reported the second payload as never having distinctly fired
+// (burpsy-react-ui-vfqy). Interactions no minted payload accounts for share the empty payload and
+// collapse among themselves, as before.
+func collaboratorEventKey(in oob.Interaction, payload string) string {
+	return strings.ToLower(payload) + "|" + in.Protocol + "|" + in.QType + "|" + in.RemoteAddress
+}
+
 // countsOf tallies both numbers and seeds the three protocols Burp gives their own pane, so a UI can
 // render "DNS 0 / HTTP 0 / SMTP 0" from a real zero rather than from a missing key.
-func countsOf(all []oob.Interaction) *collaboratorCounts {
+//
+// Distinct counts the rows collaboratorRows does not mark collapsed, on the same payload-scoped key,
+// so the headline count and the table's collapsed marks cannot disagree.
+func countsOf(all []oob.Interaction, minted []mintedPayload) *collaboratorCounts {
 	byType := map[string]int{"dns": 0, "http": 0, "smtp": 0}
 	for _, in := range all {
 		byType[strings.ToLower(in.Protocol)]++
 	}
+	distinct := 0
+	for _, row := range collaboratorRows(all, minted) {
+		if !row.Collapsed {
+			distinct++
+		}
+	}
 	return &collaboratorCounts{
 		Total:    len(all),
-		Distinct: len(oob.Deduplicate(all)),
+		Distinct: distinct,
 		ByType:   byType,
 	}
 }
@@ -534,7 +557,7 @@ func (s *Server) collaboratorStatusNow(read bool) collaboratorStatus {
 		s.collab().recordRead(len(all), err)
 		minted, last = s.collab().snapshot()
 		if err == nil {
-			status.Interactions = countsOf(all)
+			status.Interactions = countsOf(all, minted)
 			status.Payloads = payloadViews(minted, all)
 		} else {
 			// Deliberately leaves Interactions nil. A read that failed produced no count, and
@@ -965,7 +988,7 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"rows":         rows,
-		"interactions": countsOf(all),
+		"interactions": countsOf(all, minted),
 		"configured":   true,
 		"state":        collabActive,
 	})

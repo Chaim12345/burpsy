@@ -19,7 +19,7 @@ import {
  type WorkflowStatus,
 } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, NeedsValueButton, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
 import { HttpEditor } from "../ui/editor";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
@@ -392,7 +392,8 @@ export function OrganizerPage(): JSX.Element {
   const exchange = Number(exchangeId.trim());
   // `< 0`, not `<= 0`. Exchange ids count from zero, so exchange 0 is the first request captured in
   // a session — the one most likely to be reached for first, and the one this guard used to refuse.
-  if (!Number.isInteger(exchange) || exchange < 0) {
+  // An empty box is Number("") === 0, so Enter in it used to save exchange 0 (z2l5).
+  if (!exchangeId.trim() || !Number.isInteger(exchange) || exchange < 0) {
    toast.error("Enter an exchange id — a whole number, counting from 0");
    return;
   }
@@ -746,10 +747,16 @@ export function OrganizerPage(): JSX.Element {
        }}
        style={{ maxWidth: "var(--w-sm)" }}
       />
-      <Button variant="outline" size="small" onClick={add} disabled={!exchangeId.trim() || mutations.add.isPending}>
+      <NeedsValueButton
+       variant="outline"
+       size="small"
+       onClick={add}
+       disabled={mutations.add.isPending}
+       missing={exchangeId.trim() ? null : "needs an exchange id"}
+      >
        <Plus size={13} />
        Save exchange
-      </Button>
+      </NeedsValueButton>
      </div>
     </Toolbar>
 

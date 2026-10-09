@@ -600,20 +600,6 @@ export function LoggerPage(): JSX.Element {
               only items that have been annotated, either by a comment or highlight"). Here that
               is one toggle over both fields, since the two are one act of attention. */}
      <Checkbox checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} label="Annotated only" />
-     {/* Saved display filters (mntt). The capture filter below is server configuration with its
-         own Save button, and is not part of a display preset. */}
-     <FilterPresetsMenu
-      table="logger"
-      current={{ tool, term, annotatedOnly, method, statusClass }}
-      apply={(next) => {
-       const v = sanitizeSettings("logger", next).settings;
-       setTool(v.tool as string);
-       setTerm(v.term as string);
-       setAnnotatedOnly(v.annotatedOnly as boolean);
-       setMethod(v.method as string);
-       setStatusClass(v.statusClass as string);
-      }}
-     />
      {/* Burp Logger's view filter axes (uvpb) — reversible, judged by the server against the scope as
          it is now. Not to be confused with the Capture row below, which decides what is recorded. */}
      <Checkbox checked={viewScopeOnly} onCheckedChange={setViewScopeOnly} label="In-scope only" />
@@ -634,6 +620,26 @@ export function LoggerPage(): JSX.Element {
       onChange={(event) => setViewExt(event.target.value)}
       placeholder="extensions"
       style={{ maxWidth: "var(--w-xs)" }}
+     />
+     {/* Saved display filters (mntt), including the view filter axes above (3dyy). The capture
+         filter below is server configuration with its own Save button, and is not part of a
+         display preset. */}
+     <FilterPresetsMenu
+      table="logger"
+      current={{ tool, term, annotatedOnly, method, statusClass, viewScopeOnly, viewHasResponse, viewParameterized, viewMime, viewExt }}
+      apply={(next) => {
+       const v = sanitizeSettings("logger", next).settings;
+       setTool(v.tool as string);
+       setTerm(v.term as string);
+       setAnnotatedOnly(v.annotatedOnly as boolean);
+       setMethod(v.method as string);
+       setStatusClass(v.statusClass as string);
+       setViewScopeOnly(v.viewScopeOnly as boolean);
+       setViewHasResponse(v.viewHasResponse as boolean);
+       setViewParameterized(v.viewParameterized as boolean);
+       setViewMime(v.viewMime as string);
+       setViewExt(v.viewExt as string);
+      }}
      />
     </Toolbar>
     {/* Capture axis — the second, destructive axis Burp Logger keeps separate
