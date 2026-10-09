@@ -166,3 +166,59 @@ func (c *Credentials) clearFailuresMatchingLocked(pattern string) {
 		}
 	}
 }
+
+// AuthWarning is one host where a weak platform-authentication handshake was performed — every
+// NTLMv1 handshake, which the operator opted into on the rule (burpsy-react-ui-sel6). It sits
+// beside AuthFailure and is served with it, because both are "what platform authentication did
+// that the operator must know about"; unlike a failure it is recorded whatever the prompt setting.
+type AuthWarning struct {
+	Host string `json:"host"`
+	// Scheme is the weak scheme used, e.g. "NTLMv1" or "NTLMv1 (ESS)".
+	Scheme string `json:"scheme"`
+	// Wire is the header the handshake travelled in: "NTLM" or "Negotiate".
+	Wire    string `json:"wire"`
+	Warning string `json:"warning"`
+	// Count is how many weak handshakes have been performed for this host since it was recorded.
+	Count     int       `json:"count"`
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+// Warnings returns the recorded weak-authentication handshakes, most recent first. Never nil.
+func (c *Credentials) Warnings() []AuthWarning {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]AuthWarning, 0, len(c.warnings))
+	for _, w := range c.warnings {
+		out = append(out, *w)
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].LastSeen.After(out[b].LastSeen) })
+	return out
+}
+
+// recordWarningLocked notes one weak handshake. Called with c.mu held for writing. Bounded like
+// the failures, least recently seen first out.
+func (c *Credentials) recordWarningLocked(host, scheme, wire, warning string) {
+	now := time.Now()
+	key := strings.ToLower(host)
+	if c.warnings == nil {
+		c.warnings = map[string]*AuthWarning{}
+	}
+	if w, ok := c.warnings[key]; ok {
+		w.Count++
+		w.LastSeen = now
+		w.Scheme, w.Wire, w.Warning = scheme, wire, warning
+		return
+	}
+	if len(c.warnings) >= maxAuthFailures {
+		var oldest string
+		for k, w := range c.warnings {
+			if oldest == "" || w.LastSeen.Before(c.warnings[oldest].LastSeen) {
+				oldest = k
+			}
+		}
+		delete(c.warnings, oldest)
+	}
+	c.warnings[key] = &AuthWarning{Host: host, Scheme: scheme, Wire: wire, Warning: warning,
+		Count: 1, FirstSeen: now, LastSeen: now}
+}

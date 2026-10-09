@@ -2710,20 +2710,30 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   send refuses a kettled member by name; To Intruder refuses an unsent kettled tab and otherwise hands Intruder the
   stored rendering, saying so — Burp normalises.
 
-## Platform authentication: NTLM is connection-bound on the sender only; NTLMv1 and Negotiate absent (2026-10-09, burpsy-react-ui-sel6)
+## Platform authentication: NTLM is connection-bound on the sender only; Kerberos absent (2026-10-09, burpsy-react-ui-sel6)
 - **Burp:** Settings → Network → Platform authentication offers Basic, NTLMv1, NTLMv2, Negotiate and Digest, and
   applies them to every tool's traffic, the proxy's included.
-- **burpsy:** the typed sender (every `Sender.Send` caller; the raw-bytes paths are untouched) runs NTLMv2 as a
+- **burpsy:** the typed sender (every `Sender.Send` caller; the raw-bytes paths are untouched) runs NTLM as a
   connection-bound handshake: NEGOTIATE, CHALLENGE and AUTHENTICATE on one dedicated HTTP/1.1 connection, verified
   through `httptrace`, never re-dialled mid-handshake, and closed when the exchange returns so the authenticated
   connection carries no other request. A `DOMAIN\user` username authenticates in that domain. A refused
-  AUTHENTICATE, a bare `NTLM` offer and a connection closed after the challenge are each recorded as a
-  platform-authentication failure; the credential is presented once.
-- **Divergence:** one handshake per send — authenticated connections are not cached per rule, so each NTLM send
-  costs two round trips on a fresh connection. The proxy leg still uses the host-keyed NEGOTIATE/learned-challenge
-  flow, which authenticates only against a server that does not bind its challenge to the connection (an SSPI/IIS
-  server does). The raw-bytes paths (and the ry5n keep-alive pool) present no platform credential, as before. The
-  AUTHENTICATE carries no MIC: `micBitSet` reads AV-flag bit 0x4 rather than deciding from MsvAvTimestamp, and the
-  MIC-present flag is never placed in the response's AV pairs, so a server that requires a MIC refuses it.
-  NTLMv1 and Negotiate remain refused by `ParseScheme` — the recorded design refuses NTLMv1 as a downgrade
-  (`ntlm.go`), and Negotiate needs a Kerberos credential (or an NTLM-inside-Negotiate fallback nobody has decided on).
+  AUTHENTICATE, a bare offer, a SPNEGO/Kerberos Negotiate token and a connection closed after the challenge are each
+  recorded as a platform-authentication failure; the credential is presented once.
+  - **NTLMv2** is the default NTLM rule. **NTLMv1** is a separate rule scheme (`ntlmv1`), an explicit opt-in
+    downgrade: never chosen for an `ntlmv2` rule and never a fallback when v2 fails. It uses NTLM2 session security
+    (ESS) when the challenge sets the flag and plain v1 otherwise, and never computes or sends the LM hash. Every v1
+    handshake records a weak-authentication warning (served on `/api/network/auth` and
+    `/api/network/auth/failures`, shown on the Platform authentication panel), and the rule's row carries the warning
+    where it is configured.
+  - **Negotiate** is answered with raw NTLM inside `Authorization: Negotiate` (no SPNEGO), by whichever NTLM rule
+    covers the host. The handshake starts in the NTLM header; a server that ignores it and offers Negotiate gets the
+    same NEGOTIATE again in the Negotiate header on the same connection, and the host is remembered so its next
+    handshake starts there.
+- **Divergence:** Kerberos (a SPNEGO/Kerberos Negotiate token) is refused by name — it needs a ticket, not a
+  password. One handshake per send — authenticated connections are not cached per rule. A server offering both NTLM
+  and Negotiate is answered in the NTLM header it accepted, not moved to Negotiate. The proxy leg still uses the
+  host-keyed NEGOTIATE/learned-challenge flow for `ntlmv2` only (NTLMv1 and the Negotiate wrapper are sender-only),
+  which authenticates only against a server that does not bind its challenge to the connection. The raw-bytes paths
+  (and the ry5n keep-alive pool) present no platform credential, as before. The NTLMv2 AUTHENTICATE carries no MIC:
+  `micBitSet` reads AV-flag bit 0x4 rather than deciding from MsvAvTimestamp, and the MIC-present flag is never
+  placed in the response's AV pairs, so a server that requires a MIC refuses it.

@@ -14,7 +14,8 @@ import (
 	"github.com/burpsy-go/burpsy/internal/netauth"
 )
 
-// Connection-bound platform authentication: NTLM (burpsy-react-ui-sel6).
+// Connection-bound platform authentication: NTLM, in the NTLM header or as raw NTLM inside
+// Negotiate, v2 by default and v1 only for a rule that opts into it (burpsy-react-ui-sel6).
 //
 // # The shape, and why the typed transport cannot carry it
 //
@@ -102,6 +103,16 @@ func (s *Sender) sendConnectionBound(ctx context.Context, req *Request, target *
 	if err != nil {
 		return nil, err
 	}
+	if first.StatusCode == http.StatusUnauthorized && exchange.SwitchToNegotiate(challenges) {
+		// The server ignored the NTLM header and offers Negotiate: the same NEGOTIATE goes again, as
+		// raw NTLM in the Negotiate header, on the same connection (the dial guard holds that).
+		retried, retriedChallenges, err := s.exchangeOn(withLegTrace(ctx, negotiateLeg), client, req, target, exchange.Negotiate(), true)
+		if err != nil {
+			exchange.Rejected(challenges)
+			return first, nil
+		}
+		first, challenges = retried, retriedChallenges
+	}
 	if first.StatusCode != http.StatusUnauthorized {
 		// No challenge: the server did not ask for NTLM on this request (or let it through on the
 		// NEGOTIATE alone). Nothing was presented beyond the credential-free type-1 message.
@@ -109,8 +120,9 @@ func (s *Sender) sendConnectionBound(ctx context.Context, req *Request, target *
 	}
 	answer, err := exchange.Authenticate(challenges)
 	if err != nil {
-		// A bare "NTLM" offer, a non-NTLM challenge, an NTLMv1-only server: the credential cannot be
-		// presented, and the 401 is the honest answer.
+		// A bare offer, a non-NTLM challenge, a SPNEGO/Kerberos Negotiate token, an NTLMv1-only
+		// server under an ntlmv2 rule (never answered with v1): the credential cannot be presented,
+		// and the 401 is the honest answer.
 		exchange.Rejected(challenges)
 		return first, nil
 	}

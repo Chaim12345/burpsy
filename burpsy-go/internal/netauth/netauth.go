@@ -67,13 +67,21 @@ func matchHost(pattern, host string) bool {
 //
 // # What is here, and what is not
 //
-// Burp offers five schemes: Basic, Digest, NTLMv1, NTLMv2 and Negotiate. This type has three:
-// Basic, Digest and NTLMv2. NTLMv1 and Negotiate are **not supported**, and the reason they are
-// absent from the type rather than present-and-erroring is that a scheme selector containing an
-// option that does nothing is worse than a selector without it: the operator configures the
-// credential, the tool reports success, and the requests go out unauthenticated with nothing
-// anywhere saying so. ParseScheme refuses both by name; ntlm.go's package comment gives the reasons
-// (NTLMv1 is DES under the NT hash with no client entropy; Negotiate needs a Kerberos credential).
+// Burp offers five schemes: Basic, NTLMv1, NTLMv2, Negotiate and Digest. This type has four rule
+// schemes — Basic, Digest, NTLMv2 and NTLMv1 — and answers Negotiate through the NTLM ones:
+//
+//   - NTLMv1 is an explicit, per-rule downgrade (burpsy-react-ui-sel6). Its response is DES under
+//     the NT hash, so a captured exchange is an offline crack of the password. A rule gets it only
+//     by naming "ntlmv1"; an "ntlmv2" rule never falls back to it, whatever the server asks for.
+//     Every v1 handshake records a weak-authentication warning (Warnings) and the rule's view
+//     carries one, so the panel says so where the rule is configured.
+//   - Negotiate is answered with raw NTLM inside the Negotiate header — what Windows sends when
+//     Kerberos is unavailable — by whichever NTLM rule covers the host. A server whose Negotiate
+//     token is SPNEGO/Kerberos is refused by name: Kerberos needs a ticket, not a password typed
+//     into a panel, and this build does not implement it. UnsupportedSchemes names that.
+//
+// A scheme selector containing an option that does nothing is worse than a selector without it,
+// which is why Kerberos is absent from the type rather than present-and-erroring.
 //
 // # NTLM is connection-bound
 //
@@ -100,27 +108,44 @@ const (
 	// branch — NEGOTIATE preemptively, the CHALLENGE learned per host — which is only correct
 	// for a server that does not bind its challenge to the connection; see gaps.md.
 	SchemeNTLMv2 Scheme = "ntlmv2"
+	// SchemeNTLMv1 is NTLMv1 — with NTLM2 session security (ESS) when the server's challenge
+	// sets the flag, plain v1 otherwise — and is an explicit downgrade the operator opts into per
+	// rule. It is never chosen for an ntlmv2 rule and never a fallback; see ntlmv1.go.
+	SchemeNTLMv1 Scheme = "ntlmv1"
 )
+
+// isNTLM reports whether a scheme is one of the connection-bound NTLM schemes.
+func (s Scheme) isNTLM() bool { return s == SchemeNTLMv2 || s == SchemeNTLMv1 }
+
+// WeakSchemeWarning is the warning a rule's view carries, and every handshake under it records,
+// when its scheme is a known-weak downgrade. Empty for every other scheme.
+func WeakSchemeWarning(s Scheme) string {
+	if s == SchemeNTLMv1 {
+		return "NTLMv1 is a weak downgrade: its response is DES under the NT hash, so a captured exchange can be cracked offline to recover the password"
+	}
+	return ""
+}
 
 // SupportedSchemes is what a selector may offer, in display order. The UI reads this
 // through the API rather than hard-coding a list, so a scheme cannot appear in the
 // panel without existing here.
-func SupportedSchemes() []Scheme { return []Scheme{SchemeBasic, SchemeDigest, SchemeNTLMv2} }
+func SupportedSchemes() []Scheme {
+	return []Scheme{SchemeBasic, SchemeDigest, SchemeNTLMv2, SchemeNTLMv1}
+}
 
-// UnsupportedSchemes names the schemes Burp has and this does not, so the panel can
-// say so out loud instead of leaving an operator to infer it from an absence. Being
-// told "NTLM is not supported" is a usable answer; finding no NTLM option and not
-// knowing whether you are looking in the wrong place is not.
-func UnsupportedSchemes() []string { return []string{"NTLMv1", "Negotiate"} }
+// UnsupportedSchemes names what Burp's panel reaches and this build does not, so the panel can
+// say so out loud instead of leaving an operator to infer it from an absence. Negotiate itself is
+// answered (raw NTLM inside it, by an NTLM rule); a Kerberos ticket is what is missing.
+func UnsupportedSchemes() []string { return []string{"Kerberos"} }
 
 // ParseScheme resolves a wire string, refusing anything it does not implement.
 //
 // Refuse-by-default: an unrecognised scheme is an error, never a silent fallback to
 // Basic. Falling back would send the operator's password in a header the target
 // never asked for, which is a credential disclosure rather than a mere
-// misconfiguration. The error names the unsupported Burp schemes explicitly when one
-// is asked for, because "ntlm is not a known scheme" reads like a typo while "NTLM
-// is not supported by this build" is the actual answer.
+// misconfiguration. A bare "ntlm" is refused too, because it would have to pick between
+// v2 and the weak v1 for the operator, and picking v1 silently is the downgrade the
+// opt-in exists to prevent.
 func ParseScheme(raw string) (Scheme, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "basic":
@@ -129,14 +154,20 @@ func ParseScheme(raw string) (Scheme, error) {
 		return SchemeDigest, nil
 	case "ntlmv2":
 		return SchemeNTLMv2, nil
+	case "ntlmv1":
+		return SchemeNTLMv1, nil
 	case "":
-		return "", errors.New("a platform-authentication rule needs a scheme: basic, digest or ntlmv2")
-	case "ntlm", "ntlmv1", "negotiate", "kerberos":
-		return "", fmt.Errorf("%s is not supported by this build; only basic, digest and ntlmv2 are implemented "+
-			"(NTLMv1 is DES-only, and Negotiate needs a Kerberos "+
-			"credential rather than a password)", strings.TrimSpace(raw))
+		return "", errors.New("a platform-authentication rule needs a scheme: basic, digest, ntlmv2 or ntlmv1")
+	case "ntlm":
+		return "", errors.New("name the NTLM version: ntlmv2, or ntlmv1 as an explicit weak downgrade")
+	case "negotiate":
+		return "", errors.New("Negotiate is answered by an ntlmv2 (or ntlmv1) rule, which sends raw NTLM inside the " +
+			"Negotiate header; add one of those. Kerberos (a SPNEGO ticket) is not supported by this build")
+	case "kerberos", "spnego":
+		return "", fmt.Errorf("%s is not supported by this build: it needs a Kerberos ticket rather than a password; "+
+			"a server that also accepts NTLM inside Negotiate is answered by an ntlmv2 rule", strings.TrimSpace(raw))
 	default:
-		return "", fmt.Errorf("unknown authentication scheme %q: this build implements basic, digest and ntlmv2", strings.TrimSpace(raw))
+		return "", fmt.Errorf("unknown authentication scheme %q: this build implements basic, digest, ntlmv2 and ntlmv1", strings.TrimSpace(raw))
 	}
 }
 
@@ -178,7 +209,7 @@ func NewCredential(host string, scheme Scheme, username, password, realm string)
 	if strings.TrimSpace(username) == "" {
 		return Credential{}, errors.New("a platform-authentication rule needs a username")
 	}
-	if scheme != SchemeBasic && scheme != SchemeDigest && scheme != SchemeNTLMv2 {
+	if scheme != SchemeBasic && scheme != SchemeDigest && !scheme.isNTLM() {
 		return Credential{}, fmt.Errorf("unsupported scheme %q", string(scheme))
 	}
 	return Credential{
@@ -202,6 +233,9 @@ type CredentialView struct {
 	// as "no credential configured" for a rule that is in fact live. It reports
 	// whether one is set, never its length — a length is a brute-force hint.
 	HasPassword bool `json:"has_password"`
+	// Warning is set on a rule whose scheme is a weak downgrade (ntlmv1), so the panel says so
+	// on the row where the rule is configured, not only after a handshake has used it.
+	Warning string `json:"warning,omitempty"`
 }
 
 // view renders one rule with the secret dropped.
@@ -212,6 +246,7 @@ func (c Credential) view() CredentialView {
 		Username:    c.Username,
 		Realm:       c.Realm,
 		HasPassword: c.password != "",
+		Warning:     WeakSchemeWarning(c.Scheme),
 	}
 }
 
@@ -251,6 +286,14 @@ type Credentials struct {
 	// (prompt.go): whether failures are recorded, and the recorded ones keyed by lower-cased host.
 	prompt   bool
 	failures map[string]*AuthFailure
+	// warnings are the weak-authentication handshakes performed (every NTLMv1 one), keyed by
+	// lower-cased host. Recorded whatever the prompt setting: a downgrade the operator opted into
+	// is still one they must be able to see happening.
+	warnings map[string]*AuthWarning
+	// negotiateHosts are the hosts that answered an NTLM NEGOTIATE by offering only Negotiate, so
+	// their next handshake starts in the Negotiate header and saves the round trip. A fact about a
+	// server, not a secret.
+	negotiateHosts map[string]bool
 }
 
 // NewCredentials returns an empty rule list.
@@ -335,6 +378,8 @@ func (c *Credentials) ReplaceWith(src *Credentials) {
 	c.challenges = map[string]*digestState{}
 	c.ntlm = map[string]*ntlmSession{}
 	c.failures = nil
+	c.warnings = nil
+	c.negotiateHosts = nil
 }
 
 // Match returns the first rule covering host.

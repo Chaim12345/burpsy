@@ -1,21 +1,19 @@
 // NTLMv2 over HTTP: the NTLMSSP message codec and the MS-NLMP response algorithm.
 //
-// # What is here and what is deliberately not
+// # What is here
 //
-// This file implements **NTLMv2 only**. NTLMv1 and Negotiate/SPNEGO are refused by
-// ParseScheme with reasons that name what each would actually require; see the Scheme
-// doc in netauth.go. The short form:
+// This file implements NTLMv2, the default for an NTLM rule. NTLMv1 is in ntlmv1.go and is an
+// explicit per-rule downgrade (SchemeNTLMv1, burpsy-react-ui-sel6), never a fallback:
 //
-//   - NTLMv1 derives its response by DES-encrypting the server challenge under the NT
-//     hash with no client entropy, so a captured challenge/response pair is an offline
-//     crack of the password at a fixed cost. Windows has defaulted to refusing it since
-//     LmCompatibilityLevel 3, so an NTLMv1 option would mostly be a weaker credential
-//     that also does not work. It is refused, not implemented badly.
-//   - Negotiate/SPNEGO needs a Kerberos credential — a ccache, a keytab, or a live SSPI
-//     logon session — which burpsy cannot obtain in-process from a username and password
-//     typed into a panel. It is refused with that reason rather than offered and silently
-//     failing, because a silently-failing Kerberos option makes the operator blame the
-//     target.
+//   - NTLMv1 derives its response by DES-encrypting the server challenge under the NT hash
+//     (with NTLM2 session security, a hash of both parties' challenges), so a captured
+//     challenge/response pair is an offline crack of the password at a fixed cost. Windows
+//     has refused it by default since LmCompatibilityLevel 3. It exists for the legacy
+//     targets that still require it, only when a rule names it, and every handshake under it
+//     records a weak-authentication warning.
+//   - Negotiate is answered with raw NTLM inside the Negotiate header (ntlm_exchange.go). A
+//     SPNEGO/Kerberos token is refused: Kerberos needs a ticket, which burpsy cannot obtain
+//     in-process from a username and password typed into a panel.
 //
 // # Where the numbers come from
 //
@@ -383,6 +381,25 @@ func buildNegotiate() []byte {
 // one place in this flow where a hostile party chooses the input — so a short or lying
 // field must produce an error, never a slice past the end.
 func parseChallenge(msg []byte) (ntlmChallengeMessage, error) {
+	out, err := parseChallengeMessage(msg)
+	if err != nil {
+		return out, err
+	}
+	if len(out.TargetInfo) == 0 {
+		// An NTLMv2 response hashes the server's AV_PAIR list. A challenge without one is
+		// a server that wants NTLMv1, and answering it with a synthesised empty list would
+		// be this code inventing the input it is supposed to be authenticating against.
+		// An ntlmv2 rule never falls back to v1 here: that downgrade is the operator's to
+		// opt into, per rule (SchemeNTLMv1).
+		return out, errors.New("NTLM challenge carries no target info; the server is not offering NTLMv2 " +
+			"(an ntlmv2 rule never falls back to NTLMv1 — that is an explicit ntlmv1 rule)")
+	}
+	return out, nil
+}
+
+// parseChallengeMessage decodes a CHALLENGE_MESSAGE without requiring target info, for the
+// NTLMv1 answer (which hashes no AV pairs). Every bound is checked as parseChallenge documents.
+func parseChallengeMessage(msg []byte) (ntlmChallengeMessage, error) {
 	var out ntlmChallengeMessage
 	if len(msg) < 48 {
 		return out, fmt.Errorf("NTLM challenge is %d bytes; a CHALLENGE_MESSAGE is at least 48", len(msg))
@@ -405,14 +422,6 @@ func parseChallenge(msg []byte) (ntlmChallengeMessage, error) {
 				infoLen, infoOffset, len(msg))
 		}
 		out.TargetInfo = msg[infoOffset : infoOffset+infoLen]
-	}
-	if len(out.TargetInfo) == 0 {
-		// An NTLMv2 response hashes the server's AV_PAIR list. A challenge without one is
-		// a downgrade request in every practical case — a server that wants NTLMv1 — and
-		// answering it with a synthesised empty list would be this code inventing the
-		// input it is supposed to be authenticating against.
-		return out, errors.New("NTLM challenge carries no target info; the server is not offering NTLMv2 " +
-			"(this build does not implement the NTLMv1 fallback)")
 	}
 	return out, nil
 }

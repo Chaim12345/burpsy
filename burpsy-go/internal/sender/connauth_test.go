@@ -3,6 +3,8 @@ package sender
 import (
 	"bytes"
 	"context"
+	"crypto/des"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -37,6 +39,8 @@ type connKey struct{}
 type ntlmLeg struct {
 	conn net.Conn
 	kind uint32
+	// wire is the Authorization scheme the leg carried: "NTLM", "Negotiate" or "".
+	wire string
 }
 
 type ntlmConnState struct {
@@ -56,6 +60,16 @@ type ntlmDouble struct {
 	closeAfterChallenge bool
 	// bareOffer answers a NEGOTIATE with a bare "NTLM" instead of a CHALLENGE.
 	bareOffer bool
+	// negotiateOnly is a server with only the Negotiate provider: the NTLM header is ignored (401
+	// offering Negotiate), and raw NTLM inside "Negotiate" is answered in the Negotiate header.
+	negotiateOnly bool
+	// spnegoReply answers a Negotiate NEGOTIATE with a SPNEGO token, as a Kerberos-only server does.
+	spnegoReply bool
+	// v1Only sends a challenge with no target info (a server that wants NTLMv1); ess sets
+	// NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY in it.
+	v1Only, ess bool
+	// v1Verified and v2Verified count the AUTHENTICATE messages verified under each version.
+	v1Verified, v2Verified int
 
 	mu     sync.Mutex
 	legs   []ntlmLeg
@@ -88,10 +102,17 @@ func (d *ntlmDouble) serve(server *httptest.Server) {
 	}
 }
 
-func (d *ntlmDouble) record(conn net.Conn, kind uint32) {
+func (d *ntlmDouble) record(conn net.Conn, kind uint32, wire string) {
 	d.mu.Lock()
-	d.legs = append(d.legs, ntlmLeg{conn: conn, kind: kind})
+	d.legs = append(d.legs, ntlmLeg{conn: conn, kind: kind, wire: wire})
 	d.mu.Unlock()
+}
+
+// verified reports how many AUTHENTICATE messages verified under v1 and under v2.
+func (d *ntlmDouble) verified() (v1, v2 int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.v1Verified, d.v2Verified
 }
 
 func (d *ntlmDouble) seen() []ntlmLeg {
@@ -112,26 +133,30 @@ func (d *ntlmDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	d.mu.Unlock()
 
 	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "NTLM ") {
-		d.record(conn, 0)
+	wire, token, _ := strings.Cut(header, " ")
+	accepted := wire == "NTLM" && !d.negotiateOnly || wire == "Negotiate"
+	if !accepted {
+		d.record(conn, 0, wire)
 		if authed != "" {
 			// The connection authenticated earlier: an SSPI server serves it as that account.
 			fmt.Fprintf(w, "hello %s (connection already authenticated)", authed)
 			return
 		}
 		w.Header().Add("WWW-Authenticate", "Negotiate")
-		w.Header().Add("WWW-Authenticate", "NTLM")
+		if !d.negotiateOnly {
+			w.Header().Add("WWW-Authenticate", "NTLM")
+		}
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-	msg, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "NTLM "))
+	msg, err := base64.StdEncoding.DecodeString(token)
 	if err != nil || len(msg) < 12 || string(msg[0:8]) != "NTLMSSP\x00" {
-		d.t.Errorf("the double received a malformed NTLM message: %q", header)
+		d.t.Errorf("the double received a malformed %s message: %q", wire, header)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	kind := binary.LittleEndian.Uint32(msg[8:12])
-	d.record(conn, kind)
+	d.record(conn, kind, wire)
 	switch kind {
 	case 1:
 		flags := binary.LittleEndian.Uint32(msg[12:16])
@@ -140,7 +165,13 @@ func (d *ntlmDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			d.t.Errorf("NEGOTIATE flags %#x lack UNICODE, NTLM or EXTENDED_SESSIONSECURITY", flags)
 		}
 		if d.bareOffer {
-			w.Header().Set("WWW-Authenticate", "NTLM")
+			w.Header().Set("WWW-Authenticate", wire)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if d.spnegoReply && wire == "Negotiate" {
+			// A SPNEGO NegTokenResp (ASN.1 [1]), what a Kerberos-only server answers with.
+			w.Header().Set("WWW-Authenticate", "Negotiate "+base64.StdEncoding.EncodeToString([]byte{0xa1, 0x81, 0x9e, 0x30, 0x81, 0x9b}))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -151,7 +182,7 @@ func (d *ntlmDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if d.closeAfterChallenge {
 			w.Header().Set("Connection", "close")
 		}
-		w.Header().Set("WWW-Authenticate", "NTLM "+base64.StdEncoding.EncodeToString(challenge))
+		w.Header().Set("WWW-Authenticate", wire+" "+base64.StdEncoding.EncodeToString(challenge))
 		w.WriteHeader(http.StatusUnauthorized)
 	case 3:
 		d.mu.Lock()
@@ -161,13 +192,13 @@ func (d *ntlmDouble) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !challenged {
 			// An AUTHENTICATE on a connection that was never challenged cannot verify: exactly what
 			// an SSPI server answers to one that arrived on a pooled sibling connection.
-			w.Header().Set("WWW-Authenticate", "NTLM")
+			w.Header().Set("WWW-Authenticate", wire)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		account, ok := d.verify(msg, serverChallenge, targetInfo)
 		if !ok {
-			w.Header().Set("WWW-Authenticate", "NTLM")
+			w.Header().Set("WWW-Authenticate", wire)
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -200,11 +231,20 @@ func (d *ntlmDouble) challenge() (msg, targetInfo []byte, serverChallenge [8]byt
 	targetInfo = append(targetInfo, pair(7, stamp[:])...)
 	targetInfo = append(targetInfo, pair(0, nil)...)
 
+	flags := uint32(0x00898205)
+	if d.v1Only {
+		// A server that wants NTLMv1: no target info, and ESS only when asked for.
+		targetInfo = nil
+		flags = 0x00008205
+		if d.ess {
+			flags |= 0x00080000
+		}
+	}
 	msg = make([]byte, 48)
 	copy(msg[0:8], "NTLMSSP\x00")
 	binary.LittleEndian.PutUint32(msg[8:12], 2)
 	binary.LittleEndian.PutUint32(msg[16:20], 48) // empty TargetName at the payload start
-	binary.LittleEndian.PutUint32(msg[20:24], 0x00898205)
+	binary.LittleEndian.PutUint32(msg[20:24], flags)
 	copy(msg[24:32], serverChallenge[:])
 	binary.LittleEndian.PutUint16(msg[40:42], uint16(len(targetInfo)))
 	binary.LittleEndian.PutUint16(msg[42:44], uint16(len(targetInfo)))
@@ -244,7 +284,32 @@ func (d *ntlmDouble) verify(msg []byte, serverChallenge [8]byte, targetInfo []by
 	lm, nt := ntlmFieldOf(msg, 12), ntlmFieldOf(msg, 20)
 	domain, user := utf16TextOf(ntlmFieldOf(msg, 28)), utf16TextOf(ntlmFieldOf(msg, 36))
 	password, ok := d.accounts[strings.ToUpper(domain+`\`+user)]
-	if !ok || len(nt) < 16+28 || len(lm) != 24 {
+	if !ok || len(lm) != 24 {
+		return "", false
+	}
+	if len(nt) == 24 {
+		// NTLMv1 (MS-NLMP 3.3.1): only a server that issued a v1 challenge accepts it.
+		if !d.v1Only {
+			d.t.Errorf("an NTLMv1 response was sent to a server whose challenge offered NTLMv2")
+			return "", false
+		}
+		if !bytes.Equal(nt, v1ResponseOf(password, serverChallenge, lm, d.ess)) {
+			return "", false
+		}
+		if d.ess && !bytes.Equal(lm[8:], make([]byte, 16)) {
+			d.t.Errorf("an ESS LmChallengeResponse is not the client challenge padded with zeros: %x", lm)
+			return "", false
+		}
+		if !d.ess && !bytes.Equal(lm, nt) {
+			d.t.Errorf("a plain v1 LmChallengeResponse is not the NT response (an LM hash was sent?): %x", lm)
+			return "", false
+		}
+		d.mu.Lock()
+		d.v1Verified++
+		d.mu.Unlock()
+		return domain + `\` + user, true
+	}
+	if len(nt) < 16+28 {
 		return "", false
 	}
 	key := hmacMD5(ntHashOf(password), utf16leOf(strings.ToUpper(user)+domain))
@@ -261,7 +326,52 @@ func (d *ntlmDouble) verify(msg []byte, serverChallenge [8]byte, targetInfo []by
 		d.t.Errorf("the LMv2 response does not verify though the NTLMv2 one did")
 		return "", false
 	}
+	d.mu.Lock()
+	d.v2Verified++
+	d.mu.Unlock()
 	return domain + `\` + user, true
+}
+
+// v1ResponseOf is the server's own NTLMv1 computation (MS-NLMP 3.3.1), written independently of
+// netauth: the 56-bit DES keys are expanded bit by bit rather than by the shift table netauth uses.
+// The ESS input is MD5(ServerChallenge || ClientChallenge)[:8], the client challenge read back out
+// of the LmChallengeResponse.
+func v1ResponseOf(password string, serverChallenge [8]byte, lm []byte, ess bool) []byte {
+	data := serverChallenge[:]
+	if ess {
+		sum := md5.Sum(append(append([]byte{}, serverChallenge[:]...), lm[:8]...))
+		data = sum[:8]
+	}
+	key := append(ntHashOf(password), make([]byte, 5)...) // 21 bytes
+	var out []byte
+	for third := 0; third < 3; third++ {
+		var desKey [8]byte
+		for bit := 0; bit < 56; bit++ {
+			src := third*56 + bit
+			if key[src/8]&(0x80>>(src%8)) != 0 {
+				desKey[bit/7] |= 0x80 >> (bit % 7)
+			}
+		}
+		block, err := des.NewCipher(desKey[:])
+		if err != nil {
+			panic(err)
+		}
+		sealed := make([]byte, 8)
+		block.Encrypt(sealed, data)
+		out = append(out, sealed...)
+	}
+	return out
+}
+
+// ntlmSenderWith is a sender holding one NTLM rule of the given scheme for 127.0.0.1.
+func ntlmSenderWith(t *testing.T, scheme netauth.Scheme, user, password string) (*Sender, *netauth.Credentials) {
+	t.Helper()
+	store := mustCredentials(t, "127.0.0.1", scheme, user, password, "")
+	store.SetPromptOnFailure(true)
+	config := DefaultSenderConfig()
+	config.PlatformAuth = store
+	config.TLSVerify = false
+	return NewSender(config), store
 }
 
 // ntlmSender is a sender holding one NTLM rule for 127.0.0.1.
@@ -508,5 +618,155 @@ func Test_concurrent_ntlm_sends_each_complete_their_own_handshake(t *testing.T) 
 	}
 	if len(store.Failures()) != 0 {
 		t.Errorf("concurrent handshakes recorded failures: %+v", store.Failures())
+	}
+}
+
+// ---- NTLMv1 (opt-in) and NTLM inside Negotiate ---------------------------------------------
+
+// The double's own v1 computation is checked against MS-NLMP 4.2.2.2.1 and 4.2.3.2.2 before it is
+// trusted to judge the client: a verifier that agreed with the client by sharing its bug would pass
+// everything.
+func Test_the_doubles_ntlmv1_verifier_reproduces_the_published_vectors(t *testing.T) {
+	server := [8]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
+	lm := append(bytes.Repeat([]byte{0xaa}, 8), make([]byte, 16)...)
+	for ess, want := range map[bool]string{
+		false: "67c43011f30298a2ad35ece64f16331c44bdbed927841f94",
+		true:  "7537f803ae367128ca458204bde7caf81e97ed2683267232",
+	} {
+		if got := fmt.Sprintf("%x", v1ResponseOf("Password", server, lm, ess)); got != want {
+			t.Errorf("double's v1 response (ess=%v) = %s, want %s", ess, got, want)
+		}
+	}
+}
+
+// The opt-in: an ntlmv1 rule authenticates against a v1 server — with ESS when the challenge sets it,
+// plain v1 otherwise — and every handshake records the weak-authentication warning.
+func Test_an_ntlmv1_rule_authenticates_and_every_handshake_records_the_warning(t *testing.T) {
+	for _, ess := range []bool{true, false} {
+		t.Run(fmt.Sprintf("ess=%v", ess), func(t *testing.T) {
+			d := newNTLMDouble(t)
+			d.accounts[`CORP\ALICE`] = "pw"
+			d.v1Only, d.ess = true, ess
+			server := startNTLMDouble(t, d)
+			s, store := ntlmSenderWith(t, netauth.SchemeNTLMv1, `CORP\alice`, "pw")
+			store.SetPromptOnFailure(false) // the warning is recorded whatever the prompt says
+
+			for i := 1; i <= 2; i++ {
+				resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/"))
+				if err != nil || resp.StatusCode != http.StatusOK {
+					t.Fatalf("send %d: %v %+v", i, err, resp)
+				}
+				want := "NTLMv1"
+				if ess {
+					want = "NTLMv1 (ESS)"
+				}
+				w := store.Warnings()
+				if len(w) != 1 || w[0].Count != i || w[0].Scheme != want || w[0].Wire != "NTLM" || !strings.Contains(w[0].Warning, "weak") {
+					t.Fatalf("after send %d warnings = %+v, want one %s warning counted %d", i, w, want, i)
+				}
+			}
+			if v1, v2 := d.verified(); v1 != 2 || v2 != 0 {
+				t.Fatalf("the double verified v1=%d v2=%d, want two NTLMv1 answers", v1, v2)
+			}
+		})
+	}
+}
+
+// v1 is never sent without the opt-in: an ntlmv2 rule against a server that only offers v1 sends
+// the NEGOTIATE and nothing else, records the failure, and records no weak-auth warning.
+func Test_an_ntlmv2_rule_never_sends_ntlmv1(t *testing.T) {
+	d := newNTLMDouble(t)
+	d.accounts[`CORP\ALICE`] = "pw"
+	d.v1Only, d.ess = true, true
+	server := startNTLMDouble(t, d)
+	s, store := ntlmSender(t, "alice", "pw")
+
+	resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/"))
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("got %v %+v, want the 401: an ntlmv2 rule cannot answer a v1-only server", err, resp)
+	}
+	for _, leg := range d.seen() {
+		if leg.kind == 3 {
+			t.Fatal("an AUTHENTICATE went to a v1-only server under an ntlmv2 rule")
+		}
+	}
+	if v1, _ := d.verified(); v1 != 0 || len(store.Warnings()) != 0 {
+		t.Fatalf("v1Verified=%d warnings=%+v: NTLMv1 was used without the opt-in", v1, store.Warnings())
+	}
+	if len(store.Failures()) != 1 {
+		t.Errorf("the unanswerable v1 challenge was not recorded: %+v", store.Failures())
+	}
+}
+
+// A server offering only Negotiate: the NTLM header is ignored, the same NEGOTIATE goes again as raw
+// NTLM in the Negotiate header on the same connection, and the challenge is answered there. The host
+// is remembered, so the next send starts in the Negotiate header.
+func Test_a_negotiate_only_server_is_answered_with_raw_ntlm_inside_negotiate(t *testing.T) {
+	d := newNTLMDouble(t)
+	d.accounts[`CORP\ALICE`] = "pw"
+	d.negotiateOnly = true
+	server := startNTLMDouble(t, d)
+	s, _ := ntlmSender(t, "alice", "pw")
+
+	resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/"))
+	if err != nil || resp.StatusCode != http.StatusOK || !strings.Contains(string(resp.Body), `hello CORP\alice`) {
+		t.Fatalf("got %v %+v, want 200 as CORP\\alice", err, resp)
+	}
+	legs := d.seen()
+	if len(legs) != 3 || legs[0].wire != "NTLM" || legs[1].wire != "Negotiate" || legs[1].kind != 1 ||
+		legs[2].wire != "Negotiate" || legs[2].kind != 3 {
+		t.Fatalf("legs %+v, want NTLM (ignored), then Negotiate NEGOTIATE and Negotiate AUTHENTICATE", legs)
+	}
+	if legs[0].conn != legs[1].conn || legs[1].conn != legs[2].conn {
+		t.Fatal("the Negotiate legs did not ride the challenged connection")
+	}
+
+	before := len(legs)
+	if resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/")); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("second send: %v %+v", err, resp)
+	}
+	second := d.seen()[before:]
+	if len(second) != 2 || second[0].wire != "Negotiate" {
+		t.Fatalf("second send legs %+v, want two legs starting in the Negotiate header", second)
+	}
+}
+
+// A Negotiate token that is SPNEGO/Kerberos, not raw NTLM, is refused: no AUTHENTICATE, and the
+// failure is recorded under Negotiate.
+func Test_a_spnego_negotiate_token_is_refused(t *testing.T) {
+	d := newNTLMDouble(t)
+	d.accounts[`CORP\ALICE`] = "pw"
+	d.negotiateOnly, d.spnegoReply = true, true
+	server := startNTLMDouble(t, d)
+	s, store := ntlmSender(t, "alice", "pw")
+
+	resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/"))
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("got %v %+v, want the 401", err, resp)
+	}
+	for _, leg := range d.seen() {
+		if leg.kind == 3 {
+			t.Fatal("an AUTHENTICATE answered a SPNEGO token")
+		}
+	}
+	if f := store.Failures(); len(f) != 1 || f[0].Scheme != "Negotiate" {
+		t.Fatalf("failures = %+v, want one Negotiate failure", f)
+	}
+}
+
+// The opt-in also works inside Negotiate, and the warning names the header it travelled in.
+func Test_ntlmv1_inside_negotiate_records_the_warning_with_its_wire(t *testing.T) {
+	d := newNTLMDouble(t)
+	d.accounts[`CORP\ALICE`] = "pw"
+	d.negotiateOnly, d.v1Only, d.ess = true, true, true
+	server := startNTLMDouble(t, d)
+	s, store := ntlmSenderWith(t, netauth.SchemeNTLMv1, `CORP\alice`, "pw")
+
+	resp, err := s.Send(context.Background(), requestFor(t, http.MethodGet, server.URL+"/"))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %v %+v", err, resp)
+	}
+	if v1, _ := d.verified(); len(store.Warnings()) != 1 || store.Warnings()[0].Wire != "Negotiate" || v1 != 1 {
+		t.Fatalf("warnings = %+v (v1Verified %d), want one weak-auth warning over Negotiate", store.Warnings(), v1)
 	}
 }

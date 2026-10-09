@@ -84,6 +84,10 @@ type platformAuthResponse struct {
 	// PromptOnFailure is Burp's "Prompt for credentials on platform authentication failure"
 	// (burpsy-react-ui-3xnt), under Burp's key name. Off by default, as in Burp.
 	PromptOnFailure bool `json:"prompt_on_authentication_failure"`
+	// Warnings are the weak-authentication handshakes performed — every NTLMv1 one, which a rule
+	// opted into (burpsy-react-ui-sel6) — most recent first. Served here, where the rule is
+	// configured, and with the failures, where platform-authentication trouble is surfaced.
+	Warnings []netauth.AuthWarning `json:"warnings"`
 }
 
 // clientCertsResponse is GET /api/network/client-certs.
@@ -148,6 +152,7 @@ func (s *Server) getNetworkAuth(w http.ResponseWriter, _ *http.Request) {
 		// being reported as a misconfiguration.
 		PresentedOnProxy: s.proxyServer != nil && s.proxyServer.CarriesPlatformAuth(),
 		PromptOnFailure:  s.platformAuthStore().PromptOnFailure(),
+		Warnings:         s.platformAuthStore().Warnings(),
 	})
 }
 
@@ -184,7 +189,9 @@ func (s *Server) handleNetworkAuthFailures(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusOK, struct {
 			PromptOnFailure bool                  `json:"prompt_on_authentication_failure"`
 			Failures        []netauth.AuthFailure `json:"failures"`
-		}{PromptOnFailure: store.PromptOnFailure(), Failures: store.Failures()})
+			// Warnings are recorded whatever the prompt setting: see netauth.AuthWarning.
+			Warnings []netauth.AuthWarning `json:"warnings"`
+		}{PromptOnFailure: store.PromptOnFailure(), Failures: store.Failures(), Warnings: store.Warnings()})
 	case http.MethodDelete:
 		host := strings.TrimSpace(r.URL.Query().Get("host"))
 		if host == "" {
@@ -218,8 +225,8 @@ func (s *Server) postNetworkAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Refuse-by-default on the scheme, and the engine's error text is passed through
-	// verbatim: it names NTLM and Negotiate as unsupported-by-this-build rather than as
-	// typos, which is the difference between an answer and a dead end. An unrecognised
+	// verbatim: it names Kerberos as unsupported-by-this-build, and says which rule answers
+	// Negotiate, rather than reading as a typo — the difference between an answer and a dead end. An unrecognised
 	// scheme is never coerced to Basic — that would put the operator's password in a
 	// header the target never asked for, which is a disclosure and not a mere
 	// misconfiguration.
