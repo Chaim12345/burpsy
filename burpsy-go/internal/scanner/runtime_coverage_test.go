@@ -357,16 +357,32 @@ func (rt *runtimeTarget) storedDomBatch(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
 
+		// recordMu guards the result maps while the planting audits below run concurrently.
+		var recordMu sync.Mutex
 		record := func(path string, f *Finding) {
 			if f == nil || path == "" {
 				return
 			}
+			recordMu.Lock()
+			defer recordMu.Unlock()
 			if rt.storedDomByPath[path] == nil {
 				rt.storedDomByPath[path] = map[string]*Finding{}
 			}
 			rt.storedDomByPath[path][f.Name] = f
 		}
 
+		// The planting audits run concurrently, bounded the way the parallel subtests are.
+		//
+		// Run one after the other they were ~150s - most of the scanner package's critical path -
+		// and almost all of it is each audit's browser waiting out its page-settle time, not work.
+		// They are independent: each audit plants into its own endpoint's history (every
+		// stored-DOM case owns a store per half, vulnapp_stored_dom.go), the ledger is
+		// mutex-guarded and keys every canary by the exchange that planted it, and attribution
+		// below is by that exchange. What must stay ordered is planting before rendering, and it
+		// does: FinishScan runs only after every audit has returned.
+		const plantConcurrency = 4
+		sem := make(chan struct{}, plantConcurrency)
+		var wg sync.WaitGroup
 		var planted int
 		for _, e := range vulnapp.Vulnerabilities() {
 			if !e.Stored || !e.DOM {
@@ -377,13 +393,23 @@ func (rt *runtimeTarget) storedDomBatch(t *testing.T) {
 				t.Errorf("%s is declared stored+DOM but was never seeded", e.Path)
 				continue
 			}
-			outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
-			rt.storedDomSent[e.Path] = outcome.RequestsSent
-			for _, f := range findings {
-				record(e.Path, f)
-			}
 			planted++
+			e := e
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
+				recordMu.Lock()
+				rt.storedDomSent[e.Path] = outcome.RequestsSent
+				recordMu.Unlock()
+				for _, f := range findings {
+					record(e.Path, f)
+				}
+			}()
 		}
+		wg.Wait()
 		if planted == 0 {
 			return
 		}
@@ -759,7 +785,19 @@ func TestAnAuditSendsProbesAndStaysWithinARequestBudget(t *testing.T) {
 			}
 			e := e
 			t.Run(e.Path, func(t *testing.T) {
-				if !e.Stored {
+				// The stored rows of vulnapp_stored.go stay serial: their submissions land in
+				// histories that render pages audited in parallel below go on to serve, so the
+				// plants have to be finished before those audits start.
+				//
+				// The stored DOM-based endpoints do not have that coupling, and were ~130s of
+				// serial wall clock here (26 browser-driven audits of ~5s each, one after the
+				// other). This test audits them through the ordinary scanner - CheckStored is
+				// off, so nothing reaches a ledger - and each one appends only to its own
+				// case's history (vulnapp_stored_dom.go gives every endpoint a store of its
+				// own). The render pages that read those histories declare no row, so no audit
+				// in this test reads them; the only reader is the stored-DOM deferred phase,
+				// which runs in a later test function, after this one has returned.
+				if !e.Stored || e.DOM {
 					t.Parallel()
 				}
 				_, sent := rt.findingsWithProbeCount(t, e.Path, e.DOM)
