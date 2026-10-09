@@ -1,0 +1,34 @@
+{
+  "description": {
+    "featured": false,
+    "uuid": "34582844-9bdf-454f-918e-763497e82f63"
+  },
+  "scanner": {
+    "issues_reported": {
+      "scan_type_intrusive_active": true,
+      "scan_type_light_active": true,
+      "scan_type_medium_active": true,
+      "scan_type_passive": true,
+      "scan_type_javascript_analysis": true,
+      "select_individual_issues": true,
+      "scan_only_selected_issues": true,
+      "selected_issues": [
+        {
+          "detection_methods": [
+            {
+              "enabled": true,
+              "name": "Passive checks"
+            },
+            {
+              "enabled": true,
+              "name": "Active checks"
+            }
+          ],
+          "enabled": true,
+          "type_index": "0x08000000"
+        }
+      ],
+      "store_issues_within_queue_items": false
+    }
+  }
+}

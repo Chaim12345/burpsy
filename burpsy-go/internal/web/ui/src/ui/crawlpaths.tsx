@@ -1,7 +1,8 @@
-import { CornerDownRight, Link2, Sprout } from "lucide-react";
-import { useMemo } from "react";
+import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CornerDownRight, Link2, Sprout } from "lucide-react";
+import { useMemo, useState } from "react";
+import { collectBranch } from "../lib/tree-expand";
 import type { CrawlFetch, CrawlRun } from "../lib/types.observe";
-import { Badge, Empty, type Tone } from "./primitives";
+import { Badge, Button, Empty, type Tone } from "./primitives";
 
 /**
  * The crawl-paths view: how the crawler reached each page, rather than where the page sits in the
@@ -120,14 +121,44 @@ function shortLabel(url: string): string {
   }
 }
 
-function PathRow({ node, indent, onSelect }: { node: PathNode; indent: number; onSelect?: (url: string) => void }): JSX.Element {
+function PathRow({
+  node,
+  indent,
+  onSelect,
+  collapsed,
+  onToggle,
+}: {
+  node: PathNode;
+  indent: number;
+  onSelect?: (url: string) => void;
+  /** URLs whose children are hidden (txnw). Absent from the set means open, the old default. */
+  collapsed: ReadonlySet<string>;
+  onToggle: (url: string) => void;
+}): JSX.Element {
   const { fetch } = node;
   const isSeed = !fetch.found_at;
+  const hasChildren = node.children.length > 0;
+  const open = !collapsed.has(fetch.url);
   return (
     <>
+      {/* The toggle sits beside the selectable row, not inside it: a button inside a role="button"
+          row is nested-interactive, which a screen reader cannot operate. */}
+      <div className="crawl-path-line" style={{ paddingLeft: `calc(${indent} * var(--sp-4, 12px))` }}>
+      {hasChildren ? (
+        <button
+          type="button"
+          className="tree-toggle"
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"} the ${node.children.length} page${node.children.length === 1 ? "" : "s"} reached from ${shortLabel(fetch.url)}`}
+          onClick={() => onToggle(fetch.url)}
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+      ) : (
+        <span className="tree-toggle" aria-hidden="true" />
+      )}
       <div
         className="crawl-path-row"
-        style={{ paddingLeft: `calc(${indent} * var(--sp-4, 12px))` }}
         role={onSelect ? "button" : undefined}
         tabIndex={onSelect ? 0 : undefined}
         onClick={onSelect ? () => onSelect(fetch.url) : undefined}
@@ -171,10 +202,14 @@ function PathRow({ node, indent, onSelect }: { node: PathNode; indent: number; o
             not traversed
           </Badge>
         ) : null}
+        {hasChildren && !open ? <span className="cell-dim">{node.children.length} hidden</span> : null}
       </div>
-      {node.children.map((child) => (
-        <PathRow key={child.fetch.url} node={child} indent={indent + 1} onSelect={onSelect} />
-      ))}
+      </div>
+      {open
+        ? node.children.map((child) => (
+            <PathRow key={child.fetch.url} node={child} indent={indent + 1} onSelect={onSelect} collapsed={collapsed} onToggle={onToggle} />
+          ))
+        : null}
     </>
   );
 }
@@ -193,6 +228,22 @@ export function CrawlPathsView({
     [runs],
   );
   const tree = useMemo(() => buildCrawlTree(run?.report?.fetches ?? []), [run]);
+  // Burp's crawl-paths "Expand all" / "Collapse all" (BurpClass4683, txnw). Open is the default, as
+  // it always was; the set holds the URLs the operator closed.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (url: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  const collapseAll = () => {
+    const keys = [...tree.seeds, ...tree.orphans].flatMap(
+      (root) => collectBranch(root, (node) => node.children, (node) => node.fetch.url, Number.POSITIVE_INFINITY).keys,
+    );
+    setCollapsed(new Set(keys));
+  };
 
   if (runs.length === 0) {
     return (
@@ -222,10 +273,20 @@ export function CrawlPathsView({
         Run #{run.task_id} · {tree.placed} fetches · {tree.seeds.length} seed
         {tree.seeds.length === 1 ? "" : "s"}
         {tree.orphans.length > 0 ? ` · ${tree.orphans.length} whose referring page this run did not retain` : ""}
+        <span className="crawl-paths-actions">
+          <Button variant="quiet" size="small" disabled={collapsed.size === 0} onClick={() => setCollapsed(new Set())}>
+            <ChevronsUpDown size={12} />
+            Expand all
+          </Button>
+          <Button variant="quiet" size="small" onClick={collapseAll}>
+            <ChevronsDownUp size={12} />
+            Collapse all
+          </Button>
+        </span>
       </div>
 
       {tree.seeds.map((node) => (
-        <PathRow key={node.fetch.url} node={node} indent={0} onSelect={onSelect} />
+        <PathRow key={node.fetch.url} node={node} indent={0} onSelect={onSelect} collapsed={collapsed} onToggle={toggle} />
       ))}
 
       {tree.orphans.length > 0 ? (
@@ -241,7 +302,7 @@ export function CrawlPathsView({
             </span>
           </div>
           {tree.orphans.map((node) => (
-            <PathRow key={node.fetch.url} node={node} indent={0} onSelect={onSelect} />
+            <PathRow key={node.fetch.url} node={node} indent={0} onSelect={onSelect} collapsed={collapsed} onToggle={toggle} />
           ))}
         </>
       ) : null}

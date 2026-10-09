@@ -77,6 +77,12 @@ func (s *ActiveScanner) AuditCrawlLocations(ctx context.Context, locations map[s
 		out.Declined = "no DOM execution capability is configured for this scan"
 		return out, nil, nil
 	}
+	// The crawl's audit runs under the scanner's audit configuration (api_crawl.go's feed reads the
+	// same one), so its use_dynamic_analysis governs this browser pass too (burpsy-react-ui-9mti).
+	if cfg := s.AuditConfig(); !cfg.dynamicJavaScriptOn() {
+		out.Declined = "use_dynamic_analysis is false in the scanner's audit configuration, so no location was rendered"
+		return out, nil, nil
+	}
 	browser, err := s.browsers.Browser(ctx)
 	if err != nil {
 		return out, nil, err

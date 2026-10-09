@@ -172,7 +172,7 @@ func sendCacheProbe(s *ActiveScanner, ctx context.Context, exchange *core.Exchan
 	if s == nil || s.sender == nil || exchange == nil {
 		return nil, false
 	}
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  exchange.Method,
 		Host:    exchange.Host,

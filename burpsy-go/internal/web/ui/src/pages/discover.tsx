@@ -1,5 +1,6 @@
 import { Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { clearPendingDocPanel, pendingDocPanel, subscribeDocs } from "../lib/docs";
 import { countRows, filterPanels, referencePanels } from "../lib/reference";
 import { useKeymap } from "../lib/keymap";
 import { PageHeader } from "../ui/layout";
@@ -31,6 +32,24 @@ import { ReferencePanelView, panelAnchor } from "../ui/reference";
  */
 export function DiscoverPage(): JSX.Element {
   const [term, setTerm] = useState("");
+
+  // A menu's "<Tool> documentation" entry (u9zz, lib/docs.ts) lands here with a panel to show:
+  // the search is cleared (it could be hiding that panel), then the panel is scrolled to and
+  // focused, so a keyboard or screen-reader user arrives at it rather than at the page top.
+  const pendingPanel = useSyncExternalStore(subscribeDocs, pendingDocPanel, pendingDocPanel);
+  useEffect(() => {
+    if (!pendingPanel) return;
+    setTerm("");
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(panelAnchor(pendingPanel));
+      if (target) {
+        target.scrollIntoView({ block: "start" });
+        target.focus({ preventScroll: true });
+      }
+      clearPendingDocPanel();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pendingPanel]);
 
   // Subscribed, so a rebind in Settings shows here too. Discover exists to tell the operator
   // what the keys are; printing the shipped defaults after they changed one would make it the

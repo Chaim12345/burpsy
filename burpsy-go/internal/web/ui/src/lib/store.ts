@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { RepeaterSendOptions } from "./types";
+import type { Exchange, RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
 import * as intruderTabOps from "./intruder-tabs";
 import type { IntruderTabSlot } from "./intruder-tabs";
@@ -615,6 +615,9 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Zebra-striped table rows (69p0): Burp's user_interface.table_appearance.zebra_striping, which
+  *  ships true — so this does too. */
+ tableStripes: boolean;
  /** Whether to ask before the console tab is closed or reloaded (burpsy-react-ui-fyua), Burp's
   *  suppress_confirm_on_close inverted to a positive opt-in. Off by default — a proxy console is
   *  not a document with unsaved edits, so the prompt is a preference, not a safety default. */
@@ -712,6 +715,9 @@ interface AppState {
  /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
   *  page on mount (fhp). Session-only: a seed from yesterday is a request from yesterday. */
  sequencerSeed: SequencerSeed | null;
+ /** Exchanges sent to the custom scan check editor (kbu1) — the messages its Run test uses, as Burp's
+  *  "Send to Custom scan checks editor" collects them. Session-only. */
+ customCheckTestIds: number[];
  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
  intruder: IntruderConfig;
  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
@@ -747,6 +753,10 @@ interface AppState {
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
  decoderSeed: { label: string; input: string } | null;
+ /** The exchange the "Guess hidden inputs" dialog is open for, or null when it is closed
+  *  (burpsy-react-ui-wlz8). One app-level dialog rather than one per page, because the row menu
+  *  that opens it is shared by every table. */
+ hiddenInputsTarget: Exchange | null;
  /** Set when another page asks History to focus one exchange. */
  historyFocus: number | null;
  /** Set when another page pushes a filter expression into History. */
@@ -769,6 +779,7 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setTableStripes: (on: boolean) => void;
  setConfirmOnClose: (confirmOnClose: boolean) => void;
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
@@ -811,6 +822,8 @@ interface AppState {
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
  setSequencerSeed: (seed: SequencerSeed | null) => void;
+ addCustomCheckTestId: (id: number) => void;
+ setCustomCheckTestIds: (ids: number[]) => void;
  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
@@ -830,6 +843,7 @@ interface AppState {
  clearIntruderCommand: () => void;
  setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
+ setHiddenInputsTarget: (exchange: Exchange | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  /** Append one item to a side's list (yy2): send-to adds; the comparison runs on the selected
   * item from each list, so sending no longer discards what was there. */
@@ -856,6 +870,7 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  tableStripes: state.tableStripes,
   confirmOnClose: state.confirmOnClose,
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
@@ -914,6 +929,7 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   tableStripes: true,
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
@@ -943,6 +959,7 @@ export const useApp = create<AppState>()(
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
+  customCheckTestIds: [],
   sequencerSeed: null,
    intruder: emptyIntruderConfig(),
    intruderRun: null,
@@ -955,6 +972,7 @@ export const useApp = create<AppState>()(
  intruderCommand: null,
  intruderStatus: null,
    decoderSeed: null,
+   hiddenInputsTarget: null,
    comparerSlots: { a: "", b: "" },
  comparerItems: { a: [], b: [] },
    historyFocus: null,
@@ -965,6 +983,7 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   setTableStripes: (tableStripes) => set({ tableStripes }),
    confirmOnClose: false,
    setConfirmOnClose: (confirmOnClose) => set({ confirmOnClose }),
    markCollaboratorRead: (id) =>
@@ -1185,6 +1204,9 @@ export const useApp = create<AppState>()(
 
    setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
    setSequencerSeed: (sequencerSeed) => set({ sequencerSeed }),
+   addCustomCheckTestId: (id) =>
+    set((state) => ({ customCheckTestIds: state.customCheckTestIds.includes(id) ? state.customCheckTestIds : [...state.customCheckTestIds, id].slice(-20) })),
+   setCustomCheckTestIds: (customCheckTestIds) => set({ customCheckTestIds }),
    setIntruder: (next) =>
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),
@@ -1208,6 +1230,7 @@ export const useApp = create<AppState>()(
    clearIntruderCommand: () => set({ intruderCommand: null }),
    setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
+   setHiddenInputsTarget: (hiddenInputsTarget) => set({ hiddenInputsTarget }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
  addComparerItem: (slot, item) =>
   set({

@@ -209,3 +209,51 @@ func TestTheRunPriorAccumulatesAcrossItems(t *testing.T) {
 			session.Items[0].Outcome.PointsSkippedRepetitive, session.Items[1].Outcome.PointsSkippedRepetitive)
 	}
 }
+
+// The content half of "Skipped due to repetitive behavior" (burpsy-react-ui-vjjs). A clean point only
+// raises the prior when its responses looked like the baseline. An application that answers a quote
+// with a different status, or with a different page, is behaving, so no point of that type is skipped
+// on its account.
+func TestAPointWhoseInputChangesTheResponseIsNotRepetitive(t *testing.T) {
+	origins := map[string]http.HandlerFunc{
+		"status changes on a quote": func(w http.ResponseWriter, r *http.Request) {
+			for _, vs := range r.URL.Query() {
+				for _, v := range vs {
+					if strings.ContainsAny(v, `'"`) {
+						w.WriteHeader(http.StatusBadRequest)
+						fmt.Fprint(w, "bad input")
+						return
+					}
+				}
+			}
+			fmt.Fprint(w, "plain")
+		},
+		"a quote yields a different page at 200": func(w http.ResponseWriter, r *http.Request) {
+			for _, vs := range r.URL.Query() {
+				for _, v := range vs {
+					if strings.ContainsAny(v, `'"`) {
+						fmt.Fprint(w, strings.Repeat("this request could not be processed. ", 20))
+						return
+					}
+				}
+			}
+			fmt.Fprint(w, "plain")
+		},
+	}
+	for name, handler := range origins {
+		srv := httptest.NewServer(handler)
+		host, port := splitHostPort(t, srv.URL)
+		store := seedRepetitiveExchange(t, host, port, 25)
+		scan := NewActiveScanner(store, zap.NewNop()).
+			WithSender(sender.NewSender(nil)).
+			WithConfig(&ScanConfig{MaxConcurrency: 1, CheckSqli: true})
+		cfg := DefaultAuditConfig()
+		cfg.LightAuditSamplePerKind = SomeUint32(5)
+		out, _ := scan.AuditWithin(context.Background(), 0, cfg)
+		srv.Close()
+		if out.PointsSkippedRepetitive != 0 {
+			t.Errorf("%s: %d point(s) skipped as repetitive, want 0: the input visibly changed the response",
+				name, out.PointsSkippedRepetitive)
+		}
+	}
+}

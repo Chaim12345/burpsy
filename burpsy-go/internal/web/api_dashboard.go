@@ -360,6 +360,7 @@ func toolLogEntryView(e *toollog.Entry) toolLogEntry {
 		id := uint64(*e.Exchange)
 		view.Exchange = &id
 	}
+	view.Mime = e.Mime
 	return view
 }
 

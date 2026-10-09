@@ -1265,13 +1265,63 @@ tbody td {
   cursor: default;
 }
 
+/* Zebra striping (69p0): Burp's table_appearance.zebra_striping, on by default. color.ink mixed
+   into paper-raised at a per-theme opacity (pending tokens opacity.stripe-dark/-light; the
+   measured contrast is in penpot-export.json's _stripeNote). Declared before the hover and
+   selection rules so both still win on a striped row, and below the highlight rule's
+   specificity so a highlighted row keeps its colour. */
+:root {
+  --stripe-alpha: var(--opacity-stripe-dark);
+}
+
+[data-theme="light"] {
+  --stripe-alpha: var(--opacity-stripe-light);
+}
+
+.table-stripes .row-stripe td,
+.table-stripes.simple-stripes tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--ink) calc(var(--stripe-alpha) * 100%), var(--paper-raised));
+}
+
+/* Hover mixes into the same per-theme base as selection (--row-selected-base, below). Over dark's
+   --paper-raised the 7% info tint measured 4.47:1 for body text and ~4.0:1 for muted cells
+   (pre-existing; it failed axe whenever the pointer rested on a row, found in the 69p0 drive);
+   over --paper-sunken it is 6.4:1 and 5.8:1. */
 .data-row:hover td {
-  background: color-mix(in srgb, var(--info) 7%, var(--paper-raised));
+  background: color-mix(in srgb, var(--info) 7%, var(--row-selected-base));
+}
+
+/* The surface a selected row's accent is mixed into (fe16). Dark mixes into --paper-sunken, not
+   --paper-raised: 13% accent over #414547 lifted the row to #5A4944, where body text (#BBBBBB)
+   measured 4.42:1 and muted cells (#B2B2B2) 4.0:1 — below 4.5:1, and multi-row selection made that
+   the common case rather than one row at a time. Over #2B2B2B the row is #473329: body text
+   6.2:1, muted 5.6:1. Light keeps --paper-raised, where body text clears 12:1. */
+:root {
+  --row-selected-base: var(--paper-sunken);
+}
+
+[data-theme="light"] {
+  --row-selected-base: var(--paper-raised);
 }
 
 .data-row.selected-row td {
-  background: color-mix(in srgb, var(--accent) 13%, var(--paper-raised));
+  background: color-mix(in srgb, var(--accent) 13%, var(--row-selected-base));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* Dimmed cells in a selected row read as body text: light-theme --muted (#6E6E6E) measures
+   4.27:1 on the light selected row, under 4.5:1. */
+.data-row.selected-row td .cell-dim {
+  color: var(--text);
+}
+
+/* The focus row of a multi-row selection: the one the detail pane shows and the keyboard moves
+   from. A heavier top and bottom rule, so it reads apart from the rest of the selection without
+   a second fill colour. */
+.data-row.focus-row td {
+  box-shadow:
+    inset 0 1px 0 var(--accent),
+    inset 0 -1px 0 var(--accent);
 }
 
 .row-muted td {
@@ -1705,6 +1755,18 @@ tbody td {
 
 .dialog-wide {
   width: min(1000px, calc(100vw - 28px));
+}
+
+/* The shell's confirm/prompt/form dialog (ui/dialog-host.tsx, bea3): the fields stacked, the reason
+   the confirm button is disabled under them, then the actions. */
+.dialog-form {
+  display: grid;
+  gap: var(--s3);
+}
+
+.dialog-form-blocker {
+  color: var(--muted);
+  font-size: var(--fs-sm);
 }
 
 .dialog-head {
@@ -2619,6 +2681,60 @@ tbody td {
  overflow-y: auto;
 }
 
+/* A scan configuration's issue selection (burpsy-react-ui-saq3.3.1). Every catalogue type is a row,
+   so the table is bounded in HEIGHT inside the card, the same bound the event log uses, rather than
+   sliced: every row stays reachable by search and by scrolling. The bound is on a focusable wrapper
+   (see settings.scanconfig.tsx) so the region scrolls by keyboard even when every box is disabled. The index column is narrow and
+   fixed; the name and the detection methods share the rest. */
+.scan-selection-scroll {
+ max-height: min(60vh, 34rem);
+ overflow-y: auto;
+ scrollbar-width: thin;
+}
+
+.scan-selection-scroll:focus-visible {
+ outline: var(--border-strong) solid var(--accent);
+ outline-offset: -2px;
+}
+
+.scan-selection-table th:nth-child(1) {
+ width: 32%;
+}
+
+.scan-selection-table th:nth-child(2) {
+ width: 16ch;
+}
+
+/* The declines table's reason IS the content — an ellipsis there hides the one sentence that says why
+   a method does not run — so its cells wrap instead of truncating. */
+.scan-config-declines tbody td {
+ white-space: normal;
+ vertical-align: top;
+}
+
+.scan-config-declines th:nth-child(3) {
+ width: 55%;
+}
+
+.scan-config-exemptions {
+ display: grid;
+ grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-md)), 1fr));
+ gap: var(--gap);
+}
+
+.scan-config-exemptions ul {
+ list-style: none;
+ padding: 0;
+ margin: 0;
+}
+
+/* A parameter name is shown as typed. The badge's uppercase would render csrf_token as CSRF_TOKEN —
+   the same match (it is case-insensitive) but not what the operator saved. */
+.scan-config-exemptions .badge {
+ text-transform: none;
+ letter-spacing: normal;
+}
+
 .event-row {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
@@ -2927,6 +3043,9 @@ tbody td {
   display: grid;
   place-items: center;
   color: var(--muted);
+  /* No button padding: the 12px chevron in a 14-16px box was pushed off-centre and clipped by the
+     global button padding (seen in the txnw live drive, site map and crawl paths alike). */
+  padding: 0;
 }
 
 .tree-row-icon {
@@ -3416,6 +3535,12 @@ tbody td {
   word-break: break-all;
   overflow: auto;
   min-height: 0;
+}
+
+/* Comparer "Disable line wrapping" (2vuk): long lines scroll instead of folding, so columns stay aligned. */
+.diff-pane-nowrap {
+  white-space: pre;
+  word-break: normal;
 }
 
 /* Insert, delete and replace each get their own hue AND a leading mark, so the
@@ -5125,4 +5250,58 @@ tbody td {
 .crawl-stop-policy {
   border-left-color: var(--warn);
   color: var(--text);
+}
+
+/* History's tick cell (fe16): a span only so the tick's click can stop before the row's handler. */
+.tick-cell {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Settings › Hotkeys, Burp's default table (2czi): the reason is a sentence, so it wraps. */
+.burp-hotkeys {
+  display: grid;
+  gap: var(--s2);
+  margin-top: var(--s4);
+}
+
+/* Sized to content rather than the shared fixed layout: the reason is the column worth reading,
+   and five equal columns left it a quarter of the width. */
+.burp-hotkeys table {
+  table-layout: auto;
+}
+
+tbody td.burp-hotkeys-reason {
+  white-space: normal;
+  line-height: 1.35;
+  width: 50%;
+}
+
+/* Crawl paths (txnw): the disclosure toggle beside each selectable row, and the Expand all /
+   Collapse all pair at the end of the run summary. */
+.crawl-path-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+}
+
+/* The same 14px column the site-map tree gives its toggle (.tree-row's first grid track). */
+.crawl-path-line > .tree-toggle {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.crawl-path-line > .crawl-path-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.crawl-paths-actions {
+  display: inline-flex;
+  gap: var(--s1);
+  margin-left: var(--s3);
 }

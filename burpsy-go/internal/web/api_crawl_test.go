@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,29 +144,16 @@ func TestACrawlSeedOutsideTheScopeIsRefusedNotFetched(t *testing.T) {
 		"seeds":        []string{target.URL + "/"},
 		"max_requests": 5,
 	})
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("POST /api/crawl: status = %d, want 202 (%s)", rec.Code, rec.Body.String())
+	// Refused at launch (us6r.3), with the scope's own reason: a crawl whose every seed is out of scope
+	// could only ever report a finished run that "skipped nothing", which read as a clean result.
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "matches no include rule") {
+		t.Fatalf("POST /api/crawl: status = %d (%s), want 403 naming the scope's reason", rec.Code, rec.Body.String())
 	}
-	var start crawlStartResp
-	json.Unmarshal(rec.Body.Bytes(), &start)
-
-	run := waitForCrawl(t, s, start.TaskID)
 	if reached != 0 {
 		t.Errorf("the target was reached %d time(s); an out-of-scope crawl must never put a request on the wire", reached)
 	}
-	if run.Report == nil {
-		t.Fatal("no report")
-	}
-	if run.Report.Fetched != 0 {
-		t.Errorf("fetched = %d, want 0", run.Report.Fetched)
-	}
-	// Counted as an out-of-scope *skip*, not as Refused. Refused is the send-path chokepoint — a URL
-	// that got as far as being sent and was stopped there. A seed the scope rejects at admission never
-	// enters the frontier, so it is a skip, and the skip record carries the URL and the reason
-	// ("matches no include rule") rather than just incrementing a counter. Asserting on the count that
-	// the engine actually keeps, rather than the one that seemed likely.
-	if n := run.skipCount("out-of-scope"); n == 0 {
-		t.Error("out-of-scope skips = 0; the refusal must be counted and attributable, not silently dropped")
+	if n := len(s.tasks.Snapshot()); n != 0 {
+		t.Errorf("%d task(s) registered for a refused crawl", n)
 	}
 }
 
