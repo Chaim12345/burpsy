@@ -91,7 +91,7 @@ jobs:
           path: ~/.cache/burpsy-ci-downloads
           key: burpsy-ci-downloads-${{ runner.os }}-${{ hashFiles('.github/workflows/go.yml') }}
 
-      # tlsx and interactsh-client are NOT installed here, so the rows that shell out to them stay
+      # tlsx is NOT installed here (interactsh-client is, below), so the rows that shell out to it stay
       # undemonstrated and their tests skip with a reason naming the missing binary. That is the
       # honest outcome rather than a hidden one: those rows are already counted as registered-only
       # in docs/SCANNER-COVERAGE.md, so CI is not claiming something the local gate does not.
