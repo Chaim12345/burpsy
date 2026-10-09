@@ -421,7 +421,7 @@ function SectionBlock({
                   },
                 ];
                 return (
-                  <ContextMenu key={`${row.name}-${index}`} groups={copyMenu}>
+                  <ContextMenu key={`${row.name}-${index}`} groups={copyMenu} docTopic="message-editor">
                   <div
                     className={cn(gone && "inspector-row-removed", canReorder && selectedRow === index && "inspector-row-selected")}
                     // Focus anywhere in the row selects it for the arrow buttons, so a keyboard
