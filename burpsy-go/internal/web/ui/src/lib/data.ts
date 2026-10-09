@@ -542,15 +542,17 @@ export function useAnnotateExchange() {
  });
 }
 
-/** DELETE /api/history — Burp's "Delete items" / "Clear (tool)" (burpsy-react-ui-r6li). With ids
+/** DELETE /api/history/rows — Burp's "Delete items" / "Clear (tool)" (burpsy-react-ui-r6li). With ids
  *  those rows leave the operator's view; with none the whole capture clears. The server answers
  *  {removed, requested} so a caller naming a row already gone can say so — a bare 200 would read
- *  as success for a request that removed nothing. */
+ *  as success for a request that removed nothing. The route is riskDestructive (gf68), so api()
+ *  mints the confirmation; the history page's "Delete the selected items?" / "Clear the capture?"
+ *  modal is the operator's act that confirmation records. */
 export function useDeleteHistory() {
  const invalidate = useInvalidate();
  return useMutation({
   mutationFn: (ids: number[] | null) =>
-   api<{ removed: number; requested: number }>("/api/history", json("DELETE", ids === null ? undefined : { ids })),
+   api<{ removed: number; requested: number }>("/api/history/rows", json("DELETE", ids === null ? undefined : { ids })),
   // Same prefixes the server-push map gives history (INVALIDATION.history), inlined: that
   // Record's value type is string[][] and invalidate() needs tuple literals.
   onSuccess: () => invalidate([["history"], ["stats"], ["sitemap"], ["dashboard"]]),

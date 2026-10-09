@@ -62,6 +62,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/history/extract": "riskLocal",
  "/api/history/extractors": "riskLocal",
  "/api/history/import/har": "riskLocal",
+ "/api/history/rows": "riskDestructive",
  "/api/http2/kettle": "riskRead",
  "/api/http2/program": "riskEgress",
  "/api/intercept": "riskRead",

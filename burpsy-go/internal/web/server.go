@@ -988,6 +988,9 @@ func (s *Server) WithToolLog(tl *toollog.ToolLog) *Server {
 func (s *Server) setupRoutes() {
 	// Capture + stats
 	s.mux.HandleFunc("/api/history", s.handleHistory)
+	// Delete items / Clear (r6li), split from /api/history so the removal carries its own
+	// riskDestructive class and the read keeps riskRead (gf68).
+	s.mux.HandleFunc("/api/history/rows", s.handleHistoryRows)
 	// Import HAR (eyi1): bring traffic captured elsewhere into history without re-proxying it live.
 	s.mux.HandleFunc("/api/history/import/har", s.handleHistoryImportHar)
 	// Custom extractor columns (burpsy-react-ui-28n8): the saved definitions, and their values for a

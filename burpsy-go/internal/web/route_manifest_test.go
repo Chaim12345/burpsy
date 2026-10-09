@@ -438,7 +438,11 @@ func Test_the_confirmation_worthy_routes_are_the_ones_we_think_they_are(t *testi
 	//
 	// /api/browser/clear joins because it deletes the operator browser's profile — cookies, logins and
 	// history — which nothing brings back (burpsy-react-ui-bufa).
-	equal("destructive", destructive, []string{"/api/backup", "/api/browser/clear", "/api/dashboard/events", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
+	//
+	// /api/history/rows joins because it removes proxy-history rows or clears the capture; until
+	// burpsy-react-ui-gf68 it was DELETE /api/history under the read route's riskRead and passed the
+	// gate unconfirmed.
+	equal("destructive", destructive, []string{"/api/backup", "/api/browser/clear", "/api/dashboard/events", "/api/history/rows", "/api/issues/", "/api/project/open", "/api/proxy/ca/export", "/api/proxy/ca/regenerate", "/api/sitemap", "/api/tools/log"})
 	// Exactly two routes execute operator-supplied code, and both are on the Extender surface: one
 	// starts a plugin, one invokes something a running plugin registered. A third appearing here means
 	// something new can reach exec, which is a decision to make on purpose.

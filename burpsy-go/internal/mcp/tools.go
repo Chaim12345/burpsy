@@ -448,8 +448,9 @@ func describeGrouped(g groupSpec, ops []op) string {
 // The hints come from the manifest's risk class exactly as for a route tool, with one derivation on
 // top: readOnlyHint is false for a tool that can PUT, PATCH or DELETE, whatever its class says. That
 // is not a re-judgement of the class — a verb that replaces or removes state is not read-only by
-// definition — and it is what keeps a riskRead DELETE (burpsy-react-ui-gf68) from being published
-// as a read.
+// definition. It was written for DELETE /api/history, which the manifest classed riskRead until
+// burpsy-react-ui-gf68 moved it to its own riskDestructive pattern; it stays as the backstop for
+// the next mutating verb that lands under a read class.
 func annotationsForGrouped(g groupSpec, ops []op) map[string]any {
 	r := ops[0].route
 	readOnly := hasHint(r.Hints, "READ_ONLY")

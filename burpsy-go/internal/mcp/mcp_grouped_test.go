@@ -197,24 +197,37 @@ func TestNoGroupedToolSpansTwoRiskClasses(t *testing.T) {
 	}
 }
 
-// The riskRead DELETE (burpsy-react-ui-gf68) must not be published as a read.
+// The history removal (burpsy-react-ui-gf68) is published as what it is: not a read, and gated.
+// Before gf68 it was DELETE /api/history under the read route's riskRead class, so this tool said
+// requiresConfirmation=false and the console let it through unconfirmed.
 func TestTheHistoryDeleteIsNotPublishedAsARead(t *testing.T) {
 	tools, _ := listGrouped(t)
 	for _, tl := range tools {
 		for _, o := range tl.Annotations.Operations {
-			if o != "DELETE /api/history" {
+			if o == "DELETE /api/history" {
+				t.Fatalf("tool %q still fronts DELETE /api/history, which the read route no longer serves", tl.Name)
+			}
+		}
+	}
+	for _, tl := range tools {
+		for _, o := range tl.Annotations.Operations {
+			if o != "DELETE /api/history/rows" {
 				continue
 			}
 			if tl.Name == "history" {
-				t.Fatal("DELETE /api/history rides the read-only history tool")
+				t.Fatal("DELETE /api/history/rows rides the read-only history tool")
 			}
 			if tl.Annotations.ReadOnly {
 				t.Fatalf("tool %q clears history and is published readOnlyHint=true", tl.Name)
 			}
+			if tl.Annotations.RiskClass != "destructive" || !tl.Annotations.RequiresConfirmation {
+				t.Fatalf("tool %q clears history and is published risk=%s requiresConfirmation=%v, want destructive and true",
+					tl.Name, tl.Annotations.RiskClass, tl.Annotations.RequiresConfirmation)
+			}
 			return
 		}
 	}
-	t.Fatal("DELETE /api/history is not published at all")
+	t.Fatal("DELETE /api/history/rows is not published at all")
 }
 
 func TestAGroupedReadOperationReturnsThatRoutesResult(t *testing.T) {
