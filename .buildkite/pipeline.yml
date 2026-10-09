@@ -7,8 +7,8 @@
 # shards' union is every test in the module; ci-shard.sh refuses a split that would drop one.
 #
 # Agents: the `burpsy` queue. The agent image is .buildkite/Dockerfile (Go from go.mod, Chromium,
-# bun 1.4.2, xmllint); the pinned ffuf / nuclei / interactsh-client and the template corpus are
-# fetched and hash-checked by ci-install-tools.sh at run time, as on Actions.
+# bun 1.4.2, xmllint, and the pinned ffuf / nuclei / interactsh-client and template corpus baked in).
+# Each test step still runs ci-install-tools.sh, which skips whatever is already at its pin.
 
 agents:
   queue: burpsy

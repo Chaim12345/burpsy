@@ -10,9 +10,12 @@ compared before anything else is decided. It is **not** a required check.
    one. Agent tokens (`bkct_…`) let a machine join the cluster and receive jobs; treat them as
    secrets. Never put one in this repository.
 2. Create a cluster queue named `burpsy`. For Buildkite hosted agents, use a Linux queue with a
-   custom agent image built from `.buildkite/Dockerfile`; for self-hosted agents, run them on a
-   machine with the same toolchains (Go from `burpsy-go/go.mod`, Chromium, bun 1.4.2, xmllint,
-   curl, unzip).
+   custom agent image built from `.buildkite/Dockerfile` (`docker build -f .buildkite/Dockerfile .`
+   from the repository root); for self-hosted agents, run them on a machine with the same
+   toolchains (Go from `burpsy-go/go.mod`, Chromium, bun 1.4.2, xmllint, curl, unzip).
+   The image bakes in the pinned test tools. **Rebuild it whenever `scripts/ci-install-tools.sh`
+   changes** (a pin bump): until then every job still passes, but each one downloads the new
+   release again.
 3. Create a pipeline for `Chaim12345/burpsy` whose steps upload this file:
    `buildkite-agent pipeline upload .buildkite/pipeline.yml`.
 4. In the pipeline's GitHub settings, build pull requests and the `master` branch. Leave it out of

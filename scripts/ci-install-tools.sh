@@ -8,6 +8,11 @@
 #   BURPSY_TOOLS_BIN        where binaries go (default ~/.local/bin); added to GITHUB_PATH when set
 #   BURPSY_DOWNLOAD_CACHE   archive cache directory (default ~/.cache/burpsy-ci-downloads); a CI
 #                           cache may restore it, but every archive is re-checked against its pin
+#
+# Each install leaves a stamp holding the SHA-256 of the archive it came from. A tool whose stamp
+# matches its pin (and whose files are present) is not fetched again: that is what makes the tools
+# baked into the Buildkite agent image (.buildkite/Dockerfile) a no-op here, while an image built
+# before a pin changed still gets the newly pinned release.
 set -euo pipefail
 
 bin=${BURPSY_TOOLS_BIN:-$HOME/.local/bin}
@@ -51,6 +56,18 @@ if ! command -v xmllint >/dev/null 2>&1; then
 fi
 xmllint --version 2>&1 | head -1
 
+stamps="$bin/.burpsy-ci-stamps"
+mkdir -p "$stamps"
+# current NAME SHA256 FILE...: true when NAME was installed from the archive pinned as SHA256 and
+# every listed file is still there.
+current() {
+  local name=$1 sha=$2; shift 2
+  [ "$(cat "$stamps/$name" 2>/dev/null)" = "$sha" ] || return 1
+  for f in "$@"; do [ -e "$f" ] || return 1; done
+  echo "$name already at its pin"
+}
+stamp() { echo "$2" > "$stamps/$1"; }
+
 # fetch FILE SHA256 URL: reuse a cached archive only if it already matches its pin, and check the
 # pin on whatever was used. A hash pinned here proves the release is the reviewed one, which the
 # release's own checksums file cannot.
@@ -66,24 +83,38 @@ fetch() {
 # ffuf and nuclei are installed because internal/extscan's capability gate fails the package when
 # a binary is missing. Published release binaries, not `go install`: compiling nuclei with this
 # module's toolchain broke on a go:linkname into encoding/json under Go 1.26.
-fetch ffuf.tar.gz "$FFUF_SHA256" \
-  "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz"
-tar -xzf "$dl/ffuf.tar.gz" -C "$bin" ffuf
-fetch nuclei.zip "$NUCLEI_SHA256" \
-  "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
-unzip -o -q "$dl/nuclei.zip" nuclei -d "$bin"
+if ! current ffuf "$FFUF_SHA256" "$bin/ffuf"; then
+  fetch ffuf.tar.gz "$FFUF_SHA256" \
+    "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz"
+  tar -xzf "$dl/ffuf.tar.gz" -C "$bin" ffuf
+  stamp ffuf "$FFUF_SHA256"
+fi
+if ! current nuclei "$NUCLEI_SHA256" "$bin/nuclei"; then
+  fetch nuclei.zip "$NUCLEI_SHA256" \
+    "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
+  unzip -o -q "$dl/nuclei.zip" nuclei -d "$bin"
+  stamp nuclei "$NUCLEI_SHA256"
+fi
 # interactsh-client: internal/web's batch-mint test registers against the real public pool.
-fetch interactsh.zip "$INTERACTSH_SHA256" \
-  "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
-unzip -o -q "$dl/interactsh.zip" interactsh-client -d "$bin"
+if ! current interactsh "$INTERACTSH_SHA256" "$bin/interactsh-client"; then
+  fetch interactsh.zip "$INTERACTSH_SHA256" \
+    "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
+  unzip -o -q "$dl/interactsh.zip" interactsh-client -d "$bin"
+  stamp interactsh "$INTERACTSH_SHA256"
+fi
 
 # The nuclei template corpus, as a pinned archive rather than `nuclei -update-templates` (which
 # installed nothing on a fresh runner and said nothing). The test checks the http dir directly.
 templates="$HOME/.local/nuclei-templates"
-mkdir -p "$templates"
-fetch templates.tar.gz "$TEMPLATES_SHA256" \
-  "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${TEMPLATES_VERSION}.tar.gz"
-tar -xzf "$dl/templates.tar.gz" -C "$templates" --strip-components=1
+if ! current templates "$TEMPLATES_SHA256" "$templates/http"; then
+  # Replace, not overlay: a corpus left over from an older pin must not mix into the new one.
+  rm -rf "$templates"
+  mkdir -p "$templates"
+  fetch templates.tar.gz "$TEMPLATES_SHA256" \
+    "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${TEMPLATES_VERSION}.tar.gz"
+  tar -xzf "$dl/templates.tar.gz" -C "$templates" --strip-components=1
+  stamp templates "$TEMPLATES_SHA256"
+fi
 test -d "$templates/http" || { echo "ci-install-tools: nuclei template corpus did not land in $templates" >&2; exit 1; }
 
 if [ -n "${GITHUB_PATH:-}" ]; then echo "$bin" >> "$GITHUB_PATH"; fi
