@@ -2,6 +2,9 @@ package core
 
 import (
 	"bytes"
+	"mime"
+	"mime/multipart"
+	"net/url"
 	"strings"
 )
 
@@ -205,4 +208,71 @@ func countMultipartParts(body string) int {
 		return 0
 	}
 	return 1
+}
+
+// RequestParameterNames lists the parameter names a request carries: the query string's plus a
+// urlencoded or multipart body's, first-seen order, deduplicated within the request.
+//
+// The companion of RequestParameterCount for the surfaces that need the names themselves — the
+// Target analyzer's unique-parameter-name tally (burpsy-react-ui-dnvi) — and held to the same
+// honesty rule: a body this cannot parse contributes NO name, where the count says "at least one".
+// The count is a lower bound and the name list is the examined part of it; a name nobody read is
+// not invented here. A multipart part's name is its form name, the name the
+// server reads it under.
+//
+// Names are percent-decoded when they decode, and carried verbatim when they do not: a name is a
+// thing to display and to tally, not bytes to re-emit, and mangling it would split one parameter
+// into two rows.
+func RequestParameterNames(raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	head, body := splitHeadBody(raw)
+	var out []string
+	seen := map[string]bool{}
+	add := func(name string) {
+		if name == "" {
+			return
+		}
+		if decoded, err := url.QueryUnescape(name); err == nil {
+			name = decoded
+		}
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, pair := range strings.FieldsFunc(queryOf(startLine(head)), func(r rune) bool { return r == '&' || r == ';' }) {
+		name, _, _ := strings.Cut(pair, "=")
+		add(name)
+	}
+	if len(body) == 0 {
+		return out
+	}
+	mediaType := mediaTypeOf(headerValue(head, "content-type"))
+	switch {
+	case mediaType == "multipart/form-data":
+		// The real multipart reader against the declared boundary: a body is not split on "--",
+		// which any part's content may contain. A part's parameter name is its form name — what the
+		// server reads it as — whether or not it carries a file.
+		_, params, err := mime.ParseMediaType(headerValue(head, "content-type"))
+		if err != nil || params["boundary"] == "" {
+			return out
+		}
+		reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+		for {
+			part, err := reader.NextPart()
+			if err != nil {
+				break
+			}
+			add(part.FormName())
+		}
+	case parameterisedMediaTypes[mediaType]:
+		for _, pair := range strings.FieldsFunc(string(body), func(r rune) bool { return r == '&' || r == ';' }) {
+			name, _, _ := strings.Cut(pair, "=")
+			add(name)
+		}
+	}
+	return out
 }

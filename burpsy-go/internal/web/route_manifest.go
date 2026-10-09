@@ -276,6 +276,16 @@ var manifest = map[string]route{
 		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
 			"path space with a wordlist (Burp's \"Discover content\")",
 	},
+	"/api/target/analyze": {
+		// Burp's Target analyzer (burpsy-react-ui-dnvi): counts over captured content, nothing sent.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "Target analyzer: dynamic and static URLs, parameters and unique parameter names for a host or branch; format=html saves the report",
+	},
+	"/api/engagement/clickbandit.js": {
+		// burpsy's Clickbandit script (burpsy-react-ui-g67w), served as text for the console to copy.
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
+	},
 	"/api/engagement/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
 		summary: "Burp's site-map engagement searches: comments, scripts, references to a URL",
@@ -696,7 +706,7 @@ var manifest = map[string]route{
 	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
-		summary: "export findings as json, sarif or html",
+		summary: "export findings as json, sarif, html or Burp-XML (m7dk)",
 	},
 	"/api/scanner/audit": {
 		methods: []string{"POST"}, risk: riskAttack,

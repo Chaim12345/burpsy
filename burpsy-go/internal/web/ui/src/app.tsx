@@ -30,6 +30,7 @@ import {
  ShieldCheck,
  Square,
  Sun,
+ MousePointerClick,
  Unplug,
  Zap,
 } from "lucide-react";
@@ -63,6 +64,8 @@ import { ContextMenu, DropdownMenu, type MenuGroup } from "./ui/menu";
 import { CommandPalette, type PaletteAction } from "./ui/palette";
 import { ProjectSwitcher } from "./ui/project-switcher";
 import { SearchDialog } from "./ui/search-dialog";
+import { CsrfPocDialog } from "./ui/csrf-poc-dialog";
+import { ClickbanditDialog } from "./ui/clickbandit-dialog";
 import { Badge, IconButton, Kbd, Modal } from "./ui/primitives";
 
 
@@ -229,6 +232,8 @@ function App(): JSX.Element {
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
  const repeaterTabCount = useApp((state) => state.repeaterTabs.length);
  const setShortcutsOpen = useApp((state) => state.setShortcutsOpen);
+ // Burp's top-level Clickbandit (burpsy-react-ui-g67w).
+ const [clickbanditOpen, setClickbanditOpen] = useState(false);
  // Burp puts Search on the tab bar, and it is shell state rather than a page's: it crosses tools,
  // so no single tool owns it. Local rather than in the store because nothing outside the shell
  // opens it — the command palette and the menu item are both built here.
@@ -959,6 +964,13 @@ function App(): JSX.Element {
      ],
     },
     {
+     id: "tools",
+     actions: [
+      // Burp's top-level "Burp Clickbandit" (burpsy-react-ui-g67w).
+      { id: "clickbandit", label: "Clickbandit", icon: MousePointerClick, onSelect: () => setClickbanditOpen(true) },
+     ],
+    },
+    {
      id: "state",
      actions: [
       { id: "dashboard", label: "Dashboard", icon: Gauge, onSelect: () => navigate("dashboard") },
@@ -1421,6 +1433,8 @@ function App(): JSX.Element {
 
    <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} actions={paletteActions} />
    <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+   <CsrfPocDialog />
+   <ClickbanditDialog open={clickbanditOpen} onOpenChange={setClickbanditOpen} />
    <ProjectSwitcher open={projectsOpen} onOpenChange={setProjectsOpen} />
    <ShortcutHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
    {/* Hidden on purpose: the File menu item is the affordance; the input only has to accept the

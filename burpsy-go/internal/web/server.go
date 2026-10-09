@@ -121,6 +121,13 @@ type Server struct {
 	// webAddr is the address ListenAndServe bound, so the DOM auditor can tell its extension where to
 	// report. Empty in tests, which never serve.
 	webAddr string
+	// poc is the one-shot PoC page host for "Test in browser" (burpsy-react-ui-0z10): a
+	// listener on its own loopback port, deliberately NOT part of s.mux or the route
+	// manifest, because its whole reason to exist is that generated PoCs are served off
+	// the console origin. Nil until the first PoC URL is minted; pocMu guards that
+	// lazy start.
+	poc   *pocHost
+	pocMu sync.Mutex
 	// scanBaseline is the scan configuration as launched, before any project's saved overrides — what
 	// a project that saved none gets (burpsy-react-ui-z4ml). Captured on the first restore.
 	scanBaseline *scanner.ScanConfig
@@ -1008,6 +1015,8 @@ func (s *Server) setupRoutes() {
 	// and Find references, Burp's three site-map searches, computed over stored responses.
 	// One subtree pattern because the kind IS the path's last segment.
 	s.mux.HandleFunc("/api/engagement/", s.handleEngagement)
+	s.mux.HandleFunc("/api/engagement/clickbandit.js", s.handleClickbandit)
+	s.mux.HandleFunc("/api/target/analyze", s.handleTargetAnalyze)
 	// "Show response in browser" (burpsy-react-ui-js5y): the stored response replayed at a
 	// stable URL, riding the exchange subtree like /csrf. See api_inbrowser.go.
 	s.mux.HandleFunc("/api/exchange/in-browser/", s.handleExchangeInBrowserByID)
