@@ -1,105 +1,126 @@
 name: Review gate
 
 # Risk-class changes need an independent reviewer (docs/DEVELOPMENT-PROCESS.md section 7): a fresh
-# agent with the diff and the risk list, not the author. The reviewer's sign-off is the PR label
-# `agent-reviewed`, and the label means "reviewed since the last risk-path change": a push that
-# touches a risk path removes it (this workflow does that) and the check fails until a reviewer
-# re-applies it. Changes to the frozen crates/ tree fail regardless. Path list and rules:
-# scripts/review-gate.sh.
+# agent with the diff and the risk list, not the author. Its sign-off is a verdict posted on the PR
+# naming the exact commit it reviewed:
 #
-# pull_request_target, not pull_request, so that the workflow AND the script are the default
-# branch's: a PR cannot weaken the gate it is judged by. That event runs with a token that can write,
-# so this job never checks out, builds or executes PR code. It fetches the PR's commits as git
-# objects (data) and diffs them; the only program it runs is scripts/review-gate.sh read from the
-# default branch's commit (GITHUB_SHA). Every event-derived value reaches the shell through env:,
-# never through an expression inside run:.
+#     agent-review: approve <40-hex sha>        (or: agent-review: changes-required)
 #
-# Consequence: the PR that ADDS this workflow is not checked by it (the default branch does not have
-# it yet), and a PR that changes this file or the script is judged by the old version. Both are
-# reviewed by hand, and are risk paths themselves.
+# as a PR review or a PR comment by an OWNER/MEMBER/COLLABORATOR. Every run reads the PR's CURRENT
+# head and ALL verdicts from the API at run time — nothing is taken from the event payload but the PR
+# number — and passes only if the latest verdict approves a commit in the PR's history after which no
+# risk path changed. The verdict therefore binds to code: a later risk-path push invalidates it
+# whatever order events arrive or runs finish in. Changes to the frozen crates/ tree fail regardless.
 #
-# A workflow of its own, not a job in go.yml, because it must re-run on labeled/unlabeled; in go.yml
-# those events would restart the half-hour gate.
+# The result is published as a COMMIT STATUS, context `review-gate`, on the head sha it judged — that
+# is what branch protection requires (section 11). The job's own check is named `review-gate-run`
+# so the two cannot be confused.
+#
+# Trust: under pull_request_target and issue_comment the workflow file comes from the default branch,
+# and in every event the two scripts it runs are read from the default branch (`git show
+# origin/<default>:...`). The PR's commits are fetched as git objects and diffed — never checked out,
+# built or executed. Every event value reaches the shell through env:. The PR that introduces this
+# workflow (#348) is not judged by it, and a change to it or its scripts takes effect from the next PR.
 
 on:
   push:
     branches: [master]
   pull_request_target:
     branches: [master]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  # A verdict posted as a comment or a review must re-evaluate the head.
+  issue_comment:
+    types: [created, edited, deleted]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# No concurrency group. GitHub keeps at most one PENDING run per group and drops the others, so a
-# label event queued behind a push could silently drop the push's run — the one that revokes a
-# stale label. These runs take seconds; letting them all run is the safe choice.
+# One run at a time per PR, none cancelled. Each run reads the current state when it starts, so if
+# GitHub drops a pending run in favour of a newer one, the newer one sees everything the dropped one
+# would have — and runs never interleave their status writes for the same PR.
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number || github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  review-gate:
+  review-gate-run:
+    # Comments on plain issues are not our business.
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # pull-requests: write is needed only to remove a stale `agent-reviewed` label, and only here.
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
+      issues: read
+      statuses: write
 
     steps:
-      # The default branch (GITHUB_SHA under pull_request_target). Never the PR's head. Credentials
-      # stay configured so the fetches below work on a private repository; nothing from the PR runs
-      # in this job, so nothing PR-controlled can read them.
+      # No credentials left in .git/config; the two fetches below get the token explicitly.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      # On a push to master (or a manual run) there is no PR and no label to check: what landed was
-      # gated by its PR's run. The job still runs and passes so the check exists on master's commits.
       - name: review gate
         env:
           EVENT: ${{ github.event_name }}
-          ACTION: ${{ github.event.action }}
-          LABELED: ${{ contains(github.event.pull_request.labels.*.name, 'agent-reviewed') }}
-          PR: ${{ github.event.pull_request.number }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.event.after }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
           REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != "pull_request_target" ]; then
-            echo "review-gate: $EVENT event — no pull request to gate; passing."
-            exit 0
-          fi
+          case "$EVENT" in
+            pull_request_target | issue_comment | pull_request_review) ;;
+            *) echo "review-gate: $EVENT event — no pull request to judge; passing."; exit 0 ;;
+          esac
           case "$PR" in ''|*[!0-9]*) echo "::error::bad PR number"; exit 2 ;; esac
 
-          # The PR's commits, as objects only. refs/pull/N/head is GitHub's copy of the head, so this
-          # works for forks too. BEFORE may be unreachable after a force-push; the script treats a
-          # missing BEFORE as "everything changed".
-          git fetch --no-tags --quiet origin "+refs/pull/$PR/head:refs/remotes/pr/head"
-          if [ "$ACTION" = "synchronize" ] && [ -n "$BEFORE" ]; then
-            git fetch --no-tags --quiet origin "$BEFORE" 2>/dev/null || true
-          fi
+          pr=$(gh api "repos/$REPO/pulls/$PR")
+          state=$(jq -r .state <<<"$pr")
+          head=$(jq -r .head.sha <<<"$pr")
+          base_ref=$(jq -r .base.ref <<<"$pr")
+          if [ "$state" != "open" ]; then echo "review-gate: PR #$PR is $state; nothing to judge."; exit 0; fi
+          [[ "$head" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::bad head sha from the API"; exit 2; }
+          git check-ref-format --branch "$base_ref" >/dev/null || { echo "::error::bad base ref"; exit 2; }
 
-          gate="$RUNNER_TEMP/review-gate.sh"
-          git show "$GITHUB_SHA:scripts/review-gate.sh" > "$gate"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.extraheader="$auth" fetch --no-tags --quiet origin \
+            "+refs/pull/$PR/head:refs/remotes/pr/head" \
+            "+refs/heads/$base_ref:refs/remotes/origin/$base_ref" \
+            "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+          git cat-file -e "$head^{commit}" || { echo "::error::head $head not fetched (pushed again since?)"; exit 1; }
 
-          args=("$BASE_SHA" "$HEAD_SHA")
-          if [ "$LABELED" = "true" ]; then args+=(--labeled); fi
-          case "$ACTION" in
-            synchronize) args+=(--pushed "$BEFORE" "$AFTER") ;;
-            reopened) args+=(--reopened) ;;
+          tools="$RUNNER_TEMP/review-gate"
+          mkdir -p "$tools"
+          git show "origin/$DEFAULT_BRANCH:scripts/review-gate.sh" > "$tools/review-gate.sh"
+          git show "origin/$DEFAULT_BRANCH:scripts/review-verdict.sh" > "$tools/review-verdict.sh"
+
+          gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" | jq -s 'add // []' > "$tools/reviews.json"
+          gh api --paginate "repos/$REPO/issues/$PR/comments?per_page=100" | jq -s 'add // []' > "$tools/comments.json"
+          verdict=$(bash "$tools/review-verdict.sh" "$tools/reviews.json" "$tools/comments.json")
+          echo "review-gate: latest verdict: $verdict"
+
+          args=("origin/$base_ref" "$head")
+          case "$verdict" in
+            "approve "*) args+=(--reviewed-sha "${verdict#approve }") ;;
           esac
 
           rc=0
-          bash "$gate" "${args[@]}" || rc=$?
-          if [ "$rc" -eq 3 ]; then
-            # Revoke the stale sign-off. If this call fails the job fails too (set -e): the label
-            # would then still be present, and the failure is the visible signal to remove it.
-            gh api -X DELETE "repos/$REPO/issues/$PR/labels/agent-reviewed" --silent
-            echo "::error::Removed 'agent-reviewed': it predates the latest risk-path change."
-            exit 1
+          out=$(bash "$tools/review-gate.sh" "${args[@]}" 2>&1) || rc=$?
+          printf '%s\n' "$out"
+          summary=$(printf '%s\n' "$out" | tail -n 1)
+          if [ "$verdict" = "changes-required" ] && [ "$summary" != "no risk-class path touched" ]; then
+            summary="latest verdict: changes-required"
+            rc=1
           fi
+          if [ "$rc" -eq 0 ]; then st=success; else st=failure; fi
+          gh api -X POST "repos/$REPO/statuses/$head" --silent \
+            -f state="$st" -f context=review-gate -f target_url="$RUN_URL" \
+            -f description="${summary:0:139}"
+          echo "review-gate: posted $st on ${head:0:12}: $summary"
           exit "$rc"

@@ -1,49 +1,45 @@
 #!/usr/bin/env bash
-# review-gate.sh BASE HEAD [--labeled] [--pushed BEFORE AFTER | --reopened] — the `review-gate` check.
+# review-gate.sh BASE HEAD [--reviewed-sha S] — the `review-gate` verdict for one PR head.
 #
 # Lists the files BASE...HEAD (from their merge base) changes that fall in a risk class
 # (docs/DEVELOPMENT-PROCESS.md section 7). Those need an independent reviewer — a fresh agent with
-# the diff and that list, not the author — whose sign-off is the PR label `agent-reviewed`.
+# the diff and that list, not the author.
 #
-# The label means "reviewed since the last change to a risk path", and this script is what keeps it
-# meaning that. The workflow (.github/workflows/review-gate.yml) passes --pushed with a push's
-# before/after shas; when that push touches a risk path the PR changes, the script exits 3 and the
-# workflow REMOVES the label and fails. A later harmless push, a label event or a reopen therefore
-# cannot pass on a sign-off that predates the risk-path change: the sign-off is gone. The reviewer
-# re-reviews and re-applies the label, which re-runs this check.
-#
-#   --pushed BEFORE AFTER  a push moved the PR head from BEFORE to AFTER. If BEFORE is missing or
-#                          not an ancestor of AFTER (a force-push, or history this clone cannot
-#                          see), every risk path the PR touches counts as changed.
-#   --reopened             the PR was reopened. Pushes to a closed PR fire no event, so what changed
-#                          while it was closed is unknown: treated as every risk path changed.
+# Sign-off is bound to code, not to a label or to the order runs finish in. The reviewer posts a
+# verdict naming the exact commit it reviewed (`agent-review: approve <40-hex sha>`);
+# scripts/review-verdict.sh picks the latest valid verdict, and the workflow passes its sha as
+# --reviewed-sha. This script then passes only if
+#   - S is a commit and an ancestor of HEAD (it is in the PR's history), and
+#   - `git diff S HEAD` touches no risk path: nothing that needs review changed after the review.
+# So a risk-path push after the review invalidates it whatever order events arrive or runs finish
+# in, a later harmless push keeps it, and a retargeted base changes nothing (the diff is from S).
+# A merge of master into the PR branch that brings risk-path changes also invalidates it — those
+# changes are in S..HEAD; that is deliberate (fail closed), and costs one re-review.
 #
 # Exit status:
-#   0  no risk path touched; or touched, --labeled, and no revocation due
-#   1  risk path touched and not --labeled; or any crates/ change (refused, label or not)
-#   2  usage error, or a revision that does not resolve (fails closed: no verdict without a diff)
-#   3  --labeled, but the sign-off is stale (see above): the caller must remove the label; failing
+#   0  no risk path touched; or touched, and --reviewed-sha passes the checks above
+#   1  risk path touched without a valid review; or any crates/ change (refused, review or not)
+#   2  usage error, or BASE/HEAD does not resolve (fails closed: no verdict without a diff)
+# The last line printed is a one-line summary (the workflow uses it as the status description).
 #
 # The lists are paths, not semantics. A risk-class change made in a file not listed here (say, a new
 # authorisation check added to an unlisted handler) is invisible to this gate; when that happens,
 # add the file here, in the same PR. A path git has to quote (control characters, a newline) is
 # treated as a risk path rather than matched: a name built to slip past a glob fails closed.
 #
-# Under pull_request_target the workflow runs THIS FILE AS IT IS ON THE DEFAULT BRANCH, never the
-# PR's copy: a PR cannot edit the rules it is judged by. Changes to this file take effect for the
-# PRs after the one that changes it.
+# The workflow runs THIS FILE AS IT IS ON THE DEFAULT BRANCH, never the PR's copy: a PR cannot edit
+# the rules it is judged by. Changes to this file take effect for the PRs after the one that
+# changes it.
 set -euo pipefail
 
-usage() { echo "usage: $0 BASE HEAD [--labeled] [--pushed BEFORE AFTER | --reopened]" >&2; exit 2; }
+usage() { echo "usage: $0 BASE HEAD [--reviewed-sha SHA]" >&2; exit 2; }
 [ $# -ge 2 ] || usage
 base=$1 head=$2
 shift 2
-labeled=0 before="" after="" reopened=0
+reviewed=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --labeled) labeled=1 ;;
-    --pushed) [ $# -ge 3 ] || usage; before=$2; after=$3; shift 2 ;;
-    --reopened) reopened=1 ;;
+    --reviewed-sha) [ $# -ge 2 ] || usage; reviewed=$2; shift ;;
     *) usage ;;
   esac
   shift
@@ -88,6 +84,7 @@ risk=(
   # CI, its pinned versions and SHA-256s, and the code the gates run.
   ".github/*|workflows/pinned hashes"
   "scripts/review-gate.sh|CI gate code"
+  "scripts/review-verdict.sh|CI gate code"
   "scripts/beads-lint.py|CI gate code"
   # What the `ui` job runs (package.json's `check` script) and what it installs (lockfile, bun
   # config, the TypeScript settings tsc --noEmit checks against): editing these edits the UI gate.
@@ -114,63 +111,62 @@ risk_of() {
 # instead of reading as "no files changed".
 files=$(git diff --name-only --no-renames "$base...$head")
 
-hits=() hitpaths=() crates=()
+hits=() crates=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in crates/* | \"crates/*) crates+=("$f"); continue ;; esac
   class=$(risk_of "$f")
-  if [ -n "$class" ]; then hits+=("$f  [$class]"); hitpaths+=("$f"); fi
+  if [ -n "$class" ]; then hits+=("$f  [$class]"); fi
 done <<<"$files"
 
-status=0
 if [ ${#crates[@]} -gt 0 ]; then
   echo "::error::crates/ is the frozen Rust parity oracle; changes to it are refused, not reviewed:"
   printf '  %s\n' "${crates[@]}"
-  status=1
+  echo "refused: changes crates/ (frozen)"
+  exit 1
 fi
 
 if [ ${#hits[@]} -eq 0 ]; then
-  echo "review-gate: no risk-class path touched."
-  exit "$status"
+  echo "no risk-class path touched"
+  exit 0
 fi
 
 echo "review-gate: risk-class paths touched:"
 printf '  %s\n' "${hits[@]}"
 
-if [ "$labeled" = 0 ]; then
-  echo "::error::This PR touches the risk-class paths above. It needs an independent agent review"
-  echo "::error::(docs/DEVELOPMENT-PROCESS.md section 7) and then the label 'agent-reviewed'."
+if [ -z "$reviewed" ]; then
+  echo "::error::No approving agent review. Touches the risk-class paths above: needs an independent"
+  echo "::error::review posted as 'agent-review: approve <head sha>' (docs/DEVELOPMENT-PROCESS.md section 7)."
+  echo "needs agent review: risk paths touched, no approving verdict"
   exit 1
 fi
 
-late=()
-if [ "$reopened" = 1 ]; then
-  echo "review-gate: reopened — pushes while closed are invisible; treating every risk path as changed"
-  late=("${hitpaths[@]}")
-elif [ -n "$before" ]; then
-  b=$(git rev-parse --verify --quiet "$before^{commit}" || true)
-  a=$(commit "$after")
-  if [ -z "$b" ] || ! git merge-base --is-ancestor "$b" "$a"; then
-    echo "review-gate: previous head $before is missing or not an ancestor of $after (force-push?);"
-    echo "review-gate: treating every risk path as changed"
-    late=("${hitpaths[@]}")
-  else
-    pushed=$(git diff --name-only --no-renames "$b" "$a")
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      for h in "${hitpaths[@]}"; do
-        if [ "$h" = "$f" ]; then late+=("$f"); break; fi
-      done
-    done <<<"$pushed"
-  fi
+if ! [[ "$reviewed" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "::error::reviewed sha '$reviewed' is not a full 40-hex commit id"
+  echo "review invalid: malformed sha"
+  exit 1
 fi
+if ! git cat-file -e "$reviewed^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$reviewed" "$head"; then
+  echo "::error::The approved sha $reviewed is not a commit in this PR's history (force-push or wrong sha)."
+  echo "review invalid: approved ${reviewed:0:12} not in PR history"
+  exit 1
+fi
+
+since=$(git diff --name-only --no-renames "$reviewed" "$head")
+late=()
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in crates/*) late+=("$f"); continue ;; esac
+  if [ -n "$(risk_of "$f")" ]; then late+=("$f"); fi
+done <<<"$since"
 
 if [ ${#late[@]} -gt 0 ]; then
-  echo "::error::'agent-reviewed' predates changes to these risk-class paths; the label is revoked:"
+  echo "::error::Reviewed at ${reviewed:0:12}, but these risk-class paths changed after it:"
   printf '  %s\n' "${late[@]}"
-  echo "::error::Re-review the PR at its current head, then re-apply the label."
-  exit 3
+  echo "::error::Re-review at the current head and post a new verdict."
+  echo "stale review: risk paths changed after ${reviewed:0:12}"
+  exit 1
 fi
 
-echo "review-gate: labelled agent-reviewed, and no risk path changed since."
-exit "$status"
+echo "reviewed at ${reviewed:0:12}; no risk path changed since"
+exit 0
