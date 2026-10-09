@@ -334,12 +334,17 @@ type Config struct {
 	// `crawler/customization/*` key and to one thing this crawler can now do with a definition it
 	// meets during a crawl.
 	//
-	// Defaulted ON, which is the opposite of RequestSpeculative above and for a different reason.
-	// There the phase sends requests nobody asked for, so it is opt-in. These READ a document the
-	// target already published and turn its own declared routes into crawl candidates — they cannot
-	// reach anything the crawl would not have reached through a link, and leaving them off by
-	// default would make the capability present but unreachable without a Burp config file, which is
-	// the "a feature nobody can find" shape Burp ships its defaults to avoid.
+	// The zero value is OFF for all four, and nothing in this package or in the web layer sets them
+	// otherwise: an operator crawl turns them on only through a named configuration that names the
+	// key (burpsy-react-ui-tyso wired that path). An earlier version of this comment said "defaulted
+	// ON", which no code ever did. Burp ships the hidden-endpoint guess off (see commonGraphQLPaths),
+	// matching this; whether its shipped defaults turn the other three on is not established in this
+	// tree, and if they do, a crawl started here with no configuration reads less than Burp's would.
+	// Any change to these defaults is its own decision, because it changes the traffic every existing
+	// operator crawl sends.
+	// The two GraphQL switches are the only ones here that make the crawl POST of its own initiative;
+	// every such request goes through perform (the scope-authorised sender) after a check against the
+	// crawl-wide request bound.
 	ParseAPIDefinitions         bool
 	ParseSOAPWSDLs              bool
 	PerformGraphQLIntrospection bool
