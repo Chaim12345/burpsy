@@ -325,7 +325,11 @@ func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding
 	if len(ctx.Request) == 0 {
 		return nil, &ActiveError{Kind: ActiveSendFailed, Detail: "no base request to enumerate insertion points in"}
 	}
-	points, declined := Enumerate(ctx.Request, check.InsertionKinds)
+	opts := EnumerateOptions{Max: DefaultMaxInsertionPoints}
+	if ctx.EnumerateOptions != nil {
+		opts = *ctx.EnumerateOptions
+	}
+	points, declined := EnumerateWith(ctx.Request, check.InsertionKinds, opts)
 	// A request can have somewhere to inject that the enumerator refuses to
 	// splice into — a plain-text or non-UTF-8 body, or a multipart body whose
 	// framing cannot be read. When that is the *only* place the check asked for,

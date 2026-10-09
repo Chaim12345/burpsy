@@ -47,6 +47,8 @@ type crawlRuns struct {
 	mu    sync.RWMutex
 	byID  map[uint64]*crawlRun
 	order []uint64
+	// live is each retained run's live view (burpsy-react-ui-1l3x), evicted with the run.
+	live map[uint64]*crawlLive
 }
 
 // crawlRun is one crawl: its request, its state, and its report once there is one.
@@ -135,6 +137,7 @@ func (c *crawlRuns) start(taskID uint64, seeds []string, kind string, limits cra
 	c.order = append(c.order, taskID)
 	for len(c.order) > crawlRunsKept {
 		delete(c.byID, c.order[0])
+		delete(c.live, c.order[0])
 		c.order = c.order[1:]
 	}
 	return run
@@ -217,6 +220,18 @@ const (
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
+	// Protocols is Burp's "Protocol settings" (burpsy-react-ui-in8j): "both" is "Scan using HTTP &
+	// HTTPS" — every seed is crawled over both schemes, and a seed with no scheme is accepted as a
+	// host; "specified" (or empty, what every caller predating the field sends) is "Scan using my
+	// specified protocols" — each seed as written, and a seed with no scheme is refused by name.
+	Protocols string `json:"protocols,omitempty"`
+	// Scope narrows this crawl within the engagement scope (burpsy-react-ui-501u). Omitted is the
+	// engagement scope alone — every caller predating the field. See crawlScopeReq.
+	Scope *crawlScopeReq `json:"scope,omitempty"`
+	// Isolated is Burp's "Run isolated scan" (burpsy-react-ui-13uw): the crawl's exchanges carry
+	// SourceIsolatedScan, so neither they nor the issues found on them reach the site map or the
+	// issue list; the task's own views still show them.
+	Isolated bool `json:"isolated,omitempty"`
 	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
 	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
 	// request may name its own origins as well. Taking the set consumes it — a second crawl
@@ -260,6 +275,11 @@ type crawlStartReq struct {
 	// the same rule the rest of this request follows, so a configuration mistake is something the
 	// operator fixes rather than a crawl that appears in the dashboard and then fails.
 	LoginPagePattern string `json:"login_page_pattern,omitempty"`
+	// RecordedLogin names a saved recorded login sequence by id (burpsy-react-ui-xhtk): replayed in a
+	// scope-gated browser session before the first fetch, its session carried on every request and
+	// replayed again when the session is lost. An unknown id, an empty scope or no browser is a 400
+	// before any task row exists — Burp: an authenticated scan cannot start without its browser.
+	RecordedLogin string `json:"recorded_login,omitempty"`
 	// Kind is which scan kind to run: crawlKindCrawl (the default, empty) or crawlKindAudit. An
 	// unrecognised value is refused rather than treated as the default — see startCrawl. A typo'd
 	// kind that silently ran a plain crawl would leave an operator waiting for findings that the
@@ -581,6 +601,16 @@ func scanKind(requested string) (string, error) {
 // the crawl, which records it as SkipRenderUnavailable per URL rather than pretending the
 // wire parse was the whole story.
 func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
+	return s.crawlRendererIn(nil, nil)
+}
+
+// crawlRendererIn is crawlRenderer inside a recorded login's session (burpsy-react-ui-xhtk), so an
+// authenticated crawl's rendered pass sees the logged-in application rather than its login page. A
+// nil session is the ordinary renderer.
+//
+// live, when set, is the crawl's live view (burpsy-react-ui-1l3x): the render marks its page as the one
+// being looked at and, at most once a second, brings back a viewport frame from the same tab.
+func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
 	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
 		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
 		// function that returns "" would be a render that always produced nothing -- which the engine
@@ -589,20 +619,34 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 		return nil
 	}
 	return func(ctx context.Context, targetURL string) (string, crawler.RenderOutcome, error) {
-		browser, err := s.scanner.BrowserForRender(ctx)
-		if err != nil {
-			return "", crawler.RenderOutcome{}, err
+		opts := domexec.RenderOptions{
+			DOMQuiet:    domexec.DefaultDOMQuiet,
+			NetworkIdle: domexec.DefaultNetworkIdle,
+			MaxWait:     domexec.DefaultMaxRenderWait,
+		}
+		if live != nil {
+			opts.Screenshot = live.rendering(targetURL)
+		}
+		var html string
+		var outcome domexec.RenderOutcome
+		var err error
+		if sess != nil {
+			html, outcome, err = sess.RenderedDOMWithOptions(ctx, targetURL, opts)
+		} else {
+			browser, berr := s.scanner.BrowserForRender(ctx)
+			if berr != nil {
+				return "", crawler.RenderOutcome{}, berr
+			}
+			html, outcome, err = browser.RenderedDOMWithOptions(ctx, targetURL, opts)
 		}
 		// The OUTCOME form, so a render that reached its cap is reported as capped. The previous
 		// call read the DOM after a fixed 300 ms and said nothing about whether the page had settled
 		// (burpsy-react-ui-efra): a client-rendered route populating after load contributed no links
 		// and the crawl reported the application as having almost no locations, which is a confident
 		// wrong answer rather than a missing feature.
-		html, outcome, err := browser.RenderedDOMWithOptions(ctx, targetURL, domexec.RenderOptions{
-			DOMQuiet:    domexec.DefaultDOMQuiet,
-			NetworkIdle: domexec.DefaultNetworkIdle,
-			MaxWait:     domexec.DefaultMaxRenderWait,
-		})
+		if live != nil {
+			live.setFrame(targetURL, outcome.Screenshot)
+		}
 		reqs := make([]crawler.RenderedRequest, 0, len(outcome.Requests))
 		for _, r := range outcome.Requests {
 			reqs = append(reqs, crawler.RenderedRequest{URL: r.URL, Method: r.Method})
@@ -629,6 +673,13 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		if t := strings.TrimSpace(seed); t != "" {
 			seeds = append(seeds, t)
 		}
+	}
+	if seeds, err = expandSeedProtocols(seeds, req.Protocols); err != nil {
+		return 0, nil, 0, nil, err
+	}
+	// Validated before the task registers, so a bad prefix is a 400 rather than a failed row.
+	if _, err = s.crawlScope(req.Scope, seeds); err != nil {
+		return 0, nil, 0, nil, err
 	}
 	// The live passive crawl's seed set (tqug): the sweep's captured URLs, taken (consumed) so
 	// a second crawl cannot silently re-walk the same harvest. Union with the named seeds; the
@@ -763,12 +814,40 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// indistinguishable from a hung one. The hook is bound to the task once it exists (see
 	// progress.bind below); it fires only during Run, which starts after the bind.
 	progress := &crawlProgress{}
-	onFetch := progress.hook(auditOffer)
+	// The live crawl view (burpsy-react-ui-1l3x) sits first on the fetch hook and on its own send hook.
+	live := newCrawlLive(s.scanner != nil && s.scanner.DOMCapabilityConfigured())
+	onFetch := live.hook(progress.hook(auditOffer))
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,
 	// not a task that appears in the dashboard only to fail immediately.
-	c, err := crawler.New(s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh))
+	// The recorded login (burpsy-react-ui-xhtk): resolved, scope-checked and given its browser
+	// session here, before any task row, so every reason it cannot run is a 400 the operator fixes.
+	var loginSess *domexec.Session
+	var loginRunner *browserLoginRunner
+	if id := strings.TrimSpace(req.RecordedLogin); id != "" {
+		login, ok := s.recordedLoginStore().get(id)
+		if !ok {
+			return 0, nil, 0, nil, fmt.Errorf("no recorded login with id %q is saved", id)
+		}
+		sess, serr := s.openLoginSession(context.Background())
+		if serr != nil {
+			return 0, nil, 0, nil, fmt.Errorf("the recorded login %q cannot run: %w", login.Label, serr)
+		}
+		loginSess, loginRunner = sess, newBrowserLoginRunner(login, sess)
+	}
+	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh)
+	cfg.OnSend = live.onSend
+	if cfg.RenderWithOutcome != nil {
+		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
+	}
+	var loginWrap *liveLogin
+	if loginRunner != nil {
+		loginWrap = &liveLogin{inner: loginRunner, live: live, events: s.events}
+		cfg.BrowserLogin = loginWrap
+	}
+	c, err := crawler.New(cfg)
 	if err != nil {
+		loginSess.Close()
 		return 0, nil, 0, nil, err
 	}
 	// The dashboard's Pause all tasks reaches the crawl loop (burpsy-react-ui-cijs). GateCheck is
@@ -787,6 +866,11 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 
 	task := s.tasks.Start(dash.KindCrawl, strings.Join(seeds, ", "), uint64(limits.MaxRequests))
 	s.crawls.start(task.ID(), seeds, kind, limits)
+	s.crawls.attachLive(task.ID(), live)
+	if loginWrap != nil {
+		// Before the goroutine starts, which orders this write before the login's first read.
+		loginWrap.taskID = task.ID()
+	}
 
 	// Detached from the request context on purpose: a crawl outlives the HTTP call that started it,
 	// and binding it to r.Context() would cancel the whole crawl the moment the operator's browser
@@ -804,6 +888,14 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
+		// The login's browser context lives exactly as long as the crawl: its cookies are the
+		// operator's session on the target and are not kept a moment longer.
+		defer loginSess.Close()
+		// The frame is dropped when the crawl ends; the fetch list stays for the run's lifetime.
+		defer live.finish()
+		// The crawl calls its suite gate between fetches with this context, so the row's own Pause
+		// reaches it — and the audit feed, whose context derives from this one (g0ba).
+		ctx = task.Pausable(ctx)
 		// Started before Run, not after it: from here on every completed fetch is audited while the
 		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
 		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two
@@ -812,6 +904,12 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 			feed.start(ctx)
 		}
 		rep := c.Run(ctx)
+		// The logged-in render pass's refusals (burpsy-react-ui-xhtk): the session kept them apart from
+		// the replays' own, and the report is where a page that rendered empty is explained.
+		if rep.Login != nil && loginSess != nil {
+			rep.Login.RenderBlocked = loginSess.RenderBlocked()
+		}
+		live.auditing()
 		// The rendered-DOM audit over the crawl's locations (burpsy-react-ui-xuim): the crawl
 		// captured wire bytes, so script-created content was never audited. This pass renders
 		// each distinct location in the same headless browser the audit's DOM checks use and
@@ -875,6 +973,21 @@ func (s *Server) auditCrawlLocations(ctx context.Context, taskID uint64, rep *cr
 		locations[f.URL] = f.ExchangeID
 	}
 	if len(locations) == 0 {
+		return
+	}
+	// An authenticated crawl's wire bodies are logged-in pages; this pass renders in the shared
+	// browser, logged out, and comparing the two would report every authenticated page as "content
+	// visible only after script runs". Declined, with the reason, rather than run wrong
+	// (burpsy-react-ui-xhtk).
+	// Declined whenever ANY replay logged in — a crawl whose first login failed and a later re-login
+	// succeeded has logged-in wire bodies too. A crawl whose every replay failed was logged out
+	// throughout, and its comparison with a logged-out render is the ordinary one.
+	if rep.Login != nil && rep.Login.Succeeded > 0 {
+		rep.RenderedAudit = &crawler.RenderedAuditReport{
+			Candidates: len(locations),
+			Declined: "the crawl ran logged in through its recorded login and this pass renders logged out; " +
+				"comparing logged-out renders with logged-in wire bodies would report false script-only content, so it was not run",
+		}
 		return
 	}
 
@@ -1076,7 +1189,7 @@ func newCrawlAuditFeed(s *Server, target string) *crawlAuditFeed {
 // problem, and a row that says the former is the only way to tell them apart on screen.
 func (f *crawlAuditFeed) start(ctx context.Context) {
 	f.task = f.s.tasks.Start(dash.KindAuditSession, f.target+" (audited during the crawl)", 0)
-	go f.run(ctx)
+	go f.run(f.task.Pausable(ctx))
 }
 
 // offer is the crawler's OnFetch callback: one completed fetch, announced from the crawl goroutine.
@@ -1258,7 +1371,7 @@ func (f *crawlAuditFeed) finish(ctx context.Context) {
 // was shared before the crawl left it and is worth keeping shareable: two places that both "audit
 // these exchanges" is how one launched scan comes to audit less than another with nothing on screen
 // saying which.
-func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string) *scanner.SessionOutcome {
+func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string, skipParams ...string) *scanner.SessionOutcome {
 	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
 	for _, f := range rep.Fetches {
 		ids = append(ids, f.ExchangeID)
@@ -1271,6 +1384,8 @@ func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report,
 	// "audit these exchanges" is how a launched scan comes to audit less than a crawl's own phase
 	// without anything on screen saying so.
 	cfg := s.activeScanner().AuditConfig()
+	// Parameters the API review marked Fixed (vuw7) are kept out of this audit's insertion points.
+	cfg.SkipAllTestsForParameters = append(append([]string(nil), cfg.SkipAllTestsForParameters...), skipParams...)
 	return s.runBulkAudit(ctx, task, target, ids, cfg, "the run produced no exchanges to audit")
 }
 
@@ -1317,14 +1432,14 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 	_ = onFetch
 	return crawler.Config{
 		Seeds:  seeds,
-		Scope:  s.scope,
+		Scope:  s.mustCrawlScope(req.Scope, seeds),
 		Sender: s.sender,
 		Capture: scanner.Capture{
 			Store:    s.store,
 			Scanner:  s.passiveScanner,
 			Findings: s.findings,
 			Logger:   s.logger,
-			Source:   core.SourceCrawl,
+			Source:   crawlSource(req.Isolated),
 		},
 		Query:              req.Query,
 		RetentionQuery:     req.RetentionQuery,
@@ -1432,6 +1547,15 @@ func overlayCrawlLimits(dst *crawler.Limits, src crawler.Limits) {
 	if src.MaxSpeculativeLinks != 0 {
 		dst.MaxSpeculativeLinks = src.MaxSpeculativeLinks
 	}
+	// max_submissions_per_form (u0k3) was parsed and then dropped here, so a named configuration's
+	// form cap never reached the crawl. The crawl strategy's band rides the same path (8bp2).
+	if src.MaxSubmissionsPerForm != 0 {
+		dst.MaxSubmissionsPerForm = src.MaxSubmissionsPerForm
+	}
+	if src.LocationToleranceBand != nil {
+		band := *src.LocationToleranceBand
+		dst.LocationToleranceBand = &band
+	}
 }
 
 // sectionPrefixes names unknown crawler sub-objects the way a key is named, so the unapplied list
@@ -1470,6 +1594,130 @@ func (s *Server) crawlSessionCoordinator() crawler.SessionCoordinator {
 		return nil
 	}
 	return s.sessionCoordinator
+}
+
+// expandSeedProtocols applies the scan's protocol setting to its seeds (burpsy-react-ui-in8j).
+//
+// "both" crawls every seed over http and https: a seed written with either scheme gains its twin on
+// the other, and a schemeless seed ("shop.test/app") becomes both. An explicit port is kept on both
+// twins — Burp's option is about schemes, and inventing a port mapping (8080 to 8443?) would be a
+// guess. "specified" keeps each seed as written and refuses a schemeless one, naming the option that
+// would accept it. Order is kept and duplicates are dropped, so the task's target reads as typed.
+func expandSeedProtocols(seeds []string, mode string) ([]string, error) {
+	switch mode {
+	case "", "specified":
+		for _, s := range seeds {
+			if !strings.Contains(s, "://") {
+				return nil, fmt.Errorf("seed %q has no scheme: write http:// or https://, or choose \"Scan using HTTP & HTTPS\" to crawl it over both", s)
+			}
+		}
+		return seeds, nil
+	case "both":
+	default:
+		return nil, fmt.Errorf("unknown protocols %q: expected \"both\" or \"specified\"", mode)
+	}
+	out := make([]string, 0, 2*len(seeds))
+	seen := map[string]bool{}
+	add := func(u string) {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, s := range seeds {
+		rest := s
+		if i := strings.Index(s, "://"); i >= 0 {
+			scheme := strings.ToLower(s[:i])
+			if scheme != "http" && scheme != "https" {
+				add(s) // the crawler refuses it with its own reason
+				continue
+			}
+			rest = s[i+3:]
+		}
+		add("http://" + rest)
+		add("https://" + rest)
+	}
+	return out, nil
+}
+
+// crawlScopeReq is Burp's crawl scope (burpsy-react-ui-501u). Mode "seed_directories" is Burp's
+// default — each seed's final directory; "prefixes" is its "Detailed scope configuration" — Include
+// and Exclude URL prefixes; "engagement" (or empty) is the engagement scope alone. Every mode only
+// narrows the engagement scope.
+type crawlScopeReq struct {
+	Mode    string   `json:"mode"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// crawlScope builds the scope a crawl runs under.
+func (s *Server) crawlScope(req *crawlScopeReq, seeds []string) (crawler.Scope, error) {
+	if req == nil || req.Mode == "" || req.Mode == "engagement" {
+		if req != nil && (len(req.Include) > 0 || len(req.Exclude) > 0) {
+			return nil, errors.New("scope prefixes need mode \"prefixes\"")
+		}
+		return s.scope, nil
+	}
+	p := &crawler.PrefixScope{Base: s.scope}
+	norm := func(list []string) ([]string, error) {
+		out := make([]string, 0, len(list))
+		for _, raw := range list {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			n, err := crawler.NormalisePrefix(raw)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, n)
+		}
+		return out, nil
+	}
+	var err error
+	switch req.Mode {
+	case "seed_directories":
+		for _, seed := range seeds {
+			dir, derr := crawler.SeedDirectoryPrefix(seed)
+			if derr != nil {
+				return nil, derr
+			}
+			p.Include = append(p.Include, dir)
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+	case "prefixes":
+		if p.Include, err = norm(req.Include); err != nil {
+			return nil, err
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+		if len(p.Include) == 0 {
+			return nil, errors.New("scope mode \"prefixes\" needs at least one include prefix")
+		}
+	default:
+		return nil, fmt.Errorf("unknown scope mode %q: expected engagement, seed_directories or prefixes", req.Mode)
+	}
+	return p, nil
+}
+
+// mustCrawlScope is crawlScope for the config builder. startCrawl validated the same request with the
+// same function first, so the error branch is unreachable from the route; a direct caller that skips
+// that validation gets the engagement scope, the crawl's behaviour before 501u.
+func (s *Server) mustCrawlScope(req *crawlScopeReq, seeds []string) crawler.Scope {
+	sc, err := s.crawlScope(req, seeds)
+	if err != nil {
+		return s.scope
+	}
+	return sc
+}
+
+func crawlSource(isolated bool) core.Source {
+	if isolated {
+		return core.SourceIsolatedScan
+	}
+	return core.SourceCrawl
 }
 
 // errSeedsOutOfScope is a crawl whose every seed the engagement scope refuses (us6r.3).

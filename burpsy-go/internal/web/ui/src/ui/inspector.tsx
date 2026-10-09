@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsRight, ChevronsUpDown, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { copyToClipboard, formatBytes } from "../lib/api";
 import {
@@ -31,9 +31,13 @@ import {
   type ReorderDomain,
 } from "../lib/message";
 import { base64Decode, base64Encode, htmlDecode, htmlEncodeKeyChars, urlDecode, urlEncodeKeyChars } from "../lib/transforms";
+import { CRLF_GLYPHS, hasLineBreak, hasLineBreakGlyphs, insertAt, readLineBreaks, showLineBreaks } from "../lib/line-breaks";
+import { ContextMenu, type MenuGroup } from "./menu";
+import { kettleHeaderEdit, type H2Field } from "../lib/kettle";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/cn";
 import { Badge, Button, IconButton, Input } from "./primitives";
+import { confirmDialog } from "../lib/dialogs";
 
 /* ==== the model ============================================================
  *
@@ -74,6 +78,20 @@ interface SectionModel {
    * the operator's to change — the start line's attributes, or a body the writers cannot parse.
    */
   reorder?: ReorderDomain;
+  /**
+   * Whether an item here is a header field, the one thing Burp's Shift+Return injection targets
+   * (burpsy-react-ui-ln2a). Every other section refuses a CR/LF by name.
+   */
+  headerFields?: boolean;
+  /**
+   * The section's own writer target, when it is not the message text: a kettled request's header
+   * section edits the HTTP/2 field list (jae5). Its rows' `set`/`remove`, `add` and `move` then work on
+   * that list's JSON form, and this commits the result — so the generic row machinery (drafts, Apply,
+   * removal order, reordering) is the same code for both, and only where the result goes differs.
+   */
+  commit?: (apply: (state: string) => string, summary: string) => void;
+  /** Reorder for a section whose state is not the message text; see `commit`. */
+  move?: (state: string, index: number, direction: -1 | 1) => string;
 }
 
 /** "3 rows", "1 row" — the count an assistive reader hears. Pluralised because a tool whose
@@ -258,8 +276,10 @@ function SectionBlock({
   open,
   onToggle,
   editable,
-  onCommit,
+  onCommit: onCommitText,
   onSelect,
+  onDetail,
+  onAnnounce,
 }: {
   section: SectionModel;
   open: boolean;
@@ -267,6 +287,8 @@ function SectionBlock({
   editable: boolean;
   onCommit: (apply: (raw: string) => string, summary: string) => void;
   onSelect: (sectionId: string, rowIndex: number, label: string, value: string) => void;
+  onDetail: (sectionId: string, rowIndex: number) => void;
+  onAnnounce: (text: string) => void;
 }): JSX.Element {
   /** Edits buffered until Apply. Keyed by the row's position in the rendered list. */
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
@@ -326,6 +348,8 @@ function SectionBlock({
   const editRow = (index: number, row: Row, patch: Partial<Draft>) =>
     setDrafts((current) => ({ ...current, [index]: { ...draftFor(index, row), ...patch } }));
 
+  // A section with a writer target of its own commits there (jae5); every other section writes the text.
+  const onCommit = section.commit ?? onCommitText;
   const canEdit = editable && !section.note;
   const canReorder = canEdit && section.reorder !== undefined && section.rows.length > 1;
   const selectedRow = selected !== null && selected < section.rows.length ? selected : null;
@@ -341,7 +365,10 @@ function SectionBlock({
     if (to < 0 || to >= section.rows.length) return;
     const domain = section.reorder;
     const row = section.rows[selectedRow]!;
-    onCommit((raw) => moveItem(raw, domain, selectedRow, direction), `${row.name} moved ${direction < 0 ? "up" : "down"}`);
+    onCommit(
+      (raw) => (section.move ? section.move(raw, selectedRow, direction) : moveItem(raw, domain, selectedRow, direction)),
+      `${row.name} moved ${direction < 0 ? "up" : "down"}`,
+    );
     setSelected(to);
   };
 
@@ -364,24 +391,60 @@ function SectionBlock({
               {section.rows.map((row, index) => {
                 const draft = draftFor(index, row);
                 const gone = removing.includes(index);
-                const rowEditable = canEdit && Boolean(row.set);
+                // A kettled field may hold CR/LF (jae5). An inline <input> would strip it on the next
+                // keystroke, so such a row shows its line breaks as ␍␊ and is edited in the detail view.
+                const breaks = hasLineBreak(row.name) || hasLineBreak(row.value);
+                const rowEditable = canEdit && Boolean(row.set) && !breaks;
+                // Burp's item context menu: "Copy name or Copy value from the context menu". Offered on
+                // every mount, read-only ones included — copying changes nothing. The value is the
+                // item's own text, CR/LF and all, never the glyph form a field shows.
+                const copyMenu: MenuGroup[] = [
+                  {
+                    id: "copy",
+                    actions: [
+                      {
+                        id: "copy-name",
+                        label: "Copy name",
+                        icon: Copy,
+                        onSelect: () => void copyToClipboard(row.name).then(() => onAnnounce(`Copied the name ${row.name}`)),
+                      },
+                      {
+                        id: "copy-value",
+                        label: "Copy value",
+                        icon: Copy,
+                        onSelect: () => void copyToClipboard(row.value).then(() => onAnnounce(`Copied the value of ${row.name}`)),
+                      },
+                    ],
+                  },
+                  {
+                    id: "detail",
+                    actions: [{ id: "open-detail", label: "Open in detail view", icon: ChevronsRight, onSelect: () => onDetail(section.id, index) }],
+                  },
+                ];
                 return (
+                  <ContextMenu key={`${row.name}-${index}`} groups={copyMenu} docTopic="message-editor">
                   <div
-                    key={`${row.name}-${index}`}
                     className={cn(gone && "inspector-row-removed", canReorder && selectedRow === index && "inspector-row-selected")}
                     // Focus anywhere in the row selects it for the arrow buttons, so a keyboard
                     // operator selects by tabbing in exactly as a mouse operator does by clicking.
                     onFocus={canReorder ? () => setSelected(index) : undefined}
                     onClick={canReorder ? () => setSelected(index) : undefined}
-                    onKeyDown={
-                      canReorder
-                        ? (event) => {
-                            if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
-                            event.preventDefault();
-                            move(event.key === "ArrowUp" ? -1 : 1);
-                          }
-                        : undefined
-                    }
+                    onKeyDown={(event) => {
+                      // The context menu from the keyboard: the Menu key and Shift+F10 are what a
+                      // desktop tool answers, and a browser does not reliably turn either into a
+                      // contextmenu event on a focused field, so the row raises one itself.
+                      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                        event.preventDefault();
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        event.currentTarget.dispatchEvent(
+                          new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 8, clientY: rect.bottom }),
+                        );
+                        return;
+                      }
+                      if (!canReorder || !event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                      event.preventDefault();
+                      move(event.key === "ArrowUp" ? -1 : 1);
+                    }}
                   >
                     <dt title={row.name}>
                       {rowEditable && row.renamable ? (
@@ -393,7 +456,7 @@ function SectionBlock({
                           onChange={(event) => editRow(index, row, { name: event.target.value })}
                         />
                       ) : (
-                        row.name
+                        showLineBreaks(row.name)
                       )}
                     </dt>
                     <dd title={row.value}>
@@ -413,9 +476,17 @@ function SectionBlock({
                             onClick={() => void copyToClipboard(row.value)}
                             title="Copy value"
                           >
-                            {row.value === "" ? <span className="cell-dim">(empty)</span> : row.value}
+                            {row.value === "" ? <span className="cell-dim">(empty)</span> : showLineBreaks(row.value)}
                           </button>
                         )}
+                        <IconButton
+                          label={`Open ${row.name} in the detail view`}
+                          size="small"
+                          className="inspector-row-action"
+                          onClick={() => onDetail(section.id, index)}
+                        >
+                          <ChevronsRight size={12} />
+                        </IconButton>
                         <IconButton
                           label={`Decode ${row.name}`}
                           size="small"
@@ -424,7 +495,7 @@ function SectionBlock({
                         >
                           <Wand2 size={12} />
                         </IconButton>
-                        {rowEditable ? (
+                        {canEdit && row.remove ? (
                           <IconButton
                             label={gone ? `Keep ${row.name}` : `Remove ${row.name}`}
                             size="small"
@@ -439,6 +510,7 @@ function SectionBlock({
                       </div>
                     </dd>
                   </div>
+                  </ContextMenu>
                 );
               })}
               {adding ? (
@@ -672,6 +744,158 @@ function SelectionSection({
   );
 }
 
+/* ==== the detail view (burpsy-react-ui-ln2a) ================================
+ *
+ * Burp: "drill down into the header by clicking the chevron to the right of its entry in the
+ * Inspector. From this view, you can select either the Name or Value field and press the Shift +
+ * Return keys to enter the sequence \r\n." The fields show CR and LF as glyphs (lib/line-breaks.ts
+ * says why a real line break cannot live in a form field) and Apply maps them back.
+ *
+ * Whether a CR/LF may be written at all is the caller's decision, passed as `crlfRefusal`: HTTP/1
+ * text cannot carry one inside a header, so on an HTTP/1 request — or anywhere that cannot send an
+ * HTTP/2 header list as written — Shift+Return is refused with the reason instead of quietly doing
+ * nothing, and an Apply that would put one into the text is refused the same way.
+ */
+
+interface DetailTarget {
+  sectionId: string;
+  rowIndex: number;
+}
+
+function DetailSection({
+  sectionTitle,
+  row,
+  writable,
+  crlfRefusal,
+  onApply,
+  onClose,
+  onAnnounce,
+}: {
+  sectionTitle: string;
+  row: Row;
+  writable: boolean;
+  /** Why CR/LF cannot be written here, or null when it can. */
+  crlfRefusal: string | null;
+  onApply: (name: string, value: string) => void;
+  onClose: () => void;
+  onAnnounce: (text: string) => void;
+}): JSX.Element {
+  // A value already holding ␍ or ␊ cannot round-trip through the glyph form: Apply would turn a
+  // literal glyph into a CR the message never had. Such a row is shown, never written.
+  const lossy = hasLineBreakGlyphs(row.name) || hasLineBreakGlyphs(row.value);
+  const canWrite = writable && !lossy;
+  const [name, setName] = useState(showLineBreaks(row.name));
+  const [value, setValue] = useState(showLineBreaks(row.value));
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const refuse = (text: string) => {
+    setRefusal(text);
+    onAnnounce(text);
+  };
+
+  const apply = () => {
+    if (!canWrite) return;
+    const nextName = readLineBreaks(name);
+    const nextValue = readLineBreaks(value);
+    if ((hasLineBreak(nextName) || hasLineBreak(nextValue)) && crlfRefusal) {
+      refuse(crlfRefusal);
+      return;
+    }
+    onApply(nextName, nextValue);
+  };
+
+  const keys = (set: (next: string) => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!event.shiftKey) {
+      apply();
+      return;
+    }
+    if (!canWrite) return;
+    if (crlfRefusal) {
+      refuse(crlfRefusal);
+      return;
+    }
+    const field = event.currentTarget;
+    const { text, caret } = insertAt(field.value, field.selectionStart ?? field.value.length, field.selectionEnd ?? field.value.length, CRLF_GLYPHS);
+    set(text);
+    setRefusal(null);
+    // After React has written the new value, put the caret where typing would have left it.
+    requestAnimationFrame(() => field.setSelectionRange(caret, caret));
+  };
+
+  return (
+    <div className="inspector-section inspector-selection inspector-detail">
+      <div className="inspector-head-row">
+        <div className="inspector-head inspector-head-static">
+          <span />
+          <span>Detail</span>
+        </div>
+        <div className="inspector-head-extra">
+          <IconButton label="Close the detail view" size="small" onClick={onClose}>
+            <X size={12} />
+          </IconButton>
+        </div>
+      </div>
+      <div className="inspector-selection-body">
+        <p className="inspector-selection-origin" title={`${sectionTitle} · ${row.name}`}>
+          {sectionTitle} · {showLineBreaks(row.name)}
+        </p>
+        <label className="inspector-detail-field">
+          <span>Name</span>
+          <Input
+            className="inspector-input"
+            aria-label="Detail name"
+            value={name}
+            readOnly={!canWrite || !row.renamable}
+            onChange={(event) => setName(event.target.value)}
+            onKeyDown={keys(setName)}
+          />
+        </label>
+        <label className="inspector-detail-field">
+          <span>Value</span>
+          <Input
+            className="inspector-input"
+            aria-label="Detail value"
+            value={value}
+            readOnly={!canWrite}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={keys(setValue)}
+          />
+        </label>
+        {canWrite ? (
+          <p className="inspector-note">Shift+Return inserts CR LF, shown as ␍␊. Return applies.</p>
+        ) : null}
+        {lossy ? (
+          <p className="inspector-note">
+            This item already contains the ␍ or ␊ character the detail view uses to show CR and LF, so it is shown here and not
+            written back — edit it in the Raw view.
+          </p>
+        ) : null}
+        {refusal ? (
+          <p className="inspector-note inspector-refusal" role="status">
+            {refusal}
+          </p>
+        ) : null}
+        <div className="inspector-actions">
+          <IconButton label="Copy name" size="small" onClick={() => void copyToClipboard(row.name).then(() => onAnnounce("Copied the name"))}>
+            <Copy size={12} />
+          </IconButton>
+          <span style={{ flex: 1 }} />
+          <Button variant="quiet" size="small" onClick={onClose}>
+            {canWrite ? "Cancel" : "Close"}
+          </Button>
+          {canWrite ? (
+            <Button size="small" onClick={apply}>
+              Apply
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ==== settings =============================================================== */
 
 function SettingsPanel(): JSX.Element {
@@ -718,7 +942,104 @@ function SettingsPanel(): JSX.Element {
   );
 }
 
+/**
+ * The sections of a kettled request (jae5): the attributes read from the field list, Request headers
+ * editing the list itself (every pseudo-header included, as Burp's Inspector shows them), and the
+ * parameter and cookie sections read-only with the reason — they are views of HTTP/1 text, which no
+ * longer describes the request's headers.
+ */
+function kettledSections(
+  list: SectionModel[],
+  fields: H2Field[],
+  kettle: InspectorKettle,
+  editable: boolean,
+  bodySize: string,
+  announce: (text: string) => void,
+  downgrade: () => void,
+): SectionModel[] {
+  const first = (name: string) => fields.find((field) => field.name.toLowerCase() === name)?.value;
+  const parse = (state: string) => JSON.parse(state) as H2Field[];
+  const write = (next: H2Field[]) => JSON.stringify(next);
+  const commitFields = (apply: (state: string) => string, summary: string) => {
+    const before = write(fields);
+    const after = apply(before);
+    if (after === before) {
+      announce("No change");
+      return;
+    }
+    kettle.onFields(parse(after));
+    announce(summary);
+  };
+  const readOnly = "This request is kettled: its headers are an HTTP/2 field list now, edited under Request headers, and its body is edited in the request editor.";
+  return list.map((section): SectionModel => {
+    if (section.id === "attributes") {
+      return {
+        id: "attributes",
+        title: "Request attributes",
+        rows: [
+          { name: "Method", value: first(":method") ?? "—", index: 0, renamable: false },
+          { name: "Path", value: first(":path") ?? "—", index: 1, renamable: false },
+          { name: "Version", value: "HTTP/2 (kettled)", index: 2, renamable: false },
+          { name: "Authority", value: first(":authority") ?? "—", index: 3, renamable: false },
+          { name: "Body", value: bodySize, index: 4, renamable: false },
+        ],
+        extra: editable ? (
+          <Button variant="quiet" size="small" onClick={downgrade}>
+            HTTP/1
+          </Button>
+        ) : undefined,
+      };
+    }
+    if (section.id === "headers") {
+      return {
+        id: "headers",
+        title: "Request headers",
+        headerFields: true,
+        rows: fields.map((field, index) => ({
+          name: field.name,
+          value: field.value,
+          index,
+          renamable: true,
+          set: (state, name, value) => write(parse(state).map((entry, i) => (i === index ? { name, value } : entry))),
+          remove: (state) => write(parse(state).filter((_, i) => i !== index)),
+        })),
+        add: (state, name, value) => write([...parse(state), { name, value }]),
+        reorder: "header",
+        move: (state, index, direction) => {
+          const next = parse(state);
+          const to = index + direction;
+          if (to < 0 || to >= next.length) return state;
+          [next[index], next[to]] = [next[to]!, next[index]!];
+          return write(next);
+        },
+        commit: commitFields,
+      };
+    }
+    return {
+      ...section,
+      rows: section.rows.map(({ set: _set, remove: _remove, ...row }) => row),
+      add: undefined,
+      reorder: undefined,
+      note: readOnly,
+    };
+  });
+}
+
 /* ==== the Inspector ========================================================== */
+
+/**
+ * A kettled request's header list and where its edits go (jae5). `fields` is null while the request is
+ * plain text; a header edit that HTTP/1 cannot carry then seeds the list from the text and hands it to
+ * `onFields`. While it is non-null the Inspector's Request headers section edits the list itself, and
+ * `onFields(null)` is the downgrade: the list is dropped and the text — kept as its normalised
+ * rendering by the caller — is the request again.
+ */
+export interface InspectorKettle {
+  /** Whether the target is TLS: Repeater speaks HTTP/2 only over TLS, so a plain-HTTP tab cannot kettle. */
+  tls: boolean;
+  fields: H2Field[] | null;
+  onFields: (fields: H2Field[] | null) => void;
+}
 
 /**
  * Burp's Inspector: the same message broken into its addressable parts, so an
@@ -739,6 +1060,7 @@ export function Inspector({
   readOnlyNote,
   onSwitch,
   switchLabel,
+  kettle,
 }: {
   raw: string;
   label?: string;
@@ -747,15 +1069,22 @@ export function Inspector({
   /** Point the pane at the other half of the exchange, where the caller has one. */
   onSwitch?: () => void;
   switchLabel?: string;
+  /**
+   * Where an HTTP/2 header list that HTTP/1 text cannot carry can go (jae5) — given only by a mount that
+   * can send one, which is a Repeater draft. Absent, a CR/LF in a header is refused with the reason.
+   */
+  kettle?: InspectorKettle;
 }): JSX.Element {
   const parsed = useMemo(() => parseMessage(raw), [raw]);
   const response = useMemo(() => isResponse(raw), [raw]);
   const editable = Boolean(onChange);
+  const kettled = kettle?.fields ?? null;
   const panelState = useApp((state) => state.inspectorPanelState);
   const dock = useApp((state) => state.inspectorDock);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const settingsRef = useRef<HTMLDivElement>(null);
 
@@ -965,18 +1294,76 @@ export function Inspector({
       // Header order is a smuggling and desync variable; this is the one place it can be changed
       // without retyping lines in Raw.
       reorder: "header",
+      headerFields: !response,
     });
 
+    if (!response && kettled && kettle) {
+      return kettledSections(list, kettled, kettle, editable, formatBytes(bodyBytes), setAnnouncement, async () => {
+        // Burp's downgrade warning: the HTTP/2-only edits are lost, and the request is normalised.
+        const ok = await confirmDialog({
+          title: "Downgrade this kettled request to HTTP/1?",
+          description:
+            "Burp calls this normalising: every change HTTP/1 cannot carry — CR/LF in a header, an uppercase name, extra pseudo-headers — is discarded.",
+          confirmLabel: "Downgrade",
+          danger: true,
+        });
+        if (!ok) return;
+        kettle.onFields(null);
+        commit((current) => setStartLineToken(current, 2, "HTTP/1.1"), "Downgraded to HTTP/1.1; the kettled edits were discarded");
+      });
+    }
     return list;
     // `commit` closes over `raw`, which is already a dependency; listing it would
     // rebuild every section on each render for no gain.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [parsed, response, raw, editable]);
+  }, [parsed, response, raw, editable, kettled, kettle]);
 
   /** Explicit toggles win; otherwise the persisted default decides. */
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
   const isOpen = (section: SectionModel) =>
     section.id in toggled ? toggled[section.id]! : panelState === "auto" && section.rows.length > 0;
+
+  const detailSection = detail ? sections.find((entry) => entry.id === detail.sectionId) : undefined;
+  const detailRow = detail ? detailSection?.rows[detail.rowIndex] : undefined;
+  const http2 = !response && parseRequestLine(parsed.startLine)?.version === "HTTP/2";
+
+  /**
+   * Why a CR/LF cannot be written into an item of this section, or null when it can (ln2a). HTTP/1
+   * text ends a header at its line break, so the only place one can live is an HTTP/2 header list
+   * sent as written — a kettled request — and only a Repeater tab sends one.
+   */
+  const crlfRefusal = (section: SectionModel): string | null => {
+    if (!section.headerFields) {
+      return `Only a header can carry CR/LF; a ${section.title.toLowerCase()} item would split the message instead.`;
+    }
+    if (!http2) {
+      return "This would split the header: only HTTP/2 can carry CR/LF inside a header. Switch the request to HTTP/2 under Request attributes first.";
+    }
+    if (!kettle) {
+      return "This editor cannot send an HTTP/2 header list as written, so CR/LF in a header has nowhere to go here. Send the request to Repeater and inject it there.";
+    }
+    if (!kettle.tls) {
+      return "This would split the header: only HTTP/2 can carry CR/LF inside a header, and Repeater speaks HTTP/2 only to an https:// target.";
+    }
+    return null;
+  };
+
+  /**
+   * Apply a detail-view edit. A CR/LF reaching a header of a request that is still text is the moment it
+   * kettles: the text is seeded into a field list with this one field changed, and the list takes over.
+   */
+  const applyDetail = (section: SectionModel, row: Row, name: string, value: string) => {
+    const breaks = hasLineBreak(name) || hasLineBreak(value);
+    // Burp's other name triggers, from the same view: renaming a header to something with an uppercase
+    // letter or a colon in it, on an HTTP/2 request, is a name HTTP/2 text would lowercase or misread.
+    const h2OnlyName = http2 && name !== row.name && /[A-Z:]/.test(name);
+    if ((breaks || h2OnlyName) && !kettled && kettle && kettle.tls && section.headerFields && !section.commit) {
+      kettle.onFields(kettleHeaderEdit(raw, kettle.tls, row.index, row.name, name, value));
+      setAnnouncement(`${row.name} changed in a way HTTP/1 text cannot carry: the request is kettled and its headers are an HTTP/2 field list`);
+      return;
+    }
+    (section.commit ?? commit)((current) => row.set!(current, name, value), `${section.title} · ${name} updated`);
+  };
 
   const applySelection = (text: string) => {
     if (!selection) return;
@@ -986,7 +1373,7 @@ export function Inspector({
       setAnnouncement("That value cannot be written back");
       return;
     }
-    commit((current) => row.set!(current, row.name, text), `${section.title} · ${row.name} updated`);
+    (section.commit ?? commit)((current) => row.set!(current, row.name, text), `${section.title} · ${row.name} updated`);
     setSelection(null);
   };
 
@@ -1037,8 +1424,26 @@ export function Inspector({
             onSelect={(sectionId, rowIndex, rowLabel, value) =>
               setSelection({ sectionId, rowIndex, label: rowLabel, original: value, stages: [] })
             }
+            onDetail={(sectionId, rowIndex) => setDetail({ sectionId, rowIndex })}
+            onAnnounce={setAnnouncement}
           />
         ))}
+        {detailSection && detailRow ? (
+          <DetailSection
+            // Remounts per item, so the drafts start from the item opened rather than the last one.
+            key={`${detail!.sectionId}-${detail!.rowIndex}-${detailRow.name}\u0000${detailRow.value}`}
+            sectionTitle={detailSection.title}
+            row={detailRow}
+            writable={editable && !detailSection.note && Boolean(detailRow.set)}
+            crlfRefusal={crlfRefusal(detailSection)}
+            onApply={(name, value) => {
+              applyDetail(detailSection, detailRow, name, value);
+              setDetail(null);
+            }}
+            onClose={() => setDetail(null)}
+            onAnnounce={setAnnouncement}
+          />
+        ) : null}
         {selection ? (
           <SelectionSection
             selection={selection}

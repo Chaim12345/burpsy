@@ -134,5 +134,13 @@ func (s *Server) dialUpstreamTLS(serverName, addr string, alpnOffer []string) (*
 	if policy := s.upstreamPolicy(); policy != nil && !policy.Empty() {
 		dialer.Carry = s.upstreamDialer().DialContext
 	}
-	return dialer.Dial(context.Background(), serverName, addr, alpnOffer)
+	conn, negotiated, err := dialer.Dial(context.Background(), serverName, addr, alpnOffer)
+	if err == nil && s.config.serverCerts != nil {
+		if _, portText, perr := net.SplitHostPort(addr); perr == nil {
+			if port, cerr := strconv.Atoi(portText); cerr == nil {
+				s.config.serverCerts.Record(serverName, uint16(port), conn.ConnectionState().PeerCertificates)
+			}
+		}
+	}
+	return conn, negotiated, err
 }

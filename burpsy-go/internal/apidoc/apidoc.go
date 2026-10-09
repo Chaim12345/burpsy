@@ -75,6 +75,8 @@ const (
 	// ValuePlaceholder was invented, because the document gave nothing. These are the numbers worth
 	// reading in a scan report.
 	ValuePlaceholder ValueSource = "placeholder"
+	// ValueOperator was set by the operator in the API-details review step (vuw7).
+	ValueOperator ValueSource = "operator"
 )
 
 // Parameter is one value the request needs: a path segment, a query pair, a header, or a body field.
@@ -186,6 +188,10 @@ func Parse(data []byte) (*Document, error) {
 	root, err := decode(data)
 	if err != nil {
 		return nil, err
+	}
+	// A Postman Collection (r39r) has its own reader; it shares the Operation model and provenance rules.
+	if isPostman(root) {
+		return parsePostman(root)
 	}
 	format, specVersion, err := detectFormat(root)
 	if err != nil {

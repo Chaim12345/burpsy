@@ -256,6 +256,10 @@ type Credentials struct {
 	// State lives here rather than in a socket, so a learned challenge reaches the next
 	// request whatever connection carries it.
 	ntlm map[string]*ntlmSession
+	// prompt and failures are Burp's "Prompt for credentials on platform authentication failure"
+	// (prompt.go): whether failures are recorded, and the recorded ones keyed by lower-cased host.
+	prompt   bool
+	failures map[string]*AuthFailure
 }
 
 // NewCredentials returns an empty rule list.
@@ -278,11 +282,13 @@ func (c *Credentials) Add(rule Credential) (replaced bool) {
 			// covers: replaying a stale nonce with a new secret fails, and the failure
 			// would look like the new password being wrong.
 			c.forgetMatching(rule.Host)
+			c.clearFailuresMatchingLocked(rule.Host)
 			return true
 		}
 	}
 	c.rules = append(c.rules, rule)
 	c.forgetMatching(rule.Host)
+	c.clearFailuresMatchingLocked(rule.Host)
 	return false
 }
 

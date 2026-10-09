@@ -7,6 +7,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/browser"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intruder"
 	"github.com/burpsy-go/burpsy/internal/pool"
 	"github.com/burpsy-go/burpsy/internal/proxy"
@@ -42,7 +43,8 @@ var routeSchemas = map[string]opSchema{
 		{name: "wait_seconds", kind: "integer", desc: "long-poll up to this many seconds (0-60) for min_rows matched rows at or beyond offset"},
 		{name: "min_rows", kind: "integer", desc: "rows to wait for with wait_seconds (default 1)"},
 	}},
-	"GET /api/discovery": {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
+	"GET /api/crawl/live": {query: []queryParam{{name: "task", kind: "integer", desc: "the crawl task to watch"}}},
+	"GET /api/discovery":  {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
 	"GET /api/engagement/": {query: []queryParam{
 		{name: "host", kind: "string", desc: "limit the search to one host"},
 		{name: "q", kind: "string", desc: "the search term"},
@@ -61,6 +63,7 @@ var routeSchemas = map[string]opSchema{
 		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
 		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
 	}},
+	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
 	"GET /api/message/": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},
@@ -119,6 +122,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/history/import/har":      {raw: "an HTTP Archive (HAR 1.2) JSON document, as a browser or proxy exports it; its members are the producer's, so unknown ones are ignored"},
 	"PUT /api/headers/uninteresting":    {body: typeOf[uninterestingHeadersReq]()},
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
+	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
@@ -138,6 +142,7 @@ var routeSchemas = map[string]opSchema{
 	"PUT /api/intercept/newline-correction": {body: typeOf[interceptNewlineCorrectionReq]()},
 	"PUT /api/intercept/rules/":             {body: typeOf[interceptListState]()},
 	"POST /api/intercept/startup":           {body: typeOf[interceptStartupReq]()},
+	"POST /api/proxy/history-logging":       {body: typeOf[proxyHistoryLoggingReq]()},
 
 	// ---- Scope & Sitemap ----------------------------------------------------------------------
 	"POST /api/scope":           {body: typeOf[ScopeRequest]()},
@@ -227,13 +232,17 @@ var routeSchemas = map[string]opSchema{
 		body: typeOf[map[string]json.RawMessage](), schema: networkSettingsPatchSchema,
 		keysCheckedBy: "applyNetworkSettingsPatch refuses a section or key networkPatchFields does not list, before applying any",
 	},
-	"POST /api/pools":                  {body: typeOf[pool.Pool]()},
-	"PUT /api/pools/":                  {body: typeOf[pool.Pool]()},
-	"DELETE /api/pools/":               noBody,
-	"POST /api/network/auth":           {body: typeOf[postNetworkAuthReq]()},
-	"DELETE /api/network/auth":         {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
-	"POST /api/network/client-certs":   {body: typeOf[postNetworkClientCertsReq]()},
-	"DELETE /api/network/client-certs": {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"POST /api/pools":                         {body: typeOf[pool.Pool]()},
+	"PUT /api/pools/":                         {body: typeOf[pool.Pool]()},
+	"DELETE /api/pools/":                      noBody,
+	"POST /api/network/auth":                  {body: typeOf[postNetworkAuthReq]()},
+	"DELETE /api/network/auth":                {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}, {name: "scheme", kind: "string", desc: "the auth scheme the rule was stored under"}}},
+	"POST /api/network/client-certs":          {body: typeOf[postNetworkClientCertsReq]()},
+	"DELETE /api/network/client-certs":        {query: []queryParam{{name: "host", kind: "string", desc: "the host pattern"}}},
+	"PUT /api/network/auth":                   {body: typeOf[putNetworkAuthPromptReq]()},
+	"DELETE /api/network/auth/failures":       {query: []queryParam{{name: "host", kind: "string", desc: "the host whose recorded failure is dismissed"}}},
+	"DELETE /api/network/server-certificates": noBody,
+	"PUT /api/project/logging":                {body: typeOf[filelog.Settings]()},
 
 	"POST /api/session/cookies":     {body: typeOf[sessionCookiesMutateReq]()},
 	"POST /api/session/login":       {body: typeOf[sessionLoginReq]()},
@@ -262,6 +271,9 @@ var routeSchemas = map[string]opSchema{
 	// ---- Fuzzing ------------------------------------------------------------------------------
 	"POST /api/intruder/run":           {body: typeOf[intruderRunReq]()},
 	"POST /api/intruder/again":         {body: typeOf[intruderAgainReq]()},
+	"POST /api/crawl/logins":           {body: typeOf[recordedLoginSaveReq]()},
+	"POST /api/crawl/logins/replay":    {body: typeOf[recordedLoginReplayReq]()},
+	"DELETE /api/crawl/logins":         {query: []queryParam{{name: "id", kind: "string", desc: "the recorded login to remove"}}},
 	"POST /api/intruder/points":        {body: typeOf[intruderPointsReq]()},
 	"POST /api/intruder/attacks/":      noBody,
 	"POST /api/intruder/payload-files": {raw: "the wordlist file's bytes, one payload per line (not JSON)"},

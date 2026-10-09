@@ -2054,6 +2054,183 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Scan launch, API scans and task control (burpsy-react-ui-cmx5, 2026-10-08)
+
+### Crawl scope (501u)
+- **Burp:** `desktop/running-scans/setting-pro-scope.html` — the crawl is restricted to the configured URLs'
+  final directory by default; "Detailed scope configuration" takes URL prefixes or advanced matching rules.
+- **burpsy:** seed directories (the New scan dialog's default), the engagement scope, or include/exclude URL
+  prefixes — always inside the engagement scope, at the frontier and at the send gate. Burp's "advanced
+  matching rules" (per-field host/port/file regexes) are not offered: the engagement scope already has that
+  rule shape, and a second rule editor scoped to one crawl would duplicate it. An API caller that omits
+  `scope` keeps the engagement scope alone, as before.
+
+### Postman Collections for API scans (r39r)
+- **burpsy:** Postman Collection v2.0/v2.1 is read into the same operation model as OpenAPI: folders walked in order,
+  collection variables substituted (an undefined `{{var}}` is counted as a placeholder; an undefined leading
+  `{{baseUrl}}` makes the request relative to the scan's base URL), disabled headers/query/body fields left out,
+  bearer/basic/header-apikey auth inherited collection → folder → request with `noauth` overriding, and raw,
+  urlencoded, form-data (text fields; a file part names a file on the author's machine and is skipped) and
+  GraphQL bodies. Pre-request and test scripts are not run.
+- **Not done:** SOAP WSDL on the API-only path is still refused by name — tracked as the rest of this bead.
+
+### Isolated scans (13uw)
+- **burpsy:** "Run isolated scan" in New scan (and `isolated: true` on `POST /api/crawl`) tags the crawl's traffic
+  with the source `isolated-scan`; the site map skips those exchanges, and `/api/issues` / `/api/findings` omit
+  findings whose every occurrence is on one (a finding also seen on ordinary traffic stays). The task's own view
+  reads `/api/issues?include_isolated=1` and gets them flagged. Burp keeps an isolated scan's results in a store
+  of their own; burpsy keeps them in the project, filtered by source, so they survive a restart and HTTP history
+  still lists the traffic.
+## Crawler B (burpsy-react-ui-re16.2, 2026-10-08)
+
+### Recorded login sequences (burpsy-react-ui-xhtk) — built, with these differences from Burp
+
+- **Burp:** `scanner/authenticated-scanning/recorded-login-sequences.html` ("a JSON-based 'script' that
+  you can import"; "TOTP multi-factor authentication. WebAuthn."), `desktop/running-scans/configuring-app-logins/adding-recorded-logins.html`
+  ("Replay existing logins", "See as JSON"), the editor's six event kinds (Zf50: Click, Type, TOTP,
+  Key press, Go to, Wait), the TOTP generator (Zxf1, validated by Zhfe against `^[A-Za-z2-7]+=*$`) and
+  the status check (Zg5_/Zrs3: URL + confirmation text, "Required when using TOTP steps").
+- **burpsy:** `internal/session/recorded_login.go` (model, Burp Login Recorder and Chrome DevTools
+  Recorder importers, redacted views), `internal/session/totp.go` (RFC 6238, SHA1/256/512),
+  `internal/domexec/session.go` + `login.go` (isolated, scope-gated replay), `internal/crawler/recorded_login.go`
+  (login before the first fetch, session jar on every request, Set-Cookie absorption, re-login on detected
+  expiry within `max_relogins`, `Report.login`, stop `login-failed`), routes `/api/crawl/logins` and
+  `/api/crawl/logins/replay`, `recorded_login` on `POST /api/crawl`, and the New scan dialog's
+  "Application login" picker and library (`ui/recorded-logins.tsx`).
+- **Difference — out-of-scope hosts during the login are REFUSED.** Burp: "When running a recorded login
+  sequence, Burp Scanner can temporarily follow any out-of-scope links that are necessary to perform the
+  login sequence." burpsy enforces scope on every request the replay browser sends — Fetch interception on
+  the full URL in the tab, plus a per-browser-context proxy on the authority that also covers out-of-process
+  iframes, popups and workers (`TestTheSessionProxyStopsWhatAnOutOfProcessFrameLoads` proved Fetch alone
+  misses those). An SSO identity provider must be added to scope; every refused request is listed in the
+  replay result and in `report.login.blocked`, so the failure is named rather than mysterious.
+- **Difference — an empty scope refuses the replay** (409 on Replay, 400 on crawl start). In this build an
+  empty scope means "everything"; a browser that follows redirects on its own is not run against that.
+- **Declined — WebAuthn / passkeys.** Burp captures passkeys during recording and replays them through a
+  virtual authenticator. burpsy imports no passkey material and offers no WebAuthn step; a recorded script
+  whose login needs a passkey replays up to that point and fails at it, named. Re-open with CDP
+  `WebAuthn.addVirtualAuthenticator` + `addCredential` and a credential-import format.
+- **Declined — recording inside burpsy.** Burp's own browser has the Login Recorder extension
+  pre-installed. burpsy imports the script that extension (installed in any Chrome) copies to the
+  clipboard, plus Chrome DevTools Recorder exports, and provides the step editor, "See as JSON" and Replay.
+  There is no in-console recorder. Re-open: inject a recorder over CDP into the operator browser
+  (`internal/browser`) — `Runtime.addBinding` plus a capture script.
+- **Import fidelity:** every recorded event that does not become a step is listed in the import reply
+  (`notes`): `scroll`, `rightClick`, `userNavigate`/`clientSideRedirect` (re-happen on replay), iframe
+  and shadow-DOM elements (not replayable here), new-tab actions (the replay runs in one tab). A typed
+  6-8 digit code into a one-time-code-looking field is flagged as a probable TOTP step, as Burp DAST does.
+- **Not captured to history:** the replay's own traffic goes from the headless browser to the target,
+  scope-gated but not recorded as exchanges. The crawl's traffic after login is captured as before.
+- **Remote CDP engines** (`-dom` pointing at obscura/lightpanda) are refused for recorded logins: browser
+  contexts and per-context proxies were only verified against Chrome. Without `-dom`, burpsy starts its own
+  headless Chrome for the login, as Burp uses its browser "even if you have not selected Use Burp's browser".
+- **Rendered-DOM audit of an authenticated crawl is declined, with the reason on the report:** it renders
+  logged out, and comparing those renders with logged-in wire bodies would report false script-only
+  content. The crawl's own render pass (link discovery) does run inside the login's browser context.
+- **Burp's "Browser settings" on a TOTP step** (three switches in Zrsc) are not represented; their meaning
+  is not recoverable from the decompiled panel.
+- **Verified vs ran.** A replay is `verified` only when its status check found the confirmation text.
+  Without a status check (optional except with TOTP, as in Burp) a sequence whose password was rejected
+  still "runs every step"; the replay result, the crawl's login card and `report.login.verified` say
+  "not verified" rather than "logged in".
+- **TLS:** the replay browser follows the operator's one certificate-verification setting (Settings →
+  Network, `tls.verify`): verification on refuses a self-signed staging host on step 1, named; off accepts
+  it — applied per tab, so the shared DOM-check browser keeps verifying.
+- **Redaction:** reported URLs (per-step, final, refused) keep scheme, host, path and parameter NAMES and
+  drop query values and fragments (`code=…`, `#…`), as cookie values are never reported.
+- **Chrome's own traffic:** one `CONNECT www.google.com:443` per new browser window still appears in a
+  replay's refusal list (it is refused; no page asked for it). Chrome-internal services that produced
+  more such tunnels are switched off in `domexec.NewBrowser`.
+- **Authenticated render pass:** requests the logged-in render pass's pages make are scope-gated too;
+  refusals are reported in `report.login.render_blocked`, so a page whose script is on an out-of-scope CDN
+  renders empty with the reason stated.
+- **Burp's login crawl events** (Zwkv `RECORDED_SEQUENCE_STARTED/ERROR`, `PAGES_FOUND_AFTER_LOGIN` /
+  `NO_PAGES_FOUND_AFTER_LOGIN`): each replay is a `crawl.login` event in the task's event log, and
+  `report.login.pages_found_after_login` carries the count. `RECORDED_SEQUENCE_BROWSER_ERROR` is a 400 at
+  launch (no browser, no crawl task). The credential-login events (`ATTEMPTING_TO_LOGIN`,
+  `REGISTERING_USER`, login/registration page found) belong to burpsy-react-ui-uzil, not built here.
+
+### Live crawl view (burpsy-react-ui-1l3x) — built, with these differences from Burp
+
+- **Burp:** `desktop/running-scans/results/live-crawl-view.html` — "a rendered view of the page that Burp
+  Scanner is currently crawling, as it would normally appear in a browser."
+- **burpsy:** the crawl task's "Live crawl view" tab, fed by `GET /api/crawl/live?task=N` (riskRead):
+  the phase (starting, logging in, fetching, rendering, finished), the request in flight (a new
+  `crawler.Config.OnSend` hook — `OnFetch` fires only after capture), the last 50 fetches newest first,
+  and a viewport JPEG taken by the render pass in the same tab that read the DOM.
+- **Difference — a frame exists only when the crawl renders.** Burp's crawler is browser-driven, so every
+  page has a picture. burpsy fetches over HTTP and renders only with `-dom`; frames come from that pass,
+  throttled to one a second at the source (a render is not asked for a picture it would throw away).
+  Without a browser `frame` is `null` and `frame_note` says why, and the console shows the last HTML
+  page's WIRE bytes in a sandboxed iframe behind a deny-all Content-Security-Policy — labelled as wire
+  HTML, not as what a browser would show, and loading nothing from the target.
+- **Difference — polled, not streamed.** The console polls once a second while the crawl runs; there is
+  no SSE/WebSocket route for frames.
+- **No frame while a recorded login replays**, by design: the page on screen is credentials being typed.
+- **Frames are not retained:** the one latest frame is dropped when the crawl finishes or is evicted; the
+  fetch list stays with the run.
+- **Measured fix recorded:** in this Chromium (147, headless) `Page.captureScreenshot` in a non-front tab
+  hung until the 30 s tab timeout and failed the render; the capture now brings the tab to the front and
+  is bounded at 3 s (`domexec.captureFrame`, `TestEveryRenderThatAsksForAFrameGetsOneQuickly`).
+## Redirect types: JavaScript-driven is refused (2026-10-08, burpsy-react-ui-z9zi)
+- **Burp:** Settings → Network → HTTP → Redirections, "Allowed redirect types": 3xx with Location,
+  any status with Location, the Refresh header, the meta refresh tag, and JavaScript-driven. Defaults
+  (`ProjectDefaults.json`, `project_options.http.redirections`): the first, third and fourth on.
+- **burpsy:** `redirects.types` on `/api/network/settings` carries all five under Burp's key names,
+  with Burp's defaults when unset. The first four are honoured by the sender's follower; a Refresh or
+  meta-refresh hop is a bodiless GET.
+- **Divergence:** `understand_javascript_driven: true` is refused by name. Following a script-driven
+  redirect means executing the page's JavaScript, which the sender does not do; storing the flag
+  would be a promise nothing keeps.
+
+## HTTP/1 keep-alive reaches the raw send path only (2026-10-08, burpsy-react-ui-ry5n)
+- **Burp:** Settings → Network → HTTP, "Use keep-alive for HTTP/1 if the server supports it" (off by
+  default; idle connections closed after five seconds) "affects all Burp Suite tools", with per-tool
+  overrides in Repeater ("Enable HTTP/1 connection reuse") and Intruder.
+- **burpsy:** `http1.enable_keep_alive` on `/api/network/settings` drives a pool on the sender's raw
+  path (`SendRawOutcome`, which Repeater, Intruder and the scanner's raw probes use): a connection the
+  exchange left reusable is kept per authority and closed after five seconds idle. `http2.enable_http2`
+  ("Default to HTTP/2") reaches both the raw path and the typed transport.
+- **Divergence:** the typed `http.Transport` path keeps its own connection reuse whatever the switch
+  says, because that transport also carries h2 and disabling keep-alive there would close h2
+  connections too. The proxy's upstream leg is unaffected. Repeater's and Intruder's per-tool reuse
+  overrides are not offered.
+
+## Platform-authentication prompt does not replay the failed request (2026-10-08, burpsy-react-ui-3xnt)
+- **Burp:** "Prompt for credentials on platform authentication failure" displays an interactive popup
+  when a host challenges, and the request goes on with the credentials entered.
+- **burpsy:** with `prompt_on_authentication_failure` on, every Basic/Digest/NTLM/Negotiate challenge
+  that no rule answers (or that refuses the rule's credential) is recorded in netauth, where the sender
+  and the proxy already report challenges; the console shows a prompt for the most recent one and saves
+  the answer as a platform-authentication rule for that host.
+- **Divergence:** the request that failed has already returned its 401 to its client and is not held or
+  resent; the credential applies from the host's next request. A raw Repeater/Intruder send never
+  consults platform authentication (the raw path sends the bytes as written), so it never prompts.
+  Negotiate is recorded but cannot be answered by this build.
+
+## Run-macro parameter update reads HTML forms and links only (2026-10-08, burpsy-react-ui-8gk8)
+- **Burp:** after a "Run a macro" action, "update the current request with parameters matched from the
+  final macro response" and "with cookies from the session handling cookie jar", each as all-except or
+  only-the-following, plus "Tolerate URL mismatch when matching parameters".
+- **burpsy:** all five choices, under Burp's keys (`update_with_params`, `match_params`, `params`,
+  `tolerate_url_mismatch`, `update_with_cookies`, `match_cookies`, `cookies`). Parameters are derived
+  from the final response's HTML forms (input, textarea, select against the form's action) and link
+  query strings, and update only parameters the current request already carries in its query string or
+  urlencoded body. A stored action without the fields behaves as before: no parameter update, the whole
+  jar.
+- **Divergence:** values in JSON, multipart bodies, or script are not derived or updated. The cookie
+  choice applies to the re-sent current request; macro steps always carry the whole jar.
+
+## Logging: unattributed traffic is not logged, and a project switch keeps the running logger's files (2026-10-08, burpsy-react-ui-nvfl)
+- **Burp:** Project settings → Logging appends requests and/or responses from Proxy, Scanner, Repeater,
+  Intruder, Sequencer and Extender (or All tools) to files.
+- **burpsy:** `GET/PUT /api/project/logging` under Burp's keys (`requests` / `responses`, tool → absolute
+  path, blank off), persisted with the project and applied at startup; every exchange the traffic store
+  records is written by one background writer in Burp's log-file shape. The crawler counts as Scanner.
+- **Divergence:** traffic this build does not attribute to a tool (Sequencer captures and extension
+  sends among it) is not written, under All tools either. An in-console project switch does not re-apply
+  the opened project's logging settings until the next start. A full writer queue drops entries and
+  counts them (`stats.dropped`) rather than slowing the proxy.
 ## Proxy listener: in-browser interface and Miscellaneous switches (2026-10, burpsy-react-ui-beof, 0q9d)
 
 - **The in-browser interface is plain HTTP only.** `http://burpsy`, `http://burpsuite` and the
@@ -2432,3 +2609,78 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
   one-sided tail at N ≥ 100.
 - **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).
+
+## Repeater B: HTTP/2 kettled requests and Inspector CRLF injection (burpsy-react-ui-i9ti.2, 2026-10-08)
+
+### Inspector detail view and Shift+Return — how CR/LF is shown, and where it can be written (ln2a)
+- **Burp:** `desktop/tools/inspector/modify-requests.html` — "Copy name or Copy value from the context menu",
+  and the detail view where "Press Shift + Return. The carriage return and line feed characters are injected";
+  `desktop/http2/performing-http2-exclusive-attacks.html` — drill into a header with the chevron and press
+  Shift+Return in the Name or Value field "to enter the sequence \r\n".
+- **burpsy:** every Inspector row has a context menu (right-click, the Menu key or Shift+F10) with *Copy name*,
+  *Copy value* and *Open in detail view*, on read-only mounts too, and a chevron button opening the detail view
+  for that item. In the detail view Shift+Return inserts CR LF at the caret and Return applies.
+- **Divergence:** CR and LF are shown in the fields as the Control Pictures ␍ and ␊, not as the text `\r\n`: a
+  browser `<input>` strips CR and LF and a `<textarea>` folds CR LF to LF before any script sees it, and `\r`
+  as text would collide with a literal backslash-r in a value. An item that already contains ␍ or ␊ is shown but
+  not written back from the detail view (the mapping would invent a CR). Shift+Return is offered on request
+  *header* items only — a query, cookie or body parameter refuses it by name — and only where an HTTP/2 header
+  list can be sent as written: on an HTTP/1 request it is refused with "This would split the header: only HTTP/2
+  can carry CR/LF inside a header", and on the Proxy intercept, HTTP history and Target mounts it is refused with
+  the reason that only a Repeater tab sends a kettled request. Burp's Proxy supports kettled requests; burpsy's
+  intercept does not (it holds HTTP/1-shaped bytes). The detail view is a panel at the foot of the Inspector, not
+  a drill-down page that replaces the item list.
+
+### Kettled HTTP/2 requests — what is refused, what the editor shows, what the record says (jae5)
+- **Burp:** `desktop/http2/index.html` "Kettled requests" — an Inspector edit HTTP/1 cannot represent (an uppercase
+  letter or colon in a header name, a newline in a name or value, a modified `:scheme`, a space in `:path` or
+  `:method`, a duplicate pseudo-header, "; " in a cookie value) kettles the request; the editor then shows "This
+  request is kettled because:" with the reasons in place of the headers and keeps the body editable; reversing the
+  edits or downgrading to HTTP/1 (with a warning that the changes are lost) unkettles it; Proxy, Repeater, Logger and
+  Scanner support kettled requests, Intruder normalises them.
+- **burpsy:** a Repeater tab kettles when a detail-view edit puts CR/LF into a header of an HTTP/2 draft (ln2a). The
+  tab then carries the field list (`h2Headers`); the request pane shows the note — reasons from
+  `POST /api/http2/kettle` (`internal/http2.KettleReasons`) — and the body editor; the Inspector's Request headers edit
+  the list, pseudo-headers included. Send carries `h2_headers`, and `sender.AuthorisedSender.SendH2Fields` writes it as
+  literal HPACK fields (no indexing, no Huffman) on a fresh h2 connection, acknowledging SETTINGS and PING, pacing DATA
+  by flow control, and reading stream 1 to END_STREAM/RST_STREAM/GOAWAY, whichever is named.
+- **How a tab becomes kettled:** from the Inspector's detail view, on an HTTP/2 draft with an https target —
+  applying a header name or value that contains CR/LF (Shift+Return), or renaming a header to a name with an
+  uppercase letter or a colon. Inline row edits on a draft that is still text keep writing the text (where an
+  HTTP/2 send lowercases names), as before; once the tab is kettled every Inspector header edit writes the list,
+  and Burp's remaining triggers (`:scheme`, a space in `:path`/`:method`, a duplicate pseudo-header) are reached by
+  editing the pseudo-header rows that then appear. Burp kettles from any Inspector edit.
+- **Paging back:** a kettled send's history entry keeps the list it sent; the request pane shows that list (CR/LF as
+  ␍␊) labelled "sent … as a kettled HTTP/2 field list", and the Inspector reads the list read-only.
+- **Decline — some of Burp's triggers are kettled but never sent.** A space (or CR/LF) in `:path`/`:method` and a
+  duplicate pseudo-header are refused by the frame-program classifier (`http2/authorise.go`): the engagement-scope gate
+  reads a request line, and a path with a space in it would be authorised up to the space and sent whole. A modified
+  `:scheme` other than `http`/`https` is refused at send time by the sender's second scope check, which cannot read an
+  authority under a scheme it cannot dial (`:scheme: http` on a TLS connection is authorised against the http authority
+  and sends). There is no override, by design. For the classifier's refusals the note says "Sending it will be
+  refused:" with the classifier's own sentence before Send; every refusal answers Send with 403 and the reason. Lifting this needs a scope
+  check that authorises a raw `:path` without rendering it into a request line — a CEO-level decision, not made here.
+- **The cookie trigger, read at the field level:** burpsy's kettled Inspector has no cookie list, so "; " in a cookie
+  value is read as RFC 9113 §8.2.3 frames it — more than one `cookie` field, one of which contains "; " — because
+  joining crumbs with "; " for HTTP/1 is exactly where that loss happens. A single `cookie` field containing "; " is
+  one Cookie line and is not kettled.
+- **burpsy addition:** a pseudo-header after a regular header is a kettle reason (HTTP/1 text cannot say where it
+  sat). Burp's list does not name it.
+- **Unkettling** is automatic only when HTTP/1 text provably carries the list unchanged (it re-seeds to the same
+  fields) and nothing would refuse it; a list that is merely "not kettled by Burp's rules" but would still change
+  (say, no `:path`) stays a field list and the note says so. The downgrade (Inspector > HTTP/1) asks first, then
+  normalises: CR/LF removed, extra pseudo-headers and colon names dropped, cookie fields joined.
+- **Raw text edits:** the request pane hides the head while kettled, as Burp does; any other path that rewrites the
+  head of the text (a body-encoding transform, a GraphQL action) drops the list at the store chokepoint and the tab
+  falls back to the normalised text, rather than sending a list the operator's edit no longer matches.
+- **The stored exchange:** history stores HTTP/1-shaped bytes and a kettled list has none, so the stored request is
+  a rendering with CR and LF inside a field written as the text `\r` `\n`, pseudo-headers folded into the request line
+  and Host, and the exchange note lists every field as sent, Go-quoted, in order. Burp stores the HTTP/2 message.
+- **Tab settings on a kettled send:** Override SNI, the response timeout, Unpack, the note, Process cookies, Strip
+  Connection and Update Content-Length apply (the last three to the field list). Normalize line endings applies to the
+  body only. HTTP/2 connection reuse does not (always a fresh connection) and redirects are not followed; each is named
+  in the answer's `kettled.notes` and the result badge. A plain-HTTP target and an HTTP/1 protocol pin are refused
+  (Repeater speaks HTTP/2 only over TLS).
+- **Not supported elsewhere:** Proxy intercept, Logger and Scanner do not carry kettled requests (Burp's do); a group
+  send refuses a kettled member by name; To Intruder refuses an unsent kettled tab and otherwise hands Intruder the
+  stored rendering, saying so — Burp normalises.

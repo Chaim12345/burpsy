@@ -93,9 +93,21 @@ const (
 	// it is deliberately high. DEFLATE carries about eleven bytes of framing
 	// (a two-byte header, a four-byte checksum and a block header), so below
 	// roughly sixty-four bytes of bit sequence the measurement describes the
-	// framing rather than the token. Sixty-four bytes of bits — 512 tokens —
-	// is the smallest sample where the reduction is about the data.
-	MinTokensForCompression = 512
+	// framing rather than the token.
+	//
+	// 1024, not 512, and the correction is measured rather than argued
+	// (burpsy-react-ui-jdgq). At 512 tokens — exactly sixty-four bytes — an
+	// all-zero position and the incompressible control both compress to the
+	// SAME zlib output, so the gap the test reads is exactly 0.0000 and a
+	// position held at zero for every token cannot be told from noise. The
+	// sequencer test that exercises this (TestCompressionFlagsABitPositionThat
+	// NeverVaries) passed under Go 1.26 only because that release's flate
+	// happened to break the tie; Go 1.27 emits a different stream at this size
+	// and the test went red with no change to its subject. The measurement is
+	// not a toolchain artefact to be patched around: 512 tokens genuinely sits
+	// on the boundary where framing dominates. At 1024 the gap is ~1.0 and the
+	// test separates a constant position from noise by a wide margin.
+	MinTokensForCompression = 1024
 
 	// CompressionTolerance is how far above the incompressible control a
 	// position's reduction may sit before it counts as structured. It is in

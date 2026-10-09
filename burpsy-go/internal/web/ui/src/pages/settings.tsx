@@ -5,9 +5,9 @@ import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import type { CaExportKind } from "../lib/ca-export";
 import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
-import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
+import { useInterceptStartup, useProxyHistoryLogging, useSaveInterceptStartup, useSaveProxyHistoryLogging, useStats } from "../lib/data";
 import { useScanConfigLibrary, useScannerConfigs , useSkills, useTriageSettings } from "../lib/data.attack";
-import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
+import { DEFAULT_REDIRECT_TYPES, useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type {
  AddressFamily,
  HostOverride,
@@ -63,7 +63,8 @@ import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/l
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
-import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
+import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
+import { FileLoggingSection } from "./settings.logging";
 import { ScanConfigDetail } from "./settings.scanconfig";
 
 const THEMES: { value: Theme; label: string }[] = [
@@ -462,7 +463,49 @@ function ProxySettingsSection(): JSX.Element {
     <Metric label="Stored on disk" value={stats.data ? formatBytes(stats.data.stored_bytes) : "—"} />
    </div>
    <InterceptStartupPreference />
+   <ProxyHistoryLoggingPreference />
   </Card>
+ );
+}
+
+/**
+ * Burp's "Proxy history logging" (configPanelProxyHistoryLogging, burpsy-react-ui-z80e): when hosts
+ * are added to the target scope, whether to stop sending out-of-scope items to Proxy history, ask
+ * each time, or do nothing. Saved immediately, like the interception preference beside it.
+ */
+function ProxyHistoryLoggingPreference(): JSX.Element {
+ const { data } = useProxyHistoryLogging();
+ const save = useSaveProxyHistoryLogging();
+ const mode = data?.mode ?? "ask";
+ const options: { value: string; label: string; hint: string }[] = [
+  { value: "stop", label: "Stop logging out-of-scope items", hint: "adding to scope turns on Don't send out-of-scope items to Proxy history" },
+  { value: "ask", label: "Ask me what to do each time", hint: "adding to scope offers to stop logging (the default)" },
+  { value: "nothing", label: "Do nothing", hint: "adding to scope leaves Proxy history logging alone" },
+ ];
+ return (
+  <div style={{ marginTop: "var(--s2)" }}>
+   <div className="field-hint">Proxy history logging — what adding hosts to the target scope does about out-of-scope items.</div>
+   <div role="radiogroup" aria-label="Proxy history logging">
+    {options.map((option) => (
+     <label key={option.value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+      <input
+       type="radio"
+       name="proxy-history-logging"
+       checked={mode === option.value}
+       onChange={() =>
+        save.mutate(option.value, {
+         onSuccess: () => toast.success(`Proxy history logging: ${option.label}`),
+         onError: (cause) => toast.error(cause instanceof Error ? cause.message : "Could not save the Proxy history logging choice"),
+        })
+       }
+      />
+      <span>
+       {option.label} <span className="field-hint">— {option.hint}</span>
+      </span>
+     </label>
+    ))}
+   </div>
+  </div>
  );
 }
 
@@ -1072,6 +1115,7 @@ function NetworkSection(): JSX.Element {
  };
 
  const following = draft !== null && draft.redirects.mode !== "never";
+ const redirectTypes = draft?.redirects.types ?? DEFAULT_REDIRECT_TYPES;
 
  return (
   <Card>
@@ -1360,6 +1404,71 @@ function NetworkSection(): JSX.Element {
        ? "A hop's Set-Cookie is carried to the next hop on the same host. Off by default: a credential the target set mid-chain is not one you asked to send, and a target that sets throwaway cookies would keep resending them."
        : "Off. A login or SSO flow that sets a cookie on its 302 will arrive at the destination unauthenticated, which reads as a broken application rather than a missing cookie."}
      </p>
+
+     <h3 className="subheading">Allowed redirect types</h3>
+     <p className="field-hint">
+      Which responses count as a redirect when one is followed. A Refresh or meta-refresh hop is
+      sent as a GET with no body, the way a browser navigates it.
+     </p>
+     <div className="switch-grid">
+      {(
+       [
+        ["understand_3xx_status_code", "3xx status code with Location header", "On by default"],
+        ["understand_any_status_code_with_location_header", "Any status code with Location header", "Off by default: a 201 names what it created, not where to go"],
+        ["understand_refresh_header", "Refresh header", "On by default"],
+        ["understand_meta_refresh_tag", "Meta refresh tag", "On by default; HTML responses only"],
+       ] as const
+      ).map(([key, label, detail]) => (
+       <label key={key} className="switch-row" htmlFor={`redirect-type-${key}`}>
+        <span>
+         <span>{label}</span>
+         <span className="cell-dim" style={{ display: "block" }}>{detail}</span>
+        </span>
+        <Switch
+         id={`redirect-type-${key}`}
+         label={label}
+         checked={redirectTypes[key]}
+         onCheckedChange={(on) => patchSection("redirects", { types: { ...redirectTypes, [key]: on } })}
+        />
+       </label>
+      ))}
+     </div>
+     <p className="field-hint">
+      JavaScript-driven redirects are not followed: that would mean running the page's script, which
+      this sender does not do.
+     </p>
+
+     <h3 className="subheading">HTTP/1 and HTTP/2</h3>
+     <div className="switch-grid">
+      <label className="switch-row" htmlFor="network-http1-keep-alive">
+       <span>
+        <span>Use keep-alive for HTTP/1 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         Off by default: each request gets its own connection. On, a connection the response left reusable carries the next request to that host, and is closed after five seconds idle.
+        </span>
+       </span>
+       <Switch
+        id="network-http1-keep-alive"
+        label="Use keep-alive for HTTP/1 if the server supports it"
+        checked={draft.http1?.enable_keep_alive === true}
+        onCheckedChange={(on) => patchSection("http1", { enable_keep_alive: on })}
+       />
+      </label>
+      <label className="switch-row" htmlFor="network-http2-default">
+       <span>
+        <span>Default to HTTP/2 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         On by default. Off, a request that names no protocol goes out as HTTP/1.1; one written as HTTP/2, or pinned to HTTP/2 in Repeater, still uses it.
+        </span>
+       </span>
+       <Switch
+        id="network-http2-default"
+        label="Default to HTTP/2 if the server supports it"
+        checked={draft.http2?.enable_http2 !== false}
+        onCheckedChange={(on) => patchSection("http2", { enable_http2: on })}
+       />
+      </label>
+     </div>
 
      <h3 className="subheading">100-continue</h3>
      <div className="stack">
@@ -3383,6 +3492,8 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  "upstream-proxy": UpstreamProxySection,
  "platform-auth": PlatformAuthSection,
  "client-certificates": ClientCertificatesSection,
+ "server-certificates": ServerCertificatesSection,
+ logging: FileLoggingSection,
  appearance: AppearanceSection,
  hotkeys: HotkeysSection,
  certificate: CertificateSection,

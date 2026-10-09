@@ -4202,6 +4202,27 @@ tbody td {
   border-top: 0;
 }
 
+/* ---- the detail view (ln2a): one item's name and value, CR/LF shown as glyphs ---- */
+
+.inspector-detail-field {
+  display: grid;
+  grid-template-columns: 4em minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s1);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+}
+
+.inspector-detail .inspector-note {
+  padding-left: 0;
+}
+
+.inspector-refusal {
+  color: var(--ink);
+  border-left: var(--border-status) solid var(--warn);
+  padding-left: var(--s1);
+}
+
 /* History and Repeater put the Inspector beside the request/response pair. */
 .editor-grid-inspected {
   min-height: 0;
@@ -5296,6 +5317,63 @@ tbody td {
   color: var(--text);
 }
 
+/* Recorded login sequences (burpsy-react-ui-xhtk): the step editor's per-kind inputs wrap in the
+   Details cell, and the replay's final-page screenshot is shown at its own size up to the panel. */
+.step-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s1);
+  align-items: center;
+}
+
+.step-fields > .input,
+.step-fields > input,
+.step-fields > select {
+  min-width: 12rem;
+  flex: 1 1 12rem;
+}
+
+.replay-shot {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+
+.replay-blocked {
+  margin: var(--s1) 0 0;
+  padding-left: var(--s3);
+  max-height: 10rem;
+  overflow: auto;
+}
+
+.login-steps-table td:first-child,
+.login-steps-table th:first-child {
+  width: 3ch;
+}
+
+.login-steps-table td:nth-child(3) {
+  width: 55%;
+}
+
+/* The live crawl view (burpsy-react-ui-1l3x): the frame is shown at its own size up to the pane. */
+.crawl-live-frame {
+  margin: 0;
+}
+
+.crawl-live-frame img {
+  max-width: 100%;
+  border: 1px solid var(--line);
+}
+
+.crawl-live-preview {
+  display: block;
+  width: 100%;
+  height: 24rem;
+}
+
+.crawl-live-current code {
+  word-break: break-all;
+}
+
 /* An editable editor's Add row under a Headers/Query/Body/Cookies tab (11r8). */
 .typed-add {
   display: flex;
@@ -5407,4 +5485,34 @@ tbody td.burp-hotkeys-reason {
   display: inline-flex;
   gap: var(--s1);
   margin-left: var(--s3);
+}
+
+/* ---- a kettled Repeater draft (jae5): Burp's note in place of the headers, the body below ---- */
+
+.kettled-request {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--line);
+}
+
+.kettled-note {
+  flex-direction: column;
+  border-left-color: var(--warn);
+}
+
+.kettled-note ul {
+  margin: 0;
+  padding-left: var(--s4);
+}
+
+.kettled-title {
+  color: var(--ink);
+  font-weight: var(--weight-bold);
+}
+
+.kettled-request > :last-child {
+  flex: 1;
+  min-height: 0;
 }

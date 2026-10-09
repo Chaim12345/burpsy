@@ -105,6 +105,8 @@ type burpCrawlConfigKey struct {
 	// applyCrawlKey has to be able to see that this row is neither a switch nor a crawl-wide bound,
 	// because folding it into either would put it on the wrong half of the Config.
 	configCountField string
+	// strategy marks crawl_optimization/crawl_strategy (8bp2), a named level rather than a value.
+	strategy bool
 }
 
 // burpCrawlConfigKeys is the whole of Burp's shipped crawl-key vocabulary, as read today.
@@ -129,12 +131,18 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	{burpKey: "crawler/customization/parse_soap_wsdls", configField: "ParseSOAPWSDLs"},
 	{burpKey: "crawler/customization/perform_graphql_introspection", configField: "PerformGraphQLIntrospection"},
 	{burpKey: "crawler/customization/guess_hidden_graphql_endpoints", configField: "GuessHiddenGraphQLEndpoints"},
+	// Burp's "Application uses fragments for routing" (burpsy-react-ui-wbqx). It lives in the
+	// customization section beside the other discovery-logic switches, and is the operator's way to
+	// tell the crawler that a fragment is a route when the automatic character test disagrees.
+	{burpKey: "crawler/customization/application_uses_fragments_for_routing", configField: "FragmentsRoute"},
 	// The two form-submission bounds (burpsy-react-ui-u0k3). Both live in crawler/crawl_optimization/
 	// in Burp (Zgjj.java:143-144), which this table already recognises as a section with no keys behind
 	// it — so before this, a migrated configuration naming either was reported UNREPRESENTABLE for the
 	// wrong reason: not "burpsy has no field" but "the loader never recognised the section it is in".
 	{burpKey: "crawler/crawl_optimization/max_submissions_per_form", field: "MaxSubmissionsPerForm"},
 	{burpKey: "crawler/crawl_optimization/form_submission_optimization_threshold", configCountField: "FormSubmissionOptimizationThreshold"},
+	// Burp's five-level crawl strategy (burpsy-react-ui-8bp2). See strategy.go for what it sets.
+	{burpKey: "crawler/crawl_optimization/crawl_strategy", strategy: true},
 }
 
 // registerBurpCrawlKey adds a row to the crawl-key table from outside this file.
@@ -170,6 +178,8 @@ type CrawlConfig struct {
 	// 0 means off, and is left as written by normalise: an operator who never wrote the key gets the
 	// zero value, and "off" is the honest reading of a phase they did not configure.
 	FormSubmissionOptimizationThreshold int
+	// CrawlStrategy is the crawl_strategy the file named (8bp2), or "" when it named none.
+	CrawlStrategy CrawlStrategy
 	// RequestSpeculative is the crawler/customization/request_speculative flag
 	// (burpsy-react-ui-t5m0): whether the crawl mines comments and script bodies for
 	// hidden links. A bool rather than a Limits field because it is a switch, not a
@@ -195,6 +205,11 @@ type CrawlConfig struct {
 	// (/graphql, /api/graphql, etc.) for hidden endpoints. A bool rather than a Limits
 	// field because it is a switch, not a bound.
 	GuessHiddenGraphQLEndpoints bool
+	// FragmentsRoute is the crawler/customization/application_uses_fragments_for_routing flag
+	// (burpsy-react-ui-wbqx): force the crawler to treat a fragment as a client-side route even
+	// when Burp's character test would not have. A bool rather than a Limits field because it is
+	// a switch, not a bound — the same reason RequestSpeculative has no Limits row.
+	FragmentsRoute bool
 	// ErrorHandling is the `crawler/error_handling/*` family as the file set it, every field a POINTER
 	// so a 0 the operator wrote is distinguishable from a key the file never mentioned
 	// (burpsy-react-ui-o0c5). See errorhandling.go for why that distinction is the whole feature.
@@ -262,6 +277,12 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 	}
 	// Sorted because Go's map iteration is random and a report that reorders itself between two
 	// reads of the same file cannot be diffed or eyeballed.
+	// The strategy's form-input count is the per-form cap unless the file also named
+	// max_submissions_per_form, which is more specific and wins. Resolved after the loop because
+	// the file's keys arrive in map order.
+	if out.CrawlStrategy != "" && out.Limits.MaxSubmissionsPerForm == 0 {
+		out.Limits.MaxSubmissionsPerForm = crawlStrategies[out.CrawlStrategy].formInputs
+	}
 	sortStrings(out.UnknownSections)
 	sortStrings(out.UnrepresentableKeys)
 	sortStrings(out.AppliedKeys)
@@ -272,6 +293,20 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 // `crawler/error_handling/*` keys — onto the ErrorHandling block, which is a different shape and
 // lives in errorhandling.go.
 func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage) error {
+	if row.strategy {
+		var name string
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+		}
+		s, err := ParseCrawlStrategy(name)
+		if err != nil {
+			return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+		}
+		c.CrawlStrategy = s
+		band := crawlStrategies[s].toleranceBand
+		c.Limits.LocationToleranceBand = &band
+		return nil
+	}
 	if row.configField != "" {
 		// A bool switch, not a bound: true/false land on the named Config field
 		// verbatim. Anything else in the file is a mistyped configuration, reported
@@ -292,6 +327,8 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 			c.PerformGraphQLIntrospection = b
 		case "GuessHiddenGraphQLEndpoints":
 			c.GuessHiddenGraphQLEndpoints = b
+		case "FragmentsRoute":
+			c.FragmentsRoute = b
 		}
 		return nil
 	}

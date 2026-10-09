@@ -48,6 +48,12 @@ export interface SiteNodeDetail {
   * would be a lie about coverage.
   */
  inserted?: boolean;
+ /**
+  * True for a URL the live passive crawl saw linked from proxied traffic that nothing has requested
+  * (burpsy-react-ui-t3zk), Burp's grey "unrequested item". linked_from is the page that linked to it.
+  */
+ unrequested?: boolean;
+ linked_from?: string;
  /** When the operator added it, in Unix milliseconds. Absent on an observed node. */
  added_at?: number;
  /** Findings recorded at this exact path. */
@@ -124,7 +130,36 @@ export interface CrawlFetch {
  link_text?: string;
 }
 
+/**
+ * A recorded login's account on the crawl report (burpsy-react-ui-xhtk). Cookie NAMES only — the
+ * values are the session. `authenticated: false` means the whole crawl ran logged out, and the
+ * report's stops carry "login-failed".
+ */
+export interface CrawlLoginReport {
+ method: string;
+ label: string;
+ authenticated: boolean;
+ /** The last successful replay was confirmed by the status check. False with `authenticated` true
+  *  means every step ran and nothing checked the login took. */
+ verified: boolean;
+ attempts: number;
+ succeeded: number;
+ failed: number;
+ relogins: number;
+ last_failure?: string;
+ final_url?: string;
+ cookie_names: string[];
+ blocked: string[];
+ requests_with_session: number;
+ /** Locations found while authenticated — every location, when the login before the first fetch worked. */
+ pages_found_after_login: number;
+ /** Requests the logged-in render pass's pages made that scope refused. */
+ render_blocked: string[];
+}
+
 export interface CrawlReport {
+ /** Present only when the crawl was launched with a recorded login. */
+ login?: CrawlLoginReport;
  seeds: string[];
  query?: string;
  retention_query?: string;

@@ -81,6 +81,10 @@ type repeaterSendReq struct {
 	// TabID is the Repeater tab this send comes from, which keys the tab's reused h2 connection when
 	// h2_connection_reuse is on (adkx). Opaque to the server; absent shares one key.
 	TabID string `json:"tab_id,omitempty"`
+	// H2Headers is a kettled tab's HTTP/2 header list (burpsy-react-ui-jae5). When present it is the
+	// request's whole header section, sent exactly as listed — pseudo-headers, order, casing and any
+	// CR/LF inside a field — and only the body is taken from the request text. See api_http2_kettle.go.
+	H2Headers []h2FieldView `json:"h2_headers,omitempty"`
 }
 
 // validRepeaterSNI checks an Override SNI against the target it rides: a valid server name, on a TLS
@@ -151,6 +155,9 @@ type repeaterSendResp struct {
 	// first on its connection ("new"), a later one ("reused"), or did not ride h2 at all ("not-h2").
 	// Absent when reuse is off, where every request is the first on a fresh connection.
 	H2Connection string `json:"h2_connection,omitempty"`
+	// Kettled is present only on a kettled send (jae5): how many fields went out, which tab settings
+	// were not honoured, and what ended the read.
+	Kettled *kettledSendView `json:"kettled,omitempty"`
 }
 
 // repeaterRedirects is the follow outcome as the panel reads it.
@@ -474,6 +481,23 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 	}
 	spec.SNI = req.SNI
 	spec.TabID = req.TabID
+	if len(req.H2Headers) > 0 {
+		fields, ferr := validKettledFields("h2_headers", req.H2Headers)
+		if ferr != nil {
+			http.Error(w, "refused: "+ferr.Error(), http.StatusBadRequest)
+			return
+		}
+		// The body is the request text's; its head is the normalised rendering the tab keeps for a
+		// downgrade, and is not what is sent.
+		_, body, _ := strings.Cut(request, "\r\n\r\n")
+		resp, code, kerr := s.sendKettledRepeaterRequest(r.Context(), spec, fields, []byte(body))
+		if kerr != nil {
+			http.Error(w, kerr.Error(), code)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1541,6 +1565,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// and needs the opposite.
 	taskCtx, cancelTask := task.WithCancel(ctx)
 	defer cancelTask()
+	// The driver calls SuiteGate between requests with a background context, so the gate is bound to
+	// this task's context here: the row's own Pause holds the attack as Pause all does (g0ba).
+	gateCtx := task.Pausable(taskCtx)
+	attack.SuiteGate = func(context.Context) { s.tasks.GateCheck(gateCtx) }
 	attackDone := make(chan struct{})
 	defer close(attackDone)
 	control.StopOnContext(taskCtx, attackDone, "stopped from the dashboard")
@@ -1849,6 +1877,10 @@ type liveAuditEnableReq struct {
 	// never means "retry" — but a plain {enabled} POST already carries the current switch,
 	// so the two compose without a second route.
 	RetryStalled *bool `json:"retry_stalled"`
+	// Config and Pool set the live task's own scan configuration and resource pool (chct): a name,
+	// or "" for the server default. Omitted leaves the current setting. An unknown name is refused.
+	Config *string `json:"config"`
+	Pool   *string `json:"pool"`
 }
 
 // handleScannerLive is the /api/scanner/live endpoint: GET reports the sweep state,
@@ -1865,6 +1897,25 @@ func (s *Server) handleScannerLive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if s.liveAudit != nil {
+			// Resolved before anything changes: a refused name leaves the task as it was.
+			if req.Config != nil && *req.Config != "" {
+				if _, _, _, err := s.resolveAuditConfig(*req.Config); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+			if req.Pool != nil && *req.Pool != "" {
+				if _, err := s.poolLimiter(*req.Pool); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
+			if req.Config != nil || req.Pool != nil {
+				s.liveAudit.SetRunSettings(req.Config, req.Pool)
+				cfgName, poolName := s.liveAudit.RunSettings()
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityInfo, fmt.Sprintf(
+					"the live audit now runs scan configuration %q under resource pool %q (empty is the default)", cfgName, poolName))
+			}
 			if req.TrafficSource != nil {
 				if err := s.liveAudit.SetTrafficSource(LiveAuditTrafficSource(*req.TrafficSource)); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)

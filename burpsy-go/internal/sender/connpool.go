@@ -19,6 +19,9 @@ package sender
 //     status that carries no body) — never one delimited by the peer closing (framingEOF);
 //   - nothing was buffered past that boundary (a peer that sent more than one response is a
 //     framing disagreement, and the extra bytes belong to no request);
+//   - the request ended exactly where its own framing said it did (requestEndsAtFraming, keepalive.go):
+//     a request carrying a second request past its framing — pipelined, or a smuggling payload sent on
+//     purpose — has a response still to come, and the next request would read it as its own;
 //   - neither the request nor the response said Connection: close, and neither was HTTP/1.0;
 //   - the response was final (not 1xx — a 100 returned with Understand100 off leaves the real
 //     response on the socket; a 101 hands the socket to another protocol), the request was not HEAD
@@ -490,6 +493,9 @@ func watchCancelSync(ctx context.Context, conn net.Conn) (stop func() (fired boo
 // completed exchange. Any head it cannot parse answers false: an exchange this cannot read is not one
 // it can vouch for.
 func exchangeAllowsReuse(req, resp []byte) bool {
+	if !requestEndsAtFraming(req) {
+		return false
+	}
 	reqLine, reqHeaders, ok := splitHead(req)
 	if !ok {
 		return false

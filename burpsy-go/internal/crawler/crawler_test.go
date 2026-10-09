@@ -137,6 +137,10 @@ func (h *harness) config(seeds ...string) Config {
 		// Fast enough that the tests do not spend their time in the token bucket, still a real
 		// limiter on the real path.
 		RequestsPerSecond: 2000,
+		// Not-found detection (s92h) adds a probe request per directory. The tests built on this
+		// harness pin exact request counts, budgets and fetch order for other features, so it is off
+		// here; notfound_test.go turns it on. Production keeps it on by default, as Burp does.
+		NoNotFoundProbe: true,
 	}
 }
 

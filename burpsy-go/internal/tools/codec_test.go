@@ -223,12 +223,22 @@ func TestDeflateDecodesARawStreamAsWellAsAZlibWrappedOne(t *testing.T) {
 // TestADecompressionBombIsCappedRatherThanExhaustingMemory ports
 // a_decompression_bomb_is_capped_rather_than_exhausting_memory.
 func TestADecompressionBombIsCappedRatherThanExhaustingMemory(t *testing.T) {
-	bomb, err := Encode(LayerGzip, make([]byte, 100*1024*1024))
+	// 100 MiB of zeros. The point of the fixture is a tiny input that inflates past MaxInflate,
+	// and the assertion below is about the RATIO, not about a byte count: the old form hard-coded
+	// `len(bomb) < 200_000`, which is a fact about one compressor's output rather than about the
+	// bomb, and Go 1.27's compress/flate emits a larger stream for these inputs. It moved past the
+	// bound and failed a test whose subject had not changed (burpsy-react-ui-jdgq). Comparing
+	// against the DECOMPRESSED length is toolchain-independent and is the property the test is
+	// actually named for: a 100 MiB expansion from an input orders of magnitude smaller.
+	const decompressed = 100 * 1024 * 1024
+	bomb, err := Encode(LayerGzip, make([]byte, decompressed))
 	if err != nil {
 		t.Fatalf("encode bomb failed: %v", err)
 	}
-	if len(bomb) >= 200_000 {
-		t.Fatalf("the bomb itself is small: %d bytes", len(bomb))
+	if len(bomb) >= decompressed/100 {
+		t.Fatalf("the bomb itself is not small relative to what it inflates to: %d bytes of input for "+
+			"%d bytes of output (%.4f%%), so this is not a decompression bomb",
+			len(bomb), decompressed, 100*float64(len(bomb))/float64(decompressed))
 	}
 	out, truncated, err := Decode(LayerGzip, bomb)
 	if err != nil {

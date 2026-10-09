@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
 import type { CompareOp } from "./response-diff";
+import type { H2Field, KettleAnswer } from "./kettle";
 import type { WsRepeaterSendResult } from "./types";
 import type {
   RepeaterGroupSendItem,
@@ -117,6 +118,8 @@ export interface RepeaterSendBody {
   sni?: string;
   /** The tab, which keys its reused HTTP/2 connection (adkx). */
   tab_id?: string;
+  /** A kettled tab's HTTP/2 header list (jae5), sent as written; the body still comes from `request`. */
+  h2_headers?: H2Field[];
 }
 
 /**
@@ -398,6 +401,19 @@ export function useWordlists() {
  * so paging back and forth reuses a diff instead of recomputing it, and disabled (no request at all)
  * when there is no pair to compare or either side is past MAX_DIFF_BYTES — the caller says which.
  */
+/**
+ * Whether a tab's HTTP/2 header list is kettled, and whether a send would be refused (jae5). Keyed by
+ * the list itself, so every Inspector edit asks again and an unchanged list is never re-asked.
+ */
+export function useKettleAnswer(fields: H2Field[] | null, tls: boolean) {
+  return useQuery({
+    queryKey: ["h2-kettle", tls, fields],
+    enabled: fields !== null && fields.length > 0,
+    staleTime: Infinity,
+    queryFn: () => api<KettleAnswer>("/api/http2/kettle", json("POST", { fields, tls })),
+  });
+}
+
 export function useResponseChanges(
   previous: { exchange_id: number; response: string } | null,
   current: { exchange_id: number; response: string } | null,

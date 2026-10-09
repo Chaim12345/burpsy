@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"io"
 	"net/http"
 	"net/url"
@@ -152,14 +153,14 @@ func (a *AuthorisedSender) FollowRedirectsAfterPolicy(
 	// Answered before the request bytes are parsed, because this runs on every send a caller makes and
 	// the overwhelming majority are not redirects. redirectLocation is the one place that decides what
 	// counts as one, so short-circuiting here reuses that decision rather than restating it.
-	if _, isRedirect := redirectLocation(resp); !isRedirect {
+	if _, isRedirect := redirectLocation(resp, policy.EffectiveTypes()); !isRedirect {
 		result.Complete = true
 		return result, nil
 	}
 
 	req, rerr := requestFromRaw(raw, a)
 	if rerr != nil {
-		if location, isRedirect := redirectLocation(resp); isRedirect {
+		if location, isRedirect := redirectLocation(resp, policy.EffectiveTypes()); isRedirect {
 			result.Hops = append(result.Hops, RedirectHop{
 				From:     formatAuthority(a.host, a.port, a.tls),
 				Status:   resp.StatusCode,
@@ -206,7 +207,7 @@ func (a *AuthorisedSender) followChain(
 
 	for {
 		from := absoluteURL(current, target)
-		location, isRedirect := redirectLocation(resp)
+		location, isRedirect := redirectLocation(resp, policy.EffectiveTypes())
 		if !isRedirect {
 			result.Complete = true
 			return
@@ -466,19 +467,51 @@ func filterHop(mode RedirectMode, from *AuthorisedSender, host string, port uint
 // server has several representations and is not nominating one, so picking its Location — which is
 // optional there and merely "preferred" — would be this tool choosing a resource the operator did not.
 // A 304 Not Modified is not a redirect at all despite living in the same century of status codes.
-func redirectLocation(resp *Response) (string, bool) {
+//
+// Which responses count beyond the 30x is Burp's "Allowed redirect types" (types, z9zi): any status
+// with a Location header, the Refresh header, and the meta refresh tag in an HTML body. A Refresh or
+// meta-refresh hop is followed as a bodiless GET, as a browser navigates it.
+func redirectLocation(resp *Response, types RedirectTypes) (string, bool) {
+	header := func(want string) (string, bool) {
+		for name, value := range resp.Headers {
+			if strings.EqualFold(name, want) {
+				return strings.TrimSpace(value), true
+			}
+		}
+		return "", false
+	}
 	switch resp.StatusCode {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
 		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-	default:
-		return "", false
-	}
-	for name, value := range resp.Headers {
-		if strings.EqualFold(name, "Location") {
-			return strings.TrimSpace(value), true
+		if types.Understand3xx {
+			loc, _ := header("Location")
+			return loc, true
 		}
 	}
-	return "", true
+	// The other kinds name their target or they are not redirects at all: a 300 or a 304 is never
+	// one, and a response without the header or tag is just a response.
+	if resp.StatusCode != http.StatusMultipleChoices && resp.StatusCode != http.StatusNotModified {
+		if types.UnderstandAnyLocation {
+			if loc, ok := header("Location"); ok && loc != "" {
+				return loc, true
+			}
+		}
+		if types.UnderstandRefreshHeader {
+			if v, ok := header("Refresh"); ok {
+				if target, ok := httputil.RefreshTarget(v); ok {
+					return target, true
+				}
+			}
+		}
+		if types.UnderstandMetaRefresh {
+			if ct, _ := header("Content-Type"); strings.Contains(strings.ToLower(ct), "html") {
+				if target, ok := httputil.MetaRefreshTarget(resp.Body); ok {
+					return target, true
+				}
+			}
+		}
+	}
+	return "", false
 }
 
 // redirectRequest builds the next hop's request from the one that produced the 30x.
