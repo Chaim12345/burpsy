@@ -128,15 +128,36 @@ fails while a PR into master touches a risk-class path and lacks the label `agen
 - MCP risk-class placement (`internal/mcp/groups.go`, `route_manifest.go`);
 - credential / client-cert / CA / TLS material (`internal/netauth/`, `internal/servercerts/`, the
   proxy's CA, listener-cert and TLS files, the CA, server-cert, TLS-policy and netauth handlers);
-- `.github/` (workflows and their pinned SHA-256s), the gate scripts themselves, `.beads/hooks/`,
-  `.gitattributes`.
+- `.github/` (workflows and their pinned versions and hashes), the gate scripts themselves, the UI
+  package's `package.json`, `bun.lock`, `bunfig.toml` and `tsconfig.json` (they define what the
+  `ui` job runs and installs), `.beads/hooks/`, `.gitattributes`.
 
 The exact globs are the list in `scripts/review-gate.sh`; the list names files, not semantics, so
-a risk-class change in an unlisted file is added to the list in the same PR. The reviewer is a fresh
-agent given the diff and this list — never the author — and posts its verdict on the PR before the
-label is applied. A push to a labelled PR that changes a risk path again fails the check until the
-label is removed and re-applied after re-review. A change to `crates/` (the frozen parity oracle)
-fails the check regardless of the label: it is refused, not reviewed.
+a risk-class change in an unlisted file is added to the list in the same PR. A file name git has to
+quote counts as a risk path. A change to `crates/` (the frozen parity oracle) fails the check
+regardless of the label: it is refused, not reviewed.
+
+**What the label means.** The reviewer is a fresh agent given the diff and this list — never the
+author — and posts its verdict on the PR, naming the head sha it reviewed, before the label is
+applied. The label then means "reviewed since the last change to a risk path", and the workflow
+keeps it meaning that: when a push to the PR touches a risk path the PR changes, the check removes
+`agent-reviewed` and fails. A force-push (the previous head is not an ancestor of the new one) and
+a reopen (pushes to a closed PR fire no event) count as every risk path changed. The reviewer
+re-reviews the PR at its new head and re-applies the label, which re-runs the check. A push that
+touches no risk path leaves the label in place.
+
+**A round PR.** CI, and so this check, runs only on PRs into master, so a risk-class item is
+reviewed on its item PR into the round branch, at the sha the lead then merges. The lead applies
+`agent-reviewed` to the round PR only when every risk-class item in it was reviewed at its final
+sha and nothing merged after touched a risk path (the bundle rebuild and the beads closure commit
+do not); a fix-forward on the round branch that touches a risk path is reviewed like an item.
+
+**Where the check's rules come from.** The workflow is `pull_request_target`: the workflow file
+and `scripts/review-gate.sh` are taken from the default branch, and the PR's commits are fetched as
+data and diffed, never checked out or run, so a PR cannot loosen the gate it is judged by. Two
+consequences: a change to the gate takes effect from the next PR, and the PR that introduced
+`review-gate.yml` (#348) was not checked by it at all — the check cannot run before the workflow is
+on master — so it was reviewed by hand.
 
 ## 8. Design decisions
 
@@ -158,7 +179,7 @@ answered, and do not build both.
 | Picked | `in_progress`, owner = round | lead |
 | Agent finds new work | listed in its report — not filed by the agent | agent |
 | Round PR ready | close each landed bead with `Fixed by PR #N (<merge sha on the round branch>): <title>`; file follow-ups; reopen anything whose code did not land; reset `in_progress` items not in this round | lead, `scripts/beads-close-merged.py` |
-| CI | `beads` job: JSONL parses, ids unique, no bead deleted, every bead closed by the PR cites a sha in the PR's history | CI, `scripts/beads-lint.py` |
+| CI | `beads` job: JSONL parses, ids unique, no bead deleted, and every bead newly closed by the change cites a sha that resolves to a commit and is an ancestor of the checked-out HEAD — for a PR, GitHub's merge of the PR into master, so the commit is in master or in the PR's own commits; for a push to master, the new tip | CI, `scripts/beads-lint.py` |
 
 Only the lead (or a dedicated beads agent) edits the JSONL.
 
@@ -191,14 +212,22 @@ The PR that introduced this document could not do these; they are the lead's, in
 1. **Create the `agent-reviewed` label** (the review gate checks for it by name):
    `gh label create agent-reviewed --repo Chaim12345/burpsy --description "Risk-class change reviewed by an independent agent"`.
 2. **Branch protection on `master`**, once the four checks have each run on master at least once
-   (GitHub only offers a check it has seen). Required: `gate`, `ui`, `beads`, `review-gate`; strict
-   (branch up to date before merging); enforced for admins; no force-push, no deletion:
+   (GitHub only offers a check it has seen). Required: `gate`, `ui`, `beads`, `review-gate`, each
+   bound to the GitHub Actions app (`app_id` 15368) so that no other app or a hand-posted commit
+   status of the same name can satisfy it; strict (branch up to date before merging); enforced for
+   admins; no force-push, no deletion:
 
        gh api -X PUT repos/Chaim12345/burpsy/branches/master/protection --input - <<'JSON'
-       {"required_status_checks": {"strict": true, "contexts": ["gate", "ui", "beads", "review-gate"]},
+       {"required_status_checks": {"strict": true, "checks": [
+          {"context": "gate", "app_id": 15368}, {"context": "ui", "app_id": 15368},
+          {"context": "beads", "app_id": 15368}, {"context": "review-gate", "app_id": 15368}]},
         "enforce_admins": true, "required_pull_request_reviews": null, "restrictions": null,
         "allow_force_pushes": false, "allow_deletions": false}
        JSON
+
+   Before requiring `review-gate`, confirm on the first PR after #348 that its check run appears on
+   the PR's head commit: it is a `pull_request_target` run, and if GitHub attached it elsewhere the
+   requirement could never be met.
 
    Check first that the plan allows it (branch protection on a private repository needs a paid
    plan), and that GitHub's merge queue is not available here before relying on it — on a
