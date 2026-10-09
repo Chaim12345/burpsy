@@ -4,3 +4,19 @@
 # file when it is newer than the DB, which wiped the whole 264-issue tracker.
 # Plain git merge on this file produces conflict markers instead: loud, and recoverable.
 # Reconcile a conflicted export per-issue by newest `updated_at`, then let bd auto-import it.
+
+# The UI bundle is generated (`bun run build` in burpsy-go/internal/web/ui) and committed only
+# because go:embed needs it. Two branches that each rebuilt it always conflict, and a hand-resolved
+# 2.5 MB minified line is not reviewable, so a merge keeps OUR side and the lead rebuilds once per
+# round (docs/DEVELOPMENT-PROCESS.md section 5). This is a different bargain from the beads driver
+# above, and the difference is the point:
+#   - `ours` is git's no-op driver (`merge.ours.driver true`, registered by scripts/dev-setup.sh);
+#     it cannot fail, and the worst it can produce is a STALE bundle, never an empty one.
+#   - a stale bundle cannot land: CI's `ui` job rebuilds with the pinned bun and fails on any
+#     difference (`git diff --exit-code`).
+#   - in a clone where dev-setup.sh never ran the driver is undefined, and git falls back to a
+#     plain text merge: conflict markers, loud — the same failure mode this file already prefers.
+# `-diff` keeps the minified line out of `git diff`/`git log -p`; linguist-generated folds it in
+# GitHub's PR view.
+burpsy-go/internal/web/ui/dist/app.js -diff linguist-generated merge=ours
+burpsy-go/internal/web/ui/style.css -diff linguist-generated merge=ours

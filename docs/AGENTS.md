@@ -18,6 +18,7 @@ Forward-looking work lives in `.planning/`, not here.
 |------|-------------|
 | `BCHECK-RESEARCH.md` | The BCheck DSL: grammar, corpus statistics, and the implementation order they imply (519 lines) |
 | `BCHECK-M2-SEMANTICS.md` | BCheck M2 runtime/evaluation semantics — the active-check milestone (623 lines) |
+| `DEVELOPMENT-PROCESS.md` | Not a research note: the repository's development process (rounds, test tiers, review gate, beads closure). Current rules, edited in place |
 | `TLS-RESEARCH.md` | TLS interception with `rcgen` + `rustls`, verified against the compiler rather than the docs (455 lines) |
 
 ## For AI Agents

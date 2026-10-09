@@ -9,20 +9,37 @@ name: Go
 
 # Pushes run only on master. Every other branch is covered by its pull request, so a push to a PR
 # branch no longer runs the gate twice for the same commit.
+#
+# Pull requests run only when they target master. Under docs/DEVELOPMENT-PROCESS.md item PRs target
+# a round branch (round/<date>-<n>) and are covered by the T1/T2 tiers; this workflow is T3, the
+# full gate run once per round on the exact tree that lands. That is deliberate, not an oversight:
+# an item PR into a round branch shows no checks.
+#
+# The review gate lives in its own workflow (review-gate.yml): it must re-run when a verdict is
+# posted as a comment or review, and it runs under pull_request_target with the default branch's
+# rules; neither fits this workflow.
 on:
   push:
     branches: [master]
   pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to the same branch or PR cancels the run it supersedes. The suite takes tens of
-# minutes; finishing a run for a commit nobody will merge only delays the one that matters.
+# A newer push to the same PR cancels the run it supersedes: the suite takes tens of minutes, and
+# finishing a run for a commit nobody will merge only delays the one that matters.
+#
+# A push to master is never cancelled. Each one is a commit that landed, and its run is the only
+# evidence that master passes at that commit; with cancel-in-progress on master, 15 of 19 master
+# runs on 2026-10-09 were cancelled by the next merge and master was green at almost no commit
+# anyone could name. A master push therefore gets a group of its own commit: GitHub keeps only one
+# PENDING run per group and silently drops the rest, so a shared master group would still lose the
+# middle commits of a burst even with cancellation off. Per-commit groups run each of them.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -227,3 +244,84 @@ jobs:
       # is shown race-clean, rather than all at once and red.
       - name: go test -race (internal/web)
         run: go test -race -count=1 -timeout 900s ./internal/web/
+
+  # The React console: type check, the source guards, and bundle freshness. Until this job existed
+  # none of it ran unless someone ran it by hand — tsc, the no-native-dialogs guard (which caught
+  # three real breaks on 2026-10-09 alone) and check:gated-routes included. `bun run check` is the
+  # package's own definition of those checks (package.json), so a guard added there is gated here
+  # without editing this file.
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: burpsy-go/internal/web/ui
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned exactly: dist/app.js is byte-reproducible only with the same bun (two rebuilds with
+      # 1.4.2 were identical; another version emits different bytes and the freshness step below
+      # would fail every PR). scripts/dev-setup.sh warns a developer whose bun differs.
+      # The action itself is pinned by commit, not tag: it downloads and runs the toolchain that
+      # builds the shipped bundle, and a tag can be moved. 0c5077e5 is v2.2.0 (= v2 on 2026-10-09).
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+
+      # --frozen-lockfile: a PR that changes dependencies must change bun.lock with them, rather
+      # than CI resolving something nobody reviewed.
+      - name: bun install
+        run: bun install --frozen-lockfile
+
+      # tsc --noEmit, token checks, the gated-routes check, script tests and the src/lib tests (which
+      # hold the no-native-dialogs guard). `bun run build` does NOT type-check; this step does.
+      - name: bun run check
+        run: bun run check
+
+      - name: bun run build
+        run: bun run build
+
+      # "Shipped" means "in the embedded bundle": go:embed serves the committed dist/app.js, so a UI
+      # source change that was never rebuilt reaches no browser while every test passes. Rebuilding
+      # with the pinned bun and requiring no difference makes that state unmergeable. The whole UI
+      # directory is compared, so generated token files are held to the same rule.
+      - name: Bundle is fresh
+        run: |
+          if ! git diff --quiet -- .; then
+            echo "::error::The committed UI bundle or generated files differ from a fresh 'bun run build' (bun 1.4.2):"
+            git diff --stat --text -- .
+            echo "::error::Rebuild in burpsy-go/internal/web/ui with bun 1.4.2 and commit the result (the lead does this once per round; see docs/DEVELOPMENT-PROCESS.md section 5)."
+            exit 1
+          fi
+          untracked=$(git ls-files --others --exclude-standard -- .)
+          if [ -n "$untracked" ]; then
+            echo "::error::The build produced files that are not committed:"
+            echo "$untracked"
+            exit 1
+          fi
+          echo "dist/app.js, style.css and generated sources match a fresh build."
+
+  # .beads/issues.jsonl on master is the issue tracker's source of truth. This job holds every
+  # change to it to the closure rule: a bead closed by this change must cite the PR and the commit
+  # that did the work, and that commit must be in the history being merged. Closures already on the
+  # base are grandfathered. The rule and its exceptions are in scripts/beads-lint.py.
+  beads:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: .
+
+    steps:
+      # Full history: "is this sha in the history being merged" cannot be answered from a shallow
+      # clone.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # HEAD^1 is the right base for both events. For a pull request the checkout is GitHub's
+      # merge commit, whose first parent is the base branch it merges into; for a push to master
+      # (always a merge commit under branch protection) it is the previous tip.
+      - name: beads lint
+        run: python3 -I scripts/beads-lint.py --base HEAD^1
