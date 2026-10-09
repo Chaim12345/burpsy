@@ -34,10 +34,12 @@ detect=TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
 timeout=(-timeout 1700s)
 
 # list_tests PKG: the package's top-level tests, one per line (go test -list prints them plus an
-# "ok" line). Fails if listing fails — a package that does not compile is not "no tests".
+# "ok" line). Fails if listing fails — a package that does not compile is not "no tests". The
+# explicit `|| return` matters: errexit is off inside the command substitutions that call this,
+# so without it a build failure came back as an empty list and was reported as a missing test.
 list_tests() {
   local out
-  out=$(go test -list '.*' "$1")
+  out=$(go test -list '.*' "$1") || { echo "ci-shard: could not list the tests in $1 (see the build error above)" >&2; return 1; }
   printf '%s\n' "$out" | grep -E '^(Test|Fuzz|Example)' || true
 }
 
@@ -45,7 +47,7 @@ require_test() {
   # The list is captured first: `grep -q` stops reading at its match, and under pipefail the
   # writer's SIGPIPE would read as "the test is gone".
   local names
-  names=$(list_tests "$scanner")
+  names=$(list_tests "$scanner") || exit 1
   if ! grep -qx "$1" <<<"$names"; then
     echo "ci-shard: $1 no longer exists in $scanner; update scripts/ci-shard.sh so no shard runs nothing" >&2
     exit 1
@@ -77,7 +79,7 @@ case "$shard" in
     ;;
   race-web-0|race-web-1)
     want=${shard##*-}
-    names=$(list_tests "$web" | awk -v w="$want" '(NR - 1) % 2 == w')
+    names=$(list_tests "$web" | awk -v w="$want" '(NR - 1) % 2 == w') || exit 1
     [ -n "$names" ] || { echo "ci-shard: $shard selected no tests" >&2; exit 1; }
     count=$(printf '%s\n' "$names" | wc -l)
     regex="^($(printf '%s\n' "$names" | paste -sd'|' -))\$"
