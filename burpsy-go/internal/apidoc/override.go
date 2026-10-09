@@ -65,6 +65,20 @@ func (op *Operation) SetParameter(in, name, value string) bool {
 				op.Header[i].Value, op.Header[i].Source = value, ValueOperator
 			}
 		}
+	case "formData":
+		// Swagger 2's form body is rendered from its formData parameters (see the parser), so it is
+		// re-rendered the same way. Without this the review reported the operator's value while the
+		// wire carried the document's. Only an urlencoded body is rebuilt, because that is the only
+		// body the parser builds from formData.
+		if op.ContentType == "application/x-www-form-urlencoded" {
+			var pairs []string
+			for _, p := range op.Parameters {
+				if p.In == "formData" {
+					pairs = append(pairs, url.QueryEscape(p.Name)+"="+url.QueryEscape(p.Value))
+				}
+			}
+			op.Body = []byte(strings.Join(pairs, "&"))
+		}
 	}
 	return true
 }

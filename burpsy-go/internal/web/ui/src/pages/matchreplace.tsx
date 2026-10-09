@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp, Copy, FlaskConical, Plus, RotateCcw, Save, Trash2 }
 import { toast } from "sonner";
 import { useMatchReplace, useSaveMatchReplace } from "../lib/data";
 import { useTestMatchReplace } from "../lib/data.policy";
+import { matchPlaceholder } from "../lib/matchreplace-hint";
 import type {
   MatchReplaceCategory,
   MatchReplaceDirection,
@@ -355,7 +356,7 @@ export function MatchReplacePage(): JSX.Element {
                   <Input
                     aria-label={`Rule ${index + 1} match`}
                     value={rule.string_match}
-                    placeholder="empty = add this header"
+                    placeholder={matchPlaceholder(rule.rule_type, rule.category)}
                     onChange={(event) => patch(index, { string_match: event.target.value })}
                   />
                 </td>

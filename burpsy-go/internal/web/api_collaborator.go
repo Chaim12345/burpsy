@@ -279,9 +279,9 @@ type collaboratorStatus struct {
 	// comment: a count of zero from a channel that never existed reads exactly like a clean result.
 	Interactions *collaboratorCounts   `json:"interactions"`
 	LastRead     *collaboratorReadView `json:"last_read"`
-	// GatedChecks is how many loaded corpus checks need this channel and are counted out of the
-	// runnable set without it. Null when no corpus is loaded, because zero would then mean "nothing
-	// needs a collaborator" when it actually means "nothing is loaded".
+	// GatedChecks is how many loaded corpus checks need this channel: they run on it, and are refused
+	// per audit item without it (burpsy-react-ui-ar8v). Null when no corpus is loaded, because zero
+	// would then mean "nothing needs a collaborator" when it actually means "nothing is loaded".
 	GatedChecks *int   `json:"gated_checks"`
 	Polling     string `json:"polling"`
 	Client      string `json:"client"`

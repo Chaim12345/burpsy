@@ -198,7 +198,7 @@ func (s *PassiveScanner) rebuildLocked() {
 	// Files counts the directory's files only: a console check is a check, not a file, and the summary
 	// says "N files" (the passive/active counts below do include console checks).
 	report := LoadReport{Files: s.dirFiles, Errors: append([]LoadError(nil), s.dirErrs...)}
-	passive, active, insertion, tools, report := classifyChecks(checks, report)
+	passive, active, insertion, tools, collab, report := classifyChecks(checks, report)
 	cov := newCoverageTracker(passive)
 	if s.coverage != nil {
 		old := map[string]CheckCoverage{}
@@ -211,5 +211,5 @@ func (s *PassiveScanner) rebuildLocked() {
 			}
 		}
 	}
-	s.passive, s.active, s.insertion, s.tools, s.report, s.coverage = passive, active, insertion, tools, report, cov
+	s.passive, s.active, s.insertion, s.tools, s.collab, s.report, s.coverage = passive, active, insertion, tools, collab, report, cov
 }

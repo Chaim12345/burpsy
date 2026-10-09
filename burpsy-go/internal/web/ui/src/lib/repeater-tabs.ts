@@ -1,3 +1,4 @@
+import { highlightName } from "./types";
 /**
  * The slice of a Repeater tab this module reads. Declared here rather than imported from the store:
  * every function below is a decision about a list of tabs, and taking the shape structurally keeps
@@ -127,14 +128,17 @@ export function tabColour(
  tab: { color?: string; groupId?: string },
  groups: { id: string; color: string }[],
 ): { color: string; from: "tab" | "group" | undefined } {
- if (tab.color) {
-  return { color: tab.color, from: "tab" };
+ // "none" (any case) is no colour, the same as "" — see highlightName (burpsy-react-ui-iqwb).
+ const own = highlightName(tab.color);
+ if (own) {
+  return { color: own, from: "tab" };
  }
  if (!tab.groupId) {
   return { color: "", from: undefined };
  }
  const group = groups.find((entry) => entry.id === tab.groupId);
- return group?.color ? { color: group.color, from: "group" } : { color: "", from: undefined };
+ const inherited = highlightName(group?.color);
+ return inherited ? { color: inherited, from: "group" } : { color: "", from: undefined };
 }
 
 /**

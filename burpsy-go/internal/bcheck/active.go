@@ -32,6 +32,7 @@
 package bcheck
 
 import (
+	"bytes"
 	"context"
 	"strings"
 
@@ -267,6 +268,10 @@ const (
 	// ActiveNeedsPoint means `send payload` ran outside a `given insertion
 	// point` check, so there is nowhere to put the payload.
 	ActiveNeedsPoint
+	// ActiveReplayDiverged means a deferred collaborator run, replayed once its interactions
+	// arrived, took a branch that needs a probe (or address, or tool run) its live pass never made.
+	// A replay never sends, so the run cannot be judged: outstanding, not clean.
+	ActiveReplayDiverged
 )
 
 // ActiveError is why an active run produced no verdict. Distinct from a
@@ -291,6 +296,8 @@ func (e *ActiveError) Error() string {
 		return "send failed: " + e.Detail
 	case ActiveNeedsPoint:
 		return "send payload needs an insertion point: " + e.Detail
+	case ActiveReplayDiverged:
+		return "deferred collaborator replay diverged: " + e.Detail
 	}
 	return "unknown active error"
 }
@@ -305,9 +312,16 @@ func (e *ActiveError) Error() string {
 // points of the base request. It is expanded here, once per point, and each
 // point gets its own `latest`, its own named bindings and its own
 // `insertion_point_base_value`.
+//
+// A check that needs a collaborator (generate_collaborator_address() or an interactions condition)
+// runs only with one attached (SetCollaborator); without it the check is refused, never run with
+// empty addresses. A run whose interactions conditions are still unknown when it ends is returned
+// through ctx.Deferred() for the caller to resolve once callbacks have had time to arrive.
 func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding, error) {
-	if check.NeedsCollaborator() {
-		return nil, &ActiveError{Kind: ActiveUnsupported, Detail: "needs a collaborator interaction server"}
+	needsCollab := check.NeedsCollaborator()
+	if needsCollab && ctx.collaborator == nil {
+		return nil, &ActiveError{Kind: ActiveUnsupported,
+			Detail: "needs a collaborator interaction server, and none is configured for this scan, so the check was not run"}
 	}
 	// A check that invokes an external tool cannot run without the caller's
 	// allowlist runner. Refused up front, like the collaborator case: nothing
@@ -320,7 +334,10 @@ func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding
 	ctx.target = target
 
 	if check.Given != "insertion point" {
-		return runCheckBody(check, ctx)
+		if !needsCollab {
+			return runCheckBody(check, ctx)
+		}
+		return runCollaboratorUnit(check, ctx)
 	}
 	if len(ctx.Request) == 0 {
 		return nil, &ActiveError{Kind: ActiveSendFailed, Detail: "no base request to enumerate insertion points in"}
@@ -355,7 +372,14 @@ func RunActive(check *Check, ctx *Context, sink Sink, target *Target) ([]Finding
 	var findings []Finding
 	for _, p := range points {
 		it := ctx.forPoint(p)
-		fs, err := runCheckBody(check, it)
+		var fs []Finding
+		var err error
+		if needsCollab {
+			fs, err = runCollaboratorUnit(check, it)
+			ctx.deferred = append(ctx.deferred, it.deferred...)
+		} else {
+			fs, err = runCheckBody(check, it)
+		}
 		// Fold diagnostics and RNG state back, including on the error path.
 		ctx.rng = it.rng
 		ctx.mergeUnresolved(it)
@@ -384,7 +408,29 @@ func (ctx *Context) forPoint(p InsertionPoint) *Context {
 	c.sent = nil
 	c.tools = nil
 	c.unresolved = nil
+	c.collabAddrs, c.observed, c.deferred, c.unit = nil, nil, nil, nil
 	return &c
+}
+
+// runCollaboratorUnit runs one run of a collaborator check — the whole check, or one insertion
+// point — as a recorded live pass, and defers it when an interactions condition was still unknown
+// at the end (collaborator.go).
+func runCollaboratorUnit(check *Check, ctx *Context) ([]Finding, error) {
+	start := ctx.snapshot()
+	unit := &collabUnit{}
+	ctx.unit = unit
+	fs, err := runCheckBody(check, ctx)
+	ctx.unit = nil
+	if err == nil {
+		err = unit.err
+	}
+	if err != nil {
+		return nil, err
+	}
+	if unit.unknown && !unit.halted {
+		ctx.deferred = append(ctx.deferred, newDeferred(check, start, unit, fs))
+	}
+	return fs, nil
 }
 
 // sendRequest builds and dispatches one `send request` statement.
@@ -408,9 +454,24 @@ func (ctx *Context) runTool(s *RunToolStatement) error {
 	for _, a := range s.Args {
 		args = append(args, ctx.resolveValue(a))
 	}
-	res, err := ctx.toolRunner.Run(ctx.toolCtx, tool, args)
-	if err != nil {
-		return &ActiveError{Kind: ActiveUnsupported, Detail: err.Error()}
+	var res ToolResult
+	if u := ctx.unit; u != nil && u.replay {
+		// A deferred replay re-reads the live pass's tool output; it never executes a tool.
+		if u.toolIx >= len(u.tools) || u.tools[u.toolIx].tool != tool ||
+			strings.Join(u.tools[u.toolIx].args, "\x00") != strings.Join(args, "\x00") {
+			return &ActiveError{Kind: ActiveReplayDiverged, Detail: "the replay reached a tool run the live pass never made"}
+		}
+		res = u.tools[u.toolIx].res
+		u.toolIx++
+	} else {
+		var err error
+		res, err = ctx.toolRunner.Run(ctx.toolCtx, tool, args)
+		if err != nil {
+			return &ActiveError{Kind: ActiveUnsupported, Detail: err.Error()}
+		}
+		if u != nil {
+			u.tools = append(u.tools, recordedTool{tool: tool, args: args, res: res})
+		}
 	}
 	ctx.tools = append(ctx.tools, boundTool{
 		name:     s.StoreAs,
@@ -599,9 +660,29 @@ func joinPath(p, v string) string {
 // binding `latest`, abandoning on failure — is identical.
 func (ctx *Context) dispatch(storeAs string, req *core.RequestEdit) error {
 	raw := req.ToRaw()
-	resp, err := ctx.sink.Send(ctx.target, raw)
-	if err != nil {
-		return &ActiveError{Kind: ActiveSendFailed, Detail: err.Error()}
+	var resp []byte
+	if u := ctx.unit; u != nil && u.err != nil {
+		// The run is already abandoned — an address could not be minted — so a probe built from it
+		// would carry an empty collaborator host. Nothing goes out.
+		return u.err
+	} else if u != nil && u.replay {
+		// A deferred replay answers from the live pass's recording and never sends: the resolver
+		// runs outside the audit that authorised, scoped and metered the original probes.
+		if u.sendIx >= len(u.sends) || !bytes.Equal(u.sends[u.sendIx].raw, raw) {
+			return &ActiveError{Kind: ActiveReplayDiverged,
+				Detail: "once its interactions arrived the check wanted a probe its live pass never sent"}
+		}
+		resp = u.sends[u.sendIx].resp
+		u.sendIx++
+	} else {
+		var err error
+		resp, err = ctx.sink.Send(ctx.target, raw)
+		if err != nil {
+			return &ActiveError{Kind: ActiveSendFailed, Detail: err.Error()}
+		}
+		if u != nil {
+			u.sends = append(u.sends, recordedSend{raw: raw, resp: resp})
+		}
 	}
 	ctx.sent = append(ctx.sent, boundSend{
 		name:  storeAs,

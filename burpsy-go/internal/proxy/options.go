@@ -87,9 +87,17 @@ const (
 	OptRemoveSecureFlagFromCookies OptionKey = "remove_secure_flag_from_cookies"
 	// OptStripAcceptEncoding removes the Accept-Encoding header from requests on
 	// the way out. Burp's own wording for this option ends "(if not unpacking
-	// compressed data)", which is exactly this build's situation: it has no
-	// decompressor on the proxy path, so asking the origin for plaintext is the
-	// only way the response rules above get a body they can rewrite.
+	// compressed data)": it is the alternative to OptUnpackCompressedResponses
+	// below, not a decompressor. Stripping only *asks* the origin for an
+	// uncompressed response; an origin is free to compress anyway, and the change
+	// is visible server-side, so the traffic recorded is no longer exactly what
+	// the client would have received.
+	//
+	// The proxy path can unpack gzip, x-gzip and deflate itself
+	// (httputil.Unpackable), so for those the unpack switch is the less
+	// intrusive choice. Stripping is still the only way the response rules above
+	// get a rewritable body from an origin that answers in br or zstd, or in a
+	// chain of encodings, none of which this build can decode.
 	OptStripAcceptEncoding OptionKey = "strip_accept_encoding"
 	// OptUnpackCompressedRequests decompresses a gzip or deflate request body before
 	// the request is forwarded, dropping its Content-Encoding and fixing

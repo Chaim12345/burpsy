@@ -20,7 +20,7 @@ There is no Rust crate counterpart.
 
 | File | Description |
 |------|-------------|
-| `extscan.go` | The gates and the exec: `Config` (allowlist + bounds), `Authorise`/`Target` (the scope gate), the `Outcome` enum, the typed refusals `ErrNotAllowed`/`ErrUnavailable`/`ErrUnauthorised`, `run` (no shell, bounded), `cappedBuffer` |
+| `extscan.go` | The gates and the exec: `Config` (allowlist + bounds), `Authorise`/`Target` (the scope gate), the `Outcome` enum, the typed refusals `ErrNotAllowed`/`ErrUnavailable`/`ErrUnauthorised`, `run` (no shell, bounded; cut-short runs wrap `ErrTimedOut`/`ErrStopped`/`ErrOutputIncomplete`), `cappedBuffer` |
 | `ffuf.go` | `RunFFUF`, `FFUFOptions`, `FFUFResult`, the `Discovery` record, `parseFFUF`, and `FFUFResult.Rows` |
 | `nuclei.go` | `RunNuclei`, `NucleiOptions`, `NucleiResult`, the `TemplateHit` record, `parseNuclei`, `MapSeverity`, and `NucleiResult.Rows` |
 | `util.go` | Small shared helpers: `pathOf`, `statusText`, stable sorting, `dedupe` |
@@ -46,9 +46,14 @@ There is no Rust crate counterpart.
   The requests are already sent by then; the point is that an out-of-engagement result must not enter
   a report as though burpsy meant to fetch it. Both filters return nil for a nil scope rather than
   passing everything through.
-- **`Outcome` is the honest-counting type, and `len(Discoveries) == 0` is not a verdict.** Six states
-  keep "not allowlisted", "binary missing", "scope refused", "nothing asked", "ran and failed" and
-  "ran" apart. `Outcome.Looked()` is the only thing a caller may gate a "clean" claim on.
+- **`Outcome` is the honest-counting type, and `len(Discoveries) == 0` is not a verdict.** Seven states
+  keep "not allowlisted", "binary missing", "scope refused", "nothing asked", "ran and failed",
+  "ran but was cut short" (`OutcomePartial`) and "ran" apart. `Outcome.Looked()` is the only thing a
+  caller may gate a "clean" claim on; `Outcome.Reported()` is what gates showing results. A nuclei
+  run killed at its timeout, stopped, whose output was not fully captured, or that stopped parsing
+  keeps the hits it streamed but is `OutcomePartial` with `NucleiResult.Incomplete` naming why —
+  classified from `run`'s wrapped `ErrTimedOut`/`ErrStopped`/`ErrOutputIncomplete`, never from the
+  message text (burpsy-react-ui-b2wh).
 - **`ffuf` has no stdout-JSON mode.** `-of` selects the format of the `-o` file, so `RunFFUF` manages
   a temp file and removes it. `nuclei` does stream JSONL to stdout under `-jsonl`. Do not "simplify"
   ffuf to a stdout parse — it does not exist.

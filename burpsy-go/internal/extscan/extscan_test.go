@@ -173,7 +173,7 @@ func TestMapSeverityUsesBurpsysOwnVocabulary(t *testing.T) {
 }
 
 func TestOutcomeLookedOnlyForCompleted(t *testing.T) {
-	for _, o := range []Outcome{OutcomeNotInvoked, OutcomeNotAllowed, OutcomeUnauthorised, OutcomeUnavailable, OutcomeFailed} {
+	for _, o := range []Outcome{OutcomeNotInvoked, OutcomeNotAllowed, OutcomeUnauthorised, OutcomeUnavailable, OutcomeFailed, OutcomePartial} {
 		if o.Looked() {
 			t.Errorf("%v reported that the tool looked", o)
 		}

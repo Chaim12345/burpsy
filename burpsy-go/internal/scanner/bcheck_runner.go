@@ -115,12 +115,13 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 			continue
 		}
 		// A check carrying `send payload` can only run where there is an insertion point to
-		// place it: `given … insertion point`. M2Runnable is false for exactly those checks, so
-		// a non-insertion-point scope with a non-M2 check is one whose payload has nowhere to
+		// place it: `given … insertion point`. NeedsInsertionPoint is true for exactly those
+		// checks, so a non-insertion-point scope with one is a check whose payload has nowhere to
 		// go — dispatch would fail it as ActiveNeedsPoint on every run. Left out rather than
-		// dispatched, and still counted as NeedsInsertionPoint by the load report, which is the
-		// honest place for a check the engine structurally cannot verdict.
-		if scope != DispatchScopePerInsertionPoint && !c.M2Runnable() {
+		// dispatched, and still counted by the load report, which is the honest place for a check
+		// the engine structurally cannot verdict. (This used to read !M2Runnable, which is also
+		// false for every collaborator check; NeedsInsertionPoint is the half that was meant.)
+		if scope != DispatchScopePerInsertionPoint && c.NeedsInsertionPoint() {
 			continue
 		}
 		// A check that needs an external tool cannot run without the allowlist
@@ -131,8 +132,16 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 			continue
 		}
 		cc := c
+		// A collaborator check is dispatched whether or not this scan has a channel: without one
+		// it is refused per item with the reason (counted Skipped), which is what an operator who
+		// turned Collaborator off must see — not a check that silently left the set.
+		var phase CheckPhase // the zero value every other corpus check has always carried
+		if cc.NeedsCollaborator() {
+			phase = PhaseCollaborator
+		}
 		out = append(out, activeCheck{
-			name: cc.Name,
+			phase: phase,
+			name:  cc.Name,
 			// A loaded corpus check IS a BCheck, and Burp files and selects every BCheck finding
 			// under one catalogue row (BCHECK_GENERATED, 0x09000000). With no type index the
 			// check was unselectable: "Audit checks - BChecks only.json" whitelists exactly that
@@ -155,7 +164,7 @@ func (s *ActiveScanner) corpusActiveChecks(corpus []*bcheck.Check) []activeCheck
 // runBCheckCorpus evaluates one loaded corpus check against one exchange,
 // sending its probes through the meter and the chokepoint.
 func (s *ActiveScanner) runBCheckCorpus(ctx context.Context, ex *core.Exchange, check *bcheck.Check) ([]*Finding, error) {
-	t := s.trialBCheck(ctx, ex, check)
+	t := s.trialBCheck(ctx, ex, check, true)
 	return t.Findings, t.err
 }
 
@@ -170,7 +179,12 @@ type CheckTrial struct {
 	Declined   []string
 	// Unsupported is the evaluator's reason when it refused the check (a needed collaborator or tool).
 	Unsupported string
-	err         error
+	// Awaiting counts the runs of a collaborator check whose interactions conditions had no answer
+	// yet when the probes were done. In an audit they are handed to the pending registry and
+	// settled after it; a console test run does not wait, so for it they are simply unanswered —
+	// not clean (burpsy-react-ui-ar8v).
+	Awaiting int
+	err      error
 }
 
 // Err is the run's failure, nil when it completed.
@@ -178,11 +192,17 @@ func (t CheckTrial) Err() error { return t.err }
 
 // TrialCorpusCheck runs one active check against one captured exchange exactly as an audit would —
 // the same sink, scope gate, tool runner and conversion — and reports the run (kbu1's "Run test").
+//
+// A collaborator check's runs that are still awaiting interactions are counted in Awaiting and not
+// registered for the scan's deferred phase: a test run is not part of an audit, and its findings
+// must not surface in whichever audit next calls FinishScan.
 func (s *ActiveScanner) TrialCorpusCheck(ctx context.Context, ex *core.Exchange, check *bcheck.Check) CheckTrial {
-	return s.trialBCheck(ctx, ex, check)
+	return s.trialBCheck(ctx, ex, check, false)
 }
 
-func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, check *bcheck.Check) (trial CheckTrial) {
+// trialBCheck runs one active corpus check. register hands a collaborator check's unanswered runs
+// to the pending registry, which only an audit does.
+func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, check *bcheck.Check, register bool) (trial CheckTrial) {
 	if ex == nil || ex.Response == nil {
 		return CheckTrial{err: errCheckUnsupported, Unsupported: "the exchange has no stored response"}
 	}
@@ -226,6 +246,14 @@ func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, chec
 	// pre-tool behaviour — a check that somehow reaches `run tool` without one
 	// is refused by the evaluator, never skipped.
 	bctx.SetToolRunner(s.toolRunner)
+	// The collaborator rides the context the same way (burpsy-react-ui-ar8v): the scan's own
+	// out-of-band channel, or nil when the scan has none — which the evaluator refuses with the
+	// reason rather than running the check with empty addresses.
+	if check.NeedsCollaborator() {
+		if c := s.bcheckCollaboratorFor(ctx); c != nil {
+			bctx.SetCollaborator(c)
+		}
+	}
 	findings, rerr := bcheck.RunActive(check, bctx, sink, &bcheck.Target{
 		Host: ex.Host,
 		Port: ex.Port,
@@ -262,14 +290,24 @@ func (s *ActiveScanner) trialBCheck(ctx context.Context, ex *core.Exchange, chec
 			zap.Uint64("exchange_id", uint64(ex.ID)),
 			zap.Strings("unresolved", un))
 	}
-	out := make([]*Finding, 0, len(findings))
-	for _, f := range findings {
-		// The same conversion and catalogue enrichment the passive set uses, so
-		// a corpus check's finding means the same thing whichever scanner
-		// produced it.
-		converted := bcheckFindingToScannerFinding(f, ex)
-		EnrichFinding(converted)
-		out = append(out, converted)
+	// The same conversion and catalogue enrichment the passive set uses, so a corpus check's
+	// finding means the same thing whichever scanner produced it.
+	out := convertBCheckFindings(findings, ex)
+	deferred := bctx.Deferred()
+	if len(deferred) == 0 {
+		return CheckTrial{Findings: out}
 	}
-	return CheckTrial{Findings: out}
+	// Some run asked about interactions that had not arrived. Its answer belongs to the pending
+	// registry, which settles it after the audit; until then it is neither a finding nor clean.
+	if register {
+		if _, err := s.registerBCheckDeferred(ex, check, deferred); err != nil {
+			return CheckTrial{Findings: out, Awaiting: len(deferred), err: err}
+		}
+	}
+	if len(out) > 0 {
+		return CheckTrial{Findings: out, Awaiting: len(deferred)}
+	}
+	return CheckTrial{Awaiting: len(deferred), err: fmt.Errorf(
+		"bcheck %q: %d run(s) planted collaborator addresses and are awaiting interactions: %w",
+		check.Name, len(deferred), errCheckInconclusive)}
 }

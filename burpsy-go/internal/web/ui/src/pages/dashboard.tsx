@@ -10,12 +10,14 @@ import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSe
 import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import type { CrawlLoginReport } from "../lib/types.observe";
-import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
+import { useAPIScanCheck, useAPIScanReviewCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
 import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, NeedsValueButton, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import { APIScanReview } from "../ui/apiscan-review";
+import { buildReview, discardStale, emptyReview, reviewChangesRequest, type ReviewState } from "../lib/apiscan-review";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -697,6 +699,37 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // what this renders is the same parse the launch will use. See useAPIScanCheck for why it is a POST
  // behind a query hook rather than a second validate route.
  const scanCheck = useAPIScanCheck(definition, baseUrl);
+ // The API-details review step (burpsy-react-ui-vuw7). Built against the unreviewed parse, so a
+ // removed endpoint stays listed and a parameter's document value stays beside its override; the
+ // reviewed dry run below is the server's verdict on the review itself.
+ const [review, setReview] = useState<ReviewState>(emptyReview);
+ const operations = scanCheck.data?.definition.operations ?? [];
+ const builtReview = buildReview(operations, review);
+ const reviewChanges = reviewChangesRequest(builtReview.fields);
+ const reviewCheck = useAPIScanReviewCheck(
+  definition,
+  baseUrl,
+  builtReview.fields,
+  scanCheck.data !== undefined && reviewChanges && builtReview.missing === null,
+ );
+ const reviewedPaths = reviewChanges && reviewCheck.check.data ? new Map(reviewCheck.check.data.definition.operations.map((op) => [op.key, op.path])) : null;
+ const reviewedCount = operations.length - (builtReview.fields.exclude_endpoints?.length ?? 0);
+ // Why the API launch cannot go yet, in the operator's terms; null when it can.
+ const apiMissing =
+  definition.trim() === ""
+   ? "Paste or load an API definition first."
+   : scanCheck.data === undefined
+    ? scanCheck.error
+      ? "The definition was refused; see the message above."
+      : "Reading the definition…"
+    : builtReview.missing ??
+      (reviewChanges && reviewCheck.check.error
+       ? "The review was refused; see the message above."
+       : reviewChanges && (!reviewCheck.settled || reviewCheck.check.data === undefined)
+        ? "Checking the review…"
+        : startAPIScan.isPending
+         ? "Starting…"
+         : null);
 
  const chosen = selectedScanType(kind);
  const close = () => onOpenChange(false);
@@ -705,18 +738,21 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const canSubmit = auditing
   ? checked.length > 0 && !auditSelected.isPending
   : apiScan
-   ? definition.trim() !== "" && scanCheck.data !== undefined && !startAPIScan.isPending
+   ? apiMissing === null
    : chosen.ready && seed.trim() !== "" && !startCrawl.isPending;
  const submit = () => {
   if (apiScan) {
-   // The check already passed on this exact text, so the launch cannot be refused for a reason the
-   // operator was not shown — both calls run the server's one prepareAPIScan.
+   // The check already passed on this exact text and this exact review, so the launch cannot be
+   // refused for a reason the operator was not shown — every call runs the server's one
+   // prepareAPIScan. The dialog stays open until the server accepts, so a refusal that does happen
+   // (the scope changed in between) is read beside the review that caused it, not in a toast alone.
    startAPIScan.mutate(
     {
      definition,
      base_url: baseUrl.trim() || undefined,
      audit: auditEndpoints,
      max_requests: Number(apiMaxRequests) || undefined,
+     ...builtReview.fields,
     },
     {
      onSuccess: (accepted) => {
@@ -725,11 +761,14 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        `${accepted.audit ? "API scan" : "API sweep"} started over ${endpoints} endpoint${endpoints === 1 ? "" : "s"}` +
         (accepted.definition.placeholder_values > 0 ? ` (${accepted.definition.placeholder_note})` : ""),
       );
+      // The credential is not kept past the launch that needed it; the endpoint and parameter
+      // choices are, so a second scan of the same document starts from the same review.
+      setReview((current) => ({ ...current, auth: { type: "none" } }));
+      close();
      },
      onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Starting the API scan failed"),
     },
    );
-   close();
    return;
   }
   // The selection kind takes ids, not seeds, so it goes to /api/audit/selected and there is no crawl
@@ -880,6 +919,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
          onClick={() => {
           setDefinition("");
           setDefinitionName("");
+          setReview(emptyReview);
          }}
         >
          Clear
@@ -950,29 +990,25 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
          Base URL <code>{scanCheck.data.definition.base_url}</code>. Every request is re-authorised against the current scope
          before it is sent, exactly as a crawl's is.
         </p>
-        {/* Capped at twelve rows, with the remainder counted rather than dropped: a document can
-            describe hundreds of endpoints, and a list that silently stopped at twelve would read as
-            the whole list. The full record is on the run, which keeps every operation. */}
-        <SimpleTable headers={["Method", "Document path", "Request"]}>
-         {scanCheck.data.definition.operations.slice(0, 12).map((op) => (
-          <tr key={`${op.method} ${op.template} ${op.path}`}>
-           <td>
-            <Badge tone={op.method === "GET" ? "info" : op.method === "DELETE" ? "bad" : "warn"}>{op.method}</Badge>
-           </td>
-           <td>
-            <code>{op.template}</code>
-           </td>
-           <td className="cell-dim">
-            <code>{op.path}</code>
-           </td>
-          </tr>
-         ))}
-        </SimpleTable>
-        {scanCheck.data.definition.operations.length > 12 ? (
-         <p className="cell-dim" style={{ margin: 0 }}>
-          …and {scanCheck.data.definition.operations.length - 12} more endpoint(s); the run's record lists every one.
-         </p>
+        <APIScanReview
+         operations={operations}
+         format={scanCheck.data.definition.format}
+         state={review}
+         onChange={setReview}
+         reviewedPaths={reviewedPaths}
+        />
+        {builtReview.stale.length > 0 ? (
+         <div className="warn-text" role="status">
+          <p style={{ margin: 0 }}>
+           {builtReview.stale.length === 1 ? "1 review row no longer matches" : `${builtReview.stale.length} review rows no longer match`}{" "}
+           the edited definition and will not be sent: {builtReview.stale.join("; ")}.
+          </p>
+          <Button variant="outline" size="small" onClick={() => setReview(discardStale(operations, review))}>
+           Discard them
+          </Button>
+         </div>
         ) : null}
+        {reviewChanges && reviewCheck.check.error ? <ErrorNotice error={reviewCheck.check.error} title="The server refused this review" /> : null}
        </>
       ) : (
        <p className="cell-dim" style={{ margin: 0 }}>
@@ -981,7 +1017,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       )}
       <div className="metric-grid wide">
        <Field label="Max requests (empty = one per endpoint)" hint="A cap below the document's endpoint count sends a prefix of the list, and the report says how many were never sent.">
-        {(id) => <Input id={id} type="number" min={1} value={apiMaxRequests} onChange={(event) => setApiMaxRequests(event.target.value)} placeholder={String(scanCheck.data?.definition.operations.length ?? "")} />}
+        {(id) => <Input id={id} type="number" min={1} value={apiMaxRequests} onChange={(event) => setApiMaxRequests(event.target.value)} placeholder={scanCheck.data ? String(reviewedCount) : ""} />}
        </Field>
       </div>
       <div className="task-tile-row">
@@ -1076,13 +1112,20 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       <RecordedLoginPicker value={recordedLogin} onChange={setRecordedLogin} />
      </>
     ) : null}
+    {apiScan && startAPIScan.error ? <ErrorNotice error={startAPIScan.error} title="The API scan was not started" /> : null}
     <div className="toolbar-end">
      <Button variant="outline" size="small" onClick={close}>
       Cancel
      </Button>
-     <Button size="small" disabled={!canSubmit} onClick={submit}>
-      {auditing ? "Audit selected items" : apiScan ? `Scan ${scanCheck.data?.definition.operations.length ?? 0} endpoint${scanCheck.data?.definition.operations.length === 1 ? "" : "s"}` : "Start"}
-     </Button>
+     {apiScan ? (
+      <NeedsValueButton size="small" missing={apiMissing} onClick={submit}>
+       {`Scan ${reviewedCount} endpoint${reviewedCount === 1 ? "" : "s"}`}
+      </NeedsValueButton>
+     ) : (
+      <Button size="small" disabled={!canSubmit} onClick={submit}>
+       {auditing ? "Audit selected items" : "Start"}
+      </Button>
+     )}
     </div>
    </div>
   </Modal>
