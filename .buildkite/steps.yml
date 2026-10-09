@@ -1,0 +1,56 @@
+# The burpsy test steps for Buildkite hosted agents. Not uploaded directly: .buildkite/pipeline.yml
+# builds (or reuses) the agent image first and uploads this file with BURPSY_CI_IMAGE set to it.
+#
+# Every shard calls the same scripts the GitHub Actions gate calls (scripts/ci-shard.sh,
+# scripts/ci-install-tools.sh), so the two pipelines test the same thing and cannot drift. The
+# shards' union is every test in the module; ci-shard.sh refuses a split that would drop one.
+#
+# The image (.buildkite/Dockerfile) carries Go from go.mod, Chromium, bun 1.4.2, xmllint and the
+# pinned ffuf / nuclei / interactsh-client and template corpus; each test step still runs
+# ci-install-tools.sh, which skips whatever is already at its pin.
+
+image: "${BURPSY_CI_IMAGE}"
+
+agents:
+  queue: burpsy
+
+env:
+  # The Go module cache and build cache are reused across steps on the same agent when the queue
+  # keeps a cache volume; harmless when it does not.
+  GOFLAGS: -mod=readonly
+
+steps:
+  - label: ":go: lint"
+    key: lint
+    command: |
+      cd burpsy-go
+      test -z "$(gofmt -l .)" || { echo "gofmt would rewrite:"; gofmt -l .; exit 1; }
+      go build ./...
+      go vet ./...
+    timeout_in_minutes: 15
+
+  - label: ":go: test {{matrix}}"
+    key: test
+    matrix:
+      - scanner-budget
+      - scanner-detect
+      - scanner-rest
+      - web
+      - rest
+      - race-web-0
+      - race-web-1
+    command: |
+      scripts/ci-install-tools.sh
+      export PATH="$$HOME/.local/bin:$$PATH"  # $$: kept for the job, not interpolated at upload
+      scripts/ci-shard.sh "{{matrix}}"
+    timeout_in_minutes: 40
+
+  - label: ":bun: ui"
+    key: ui
+    command: |
+      cd burpsy-go/internal/web/ui
+      bun install --frozen-lockfile
+      bun run check
+      bun run build
+      git diff --quiet -- . || { echo "UI bundle differs from a fresh build"; git diff --stat -- .; exit 1; }
+    timeout_in_minutes: 15

@@ -9,10 +9,15 @@
 # changes to get that time back.
 FROM golang:1.26.2-bookworm
 
+# Buildkite hosted agents need git, ca-certificates and bash in the image (they add the agent and
+# docker themselves) and run it as its own user; this image stays root. pipefail so a failed
+# download in a `curl | bash` below fails the build instead of leaving a dangling symlink.
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 # Chromium for the DOM catalog rows (the suite refuses to run without a browser), xmllint for the
 # Burp-XML DTD tests, unzip/curl for ci-install-tools.sh, git for the checkout and diffs.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends chromium libxml2-utils unzip curl git ca-certificates \
+ && apt-get install -y --no-install-recommends chromium libxml2-utils unzip curl git ca-certificates bash \
  && rm -rf /var/lib/apt/lists/*
 
 # bun is pinned exactly: dist/app.js is byte-reproducible only with 1.4.2.
