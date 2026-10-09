@@ -51,9 +51,13 @@ func guardedSwitch(t *testing.T, srv *Server, method, path, body string, confirm
 
 // mintSwitchConfirmation asks the gate for a confirmation against the switch route, exactly as
 // the console's useOpenProject does.
-func mintSwitchConfirmation(t *testing.T, srv *Server) string {
+func mintSwitchConfirmation(t *testing.T, srv *Server, body string) string {
 	t.Helper()
-	rec := guardedSwitch(t, srv, http.MethodPost, "/api/project/open/confirm", "", "")
+	desc, err := json.Marshal(map[string]string{"method": http.MethodPost, "url": "/api/project/open", "body": body})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec := guardedSwitch(t, srv, http.MethodPost, "/api/project/open/confirm", string(desc), "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("minting the switch confirmation = %d, want 200; body %s", rec.Code, rec.Body.String())
 	}
@@ -78,7 +82,7 @@ func openProjectSwitch(t *testing.T, srv *Server, path string) *httptest.Respons
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	return guardedSwitch(t, srv, http.MethodPost, "/api/project/open", string(raw), mintSwitchConfirmation(t, srv))
+	return guardedSwitch(t, srv, http.MethodPost, "/api/project/open", string(raw), mintSwitchConfirmation(t, srv, string(raw)))
 }
 
 // seedCapture puts one exchange into the store the console serves, so a test can tell which

@@ -61,8 +61,25 @@ anything.
 
 Every route carries a risk class (declared in the manifest). These matter when a
 **model or script** drives the API unattended rather than a human clicking:
-higher classes are the ones a future confirmation gate (MCP-02, see
-[MCP.md](./MCP.md)) will require a human to approve.
+`scope`, `attack`, `credential` and `destructive` are the classes the confirmation gate
+(`internal/web/confirm_gate.go`; see [MCP.md](./MCP.md)) requires an explicit confirmation for.
+
+**Confirming a call.** A mutating call (anything but GET/HEAD/OPTIONS/TRACE) to a gated route without
+a token answers **428**. A token is minted for **one exact call**, not for the route:
+
+```
+POST <route, trailing slash trimmed>/confirm
+{"method": "POST", "url": "/api/audit/12?x=1", "body": "<the exact request body>"}
+```
+
+(`body_base64` instead of `body` for a body that is not UTF-8; omit both for no body.) The answer is
+`{token, route, expires_in, confirm_with, binding, call}`, where `call` is the server's preview of the
+request the token authorises — `method`, `url`, `body_kind`, `body` (pretty-printed; JSON members
+named like passwords, secrets, tokens, keys or cookies withheld and listed in `redacted`),
+`body_bytes` and `body_sha256`. Send the call with `X-Burpsy-Confirm: <token>`. The token is
+single-use, lives 60 seconds, and is refused and burned when the call's method, path, query or body
+differs from the described one (burpsy-react-ui-e0yq). JSON bodies and queries are compared in
+canonical form, so key order and whitespace do not matter; anything that decodes differently does.
 
 | Class | Meaning |
 |---|---|
@@ -82,7 +99,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/history` | read | Proxy history, filtered by the typed query DSL. |
-| DELETE | `/api/history/rows` | **destructive** | Burp's "Delete items" / "Clear (tool)": `{"ids":[..]}` removes those rows, no body clears every row; answers `{removed, requested}`. A view-level tombstone (ids stay stable, bytes are not erased). Needs a confirmation (`POST /api/history/rows/confirm`, then the `X-Burpsy-Confirm` header). Was `DELETE /api/history` before gf68, which now answers 405. |
+| DELETE | `/api/history/rows` | **destructive** | Burp's "Delete items" / "Clear (tool)": `{"ids":[..]}` removes those rows, no body clears every row; answers `{removed, requested}`. A view-level tombstone (ids stay stable, bytes are not erased). Needs a confirmation of the exact call (`POST /api/history/rows/confirm` with `{"method":"DELETE","url":"/api/history/rows","body":…}`, then the `X-Burpsy-Confirm` header). Was `DELETE /api/history` before gf68, which now answers 405. |
 | GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. With any of `byte_offset`, `max_bytes` (1–65536, default 2048), `pattern` (RE2; anchors the window at the first match, `byte_offset` then relative to it), `case_insensitive`, `decoded`: a **window** of the body instead — `head` in full, `window_base64` (exact) and `window_text` (+ `window_utf8`), `next_offset` (null at the end), `anchor`, `matches` (≤100, always an array). Reads a body of any size to its last byte. |
 | GET | `/api/skills` | read | The skill library loaded with `-skills DIR`: each skill (tools it calls, arguments, available, disabled for this project) and every refused manifest with why. |
 | GET | `/api/skills/{name}` | read | One skill with its prompt rendered from `?argument=value`; 409 when disabled or unavailable, 400 for a missing required argument. |

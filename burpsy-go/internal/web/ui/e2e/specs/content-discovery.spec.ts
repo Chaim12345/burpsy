@@ -23,12 +23,14 @@ test.describe("Content discovery — built-in lists and recursion", () => {
   // thing to screenshot. /api/scope is an unattended-caller-gated route, so the
   // include goes through the one-time confirmation the gate exists for — the
   // same flow a scripted caller uses in production.
-  const confirm = await page.request.post("/api/scope/confirm");
+  // The token is bound to the exact call (burpsy-react-ui-e0yq), so the mint describes it.
+  const include = JSON.stringify({ action: "include", pattern: "127.0.0.1" });
+  const confirm = await page.request.post("/api/scope/confirm", { data: { method: "POST", url: "/api/scope", body: include } });
   expect(confirm.ok(), "minting the scope confirmation").toBe(true);
   const { token } = (await confirm.json()) as { token: string };
   const scoped = await page.request.post("/api/scope", {
-   data: { action: "include", pattern: "127.0.0.1" },
-   headers: { "X-Burpsy-Confirm": token },
+   data: include,
+   headers: { "X-Burpsy-Confirm": token, "content-type": "application/json" },
   });
   expect(scoped.ok(), "the scope include must be accepted").toBe(true);
 

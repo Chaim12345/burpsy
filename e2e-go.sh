@@ -21,12 +21,17 @@ PASS=0; FAIL=0
 ok(){ echo "  PASS  $1"; PASS=$((PASS+1)); }
 no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 
-# gated_post PATTERN URL [curl args...] — POST to a confirmation-worthy route the way an operator does.
+# gated_post PATTERN URL BODY [curl args...] — POST to a confirmation-worthy route the way an
+# operator does. BODY is the exact request body ("" for none); it is sent with -d when non-empty.
 #
 # Every mutating call to a riskAttack/riskScope/riskCredential/riskDestructive route is refused with
 # 428 unless it carries a one-time token (burpsy-react-ui-ejp5). This suite predates that gate, so it
 # called those routes bare and read the 428 as a product regression — which is how a gate is supposed
 # to look to a harness nobody updated.
+#
+# The token is bound to the exact call (burpsy-react-ui-e0yq): the mint describes the method, the
+# path and the body, and the gate refuses the token on any other request. So the body is an argument
+# here, not a curl flag — a mint that described one body while curl sent another is refused.
 #
 # The pattern is passed separately from the URL on purpose, and getting that wrong is the mistake
 # this comment exists to stop repeating: a confirmation is minted against the MANIFEST pattern, so
@@ -34,14 +39,18 @@ no(){ echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 # "/api/audit/0/confirm", which is not a registered mint endpoint and answers 404 — the same
 # concrete-path-for-a-pattern confusion the MCP transport documents in burpsy-react-ui-q31t.
 gated_post(){
-  local pattern="$1"; local url="$2"; shift 2
+  local pattern="$1"; local url="$2"; local body="$3"; shift 3
   local token err
   err=$(mktemp)
-  token=$(python3 - "$WEB_PORT" "$pattern" <<'PY' 2>"$err"
-import json,sys,urllib.request
-web,pattern=sys.argv[1],sys.argv[2]
+  token=$(python3 - "$WEB_PORT" "$pattern" "$url" "$body" <<'PY' 2>"$err"
+import json,sys,urllib.parse,urllib.request
+web,pattern,url,body=sys.argv[1:5]
+u=urllib.parse.urlsplit(url)
+desc={"method":"POST","url":u.path+("?"+u.query if u.query else "")}
+if body:
+    desc["body"]=body
 r=urllib.request.urlopen(urllib.request.Request(
-    f"http://127.0.0.1:{web}{pattern.rstrip('/')}/confirm",b"",{"content-type":"application/json"}),timeout=10)
+    f"http://127.0.0.1:{web}{pattern.rstrip('/')}/confirm",json.dumps(desc).encode(),{"content-type":"application/json"}),timeout=10)
 print(json.load(r).get("token",""))
 PY
 )
@@ -54,7 +63,11 @@ PY
     return 0
   fi
   rm -f "$err"
-  curl -s -X POST "$url" -H "X-Burpsy-Confirm: $token" "$@"
+  if [ -n "$body" ]; then
+    curl -s -X POST "$url" -H "X-Burpsy-Confirm: $token" -d "$body" "$@"
+  else
+    curl -s -X POST "$url" -H "X-Burpsy-Confirm: $token" "$@"
+  fi
 }
 
 BIN=$(mktemp -u /tmp/burpsy-go-e2e.XXXXXX)
@@ -155,11 +168,11 @@ PY
 AUD=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$WEB_PORT/api/audit/0" -H 'content-type: application/json')
 [ "$AUD" = "428" ] && ok "an unconfirmed POST /api/audit/0 is refused (the gate)" \
   || no "unconfirmed POST /api/audit/0 -> HTTP $AUD, want 428"
-AUDB=$(gated_post "/api/audit/" "http://127.0.0.1:$WEB_PORT/api/audit/0" -H 'content-type: application/json')
+AUDB=$(gated_post "/api/audit/" "http://127.0.0.1:$WEB_PORT/api/audit/0" "" -H 'content-type: application/json')
 echo "$AUDB" | grep -q '"exchange_id":0' && ok "audit ran against exchange 0" || no "audit body: ${AUDB:0:160}"
 # The legacy alias had the same bug spelled differently ("exchange_id is required" for a supplied 0).
-LEG=$(gated_post "/api/scanner/audit" "http://127.0.0.1:$WEB_PORT/api/scanner/audit" \
-      -H 'content-type: application/json' -d '{"exchange_id":0}')
+LEG=$(gated_post "/api/scanner/audit" "http://127.0.0.1:$WEB_PORT/api/scanner/audit" '{"exchange_id":0}' \
+      -H 'content-type: application/json')
 echo "$LEG" | grep -q '"exchange_id":0' && ok "legacy alias accepts exchange 0" || no "legacy alias: ${LEG:0:160}"
 
 echo "=== 4. stored request is retrievable and byte-exact ==="
@@ -217,10 +230,12 @@ import json,sys,urllib.request
 web,mid,tgt=sys.argv[1],int(sys.argv[2]),sys.argv[3]
 # The attack is confirmation-worthy, so the operator's two steps are both performed here: mint a
 # token for the route, then spend it on the call. A bare POST is a 428 by design.
-tok=json.load(urllib.request.urlopen(urllib.request.Request(
-    f"http://127.0.0.1:{web}/api/intruder/run/confirm",b"",{"content-type":"application/json"}),timeout=10))["token"]
 body=json.dumps({"msg_id":mid,"target":f"http://127.0.0.1:{tgt}",
                  "point_index":0,"payloads":["AAA","BBB","'"],"all":False}).encode()
+# The token is bound to this exact call (burpsy-react-ui-e0yq), so the mint describes it.
+desc=json.dumps({"method":"POST","url":"/api/intruder/run","body":body.decode()}).encode()
+tok=json.load(urllib.request.urlopen(urllib.request.Request(
+    f"http://127.0.0.1:{web}/api/intruder/run/confirm",desc,{"content-type":"application/json"}),timeout=10))["token"]
 r=urllib.request.urlopen(urllib.request.Request(
     f"http://127.0.0.1:{web}/api/intruder/run",body,
     {"content-type":"application/json","X-Burpsy-Confirm":tok}),timeout=60)
@@ -258,8 +273,9 @@ web,tgt=sys.argv[1],sys.argv[2]
 raw=f"GET /token HTTP/1.1\r\nHost: 127.0.0.1:{tgt}\r\nConnection: close\r\n\r\n"
 body=json.dumps({"target":f"http://127.0.0.1:{tgt}","protocol":"http","request":raw,"count":12,
                  "location":{"kind":"cookie","name":"E2E_SESSION"}}).encode()
+desc=json.dumps({"method":"POST","url":"/api/sequencer/capture","body":body.decode()}).encode()
 tok=json.load(urllib.request.urlopen(urllib.request.Request(
-    f"http://127.0.0.1:{web}/api/sequencer/capture/confirm",b"",{"content-type":"application/json"}),timeout=10))["token"]
+    f"http://127.0.0.1:{web}/api/sequencer/capture/confirm",desc,{"content-type":"application/json"}),timeout=10))["token"]
 started=json.load(urllib.request.urlopen(urllib.request.Request(
     f"http://127.0.0.1:{web}/api/sequencer/capture",body,
     {"content-type":"application/json","X-Burpsy-Confirm":tok}),timeout=20))
