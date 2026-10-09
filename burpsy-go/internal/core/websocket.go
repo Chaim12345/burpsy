@@ -395,6 +395,16 @@ func (r *WsReassembler) MarkLastMessageUserEdited() {
 	}
 }
 
+// AtMessageBoundary reports whether the bytes fed so far end exactly between two messages: no
+// header half-read, no frame payload in flight, and no fragmented data message open. It is the
+// one place a third party may splice a whole new data frame into the stream the reassembler is
+// tracking (burpsy-react-ui-wuwf) — between two frames of one fragmented message only control
+// frames may appear (RFC 6455 §5.4), and anywhere inside a frame a new header would be read as
+// payload by the peer.
+func (r *WsReassembler) AtMessageBoundary() bool {
+	return r.inFlight == nil && len(r.head) == 0 && !r.partialOpen
+}
+
 func (r *WsReassembler) beginFrame(hdr *WsFrameHeader) {
 	dest := wsDestData
 	if hdr.Opcode.IsControl() {

@@ -681,7 +681,11 @@ export interface WsConnection {
  exchange: number;
  host: string;
  port: number;
+ /** The handshake's scheme. */
+ tls: boolean;
  path: string;
+ /** Open through the proxy right now, so Repeater can attach to it (burpsy-react-ui-wuwf). */
+ live: boolean;
  messages: number;
  sent: number;
  received: number;
@@ -714,6 +718,9 @@ export interface WsRow {
   *  frame on one connection and different between two connections to the same URL. Carried beside
   *  `exchange` — same number, the name an operator migrating from Burp looks for on screen. */
  socket_id: number;
+ /** A note the capture or the relay attached — e.g. that Repeater, attached, sent this frame rather
+  *  than the peer it is attributed to (wuwf). */
+ note?: string;
 }
 
 export interface WsRepeaterSendResult {
@@ -727,6 +734,15 @@ export interface WsRepeaterSendResult {
  close_code?: number;
  close_reason?: string;
  elapsed_ms: number;
+}
+
+/** POST /api/repeater/ws-attach's answer (burpsy-react-ui-wuwf): the frame went into the live
+ *  connection, and is the connection's history row `message_id`. */
+export interface WsAttachResult {
+ socket: number;
+ message_id: number;
+ direction: "client_to_server" | "server_to_client";
+ len: number;
 }
 
 export interface WsHistory {

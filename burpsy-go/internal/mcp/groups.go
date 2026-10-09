@@ -86,9 +86,9 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "send", group: groupRequests,
-		short: "Sends one request (or a group, a WebSocket message, an HTTP/2 frame program) to the target and returns the response.",
+		short: "Sends one request (or a group, a WebSocket message — on a new, cloned or attached live connection — an HTTP/2 frame program) to the target and returns the response.",
 		ops: []string{
-			"POST /api/repeater/send", "POST /api/repeater/send-group", "POST /api/repeater/ws-send",
+			"POST /api/repeater/send", "POST /api/repeater/send-group", "POST /api/repeater/ws-send", "POST /api/repeater/ws-attach",
 			"POST /api/repeater/browser-reissue", "POST /api/http2/program",
 		},
 	},
@@ -174,6 +174,13 @@ var groupedTools = []groupSpec{
 			"GET /api/hidden-inputs", "POST /api/hidden-inputs", "POST /api/scanner/checks/test",
 			"GET /api/scanner/live", "POST /api/scanner/live", "POST /api/scanner/audit-items/",
 		},
+	},
+	{
+		// Its own tool, not an op of "scan": the fetch is one or two bounded requests (egress), and a
+		// grouped tool spans exactly one risk class (burpsy-react-ui-fu4l).
+		name: "scan_definition_fetch", group: groupScanning,
+		short: "Fetches an API definition from a URL for an API-only scan (Upload from URL), with optional Basic, Bearer or OAuth2 client-credentials auth; one scope-checked GET, not recorded in history.",
+		ops:   []string{"POST /api/apiscan/fetch"},
 	},
 	{
 		name: "scan_schedules", group: groupScanning,

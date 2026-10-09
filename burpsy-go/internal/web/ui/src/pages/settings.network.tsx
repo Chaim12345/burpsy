@@ -79,7 +79,7 @@ export function PlatformAuthSection(): JSX.Element {
     <Card>
       <SectionHeading
         title="Platform authentication"
-        detail="Credentials burpsy presents to a host that demands them. Rules are matched top to bottom and the first host match wins. Presented on Repeater sends, scanner probes and browser traffic through the proxy — a browser's own Authorization header is never replaced. Digest needs the host's 401 challenge first, so the first request to a protected host is refused and the next one authenticates."
+        detail="Credentials burpsy presents to a host that demands them. Rules are matched top to bottom and the first host match wins. Presented on Repeater sends, scanner probes and browser traffic through the proxy — a browser's own Authorization header is never replaced. Digest needs the host's 401 challenge first, so the first request to a protected host is refused and the next one authenticates. NTLM runs its handshake on one dedicated connection per send (not on the proxy leg, which answers NTLM only for servers that do not bind the handshake to a connection)."
         actions={
           <>
             {data ? (
@@ -99,7 +99,7 @@ export function PlatformAuthSection(): JSX.Element {
           <span>
             <span>Prompt for credentials on platform authentication failure</span>
             <span className="cell-dim" style={{ display: "block" }}>
-              Off by default. On, a host that challenges for Basic, Digest or NTLM credentials and gets none it
+              Off by default. On, a host that challenges for Basic, Digest, NTLM or Negotiate credentials and gets none it
               accepts opens a prompt here to enter them; they apply from that host&apos;s next request.
             </span>
           </span>
@@ -129,10 +129,26 @@ export function PlatformAuthSection(): JSX.Element {
       {data && data.unsupported.length ? (
         <div className="notice">
           <span>
-            {data.unsupported.join(", ")} {data.unsupported.length === 1 ? "is" : "are"} not implemented by this build
-            and cannot be selected. NTLMv1 is DES-only — a weaker credential that also does not work — and Negotiate
-            needs a Kerberos credential rather than a password. Basic is sent preemptively; Digest and NTLMv2 answer
-            one challenge first, with NTLMv2 exchanging NTLMSSP negotiate, challenge and authenticate messages.
+            {data.unsupported.join(", ")} {data.unsupported.length === 1 ? "is" : "are"} not implemented by this build:
+            Kerberos needs a ticket rather than a password. A host that offers Negotiate is answered by an NTLMv2 (or
+            NTLMv1) rule with raw NTLM inside the Negotiate header; a host whose Negotiate token is Kerberos/SPNEGO is
+            refused and recorded as a failure. Basic is sent preemptively; Digest and NTLM answer one challenge first.
+          </span>
+        </div>
+      ) : null}
+
+      {data && data.warnings && data.warnings.length ? (
+        <div className="notice notice-warn" role="status">
+          <span>
+            Weak authentication was used:{" "}
+            {data.warnings.map((warning, index) => (
+              <span key={warning.host}>
+                {index ? "; " : ""}
+                <code>{warning.host}</code> — {warning.scheme} over {warning.wire}, {warning.count}{" "}
+                {warning.count === 1 ? "handshake" : "handshakes"}, last {new Date(warning.last_seen).toLocaleString()}
+              </span>
+            ))}
+            . {data.warnings[0]?.warning}.
           </span>
         </div>
       ) : null}
@@ -143,7 +159,7 @@ export function PlatformAuthSection(): JSX.Element {
             <Input id={id} value={host} placeholder="api.example.com" onChange={(event) => setHost(event.target.value)} />
           )}
         </Field>
-        <Field label="Scheme" hint="Basic is preemptive; Digest and NTLMv2 wait for a challenge.">
+        <Field label="Scheme" hint="Basic is preemptive; Digest and NTLM wait for a challenge. NTLMv1 is a weak downgrade — choose it only for a target that refuses NTLMv2.">
           {(id) => (
             <Select
               id={id}
@@ -153,7 +169,15 @@ export function PlatformAuthSection(): JSX.Element {
             >
               {schemes.map((option) => (
                 <option key={option} value={option}>
-                  {option === "basic" ? "Basic" : option === "digest" ? "Digest" : option === "ntlmv2" ? "NTLMv2" : option}
+                  {option === "basic"
+                    ? "Basic"
+                    : option === "digest"
+                      ? "Digest"
+                      : option === "ntlmv2"
+                        ? "NTLMv2"
+                        : option === "ntlmv1"
+                          ? "NTLMv1 (weak downgrade)"
+                          : option}
                 </option>
               ))}
             </Select>
@@ -190,6 +214,16 @@ export function PlatformAuthSection(): JSX.Element {
         </Button>
       </Toolbar>
 
+      {scheme === "ntlmv1" ? (
+        <div className="notice notice-warn" role="note">
+          <span>
+            NTLMv1 is an explicit downgrade: its response is DES under the password&apos;s NT hash, so anyone who captures
+            the exchange can crack the password offline. It is used only for hosts this rule covers, never as a fallback
+            for an NTLMv2 rule, and every handshake under it is recorded as a weak-authentication warning here.
+          </span>
+        </div>
+      ) : null}
+
       {data && data.empty ? (
         <Empty
           title="No platform-authentication rules"
@@ -204,7 +238,12 @@ export function PlatformAuthSection(): JSX.Element {
                 <code>{rule.host}</code>
               </td>
               <td>
-                <Badge tone="neutral">{rule.scheme}</Badge>
+                <Badge tone={rule.warning ? "warn" : "neutral"}>{rule.scheme}</Badge>
+                {rule.warning ? (
+                  <span className="field-hint" style={{ display: "block" }}>
+                    {rule.warning}
+                  </span>
+                ) : null}
               </td>
               <td>{rule.username}</td>
               <td>{rule.realm ? <code>{rule.realm}</code> : <span className="field-hint">any</span>}</td>

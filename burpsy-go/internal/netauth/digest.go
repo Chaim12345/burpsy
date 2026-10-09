@@ -577,4 +577,9 @@ func (c *Credentials) forgetMatching(pattern string) {
 			delete(c.ntlm, host)
 		}
 	}
+	for host := range c.negotiateHosts {
+		if matchHost(pattern, host) {
+			delete(c.negotiateHosts, host)
+		}
+	}
 }

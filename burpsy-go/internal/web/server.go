@@ -1091,6 +1091,7 @@ func (s *Server) setupRoutes() {
 	// Tools
 	s.mux.HandleFunc("/api/repeater/send", s.handleRepeaterSend)
 	s.mux.HandleFunc("/api/repeater/ws-send", s.handleRepeaterWsSend)
+	s.mux.HandleFunc("/api/repeater/ws-attach", s.handleRepeaterWsAttach)
 	s.mux.HandleFunc("/api/repeater/browser-reissue", s.handleRepeaterBrowserReissue)
 	// The re-issue fetch is served outside /api on purpose: it is the URL the operator's
 	// browser opens, and a URL the operator types should not look like a console API route.
@@ -1283,6 +1284,9 @@ func (s *Server) setupRoutes() {
 	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
 	// api_apiscan.go's package comment for why there is one read door and not two.
 	s.mux.HandleFunc("/api/apiscan", s.handleAPIScan)
+	// Upload from URL (burpsy-react-ui-fu4l): fetch a definition, optionally authenticated, through the
+	// authorised sender; api_apiscan_fetch.go.
+	s.mux.HandleFunc("/api/apiscan/fetch", s.handleAPIScanFetch)
 	// Content discovery: Burp's "Discover content" engagement tool, delegated to ffuf. Registered
 	// beside the crawl because they answer the same operator question from opposite ends — a crawl
 	// follows what the application links to, a sweep guesses what it does not.

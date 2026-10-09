@@ -116,6 +116,16 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskAttack,
 		summary: "start an API-only scan from an OpenAPI 3.x or Swagger 2.0 definition (JSON or YAML), sending the endpoints it describes in place of URLs to crawl; dry_run: true reports what a run would send instead",
 	},
+	"/api/apiscan/fetch": {
+		// riskEgress, not riskAttack: one GET for the definition, plus one POST to a token endpoint when
+		// OAuth2 client credentials is chosen — a fixed, tiny count, each authorised against scope on its
+		// exact bytes before the dial. It carries the caller's credential for the fetch, and neither logs
+		// nor persists it: the fetch is not recorded in history, and the tool-log row has no query string.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "fetch an API definition from a URL for the API-only scan (Upload from URL), with optional " +
+			"Basic, Bearer or OAuth2 client-credentials auth; scope-gated, size- and time-bounded, and " +
+			"reports whether the document is OpenAPI, Swagger, Postman, WSDL or unrecognised",
+	},
 	"/api/audit/": {
 		methods: []string{"POST"}, risk: riskAttack, subPath: "0",
 		summary: "run an active audit over one captured exchange, by id (0 is valid — see HONEST-05)",
@@ -798,8 +808,18 @@ var manifest = map[string]route{
 		// To-client is answered 400 with the reason rather than attempted, so an unattended caller
 		// cannot reach the browser-facing half by omitting the direction.
 		methods: []string{"POST"}, risk: riskEgress,
-		summary: "resend one WebSocket frame on a freshly dialled connection, recording the handshake " +
-			"exchange and the reply frames; to-client is refused with its reason",
+		summary: "resend one WebSocket frame on a freshly dialled connection (or, with clone, one opened " +
+			"with a captured connection's own handshake), recording the handshake exchange and the reply " +
+			"frames; to-client is refused with its reason",
+	},
+	"/api/repeater/ws-attach": {
+		// riskEgress, the same class as ws-send: one operator-authored frame, into one connection. It
+		// dials nothing — the socket must be one the proxy is relaying right now, looked up by its
+		// WebSocket ID in the relay's own registry — and the connection's handshake target must be
+		// in scope. To-client is allowed here, because an attached connection has a client.
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "write one WebSocket frame into a connection open through the proxy (Repeater attach), " +
+			"to the server or to the client; scope-gated on the connection's target, recorded on its history",
 	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",

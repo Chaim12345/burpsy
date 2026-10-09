@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
 import type { CompareOp } from "./response-diff";
 import type { H2Field, KettleAnswer } from "./kettle";
-import type { WsRepeaterSendResult } from "./types";
+import type { WsAttachResult, WsRepeaterSendResult } from "./types";
 import type {
   RepeaterGroupSendItem,
   RepeaterGroupSendMode,
@@ -156,6 +156,22 @@ export interface RepeaterWsSendBody {
  payload: string;
  /** Burp's other direction. Refused by the wire with its reason — see the store's wsDirection. */
  to_client?: boolean;
+ /** Open the new connection with the captured handshake of WebSocket `socket` (wuwf). */
+ clone?: boolean;
+ /** The WebSocket ID to clone. */
+ socket?: number;
+}
+
+/**
+ * Repeater's attach (burpsy-react-ui-wuwf): one frame into a connection the proxy is relaying right
+ * now, toward the server or the client. The replies are the connection's own traffic, read from
+ * its WebSockets history.
+ */
+export function useRepeaterWsAttach() {
+ return useMutation({
+  mutationFn: (body: { socket: number; opcode: string; payload: string; to_client?: boolean }) =>
+   api<WsAttachResult>("/api/repeater/ws-attach", json("POST", body)),
+ });
 }
 
 /**

@@ -127,6 +127,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
 	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
 	"POST /api/repeater/ws-send":         {body: typeOf[repeaterWsSendReq]()},
+	"POST /api/repeater/ws-attach":       {body: typeOf[repeaterWsAttachReq]()},
 	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
 	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},
 
@@ -169,6 +170,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/scanner/audit":  {body: typeOf[scannerAuditReq]()},
 	"POST /api/crawl":          {body: typeOf[crawlStartReq]()},
 	"POST /api/apiscan":        {body: typeOf[apiScanReq]()},
+	"POST /api/apiscan/fetch":  {body: typeOf[apiScanFetchReq]()},
 	"POST /api/discovery":      {body: typeOf[discoveryStartReq]()},
 	"POST /api/hidden-inputs":  {body: typeOf[hiddenInputStartReq]()},
 	"POST /api/scanner/live":   {body: typeOf[liveAuditEnableReq]()},

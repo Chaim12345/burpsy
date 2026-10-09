@@ -177,13 +177,27 @@ from it:
 1. A mutating call to a confirmation-worthy route with no confirmation is refused by the console with
    **HTTP 428**, and the transport surfaces that refusal as an `isError` tool result with the gate's
    own body verbatim.
-2. Recovering from it is an explicit, separate step: the client calls **`burpsy_confirm`** with the
-   route pattern, which POSTs the console's own mint endpoint and returns a one-time token.
-3. The original call is re-issued with `confirm` set to that token. The transport relays it as the
-   `X-Burpsy-Confirm` header — it never mints a token, never retries without one, and never caches
-   one.
+2. Recovering from it is an explicit, separate step: the client calls **`burpsy_confirm`** with
+   `{"tool": "<the tool>", "arguments": {<the call's exact arguments, without confirm>}}` — the
+   refusal prints this object for the refused call. The transport resolves those arguments with the
+   same code `tools/call` uses (including the `{"async":true}` it adds to an audit), POSTs the resolved
+   request to the console's own mint endpoint, and returns the console's **preview** of it — method,
+   URL, body (secret-named JSON members withheld, still covered by the hash) and the body's canonical
+   SHA-256 — with a one-time token bound to that request.
+3. The original call is re-issued, unchanged, with `confirm` set to that token. The transport relays
+   it as the `X-Burpsy-Confirm` header — it never mints a token, never retries without one, and never
+   caches one.
 
-The token is single-use, expires in **60 seconds**, and is bound to the route it was minted for.
+The token is single-use, expires in **60 seconds**, and is bound to the **resolved call**, not the
+route (burpsy-react-ui-e0yq): the gate recomputes method, path, canonical query and canonical body
+hash from the request it is about to admit and refuses — and burns — a token presented with any
+other request. A token minted for `POST /api/audit/41` does not authorise `POST /api/audit/42`; one
+minted to export the CA certificate does not export its private key. JSON bodies and queries are
+compared in canonical form (sorted keys/parameters, no insignificant whitespace), so a host that
+re-serialises the arguments between the two calls is not refused. A body whose objects name a member
+twice under `encoding/json`'s case folding is refused outright, because the handler reads whichever
+comes last and canonical order would hide which. The refusal names the tool and the argument keys to
+resend, never their values.
 
 `burpsy_confirm` is a separate tool precisely so the escalation is one visible, approvable call in
 the host's transcript rather than a field a model fills in silently. Its description states the limit
@@ -242,10 +256,9 @@ unreachable console is a JSON-RPC error, not an empty prompt list.
 - A response over **1 MiB** is truncated, and the cut is stated in the result rather than left silent.
 - A **streaming** route (`text/event-stream`) is refused with a reason, instead of being allowed to
   hang until the client timeout.
-- The gate's own 428 text prints the manifest pattern, so for a subtree route it reads
-  `POST /api/audit//confirm` — one slash too many. The transport prints the path it will actually
-  POST to (`/api/audit/confirm`) and says why the two differ; it does not edit the gate's message,
-  which is evidence.
+- Burp also publishes each tool's preview as an MCP resource (`burp://preview/<tool>{?args}`) with
+  `previewUri` in the tool metadata. burpsy's server advertises `tools` only; the preview is the
+  answer of `burpsy_confirm` rather than a separate resource read.
 - On `-surface routes` only, `tools/list` returns every manifest route including static assets (`/`
   and the SPA catch-all). That is honest — they are routes — but a model calling them gets the
   console's own HTML. The default grouped surface does not publish them.

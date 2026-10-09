@@ -71,56 +71,165 @@ export function confirmUrlFor(pattern: string): string {
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS", "TRACE"]);
 
 /**
- * Mint a one-time confirmation for the gated route `url` resolves to.
- *
- * The token is bound to that route (burpsy-react-ui-r9b5: a token minted for one route is refused —
- * and burned — on any other; the two members of an `/x` + `/x/` pair are one route), lives 60
- * seconds and is spent by one call. A raw fetch rather than `api()`, because `/x/confirm` itself
- * resolves under a gated `/x/` subtree and `api()` would try to mint for the mint.
+ * The call a confirmation is bound to, as the server resolved it — what the approver is shown.
+ * Mirrors confirmPreview in internal/web/confirm_binding.go.
  */
-export async function mintConfirmation(url: string): Promise<string> {
+export interface ConfirmedCallPreview {
+ method: string;
+ /** The path plus the canonical query, secret-looking query values withheld (listed in `redacted` as "?name"). For reading. */
+ url: string;
+ /** The decoded path exactly as bound, never redacted. */
+ path?: string;
+ body_bytes: number;
+ body_sha256: string;
+ body_kind: "none" | "json" | "text" | "binary";
+ /** Pretty-printed JSON (secret-named members withheld) or text; absent for none/binary. */
+ body?: string;
+ body_truncated?: boolean;
+ /** JSON members whose values the preview withheld; the hash still covers them. */
+ redacted?: string[];
+}
+
+/** A minted confirmation: the token, the digest it is bound to, and the server's preview of the call. */
+export interface MintedConfirmation {
+ token: string;
+ binding: string;
+ call: ConfirmedCallPreview;
+ /** Epoch ms after which the server no longer accepts the token. */
+ expiresAt: number;
+}
+
+/** The mint request body: the call the token will authorise (confirmCall in confirm_binding.go). */
+export interface CallDescription {
+ method: string;
+ url: string;
+ body?: string;
+ body_base64?: string;
+}
+
+function base64OfBytes(bytes: Uint8Array): string {
+ let binary = "";
+ for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+ return btoa(binary);
+}
+
+/**
+ * Describe the call `fetch(url, init)` will send, for a mint (burpsy-react-ui-e0yq).
+ *
+ * The token is bound to exactly this request — method, path and query, and body — so the body is
+ * described in the bytes fetch will send. A body fetch serialises with bytes this side never sees (a
+ * FormData, whose multipart boundary the browser picks at send time, or a stream) cannot be described
+ * and is refused here rather than minted for something else.
+ */
+export async function describeCall(url: string, init: RequestInit = {}): Promise<CallDescription> {
+ const parsed = new URL(url, "http://console.invalid");
+ const description: CallDescription = { method: (init.method ?? "GET").toUpperCase(), url: `${parsed.pathname}${parsed.search}` };
+ const body = init.body;
+ if (body === undefined || body === null) return description;
+ if (typeof body === "string") description.body = body;
+ else if (body instanceof URLSearchParams) description.body = body.toString();
+ else if (body instanceof Blob) description.body_base64 = base64OfBytes(new Uint8Array(await body.arrayBuffer()));
+ else if (body instanceof ArrayBuffer) description.body_base64 = base64OfBytes(new Uint8Array(body));
+ else if (ArrayBuffer.isView(body)) description.body_base64 = base64OfBytes(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+ else throw new ApiError("this request's body is assembled by the browser at send time, so it cannot be confirmed as the exact call", 0, "");
+ return description;
+}
+
+/**
+ * Mint a one-time confirmation for the one call `fetch(url, init)` will make.
+ *
+ * The token is bound to that call (burpsy-react-ui-e0yq: method, path, query and body; a token tried
+ * on any other request — or any other route — is refused and burned), lives 60 seconds and is spent
+ * by one call. The answer carries the server's preview of the call, which is what an approver is
+ * shown. A raw fetch rather than `api()`, because `/x/confirm` itself resolves under a gated `/x/`
+ * subtree and `api()` would try to mint for the mint.
+ */
+export async function mintConfirmation(url: string, init: RequestInit = {}): Promise<MintedConfirmation> {
  const pattern = gatedPatternFor(url) ?? new URL(url, "http://console.invalid").pathname;
- const response = await fetch(confirmUrlFor(pattern), { method: "POST" });
+ const description = await describeCall(url, init);
+ const response = await fetch(confirmUrlFor(pattern), {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(description),
+  cache: "no-store",
+ });
  const text = await response.text();
  if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
- let token = "";
+ let parsed: Partial<{ token: string; binding: string; call: ConfirmedCallPreview; expires_in: number }> = {};
  try {
-  token = (JSON.parse(text) as { token?: string }).token ?? "";
+  parsed = JSON.parse(text) as typeof parsed;
  } catch {
-  token = "";
+  parsed = {};
  }
- if (!token) throw new ApiError("the confirmation endpoint returned no token", response.status, text);
- return token;
+ if (!parsed.token || !parsed.binding || !parsed.call) throw new ApiError("the confirmation endpoint returned no token bound to a call", response.status, text);
+ return { token: parsed.token, binding: parsed.binding, call: parsed.call, expiresAt: Date.now() + (parsed.expires_in ?? 60) * 1000 };
 }
+
+/** The operator declined the previewed call; nothing was sent. Callers treat it as a cancel, not a failure. */
+export class ConfirmationDeclined extends Error {
+ constructor() {
+  super("the call was not confirmed, and nothing was sent");
+  this.name = "ConfirmationDeclined";
+ }
+}
+
+/** Options for a gated call. */
+export interface GatedOptions {
+ /**
+  * Show the operator the server's preview of the exact call and resolve whether they approve it. The
+  * call is sent only on true; false throws ConfirmationDeclined. Without it the click that led here
+  * is the approval, as before — the token is still bound to the exact call.
+  */
+ approve?: (call: ConfirmedCallPreview) => Promise<boolean>;
+}
+
+/** How close to expiry a token may be and still be spent, rather than re-minted, after a preview. */
+const REMINT_MARGIN_MS = 5000;
 
 /**
  * `fetch` for the console: a mutating call (anything but GET/HEAD/OPTIONS/TRACE — the gate's own
  * methodMutates rule) to a route the server gates (scope, attack, credential, destructive) first
- * mints a confirmation for exactly that route and sends it (burpsy-react-ui-p1uz).
+ * mints a confirmation for exactly that call and sends it (burpsy-react-ui-p1uz, e0yq).
  *
  * Why in the client and not at each call site: the gate landed (cc972e0) after most of the console
  * was written, and a dozen operator actions — Regenerate CA, Back up now, every scope edit, rule
  * saves and deletes — silently became 428s. One rule here, driven by a table generated from the Go
  * manifest (gated-routes.ts, drift-tested), means a newly gated route cannot regress the same way.
  *
+ * With `options.approve`, the server's preview of the call is put in front of the operator before
+ * anything is sent. An operator who takes longer than the token's life to answer gets a fresh token,
+ * and that token is spent only if the server bound it to the same call (equal binding digests) — the
+ * drift check between what was shown and what runs.
+ *
  * What this does NOT change: every console mutation is an operator's click (or an operator-armed
  * task), so minting on its behalf records that act. The gate exists for callers with no human
  * present — agents, scripts, other pages — and they still get 428. A caller that already holds a
  * token (an explicit mint) is left alone.
  */
-export async function gatedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+export async function gatedFetch(url: string, init: RequestInit = {}, options: GatedOptions = {}): Promise<Response> {
  const method = (init.method ?? "GET").toUpperCase();
  const headers = new Headers(init.headers);
  if (!SAFE_METHODS.has(method) && !headers.has(CONFIRM_HEADER) && gatedPatternFor(url) !== undefined) {
-  headers.set(CONFIRM_HEADER, await mintConfirmation(url));
+  let minted = await mintConfirmation(url, init);
+  if (options.approve) {
+   if (!(await options.approve(minted.call))) throw new ConfirmationDeclined();
+   if (Date.now() > minted.expiresAt - REMINT_MARGIN_MS) {
+    const again = await mintConfirmation(url, init);
+    if (again.binding !== minted.binding) {
+     throw new ApiError("the request changed between the preview and the send, so nothing was sent; try again", 409, "");
+    }
+    minted = again;
+   }
+  }
+  headers.set(CONFIRM_HEADER, minted.token);
  }
  return fetch(url, { ...init, headers });
 }
 
-export async function api<T>(url: string, init?: RequestInit): Promise<T> {
+export async function api<T>(url: string, init?: RequestInit, options?: GatedOptions): Promise<T> {
  const headers = new Headers(init?.headers);
  if (init?.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
- const response = await gatedFetch(url, { ...init, headers });
+ const response = await gatedFetch(url, { ...init, headers }, options);
  const text = await response.text();
  if (!response.ok) throw new ApiError(readFailure(text, response.statusText), response.status, text);
  if (!text) return null as T;

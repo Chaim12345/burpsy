@@ -24,10 +24,15 @@ def free_port():
 
 def api(base, method, path, body=None, confirm=False):
     headers = {"Content-Type": "application/json", "Origin": base}
-    if confirm:
-        req = urllib.request.Request(base + path + "/confirm", method="POST", headers=headers, data=b"")
-        headers["X-Burpsy-Confirm"] = json.load(urllib.request.urlopen(req))["token"]
     data = json.dumps(body).encode() if body is not None else None
+    if confirm:
+        # The token is bound to this exact call (method, path, body), so the mint describes it.
+        desc = {"method": method, "url": path}
+        if data is not None:
+            desc["body"] = data.decode()
+        req = urllib.request.Request(base + path.rstrip("/") + "/confirm", method="POST", headers=headers,
+                                     data=json.dumps(desc).encode())
+        headers["X-Burpsy-Confirm"] = json.load(urllib.request.urlopen(req))["token"]
     req = urllib.request.Request(base + path, method=method, headers=headers, data=data)
     with urllib.request.urlopen(req) as r:
         raw = r.read()

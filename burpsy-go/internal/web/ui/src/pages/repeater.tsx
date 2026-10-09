@@ -13,12 +13,14 @@ import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEnc
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
 import { useCommandHandler } from "../lib/commands";
-import { SendCancelled, useKettleAnswer, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
+import { SendCancelled, useKettleAnswer, useRepeaterSend, useRepeaterWsAttach, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup, type RepeaterWsSendBody } from "../lib/data.tools";
+import { useWsConnections, useWsHistory, useWsMessage } from "../lib/data";
+import { effectiveWsMode, planWsSend, toClientRuns, wsModeOptions, type WsConnectionMode } from "../lib/repeater-ws-connection";
 import { kettledListText, renderNormalised, requestBody, seedH2Fields, type H2Field, type KettleAnswer } from "../lib/kettle";
 import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
 import { isIntrospectionAnswer } from "../lib/graphql-introspection";
 import { mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "../lib/send-settings";
-import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
+import type { RepeaterWsHistoryEntry, WsAttachResult, WsRepeaterSendResult, WsRow } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
 import type {
@@ -197,6 +199,13 @@ export function RepeaterPage(): JSX.Element {
   const [inspecting, setInspecting] = useState<"request" | "response">("request");
   const send = useRepeaterSend();
  const wsSend = useRepeaterWsSend();
+  // Repeater's attach (wuwf): a frame into the live proxied connection the tab came from. The last
+  // attached send per tab is kept so the pane can say what went where; the replies themselves are
+  // the connection's own history, read live below.
+  const wsAttach = useRepeaterWsAttach();
+  const [attachSent, setAttachSent] = useState<Record<string, WsAttachResult>>({});
+  // Which captured connections the proxy still holds — what makes "attach" available.
+  const wsConnections = useWsConnections();
   const groupSend = useSendRepeaterGroup();
   /**
    * The last group send's outcome, or null when this session has not made one.
@@ -386,18 +395,25 @@ export function RepeaterPage(): JSX.Element {
       return;
     }
     const sentPayload = tab.wsPayload ?? "";
-    const toClient = (tab.wsDirection ?? "server") === "client";
+    // Which connection, and so which route (wuwf): attached, the frame goes into the live socket
+    // the tab came from; cloned or new, it goes out on a new connection. to-client rides every
+    // mode — on a new or cloned connection the wire refuses it with its reason, which is shown
+    // rather than the choice being hidden. See lib/repeater-ws-connection.ts.
+    const plan = planWsSend(tab);
+    if (plan.route === "/api/repeater/ws-attach") {
+      wsAttach.mutate(plan.body as { socket: number; opcode: string; payload: string; to_client?: boolean }, {
+        onSuccess: (result) => {
+          setAttachSent((current) => ({ ...current, [tab.id]: result }));
+          toast.success(
+            `Sent ${result.direction === "server_to_client" ? "to the client" : "to the server"} on live WebSocket #${result.socket}`,
+          );
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+      });
+      return;
+    }
     wsSend.mutate(
-      {
-        message: tab.fromExchange ?? 0,
-        target: tab.target,
-        opcode: tab.wsOpcode ?? "text",
-        payload: sentPayload,
-        // The direction Burp offers as a choice. to-server is the half a fresh dial can do;
-        // to-client is sent as the flag the wire refuses with its reason, so choosing it shows
-        // exactly why it cannot run here instead of the control being absent.
-        ...(toClient ? { to_client: true } : {}),
-      },
+      plan.body as unknown as RepeaterWsSendBody,
       {
         onSuccess: (result) => {
           setHistory((current) => ({
@@ -614,6 +630,10 @@ export function RepeaterPage(): JSX.Element {
   const httpResult = result && "status" in result ? result : null;
   /** The ws entry's reply frames, or null when it is an HTTP send's. */
   const wsResult = result && "ws" in result ? result.ws : null;
+  /** The ws tab's connection mode, and whether its connection is open through the proxy (wuwf). */
+  const activeWsMode: WsConnectionMode = active && active.kind === "ws" ? effectiveWsMode(active) : "new";
+  const activeWsLive =
+    active?.wsSocket !== undefined && (wsConnections.data ?? []).some((conn) => conn.exchange === active.wsSocket && conn.live);
 
   // Burp's tab and history actions (2czi), registered for the palette and the catalogue chords
   // (lib/commands.ts). Each passes null when it cannot run — no tab, nothing closed, already at the
@@ -1541,10 +1561,10 @@ export function RepeaterPage(): JSX.Element {
                   type="button"
                   className="button button-primary"
                   onClick={() => (active.kind === "ws" ? submitWs(active) : submit(active))}
-                  disabled={send.isPending || wsSend.isPending || groupSend.isPending || viewedRequest != null}
+                  disabled={send.isPending || wsSend.isPending || wsAttach.isPending || groupSend.isPending || viewedRequest != null}
                 >
                   <Send size={14} />
-                  {send.isPending || wsSend.isPending ? "Sending…" : "Send"}
+                  {send.isPending || wsSend.isPending || wsAttach.isPending ? "Sending…" : "Send"}
                 </button>
               </Tooltip>
               {/* Burp grows a dropdown arrow beside Send exactly when the active tab belongs to a
@@ -1780,6 +1800,29 @@ export function RepeaterPage(): JSX.Element {
             </Field>
           ) : null}
           {active.kind === "ws" ? (
+            /* Burp's "clone or attach to any open connection" (wuwf): which connection Send uses.
+             * Every mode is listed; one that cannot run is disabled with its reason as the
+             * option's title, so the chooser never reads as a tool that cannot attach at all. */
+            <Field label="Connection" style={{ maxWidth: "var(--w-md)" }}>
+              {(id) => (
+                <Select
+                  id={id}
+                  aria-label="Which connection the frame is sent on"
+                  value={activeWsMode}
+                  onChange={(event) => updateRepeaterTab(active.id, { wsMode: event.target.value as WsConnectionMode })}
+                >
+                  {wsModeOptions(active.wsSocket, activeWsLive).map((option) => (
+                    <option key={option.value} value={option.value} disabled={option.disabledReason !== undefined} title={option.disabledReason}>
+                      {option.disabledReason && option.value === "attach" && active.wsSocket !== undefined
+                        ? `${option.label} (closed)`
+                        : option.label}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+          ) : null}
+          {active.kind === "ws" ? (
             /* Burp's direction choice, on the tab that has it (6ex). Both directions are
              * offered: "to client" is refused by the wire with the reason it cannot run on a
              * fresh connection, and a chooser that hid half of Burp's choice would misstate
@@ -1795,7 +1838,9 @@ export function RepeaterPage(): JSX.Element {
                   }
                 >
                   <option value="server">To server</option>
-                  <option value="client">To client (refused on a fresh connection)</option>
+                  <option value="client">
+                    {toClientRuns(activeWsMode) ? "To client" : "To client (attached connections only)"}
+                  </option>
                 </Select>
               )}
             </Field>
@@ -1933,8 +1978,20 @@ export function RepeaterPage(): JSX.Element {
              * one dial per send, not a held socket — which is also what Burp's own "set
              * automatically" does once the original has closed.
              */
+            activeWsMode === "attach" && active.wsSocket !== undefined ? (
+              <WsAttachedPane
+                socket={active.wsSocket}
+                live={activeWsLive}
+                sent={attachSent[active.id] ?? null}
+                pending={wsAttach.isPending}
+                failure={wsAttach.error ? (wsAttach.error instanceof Error ? wsAttach.error.message : String(wsAttach.error)) : null}
+              />
+            ) : (
             <WsReplyPane
               result={wsResult ?? null}
+              sentOn={activeWsMode === "clone" && active.wsSocket !== undefined
+                ? `a new connection cloned from WebSocket #${active.wsSocket} (same handshake)`
+                : "a new connection (one dial per send)"}
               pending={wsSend.isPending}
               cancelled={wsSend.error instanceof SendCancelled}
               /* The refusal text. A ws send that was refused before the dial (a bad target, a
@@ -1944,8 +2001,9 @@ export function RepeaterPage(): JSX.Element {
               failure={wsSend.error && !(wsSend.error instanceof SendCancelled)
                 ? wsSend.error instanceof Error ? wsSend.error.message : String(wsSend.error)
                 : null}
-              exchangeId={httpResult?.exchange_id ?? null}
+              exchangeId={wsResult?.exchange_id ?? null}
             />
+            )
           ) : finalResponse != null ? (
             <div className="toolbar" role="group" aria-label="Which chain response to show">
               <Button
@@ -2100,6 +2158,85 @@ function KettledNote({
 }
 
 /**
+ * An attached ws tab's response pane (burpsy-react-ui-wuwf). An attached send has no reply of its
+ * own: the frame joined the browser's conversation, and what follows is that conversation. So the
+ * pane shows the live connection's newest frames — the operator's injected ones marked by their
+ * note — read from the same history WebSockets history shows, which updates as frames arrive.
+ */
+function WsAttachedPane({
+  socket,
+  live,
+  sent,
+  pending,
+  failure,
+}: {
+  socket: number;
+  live: boolean;
+  sent: WsAttachResult | null;
+  pending: boolean;
+  failure: string | null;
+}): JSX.Element {
+  const frames = useWsHistory(socket, undefined, 15);
+  return (
+    <div className="detail-panel">
+      {failure ? (
+        <div className="notice notice-warn" role="status">
+          The frame was not sent: {failure}
+        </div>
+      ) : null}
+      <DetailList
+        rows={[
+          { label: "Connection", value: `WebSocket #${socket} — ${live ? "open through the proxy" : "closed (clone it to send again)"}` },
+          {
+            label: "Last sent",
+            value: pending
+              ? "Sending…"
+              : sent
+                ? `message #${sent.message_id}, ${sent.direction === "server_to_client" ? "to the client" : "to the server"}, ${formatBytes(sent.len)}`
+                : "Nothing sent from this tab yet",
+          },
+        ]}
+      />
+      {frames.isError ? (
+        <ErrorNotice error={frames.error} title="The connection's frames could not be read" />
+      ) : frames.isPending ? (
+        <Empty title="Loading the connection's frames…" detail="Reading WebSocket history for this connection." />
+      ) : (frames.data?.rows.length ?? 0) === 0 ? (
+        <Empty title="No frames on this connection yet" detail="Frames appear here as either side sends them, including the ones this tab sends." />
+      ) : (
+        <div className="detail-actions" style={{ display: "grid", gap: 4 }}>
+          {frames.data!.rows.map((row) => (
+            <WsAttachedFrame key={row.id} row={row} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One frame of an attached connection, newest first: direction, opcode, size, and its payload. */
+function WsAttachedFrame({ row }: { row: WsRow }): JSX.Element {
+  const message = useWsMessage(row.id);
+  const arrow = row.direction === "client_to_server" ? "client → server" : "server → client";
+  const value = message.isError
+    ? "The payload could not be read."
+    : message.data
+      ? row.opcode === "binary"
+        ? (message.data.hex ?? "")
+        : (message.data.text ?? "")
+      : "Loading…";
+  return (
+    <HttpEditor
+      label={`#${row.id} · ${arrow} · ${row.opcode} · ${formatBytes(row.len)}${row.note ? ` · ${row.note}` : ""}`}
+      views={false}
+      readOnly
+      value={value}
+      filename={`ws-message-${row.id}.txt`}
+    />
+  );
+}
+
+/**
  * A ws tab's response pane (burpsy-react-ui-6ex): the handshake line, the reply frames the
  * target sent back in order, and how the conversation ended. Not an HTTP response editor —
  * a ws send has no status code or body to parse, and dressing frames up as one would
@@ -2109,12 +2246,14 @@ function KettledNote({
  */
 function WsReplyPane({
   result,
+  sentOn,
   pending,
   cancelled,
   failure,
   exchangeId,
 }: {
   result: WsRepeaterSendResult | null;
+  sentOn: string;
   pending: boolean;
   cancelled: boolean;
   failure: string | null;
@@ -2168,8 +2307,8 @@ function WsReplyPane({
       <DetailList
         rows={[
           { label: "Handshake", value: result.handshake },
-          { label: "Sent on", value: `a new connection (one dial per send)` },
-          { label: "Exchange", value: exchangeId ? `#${exchangeId}` : "—" },
+          { label: "Sent on", value: sentOn },
+          { label: "Exchange", value: exchangeId != null ? `#${exchangeId}` : "—" },
           ...(result.closed_by_peer
             ? [{ label: "Closed by peer", value: `${result.close_code ?? "?"}${result.close_reason ? ` (${result.close_reason})` : ""}` }]
             : []),

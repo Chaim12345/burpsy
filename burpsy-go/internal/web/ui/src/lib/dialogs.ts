@@ -18,6 +18,7 @@
  *
  * Kept free of React and the DOM so the queueing and settle rules are unit-testable.
  */
+import type { ConfirmedCallPreview } from "./api";
 
 export interface ConfirmRequest {
   kind: "confirm";
@@ -28,6 +29,12 @@ export interface ConfirmRequest {
   cancelLabel?: string;
   /** Renders the confirming button in the danger style. For irreversible actions. */
   danger?: boolean;
+  /**
+   * The server's preview of the exact request the confirming button sends (burpsy-react-ui-e0yq).
+   * Set by approveCall: the operator approves this request, and the token the gate checks is bound
+   * to it — not to the route name the title happens to describe.
+   */
+  preview?: ConfirmedCallPreview;
 }
 
 export interface PromptRequest {
@@ -148,6 +155,15 @@ function open<R extends DialogRequest>(request: R): Promise<Answer<R>> {
 /** Ask a yes/no question. Resolves false on cancel or dismissal. */
 export function confirmDialog(request: Omit<ConfirmRequest, "kind">): Promise<boolean> {
   return open({ kind: "confirm", ...request });
+}
+
+/**
+ * An approver for gatedFetch's `approve` option: shows `request` with the server's preview of the
+ * exact call, and resolves whether the operator confirmed it. The dialog is opened only once the
+ * server has bound a token to that call, so what the operator reads is what the gate will admit.
+ */
+export function approveCall(request: Omit<ConfirmRequest, "kind" | "preview">): (call: ConfirmedCallPreview) => Promise<boolean> {
+  return (call) => confirmDialog({ ...request, preview: call });
 }
 
 /** Ask for one string. Resolves null on cancel or dismissal — never "" for a cancel. */

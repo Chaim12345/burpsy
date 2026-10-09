@@ -95,6 +95,10 @@ type wsConnectionView struct {
 	Sent     int             `json:"sent"`
 	Received int             `json:"received"`
 	LastMs   uint64          `json:"last_ms"`
+	// Live says the connection is open through the proxy right now, so Repeater can attach to it
+	// (burpsy-react-ui-wuwf). No omitempty: "live":false is the stated fact that attach is not
+	// available, and an absent key would read the same as a server that never reports it.
+	Live bool `json:"live"`
 }
 
 // wsMaxLimit caps a history page. Matches /api/history's cap: the browser is what falls over first.
@@ -163,6 +167,12 @@ func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conns := s.store.WsConnections()
+	live := map[core.ExchangeID]bool{}
+	if s.proxyServer != nil {
+		for _, c := range s.proxyServer.LiveWebSockets() {
+			live[c.Exchange] = true
+		}
+	}
 	views := make([]wsConnectionView, 0, len(conns))
 	for _, c := range conns {
 		views = append(views, wsConnectionView{
@@ -175,6 +185,7 @@ func (s *Server) handleWSConnections(w http.ResponseWriter, r *http.Request) {
 			Sent:     c.Sent,
 			Received: c.Received,
 			LastMs:   c.LastMs,
+			Live:     live[c.Exchange],
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

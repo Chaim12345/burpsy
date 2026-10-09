@@ -15,6 +15,7 @@
  * and returns focus there, if it is still in the document.
  */
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { formatBytes, type ConfirmedCallPreview } from "../lib/api";
 import {
   currentDialog,
   dismissDialog,
@@ -65,6 +66,37 @@ export function DialogHost(): JSX.Element | null {
   );
 }
 
+/**
+ * The exact request a confirm dialog approves — the server's own preview of the call the gate's
+ * token is bound to (burpsy-react-ui-e0yq). Shown as data, not prose: the verb and URL, the body as
+ * the server will compare it, what was withheld from the preview, and the hash that covers it all.
+ */
+function CallPreview({ call }: { call: ConfirmedCallPreview }): JSX.Element {
+  return (
+    <section className="call-preview" aria-label="The request this confirms">
+      <div className="call-preview-line">
+        <strong>{call.method}</strong> <span className="call-preview-url">{call.url}</span>
+      </div>
+      {call.body_kind === "none" ? (
+        <p className="call-preview-note">No body.</p>
+      ) : call.body_kind === "binary" ? (
+        <p className="call-preview-note">{formatBytes(call.body_bytes)} of binary body (not shown).</p>
+      ) : (
+        <>
+          <pre className="call-preview-body">{call.body ?? ""}</pre>
+          {call.body_truncated ? <p className="call-preview-note">The preview is truncated; the hash covers the whole {formatBytes(call.body_bytes)} body.</p> : null}
+        </>
+      )}
+      {call.redacted && call.redacted.length > 0 ? (
+        <p className="call-preview-note">Not shown here, but bound by the hash: {call.redacted.join(", ")}.</p>
+      ) : null}
+      <p className="call-preview-note">
+        Body SHA-256 <span className="call-preview-hash">{call.body_sha256.slice(0, 16)}…</span> — the token is refused on any other request.
+      </p>
+    </section>
+  );
+}
+
 function DialogBody({ pending, onCloseAutoFocus }: { pending: PendingDialog; onCloseAutoFocus: (event: Event) => void }): JSX.Element {
   const { request } = pending;
   const [values, setValues] = useState<Record<string, string>>(() => initialValues(request));
@@ -102,6 +134,7 @@ function DialogBody({ pending, onCloseAutoFocus }: { pending: PendingDialog; onC
       }}
     >
       <form className="dialog-form" onSubmit={submit} noValidate>
+        {request.kind === "confirm" && request.preview ? <CallPreview call={request.preview} /> : null}
         {request.kind === "prompt" ? (
           <Field label={request.label}>
             {(id) =>

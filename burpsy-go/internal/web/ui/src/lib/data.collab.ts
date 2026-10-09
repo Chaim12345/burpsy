@@ -6,7 +6,7 @@
  * would read as "nothing happened".
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, json } from "./api";
+import { api, json, type GatedOptions } from "./api";
 import { keys } from "./data";
 
 export interface CollaboratorPayload {
@@ -182,11 +182,14 @@ export interface CollaboratorUnsetResult {
  */
 export function useUnsetCollaboratorServer() {
   const client = useQueryClient();
-  return useMutation<CollaboratorUnsetResult, Error, { discardOpenChannel: boolean }>({
-    mutationFn: ({ discardOpenChannel }) =>
+  // `approve`, when given, puts the server's preview of the exact DELETE in front of the operator
+  // before it is sent (gatedFetch; burpsy-react-ui-e0yq).
+  return useMutation<CollaboratorUnsetResult, Error, { discardOpenChannel: boolean; approve?: GatedOptions["approve"] }>({
+    mutationFn: ({ discardOpenChannel, approve }) =>
       api<CollaboratorUnsetResult>(
         "/api/collaborator/server",
         json("DELETE", discardOpenChannel ? { discard_open_channel: true } : {}),
+        { approve },
       ),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: keys.collaborator });
