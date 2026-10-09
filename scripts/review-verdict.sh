@@ -13,8 +13,9 @@
 # can comment on a public PR. A review is ignored when DISMISSED, and its approve counts only when the
 # review's own commit_id is the sha in the marker (the review was submitted against that commit).
 # Anything else — a short sha, extra words, a marker in a quote — is not a verdict. Several markers in
-# one body: the last one counts. The latest verdict wins (reviews by submitted_at, comments by
-# updated_at, so an edited comment counts as of its edit).
+# one body: the last one counts. The latest verdict wins: reviews by submitted_at, comments by
+# created_at. Editing an old comment does not move it forward in time, so an old approve edited after
+# a newer changes-required is still older than it; the comment's CURRENT body is what is read.
 #
 # Pure data in, one line out: jq parses the JSON; nothing from a body is evaluated.
 set -euo pipefail
@@ -34,6 +35,6 @@ jq -r -n --slurpfile r "$1" --slurpfile c "$2" '
   + [ ($c[0] // [])[]
       | select(type == "object" and trusted)
       | . as $x | (marker) as $m | select($m != null)
-      | {t: ($x.updated_at // $x.created_at // ""), v: $m.v} ] )
+      | {t: ($x.created_at // ""), v: $m.v} ] )
   | sort_by(.t) | last | if . == null then "none" else .v end
 '

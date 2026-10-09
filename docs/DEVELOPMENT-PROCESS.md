@@ -154,7 +154,10 @@ Record the sha when the review starts, not when the verdict is posted: stamping 
 time would approve commits pushed while the review was running.
 
 Only verdicts by an OWNER, MEMBER or COLLABORATOR count; a review's approve counts only if the review
-was submitted on that same commit, and a dismissed review does not count. The latest verdict wins.
+was submitted on that same commit, and a dismissed review does not count. The latest verdict wins,
+by when it was first posted (a review's `submitted_at`, a comment's `created_at`): editing an old
+comment does not make it newer, so it cannot revive an approve that a later `changes-required`
+superseded. To change a verdict, post a new one.
 
 **How it is judged.** Every run reads the PR's current head and all verdicts from the API when it
 runs — nothing but the PR number comes from the triggering event — and passes when the PR touches
@@ -174,10 +177,17 @@ only when every risk-class item was reviewed at the sha that was merged and noth
 touched a risk path (the bundle rebuild and the beads closure do not). A fix-forward on the round
 branch that touches a risk path is reviewed like an item, and the round PR needs a new verdict.
 
-**Where the rules come from.** For `pull_request_target` and `issue_comment` the workflow file is
-the default branch's, and in every event the two scripts are read from the default branch; the PR's
-commits are fetched as data and diffed, never checked out or run, so a PR cannot loosen the rules it
-is judged by. A change to them therefore takes effect from the next PR, and #348, which introduced
+**Where the rules come from.** In every event the job checks out the default branch and runs the
+two scripts as they are on the default branch; the PR's commits are fetched as data and diffed,
+never checked out or run, so a PR cannot loosen the rules it is judged by. The workflow file itself
+is the default branch's for `pull_request_target` and `issue_comment`; for `pull_request_review`
+GitHub runs the PR's copy (see the residual risk below).
+
+**No outcome is not a pass.** A run posts `pending` on the head before judging and overwrites it
+with the result; a run that dies in between leaves `pending`, which blocks the merge. A run
+triggered by a verdict comment or review first waits (with backoff, about 30 seconds) for that
+comment or review to appear in the API listing it reads, and if it never does, posts
+`failure: verdict not yet visible; re-run` instead of judging on a stale list. A change to them therefore takes effect from the next PR, and #348, which introduced
 the workflow, was not judged by it at all — it was reviewed by hand.
 
 **Residual risk, stated plainly.** The status is a name, and anything holding a token with
