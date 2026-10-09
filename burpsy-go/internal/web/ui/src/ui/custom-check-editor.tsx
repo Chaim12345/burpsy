@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ApiError } from "../lib/api";
 import { useApp } from "../lib/store";
+import { confirmDialog } from "../lib/dialogs";
 import {
   useImportCheck,
   useTestCheck,
@@ -64,7 +65,11 @@ export function CustomCheckEditor({ target, onClose }: { target: EditorTarget | 
     if (!v?.valid) return;
     let replace = target?.editing !== null && target?.editing === v.name;
     if (!replace && v.existing_origin === "console") {
-      replace = window.confirm(`A console check named "${v.name}" is already loaded. Replace it?`);
+      replace = await confirmDialog({
+        title: `Replace "${v.name}"?`,
+        description: `A console check named "${v.name}" is already loaded. Saving replaces it.`,
+        confirmLabel: "Replace it",
+      });
       if (!replace) return;
     }
     save.mutate(

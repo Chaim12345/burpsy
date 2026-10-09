@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { useCorpusChecks, useSetCorpusCheckEnabled } from "../lib/data.attack";
 import { downloadText } from "../lib/api";
+import { confirmDialog } from "../lib/dialogs";
 import { CHECK_TEMPLATES, fetchCheckSource, useDeleteCheck, useReloadChecks } from "../lib/data.customchecks";
 import { CustomCheckEditor, type EditorTarget } from "../ui/custom-check-editor";
 import { DropdownMenu } from "../ui/menu";
@@ -123,8 +124,14 @@ export function ScannerChecksPage(): JSX.Element {
    const file = (src.file ?? `${src.name.replace(/[^A-Za-z0-9._-]+/g, "_")}.bcheck`).replace(/\.bcheck$/i, "") + ".bcheck";
    downloadText(file, src.source);
   }, failed);
- const deleteRow = (row: CorpusCheckView) => {
-  if (!window.confirm(`Delete the custom scan check "${row.name}"? It is removed from the corpus and the project.`)) return;
+ const deleteRow = async (row: CorpusCheckView) => {
+  const ok = await confirmDialog({
+   title: `Delete the custom scan check "${row.name}"?`,
+   description: "It is removed from the corpus and the project.",
+   confirmLabel: "Delete",
+   danger: true,
+  });
+  if (!ok) return;
   del.mutate(row.name, { onSuccess: () => toast.success(`Deleted "${row.name}"`), onError: failed });
  };
  const onReload = () =>
