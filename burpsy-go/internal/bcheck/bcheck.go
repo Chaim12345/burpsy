@@ -388,6 +388,11 @@ type Context struct {
 	// User-Agent the scanner's sender puts on requests that carry none (u411). Empty falls back to the
 	// base request's own User-Agent, and a context with neither leaves the reference unresolved.
 	UserAgent string
+	// EnumerateOptions is the enumerator tuning a `given insertion point` check expands under: the
+	// audit run's own (its insertion-point cap, nested switch, manual spans and the operator's
+	// skip-all-tests parameter list) when the scanner supplies one. Nil enumerates with the engine
+	// default, which is what a direct evaluator call has always done.
+	EnumerateOptions *EnumerateOptions
 
 	// sink performs the outbound half of `send request` and `send payload`. Nil means the check
 	// is being evaluated passively, where a send is a no-op — RunPassive never sets it, RunActive

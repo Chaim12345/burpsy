@@ -230,6 +230,12 @@ export function useStartCrawl() {
   mutationFn: (body: {
    seeds: string[];
    kind?: string;
+   /** Burp's Protocol settings (in8j): "both" crawls every seed over http and https. */
+   protocols?: "both" | "specified";
+   /** Burp's "Run isolated scan" (13uw). */
+   isolated?: boolean;
+   /** The crawl's own scope inside the engagement scope (501u). */
+   scope?: { mode: "seed_directories" | "engagement" | "prefixes"; include?: string[]; exclude?: string[] };
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;

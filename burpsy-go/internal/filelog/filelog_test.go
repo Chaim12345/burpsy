@@ -114,3 +114,27 @@ func TestAFileNamedTwiceGetsEachEntryOnce(t *testing.T) {
 		t.Errorf("the entry was written %d times, want 1", n)
 	}
 }
+
+// An isolated scan's traffic is Scanner traffic on the wire (13uw): it is kept out of the site map, not
+// out of the log of what was sent. A schema-generated item was never sent and is not logged.
+func TestAnIsolatedScansTrafficIsLoggedAsScanner(t *testing.T) {
+	dir := t.TempDir()
+	scannerReqs := filepath.Join(dir, "scanner.log")
+	store := core.NewTrafficStore()
+	l := New(store)
+	defer l.Close()
+	store.ObserveExchanges(l.Observe)
+	if err := l.Apply(Settings{Requests: map[string]string{"scanner": scannerReqs, "all_tools": filepath.Join(dir, "all.log")}}); err != nil {
+		t.Fatal(err)
+	}
+	addExchange(t, store, core.SourceIsolatedScan, "/iso")
+	addExchange(t, store, core.SourceSchema, "/schema")
+	l.Flush()
+	s := read(t, scannerReqs)
+	if !strings.Contains(s, "GET /iso HTTP/1.1") {
+		t.Errorf("scanner requests log = %q, want the isolated scan's request", s)
+	}
+	if a := read(t, filepath.Join(dir, "all.log")); strings.Contains(a, "/schema") {
+		t.Errorf("all_tools log = %q: a schema item was never sent and must not be logged", a)
+	}
+}

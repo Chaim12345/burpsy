@@ -344,6 +344,10 @@ func (sm *SiteMap) Add(ex *core.Exchange) {
 }
 
 func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
+	// An isolated scan's traffic stays out of the site map (13uw).
+	if ex.Source.Isolated() {
+		return
+	}
 	key := hostKey(ex.Host, ex.Port, ex.TLS)
 	// A suppressed host or branch stays suppressed for re-captures too: Add runs before this on the
 	// live path, but Sync's rebuild walks every stored exchange through here, so the check lives at

@@ -6,7 +6,8 @@ import { Copy, FolderTree, MoreVertical, Pause, Play, Plus, Radar, Search, Squar
 import { toast } from "sonner";
 import { api, copyToClipboard, formatCount, formatDuration, json, relativeTime, statusTone } from "../lib/api";
 import { useDashboard, useInvalidate, useIssues } from "../lib/data";
-import { useIssuesDetailed, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
+import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
 import type { CrawlLoginReport } from "../lib/types.observe";
 import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
@@ -14,7 +15,7 @@ import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -89,6 +90,31 @@ function useClearEventLog() {
   },
   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Clearing the event log failed"),
  });
+}
+
+// Burp's per-task Pause / Resume (burpsy-react-ui-g0ba), shown only on a running task whose loop
+// stops at the pause gate. The server answers 409 for any other, so the button never promises more.
+function TaskPauseButton({ task }: { task: TaskRow }): JSX.Element | null {
+ const invalidate = useInvalidate();
+ const toggle = useMutation({
+  mutationFn: (pause: boolean) => api<{ id: number; paused: boolean }>(`/api/tasks/${task.id}/${pause ? "pause" : "resume"}`, json("POST")),
+  onSuccess: (out) => {
+   toast.success(out.paused ? `Task ${task.id} paused at its next step` : `Task ${task.id} resumed`);
+   invalidate([["dashboard"]]);
+  },
+  onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Pausing the task failed"),
+ });
+ if (task.id === -1 || !task.pausable || task.state !== "running") return null;
+ return (
+  <IconButton
+   label={`${task.paused ? "Resume" : "Pause"} ${task.kind} task on ${task.target}`}
+   size="small"
+   disabled={toggle.isPending}
+   onClick={() => toggle.mutate(!task.paused)}
+  >
+   {task.paused ? <Play size={12} /> : <Pause size={12} />}
+  </IconButton>
+ );
 }
 
 function useCancelTask() {
@@ -209,6 +235,8 @@ function TaskTile({
       {ordinal}. {task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`}
      </strong>
     </button>
+    {task.paused ? <Badge tone="warn">paused</Badge> : null}
+    <TaskPauseButton task={task} />
     {task.id !== -1 && task.cancellable && task.state === "running" ? (
      <IconButton
       label={`Cancel ${task.kind} task on ${task.target}`}
@@ -634,6 +662,16 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // (Burp: "Define the URLs to scan. Burp will begin crawling from these URLs"). The wire has
  // taken an array all along; only the input was single.
  const seeds = parseSeeds(seed);
+ // Burp's Protocol settings (in8j): "Scan using HTTP & HTTPS" is its default, and is what lets a seed
+ // be written as a bare host.
+ const [protocols, setProtocols] = useState<"both" | "specified">("both");
+ // Burp's crawl scope (501u): by default "restricted to the configured URLs, ending with the final
+ // directory"; the detailed configuration takes URL prefixes. Always inside the engagement scope.
+ const [scopeMode, setScopeMode] = useState<"seed_directories" | "engagement" | "prefixes">("seed_directories");
+ const [scopeInclude, setScopeInclude] = useState("");
+ // Burp's "Run isolated scan" (13uw): results stay out of the site map and All issues.
+ const [isolated, setIsolated] = useState(false);
+ const [scopeExclude, setScopeExclude] = useState("");
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
@@ -721,6 +759,13 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
    {
     seeds,
     kind: chosen.wire,
+    protocols,
+    isolated: isolated || undefined,
+    scope: {
+     mode: scopeMode,
+     include: scopeMode === "prefixes" ? parseSeeds(scopeInclude) : undefined,
+     exclude: scopeMode !== "engagement" ? parseSeeds(scopeExclude) : undefined,
+    },
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
@@ -804,7 +849,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </p>
       <Field
        label="API definition"
-       hint="OpenAPI 3.x or Swagger 2.0, in JSON or YAML. Paste it here, or load the file."
+       hint="OpenAPI 3.x, Swagger 2.0 or a Postman Collection (v2.x), in JSON or YAML. Paste it here, or load the file."
       >
        {(id) => (
         <Textarea
@@ -963,6 +1008,53 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         />
        )}
       </Field>
+      <div role="radiogroup" aria-label="Crawl scope">
+       {(
+        [
+         ["seed_directories", "Restrict to the URLs' directories", "Burp's default: each URL's final directory"],
+         ["engagement", "Use the engagement scope", "everything the project scope allows"],
+         ["prefixes", "Detailed scope configuration", "URL prefixes to include and exclude"],
+        ] as const
+       ).map(([value, label, hint]) => (
+        <label key={value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+         <input type="radio" name="crawl-scope" checked={scopeMode === value} onChange={() => setScopeMode(value)} />
+         <span>
+          {label} <span className="field-hint">— {hint}</span>
+         </span>
+        </label>
+       ))}
+      </div>
+      {scopeMode === "prefixes" ? (
+       <Field label="Include URL prefixes" hint="One per line; the crawl stays under these.">
+        {(id) => <Input id={id} value={scopeInclude} onChange={(event) => setScopeInclude(event.target.value)} placeholder="https://demo.local/app/" />}
+       </Field>
+      ) : null}
+      {scopeMode !== "engagement" ? (
+       <Field label="Exclude URL prefixes" hint="Optional; never requested even when included.">
+        {(id) => <Input id={id} value={scopeExclude} onChange={(event) => setScopeExclude(event.target.value)} placeholder="https://demo.local/app/logout" />}
+       </Field>
+      ) : null}
+      <label style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+       <input type="checkbox" checked={isolated} onChange={(event) => setIsolated(event.target.checked)} />
+       <span>
+        Run isolated scan <span className="field-hint">— its locations and issues stay out of the site map and All issues; the task still shows them</span>
+       </span>
+      </label>
+      <div role="radiogroup" aria-label="Protocol settings">
+       {(
+        [
+         ["both", "Scan using HTTP & HTTPS", "each URL is crawled over both schemes; a URL may be written as a bare host"],
+         ["specified", "Scan using my specified protocols", "each URL over the scheme it names"],
+        ] as const
+       ).map(([value, label, hint]) => (
+        <label key={value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+         <input type="radio" name="scan-protocols" checked={protocols === value} onChange={() => setProtocols(value)} />
+         <span>
+          {label} <span className="field-hint">— {hint}</span>
+         </span>
+        </label>
+       ))}
+      </div>
       {chosen.id === "crawl-audit" ? (
        <p className="cell-dim" style={{ margin: 0 }}>
         Two tasks appear below: the crawl, then a separate audit of the exchanges it fetched. The audit starts when the
@@ -1003,6 +1095,11 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const setLive = useSetScannerLive();
  const [query, setQuery] = useState("");
+ // Burp's live task Scan configuration and Resource pool tabs (chct).
+ const configs = useScannerConfigs();
+ const pools = usePools();
+ const [config, setConfig] = useState("");
+ const [poolName, setPoolName] = useState("");
  const close = () => onOpenChange(false);
 
  return (
@@ -1011,9 +1108,30 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
     <Field label="Scope filter query (optional)">
      {(id) => <Input id={id} value={query} onChange={(event) => setQuery(event.target.value)} placeholder='host == "demo.local"' />}
     </Field>
-    <p className="cell-dim" style={{ margin: 0 }}>
-     Which checks run is global — set it under Settings → Audit checks.
-    </p>
+    <Field label="Scan configuration">
+     {(id) => (
+      <Select id={id} value={config} onChange={(event) => setConfig(event.target.value)}>
+       <option value="">Server default (Settings → Audit checks)</option>
+       {(configs.data?.configs ?? []).map((c) => (
+        <option key={c.name} value={c.name}>
+         {c.name}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+    <Field label="Resource pool">
+     {(id) => (
+      <Select id={id} value={poolName} onChange={(event) => setPoolName(event.target.value)}>
+       <option value="">Global pace</option>
+       {(pools.data?.pools ?? []).map((p) => (
+        <option key={p.name} value={p.name}>
+         {p.name}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
     <div className="toolbar-end">
      <Button variant="outline" size="small" onClick={close}>
       Cancel
@@ -1023,7 +1141,7 @@ function NewLiveTaskModal({ open, onOpenChange }: { open: boolean; onOpenChange:
       disabled={setLive.isPending}
       onClick={() => {
        setLive.mutate(
-        { enabled: true, query: query.trim() || undefined },
+        { enabled: true, query: query.trim() || undefined, config, pool: poolName },
         {
          onSuccess: () => toast.success("Live audit sweep enabled"),
          onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "Enabling the live sweep failed"),
@@ -1161,7 +1279,9 @@ function TaskDetail({
  // The same cache key the Issues page reads, so a finding that arrives mid-scan is here on the
  // next render without a second request. Reverse-chronological by id: the store is a dense counter
  // from zero, so higher id == raised later — the feed's whole point (burpsy-react-ui-i18).
- const issuesDetailed = useIssuesDetailed();
+ // With isolated scans' findings (13uw): a task's own view shows what it found even when the run
+ // was isolated from All issues and the site map.
+ const issuesDetailed = useIssuesDetailedWithIsolated();
  // The retained run behind this task, when there is one. Only an API scan's row carries anything the
  // detail pane does not already have (its definition), and the request is made for every kind anyway
  // because which kinds have a run is not something the console should have to predict — a crawl
@@ -1194,6 +1314,7 @@ function TaskDetail({
    <div className="task-detail-head">
     <h2>{title}</h2>
     <div className="task-detail-actions">
+     <TaskPauseButton task={task} />
      {task.id !== -1 && task.cancellable && task.state === "running" ? (
       <IconButton
        label={`Cancel ${task.kind} task on ${task.target}`}

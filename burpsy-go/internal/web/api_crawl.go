@@ -220,6 +220,18 @@ const (
 // documented default rather than to a value invented here, so "what bounds a crawl" has one answer.
 type crawlStartReq struct {
 	Seeds []string `json:"seeds"`
+	// Protocols is Burp's "Protocol settings" (burpsy-react-ui-in8j): "both" is "Scan using HTTP &
+	// HTTPS" — every seed is crawled over both schemes, and a seed with no scheme is accepted as a
+	// host; "specified" (or empty, what every caller predating the field sends) is "Scan using my
+	// specified protocols" — each seed as written, and a seed with no scheme is refused by name.
+	Protocols string `json:"protocols,omitempty"`
+	// Scope narrows this crawl within the engagement scope (burpsy-react-ui-501u). Omitted is the
+	// engagement scope alone — every caller predating the field. See crawlScopeReq.
+	Scope *crawlScopeReq `json:"scope,omitempty"`
+	// Isolated is Burp's "Run isolated scan" (burpsy-react-ui-13uw): the crawl's exchanges carry
+	// SourceIsolatedScan, so neither they nor the issues found on them reach the site map or the
+	// issue list; the task's own views still show them.
+	Isolated bool `json:"isolated,omitempty"`
 	// IncludeLiveSeen seeds the crawl from the live sweep's captured-URL set (tqug): every
 	// distinct in-scope URL the live audit admitted, wire-observed. Union with Seeds, so a
 	// request may name its own origins as well. Taking the set consumes it — a second crawl
@@ -662,6 +674,13 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 			seeds = append(seeds, t)
 		}
 	}
+	if seeds, err = expandSeedProtocols(seeds, req.Protocols); err != nil {
+		return 0, nil, 0, nil, err
+	}
+	// Validated before the task registers, so a bad prefix is a 400 rather than a failed row.
+	if _, err = s.crawlScope(req.Scope, seeds); err != nil {
+		return 0, nil, 0, nil, err
+	}
 	// The live passive crawl's seed set (tqug): the sweep's captured URLs, taken (consumed) so
 	// a second crawl cannot silently re-walk the same harvest. Union with the named seeds; the
 	// honest count rides the reply.
@@ -874,6 +893,9 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		defer loginSess.Close()
 		// The frame is dropped when the crawl ends; the fetch list stays for the run's lifetime.
 		defer live.finish()
+		// The crawl calls its suite gate between fetches with this context, so the row's own Pause
+		// reaches it — and the audit feed, whose context derives from this one (g0ba).
+		ctx = task.Pausable(ctx)
 		// Started before Run, not after it: from here on every completed fetch is audited while the
 		// crawl is still fetching. Ordering is why this line is where it is — the consumer reads a
 		// field the crawl goroutine wrote, and starting it in this goroutine before Run puts the two
@@ -1167,7 +1189,7 @@ func newCrawlAuditFeed(s *Server, target string) *crawlAuditFeed {
 // problem, and a row that says the former is the only way to tell them apart on screen.
 func (f *crawlAuditFeed) start(ctx context.Context) {
 	f.task = f.s.tasks.Start(dash.KindAuditSession, f.target+" (audited during the crawl)", 0)
-	go f.run(ctx)
+	go f.run(f.task.Pausable(ctx))
 }
 
 // offer is the crawler's OnFetch callback: one completed fetch, announced from the crawl goroutine.
@@ -1349,7 +1371,7 @@ func (f *crawlAuditFeed) finish(ctx context.Context) {
 // was shared before the crawl left it and is worth keeping shareable: two places that both "audit
 // these exchanges" is how one launched scan comes to audit less than another with nothing on screen
 // saying which.
-func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string) *scanner.SessionOutcome {
+func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report, subject string, skipParams ...string) *scanner.SessionOutcome {
 	ids := make([]core.ExchangeID, 0, len(rep.Fetches))
 	for _, f := range rep.Fetches {
 		ids = append(ids, f.ExchangeID)
@@ -1362,6 +1384,8 @@ func (s *Server) auditFetchedExchanges(ctx context.Context, rep *crawler.Report,
 	// "audit these exchanges" is how a launched scan comes to audit less than a crawl's own phase
 	// without anything on screen saying so.
 	cfg := s.activeScanner().AuditConfig()
+	// Parameters the API review marked Fixed (vuw7) are kept out of this audit's insertion points.
+	cfg.SkipAllTestsForParameters = append(append([]string(nil), cfg.SkipAllTestsForParameters...), skipParams...)
 	return s.runBulkAudit(ctx, task, target, ids, cfg, "the run produced no exchanges to audit")
 }
 
@@ -1408,14 +1432,14 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 	_ = onFetch
 	return crawler.Config{
 		Seeds:  seeds,
-		Scope:  s.scope,
+		Scope:  s.mustCrawlScope(req.Scope, seeds),
 		Sender: s.sender,
 		Capture: scanner.Capture{
 			Store:    s.store,
 			Scanner:  s.passiveScanner,
 			Findings: s.findings,
 			Logger:   s.logger,
-			Source:   core.SourceCrawl,
+			Source:   crawlSource(req.Isolated),
 		},
 		Query:              req.Query,
 		RetentionQuery:     req.RetentionQuery,
@@ -1570,6 +1594,130 @@ func (s *Server) crawlSessionCoordinator() crawler.SessionCoordinator {
 		return nil
 	}
 	return s.sessionCoordinator
+}
+
+// expandSeedProtocols applies the scan's protocol setting to its seeds (burpsy-react-ui-in8j).
+//
+// "both" crawls every seed over http and https: a seed written with either scheme gains its twin on
+// the other, and a schemeless seed ("shop.test/app") becomes both. An explicit port is kept on both
+// twins — Burp's option is about schemes, and inventing a port mapping (8080 to 8443?) would be a
+// guess. "specified" keeps each seed as written and refuses a schemeless one, naming the option that
+// would accept it. Order is kept and duplicates are dropped, so the task's target reads as typed.
+func expandSeedProtocols(seeds []string, mode string) ([]string, error) {
+	switch mode {
+	case "", "specified":
+		for _, s := range seeds {
+			if !strings.Contains(s, "://") {
+				return nil, fmt.Errorf("seed %q has no scheme: write http:// or https://, or choose \"Scan using HTTP & HTTPS\" to crawl it over both", s)
+			}
+		}
+		return seeds, nil
+	case "both":
+	default:
+		return nil, fmt.Errorf("unknown protocols %q: expected \"both\" or \"specified\"", mode)
+	}
+	out := make([]string, 0, 2*len(seeds))
+	seen := map[string]bool{}
+	add := func(u string) {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, s := range seeds {
+		rest := s
+		if i := strings.Index(s, "://"); i >= 0 {
+			scheme := strings.ToLower(s[:i])
+			if scheme != "http" && scheme != "https" {
+				add(s) // the crawler refuses it with its own reason
+				continue
+			}
+			rest = s[i+3:]
+		}
+		add("http://" + rest)
+		add("https://" + rest)
+	}
+	return out, nil
+}
+
+// crawlScopeReq is Burp's crawl scope (burpsy-react-ui-501u). Mode "seed_directories" is Burp's
+// default — each seed's final directory; "prefixes" is its "Detailed scope configuration" — Include
+// and Exclude URL prefixes; "engagement" (or empty) is the engagement scope alone. Every mode only
+// narrows the engagement scope.
+type crawlScopeReq struct {
+	Mode    string   `json:"mode"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// crawlScope builds the scope a crawl runs under.
+func (s *Server) crawlScope(req *crawlScopeReq, seeds []string) (crawler.Scope, error) {
+	if req == nil || req.Mode == "" || req.Mode == "engagement" {
+		if req != nil && (len(req.Include) > 0 || len(req.Exclude) > 0) {
+			return nil, errors.New("scope prefixes need mode \"prefixes\"")
+		}
+		return s.scope, nil
+	}
+	p := &crawler.PrefixScope{Base: s.scope}
+	norm := func(list []string) ([]string, error) {
+		out := make([]string, 0, len(list))
+		for _, raw := range list {
+			if strings.TrimSpace(raw) == "" {
+				continue
+			}
+			n, err := crawler.NormalisePrefix(raw)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, n)
+		}
+		return out, nil
+	}
+	var err error
+	switch req.Mode {
+	case "seed_directories":
+		for _, seed := range seeds {
+			dir, derr := crawler.SeedDirectoryPrefix(seed)
+			if derr != nil {
+				return nil, derr
+			}
+			p.Include = append(p.Include, dir)
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+	case "prefixes":
+		if p.Include, err = norm(req.Include); err != nil {
+			return nil, err
+		}
+		if p.Exclude, err = norm(req.Exclude); err != nil {
+			return nil, err
+		}
+		if len(p.Include) == 0 {
+			return nil, errors.New("scope mode \"prefixes\" needs at least one include prefix")
+		}
+	default:
+		return nil, fmt.Errorf("unknown scope mode %q: expected engagement, seed_directories or prefixes", req.Mode)
+	}
+	return p, nil
+}
+
+// mustCrawlScope is crawlScope for the config builder. startCrawl validated the same request with the
+// same function first, so the error branch is unreachable from the route; a direct caller that skips
+// that validation gets the engagement scope, the crawl's behaviour before 501u.
+func (s *Server) mustCrawlScope(req *crawlScopeReq, seeds []string) crawler.Scope {
+	sc, err := s.crawlScope(req, seeds)
+	if err != nil {
+		return s.scope
+	}
+	return sc
+}
+
+func crawlSource(isolated bool) core.Source {
+	if isolated {
+		return core.SourceIsolatedScan
+	}
+	return core.SourceCrawl
 }
 
 // errSeedsOutOfScope is a crawl whose every seed the engagement scope refuses (us6r.3).

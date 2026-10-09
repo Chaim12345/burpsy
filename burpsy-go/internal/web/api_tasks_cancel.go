@@ -154,6 +154,25 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"cancelled": id})
+	case strings.HasSuffix(rest, "/pause"), strings.HasSuffix(rest, "/resume"):
+		// Burp's per-task Pause / Resume (burpsy-react-ui-g0ba), beside the suite-wide pair above.
+		if !requirePost() {
+			return
+		}
+		pause := strings.HasSuffix(rest, "/pause")
+		id, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSuffix(rest, "/pause"), "/resume"), 10, 64)
+		if err != nil {
+			http.Error(w, "Invalid task id", http.StatusNotFound)
+			return
+		}
+		switch err := s.tasks.SetTaskPaused(id, pause); err {
+		case nil:
+			writeJSON(w, http.StatusOK, map[string]any{"id": id, "paused": pause})
+		case dash.ErrNoSuchTask:
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 	case strings.HasSuffix(rest, "/again"):
 		s.handleTaskAgain(w, r)
 	case r.Method == http.MethodGet && !strings.Contains(strings.Trim(rest, "/"), "/"):
@@ -168,7 +187,7 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 // written 404, so callers return immediately on false.
 func (s *Server) taskIDOf(w http.ResponseWriter, r *http.Request) (uint64, bool) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
-	for _, suffix := range []string{"/cancel", "/again"} {
+	for _, suffix := range []string{"/cancel", "/again", "/pause", "/resume"} {
 		rest = strings.TrimSuffix(rest, suffix)
 	}
 	id, err := strconv.ParseUint(strings.Trim(rest, "/"), 10, 64)

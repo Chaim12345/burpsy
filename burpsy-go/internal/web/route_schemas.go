@@ -63,6 +63,7 @@ var routeSchemas = map[string]opSchema{
 		{name: "search_regex", kind: "boolean", desc: "search is a regular expression"},
 		{name: "search_negate", kind: "boolean", desc: "keep rows that do NOT match"},
 	}},
+	"GET /api/issues": {query: []queryParam{{name: "include_isolated", kind: "boolean", desc: "also list issues raised only on an isolated scan's traffic, flagged isolated; All issues omits them"}}},
 	"GET /api/message/": {query: []queryParam{
 		{name: "byte_offset", kind: "integer", desc: "where the body window starts: absolute (0 = start of body), or relative to the first pattern match (may be negative); copy next_offset to page on"},
 		{name: "max_bytes", kind: "integer", desc: "body bytes in the window, 1-65536 (default 2048)"},

@@ -2054,6 +2054,33 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Scan launch, API scans and task control (burpsy-react-ui-cmx5, 2026-10-08)
+
+### Crawl scope (501u)
+- **Burp:** `desktop/running-scans/setting-pro-scope.html` — the crawl is restricted to the configured URLs'
+  final directory by default; "Detailed scope configuration" takes URL prefixes or advanced matching rules.
+- **burpsy:** seed directories (the New scan dialog's default), the engagement scope, or include/exclude URL
+  prefixes — always inside the engagement scope, at the frontier and at the send gate. Burp's "advanced
+  matching rules" (per-field host/port/file regexes) are not offered: the engagement scope already has that
+  rule shape, and a second rule editor scoped to one crawl would duplicate it. An API caller that omits
+  `scope` keeps the engagement scope alone, as before.
+
+### Postman Collections for API scans (r39r)
+- **burpsy:** Postman Collection v2.0/v2.1 is read into the same operation model as OpenAPI: folders walked in order,
+  collection variables substituted (an undefined `{{var}}` is counted as a placeholder; an undefined leading
+  `{{baseUrl}}` makes the request relative to the scan's base URL), disabled headers/query/body fields left out,
+  bearer/basic/header-apikey auth inherited collection → folder → request with `noauth` overriding, and raw,
+  urlencoded, form-data (text fields; a file part names a file on the author's machine and is skipped) and
+  GraphQL bodies. Pre-request and test scripts are not run.
+- **Not done:** SOAP WSDL on the API-only path is still refused by name — tracked as the rest of this bead.
+
+### Isolated scans (13uw)
+- **burpsy:** "Run isolated scan" in New scan (and `isolated: true` on `POST /api/crawl`) tags the crawl's traffic
+  with the source `isolated-scan`; the site map skips those exchanges, and `/api/issues` / `/api/findings` omit
+  findings whose every occurrence is on one (a finding also seen on ordinary traffic stays). The task's own view
+  reads `/api/issues?include_isolated=1` and gets them flagged. Burp keeps an isolated scan's results in a store
+  of their own; burpsy keeps them in the project, filtered by source, so they survive a restart and HTTP history
+  still lists the traffic.
 ## Crawler B (burpsy-react-ui-re16.2, 2026-10-08)
 
 ### Recorded login sequences (burpsy-react-ui-xhtk) — built, with these differences from Burp
