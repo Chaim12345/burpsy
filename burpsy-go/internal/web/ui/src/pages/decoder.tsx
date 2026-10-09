@@ -16,6 +16,7 @@ import {
 } from "../lib/data.workbench";
 import { encodingFamily, familyForValue } from "../lib/decoder-colours";
 import { resolveSelection, splitInput } from "../lib/decoder-span";
+import { docPosToValuePos } from "../lib/message-views";
 import type { TransformKind, TransformResult, TransformStep } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
@@ -361,7 +362,14 @@ export function DecoderPage(): JSX.Element {
     // held aside and shown unchanged around each step's output. No selection → whole input, as before.
     const view = editorWrapRef.current ? EditorView.findFromDOM(editorWrapRef.current) : null;
     const main = view?.state.selection.main;
-    const selection = resolveSelection(input.length, main ? main.from : null, main ? main.to : null);
+    // The selection indexes CodeMirror's document, which holds one "\n" for each CRLF; `input`
+    // keeps the CRLF (a message sent here from Proxy or Repeater does), so map back before
+    // slicing it, or the span shifts left a character per preceding line (burpsy-react-ui-ngao).
+    const selection = resolveSelection(
+      input.length,
+      main ? docPosToValuePos(input, main.from) : null,
+      main ? docPosToValuePos(input, main.to) : null,
+    );
     const parts = splitInput(input, selection);
     setRunSplit({ before: parts.before, after: parts.after, whole: selection.whole });
     pipeline.mutate(

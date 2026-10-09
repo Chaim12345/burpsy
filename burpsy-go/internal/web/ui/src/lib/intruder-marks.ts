@@ -9,7 +9,21 @@
  *
  * The mapping is pure offset arithmetic on the sorted span list, because the editor is read-only
  * here — the displayed text cannot drift from the request the spans were measured against.
+ *
+ * Three coordinate spaces meet here, and confusing any two marks the wrong bytes
+ * (burpsy-react-ui-ngao):
+ *  - wire: UTF-8 byte offsets into the stored request. Spans are kept and sent in this space,
+ *    because the server splices `msg.Raw()` by byte.
+ *  - raw: UTF-16 indices into the request string (`MessageView.text`). A CRLF is two characters
+ *    here, as it is two bytes on the wire; a non-ASCII character is one or two units but up to
+ *    four bytes.
+ *  - display: UTF-16 indices into `displayText` — raw plus the "§" pairs. The editor reports
+ *    selections in this space only after mapping its own document positions back through
+ *    `docPosToValuePos`, because CodeMirror normalises every CRLF to a single "\n": a document
+ *    offset on line N of a CRLF request is N-1 short of the display offset it names.
  */
+
+import { byteOffsetToCharIndex, charIndexToByteOffset } from "./message-views";
 
 export const MARK_CHAR = "\u00a7";
 
@@ -47,17 +61,24 @@ export function addManualSpan(existing: ManualSpanView[], start: number, end: nu
   return { ok: true, spans };
 }
 
+/** The spans with their wire byte offsets turned into raw-string (UTF-16) indices. */
+function spansInChars(raw: string, spans: ManualSpan[]): ManualSpan[] {
+  return [...spans]
+    .sort((a, b) => a.start - b.start)
+    .map((span) => ({ start: byteOffsetToCharIndex(raw, span.start), end: byteOffsetToCharIndex(raw, span.end) }));
+}
+
 /**
  * The base request as the editor shows it: each marker's range wrapped in a "§" pair.
  *
- * Offsets are applied to the raw text and the insertions are folded in left to right, so the
- * display text is the raw text plus exactly two characters per marker.
+ * Span offsets are wire bytes and are mapped to string indices first, so a marker after a
+ * multi-byte character still wraps the bytes it names. The display text is the raw text plus
+ * exactly two characters per marker.
  */
-export function displayText(raw: string, spans: ManualSpanView[]): string {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
+export function displayText(raw: string, spans: ManualSpan[]): string {
   let out = "";
   let cursor = 0;
-  for (const span of sorted) {
+  for (const span of spansInChars(raw, spans)) {
     out += raw.slice(cursor, span.start) + MARK_CHAR + raw.slice(span.start, span.end) + MARK_CHAR;
     cursor = span.end;
   }
@@ -75,19 +96,56 @@ function markDisplayPositions(sorted: ManualSpan[]): number[] {
   return positions;
 }
 
-/** Map a display (editor) offset back to the raw request offset it names. */
+/**
+ * Map a display offset back to the raw offset it names. Both sides are string indices, so the
+ * spans passed here must be in raw-string space too (identical to wire bytes for ASCII).
+ */
 export function displayToRaw(spans: ManualSpan[], displayOffset: number): number {
   const sorted = [...spans].sort((a, b) => a.start - b.start);
   const marks = markDisplayPositions(sorted);
   return displayOffset - marks.filter((position) => position < displayOffset).length;
 }
 
+export type RawSpanResult =
+  | { ok: true; start: number; end: number; text: string }
+  | { ok: false; reason: string };
+
 /**
- * Map a display selection to raw offsets, as `addManualSpan` wants them.
+ * Map a selection of the display text (string indices into `displayText(raw, spans)`, CRLF
+ * counted as two — see the header) to the wire byte span `addManualSpan` wants, plus the raw
+ * text it covers, CRLFs included.
  *
  * The selection may itself span "§" characters (marking across an existing marker reads as a
  * larger raw range); the overlap check downstream still refuses any real overlap.
+ *
+ * `wireLength` is the stored request's byte count (`MessageView.len`). The text is a lossy UTF-8
+ * rendering, so when the two disagree some byte was not valid UTF-8 and arrived as U+FFFD; from
+ * the first U+FFFD on, a string index no longer names a byte, and a marker there is refused
+ * rather than sent at an offset that would splice the payload somewhere else.
  */
-export function selectionToRawSpan(spans: ManualSpanView[], from: number, to: number): { start: number; end: number } {
-  return { start: displayToRaw(spans, from), end: displayToRaw(spans, to) };
+export function selectionToRawSpan(
+  raw: string,
+  spans: ManualSpan[],
+  from: number,
+  to: number,
+  wireLength?: number,
+): RawSpanResult {
+  const charSpans = spansInChars(raw, spans);
+  const rawFrom = Math.min(displayToRaw(charSpans, Math.min(from, to)), raw.length);
+  const rawTo = Math.min(displayToRaw(charSpans, Math.max(from, to)), raw.length);
+  if (wireLength !== undefined && charIndexToByteOffset(raw, raw.length) !== wireLength) {
+    const firstLossy = raw.indexOf("\uFFFD");
+    if (firstLossy >= 0 && rawTo > firstLossy) {
+      return {
+        ok: false,
+        reason: "That range reaches bytes that are not valid UTF-8, so the text shown cannot name their offsets — mark only before them",
+      };
+    }
+  }
+  return {
+    ok: true,
+    start: charIndexToByteOffset(raw, rawFrom),
+    end: charIndexToByteOffset(raw, rawTo),
+    text: raw.slice(rawFrom, rawTo),
+  };
 }

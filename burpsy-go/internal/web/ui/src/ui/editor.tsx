@@ -671,9 +671,13 @@ export function HttpEditor({
  menuGroups?: MenuGroup[];
  /**
   * Hand-marked payload positions (Burp's Add §, burpsy-react-ui-mun). When given, the Raw view's
-  * selection menu gains an "Add § payload marker" entry that reports the selection's character
-  * offsets in the document this editor is showing. Callers displaying a transformed document
-  * (the Intruder base request shows its marks as "§" pairs) map those offsets back themselves.
+  * selection menu gains an "Add § payload marker" entry that reports the selection as [start, end)
+  * UTF-16 positions in `value` — CRLF restored (docPosToValuePos), NOT CodeMirror's document
+  * offsets, which count each CRLF as one character and would land one short per preceding line
+  * (burpsy-react-ui-ngao). `text` is `value`'s own slice, line breaks as they are in the message.
+  * Callers displaying a transformed value (the Intruder base request shows its marks as "§"
+  * pairs) map those positions back themselves. Not offered under a charset override, where the
+  * document is not `value`'s characters at all.
   */
  payloadMarks?: {
   onAdd: (span: { start: number; end: number; text: string }) => void;
@@ -1215,7 +1219,15 @@ export function HttpEditor({
   if (!cm) return;
   const sel = cm.state.selection.main;
   if (sel.empty) return;
-  setConversionResult({ label, output: transform(cm.state.sliceDoc(sel.from, sel.to)) });
+  // On the unconverted Raw view the input is the message's own characters, CRLF included: the
+  // document holds a lone "\n" for each, and URL-encoding a selection across a header break must
+  // give %0D%0A, as the bytes are (burpsy-react-ui-ngao). Pretty and charset views have no such
+  // mapping and convert what is on screen.
+  const raw = rawSelectionRef.current;
+  const input = raw.rawView
+   ? raw.value.slice(docPosToValuePos(raw.value, sel.from), docPosToValuePos(raw.value, sel.to))
+   : cm.state.sliceDoc(sel.from, sel.to);
+  setConversionResult({ label, output: transform(input) });
  }, []);
 
  /**
@@ -1324,7 +1336,7 @@ export function HttpEditor({
    });
   }
   if (active !== "raw") return groups;
-  if (payloadMarks) {
+  if (payloadMarks && !charsetActive) {
    groups.push({
     id: "payload-marks",
     actions: [
@@ -1336,7 +1348,11 @@ export function HttpEditor({
        const cm = cmViewRef.current;
        if (!cm) return;
        const sel = cm.state.selection.main;
-       payloadMarks.onAdd({ start: sel.from, end: sel.to, text: cm.state.sliceDoc(sel.from, sel.to) });
+       // The document normalises CRLF to one "\n"; the caller's offsets index `value`, where it is
+       // two characters (and two bytes on the wire). Map before reporting (burpsy-react-ui-ngao).
+       const start = docPosToValuePos(value, sel.from);
+       const end = docPosToValuePos(value, sel.to);
+       payloadMarks.onAdd({ start, end, text: value.slice(start, end) });
       },
      },
     ],
@@ -1774,9 +1790,12 @@ export function HttpEditor({
           // range Raw will scroll to, which is what byteOffsetToCharIndex
           // exists for — without it a selection past a multibyte character
           // lands one or more characters off.
+          // Then to CodeMirror's document, which holds one "\n" per CRLF: dispatching the
+          // string index as-is selected one character further right per preceding line
+          // (burpsy-react-ui-ngao).
           setReveal({
-           from: byteOffsetToCharIndex(value, selection.from),
-           to: byteOffsetToCharIndex(value, selection.to),
+           from: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.from)),
+           to: valuePosToDocPos(value, byteOffsetToCharIndex(value, selection.to)),
           });
           pick("raw");
          }
