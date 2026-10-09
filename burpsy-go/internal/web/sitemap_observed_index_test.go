@@ -133,12 +133,14 @@ func TestSitemapGetRequestingAQueryURLClearsItsUnrequestedItem(t *testing.T) {
 		sort.Strings(out)
 		return out
 	}
-	if got, want := strings.Join(unrequested(), ","), "/other?x=1,/search?q=1,/search?q=2"; got != want {
+	// Two links to /search that differ only in query are the one grey /search row (vc98), drawn at
+	// the node the way the fold draws query variants of an observed path.
+	if got, want := strings.Join(unrequested(), ","), "/other,/search"; got != want {
 		t.Fatalf("before any request: unrequested = %s, want %s", got, want)
 	}
 
 	s.sitemap.Add(&core.Exchange{ID: 1, Host: "app.test", Port: 80, Method: "GET", Path: "/search?q=1"})
-	if got, want := strings.Join(unrequested(), ","), "/other?x=1"; got != want {
+	if got, want := strings.Join(unrequested(), ","), "/other"; got != want {
 		t.Errorf("after /search?q=1 was requested: unrequested = %s, want %s", got, want)
 	}
 	// And at record time: a later link to another query of the requested node is not stored.

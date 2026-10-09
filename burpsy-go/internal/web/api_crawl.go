@@ -721,6 +721,12 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// configuration — Burp exposes it nowhere else, so there is no request field to overlay it with —
 	// and a request naming none gets the engine's 0, which is off.
 	var configFormOptThreshold int
+	// The five discovery switches a named configuration carries in crawler/customization
+	// (burpsy-react-ui-tyso): API definitions, SOAP WSDLs, GraphQL introspection, hidden-GraphQL
+	// guessing and fragment routing. Like the threshold, Burp exposes them nowhere but the
+	// configuration, so there is no request field to overlay them with, and a request naming no
+	// configuration — or one that does not name the key — keeps the engine's zero value, which is off.
+	var configSwitches configCrawlSwitches
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.
@@ -735,6 +741,13 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		configSpeculative = whole.RequestSpeculative
 		configSpeculativeLinks = whole.Limits.MaxSpeculativeLinks
 		configFormOptThreshold = whole.FormSubmissionOptimizationThreshold
+		configSwitches = configCrawlSwitches{
+			ParseAPIDefinitions:         whole.ParseAPIDefinitions,
+			ParseSOAPWSDLs:              whole.ParseSOAPWSDLs,
+			PerformGraphQLIntrospection: whole.PerformGraphQLIntrospection,
+			GuessHiddenGraphQLEndpoints: whole.GuessHiddenGraphQLEndpoints,
+			FragmentsRoute:              whole.FragmentsRoute,
+		}
 	}
 	// The error-handling keys overlay the named configuration the same way the limits do: a field the
 	// operator typed on this request wins over the file they also named (o0c5).
@@ -840,7 +853,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		}
 		loginSess, loginRunner = sess, newBrowserLoginRunner(login, sess)
 	}
-	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh, configFormOptThreshold)
+	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh, configFormOptThreshold, configSwitches)
 	cfg.OnSend = live.onSend
 	if cfg.RenderWithOutcome != nil {
 		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
@@ -1420,6 +1433,17 @@ func availablePools(reg *pool.Registry) string {
 	return strings.Join(names, ", ")
 }
 
+// configCrawlSwitches are the crawler/customization switches only a named configuration can set
+// (burpsy-react-ui-tyso). A struct rather than five more bool parameters, because five adjacent bools
+// in a call are five chances to transpose two and have the compiler accept it.
+type configCrawlSwitches struct {
+	ParseAPIDefinitions         bool
+	ParseSOAPWSDLs              bool
+	PerformGraphQLIntrospection bool
+	GuessHiddenGraphQLEndpoints bool
+	FragmentsRoute              bool
+}
+
 // crawlConfig is the crawler configuration an operator-launched crawl runs under, and it exists as a
 // named method so a test can read what production actually builds.
 //
@@ -1429,7 +1453,7 @@ func availablePools(reg *pool.Registry) string {
 // that the session had been lost, and reported whatever the public pages yielded. A field missing
 // from a struct literal nobody inspects is invisible, and that is the same shape as the Params
 // field's own note about the wire dropping what the store kept.
-func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling, formOptThreshold int) crawler.Config {
+func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling, formOptThreshold int, switches configCrawlSwitches) crawler.Config {
 	// The fetch hook for the crawl→audit bridge, built before the task is registered so a
 	// configuration mistake is a 400 the operator can fix, not a task that appears in the dashboard
 	// only to fail immediately. Declared here rather than at the call site so this method is the
@@ -1456,15 +1480,27 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		// named configuration's threshold was in force. A parameter rather than a read of req so the
 		// one overlay in startCrawl stays the place every configuration-carried field is decided.
 		FormSubmissionOptimizationThreshold: formOptThreshold,
-		Limits:                              limits,
-		ErrorHandling:                       eh,
-		RequestWellKnown:                    req.RequestWellKnown,
-		RequestsPerSecond:                   req.RequestsPerSecond,
-		Pool:                                poolLimit,
-		UserAgent:                           req.UserAgent,
-		Headers:                             req.Headers,
-		OnFetch:                             onFetch,
-		Render:                              nil,
+		// burpsy-react-ui-tyso, the same defect as the threshold above five times over: the parser
+		// listed these keys as applied (so the start reply did not name them as unapplied) and the
+		// crawler implements every one, but this literal never set them, so a configuration that
+		// turned them on crawled with all five off. Every request they cause still goes through the
+		// crawl's own gates: definition endpoints enter through admit() like any link, and the GraphQL
+		// probes and introspection queries go through perform() — the scope-authorised sender, the
+		// limiters — after a check against the crawl-wide request bound.
+		ParseAPIDefinitions:         switches.ParseAPIDefinitions,
+		ParseSOAPWSDLs:              switches.ParseSOAPWSDLs,
+		PerformGraphQLIntrospection: switches.PerformGraphQLIntrospection,
+		GuessHiddenGraphQLEndpoints: switches.GuessHiddenGraphQLEndpoints,
+		FragmentsRoute:              switches.FragmentsRoute,
+		Limits:                      limits,
+		ErrorHandling:               eh,
+		RequestWellKnown:            req.RequestWellKnown,
+		RequestsPerSecond:           req.RequestsPerSecond,
+		Pool:                        poolLimit,
+		UserAgent:                   req.UserAgent,
+		Headers:                     req.Headers,
+		OnFetch:                     onFetch,
+		Render:                      nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
 		Logger:            s.logger,

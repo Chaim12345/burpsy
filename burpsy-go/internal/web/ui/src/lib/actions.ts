@@ -37,7 +37,7 @@ import { manyMenuGroups } from "./actions-many";
 import { useChord } from "./keymap";
 import { useApp } from "./store";
 import { useCsrfPoc } from "./csrf-poc";
-import { HIGHLIGHTS, type Exchange, type MessageView } from "./types";
+import { HIGHLIGHTS, highlightName, type Exchange, type MessageView } from "./types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { MenuGroup } from "../ui/menu";
 
@@ -882,7 +882,7 @@ const showResponseInBrowser = (exchange: Exchange) => {
          id: name,
          label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
          icon: HIGHLIGHT_ICONS[name],
-         disabled: (exchange.highlight ?? "") === wire,
+         disabled: highlightName(exchange.highlight) === wire,
          onSelect: () => setHighlight(exchange, wire),
         };
        }),

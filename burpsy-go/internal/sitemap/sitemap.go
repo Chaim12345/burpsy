@@ -84,7 +84,13 @@ type SiteMap struct {
 	// unrequested is every URL the live passive crawl saw linked from proxied traffic and nobody has
 	// requested yet (burpsy-react-ui-t3zk), Burp's grey "unrequested items". Kept apart from the
 	// observed tree for the reason inserted is, and bounded by MaxUnrequested.
-	unrequested map[string]*UnrequestedNode
+	//
+	// Grouped by node — outer key insertKey(host, port, tls, NodePath(path)), inner key the URL as
+	// linked (insertKey with the raw path) — so the moment a node becomes covered by traffic its
+	// items can be dropped with one lookup instead of a scan of the whole set on the capture path
+	// (burpsy-react-ui-vc98). unrequestedN is the item count the cap is checked against.
+	unrequested  map[string]map[string]*UnrequestedNode
+	unrequestedN int
 	// pinned is every exchange an operator recorded into the map by id (burpsy-react-ui-4bfp) — Burp's
 	// add_to_sitemap. The map already follows the store, so a captured exchange is on it unless a
 	// suppression hides it; a pin is the operator saying "this one, anyway". It outranks the
@@ -100,6 +106,14 @@ type SiteMap struct {
 	// after /search?q=1 itself was requested. Counted rather than a set so a Suppress that drops one
 	// raw key leaves the node observed while another still holds it.
 	nodes map[string]int
+	// folders counts, per folder, the observed nodes strictly beneath it: key is
+	// insertKey(host, port, tls, folder) for every folder of a node's NodePath ("/" and "/a" for
+	// /a/b), value how many observed nodes sit under it (burpsy-react-ui-vc98). GET /api/sitemap
+	// treats a folder anything observed sits beneath as observed — the fold synthesises that folder
+	// row, so an item there would be a second row for it — and the store has to agree with the read,
+	// or an item the read hides keeps one of the MaxUnrequested slots for the life of the process.
+	// Moved only when a node appears or disappears, never per exchange.
+	folders map[string]int
 }
 
 // NodePath is the identity a path has on the map: the path with any query string removed,
@@ -124,6 +138,14 @@ func NodePath(p string) string {
 	return p
 }
 
+// NodeDepth is a node's depth on the map: the number of segments in its NodePath, so a host is 0
+// (it has no path), "/" and "/a" are 1 and "/a/b" is 2. GET /api/sitemap reports observed, inserted
+// and unrequested nodes with this one rule, so a grey /a/b is drawn at the depth of an observed /a/b
+// rather than at 0 under its host (burpsy-react-ui-vc98).
+func NodeDepth(p string) int {
+	return strings.Count(NodePath(p), "/")
+}
+
 // MaxUnrequested bounds the unrequested set: a site that links to a calendar or a search with a fresh
 // query on every page would otherwise grow it without end.
 const MaxUnrequested = 20000
@@ -140,41 +162,65 @@ type UnrequestedNode struct {
 }
 
 // AddUnrequested records a linked-but-never-requested URL. It reports false when the URL's node is
-// already observed, or the URL is inserted, suppressed, already known as unrequested, or the set is
-// full. "Observed" is by node (NodePath): a link to /search?q=2 is not recorded once /search?q=1 has
-// been requested, because both are the requested /search node and its parameter list.
+// already covered by traffic, or the URL is inserted, suppressed, already known as unrequested, or
+// the set is full. "Covered" is by node (NodePath): a link to /search?q=2 is not recorded once
+// /search?q=1 has been requested, because both are the requested /search node and its parameter
+// list; and a link to a folder something observed sits beneath (/api once /api/users was requested)
+// is not recorded either, because the map already draws that folder.
 //
-// Unrequested items are keyed by the URL as linked, query included, so two links differing only in
-// query are two grey items until their node is requested; GET /api/sitemap applies the same
-// NodePath rule at merge time to drop items whose node was requested after they were recorded.
+// Unrequested items are stored by the URL as linked, query included, so the parameter names of every
+// link to a node survive; GET /api/sitemap draws them as the one grey node at NodePath. An item whose
+// node becomes covered later is dropped from the set at that moment (see countNodeLocked), so the
+// MaxUnrequested slots hold only items the map can still show.
 func (sm *SiteMap) AddUnrequested(host string, port uint16, tls bool, path, from string, seen time.Time) bool {
 	if host == "" || path == "" {
 		return false
 	}
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if sm.observedLocked(host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
+	if sm.coveredLocked(host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
 		return false
 	}
 	key := insertKey(host, port, tls, path)
 	if _, ok := sm.inserted[key]; ok {
 		return false
 	}
-	if _, ok := sm.unrequested[key]; ok || len(sm.unrequested) >= MaxUnrequested {
+	nk := insertKey(host, port, tls, NodePath(path))
+	group := sm.unrequested[nk]
+	if _, ok := group[key]; ok || sm.unrequestedN >= MaxUnrequested {
 		return false
 	}
-	sm.unrequested[key] = &UnrequestedNode{Host: host, Port: port, TLS: tls, Path: path, From: from, Seen: seen}
+	if group == nil {
+		if sm.unrequested == nil {
+			sm.unrequested = make(map[string]map[string]*UnrequestedNode)
+		}
+		group = make(map[string]*UnrequestedNode, 1)
+		sm.unrequested[nk] = group
+	}
+	group[key] = &UnrequestedNode{Host: host, Port: port, TLS: tls, Path: path, From: from, Seen: seen}
+	sm.unrequestedN++
 	return true
+}
+
+// dropUnrequestedNodeLocked removes every unrequested item stored under one node key. Callers hold
+// sm.mu.
+func (sm *SiteMap) dropUnrequestedNodeLocked(nodeKey string) {
+	if group, ok := sm.unrequested[nodeKey]; ok {
+		sm.unrequestedN -= len(group)
+		delete(sm.unrequested, nodeKey)
+	}
 }
 
 // Unrequested returns the unrequested set, sorted by host and path.
 func (sm *SiteMap) Unrequested() []*UnrequestedNode {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	out := make([]*UnrequestedNode, 0, len(sm.unrequested))
-	for _, n := range sm.unrequested {
-		c := *n
-		out = append(out, &c)
+	out := make([]*UnrequestedNode, 0, sm.unrequestedN)
+	for _, group := range sm.unrequested {
+		for _, n := range group {
+			c := *n
+			out = append(out, &c)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Host != out[j].Host {
@@ -210,9 +256,10 @@ func New() *SiteMap {
 		suppressed: make(map[string]struct{}),
 		inserted:   make(map[string]*InsertedNode),
 
-		unrequested: make(map[string]*UnrequestedNode),
+		unrequested: make(map[string]map[string]*UnrequestedNode),
 		pinned:      make(map[core.ExchangeID]pin),
 		nodes:       make(map[string]int),
+		folders:     make(map[string]int),
 	}
 }
 
@@ -290,16 +337,74 @@ func (sm *SiteMap) observedLocked(host string, port uint16, tls bool, path strin
 	return sm.nodes[insertKey(host, port, tls, NodePath(path))] > 0
 }
 
+// coveredLocked reports whether traffic already accounts for this path's place on the map: its node
+// is observed, or it names a folder some observed node sits beneath ("/" under any host with a path
+// at all). This is the store-side twin of GET /api/sitemap's observedIndex, and the two must agree:
+// an item the read hides but the store keeps is a MaxUnrequested slot nothing can ever free
+// (burpsy-react-ui-vc98). Callers hold sm.mu.
+func (sm *SiteMap) coveredLocked(host string, port uint16, tls bool, path string) bool {
+	if path == "" {
+		return sm.hosts[hostKey(host, port, tls)] != nil
+	}
+	k := insertKey(host, port, tls, NodePath(path))
+	return sm.nodes[k] > 0 || sm.folders[k] > 0
+}
+
 // countNodeLocked moves the per-node count for one raw path key of hn by delta. Callers hold sm.mu.
+//
+// When a node appears (its count leaves zero) it, and every folder above it, become covered, and the
+// unrequested items stored at any of them are dropped then and there: they are hidden by the read
+// from this moment on, and keeping them would spend MaxUnrequested slots on rows nobody will see
+// (burpsy-react-ui-vc98). Pruning at the transition rather than counting only visible items keeps
+// the cap a bound on memory, which is what it exists for; the cost is one map lookup per folder
+// level, paid only when a new node appears, never per exchange.
 func (sm *SiteMap) countNodeLocked(hn *HostNode, rawPath string, delta int) {
 	if sm.nodes == nil {
 		sm.nodes = make(map[string]int)
 	}
-	k := insertKey(hn.Host, hn.Port, hn.TLS, NodePath(rawPath))
-	if n := sm.nodes[k] + delta; n > 0 {
+	if sm.folders == nil {
+		sm.folders = make(map[string]int)
+	}
+	np := NodePath(rawPath)
+	k := insertKey(hn.Host, hn.Port, hn.TLS, np)
+	before := sm.nodes[k]
+	if n := before + delta; n > 0 {
 		sm.nodes[k] = n
 	} else {
 		delete(sm.nodes, k)
+	}
+	after := sm.nodes[k]
+	switch {
+	case before == 0 && after > 0:
+		sm.dropUnrequestedNodeLocked(k)
+		forEachFolder(np, func(folder string) {
+			fk := insertKey(hn.Host, hn.Port, hn.TLS, folder)
+			sm.folders[fk]++
+			sm.dropUnrequestedNodeLocked(fk)
+		})
+	case before > 0 && after == 0:
+		forEachFolder(np, func(folder string) {
+			fk := insertKey(hn.Host, hn.Port, hn.TLS, folder)
+			if n := sm.folders[fk] - 1; n > 0 {
+				sm.folders[fk] = n
+			} else {
+				delete(sm.folders, fk)
+			}
+		})
+	}
+}
+
+// forEachFolder calls fn with every folder a node path sits beneath, "/" first: "/", "/a" and "/a/b"
+// for /a/b/c. The root node "/" sits beneath nothing.
+func forEachFolder(np string, fn func(string)) {
+	if np == "/" {
+		return
+	}
+	fn("/")
+	for i := 1; i < len(np); i++ {
+		if np[i] == '/' {
+			fn(np[:i])
+		}
 	}
 }
 
@@ -358,6 +463,7 @@ func (sm *SiteMap) Sync(store *core.TrafficStore) {
 	defer sm.mu.Unlock()
 	sm.hosts = make(map[string]*HostNode)
 	sm.nodes = make(map[string]int)
+	sm.folders = make(map[string]int)
 	for _, ex := range exchanges {
 		sm.addExchangeLocked(ex)
 	}
@@ -452,9 +558,10 @@ const (
 )
 
 // suppressedByLocked reports whether this host or this path under it is suppressed. A whole-host
-// entry answers for every path; an item entry answers its exact path; a branch entry answers the
-// path and anything beneath it (prefix on segment boundaries, so /api/ does not swallow /apiary).
-// Callers hold sm.mu.
+// entry answers for every path; an item entry answers its node (NodePath, so an item delete of /a
+// covers /a?x=1 and /a/ too) or, when the delete named a URL with a query, that exact URL; a branch
+// entry answers the node and anything beneath it (prefix on segment boundaries, so /api/ does not
+// swallow /apiary). Callers hold sm.mu.
 func (sm *SiteMap) suppressedByLocked(hostKey string, path string) bool {
 	if _, ok := sm.suppressed[hostKey]; ok {
 		return true
@@ -462,12 +569,14 @@ func (sm *SiteMap) suppressedByLocked(hostKey string, path string) bool {
 	if path == "" {
 		return false
 	}
-	clean := path
-	if i := strings.IndexByte(clean, '?'); i >= 0 {
-		clean = clean[:i]
-	}
+	clean := NodePath(path)
 	if _, ok := sm.suppressed[hostKey+"|"+suppressItem+"|"+clean]; ok {
 		return true
+	}
+	if clean != path {
+		if _, ok := sm.suppressed[hostKey+"|"+suppressItem+"|"+path]; ok {
+			return true
+		}
 	}
 	prefix := hostKey + "|" + suppressBranch + "|"
 	if _, ok := sm.suppressed[prefix+clean]; ok {
@@ -512,6 +621,21 @@ func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
 				delete(sm.pinned, id)
 			}
 		}
+		// Grey items under what was just deleted go with it: AddUnrequested already refuses a link
+		// into a suppressed host or branch, and one recorded before the delete would otherwise
+		// stay drawn — and keep its MaxUnrequested slot — under a node the operator removed. One
+		// scan of the bounded set, on an operator action, never on the capture path.
+		for nk, group := range sm.unrequested {
+			for k, un := range group {
+				if hostKey == HostKey(un.Host, un.Port, un.TLS) && sm.suppressedByLocked(hostKey, un.Path) {
+					delete(group, k)
+					sm.unrequestedN--
+				}
+			}
+			if len(group) == 0 {
+				delete(sm.unrequested, nk)
+			}
+		}
 	}()
 	if path == "" {
 		sm.suppressed[hostKey] = struct{}{}
@@ -525,20 +649,35 @@ func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
 		delete(sm.hosts, hostKey)
 		return
 	}
-	sm.suppressed[hostKey+"|"+kind+"|"+path] = struct{}{}
+	// The stored key and the live removal both work on node identity (burpsy-react-ui-vc98): the
+	// tree an operator deletes from draws /a, /a?x=1 and /a/ as one row, so "Delete item" on that row
+	// has to take every raw key folded into it — removing only the exact key "/a" left /a?x=1 on
+	// screen and the node counted as observed until the next Sync. A path that carries a query names
+	// one captured URL rather than a row, and is kept as that exact URL.
+	exact := strings.IndexByte(path, '?') >= 0 && kind != suppressBranch
+	stored := path
+	if !exact {
+		stored = NodePath(path)
+	}
+	sm.suppressed[hostKey+"|"+kind+"|"+stored] = struct{}{}
 	if hn, ok := sm.hosts[hostKey]; ok {
-		if kind == suppressBranch {
-			// Prefix removal for the live tree: every path at or under the branch goes now, not on
-			// the next fold. The stored suppression set is what keeps them out afterwards.
-			for p := range hn.Paths {
-				if p == path || strings.HasPrefix(p, path+"/") {
-					delete(hn.Paths, p)
-					sm.countNodeLocked(hn, p, -1)
-				}
+		for p := range hn.Paths {
+			var drop bool
+			switch {
+			case exact:
+				drop = p == path
+			case kind == suppressBranch:
+				// Prefix removal for the live tree: every path at or under the branch goes now, not
+				// on the next fold. The stored suppression set is what keeps them out afterwards.
+				np := NodePath(p)
+				drop = np == stored || strings.HasPrefix(np, stored+"/")
+			default:
+				drop = NodePath(p) == stored
 			}
-		} else if _, ok := hn.Paths[path]; ok {
-			delete(hn.Paths, path)
-			sm.countNodeLocked(hn, path, -1)
+			if drop {
+				delete(hn.Paths, p)
+				sm.countNodeLocked(hn, p, -1)
+			}
 		}
 		// A host with nothing left shows an empty branch forever; drop it too.
 		if len(hn.Paths) == 0 {

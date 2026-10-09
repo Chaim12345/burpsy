@@ -15,7 +15,7 @@ import { Check, Copy, Plus, RefreshCw, X } from "lucide-react";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Input, Metric, Select, Toolbar } from "../ui/primitives";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { SimpleTable } from "../ui/table";
-import { HIGHLIGHTS } from "../lib/types";
+import { HIGHLIGHTS, highlightName } from "../lib/types";
 import {
   useBlindXSS,
   useCollaboratorInteraction,
@@ -49,8 +49,9 @@ function formatTime(ms: number): string {
  * pure function so the token choice is unit-testable without a DOM.
  */
 export function highlightBorderStyle(highlight: string | undefined): CSSProperties | undefined {
-  if (!highlight || highlight === "none") return undefined;
-  return { borderLeft: `3px solid var(--highlight-${highlight}, var(--accent))` };
+  const name = highlightName(highlight);
+  if (!name) return undefined;
+  return { borderLeft: `3px solid var(--highlight-${name}, var(--accent))` };
 }
 
 export function CollaboratorPage(): JSX.Element {

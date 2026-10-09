@@ -11,6 +11,21 @@ import type { H2Field } from "./kettle";
 export const HIGHLIGHTS = ["none", "red", "orange", "yellow", "green", "cyan", "blue", "pink", "magenta", "gray"];
 
 /**
+ * The colour a stored highlight paints, or "" for no highlight.
+ *
+ * The wire's "no highlight" is "", but a stored value of "none" (any case — an import, an older
+ * build, a hand-edited project) is the picker's sentinel leaking through, and it means the same
+ * thing. Rendering it as-is drew a "NONE" badge in Organizer and a `row-highlight-none` class
+ * elsewhere (burpsy-react-ui-iqwb). Every place a highlight is rendered, filtered on or compared
+ * reads it through here so the two spellings of "nothing" cannot diverge. A real colour is
+ * returned trimmed and lower-cased, matching the `--highlight-<name>` tokens.
+ */
+export function highlightName(value: string | null | undefined): string {
+ const name = (value ?? "").trim().toLowerCase();
+ return name === "none" ? "" : name;
+}
+
+/**
  * Tone to render each highlight as when it needs a `Badge` rather than a swatch (Organizer's table).
  * `gray` and `none` are deliberately unmapped — neither reads as a severity/status colour, so callers
  * fall back to `"neutral"`.

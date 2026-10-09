@@ -212,6 +212,13 @@ func applyReview(doc *apidoc.Document, req apiScanReq) error {
 		if o.Mode != "" && o.Mode != "fixed" && o.Mode != "dynamic" {
 			return fmt.Errorf("parameter %s mode %q: expected fixed or dynamic", o.Name, o.Mode)
 		}
+		// A Postman request's path is the collection's raw URL with its {{variables}} and :path
+		// variables already substituted, and the template keeps neither in a form this build can
+		// re-render. Refused by name rather than accepted, because the alternative is a path that
+		// is reported as the operator's value and sent garbled (vuw7).
+		if o.In == "path" && doc.Format == apidoc.FormatPostman {
+			return fmt.Errorf("path parameter %q cannot be overridden in a Postman collection: edit the collection's variable instead", o.Name)
+		}
 		hit := false
 		for i := range doc.Operations {
 			op := &doc.Operations[i]
@@ -421,6 +428,19 @@ func (s *Server) prepareAPIScan(req apiScanReq) ([]crawler.SeedRequest, *apiScan
 	requests, operations, err := resolveOperations(doc, base)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	// The review's authentication method replaces a header of the same name the document declares,
+	// as Burp's does. The crawl engine writes its configured headers beside each request's own, so
+	// without this a definition declaring an Authorization parameter went out with two (vuw7).
+	if req.Auth != nil {
+		name, _, _ := req.Auth.header()
+		for i := range requests {
+			for h := range requests[i].Headers {
+				if strings.EqualFold(h, name) {
+					delete(requests[i].Headers, h)
+				}
+			}
+		}
 	}
 	summary := &apiScanSummary{
 		Format:            string(doc.Format),

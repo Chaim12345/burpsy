@@ -14,7 +14,7 @@ import { useHistoryExtractors, useHistoryExtractValues, type ExtractValues } fro
 import { extractorColumnId, extractorSignature } from "../lib/extractors";
 import { ExtractorCell } from "../ui/extractor-manager";
 import { useApp } from "../lib/store";
-import { HIGHLIGHTS, HIGHLIGHT_TONE } from "../lib/types";
+import { HIGHLIGHTS, HIGHLIGHT_TONE, highlightName } from "../lib/types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
 import type { ToolLogRow } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
@@ -203,7 +203,7 @@ export function LoggerPage(): JSX.Element {
      const classDigit = Math.floor(row.status / 100);
      if (String(classDigit) !== statusClass) return false;
     }
-    if (annotatedOnly && !row.comment && !row.highlight) return false;
+    if (annotatedOnly && !row.comment && !highlightName(row.highlight)) return false;
     return true;
    }),
   [rows, method, statusClass, annotatedOnly],
@@ -329,7 +329,7 @@ export function LoggerPage(): JSX.Element {
     // Burp's annotation column: the colour swatch (or an em dash when unpainted). Hidden
     // from the menu like Age — it is the row's identity marker in the annotation model.
     enableHiding: false,
-    accessorFn: (row) => row.highlight,
+    accessorFn: (row) => highlightName(row.highlight),
     cell: (info) => {
      const value = info.getValue<string>();
      return value ? (
@@ -475,7 +475,11 @@ export function LoggerPage(): JSX.Element {
      },
      {
       label: "Highlight",
-      value: selected.highlight ? <Badge tone={HIGHLIGHT_TONE[selected.highlight]}>{selected.highlight}</Badge> : "none",
+      value: highlightName(selected.highlight) ? (
+        <Badge tone={HIGHLIGHT_TONE[highlightName(selected.highlight)] ?? "neutral"}>{highlightName(selected.highlight)}</Badge>
+       ) : (
+        "none"
+       ),
      },
     ]}
    />
@@ -814,7 +818,7 @@ export function LoggerPage(): JSX.Element {
           id: name,
           label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
           icon: HIGHLIGHT_ICONS[name],
-          disabled: row.highlight === wire,
+          disabled: highlightName(row.highlight) === wire,
           onSelect: () => annotate(row, row.comment, wire, wire === "" ? `Highlight cleared on #${row.id}` : `#${row.id} highlighted ${wire}`),
          };
         }),
@@ -884,7 +888,7 @@ export function LoggerPage(): JSX.Element {
           : undefined,
         // Same per-colour tint classes the history and site-map tables use, so a
         // highlighted row looks the same in every tool (see styles.css Task 5).
-        row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined,
+        highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined,
        )
       }
       loading={isFetching && !data}

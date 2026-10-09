@@ -15,7 +15,7 @@ import { requestSettingsSection } from "../lib/settings-sections";
 import { useApp } from "../lib/store";
 import { toast } from "sonner";
 import type { SiteNodeDetail as SiteNode } from "../lib/types.observe";
-import type { Exchange } from "../lib/types";
+import { highlightName, type Exchange } from "../lib/types";
 import { CrawlLauncher } from "../ui/crawl";
 import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
@@ -1067,7 +1067,7 @@ export function SiteMapPage(): JSX.Element {
        menuGroups={(row) => actions.menu(row, [exchangeEngagement(row)])}
        multiSelect
        menuGroupsMany={(rows) => actions.menuMany(rows)}
-       rowClassName={(row) => (row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined)}
+       rowClassName={(row) => (highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined)}
       />
      )
     }
