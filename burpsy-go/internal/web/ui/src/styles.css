@@ -1811,6 +1811,39 @@ tbody td {
   font-size: var(--fs-sm);
 }
 
+/* The exact request a confirm dialog approves (dialog-host.tsx CallPreview, e0yq): the server's own
+   preview of the call the gate's token is bound to. */
+.call-preview {
+  display: grid;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  background: var(--paper-sunken);
+  min-width: 0;
+}
+
+.call-preview-line,
+.call-preview-url,
+.call-preview-hash {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.call-preview-body {
+  margin: 0;
+  max-height: 14em;
+  overflow: auto;
+  font: var(--fs-sm)/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.call-preview-note {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
 .dialog-head {
   display: flex;
   align-items: start;

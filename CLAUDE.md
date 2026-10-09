@@ -81,8 +81,9 @@ the frozen Rust reference (`verify.sh`). Full rules: `docs/DEVELOPMENT-PROCESS.m
 
 ```bash
 pkgs=$(scripts/affected-go-tests.sh origin/master)                  # T1 test set
-(cd burpsy-go && [ -n "$pkgs" ] && go test -count=1 -timeout 30m $pkgs)
-(cd burpsy-go && go test ./... -count=1 -timeout 30m)               # whole suite: a diagnostic, hold flock /tmp/burpsy-heavy.lock
+[ -n "$pkgs" ] && scripts/capped-run.sh -- sh -c "cd burpsy-go && go test -count=1 -timeout 30m $pkgs"
+scripts/capped-run.sh -- scripts/ci-shard.sh web                   # one CI shard; `ci-shard.sh all` lists them
+scripts/capped-run.sh -- sh -c 'cd burpsy-go && go test ./... -count=1 -timeout 30m'  # whole suite: a diagnostic
 (cd burpsy-go/internal/web/ui && bun run check && bun run build)    # tsc + guards; build does NOT type-check
 ```
 

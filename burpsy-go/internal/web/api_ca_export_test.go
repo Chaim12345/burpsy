@@ -88,11 +88,11 @@ func TestTheExportedKeyParsesAndItsPublicHalfMatchesTheExportedCert(t *testing.T
 
 	// A fresh confirmation per export. Tokens are one-time by design, so reusing one here would be
 	// testing the token's lifecycle rather than the pair — which the test below already does.
-	certRec := postCAExport(t, ts, confirm(t, ts, "/api/proxy/ca/export"), `{"kind":"cert"}`)
+	certRec := postCAExport(t, ts, confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"cert"}`), `{"kind":"cert"}`)
 	if certRec.Code != http.StatusOK {
 		t.Fatalf("exporting the certificate = %d, want 200: %s", certRec.Code, certRec.Body.String())
 	}
-	keyRec := postCAExport(t, ts, confirm(t, ts, "/api/proxy/ca/export"), `{"kind":"key"}`)
+	keyRec := postCAExport(t, ts, confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"key"}`), `{"kind":"key"}`)
 	if keyRec.Code != http.StatusOK {
 		t.Fatalf("exporting the key = %d, want 200: %s", keyRec.Code, keyRec.Body.String())
 	}
@@ -134,7 +134,7 @@ func TestTheExportRouteRefusesAnUnconfirmedCall(t *testing.T) {
 // into a standing permission, so the second export must be refused even though the first succeeded.
 func TestAConfirmationTokenIsSpentByOneCallAndCannotBeReplayed(t *testing.T) {
 	ts, _ := newTestServerWithCA(t)
-	token := confirm(t, ts, "/api/proxy/ca/export")
+	token := confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"cert"}`)
 
 	if rec := postCAExport(t, ts, token, `{"kind":"cert"}`); rec.Code != http.StatusOK {
 		t.Fatalf("the first export = %d, want 200: %s", rec.Code, rec.Body.String())
@@ -151,7 +151,7 @@ func TestAConfirmationTokenIsSpentByOneCallAndCannotBeReplayed(t *testing.T) {
 // whole purpose is to be carried to another machine, so "no protection" must not look like success.
 func TestAPKCS12ExportRefusesAnEmptyPassword(t *testing.T) {
 	ts, _ := newTestServerWithCA(t)
-	token := confirm(t, ts, "/api/proxy/ca/export")
+	token := confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"pkcs12"}`)
 
 	rec := postCAExport(t, ts, token, `{"kind":"pkcs12"}`)
 
@@ -169,7 +169,7 @@ func TestAPKCS12ExportRefusesAnEmptyPassword(t *testing.T) {
 // after they have already pointed another tool at it.
 func TestAPKCS12ExportProducesAKeystoreCarryingBothHalvesOfTheLiveCA(t *testing.T) {
 	ts, _ := newTestServerWithCA(t)
-	token := confirm(t, ts, "/api/proxy/ca/export")
+	token := confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"pkcs12","password":"hunter2"}`)
 
 	rec := postCAExport(t, ts, token, `{"kind":"pkcs12","password":"hunter2"}`)
 	if rec.Code != http.StatusOK {
@@ -201,7 +201,7 @@ func TestAPKCS12ExportProducesAKeystoreCarryingBothHalvesOfTheLiveCA(t *testing.
 // matters.
 func TestTheExportRouteRefusesAnUnknownKindWithoutEchoingAnything(t *testing.T) {
 	ts, _ := newTestServerWithCA(t)
-	token := confirm(t, ts, "/api/proxy/ca/export")
+	token := confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"everything"}`)
 
 	rec := postCAExport(t, ts, token, `{"kind":"everything"}`)
 
@@ -222,7 +222,7 @@ func TestExportingWithNoCAExplainsWhyRatherThanReturningAnEmptyFile(t *testing.T
 	ts := newTestServer()
 	// Confirmed, so the call reaches the handler: what is under test is the no-CA branch, not the
 	// gate that stands in front of it (asserted separately above).
-	token := confirm(t, ts, "/api/proxy/ca/export")
+	token := confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", `{"kind":"key"}`)
 
 	rec := postCAExport(t, ts, token, `{"kind":"key"}`)
 
@@ -244,7 +244,7 @@ func TestNoExportWritesKeyMaterialOrThePasswordToTheLog(t *testing.T) {
 	ts.WithLogger(zap.New(core))
 
 	for _, body := range []string{`{"kind":"cert"}`, `{"kind":"key"}`, `{"kind":"pkcs12","password":"hunter2"}`} {
-		if rec := postCAExport(t, ts, confirm(t, ts, "/api/proxy/ca/export"), body); rec.Code != http.StatusOK {
+		if rec := postCAExport(t, ts, confirm(t, ts, http.MethodPost, "/api/proxy/ca/export", body), body); rec.Code != http.StatusOK {
 			t.Fatalf("export %s = %d: %s", body, rec.Code, rec.Body.String())
 		}
 	}

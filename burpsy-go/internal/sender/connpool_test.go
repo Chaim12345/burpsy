@@ -276,6 +276,10 @@ func TestAnIdleConnectionTheServerClosedIsNotUsed(t *testing.T) {
 	}
 	defer ln.Close()
 	var accepts atomic.Int64
+	// closed is signalled once the server has closed a socket. The test waits on it rather than
+	// sleeping: under load a fixed sleep let the next send's probe run before the close, see a
+	// live socket, and then read the FIN as the response (1 run in ~300 with the CPUs saturated).
+	closed := make(chan struct{}, 3)
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -297,6 +301,8 @@ func TestAnIdleConnectionTheServerClosedIsNotUsed(t *testing.T) {
 				}
 				// Framed and keep-alive, then the server closes anyway — an idle timeout.
 				fmt.Fprint(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+				c.Close()
+				closed <- struct{}{}
 			}(c)
 		}
 	}()
@@ -310,7 +316,11 @@ func TestAnIdleConnectionTheServerClosedIsNotUsed(t *testing.T) {
 		if _, err := auth.SendReusing(context.Background(), pool, []byte(post), ProtocolPreferenceAuto); err != nil {
 			t.Fatalf("send %d after the server closed its idle socket: %v", i, err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("send %d: the server never closed its socket", i)
+		}
 	}
 	if accepts.Load() != 3 {
 		t.Fatalf("%d sockets for 3 sends to a server that closes after each", accepts.Load())
@@ -462,5 +472,55 @@ func TestAConnPoolRequestWithBytesPastItsFramingDoesNotPoolItsConnection(t *test
 	}
 	if got := conns.Load() - before; got != 0 {
 		t.Errorf("%d new connection(s) for two single-request sends with bodies, want 0: each is exactly its framing", got)
+	}
+}
+
+// lateConn is a connection whose goroutine is always descheduled past the probe's deadline: every
+// non-zero read deadline it is given has already passed. Go then refuses the probe's read without
+// asking the socket, which is what a loaded machine did intermittently to the real probe.
+type lateConn struct{ *net.TCPConn }
+
+func (c lateConn) SetReadDeadline(t time.Time) error {
+	if !t.IsZero() {
+		t = time.Now().Add(-time.Second)
+	}
+	return c.TCPConn.SetReadDeadline(t)
+}
+
+// A connection whose peer has closed is not alive, even when the deadline probe never gets to read:
+// the FIN is seen on the socket itself.
+func TestAProbeThatNeverReadsStillSeesAClosedPeer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	server := <-accepted
+	conn := lateConn{c.(*net.TCPConn)}
+	pc := &pooledConn{conn: conn, br: bufio.NewReader(conn), read: &atomic.Int64{}}
+
+	if !alive(pc) {
+		t.Fatal("an open, quiet connection was judged dead")
+	}
+	server.Close()
+	// The FIN is on the loopback socket once Close returns; give a loaded scheduler a moment anyway.
+	deadline := time.Now().Add(5 * time.Second)
+	for alive(pc) {
+		if time.Now().After(deadline) {
+			t.Fatal("a connection whose peer closed was still judged alive: the probe never read the socket")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

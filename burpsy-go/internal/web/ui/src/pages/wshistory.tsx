@@ -6,6 +6,7 @@ import { useWsConnections, useWsHistory } from "../lib/data";
 import { useExchange, useWsMessageDetailed } from "../lib/data.observe";
 import { useMessage } from "../lib/data";
 import { useApp } from "../lib/store";
+import { wsTabSeedFromFrame } from "../lib/repeater-ws-connection";
 import { useSendShortcuts } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import type { WsConnection, WsRow } from "../lib/types";
@@ -122,31 +123,6 @@ export function WebSocketPage(): JSX.Element {
  const actions = usePluginExchangeActions();
  const openRepeaterTab = useApp((state) => state.openRepeaterTab);
 
- /**
-  * Burp's "Send to Repeater" on a WebSocket frame (burpsy-react-ui-6ex): opens a Repeater
-  * tab seeded with the frame's payload and target, and records a one-shot ws-send there.
-  *
-  * The seed carries the connection's target and TLS (the upgrade handshake's host:port) so
-  * the tab's send goes back to the same authority the frame used, and the frame's opcode and
-  * payload prefill the editor — edit, then send, which is Burp's own flow. The direction
-  * choice is to-server on this path: burpsy cannot inject into a third party's client socket,
-  * and the server refuses to-client with the reason rather than pretending.
-  */
- const sendFrameToRepeater = (row: WsRow) => {
-  const opcode = row.opcode === "text" ? "text" : row.opcode === "binary" ? "binary" : "text";
-  const host = selectedConn ? `${selectedConn.host}:${selectedConn.port}` : "";
-  openRepeaterTab({
-   name: `WS frame #${row.id}`.slice(0, 42),
-   target: host,
-   protocol: "http",
-   request: "", // the tab's WS send carries the frame; the HTTP request editor stays blank
-   // The frame's own connection, so the tab's send returns to the authority the frame used.
-   fromExchange: row.exchange,
-  });
-  setRoute("repeater");
-  toast.success(`Frame #${row.id} sent to Repeater (${opcode})`);
- };
-
  const [selectedExchange, setSelectedExchange] = useState<number | null>(null);
  const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);
  // The frame-list filter (burpsy-react-ui-5k4): direction, opcode and payload substring.
@@ -171,6 +147,28 @@ export function WebSocketPage(): JSX.Element {
   payload: debouncedPayload,
  });
  const frame = useWsMessageDetailed(selectedFrameId);
+ /**
+  * Burp's "Send to Repeater" on a WebSocket frame (burpsy-react-ui-6ex, wuwf): opens a Repeater
+  * WebSocket tab seeded with the frame's payload and opcode, on the frame's own connection.
+  *
+  * The tab knows that connection (its WebSocket ID), so it starts ATTACHED when the proxy still
+  * holds it — the frame goes into the live socket, to the server or to the client — and CLONED
+  * when it has closed: a new connection with the captured handshake. The operator can switch
+  * either way, or to a plain new connection, in the tab. This used to open an HTTP tab with an
+  * empty request and the handshake's exchange id where the send expected a frame id, so the
+  * frame never reached the editor it was sent to.
+  */
+ const sendFrameToRepeater = (row: WsRow) => {
+  const conn = (connections.data ?? []).find((c) => c.exchange === row.exchange) ?? null;
+  const payload = frame.data && frame.data.id === row.id ? frame.data.text : null;
+  const seed = wsTabSeedFromFrame(row, conn, payload);
+  openRepeaterTab(seed);
+  setRoute("repeater");
+  toast.success(
+   `Frame #${row.id} sent to Repeater — ${seed.wsMode === "attach" ? `attached to live WebSocket #${row.exchange}` : `will clone WebSocket #${row.exchange} (it has closed)`}`,
+  );
+ };
+
  // Fetched only for the connection currently under the pointer, so a right-click on any other
  // connection still gets the minimal id-only menu rather than blocking on a fetch.
  const exchangeDetail = useExchange(selectedExchange);

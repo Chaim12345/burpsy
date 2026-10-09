@@ -10,12 +10,21 @@ import {
  resetRow,
  setRowScope,
  toggleEndpoint,
+ blankFetchAuth,
+ FETCH_AUTH_LABELS,
+ fetchAuthProblem,
+ fetchRequestBody,
+ fetchURLProblem,
  type AuthType,
+ type FetchAuth,
+ type FetchAuthType,
+ type FetchedDefinition,
  type ParamMode,
  type ReviewState,
 } from "../lib/apiscan-review";
 import type { APIScanOperation, APIScanValueSource } from "../lib/types.observe";
-import { Badge, Button, Field, Input, Select, type Tone } from "./primitives";
+import { Badge, Button, ErrorNotice, Field, Input, Select, type Tone } from "./primitives";
+import { useFetchAPIDefinition } from "../lib/data.observe";
 import { SimpleTable } from "./table";
 
 const SOURCE_TONE: Record<APIScanValueSource, Tone> = {
@@ -275,5 +284,80 @@ function AuthSection({
     </p>
    ) : null}
   </>
+ );
+}
+
+/**
+ * Upload from URL, with Add auth (burpsy-react-ui-fu4l): Burp's other definition source. The fetch
+ * goes through POST /api/apiscan/fetch — scope-checked on the exact bytes, not recorded in history —
+ * and what comes back fills the same definition box an uploaded file does.
+ *
+ * The credential is held in this component's state only: it is for this fetch, it is not the scan's
+ * authentication method (set in the review below), and nothing here writes it to the persisted store.
+ */
+export function APIScanFetchFromURL({ onLoaded }: { onLoaded: (fetched: FetchedDefinition) => void }): JSX.Element {
+ const [url, setUrl] = useState("");
+ const [auth, setAuth] = useState<FetchAuth>({ type: "none" });
+ const fetchDefinition = useFetchAPIDefinition();
+ const problem = fetchURLProblem(url) ?? fetchAuthProblem(auth);
+ const run = () => {
+  if (problem) return;
+  fetchDefinition.mutate(fetchRequestBody(url, auth), { onSuccess: onLoaded });
+ };
+ return (
+  <div className="stack" style={{ gap: 8 }}>
+   <div className="toolbar" style={{ alignItems: "flex-end" }}>
+    <Field label="Definition URL" style={{ flex: 1 }} hint="Fetched once through the scope check — an out-of-scope URL is refused, not contacted. Redirects are not followed.">
+     {(id) => (
+      <Input
+       id={id}
+       value={url}
+       onChange={(event) => setUrl(event.target.value)}
+       onKeyDown={(event) => {
+        if (event.key === "Enter") run();
+       }}
+       placeholder="https://api.example.com/openapi.json"
+      />
+     )}
+    </Field>
+    <Field label="Add auth" style={{ maxWidth: "var(--w-md)" }}>
+     {(id) => (
+      <Select id={id} value={auth.type} onChange={(event) => setAuth(blankFetchAuth(event.target.value as FetchAuthType))}>
+       {(Object.keys(FETCH_AUTH_LABELS) as FetchAuthType[]).map((type) => (
+        <option key={type} value={type}>
+         {FETCH_AUTH_LABELS[type]}
+        </option>
+       ))}
+      </Select>
+     )}
+    </Field>
+   </div>
+   {auth.type === "basic" ? (
+    <div className="toolbar">
+     <Field label="Username">{(id) => <Input id={id} autoComplete="off" value={auth.username} onChange={(e) => setAuth({ ...auth, username: e.target.value })} />}</Field>
+     <Field label="Password">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.password} onChange={(e) => setAuth({ ...auth, password: e.target.value })} />}</Field>
+    </div>
+   ) : auth.type === "bearer" ? (
+    <Field label="Token">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.token} onChange={(e) => setAuth({ ...auth, token: e.target.value })} />}</Field>
+   ) : auth.type === "oauth2_client_credentials" ? (
+    <div className="stack" style={{ gap: 8 }}>
+     <Field label="Token URL" hint="Must be in scope too: the token request is a send like any other.">
+      {(id) => <Input id={id} value={auth.tokenUrl} placeholder="https://auth.example.com/oauth/token" onChange={(e) => setAuth({ ...auth, tokenUrl: e.target.value })} />}
+     </Field>
+     <div className="toolbar">
+      <Field label="Client ID">{(id) => <Input id={id} autoComplete="off" value={auth.clientId} onChange={(e) => setAuth({ ...auth, clientId: e.target.value })} />}</Field>
+      <Field label="Client secret">{(id) => <Input id={id} type="password" autoComplete="off" value={auth.clientSecret} onChange={(e) => setAuth({ ...auth, clientSecret: e.target.value })} />}</Field>
+      <Field label="Scope (optional)">{(id) => <Input id={id} value={auth.scope} onChange={(e) => setAuth({ ...auth, scope: e.target.value })} />}</Field>
+     </div>
+    </div>
+   ) : null}
+   <div className="toolbar">
+    <Button variant="outline" size="small" onClick={run} disabled={problem !== null || fetchDefinition.isPending}>
+     {fetchDefinition.isPending ? "Fetching…" : "Fetch definition"}
+    </Button>
+    {problem && url.trim() !== "" ? <span className="cell-dim">{problem}</span> : null}
+   </div>
+   {fetchDefinition.error ? <ErrorNotice error={fetchDefinition.error} title="The definition was not fetched" /> : null}
+  </div>
  );
 }

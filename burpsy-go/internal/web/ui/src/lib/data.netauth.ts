@@ -23,6 +23,21 @@ export interface PlatformAuthRule {
    * in fact live.
    */
   has_password: boolean;
+  /** Set on a rule whose scheme is a weak downgrade (ntlmv1): shown on the row where it is configured. */
+  warning?: string;
+}
+
+/** One host where a weak handshake (every NTLMv1 one, opted into on the rule) was performed. */
+export interface PlatformAuthWarning {
+  host: string;
+  /** "NTLMv1" or "NTLMv1 (ESS)". */
+  scheme: string;
+  /** The header it travelled in: "NTLM" or "Negotiate". */
+  wire: string;
+  warning: string;
+  count: number;
+  first_seen: string;
+  last_seen: string;
 }
 
 export interface PlatformAuthResponse {
@@ -44,6 +59,8 @@ export interface PlatformAuthResponse {
   presented_on_proxy: boolean;
   /** Burp's "Prompt for credentials on platform authentication failure". Off by default. */
   prompt_on_authentication_failure?: boolean;
+  /** Weak-authentication handshakes performed, most recent first. Recorded whatever the prompt says. */
+  warnings?: PlatformAuthWarning[];
 }
 
 /** One host whose platform-authentication challenge failed while the prompt was on. */
@@ -61,9 +78,14 @@ export interface PlatformAuthFailure {
 export interface PlatformAuthFailuresResponse {
   prompt_on_authentication_failure: boolean;
   failures: PlatformAuthFailure[];
+  warnings?: PlatformAuthWarning[];
 }
 
-/** The rule scheme a challenged scheme maps to, or null when this build cannot answer it. */
+/**
+ * The rule scheme a challenged scheme maps to, or null when this build cannot answer it. NTLM and
+ * Negotiate map to ntlmv2 (Negotiate is answered with raw NTLM inside it). Never ntlmv1: that weak
+ * downgrade is only ever the operator's explicit choice on the rule, not a prompt's default.
+ */
 export function ruleSchemeFor(challenged: string): "basic" | "digest" | "ntlmv2" | null {
   switch (challenged.toLowerCase()) {
     case "basic":
@@ -71,6 +93,7 @@ export function ruleSchemeFor(challenged: string): "basic" | "digest" | "ntlmv2"
     case "digest":
       return "digest";
     case "ntlm":
+    case "negotiate":
       return "ntlmv2";
     default:
       return null;

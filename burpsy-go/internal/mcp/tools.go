@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/burpsy-go/burpsy/internal/web"
 )
@@ -54,8 +56,11 @@ type callArgs struct {
 	Body   json.RawMessage   `json:"body,omitempty"`
 	// Confirm is the one-time token minted by burpsy_confirm. It is relayed as the gate's header.
 	Confirm string `json:"confirm,omitempty"`
-	// Route is burpsy_confirm's own argument: the exact manifest pattern to mint for.
-	Route string `json:"route,omitempty"`
+	// Tool and Arguments are burpsy_confirm's own arguments: the tool the confirmation is for, and the
+	// exact arguments that call will carry. The confirmation is bound to the call they resolve to
+	// (burpsy-react-ui-e0yq), so they are resolved by the same code the call itself goes through.
+	Tool      string          `json:"tool,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 type callResult struct {
@@ -110,7 +115,7 @@ func (s *Server) buildRouteTools() []tool {
 		s.byName[t.Name] = t
 	}
 
-	confirm := s.confirmToolDescriptor(routes)
+	confirm := s.confirmToolDescriptor(out)
 	out = append(out, confirm)
 	s.byName[confirm.Name] = confirm
 	status := taskStatusDescriptor()
@@ -295,22 +300,26 @@ func pathExample(r web.MCPRouteInfo) string {
 // confirmations has turned a checkpoint into a formality. The separation — a distinct tool, a
 // distinct call in the transcript — is the most a server can do; the enforcement point is the host
 // that decides whether to ask its human first.
-func (s *Server) confirmToolDescriptor(routes []web.MCPRouteInfo) tool {
-	gated := make([]string, 0, len(routes))
-	for _, r := range routes {
-		if r.NeedsConfirm {
-			gated = append(gated, r.Pattern)
+//
+// What the host's human is asked to approve is the call itself, not a route name: burpsy_confirm
+// takes the tool and the exact arguments of the call it confirms, and its answer is the console's
+// preview of the resolved request — the method, the URL and the body the token is bound to
+// (burpsy-react-ui-e0yq). A host that shows its human this call's arguments is showing them what
+// will run; the gate refuses the token on any other request.
+func (s *Server) confirmToolDescriptor(tools []tool) tool {
+	gated := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if toolNeedsConfirm(t) {
+			gated = append(gated, t.Name)
 		}
 	}
 	sort.Strings(gated)
 
-	description := fmt.Sprintf(`Mint a one-time confirmation for a burpsy route whose risk class requires one.
+	description := fmt.Sprintf(`Mint a one-time confirmation for ONE specific call to a burpsy tool whose risk class requires one.
 
 Use this only when a human has asked for that specific action. A confirmation is the server's checkpoint in front of the routes that send unbounded traffic, widen what the engagement is allowed to touch, read or replay credentials, or discard evidence. An agent that mints its own confirmations has turned that checkpoint into a formality — this tool is a separate call precisely so the escalation is visible in the transcript and can be approved by the host as its own act, not as a field filled in silently.
 
-Minting does not perform the action. The token that comes back is single-use, expires in %d seconds, is bound to the route it was minted for, and is spent by setting the "confirm" argument of the call it authorises.
-
-route must be the exact pattern %s, not a concrete path — the refusal message and the tool's own annotations both print it.`, web.MCPConfirmTTLSeconds(), `(for example "/api/audit/")`)
+Pass "tool" (the tool you will call) and "arguments" (exactly the arguments you will call it with, without "confirm"). The answer is a preview of the resolved request — method, URL, body and the body's hash — and the token is bound to that request: it is refused, and burned, if the call that spends it differs in method, path, query or body. Minting does not perform the action. The token is single-use, expires in %d seconds, and is spent by setting the "confirm" argument of that call.`, web.MCPConfirmTTLSeconds())
 
 	return tool{
 		Name:        confirmToolName,
@@ -318,13 +327,18 @@ route must be the exact pattern %s, not a concrete path — the refusal message 
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"route": map[string]any{
+				"tool": map[string]any{
 					"type":        "string",
 					"enum":        gated,
-					"description": "The exact route pattern to mint a confirmation for.",
+					"description": "The tool whose call this confirmation is for.",
+				},
+				"arguments": map[string]any{
+					"type":                 "object",
+					"additionalProperties": true,
+					"description":          "The exact arguments the confirmed call will carry (op, id or path, method, query, body), without \"confirm\". The token is bound to the request they resolve to.",
 				},
 			},
-			"required": []string{"route"},
+			"required": []string{"tool", "arguments"},
 		},
 		Annotations: map[string]any{
 			"readOnlyHint":         false,
@@ -336,6 +350,19 @@ route must be the exact pattern %s, not a concrete path — the refusal message 
 			"requiresHumanIntent":  true,
 		},
 	}
+}
+
+// toolNeedsConfirm reports whether any operation a tool reaches is confirmation-worthy.
+func toolNeedsConfirm(t tool) bool {
+	if t.ops == nil {
+		return t.route.NeedsConfirm
+	}
+	for _, o := range t.ops {
+		if o.route.NeedsConfirm {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- the grouped surface ------------------------------------------------------------------------
@@ -383,7 +410,7 @@ func (s *Server) buildGroupedTools() ([]tool, error) {
 		s.byName[t.Name] = t
 	}
 
-	confirm := s.confirmToolDescriptor(s.routes)
+	confirm := s.confirmToolDescriptor(out)
 	out = append(out, confirm)
 	s.byName[confirm.Name] = confirm
 	status := taskStatusDescriptor()
@@ -689,46 +716,15 @@ func (s *Server) callTool(ctx context.Context, req request) response {
 // It makes no authorisation decision. Whether the call is permitted is the running console's
 // answer, and the only thing this function does with a confirmation is relay the caller's token.
 func (s *Server) invoke(ctx context.Context, t tool, args callArgs, call callState) callResult {
-	route := t.route
-	var method string
-	if t.ops != nil {
-		o, err := resolveOp(t, args)
-		if err != nil {
-			return errResult(err.Error())
-		}
-		route, method = o.route, o.method
-		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" && strings.HasSuffix(route.Pattern, "/") {
-			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
-		}
-	}
-	path, err := s.resolvePath(t.Name, route, args)
+	rc, err := s.resolveCall(t, args)
 	if err != nil {
 		return errResult(err.Error())
 	}
-	if method == "" {
-		if method, err = chooseMethod(route, args); err != nil {
-			return errResult(err.Error())
-		}
-	}
-
-	target := s.baseURL + path
-	if len(args.Query) > 0 {
-		q := url.Values{}
-		for k, v := range args.Query {
-			q.Set(k, v)
-		}
-		target += "?" + q.Encode()
-	}
-
-	// An audit started through the transport runs as a console task and is awaited for the sync
-	// window (burpsy-react-ui-wdza): the call answers with the finished result, or with a task handle
-	// the session can keep working past. "async": false in the body keeps the old blocking call.
-	if asyncOps[method+" "+route.Pattern] {
-		args.Body = withAsync(args.Body)
-	}
+	route, method, path := rc.route, rc.method, rc.path
+	target := s.baseURL + rc.url
 	var body io.Reader
-	if len(args.Body) > 0 {
-		body = bytes.NewReader(args.Body)
+	if rc.body != nil {
+		body = bytes.NewReader(rc.body)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
@@ -778,7 +774,7 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs, call callSta
 	text := b.String()
 
 	if resp.StatusCode == http.StatusPreconditionRequired {
-		return errResult(refusalText(route, text))
+		return errResult(refusalText(route, t.Name, args, text))
 	}
 	if resp.StatusCode == http.StatusAccepted && !truncated {
 		if id, ok := taskIDOf(payload); ok {
@@ -789,6 +785,63 @@ func (s *Server) invoke(ctx context.Context, t tool, args callArgs, call callSta
 		return errResult(text)
 	}
 	return callResult{Content: []contentBlock{{Type: "text", Text: text}}}
+}
+
+// resolvedCall is a tool call resolved to the request it sends: the one definition both the call
+// and burpsy_confirm use, so the request a confirmation previews is the request the call sends.
+type resolvedCall struct {
+	route  web.MCPRouteInfo
+	method string
+	// path is the concrete path; url is the path plus the encoded query, relative to the console.
+	path string
+	url  string
+	// body is the exact body sent, nil for none — after any transformation this layer applies
+	// (withAsync), because that transformed body is what the gate compares.
+	body []byte
+}
+
+// resolveCall validates a call's arguments against its tool and resolves the request it will send.
+func (s *Server) resolveCall(t tool, args callArgs) (resolvedCall, error) {
+	route := t.route
+	var method string
+	if t.ops != nil {
+		o, err := resolveOp(t, args)
+		if err != nil {
+			return resolvedCall{}, err
+		}
+		route, method = o.route, o.method
+		if strings.TrimSpace(args.Path) == "" && strings.TrimSpace(args.ID) != "" && strings.HasSuffix(route.Pattern, "/") {
+			args.Path = route.Pattern + strings.TrimPrefix(strings.TrimSpace(args.ID), "/")
+		}
+	}
+	path, err := s.resolvePath(t.Name, route, args)
+	if err != nil {
+		return resolvedCall{}, err
+	}
+	if method == "" {
+		if method, err = chooseMethod(route, args); err != nil {
+			return resolvedCall{}, err
+		}
+	}
+	target := path
+	if len(args.Query) > 0 {
+		q := url.Values{}
+		for k, v := range args.Query {
+			q.Set(k, v)
+		}
+		target += "?" + q.Encode()
+	}
+	// An audit started through the transport runs as a console task and is awaited for the sync
+	// window (burpsy-react-ui-wdza): the call answers with the finished result, or with a task handle
+	// the session can keep working past. "async": false in the body keeps the old blocking call.
+	if asyncOps[method+" "+route.Pattern] {
+		args.Body = withAsync(args.Body)
+	}
+	var body []byte
+	if len(args.Body) > 0 {
+		body = []byte(args.Body)
+	}
+	return resolvedCall{route: route, method: method, path: path, url: target, body: body}, nil
 }
 
 // resolvePath decides the concrete path a tool call will request, and refuses anything that is not
@@ -865,42 +918,118 @@ func chooseMethod(r web.MCPRouteInfo, args callArgs) (string, error) {
 
 // refusalText turns the gate's 428 into the next step. The gate's own body is kept verbatim — it
 // is the evidence, and it carries the route, the risk class and the header name — and the
-// instruction this transport adds is what to do with it.
+// instruction this transport adds is what to do with it: confirm THIS call, by its tool and its
+// arguments, because the token is bound to the request they resolve to.
 //
-// The mint path is computed here rather than read out of the gate's message because the gate prints
-// the MANIFEST pattern, so a subtree route renders as "POST /api/audit//confirm" — one slash too
-// many. This layer prints the path it will actually POST to, and a test mints through the console
-// for every confirmation-worthy route so the derivation cannot drift from the registered endpoint.
-func refusalText(r web.MCPRouteInfo, gate string) string {
+// It names the argument keys and never echoes their values: a body may carry a password (a PKCS#12
+// export) or a credential rule, and a refusal is text an MCP host shows, logs and keeps in its
+// transcript. The caller already holds the arguments; it needs to be told to resend them unchanged.
+func refusalText(r web.MCPRouteInfo, toolName string, args callArgs, gate string) string {
 	return fmt.Sprintf(`%s
-burpsy refused this call: a mutating call to a route whose risk class is %q needs a one-time confirmation.
-Next step, as its own visible action: call the %s tool with {"route":%q}. It returns a token.
-Then re-issue this call with "confirm" set to that token. The token is single-use, expires in %d seconds, and is bound to %s.
-Minting is a POST to %s. (The console's own message above prints the route pattern, so a subtree route reads with a doubled slash; the path here is the one this transport will use.)
+burpsy refused this call: a mutating call to a route whose risk class is %q needs a one-time confirmation of this exact call.
+Next step, as its own visible action: call the %s tool with "tool": %q and "arguments": the same arguments you just sent (%s), without "confirm". It returns a preview of the request and a token bound to it.
+Then re-issue this call, unchanged, with "confirm" set to that token. The token is single-use, expires in %d seconds, and is refused on any call whose method, path, query or body differs.
+Minting is a POST to %s.
 Only do this when a human has asked for this specific action.`,
-		gate, r.Risk, confirmToolName, r.Pattern, web.MCPConfirmTTLSeconds(), r.Pattern, web.MCPConfirmEndpoint(r.Pattern))
+		gate, r.Risk, confirmToolName, toolName, argumentKeys(args), web.MCPConfirmTTLSeconds(), web.MCPConfirmEndpoint(r.Pattern))
 }
 
-// callConfirm mints a confirmation through the console's own endpoint.
+// argumentKeys names the arguments a call carried, in the order the tool schema lists them.
+func argumentKeys(args callArgs) string {
+	var keys []string
+	for _, k := range []struct {
+		name string
+		set  bool
+	}{
+		{"op", args.Op != ""}, {"id", args.ID != ""}, {"method", args.Method != ""}, {"path", args.Path != ""},
+		{"query", len(args.Query) > 0}, {"body", len(args.Body) > 0},
+	} {
+		if k.set {
+			keys = append(keys, `"`+k.name+`"`)
+		}
+	}
+	if len(keys) == 0 {
+		return "none"
+	}
+	return strings.Join(keys, ", ")
+}
+
+// mintDescription is the body of a mint request: the call a confirmation is for, as the console's
+// mint endpoint reads it.
+type mintDescription struct {
+	Method     string  `json:"method"`
+	URL        string  `json:"url"`
+	Body       *string `json:"body,omitempty"`
+	BodyBase64 *string `json:"body_base64,omitempty"`
+}
+
+// mintPreview is the part of the console's mint answer this layer renders for the approver.
+type mintPreview struct {
+	Token   string `json:"token"`
+	Binding string `json:"binding"`
+	Call    struct {
+		Method        string   `json:"method"`
+		URL           string   `json:"url"`
+		Path          string   `json:"path"`
+		BodyBytes     int      `json:"body_bytes"`
+		BodySHA256    string   `json:"body_sha256"`
+		BodyKind      string   `json:"body_kind"`
+		Body          string   `json:"body"`
+		BodyTruncated bool     `json:"body_truncated"`
+		Redacted      []string `json:"redacted"`
+	} `json:"call"`
+}
+
+// callConfirm mints a confirmation for one resolved call through the console's own endpoint.
 //
-// The route pattern is validated against the manifest before it is used to build a URL — not as an
-// authorisation decision (the server makes that, and answers 400 for a route that needs no
-// confirmation) but because the pattern is interpolated into a URL, and a caller-supplied string
-// in a URL is a request the caller chose. Only strings the manifest actually contains are used.
+// The call is resolved by resolveCall — the code tools/call itself runs — so the request the
+// console binds the token to is the request the call will send, including what this layer adds to
+// it (withAsync). The tool name is validated against the surface before anything is built, and the
+// route pattern used for the mint URL comes from the manifest, never from the caller.
+//
+// It makes no authorisation decision: a call that needs no confirmation is still POSTed, and the
+// console's own refusal is passed through, so the two cannot disagree about which classes are gated.
 func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) response {
-	route := strings.TrimSpace(args.Route)
-	r, ok := s.byPattern[route]
-	if !ok {
-		return s.ok(req, errResult(fmt.Sprintf("%q is not a route in burpsy's manifest. Pass the exact \"route\" value printed by a refusal (for example %q), not a concrete path.",
-			route, "/api/audit/")))
+	name := strings.TrimSpace(args.Tool)
+	t, ok := s.byName[name]
+	if !ok || name == confirmToolName || name == taskStatusToolName {
+		return s.ok(req, errResult(fmt.Sprintf("%q is not a tool on this surface. Pass \"tool\" (the tool you will call) and \"arguments\" (its exact arguments); the refusal of the call prints both.", name)))
+	}
+	var callArgsOf callArgs
+	if len(args.Arguments) > 0 {
+		if err := json.Unmarshal(args.Arguments, &callArgsOf); err != nil {
+			return s.ok(req, errResult("could not read \"arguments\": "+err.Error()))
+		}
+	}
+	if callArgsOf.Confirm != "" || callArgsOf.Tool != "" || len(callArgsOf.Arguments) > 0 {
+		return s.ok(req, errResult("\"arguments\" are the confirmed call's own arguments; they carry no \"confirm\", \"tool\" or nested \"arguments\""))
+	}
+	rc, err := s.resolveCall(t, callArgsOf)
+	if err != nil {
+		return s.ok(req, errResult(err.Error()))
+	}
+	desc := mintDescription{Method: rc.method, URL: rc.url}
+	if rc.body != nil {
+		if utf8.Valid(rc.body) {
+			b := string(rc.body)
+			desc.Body = &b
+		} else {
+			b := base64.StdEncoding.EncodeToString(rc.body)
+			desc.BodyBase64 = &b
+		}
+	}
+	descJSON, err := json.Marshal(desc)
+	if err != nil {
+		return s.ok(req, errResult("could not describe the call: "+err.Error()))
 	}
 
-	target := s.baseURL + web.MCPConfirmEndpoint(r.Pattern)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	endpoint := web.MCPConfirmEndpoint(rc.route.Pattern)
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+endpoint, bytes.NewReader(descJSON))
 	if err != nil {
 		return s.ok(req, errResult("could not build the confirmation request: "+err.Error()))
 	}
 	hreq.Header.Set("Accept", "application/json")
+	hreq.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.http.Do(hreq)
 	if err != nil {
@@ -914,7 +1043,7 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "HTTP %d POST %s\n", resp.StatusCode, web.MCPConfirmEndpoint(r.Pattern))
+	fmt.Fprintf(&b, "HTTP %d POST %s\n", resp.StatusCode, endpoint)
 	if truncated {
 		fmt.Fprintf(&b, "(truncated at %d bytes)\n", maxResultBytes)
 	}
@@ -923,10 +1052,53 @@ func (s *Server) callConfirm(ctx context.Context, req request, args callArgs) re
 	if resp.StatusCode != http.StatusOK {
 		return s.ok(req, errResult(b.String()))
 	}
+	var minted mintPreview
+	if truncated || json.Unmarshal(payload, &minted) != nil || minted.Token == "" {
+		return s.ok(req, errResult(b.String()+"\nthe console's answer is not a mint result; no token is usable from it"))
+	}
+	// The drift check this layer can make: the console must have bound the token to the method and
+	// path this layer will send. (The preview's url withholds secret query values, so the unredacted
+	// path is what is compared; the query and body are bound by the console from this layer's own
+	// description of them.) A disagreement is a token for a call nobody is going to make, and it is
+	// not handed out as if it were fine.
+	if want := canonicalPath(rc.url); minted.Call.Method != rc.method || minted.Call.Path != want {
+		return s.ok(req, errResult(fmt.Sprintf("%s\nthe console bound the token to %s %s, but this call sends %s %s; not using it",
+			b.String(), minted.Call.Method, minted.Call.Path, rc.method, want)))
+	}
 
-	fmt.Fprintf(&b, "\nOne-time token minted for %s. It is single-use, expires in %d seconds, and authorises one mutating call to that route. Re-issue the refused call with \"confirm\" set to the token value.\nOnly proceed if a human asked for that specific action.",
-		r.Pattern, web.MCPConfirmTTLSeconds())
+	p := minted.Call
+	fmt.Fprintf(&b, "\n\nPreview — the one request this token authorises (show this to the human approving it):\n  %s %s\n", p.Method, p.URL)
+	switch p.BodyKind {
+	case "none":
+		b.WriteString("  body: none\n")
+	case "binary":
+		fmt.Fprintf(&b, "  body: %d bytes of binary content (not shown)\n", p.BodyBytes)
+	default:
+		fmt.Fprintf(&b, "  body (%s, %d bytes):\n", p.BodyKind, p.BodyBytes)
+		for _, line := range strings.Split(p.Body, "\n") {
+			b.WriteString("    " + line + "\n")
+		}
+		if p.BodyTruncated {
+			b.WriteString("    … (preview truncated; the hash below covers the whole body)\n")
+		}
+	}
+	if len(p.Redacted) > 0 {
+		fmt.Fprintf(&b, "  withheld from this preview (still bound by the hash): %s\n", strings.Join(p.Redacted, ", "))
+	}
+	fmt.Fprintf(&b, "  body sha256 (canonical): %s\n", p.BodySHA256)
+	fmt.Fprintf(&b, "One-time token minted for exactly this call to %s. It is single-use, expires in %d seconds, and is refused (and burned) on any call whose method, path, query or body differs. Re-issue the %s call with these arguments, unchanged, and \"confirm\" set to the token value.\nOnly proceed if a human asked for that specific action.",
+		t.Name, web.MCPConfirmTTLSeconds(), t.Name)
 	return s.ok(req, callResult{Content: []contentBlock{{Type: "text", Text: b.String()}}})
+}
+
+// canonicalPath is the decoded path of a relative URL — the form the console's preview reports in
+// its path field — so the drift check compares like with like.
+func canonicalPath(raw string) string {
+	path, _, _ := strings.Cut(raw, "?")
+	if decoded, err := url.PathUnescape(path); err == nil {
+		return decoded
+	}
+	return path
 }
 
 // readCapped reads at most limit bytes and reports whether there was more. Reading one byte over

@@ -237,6 +237,10 @@ func alive(pc *pooledConn) bool {
 	if pc.br.Buffered() > 0 {
 		return false
 	}
+	// A FIN that has already arrived is decided here, without a deadline: see socketShut.
+	if socketShut(pc.conn) {
+		return false
+	}
 	if err := pc.conn.SetReadDeadline(time.Now().Add(livenessProbe)); err != nil {
 		return false
 	}

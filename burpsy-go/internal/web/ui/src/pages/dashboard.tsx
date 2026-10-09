@@ -16,8 +16,8 @@ import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
 import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, NeedsValueButton, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
-import { APIScanReview } from "../ui/apiscan-review";
-import { buildReview, discardStale, emptyReview, reviewChangesRequest, type ReviewState } from "../lib/apiscan-review";
+import { APIScanFetchFromURL, APIScanReview } from "../ui/apiscan-review";
+import { buildReview, discardStale, emptyReview, fetchedCaption, fetchedWarning, reviewChangesRequest, type ReviewState } from "../lib/apiscan-review";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -685,6 +685,10 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  // the fact — and never travels to the server, which reads the bytes and not the filename.
  const [definition, setDefinition] = useState("");
  const [definitionName, setDefinitionName] = useState("");
+ // Upload from URL (fu4l): whether the URL panel is open, and what the dialog has to say about a
+ // fetched document the scan cannot read (WSDL, an HTML login page) — null for a readable one.
+ const [fromUrlOpen, setFromUrlOpen] = useState(false);
+ const [fetchedNote, setFetchedNote] = useState<string | null>(null);
  const [baseUrl, setBaseUrl] = useState("");
  // Its own cap, empty by default. Sharing the crawl card's "50" would cap a definition sweep at fifty
  // endpoints without the operator asking, and the server's default for this card is the document's own
@@ -889,7 +893,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
       </p>
       <Field
        label="API definition"
-       hint="OpenAPI 3.x, Swagger 2.0 or a Postman Collection (v2.x), in JSON or YAML. Paste it here, or load the file."
+       hint="OpenAPI 3.x, Swagger 2.0 or a Postman Collection (v2.x), in JSON or YAML. Paste it here, load the file, or fetch it from a URL."
       >
        {(id) => (
         <Textarea
@@ -900,6 +904,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
           // Cleared rather than kept: the box no longer holds the file, and a label naming a file
           // whose contents have since been edited would be a caption that disagrees with the box.
           setDefinitionName("");
+          setFetchedNote(null);
          }}
          rows={7}
          placeholder={'openapi: "3.0.3"\ninfo: {title: Petstore, version: "1.0.2"}\nservers: [{url: https://api.example.com/v1}]\npaths:\n  /pets:\n    get:\n      responses: {"200": {description: ok}}'}
@@ -911,6 +916,9 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
        <Button variant="outline" size="small" onClick={() => definitionFileRef.current?.click()}>
         Load from file
        </Button>
+       <Button variant="outline" size="small" aria-expanded={fromUrlOpen} onClick={() => setFromUrlOpen((open) => !open)}>
+        Load from URL
+       </Button>
        {definitionName ? <span className="cell-dim">{definitionName}</span> : null}
        {definition ? (
         <Button
@@ -919,6 +927,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
          onClick={() => {
           setDefinition("");
           setDefinitionName("");
+          setFetchedNote(null);
           setReview(emptyReview);
          }}
         >
@@ -941,10 +950,26 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
          void file.text().then((text) => {
           setDefinition(text);
           setDefinitionName(file.name);
+          setFetchedNote(null);
          });
         }}
        />
       </div>
+      {fromUrlOpen ? (
+       <APIScanFetchFromURL
+        onLoaded={(fetched) => {
+         setDefinition(fetched.definition);
+         setDefinitionName(fetchedCaption(fetched));
+         setFetchedNote(fetchedWarning(fetched));
+         setFromUrlOpen(false);
+        }}
+       />
+      ) : null}
+      {fetchedNote ? (
+       <div className="notice notice-warn" role="status">
+        {fetchedNote}
+       </div>
+      ) : null}
       <Field
        label="Base URL (optional)"
        hint="Overrides the document's own servers[0]. Required when the document declares no server, or a relative one — a pasted document has no host of its own to be relative to."

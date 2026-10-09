@@ -305,15 +305,28 @@ func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn,
 	faults := make([]string, 2)
 	peer := wsPeer{host: host, port: port, tls: tls, path: path, clientIP: clientIPOf(clientConn)}
 
+	// The two write sides, shared with Repeater's attach (burpsy-react-ui-wuwf): every relayed byte
+	// goes through them, so an injected frame can only land between two whole messages. Registered
+	// only for a captured connection — one with a handshake row, which is what gives it the
+	// WebSocket ID an operator attaches by — and removed the moment the relay returns.
+	toServer := newWsSink(upstreamConn)
+	toClient := newWsSink(clientConn)
+	if capture != nil {
+		live := &wsLiveConn{exchange: exchangeID, host: host, port: port, tls: tls, path: path,
+			opened: time.Now(), toServer: toServer, toClient: toClient}
+		s.wsLive.add(live)
+		defer s.wsLive.remove(live)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		faults[0] = s.wsDirection(exchangeID, clientReader, upstreamConn, true, peer, capture, &stats)
+		faults[0] = s.wsDirectionSink(exchangeID, clientReader, toServer, true, peer, capture, &stats)
 	}()
 	go func() {
 		defer wg.Done()
-		faults[1] = s.wsDirection(exchangeID, upstreamReader, clientConn, false, peer, capture, &stats)
+		faults[1] = s.wsDirectionSink(exchangeID, upstreamReader, toClient, false, peer, capture, &stats)
 	}()
 	wg.Wait()
 
@@ -351,7 +364,21 @@ func (s *Server) relayWebsocket(exchangeID core.ExchangeID, clientConn net.Conn,
 // interception takes effect on an already-open socket — the same reason scope is
 // asked per message rather than at the handshake.
 func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst net.Conn, fromClient bool, peer wsPeer, capture *wsCapture, stats *wsCaptureStats) string {
-	rs := core.NewWsReassembler(core.DefaultMaxWsMessageBytes)
+	return s.wsDirectionSink(exchangeID, src, newWsSink(dst), fromClient, peer, capture, stats)
+}
+
+// newWsSink wraps one direction's destination with the reassembler that tracks what it was sent.
+func newWsSink(dst net.Conn) *wsSink {
+	return &wsSink{dst: dst, rs: core.NewWsReassembler(core.DefaultMaxWsMessageBytes)}
+}
+
+// wsDirectionSink is wsDirection writing through a sink an injector may share (ws_live.go). Every
+// write to the destination goes through sink, never to the conn directly: a write that bypassed
+// it would move the stream without moving the reassembler, and the next injection would be
+// spliced at a boundary that is not one.
+func (s *Server) wsDirectionSink(exchangeID core.ExchangeID, src *bufio.Reader, sink *wsSink, fromClient bool, peer wsPeer, capture *wsCapture, stats *wsCaptureStats) string {
+	defer sink.markEnded()
+	rs := sink.rs
 	buf := make([]byte, wsRelayChunk)
 
 	// pending holds bytes the interception path has read but not yet placed on the
@@ -385,7 +412,7 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 			// been relayed, so switching to the chunk path would emit the rest of the message ahead
 			// of its own beginning.
 			if !degraded && (s.wsNeedsFrames(fromClient, peer) || len(pending) > 0 || frag.active) {
-				fault, gone := s.wsIntercept(dir, &pending, chunk, dst, rs, exchangeID, fromClient, peer, stats, &frag)
+				fault, gone := s.wsIntercept(dir, &pending, chunk, sink, exchangeID, fromClient, peer, stats, &frag)
 				if gone {
 					return ""
 				}
@@ -395,11 +422,12 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 					// inability to parse them is not a reason to swallow them —
 					// and this direction becomes a plain relay.
 					if len(pending) > 0 {
-						if _, werr := dst.Write(pending); werr != nil {
+						if werr := sink.writeRaw(pending); werr != nil {
 							return fault
 						}
 						pending = nil
 					}
+					sink.markLost()
 					degraded = true
 					s.drainWs(rs, exchangeID, fromClient, capture, stats)
 					return fault
@@ -411,11 +439,13 @@ func (s *Server) wsDirection(exchangeID core.ExchangeID, src *bufio.Reader, dst 
 				continue
 			}
 
-			// Relay first, capture second — the ordering is the safety argument.
-			if _, werr := dst.Write(chunk); werr != nil {
+			// Relay first, capture second — the ordering is the safety argument. The sink does
+			// both, in that order, under the lock an attached Repeater's injection also takes.
+			werr, cerr := sink.write(chunk)
+			if werr != nil {
 				return ""
 			}
-			if cerr := rs.Feed(chunk); cerr != nil {
+			if cerr != nil {
 				fault := fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr)
 				s.config.logger.Warn("websocket capture stopped",
 					zap.String("direction", wsWhich(fromClient)), zap.String("exchange", fmt.Sprintf("%d", exchangeID)), zap.Error(cerr))
@@ -521,7 +551,7 @@ func (s *Server) wsNeedsFrames(fromClient bool, peer wsPeer) bool {
 //
 // Returns a fault when frame boundaries are lost, and connGone when the sink is
 // closed. A fault leaves pending intact for the caller to flush.
-func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []byte, dst net.Conn, rs *core.WsReassembler, exchangeID core.ExchangeID, fromClient bool, peer wsPeer, stats *wsCaptureStats, frag *wsFragments) (string, bool) {
+func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []byte, sink *wsSink, exchangeID core.ExchangeID, fromClient bool, peer wsPeer, stats *wsCaptureStats, frag *wsFragments) (string, bool) {
 	*pending = append(*pending, chunk...)
 
 	for {
@@ -558,10 +588,11 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 			continue
 		}
 		for _, out := range outs {
-			if _, werr := dst.Write(out); werr != nil {
+			werr, cerr := sink.write(out)
+			if werr != nil {
 				return "", true
 			}
-			if cerr := rs.Feed(out); cerr != nil {
+			if cerr != nil {
 				// The frame went out; only the index lost track. Same treatment as on
 				// the relay-first path.
 				return fmt.Sprintf("%s: %v", wsWhich(fromClient), cerr), false
@@ -572,7 +603,7 @@ func (s *Server) wsIntercept(dir intercept.Direction, pending *[]byte, chunk []b
 		// it produced — after the Feed, so which flush fired (the FIN flush or an interrupt flush of a
 		// stale partial) cannot misattribute it. drainWs carries the stamp on to the WsMessage.
 		if edited {
-			rs.MarkLastMessageUserEdited()
+			sink.rs.MarkLastMessageUserEdited()
 		}
 	}
 }

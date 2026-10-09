@@ -205,12 +205,16 @@ const (
 	// DowngradeProjectDefaultHTTP1 means the project's "Default to HTTP/2" setting is off and the send
 	// named no protocol of its own (burpsy-react-ui-ry5n).
 	DowngradeProjectDefaultHTTP1
+	// DowngradeConnectionBoundAuth means the send carried a connection-bound platform credential
+	// (NTLM), whose handshake authenticates one HTTP/1.1 connection: over h2 the legs would be
+	// streams of a multiplexed connection, which NTLM servers refuse (burpsy-react-ui-sel6).
+	DowngradeConnectionBoundAuth
 )
 
 // DowngradeReasonAll is every reason, in the order the send path tests them: negotiation facts first,
 // then the request's own constructs in the order planH2 reads them. A caller iterating this sees
 // reasons in the same order the code decides them.
-var DowngradeReasonAll = [20]DowngradeReason{
+var DowngradeReasonAll = [21]DowngradeReason{
 	DowngradePlaintextTarget,
 	DowngradeNegotiatedHTTP11,
 	DowngradeNoALPN,
@@ -231,6 +235,7 @@ var DowngradeReasonAll = [20]DowngradeReason{
 	DowngradeContentLengthUnreadable,
 	DowngradeContentLengthDisagreesWithBody,
 	DowngradeProjectDefaultHTTP1,
+	DowngradeConnectionBoundAuth,
 }
 
 // Explanation is one line an operator can act on.
@@ -246,6 +251,8 @@ func (r DowngradeReason) Explanation() string {
 		return "the caller pinned this send to HTTP/1.1 so the bytes go on the wire as written"
 	case DowngradeProjectDefaultHTTP1:
 		return "the project setting \"Default to HTTP/2 if the server supports it\" is off, so a send that names no protocol uses HTTP/1.1"
+	case DowngradeConnectionBoundAuth:
+		return "the target's platform credential is NTLM, whose handshake authenticates one HTTP/1.1 connection and cannot ride h2"
 	case DowngradeHeadersNotTerminated:
 		return "the request has no blank line ending its header section"
 	case DowngradeRequestLineUnreadable:

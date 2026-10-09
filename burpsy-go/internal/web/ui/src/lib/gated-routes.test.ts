@@ -74,7 +74,7 @@ describe("api() mints for gated mutations only", () => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
    const url = String(input);
    log.calls.push({ url, method: init?.method ?? "GET", token: new Headers(init?.headers).get(CONFIRM_HEADER) });
-   if (url.endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok" }), { status: 200 });
+   if (url.endsWith("/confirm")) return new Response(JSON.stringify({ token: "tok", binding: "b", call: { method: "POST", url: "/", body_bytes: 0, body_sha256: "", body_kind: "none" } }), { status: 200 });
    return new Response("{}", { status: 200 });
   }) as typeof fetch;
   return log;

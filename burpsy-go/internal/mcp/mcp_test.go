@@ -387,7 +387,8 @@ func TestAGatedToolCallWithoutAConfirmationSurfacesTheRealGateRefusal(t *testing
 func TestAMintedConfirmationLetsTheGatedCallThroughExactlyOnce(t *testing.T) {
 	_, base := newConsole(t)
 
-	minted := call(t, base, confirmToolName, map[string]any{"route": "/api/audit/"})
+	callArgs := map[string]any{"path": "/api/audit/999999"}
+	minted := call(t, base, confirmToolName, map[string]any{"tool": "api_audit", "arguments": callArgs})
 	if minted.IsError {
 		t.Fatalf("minting a confirmation through the console failed: %s", textOf(minted))
 	}
@@ -416,21 +417,99 @@ func TestAMintedConfirmationLetsTheGatedCallThroughExactlyOnce(t *testing.T) {
 	}
 }
 
+// burpsy-react-ui-e0yq through the transport: burpsy_confirm previews the resolved request, and the
+// token it returns for call A does not authorise call B on the same route — a different subtree path
+// here, the "target" of an audit.
+func TestBurpsyConfirmPreviewsTheCallAndItsTokenAuthorisesNoOtherCall(t *testing.T) {
+	_, base := newConsole(t)
+
+	minted := call(t, base, confirmToolName, map[string]any{"tool": "api_audit", "arguments": map[string]any{"path": "/api/audit/41"}})
+	if minted.IsError {
+		t.Fatalf("mint failed: %s", textOf(minted))
+	}
+	text := textOf(minted)
+	for _, want := range []string{
+		"Preview — the one request this token authorises",
+		"POST /api/audit/41",
+		`"async": true`, // the body this transport adds is in the preview, because it is in the binding
+		"body sha256 (canonical): ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the mint result does not preview %q:\n%s", want, text)
+		}
+	}
+	var token struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(bodyLine(t, text)), &token); err != nil || token.Token == "" {
+		t.Fatalf("no token: %v\n%s", err, text)
+	}
+
+	other := call(t, base, "api_audit", map[string]any{"path": "/api/audit/42", "confirm": token.Token})
+	if !other.IsError || !strings.Contains(textOf(other), "HTTP 428") {
+		t.Fatalf("a token minted for POST /api/audit/41 authorised POST /api/audit/42:\n%s", textOf(other))
+	}
+	// And it was burned by the attempt: the call it was minted for is refused with it now too.
+	if own := call(t, base, "api_audit", map[string]any{"path": "/api/audit/41", "confirm": token.Token}); !own.IsError || !strings.Contains(textOf(own), "HTTP 428") {
+		t.Fatalf("a token tried on another call stayed live for its own:\n%s", textOf(own))
+	}
+}
+
+// The refusal tells the agent how to confirm this call — the tool and which arguments to resend —
+// without echoing their values: a body can carry a password, and the refusal is transcript text.
+func TestTheRefusalNamesTheToolAndArgumentKeysWithoutEchoingValues(t *testing.T) {
+	_, base := newConsole(t)
+	res := call(t, base, "api_audit", map[string]any{"path": "/api/audit/7", "body": map[string]any{"note": "s3cr3t-in-body"}})
+	text := textOf(res)
+	if !res.IsError || !strings.Contains(text, `"tool": "api_audit"`) || !strings.Contains(text, `("path", "body")`) {
+		t.Fatalf("the refusal does not name the tool and the argument keys:\n%s", text)
+	}
+	if strings.Contains(text, "s3cr3t-in-body") {
+		t.Fatalf("the refusal echoes the call's body:\n%s", text)
+	}
+}
+
 // The mint path is derived, not listed, so it can drift from the endpoints the gate actually
 // registers. Minting for every confirmation-worthy route through the console catches that for all
 // of them, including the subtree patterns whose registered path is not the pattern itself.
 func TestEveryConfirmationWorthyRouteCanBeMinted(t *testing.T) {
 	_, base := newConsole(t)
 
+	replies := ask(t, base, rpcRequest(t, 1, "tools/list", nil))
+	var listed toolList
+	if len(replies) != 1 || json.Unmarshal(replies[0].Result, &listed) != nil {
+		t.Fatal("tools/list did not answer")
+	}
+	toolFor := map[string]string{}
+	for _, tl := range listed.Tools {
+		if route, ok := tl.Annotations["route"].(string); ok {
+			toolFor[route] = tl.Name
+		}
+	}
+
 	gated := 0
 	for _, r := range web.MCPRoutes() {
 		if !r.NeedsConfirm {
 			continue
 		}
+		var method string
+		for _, m := range r.Methods {
+			if web.MCPMethodMutates(m) {
+				method = m
+				break
+			}
+		}
+		if method == "" {
+			continue // gated class, but no mutating verb: nothing to confirm
+		}
 		gated++
-		res := call(t, base, confirmToolName, map[string]any{"route": r.Pattern})
+		args := map[string]any{"method": method}
+		if strings.HasSuffix(r.Pattern, "/") {
+			args["path"] = pathExample(r)
+		}
+		res := call(t, base, confirmToolName, map[string]any{"tool": toolFor[r.Pattern], "arguments": args})
 		if res.IsError {
-			t.Fatalf("minting for %s (class %s) failed: %s", r.Pattern, r.Risk, textOf(res))
+			t.Fatalf("minting for %s %s (class %s) failed: %s", method, r.Pattern, r.Risk, textOf(res))
 		}
 		var minted struct {
 			Token string `json:"token"`
@@ -442,42 +521,47 @@ func TestEveryConfirmationWorthyRouteCanBeMinted(t *testing.T) {
 			t.Fatalf("mint for %s returned no token:\n%s", r.Pattern, textOf(res))
 		}
 	}
-	if gated != 35 {
-		// Not a hardcoded desire for 35: a change in the gated set should be a deliberate act, and a
-		// silent one would mean the loop above stopped covering what it was written to cover.
-		t.Logf("note: the manifest now has %d confirmation-worthy routes (was 35 when this test was written)", gated)
+	if gated == 0 {
+		t.Fatal("no confirmation-worthy route was minted for; the loop covers nothing")
 	}
 }
 
-// burpsy_confirm must not be its own policy. A route that needs no confirmation is refused by the
-// CONSOLE (400, with its own message), and the transport passes that through rather than
-// pre-empting it — otherwise the two would be free to disagree about which classes are gated.
+// burpsy_confirm must not be its own policy. A call that needs no confirmation is refused by the
+// CONSOLE (with its own message), and the transport passes that through rather than pre-empting it —
+// otherwise the two would be free to disagree about which classes are gated.
 func TestBurpsyConfirmPassesTheConsolesOwnRefusalThrough(t *testing.T) {
 	_, base := newConsole(t)
 
-	res := call(t, base, confirmToolName, map[string]any{"route": "/api/advisories"})
+	res := call(t, base, confirmToolName, map[string]any{"tool": "api_advisories", "arguments": map[string]any{}})
 	if !res.IsError {
 		t.Fatalf("minting for a read route was accepted:\n%s", textOf(res))
 	}
 	// The console has no mint endpoint for an ungated pattern, so the POST lands on the read
-	// handler and is answered 405 by the server. The assertion is not that this particular status
-	// is ideal — it is that this layer did not invent its own answer to a question the console owns.
-	if !strings.Contains(textOf(res), "HTTP 405") || !strings.Contains(textOf(res), "Method not allowed") {
+	// handler and is answered by the server. The assertion is not that this particular status is
+	// ideal — it is that this layer did not invent its own answer to a question the console owns.
+	if !strings.HasPrefix(textOf(res), "HTTP 4") || !strings.Contains(textOf(res), "POST /api/advisories/confirm") {
 		t.Fatalf("the refusal is not the console's own:\n%s", textOf(res))
 	}
 }
 
-// A route pattern the manifest does not contain is refused before any URL is built, because the
-// pattern is interpolated into one.
-func TestBurpsyConfirmRefusesARouteThatDoesNotExist(t *testing.T) {
+// A tool name the surface does not carry is refused before any URL is built, and so is a confirm
+// whose "arguments" smuggle a token or a nested confirm.
+func TestBurpsyConfirmRefusesAToolThatDoesNotExist(t *testing.T) {
 	_, base := newConsole(t)
 
-	res := call(t, base, confirmToolName, map[string]any{"route": "http://example.invalid/api/audit/"})
-	if !res.IsError {
-		t.Fatalf("a non-manifest route was accepted:\n%s", textOf(res))
+	for _, args := range []map[string]any{
+		{"tool": "http://example.invalid/api/audit/", "arguments": map[string]any{}},
+		{"tool": confirmToolName, "arguments": map[string]any{}},
+		{"route": "/api/audit/"},
+	} {
+		res := call(t, base, confirmToolName, args)
+		if !res.IsError || !strings.Contains(textOf(res), "is not a tool on this surface") {
+			t.Fatalf("%v: unexpected answer:\n%s", args, textOf(res))
+		}
 	}
-	if !strings.Contains(textOf(res), "not a route in burpsy's manifest") {
-		t.Fatalf("unexpected refusal:\n%s", textOf(res))
+	res := call(t, base, confirmToolName, map[string]any{"tool": "api_audit", "arguments": map[string]any{"path": "/api/audit/1", "confirm": "x"}})
+	if !res.IsError || !strings.Contains(textOf(res), "carry no") {
+		t.Fatalf("a confirm carrying a token in its arguments was accepted:\n%s", textOf(res))
 	}
 }
 

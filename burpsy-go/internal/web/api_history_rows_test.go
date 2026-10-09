@@ -72,7 +72,7 @@ func TestClearingHistoryNeedsAConfirmation(t *testing.T) {
 		t.Fatalf("DELETE /api/history = %d Allow=%q, want 405 Allow=GET: %s", rec.Code, rec.Header().Get("Allow"), rec.Body.String())
 	}
 	// A token minted for another destructive route does not spend here.
-	if rec := confirmedDelete(t, s, confirm(t, s, "/api/sitemap"), ""); rec.Code != http.StatusPreconditionRequired {
+	if rec := confirmedDelete(t, s, confirm(t, s, http.MethodDelete, "/api/sitemap", ""), ""); rec.Code != http.StatusPreconditionRequired {
 		t.Fatalf("a /api/sitemap confirmation spent on /api/history/rows = %d, want 428", rec.Code)
 	}
 	if n := historyRowCount(t, s); n != 3 {
@@ -80,8 +80,9 @@ func TestClearingHistoryNeedsAConfirmation(t *testing.T) {
 	}
 
 	// Confirmed, named ids: exactly that row goes.
-	token := confirm(t, s, "/api/history/rows")
-	rec := confirmedDelete(t, s, token, fmt.Sprintf(`{"ids":[%d]}`, first))
+	named := fmt.Sprintf(`{"ids":[%d]}`, first)
+	token := confirm(t, s, http.MethodDelete, "/api/history/rows", named)
+	rec := confirmedDelete(t, s, token, named)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed":1`) {
 		t.Fatalf("a confirmed DELETE of one row = %d %s, want 200 removed 1", rec.Code, rec.Body.String())
 	}
@@ -89,7 +90,7 @@ func TestClearingHistoryNeedsAConfirmation(t *testing.T) {
 		t.Fatalf("after removing one row history lists %d, want 2", n)
 	}
 	// The token was one-time.
-	if rec := confirmedDelete(t, s, token, ""); rec.Code != http.StatusPreconditionRequired {
+	if rec := confirmedDelete(t, s, token, named); rec.Code != http.StatusPreconditionRequired {
 		t.Fatalf("a replayed confirmation = %d, want 428", rec.Code)
 	}
 	if n := historyRowCount(t, s); n != 2 {
@@ -97,7 +98,7 @@ func TestClearingHistoryNeedsAConfirmation(t *testing.T) {
 	}
 
 	// Confirmed, no body: the whole capture clears.
-	rec = confirmedDelete(t, s, confirm(t, s, "/api/history/rows"), "")
+	rec = confirmedDelete(t, s, confirm(t, s, http.MethodDelete, "/api/history/rows", ""), "")
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed":2`) {
 		t.Fatalf("a confirmed clear = %d %s, want 200 removed 2", rec.Code, rec.Body.String())
 	}

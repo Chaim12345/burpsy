@@ -73,7 +73,12 @@ repository root.
 `.buildkite/` runs the same shards on Buildkite for comparison; it is optional and never a
 required check (see `.buildkite/README.md`).
 
-Whole-module and Chrome-heavy runs take `flock /tmp/burpsy-heavy.lock` — one per machine. A local
+Whole-module, race and Chrome-heavy runs go through `scripts/capped-run.sh -- <command>`, e.g.
+`scripts/capped-run.sh -- scripts/ci-shard.sh web`. It runs the command in its own cgroup with a
+hard CPU quota and memory limit (default: half the machine each, so two runs share it without
+starving each other), sets `GOMAXPROCS`, `go -p` and `GOMEMLIMIT` to match, and queues for one of
+the machine's slots (`/tmp/burpsy-heavy.<n>.lock`, replacing the single `/tmp/burpsy-heavy.lock`).
+A run the memory cap killed says so; rerun with a larger `--mem`, or treat it as a leak. A local
 full suite is a diagnostic for a red T3, not a gate. `go test ./...` without `-timeout 30m` is not
 a run (`internal/scanner` alone takes ~8 minutes); `bun run build` is not a type check
 (`tsc --noEmit` is, via `bun run check`).

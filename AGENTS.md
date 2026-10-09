@@ -115,12 +115,12 @@ pkgs=$(scripts/affected-go-tests.sh origin/master)
 cd burpsy-go
 gofmt -l .                     # must print nothing
 go vet ./...                   # must be clean
-[ -n "$pkgs" ] && go test -count=1 -timeout 30m $pkgs
+[ -n "$pkgs" ] && ../scripts/capped-run.sh -- go test -count=1 -timeout 30m $pkgs   # heavy runs are capped
 
-# T3, CI on every PR into master and every master push (.github/workflows/go.yml, job `gate`)
-go build ./... && go vet ./... && gofmt -l .
-go test ./... -count=1 -timeout 30m            # internal/scanner alone is ~8 minutes
-go test -race -count=1 ./internal/web/
+# T3, CI on every PR into master and every master push (.github/workflows/go.yml; `gate` aggregates
+# `lint` and the `test` shard matrix). The shards together are the whole suite plus the internal/web
+# race run; reproduce one red shard locally with:
+../scripts/capped-run.sh -- ../scripts/ci-shard.sh <shard>   # ../scripts/ci-shard.sh all lists them
 
 # Nightly only (.github/workflows/nightly.yml) — not run per merge
 ../e2e-go.sh                   # end-to-end against the Go binary

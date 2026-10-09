@@ -122,24 +122,29 @@ func Test_secrets_are_readable_by_the_persistence_hole_and_round_trip(t *testing
 
 // ---- schemes ------------------------------------------------------------------------
 
-// The unsupported schemes must be refused by name, not silently coerced. Coercion to
-// Basic would put the operator's password in a header the target never asked for.
+// The unsupported and ambiguous schemes must be refused by name, not silently coerced. Coercion to
+// Basic would put the operator's password in a header the target never asked for, and coercing a
+// bare "ntlm" to v1 would be the silent downgrade NTLMv1's opt-in exists to prevent
+// (burpsy-react-ui-sel6).
 func Test_unsupported_schemes_are_refused_and_named(t *testing.T) {
-	// NTLMv2 is implemented (ntlm.go, full MS-NLMP codec) and must parse; the rest of
-	// Burp's list is refused with the reason each would actually require.
-	for _, raw := range []string{"ntlm", "NTLMv1", "Negotiate", "kerberos"} {
+	for raw, says := range map[string]string{
+		"kerberos":  "not supported by this build",
+		"Negotiate": "ntlmv2",
+		"ntlm":      "ntlmv1 as an explicit weak downgrade",
+	} {
 		scheme, err := ParseScheme(raw)
 		if err == nil {
-			t.Errorf("ParseScheme(%q) returned %q instead of refusing; a selector option that does "+
-				"nothing is the defect this is meant to prevent", raw, scheme)
+			t.Errorf("ParseScheme(%q) returned %q instead of refusing", raw, scheme)
 			continue
 		}
-		if !strings.Contains(err.Error(), "not supported by this build") {
-			t.Errorf("ParseScheme(%q) error does not say it is unsupported, so it reads like a typo: %v", raw, err)
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("ParseScheme(%q) error does not say %q: %v", raw, says, err)
 		}
 	}
-	if _, err := ParseScheme("ntlmv2"); err != nil {
-		t.Errorf("ParseScheme(%q) refused the scheme the codec implements: %v", "ntlmv2", err)
+	for raw, want := range map[string]Scheme{"ntlmv2": SchemeNTLMv2, "NTLMv1": SchemeNTLMv1} {
+		if got, err := ParseScheme(raw); err != nil || got != want {
+			t.Errorf("ParseScheme(%q) = %q, %v; want %q", raw, got, err, want)
+		}
 	}
 	if _, err := ParseScheme("bogus"); err == nil {
 		t.Error("an unknown scheme must be an error, never a fallback to basic")
@@ -170,7 +175,7 @@ func Test_the_advertised_scheme_lists_agree_with_the_parser(t *testing.T) {
 	}
 	if len(UnsupportedSchemes()) == 0 {
 		t.Error("UnsupportedSchemes() is empty, so the panel has nothing to tell the operator " +
-			"about NTLM and Negotiate and they are left to infer it from an absence")
+			"about Kerberos and they are left to infer it from an absence")
 	}
 }
 
