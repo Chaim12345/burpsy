@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -82,15 +83,52 @@ type NucleiResult struct {
 	// Hits and counted here for the same reason FFUFResult.OutOfScope is.
 	OutOfScope int
 	// Err explains every outcome but OutcomeCompleted, and is nil for that one.
+	// For OutcomePartial it is why the run was cut short.
 	Err error
 	// Command is the argv actually executed.
 	Command  []string
 	ExitCode int
 	// Truncated records that the captured output hit the configured cap, so the
 	// hit list is a prefix of what nuclei reported rather than all of it. A
-	// truncated run that still parsed is completed-but-partial, and a reader has
-	// to be told which.
+	// truncated run that still parsed is OutcomePartial with Incomplete
+	// IncompleteCapped (unless something more fundamental also cut it short).
 	Truncated bool
+	// Incomplete says why an OutcomePartial run did not finish, and is ""
+	// for every other outcome (burpsy-react-ui-b2wh).
+	Incomplete IncompleteReason
+}
+
+// IncompleteReason names why a run that reported results did not finish.
+type IncompleteReason string
+
+const (
+	// IncompleteTimeout: the run hit its timeout and nuclei was killed.
+	IncompleteTimeout IncompleteReason = "timed out"
+	// IncompleteStopped: the caller stopped the run and nuclei was killed.
+	IncompleteStopped IncompleteReason = "stopped"
+	// IncompleteOutput: nuclei exited but its output was not fully captured
+	// (a process it started held the pipes open past procgroup.WaitDelay).
+	IncompleteOutput IncompleteReason = "incomplete output"
+	// IncompleteUnparseable: a record mid-stream could not be parsed, so the
+	// records after it were not read.
+	IncompleteUnparseable IncompleteReason = "unparseable output"
+	// IncompleteCapped: the captured output hit Config.MaxOutputBytes.
+	IncompleteCapped IncompleteReason = "output cap reached"
+)
+
+// incompleteOf classifies the process-level error run returned for a run that
+// still produced records. Anything run reports as an error is a cut-short run:
+// a non-zero exit on its own is not an error there (nuclei exits non-zero on
+// ordinary conditions), so it never reaches this.
+func incompleteOf(runErr error) IncompleteReason {
+	switch {
+	case errors.Is(runErr, ErrTimedOut):
+		return IncompleteTimeout
+	case errors.Is(runErr, ErrStopped):
+		return IncompleteStopped
+	default:
+		return IncompleteOutput
+	}
 }
 
 // nucleiRecord is one line of nuclei's -jsonl stream. Only the fields read here
@@ -178,9 +216,13 @@ func RunNuclei(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Ta
 	res.Truncated = truncated
 
 	// A run that failed at the process level but still streamed usable records
-	// is reported with what it produced — nuclei exits non-zero for reasons that
-	// do not invalidate the matches already written. Only a run with nothing
-	// parsed is a refusal.
+	// is reported with what it produced — those matches are real evidence — but
+	// as OutcomePartial with the reason, never as a completed run
+	// (burpsy-react-ui-b2wh): a nuclei killed at its timeout has not run the
+	// templates it had not reached, and a clean "completed" would tell a reader
+	// they found nothing. A plain non-zero exit is not a process-level failure
+	// (run returns it as data), so a finished run that exited non-zero is still
+	// completed. Only a run with nothing parsed is a refusal.
 	if len(hits) == 0 {
 		switch {
 		case runErr != nil:
@@ -196,6 +238,24 @@ func RunNuclei(ctx context.Context, cfg Config, scope ScopeAuthoriser, target Ta
 
 	res.Hits, res.OutOfScope = filterHitsInScope(scope, target, hits)
 	res.Outcome = OutcomeCompleted
+	switch {
+	case runErr != nil:
+		res.Incomplete = incompleteOf(runErr)
+		res.Err = fmt.Errorf("extscan: nuclei %s; the %d hit(s) parsed before that are reported, "+
+			"and templates it had not reached are not represented: %w: %s",
+			res.Incomplete, len(hits), runErr, trimErr(stderr))
+	case parseErr != nil:
+		res.Incomplete = IncompleteUnparseable
+		res.Err = fmt.Errorf("extscan: nuclei output stopped parsing after %d hit(s); records after "+
+			"that point were not read: %w", len(hits), parseErr)
+	case truncated:
+		res.Incomplete = IncompleteCapped
+		res.Err = fmt.Errorf("extscan: nuclei output hit the %d-byte capture cap; the %d hit(s) "+
+			"parsed are a prefix of what nuclei reported", cfg.maxOutput(), len(hits))
+	}
+	if res.Incomplete != "" {
+		res.Outcome = OutcomePartial
+	}
 	return res
 }
 
@@ -304,7 +364,7 @@ func MapSeverity(nucleiSeverity string) core.Severity {
 // Occurrences and Evidence already express — and is how burpsy's own findings
 // are counted, so the two sets are comparable in one report.
 func (r NucleiResult) Rows() []report.Row {
-	if r.Outcome != OutcomeCompleted || len(r.Hits) == 0 {
+	if !r.Outcome.Reported() || len(r.Hits) == 0 {
 		return nil
 	}
 	byTemplate := map[string][]TemplateHit{}
@@ -353,10 +413,22 @@ func (r NucleiResult) Rows() []report.Row {
 			Hosts:        sortedKeys(hosts),
 			Occurrences:  len(group),
 			Evidence:     evidence,
-			AdvisoryNote: nucleiAdvisoryNote(first),
+			AdvisoryNote: nucleiAdvisoryNote(first) + r.partialNote(),
 		})
 	}
 	return rows
+}
+
+// partialNote is appended to every row of a cut-short run, so a report read on
+// its own — without the command's console output — still says the run did not
+// finish and the rows are not the whole of what nuclei would have found.
+func (r NucleiResult) partialNote() string {
+	if r.Outcome != OutcomePartial {
+		return ""
+	}
+	return fmt.Sprintf(" This nuclei run did not finish (%s): the hit is real, but templates the run "+
+		"had not reached are not represented, so the absence of other rows is not evidence of "+
+		"absence.", r.Incomplete)
 }
 
 func nucleiRowName(h TemplateHit) string {

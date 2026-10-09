@@ -147,6 +147,19 @@ var (
 	ErrUnauthorised = errors.New("extscan: target not authorised by scope")
 )
 
+// Why a run that started did not finish, as run reports it. Each is wrapped by
+// the error run returns, so a caller classifies with errors.Is rather than by
+// reading the message (burpsy-react-ui-b2wh).
+var (
+	// ErrTimedOut: the run hit Config.Timeout and the tool was killed.
+	ErrTimedOut = errors.New("timed out")
+	// ErrStopped: the caller's context ended the run and the tool was killed.
+	ErrStopped = errors.New("stopped before it finished")
+	// ErrOutputIncomplete: the tool exited, but a process it started held its
+	// output open past procgroup.WaitDelay, so the capture is a prefix.
+	ErrOutputIncomplete = errors.New("captured output is incomplete")
+)
+
 // Outcome keeps "found nothing" separate from "could not look". Folding them
 // together would let a missing binary, a refused target or a timeout read as a
 // clean result for a phase that never ran.
@@ -165,6 +178,13 @@ const (
 	OutcomeFailed
 	// OutcomeCompleted: the tool ran; its results, however many, are the result.
 	OutcomeCompleted
+	// OutcomePartial: the tool ran and reported results, but the run was cut
+	// short — timed out, stopped, or its output is incomplete — so the results
+	// are real but are a prefix of what a finished run would have reported
+	// (burpsy-react-ui-b2wh). The result's Err and Incomplete say why. Kept
+	// apart from OutcomeCompleted because a cut-short scan that reads as a clean
+	// finish tells a reader the templates that never ran found nothing.
+	OutcomePartial
 )
 
 func (o Outcome) String() string {
@@ -181,6 +201,8 @@ func (o Outcome) String() string {
 		return "tool failed"
 	case OutcomeCompleted:
 		return "completed"
+	case OutcomePartial:
+		return "partial (cut short)"
 	}
 	return "unknown"
 }
@@ -188,7 +210,15 @@ func (o Outcome) String() string {
 // Looked reports whether this outcome means the tool actually examined the
 // target. Only OutcomeCompleted does. A caller writing "no issues found" must
 // gate on this, which is the whole reason the enum is not a bool.
+//
+// OutcomePartial is deliberately not Looked: the tool examined part of the
+// target, and "looked" is the licence to state an absence, which a cut-short
+// run cannot give. Its results are still reported — see Reported.
 func (o Outcome) Looked() bool { return o == OutcomeCompleted }
+
+// Reported reports whether this outcome carries results to show: a completed
+// run, or a partial one whose results are real but incomplete.
+func (o Outcome) Reported() bool { return o == OutcomeCompleted || o == OutcomePartial }
 
 // ScopeAuthoriser is the engagement scope, narrowed to the one question this
 // package asks. *core.Scope satisfies it; the interface keeps extscan free of a
@@ -345,19 +375,22 @@ func run(ctx context.Context, cfg Config, path string, args []string) (stdout, s
 	cmd.Stderr = &errb
 	runErr := cmd.Run()
 
-	if runCtx.Err() == context.DeadlineExceeded {
-		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("timed out after %s", cfg.timeout())
+	// The caller's own deadline is a stop, not this run's timeout: only the
+	// deadline this function set is reported as a timeout.
+	if runCtx.Err() == context.DeadlineExceeded && ctx.Err() == nil {
+		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("%w after %s", ErrTimedOut, cfg.timeout())
 	}
 	// Stopped by the caller's context (the dashboard's stop button). The tool
-	// was killed for it, so its partial output and signal exit are not a result.
+	// was killed for it, so its partial output and signal exit are not a clean
+	// result; a caller that keeps what was captured must say it was cut short.
 	if err := runCtx.Err(); err != nil {
-		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("stopped before it finished: %w", err)
+		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("%w: %w", ErrStopped, err)
 	}
 	if errors.Is(runErr, exec.ErrWaitDelay) {
 		// The tool exited; a process it started held its output open past the
 		// delay. Not a launch failure, and not a clean exit either.
-		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("exited (status %d), but a process it started held its output open for more than %s; its captured stdout/stderr is incomplete",
-			cmd.ProcessState.ExitCode(), procgroup.WaitDelay)
+		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("exited (status %d), but a process it started held its output open for more than %s: %w",
+			cmd.ProcessState.ExitCode(), procgroup.WaitDelay, ErrOutputIncomplete)
 	}
 	if runErr != nil {
 		var ee *exec.ExitError
