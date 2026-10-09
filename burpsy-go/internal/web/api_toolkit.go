@@ -237,12 +237,15 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	// re-walking every finding at every node would be quadratic in a map that only needs building
 	// once.
 	issues := s.issuesByNode()
-	var tree []sitemapNodeView
 	var nodeCount int
 
 	// One snapshot serves both the observed tree and the dedupe of inserted and unrequested items
 	// below, so the two agree with each other and the map is cloned once per request.
 	hosts := s.sitemap.Hosts()
+	// Allocated, never nil: an empty map is "tree":[] on the wire, not null (burpsy-react-ui-9n01).
+	// The UI types the field as an array, and a null there breaks any client that iterates it where
+	// it should have rendered an empty site map.
+	tree := make([]sitemapNodeView, 0, len(hosts))
 	for _, host := range hosts {
 		if hostFilter != "" && host.Host != hostFilter {
 			continue
@@ -274,6 +277,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:       []string{},
 			Statuses:      []int{},
 			Mimes:         sortedSetKeys(hostMimes),
+			Params:        []string{},
 			LastExchange:  lastEx,
 			Recent:        []core.ExchangeID{},
 			SubtreeIssues: hostIssues,
@@ -321,6 +325,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:  []string{},
 			Statuses: []int{},
 			Mimes:    []string{},
+			Params:   []string{},
 			Recent:   []core.ExchangeID{},
 			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
 		})
@@ -353,6 +358,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			Methods:     []string{},
 			Statuses:    []int{},
 			Mimes:       []string{},
+			Params:      []string{},
 			Recent:      []core.ExchangeID{},
 			InScope:     s.scope.Contains(un.Host, un.Port, pathOrRoot(un.Path), un.TLS),
 		})
@@ -475,7 +481,7 @@ func mergeInsertedIntoTree(tree []sitemapNodeView, inserts []sitemapNodeView, no
 				Port:     in.Port,
 				TLS:      in.TLS,
 				Depth:    0,
-				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Recent: []core.ExchangeID{},
+				Methods:  []string{}, Statuses: []int{}, Mimes: []string{}, Params: []string{}, Recent: []core.ExchangeID{},
 			}, paths: map[string]sitemapNodeView{}}
 			byHost[key] = g
 			order = append(order, key)
@@ -573,6 +579,7 @@ func graftInserted(host *sitemapNodeView, in sitemapNodeView, nodeCount *int) {
 				Methods:    []string{},
 				Statuses:   []int{},
 				Mimes:      []string{},
+				Params:     []string{},
 				Recent:     []core.ExchangeID{},
 				ChildCount: len(ancestors) - depth - 1,
 			})
@@ -741,7 +748,7 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 			Mimes:         sortedSetKeys(a.mimes),
 			Params:        sortedSetKeys(a.params),
 			LastExchange:  lastExchangeForPath(host.Host, a.ids),
-			Recent:        lastN(a.ids, 20),
+			Recent:        nonNilIDs(lastN(a.ids, 20)),
 			Issues:        own,
 			SubtreeIssues: own,
 			WorstSeverity: severityName(ownWorst),
@@ -938,6 +945,16 @@ func statusInts(statuses map[int]int) []int {
 		}
 	}
 	return out
+}
+
+// nonNilIDs is ids, or an empty slice for a folder synthesised to hold children: it holds no
+// exchanges of its own, and a nil slice would reach the wire as "recent_exchanges":null
+// (burpsy-react-ui-9n01).
+func nonNilIDs(ids []core.ExchangeID) []core.ExchangeID {
+	if ids == nil {
+		return []core.ExchangeID{}
+	}
+	return ids
 }
 
 func lastN(ids []core.ExchangeID, n int) []core.ExchangeID {
