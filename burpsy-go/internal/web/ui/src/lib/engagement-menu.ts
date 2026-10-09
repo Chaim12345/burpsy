@@ -116,6 +116,8 @@ export interface EngagementHandlers {
   discoverContent: (target: string) => void;
   /** Open Settings › Scheduled tasks, carrying this URL as far as burpsy can take it. */
   scheduleTask: (target: string) => void;
+  /** Show the Target analyzer for this host or branch. */
+  analyzeTarget: (seed: EngagementSeed) => void;
 }
 
 /**
@@ -194,11 +196,9 @@ export function engagementToolsGroup(seed: EngagementSeed, handlers: EngagementH
       id: "target-analyzer",
       label: "Target analyzer",
       icon: Gauge,
-      disabled: true,
-      // Present-and-disabled rather than absent, because burpsy holds the material the analyzer
-      // reports on and simply has no page that reports it — the gap is a view, not a capability.
-      hint: "burpsy has no target analyzer. The material it would report on is already on the site map — each node carries its request count, the methods seen and the status codes returned — and the Dashboard carries the coverage totals; what is missing is the summary that counts static versus dynamic URLs and estimates the testing effort.",
-      onSelect: () => undefined,
+      // Burp's Target analyzer (burpsy-react-ui-dnvi), over what the site map holds for this node.
+      hint: `Counts the dynamic and static URLs, parameters and unique parameter names captured under ${seed.path === "" ? seed.host : `${seed.host}${seed.path}`}, with a saved HTML report.`,
+      onSelect: () => handlers.analyzeTarget(seed),
     },
   ];
 

@@ -1765,3 +1765,199 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Burp-XML issue export: deliberate divergences (2026-10-08, burpsy-react-ui-m7dk)
+
+The XML export reproduces Burp's grammar — the internal DTD verbatim from the decompiled writer
+`burp.Zb2g.ZI`, the element sequence from `Zb2g.Zk`, the requestresponse shape from `Zpa6` — and
+where burpsy's data model cannot fill a field the divergence is recorded here, not papered over.
+
+- **burpVersion says "burpsy", not a Burp version number.** The attribute is CDATA and undocumented
+  beyond its name; writing "2026.7.1" would be a false claim about which tool produced the file, and
+  the DTD — the thing a consumer actually validates — is identical either way.
+- **Messages are always `base64="true"`; the `base64="false"` variant is not offered.** Burp's own
+  export notes that the raw variant leaves NULL bytes that "strictly break the XML syntax"
+  (report-settings.html) and recommends Base64 for strict parsers; raw bytes also cannot round-trip
+  through the text-node control-character mapping `Zfkt.ZG` applies (control chars become '.').
+  Byte-identical decode is this bead's acceptance bar, and only base64 can meet it.
+- **`host ip=""` is always empty.** Burp writes the resolved IP (`Zb2g.Zk`: `var1.ZDe().ZLo()`).
+  burpsy's capture store records the host name, not the dialled address, per exchange; inventing an
+  IP is worse than the attribute's own documented default. Re-open: record the remote address on
+  `core.Exchange` at capture time.
+- **No `responseRedirected` element.** Optional in the DTD; Burp writes the pair's redirect flag
+  (`Zpa6.Zh`). burpsy does not track whether a stored response was redirect-followed, so the
+  element is omitted rather than written with a guessed value.
+- **Severity and confidence use burpsy's own grade names.** Burp's XML vocabulary is
+  Information/Low/Medium/High/Undefined/False positive (`Ze1r.ZX`) and Undefined/Tentative/Firm/
+  Certain (`Zeue.ZZ`). burpsy additionally has Critical (which Burp's enum lacks entirely) and
+  Suppressed-negative, and says "Informational" where Burp says "Information". Remapping Critical
+  down to High would understate a finding; emitting burpsy's real grade is the honest option.
+- **Merged findings export as one `issue` element.** Burp holds one issue per host; burpsy's store
+  merges same-issue observations across hosts into one `Row`. The first host leads the `host`
+  element, and every occurrence's `requestresponse` still carries its bytes, so no evidence is lost
+  — but a consumer tallying issues per host sees one row where Burp would show several.
+- **`serialNumber` is the burpsy finding id.** Unique per finding instance for the life of the
+  store, which is the property Burp documents ("unique to that individual issue instance"); it is
+  not Burp's serial space and a consumer must not read burp-specific ranges into it.
+- **`location` is synthesized.** Burp's issue classes build their own location strings
+  (`Zco9.Zxy`); burpsy's rows carry the evidence host/path and the parameter set, so location is
+  `host + path [param, …]` in Burp's own "[parameter]" shape. The path element (documented as
+  query-excluded) and the location element (the entry point, query included) deliberately differ.
+- **Advisory text arrives as plain text via a tag scanner, not an HTML parser.**
+  `sanitisedHTMLToText` mirrors Burp's HTML strip (`net.portswigger.Zhs.Zq`) over input that is
+  already `advisory.SanitisedHTML` output — allowed elements only, no attributes — which is what
+  makes a scanner safe. Its contract is stated in its doc comment; widening the input would need a
+  real parser.
+- **The "relevant extract" message mode is the header block, not Burp's highlight window.** Burp
+  extracts "the parts of the message that are highlighted in the in-tool results" plus context
+  (report-settings.html); burpsy's findings carry no highlight spans — no producer populates
+  `core.Occurrence.Span` — so those locations cannot be recovered. The header block (through the
+  blank line) is the deterministic substitute, labelled "[relevant extract — body omitted]" in the
+  HTML and carried as bytes in the XML. Re-open: populate Occurrence.Span at finding production.
+
+### Report settings: query-string shape and the TOC clamp (burpsy-react-ui-a9qy)
+
+- **The wizard is a query string, not a saved profile.** Burp's report settings are chosen in a
+  wizard per export; burpsy's are parameters on `/api/report/html` and `/api/report/xml`
+  (`title`, `organise_by`, `toc_depth`, `sections`, `message_mode`, `max_message_len`), so an
+  export link carries its own configuration. There is no persisted settings store — each export is
+  configured for itself, which is what Burp's wizard does too.
+- **`toc_depth` is clamped to 2, not 3+.** Burp's wizard offers more levels; in burpsy's report the
+  third level would repeat the same rows (groups, then findings, then the same findings again), so
+  asking for more is clamped rather than rendered as fake depth.
+- **`sections=` present but empty means every detail section is off.** Burp's wizard allows
+  unticking all five detail options; a query string cannot otherwise distinguish "all off" from
+  "parameter absent" (all on). The nil-vs-empty list split carries the two states; the renderer's
+  `sectionOn` documents it.
+- **"Affected parameters" is always printed, not a section.** Burp prints an issue's location and
+  entry point beside the issue header, not under a detail section; burpsy's params list follows
+  that, so it survives an all-off report the way the finding's name does.
+
+## CSRF PoC techniques: the generator's four ways to replay one request (2026-10-08, burpsy-react-ui-0z10)
+
+Burp's generator (generate-csrf-poc.html) is the ground truth for the technique set; where its
+exact behaviour is not recoverable from the documentation, the divergence is recorded here.
+
+- **Auto's choice is burpsy's reading of "most appropriate technique capable of generating the
+  required request".** urlencoded gives the form; multipart gives the multipart form; anything
+  else with an equals character gives the plain-text form (the exact-body technique that needs no
+  CORS); anything else gives the cross-domain XHR. The docs say only that Auto picks the most
+  appropriate technique, and that JSON/XML bodies "can only be generated using either a form with
+  plain text encoding, or a cross-domain XHR" — which of the two Auto prefers for a given body is
+  not stated, so burpsy prefers the one with no CORS dependency whenever the body splits at an
+  equals.
+- **"Test in browser" is one-shot.** Burp's URL keeps serving "the currently displayed HTML"; the
+  epic's acceptance (and the security reading behind it) is that a token that keeps replaying an
+  attack page outlives its purpose, so burpsy's PoC host spends the token on the first fetch and
+  answers 410 after. Regenerating is one click.
+- **The PoC page moved off the console origin.** burpsy's previous generator opened the PoC as a
+  blob URL, which inherits the console's origin — the one surface attacker-shaped HTML must never
+  run on. The dialog now shows the HTML, and Test in browser opens the PoC host's URL on its own
+  port, which has no console routes and no console cookies.
+- **No request editing.** Burp's panel lets the operator edit the request and Regenerate from the
+  edit; burpsy's dialog generates from the captured exchange. The generated HTML is copyable and
+  downloadable, which is the same capability by another path. Re-open: an editable request pane in
+  the dialog.
+- **The XHR technique sets withCredentials and every header the browser allows scripts to set.**
+  The fetch specification's forbidden headers (Host, Cookie, Content-Length and kin) are omitted
+  rather than set-and-ignored — a setRequestHeader the browser silently ignores is a PoC that lies
+  about what the victim's browser will send. The docs' warnings (the CORS dependency, the
+  application/json preflight, the no-reflected-XSS limit) are carried as notes verbatim in intent.
+- **The plain-text form's trailing CRLF is accounted for.** The browser's text/plain submission
+  appends a CRLF after every entry, so a captured body ending in CRLF reproduces byte-exactly
+  (it is cut from the value and the browser puts it back) and one that does not gets a note saying
+  the sent body is the captured one plus two bytes.
+
+## Content discovery: the session shape (2026-10-08, burpsy-react-ui-dgbi)
+
+Burp's "Discover content" builds a session, not one run (content-discovery.html); where its exact
+algorithms are not in the documentation, burpsy's stated rules are recorded here.
+
+- **The derivation rule set is burpsy's own.** Burp's docs give one example — "if Burp discovers
+  the directory AnnualReport2018, it also checks for AnnualReport2019, AnnualReport2020" — and no
+  algorithm. burpsy's deterministic set (see `deriveDiscoveryNames`): trailing-number +1 and +2,
+  name + "_old", name + ".bak", and the all-lower and all-upper case variants of each discovered
+  item's last path segment, swept in the directory the discovery was made in.
+- **Recursion is breadth-first, not priority-ordered.** Burp "may add a task" per discovery and
+  "new tasks are prioritized by how likely they are to discover new content"; burpsy sweeps each
+  depth's discovered directories in the order they were found, one bounded ffuf run per directory,
+  scope-checked before launch (which is also why ffuf's own -recursion is not used: it dials paths
+  burpsy never checked against scope). Re-open: a priority ordering when there is evidence for one.
+- **Observed names come from the capture store's exchanges on the target host** — the directory
+  segments and filename stems burpsy has actually seen — where Burp reads its site map. The two
+  stores agree for burpsy's purposes (the site map is built from the same exchanges); burpsy
+  matches the host only, not the scheme or port, and sorts the names so the merged wordlist file is
+  reproducible from the request by hand.
+- **The built-in lists are the four Burp ships**: short/long file lists and short/long directory
+  lists, from the bundled PortSwigger corpus (`internal/intruder/wordlists/burp-*`). A custom list
+  is the operator's wordlist path, which merges with them.
+- **Not implemented from Burp's Config tab**: "Test all extensions observed in use on target site,
+  except for…" (the always-test extension list is the `extensions` field) and the case-sensitivity
+  mode (ffuf matches paths as the target serves them). Neither is in this bead's scope; both are
+  one-option follow-ups if an engagement needs them.
+- **A running run's `by_status` serialises as []** — a pre-existing null that crashed the console's
+  status chips the first time an e2e sweep rendered a running run (the tool had never been
+  allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:
+  the server initialises the counts and the page tolerates an older server's null.
+
+## Clickbandit is burpsy's own script (2026-10-08, burpsy-react-ui-g67w)
+- **Burp:** top-level Burp Clickbandit copies a script to paste into the target page's console:
+  Start, record clicks, Finish, then review (toggle transparency, reset, zoom, arrow keys) and Save
+  the overlay as HTML; options Disable click actions and Sandbox iframe.
+- **burpsy:** burpsy → Clickbandit offers the same workflow and options with its own script
+  (`internal/web/clickbandit/clickbandit.js`, served at `/api/engagement/clickbandit.js`). PortSwigger's
+  script is not reused. The saved proof of concept frames the target transparently and shows one decoy
+  per recorded click, advancing when a click on the frame blurs the page.
+- **Divergence:** recording needs the page to be same-origin with itself in a frame; a target that
+  refuses framing (X-Frame-Options / frame-ancestors) cannot be recorded, which is itself the
+  clickjacking defence working.
+
+## Decoder digests: 23 of Burp's 62 DigestAlgorithm values (2026-10, burpsy-react-ui-7tgt)
+
+Burp's `CryptoUtils.generateDigest` takes the 62-constant `DigestAlgorithm` enum
+(`/root/burp-re/out/burp/api/montoya/utilities/DigestAlgorithm.java`, Montoya 2026.7). burpsy's hash
+step (`internal/tools/digest.go`, one table; the UI list is test-pinned to it) computes the 23 that the
+Go standard library and `golang.org/x/crypto` provide: MD4, MD5, SHA-1, RIPEMD-160, SHA-224/256/384/512,
+SHA-512/224, SHA-512/256, SHA3-224/256/384/512, Keccak-256/512, SHAKE128-256, SHAKE256-512,
+BLAKE2b-160/256/384/512 and BLAKE2s-256 — plus eight HMACs (MD5, SHA-1, SHA-224/256/384/512,
+SHA3-256/512), which Burp exposes through its Decoder rather than this enum.
+
+**Not offered (39), by name:** BLAKE2S_128, BLAKE2S_160, BLAKE2S_224, BLAKE3_256, DSTU7564_256/384/512,
+GOST3411, GOST3411_2012_256/512, HARAKA_256/512, KECCAK_224/288/384, MD2, PARALLEL_HASH_128_256,
+PARALLEL_HASH_256_512, RIPEMD_128/256/320, SKEIN (all 13 variants), SM3, TIGER, TUPLEHASH_128_256,
+TUPLEHASH_256_512, WHIRLPOOL.
+
+**Why:** Burp gets these from BouncyCastle. None is in Go's standard library or `x/crypto` (BLAKE2s
+there exposes only the 256-bit and the keyed 128-bit form; legacy Keccak only 256/512), so each would be a
+new third-party dependency in a security tool, for algorithms that rarely appear in a web engagement.
+The route refuses every one by name (400 listing the supported set), never by falling back to SHA-256.
+**Re-open:** a concrete engagement need for a specific algorithm, and a vetted pure-Go implementation.
+
+## Sequencer per-position FIPS: Burp's pass rules, computed significance (2026-10, burpsy-react-ui-c0k3)
+
+The FIPS battery now also runs at each bit position across tokens, as Burp's bit-level analysis does
+(`internal/sequencer/fips_position.go`, report field `fips_positions`). The pass rules are Burp
+2026.7.1's `Zpu3`, copied exactly:
+- At N = 20,000 the FIPS 140-2 intervals apply.
+- At other N a position passes when its significance exceeds 1e-4 (monobit, poker), 1.8e-5 (runs) or
+  2.98e-4 (long run).
+- A longest run under 12 always passes.
+- The sample size is limited to Burp's range, 100 to 20,000 tokens.
+
+The significance is **computed exactly at N**, not read from Burp's tables (`Zw_0`, `Zcmb` →
+`Zx79`/`Zb74`/`Zgrh`/`Zxh7`/`Zi0_`, `Zphy`) and interpolated across their 28 sample sizes as
+`Zc6a.ZH` does. Where the two differ, it is deliberate:
+
+- **Monobit.** The tables equal the exact two-sided binomial tail to 8 digits, but they shift by one
+  key at and above the centre. burpsy uses the symmetric exact value.
+- **Runs counting.** Burp's counter pools zero-runs and one-runs in one histogram. It restarts the run
+  length at 0 instead of 1 on a change, never counts the final run, and scores the "6 or more" bucket
+  with its exactly-5 table. burpsy counts each symbol separately, as FIPS specifies, and scores each
+  of the twelve cells against its exact distribution, with a dynamic programme checked against brute
+  enumeration. Burp's run tables do match that distribution, verified on `Zxh7` and `Zi0_` at N = 100.
+  A position's runs significance is its least likely cell.
+- **Long run.** burpsy scores the exact upper tail P(longest ≥ l). Burp's `Zphy` rows do not match the
+  exact distribution; they sit roughly one sample-size row off. They are also two-sided, which is why
+  Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
+  one-sided tail at N ≥ 100.
+- **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).

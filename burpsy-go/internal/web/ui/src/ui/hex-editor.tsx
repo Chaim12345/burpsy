@@ -419,7 +419,7 @@ export function HexEditor({
         </span>
       </div>
 
-      <ContextMenu groups={menuGroups}>
+      <ContextMenu groups={menuGroups} docTopic="message-editor">
       <div className="hex-scroll" ref={scrollRef}>
         <table
           className="hex-table"

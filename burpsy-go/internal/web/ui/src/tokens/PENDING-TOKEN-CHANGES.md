@@ -238,3 +238,11 @@ into one token each, rather than three, when Phase C rebinds the library:
 Not applied here — like the rest of this file, a colour merge is a design
 decision for Phase C, not a value to patch unattended. Recorded so it isn't
 rediscovered from scratch.
+
+## Zebra stripe opacity (69p0) — pending
+
+`opacity.stripe-dark` (0.2) and `opacity.stripe-light` (0.04), added to `_pendingPenpot` with the
+contrast reasoning in its `_stripeNote`. A table stripe row is `color.ink` mixed into
+`color.paper-raised` at the mode's value. Two tokens rather than one per-mode token because
+Penpot's opacity type has no per-mode value; `styles.css` picks one per `data-theme`. To adopt:
+create both opacity tokens in Penpot, re-export, and move them out of `_pendingPenpot`.
