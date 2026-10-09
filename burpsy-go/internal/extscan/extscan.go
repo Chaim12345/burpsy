@@ -48,6 +48,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/procgroup"
 )
 
 // DefaultTimeout bounds one delegated run when the config names none. Both
@@ -332,6 +334,10 @@ func run(ctx context.Context, cfg Config, path string, args []string) (stdout, s
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, path, args...)
+	// The timeout bounds the tool's whole process tree: without a process
+	// group a child the tool started keeps the pipes open and Run waits for it
+	// (burpsy-react-ui-9bzh).
+	procgroup.Contain(cmd)
 	var out, errb cappedBuffer
 	out.limit = cfg.maxOutput()
 	errb.limit = cfg.maxOutput()
@@ -341,6 +347,17 @@ func run(ctx context.Context, cfg Config, path string, args []string) (stdout, s
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("timed out after %s", cfg.timeout())
+	}
+	// Stopped by the caller's context (the dashboard's stop button). The tool
+	// was killed for it, so its partial output and signal exit are not a result.
+	if err := runCtx.Err(); err != nil {
+		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("stopped before it finished: %w", err)
+	}
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		// The tool exited; a process it started held its output open past the
+		// delay. Not a launch failure, and not a clean exit either.
+		return out.Bytes(), errb.Bytes(), -1, fmt.Errorf("exited (status %d), but a process it started held its output open for more than %s; its captured stdout/stderr is incomplete",
+			cmd.ProcessState.ExitCode(), procgroup.WaitDelay)
 	}
 	if runErr != nil {
 		var ee *exec.ExitError

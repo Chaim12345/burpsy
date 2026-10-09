@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/procgroup"
 )
 
 // DefaultToolTimeout bounds one tool run when the config names none. External
@@ -91,6 +92,10 @@ func (r *execToolRunner) Run(ctx context.Context, tool string, args []string) (b
 	runCtx, cancel := context.WithTimeout(ctx, r.cfg.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, bin, args...)
+	// The timeout bounds the tool's whole process tree, not just the binary
+	// named: a wrapper script's child would otherwise hold stdout open and keep
+	// this call running until it exited on its own (burpsy-react-ui-9bzh).
+	procgroup.Contain(cmd)
 	var stdout, stderr cappedBuffer
 	stdout.limit = r.cfg.MaxOutputBytes
 	stderr.limit = r.cfg.MaxOutputBytes
@@ -99,6 +104,18 @@ func (r *execToolRunner) Run(ctx context.Context, tool string, args []string) (b
 	runErr := cmd.Run()
 	if runCtx.Err() == context.DeadlineExceeded {
 		return bcheck.ToolResult{}, fmt.Errorf("tool %q timed out after %s", tool, r.cfg.Timeout)
+	}
+	// The audit was cancelled while the tool ran. The tool was killed for it, so
+	// its exit status (-1, a signal) is not data the check may judge from.
+	if err := runCtx.Err(); err != nil {
+		return bcheck.ToolResult{}, fmt.Errorf("tool %q was stopped: %w", tool, err)
+	}
+	// The tool exited, but something it started kept stdout/stderr open past
+	// procgroup.WaitDelay. The output is a prefix of what that process would
+	// have written, so it is refused rather than handed to the check as whole.
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		return bcheck.ToolResult{}, fmt.Errorf("tool %q exited, but a process it started held its output open for more than %s; its captured stdout/stderr is incomplete",
+			tool, procgroup.WaitDelay)
 	}
 	// A launch failure (binary missing, not executable) is an error: the check
 	// cannot see the tool it asked for. A non-zero exit is data.

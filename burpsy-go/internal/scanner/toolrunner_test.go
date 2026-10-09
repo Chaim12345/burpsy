@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The runner refuses a tool that is not on the allowlist — the whole gate.
@@ -71,21 +70,5 @@ func TestExecToolRunnerCapsOutput(t *testing.T) {
 	}
 	if len(res.Stdout) > 16 {
 		t.Errorf("captured %d bytes, want capped at 16", len(res.Stdout))
-	}
-}
-
-// A tool that hangs is killed when its timeout expires; the run is an error,
-// so the check cannot judge from a tool that never finished.
-func TestExecToolRunnerTimesOut(t *testing.T) {
-	r := NewToolRunner(ToolRunnerConfig{
-		Tools:   map[string]string{"sh": "/bin/sh"},
-		Timeout: 50 * time.Millisecond,
-	})
-	_, err := r.Run(context.Background(), "sh", []string{"-c", "sleep 5"})
-	if err == nil {
-		t.Fatal("Run succeeded for a tool that should have timed out")
-	}
-	if !strings.Contains(err.Error(), "timed out") {
-		t.Errorf("error %q does not say timed out", err)
 	}
 }

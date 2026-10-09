@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/burpsy-go/burpsy/internal/procgroup"
 )
 
 const (
@@ -201,6 +203,9 @@ func Probe(ctx context.Context, targets []string, opts Options) Result {
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, path, args...)
+	// The timeout bounds tlsx's whole process tree, not only tlsx itself
+	// (burpsy-react-ui-9bzh).
+	procgroup.Contain(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
