@@ -15,7 +15,7 @@ import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/
 import { useApp } from "../lib/store";
 import type { ActivityRow, CoverageSummary, TaskRow, ToolEvent } from "../lib/types";
 import { PageHeader, RefreshButton, SectionHeading, SplitPane } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metric, Modal, Select, Switch, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
@@ -23,6 +23,7 @@ import { RecordedLoginPicker } from "../ui/recorded-logins";
 import { CrawlLiveView } from "../ui/crawl-live";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 import { severityTone } from "../lib/severity";
+import { EVENT_SEVERITY_OPTIONS, eventSource, filterEvents, isFiltered, severityCounts, type EventLogFilter, type EventSeverityFilter } from "../lib/event-log-filter";
 
 function taskTone(state: string): "good" | "bad" | "warn" | "info" {
  const value = state.toLowerCase();
@@ -1215,6 +1216,7 @@ export function DashboardPage(): JSX.Element {
      selected ? (
       <TaskDetail
        task={selected}
+       tasks={data?.tasks ?? []}
        liveFindings={liveFindings}
        liveEnabled={liveEnabled}
        issuesEnabled={issues.data?.enabled === true}
@@ -1247,11 +1249,142 @@ export function DashboardPage(): JSX.Element {
  );
 }
 
+/**
+ * The event log, filterable by severity, searchable, and with a Source column (burpsy-react-ui-lxqq).
+ *
+ * It sits in a task's pane but holds the whole log — scope edits and live-audit switches belong to
+ * no task, and hiding them under whichever task happens to be selected would lose them. So Source
+ * is a filter as well as a column: "This task" narrows to the selected task's own events, and the
+ * column is dropped then, because every row would say the same thing.
+ */
+function EventLogPanel({
+ events,
+ tasks,
+ task,
+ eventWindow,
+}: {
+ events: ToolEvent[];
+ tasks: TaskRow[];
+ task: TaskRow;
+ eventWindow: { shown: number; total: number; dropped: number };
+}): JSX.Element {
+ const clearEvents = useClearEventLog();
+ const [severity, setSeverity] = useState<EventSeverityFilter>("all");
+ const [search, setSearch] = useState("");
+ // "task" rather than the id itself, so selecting another task re-targets the filter instead of
+ // leaving it pinned to a task that is no longer the one on screen. The synthetic live-audit row
+ // (id -1) owns no events — the sweep records with no task id — so it is not offered there.
+ const [sourceScope, setSourceScope] = useState<"all" | "task">("all");
+ const taskScoped = sourceScope === "task" && task.id > 0;
+ const filter: EventLogFilter = { severity, search, source: taskScoped ? task.id : "all" };
+ const visible = filterEvents(events, filter, tasks);
+ const counts = severityCounts(events);
+ const showSource = !taskScoped;
+ return (
+  <>
+   {/*
+     * The feed used to render events.slice(0, 20): rows 21 and beyond were dropped on the floor
+     * with nothing saying so, which is the half of burpsy-react-ui-voc that made the log unable
+     * to answer "what happened". Every row the server sends is now rendered, and the window is
+     * stated from the server's own counters rather than re-derived here. The real bound is the
+     * EventLog's, which already counts what it discarded — a second, silent cap in the browser
+     * could only disagree with it. The filters below narrow what is shown, and say so.
+     */}
+   <SectionHeading
+    title="Event log"
+    detail={
+     eventWindow.dropped > 0
+      ? `State changes that are not requests. Showing all ${eventWindow.shown} the log holds; ${eventWindow.dropped} older event(s) have been discarded as it filled.`
+      : "State changes that are not requests. The log shows key task events, such as start times, alerts, and progress updates."
+    }
+    actions={
+     <Button variant="outline" disabled={!events.length || clearEvents.isPending} onClick={() => clearEvents.mutate()}>
+      {clearEvents.isPending ? "Clearing…" : "Clear event log"}
+     </Button>
+    }
+   />
+   {events.length ? (
+    <Toolbar className="event-filters">
+     <Field label="Severity" className="field-inline">
+      {(id) => (
+       <Select id={id} value={severity} onChange={(event) => setSeverity(event.target.value as EventSeverityFilter)}>
+        {EVENT_SEVERITY_OPTIONS.map((option) => (
+         <option key={option.value} value={option.value}>
+          {option.value === "all" ? `${option.label} (${events.length})` : `${option.label} (${counts[option.value]})`}
+         </option>
+        ))}
+       </Select>
+      )}
+     </Field>
+     <Field label="Source" className="field-inline">
+      {(id) => (
+       <Select id={id} value={taskScoped ? "task" : "all"} onChange={(event) => setSourceScope(event.target.value as "all" | "task")}>
+        <option value="all">All sources</option>
+        {task.id > 0 ? <option value="task">This task (Task {task.id})</option> : null}
+       </Select>
+      )}
+     </Field>
+     <Field label="Search" className="field-inline">
+      {(id) => (
+       <Input id={id} type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="kind, detail or source…" style={{ maxWidth: "var(--w-md)" }} />
+      )}
+     </Field>
+     {isFiltered(filter) ? (
+      <span className="cell-dim" role="status">
+       {visible.length} of {events.length} shown
+      </span>
+     ) : null}
+    </Toolbar>
+   ) : null}
+   {!events.length ? (
+    <Empty
+     title="No event log items to show"
+     detail="The event log shows key task events, such as start times, alerts, and progress updates."
+    />
+   ) : !visible.length ? (
+    // Distinct from the empty log: the events are still there, the filters are narrower than them.
+    <Empty
+     title="No event matches these filters"
+     detail={`All ${events.length} events are still in the log. Widen or clear the severity, source or search to see them.`}
+     action={
+      <Button
+       variant="outline"
+       size="small"
+       onClick={() => {
+        setSeverity("all");
+        setSearch("");
+        setSourceScope("all");
+       }}
+      >
+       Clear filters
+      </Button>
+     }
+    />
+   ) : (
+    <div className="event-list event-list-scroll">
+     {visible.map((event, index) => (
+      <div className={showSource ? "event-row event-row-sourced" : "event-row"} key={event.id ?? `${event.kind}-${event.at_ms}-${index}`}>
+       <span className={`event-dot event-${event.severity}`} title={event.severity} />
+       <div>
+        <strong>{event.kind}</strong>
+        <p>{event.detail}</p>
+       </div>
+       {showSource ? <span className="event-source">{eventSource(event, tasks)}</span> : null}
+       <time title={new Date(event.at_ms).toLocaleString()}>{relativeTime(event.at_ms)}</time>
+      </div>
+     ))}
+    </div>
+   )}
+  </>
+ );
+}
+
 /** One task's detail pane: header, Summary / Event log tabs, then the tab's content. Burp keeps
  * the task's own facts (configuration, progress) on Summary and everything the task produced
  * (issues, events) on the later tabs; the same split, with burpsy's equivalents in each. */
 function TaskDetail({
  task,
+ tasks,
  liveFindings,
  liveEnabled,
  issuesEnabled,
@@ -1263,6 +1396,7 @@ function TaskDetail({
  onFilterHistory,
 }: {
  task: TaskRow;
+ tasks: TaskRow[];
  liveFindings?: number;
  liveEnabled: boolean;
  issuesEnabled: boolean;
@@ -1274,7 +1408,6 @@ function TaskDetail({
  onFilterHistory: (query: string) => void;
 }): JSX.Element {
  const cancel = useCancelTask();
- const clearEvents = useClearEventLog();
  const setLive = useSetScannerLive();
  // The same cache key the Issues page reads, so a finding that arrives mid-scan is here on the
  // next render without a second request. Reverse-chronological by id: the store is a dense counter
@@ -1625,42 +1758,7 @@ function TaskDetail({
         * EventLog's, which already counts what it discarded — a second, silent cap in the browser
         * could only disagree with it.
         */}
-      <SectionHeading
-       title="Event log"
-       detail={
-        eventWindow.dropped > 0
-         ? `State changes that are not requests. Showing all ${eventWindow.shown} the log holds; ${eventWindow.dropped} older event(s) have been discarded as it filled.`
-         : "State changes that are not requests. The log shows key task events, such as start times, alerts, and progress updates."
-       }
-       actions={
-        <Button
-         variant="outline"
-         disabled={!events.length || clearEvents.isPending}
-         onClick={() => clearEvents.mutate()}
-        >
-         {clearEvents.isPending ? "Clearing…" : "Clear event log"}
-        </Button>
-       }
-      />
-      {events.length ? (
-       <div className="event-list event-list-scroll">
-        {events.map((event, index) => (
-         <div className="event-row" key={`${event.kind}-${event.at_ms}-${index}`}>
-          <span className={`event-dot event-${event.severity}`} />
-          <div>
-           <strong>{event.kind}</strong>
-           <p>{event.detail}</p>
-          </div>
-          <time title={new Date(event.at_ms).toLocaleString()}>{relativeTime(event.at_ms)}</time>
-         </div>
-        ))}
-       </div>
-      ) : (
-       <Empty
-        title="No event log items to show"
-        detail="The event log shows key task events, such as start times, alerts, and progress updates."
-       />
-      )}
+      <EventLogPanel events={events} tasks={tasks} task={task} eventWindow={eventWindow} />
      </Card>
     </TabsContent>
 

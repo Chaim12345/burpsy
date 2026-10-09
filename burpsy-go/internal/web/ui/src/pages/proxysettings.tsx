@@ -80,7 +80,23 @@ const SWITCHES: { key: string; label: string; detail: string }[] = [
  {
   key: "strip_accept_encoding",
   label: "Strip Accept-Encoding from requests",
-  detail: "Ask the origin for plaintext: with no decompressor on the proxy path, compressed responses are exactly the ones these rules cannot rewrite.",
+  // Not "the only way to read a compressed body" any more: unpack_compressed_responses below decodes
+  // gzip and deflate in place. What stripping still buys is the encodings this build has no decoder
+  // for (br, zstd), at the price of changing what the client asked the origin for.
+  detail:
+   "Ask the origin for an uncompressed response (it may compress anyway, and can see the header is gone). Not needed for gzip or deflate when Unpack compressed responses is on; useful for br and zstd, which this build cannot decode.",
+ },
+ {
+  key: "unpack_compressed_requests",
+  label: "Unpack compressed requests",
+  detail:
+   "Decompress a gzip or deflate request body before forwarding, fixing its headers. The origin then receives the uncompressed body, which it may reject. br and zstd are forwarded as sent.",
+ },
+ {
+  key: "unpack_compressed_responses",
+  label: "Unpack compressed responses",
+  detail:
+   "Decompress a gzip or deflate response body, fixing its headers, so the rules above can rewrite it; the browser and history get the decompressed body. br and zstd stay compressed (counted below); HTTP/2 responses are not reached.",
  },
 ];
 
@@ -140,9 +156,28 @@ export function ProxySettingsPage(): JSX.Element {
      <Metric label="Considered" value={c.responses_considered} />
      <Metric label="Modified" value={c.responses_modified} tone={c.responses_modified > 0 ? "good" : undefined} />
      <Metric label="Unchanged" value={c.responses_unchanged} />
-     <Metric label="Skipped: compressed" value={c.skipped_compressed} detail="turn on strip-Accept-Encoding to reach these" />
+     <Metric
+      label="Skipped: compressed"
+      value={c.skipped_compressed}
+      detail={
+       d.options["unpack_compressed_responses"] === true
+        ? "unpacking is on; the rest are br, zstd or undecodable"
+        : "turn on Unpack compressed responses to reach gzip and deflate"
+      }
+     />
+     {/* The subset of the one above where unpacking was on and could not help — a different answer
+         to an operator who just ticked the box: "the switch is off" is fixable, "this build has no
+         brotli decoder" is not (proxy.Counters.SkippedUnsupportedEncoding). */}
+     <Metric
+      label="Skipped: unsupported encoding"
+      value={c.skipped_unsupported_encoding}
+      detail="unpacking on, but br, zstd, a chain, or a corrupt body"
+      tone={c.skipped_unsupported_encoding > 0 ? "warn" : undefined}
+     />
      <Metric label="Skipped: not HTML" value={c.skipped_not_html} />
      <Metric label="Skipped: unframed" value={c.skipped_unframed} />
+     <Metric label="Unpacked: responses" value={c.unpacked_responses} detail="actually decompressed" />
+     <Metric label="Unpacked: requests" value={c.unpacked_requests} detail="actually decompressed" />
     </div>
     {c.responses_considered > 0 && c.responses_modified === 0 ? (
      <p className="cell-dim" style={{ marginTop: "var(--gap)" }}>

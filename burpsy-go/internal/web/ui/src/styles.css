@@ -2787,6 +2787,22 @@ tbody td {
   font-size: var(--fs-md);
 }
 
+/* With the Source column (burpsy-react-ui-lxqq): the source sits between the text and the time,
+   bounded so a long crawl target cannot squeeze the detail out. */
+.event-row-sourced {
+  grid-template-columns: 8px minmax(0, 1fr) minmax(0, var(--w-sm)) auto;
+}
+
+.event-source {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.event-filters {
+  margin-bottom: var(--s2);
+}
+
 .event-row p {
   color: var(--muted);
   font-size: var(--fs-sm);
@@ -5523,4 +5539,24 @@ tbody td.burp-hotkeys-reason {
 .kettled-request > :last-child {
   flex: 1;
   min-height: 0;
+}
+
+/* The decode strip over a history message pane (burpsy-react-ui-qpfy): names a decoded rendering
+   of a gzip/deflate body, or why a compressed body could not be decoded. Same chrome as the
+   variant picker it can sit beside, so the two read as one header band. */
+.decode-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s1) var(--s2);
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-deep);
+}
+
+/* The marker names an encoding as the header spelled it ("gzip"); the badge's uppercase would turn it
+   into GZIP, which is not what the message says. Same exemption the scan-config badges take. */
+.decode-strip .badge {
+  text-transform: none;
+  letter-spacing: normal;
 }
