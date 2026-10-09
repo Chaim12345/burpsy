@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"time"
 )
@@ -38,6 +39,71 @@ type SendOptions struct {
 	// applies exactly as before. A context deadline that falls earlier still wins — a caller that set
 	// one is describing the whole operation, which a response timeout is a part of.
 	ResponseTimeout time.Duration
+	// StreamingTimeout is this send's streaming-response window (burpsy-react-ui-of0z — Burp's
+	// per-tab "Streaming response timeout"), meaningful only when StreamingTimeoutSet. While set, a
+	// response this send treats as streaming is read for this long and what arrived is returned: a
+	// response from a host declared open-ended, a text/event-stream response that is chunked or
+	// unframed (whether or not the network setting promotes event streams), and an unframed
+	// read-until-close response such as a held long-poll. Zero means no cutoff — Burp's "To turn off
+	// the timeout, set it to 0" — and the read then ends when the peer closes, the operator cancels,
+	// or the streaming body cap is reached.
+	StreamingTimeout    time.Duration
+	StreamingTimeoutSet bool
+	// SNI replaces the server name this send's TLS ClientHello carries (burpsy-react-ui-k011 —
+	// Repeater's "Override SNI"). Only the ClientHello changes: the address dialled, the Host header
+	// and the name the certificate is verified against stay the target's (see alpn.Dialer.SNI). A
+	// redirect hop never carries it — HopContext strips it — because the override names this
+	// target's handshake, not wherever a Location points next. Empty means no override.
+	SNI string
+	// H2Sessions, when set, keeps this send's h2 connection open for the next send with the same
+	// H2SessionKey and authority, and rides an open one when it exists (adkx — Burp's "HTTP/2
+	// connection reuse"). Nil, the default, dials fresh for every send, so every request is the
+	// first on its connection. HTTP/1 sends never touch it.
+	H2Sessions   *H2Sessions
+	H2SessionKey string
+}
+
+// sniOverride is the ClientHello server name ctx asks for, or "".
+func sniOverride(ctx context.Context) string {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok {
+		return ""
+	}
+	return opts.SNI
+}
+
+// HopContext is ctx for a redirect hop: the per-send options that describe this target alone (the
+// SNI override, the tab's h2 session) are removed, and the ones that describe the whole send (the response timeout, the
+// streaming window) are kept.
+func HopContext(ctx context.Context) context.Context {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok || (opts.SNI == "" && opts.H2Sessions == nil) {
+		return ctx
+	}
+	opts.SNI = ""
+	// A hop dials its own connection, as every hop always has: the tab's reused session belongs to
+	// the tab's own target.
+	opts.H2Sessions = nil
+	opts.H2SessionKey = ""
+	return WithSendOptions(ctx, opts)
+}
+
+// ValidateSNI refuses a server name a ClientHello cannot carry: empty, longer than a DNS name, an IP
+// literal (crypto/tls sends no SNI for one, so the override would silently send none), or a character
+// outside letters, digits, '.', '-' and '_'. field names the request key.
+func ValidateSNI(field, name string) error {
+	if name == "" || len(name) > 253 {
+		return fmt.Errorf("%s must be 1 to 253 characters, got %d", field, len(name))
+	}
+	if net.ParseIP(name) != nil {
+		return fmt.Errorf("%s %q is an IP address; a ClientHello carries no SNI for an IP, so the override would send none", field, name)
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_') {
+			return fmt.Errorf("%s %q contains %q; a server name is letters, digits, '.', '-' and '_'", field, name, r)
+		}
+	}
+	return nil
 }
 
 type sendOptionsKey struct{}
@@ -116,6 +182,41 @@ func ValidateResponseTimeoutMS(field string, ms int64) error {
 	if ms <= 0 {
 		return fmt.Errorf("%s is %d; give a positive number of milliseconds, or omit it to use the "+
 			"standing read timeout", field, ms)
+	}
+	if ms > MaxTimeoutMS {
+		return fmt.Errorf("%s is %d, longer than the %d ms this tool will wait", field, ms, MaxTimeoutMS)
+	}
+	return nil
+}
+
+// streamingOverride is the per-send streaming window ctx carries, and whether it carries one.
+func streamingOverride(ctx context.Context) (time.Duration, bool) {
+	opts, ok := SendOptionsFrom(ctx)
+	if !ok || !opts.StreamingTimeoutSet {
+		return 0, false
+	}
+	return opts.StreamingTimeout, true
+}
+
+// streamingDeadline is the deadline a per-send streaming window imposes from now, clamped to the
+// context's own deadline when that is earlier. The zero time means "no deadline" (a window of 0 with
+// no context deadline), which is what SetReadDeadline takes to clear one.
+func streamingDeadline(ctx context.Context, window time.Duration) time.Time {
+	var deadline time.Time
+	if window > 0 {
+		deadline = time.Now().Add(window)
+	}
+	if ctxDeadline, has := ctx.Deadline(); has && (deadline.IsZero() || ctxDeadline.Before(deadline)) {
+		deadline = ctxDeadline
+	}
+	return deadline
+}
+
+// ValidateStreamingTimeoutMS refuses a per-send streaming window an API caller cannot mean: negative,
+// or longer than the longest bound the network settings accept. Zero is valid and means no cutoff.
+func ValidateStreamingTimeoutMS(field string, ms int64) error {
+	if ms < 0 {
+		return fmt.Errorf("%s is %d; give 0 for no cutoff or a positive number of milliseconds", field, ms)
 	}
 	if ms > MaxTimeoutMS {
 		return fmt.Errorf("%s is %d, longer than the %d ms this tool will wait", field, ms, MaxTimeoutMS)

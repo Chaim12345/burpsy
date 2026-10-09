@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Copy, Plus, Settings2, Trash2, Wand2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { copyToClipboard, formatBytes } from "../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
   headerSpans,
   headerValue,
   isResponse,
+  moveItem,
   parseMessage,
   parseRequestLine,
   parseStatusLine,
@@ -27,9 +28,11 @@ import {
   setQueryParamAt,
   setStartLineTail,
   setStartLineToken,
+  type ReorderDomain,
 } from "../lib/message";
 import { base64Decode, base64Encode, htmlDecode, htmlEncodeKeyChars, urlDecode, urlEncodeKeyChars } from "../lib/transforms";
 import { useApp } from "../lib/store";
+import { cn } from "../lib/cn";
 import { Badge, Button, IconButton, Input } from "./primitives";
 
 /* ==== the model ============================================================
@@ -66,6 +69,11 @@ interface SectionModel {
   note?: string;
   /** Extra controls in the section head; the attributes section's HTTP/1 and HTTP/2. */
   extra?: JSX.Element;
+  /**
+   * Which item list the arrow buttons reorder (burpsy-react-ui-ybmd), absent where order is not
+   * the operator's to change — the start line's attributes, or a body the writers cannot parse.
+   */
+  reorder?: ReorderDomain;
 }
 
 /** "3 rows", "1 row" — the count an assistive reader hears. Pluralised because a tool whose
@@ -264,6 +272,13 @@ function SectionBlock({
   const [drafts, setDrafts] = useState<Record<number, Draft>>({});
   const [removing, setRemoving] = useState<number[]>([]);
   const [adding, setAdding] = useState<Draft | null>(null);
+  /**
+   * The row the arrow buttons move — Burp's "select the item and use the arrow buttons at the
+   * bottom of the list". Kept out of `reset` on purpose: a move changes the row fingerprint, and
+   * the selection has to follow the moved row to its new place rather than vanish, so a header
+   * can be walked several places with repeated clicks.
+   */
+  const [selected, setSelected] = useState<number | null>(null);
 
   const reset = () => {
     setDrafts({});
@@ -312,6 +327,23 @@ function SectionBlock({
     setDrafts((current) => ({ ...current, [index]: { ...draftFor(index, row), ...patch } }));
 
   const canEdit = editable && !section.note;
+  const canReorder = canEdit && section.reorder !== undefined && section.rows.length > 1;
+  const selectedRow = selected !== null && selected < section.rows.length ? selected : null;
+
+  /**
+   * Move the selected row one place. Refused while edits are buffered: a move rewrites the
+   * message, the fingerprint change resets the section, and an operator's half-typed value would
+   * be silently thrown away by a click on an arrow. Applying or cancelling first is one click.
+   */
+  const move = (direction: -1 | 1) => {
+    if (selectedRow === null || !section.reorder || dirty) return;
+    const to = selectedRow + direction;
+    if (to < 0 || to >= section.rows.length) return;
+    const domain = section.reorder;
+    const row = section.rows[selectedRow]!;
+    onCommit((raw) => moveItem(raw, domain, selectedRow, direction), `${row.name} moved ${direction < 0 ? "up" : "down"}`);
+    setSelected(to);
+  };
 
   return (
     <div className="inspector-section">
@@ -334,7 +366,23 @@ function SectionBlock({
                 const gone = removing.includes(index);
                 const rowEditable = canEdit && Boolean(row.set);
                 return (
-                  <div key={`${row.name}-${index}`} className={gone ? "inspector-row-removed" : undefined}>
+                  <div
+                    key={`${row.name}-${index}`}
+                    className={cn(gone && "inspector-row-removed", canReorder && selectedRow === index && "inspector-row-selected")}
+                    // Focus anywhere in the row selects it for the arrow buttons, so a keyboard
+                    // operator selects by tabbing in exactly as a mouse operator does by clicking.
+                    onFocus={canReorder ? () => setSelected(index) : undefined}
+                    onClick={canReorder ? () => setSelected(index) : undefined}
+                    onKeyDown={
+                      canReorder
+                        ? (event) => {
+                            if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+                            event.preventDefault();
+                            move(event.key === "ArrowUp" ? -1 : 1);
+                          }
+                        : undefined
+                    }
+                  >
                     <dt title={row.name}>
                       {rowEditable && row.renamable ? (
                         <Input
@@ -425,6 +473,38 @@ function SectionBlock({
                   <Plus size={12} />
                   Add
                 </Button>
+              ) : null}
+              {canReorder ? (
+                <>
+                  <IconButton
+                    label={
+                      dirty
+                        ? "Apply or cancel the pending edits before reordering"
+                        : selectedRow === null
+                          ? `Select a ${section.title.toLowerCase()} row to move it up`
+                          : `Move ${section.rows[selectedRow]!.name} up (Alt+Up)`
+                    }
+                    size="small"
+                    disabled={dirty || selectedRow === null || selectedRow === 0}
+                    onClick={() => move(-1)}
+                  >
+                    <ArrowUp size={12} />
+                  </IconButton>
+                  <IconButton
+                    label={
+                      dirty
+                        ? "Apply or cancel the pending edits before reordering"
+                        : selectedRow === null
+                          ? `Select a ${section.title.toLowerCase()} row to move it down`
+                          : `Move ${section.rows[selectedRow]!.name} down (Alt+Down)`
+                    }
+                    size="small"
+                    disabled={dirty || selectedRow === null || selectedRow === section.rows.length - 1}
+                    onClick={() => move(1)}
+                  >
+                    <ArrowDown size={12} />
+                  </IconButton>
+                </>
               ) : null}
               <span style={{ flex: 1 }} />
               {dirty ? (
@@ -814,6 +894,7 @@ export function Inspector({
           remove: (current) => removeQueryParamAt(current, index),
         })),
         add: (current, name, value) => addQueryParam(current, name, value),
+        reorder: "query",
       });
     }
 
@@ -841,6 +922,7 @@ export function Inspector({
           remove: (current) => removeCookieAt(current, index),
         })),
         add: (current, name, value) => addCookie(current, name, value),
+        reorder: "cookie",
       });
     }
 
@@ -859,6 +941,7 @@ export function Inspector({
           remove: writable ? (current) => removeBodyParamAt(current, index) : undefined,
         })),
         add: writable ? (current, name, value) => addBodyParam(current, name, value) : undefined,
+        reorder: writable ? "body" : undefined,
         // Named rather than generic: an operator who sees "not editable" wants to know
         // which content type put them there.
         note: writable
@@ -879,6 +962,9 @@ export function Inspector({
         remove: (current) => removeHeaderAt(current, index),
       })),
       add: (current, name, value) => addHeader(current, name, value),
+      // Header order is a smuggling and desync variable; this is the one place it can be changed
+      // without retyping lines in Raw.
+      reorder: "header",
     });
 
     return list;

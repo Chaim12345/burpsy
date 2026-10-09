@@ -208,6 +208,21 @@ export interface RepeaterTab {
   * operator overrides again, exactly as Burp's toggle does.
   */
  inheritsGlobal?: boolean;
+ /**
+  * The tab's Notes panel (burpsy-react-ui-jva5): Burp's "If you find something interesting in a
+  * request or response, you can add notes to the Repeater tab". Persisted with the tab, carried by
+  * duplicate and reopen (both copy the whole tab), seeded from an exchange's comment when the tab
+  * is opened from one, and sent with every send so the new exchange carries it as its comment —
+  * which is how it reaches Organizer and every other tool that reads an exchange's notes.
+  */
+ note?: string;
+ /**
+  * Override SNI (burpsy-react-ui-k011): Burp's target-dialog "Override SNI". The server name this
+  * tab's TLS ClientHello carries instead of the target's — a Collaborator domain, to reproduce an
+  * SNI-based external service interaction by hand. Empty or absent is no override. Only the
+  * ClientHello changes; the server refuses it on a plain-HTTP target.
+  */
+ sni?: string;
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:
@@ -708,6 +723,13 @@ interface AppState {
 
  repeaterTabs: RepeaterTab[];
  activeRepeaterTab: string | null;
+ /**
+  * Bumped by the palette's "Open tab search" (qqcn) so the Repeater page opens its tab search even
+  * when it is already mounted. A counter, not a boolean: the page cannot reset a flag it did not set
+  * without racing the palette, and a second request must open the search again. Not persisted.
+  */
+ repeaterTabSearchNonce: number;
+ requestRepeaterTabSearch: () => void;
  /** Reopen-closed stack, most recent last. Session-only by design (see partialize). */
  closedRepeaterTabs: RepeaterTab[];
  repeaterGroups: RepeaterGroup[];
@@ -797,7 +819,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client"; note?: string }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;
@@ -956,6 +978,7 @@ export const useApp = create<AppState>()(
   setHideHeadersByDefault: (hideHeadersByDefault) => set({ hideHeadersByDefault }),
    repeaterTabs: [],
    activeRepeaterTab: null,
+   repeaterTabSearchNonce: 0,
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
@@ -1005,7 +1028,7 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection, note }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
@@ -1031,6 +1054,9 @@ export const useApp = create<AppState>()(
         ...(wsPayload !== undefined ? { wsPayload } : {}),
         ...(wsOpcode ? { wsOpcode } : {}),
         ...(wsDirection ? { wsDirection } : {}),
+        // A note the tab was opened with (an exchange's comment, or the source tab's note on a
+        // Send to Repeater) — absent rather than empty when there is none (jva5).
+        ...(note ? { note } : {}),
        },
       ],
       state.closedRepeaterTabs,
@@ -1133,6 +1159,7 @@ export const useApp = create<AppState>()(
      };
     }),
    setActiveRepeaterTab: (activeRepeaterTab) => set({ activeRepeaterTab }),
+   requestRepeaterTabSearch: () => set((state) => ({ repeaterTabSearchNonce: state.repeaterTabSearchNonce + 1 })),
 
    createRepeaterGroup: () => {
     // Palette order is stable, so group colours cycle predictably rather than looking random.

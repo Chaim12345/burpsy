@@ -141,6 +141,11 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   { id: "editor.insertCollaborator", group: "Message editor", label: "Insert a Collaborator payload", defaultChord: null, rebindable: true, burp: "EDITOR_INSERT_COLLABORATOR_PAYLOAD", palette: true, where: "an editable message editor (click into one first)" },
   { id: "editor.toggleSidebar", group: "Message editor", label: "Toggle the Inspector sidebar", defaultChord: null, rebindable: true, burp: "EDITOR_TOGGLE_SIDEBAR", palette: true, where: "anywhere" },
   { id: "editor.cycleLayout", group: "Message editor", label: "Cycle the request/response layout", defaultChord: null, rebindable: true, burp: "EDITOR_CYCLE_REQUEST_RESPONSE_LAYOUT", palette: true, where: "Proxy › HTTP history" },
+  {
+    id: "repeater.tabSearch", group: "Repeater", label: "Open tab search (Repeater)",
+    defaultChord: "mod+shift+f", rebindable: true,
+    note: "Burp's OPEN_TAB_SEARCH palette action; the decompiled catalogue carries no default binding, so this one is burpsy's",
+  },
 
   // ---- Navigation ------------------------------------------------------------------
   { id: "nav.palette", group: "Navigation", label: "Command palette", defaultChord: "mod+k", rebindable: true, burp: "SHOW_COMMAND_PALETTE", note: "Burp's documented default is also Ctrl+K, so this matches Burp exactly" },

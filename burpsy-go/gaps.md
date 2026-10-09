@@ -2054,6 +2054,59 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Repeater A: editor views, tab workflow, per-tab overrides, GraphQL actions (burpsy-react-ui-i9ti.1, 2026-10-08)
+
+### Save entire history — the file format (pznm)
+- **Burp:** `desktop/tools/context-menu.html` — "Save entire history — Saves the change history for the
+  selected request to a file"; the menu item is `burp.Zgkb` ("Save entire history", action id 134832).
+- **burpsy:** the tab context menu's *Save entire history* posts the tab's message ids to
+  `POST /api/repeater/history-export` and downloads a JSON file, `format: "burpsy-repeater-history/1"`,
+  with each send's request and response bytes base64-encoded from the store (byte-exact, binary bodies
+  included), plus `skipped` (WebSocket sends, sends with no stored message) and `missing_responses`.
+- **Divergence:** Burp's on-disk format for this file is not in the evidence — the serializer behind
+  action 134832 could not be traced in the decompiled jar, and neither the string table nor the
+  bundled docs describe it. burpsy writes its own declared format rather than guess at Burp's; a file
+  saved by one cannot be loaded by the other. Re-open with a Burp-saved sample file.
+
+### Unpack compressed responses — Brotli, and display-only (of0z)
+- **Burp:** `settings/tools/repeater.html` — "By default, Burp automatically unpacks any gzip, deflate, and
+  Brotli-compressed content received in responses."
+- **burpsy:** on by default per tab (`unpack_responses`, off only when a tab says `false`); the send's answer
+  carries `response_unpacked` beside the bytes that arrived, and the pane shows it with an "unpacked gzip"
+  badge. gzip and deflate decode; a `br` response is shown as it arrived with `unpack_error` naming why.
+- **Divergence:** no Brotli decoder in this build (`httputil.Unpackable`), and unpacking is display-only — the
+  stored exchange keeps the compressed bytes, where Burp's Repeater message is the unpacked one.
+
+### Streaming response timeout — which responses it applies to (of0z)
+- **Burp:** `settings/tools/repeater.html` — "Streaming responses timeout … controls how long Repeater keeps a
+  streaming connection open. By default, it's set to 600 seconds … To turn off the timeout, set it to 0";
+  which responses are streaming is decided under Network > HTTP > Streaming responses.
+- **burpsy:** the per-tab `streaming_timeout_ms` (0 = no cutoff) bounds a declared streaming host's read and,
+  for that tab, also promotes a chunked/unframed `text/event-stream` response (whatever the network setting
+  says) and any unframed read-until-close response (a held long-poll), over HTTP/1 and h2 (event streams).
+- **Divergence:** the tab override widens what counts as streaming for that tab rather than only re-timing
+  responses the global rule already recognises — an operator who sets a streaming window on a tab is asking for
+  that endpoint to be read as a stream. A framed (Content-Length or non-event-stream chunked) response is never
+  promoted.
+
+### HTTP/2 connection reuse — off by default (adkx)
+- **Burp:** `desktop/http2/index.html` — "By default, Repeater reuses the same connection for multiple HTTP/2
+  requests"; `settings/tools/repeater.html` lists it under Connections, default on.
+- **burpsy:** per-tab `h2_connection_reuse` keeps one h2 connection per (tab, target, SNI) open between sends
+  (at most 32, closed after 60 s idle) and every answer says `h2_connection: "new" | "reused" | "not-h2"`. Off,
+  every send dials fresh, so every request is the first on its connection.
+- **Divergence:** the default is off where Burp's is on. Every raw send in burpsy has always dialled fresh, and
+  turning reuse on silently would change what "this request's response" means for every existing tab; an
+  operator turns it on per tab in Config. A failed send on a reused connection is reported, never retried.
+
+### Response change highlighting — Raw view only (b4gt)
+- **Burp:** "Burp Repeater highlights any changes between the new and original responses"
+  (testing-for-reflected-xss.html), in the response editor.
+- **burpsy:** the word diff against the previous send in the tab is painted on the response's Raw view; the
+  header button counts the changes and says "· Raw view".
+- **Divergence:** not painted on Pretty (which reformats the body, so diff positions would name the wrong
+  characters) or on Hex/typed views. An HTML or JSON response opens on Pretty, so the operator switches to Raw
+  to see the marks.
 ## Intruder B: attack tabs, Request item again, Collaborator interactions, anomaly ranking (burpsy-react-ui-xixe.2, 2026-10-08)
 
 ### Anomaly ranking (burpsy-react-ui-pglp)

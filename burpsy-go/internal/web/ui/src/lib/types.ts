@@ -430,6 +430,16 @@ export interface RepeaterSendOptions {
   *  network read timeout; the server refuses zero or a negative value rather than reading it as
   *  "no bound". */
  response_timeout_ms?: number;
+ /** Burp's per-tab "Streaming response timeout", in ms (of0z). 0 is no cutoff; absent is the network
+  *  settings' streaming window and promotion rule. */
+ streaming_timeout_ms?: number;
+ /** Burp's "Unpack compressed responses" (of0z). Absent is Burp's default, on; only an explicit
+  *  false is ever sent, which shows the compressed bytes instead. */
+ unpack_responses?: boolean;
+ /** Burp's "HTTP/2 connection reuse" (adkx): this tab's h2 sends share one connection per target. */
+ h2_connection_reuse?: boolean;
+ /** Burp's "Use selected protocol for cross-domain redirects" (adkx). */
+ enforce_protocol_cross_domain?: boolean;
 }
 
 export interface RepeaterResult {
@@ -439,6 +449,10 @@ export interface RepeaterResult {
  /** The response body's exact octets when `response` cannot carry them (not UTF-8), so the response
   *  pane can show a binary body such as a gRPC reply in the Protobuf tab (burpsy-react-ui-3pco). */
  response_body_base64?: string;
+ /** The stored request and response message ids — the exact bytes that went out and came back.
+  *  Save entire history (pznm) exports by these, never by the lossy `response` string. */
+ request_msg_id?: number;
+ response_msg_id?: number;
  exchange_id: number;  /**
    * The redirect chain this send produced, present only when the response was a 30x.
    *
@@ -449,6 +463,15 @@ export interface RepeaterResult {
    * says which.
    */
  redirects?: RepeaterRedirects;
+ /** The response with its compressed body decoded, for display (of0z). `response` stays the bytes
+  *  that arrived, which is also what is stored. */
+ response_unpacked?: string;
+ response_unpacked_body_base64?: string;
+ /** The encoding that was decoded, or that could not be (see unpack_error). */
+ unpacked_from?: string;
+ unpack_error?: string;
+ /** With HTTP/2 connection reuse on (adkx): whether this request was the first on its connection. */
+ h2_connection?: "new" | "reused" | "not-h2";
 }
 
 /**
@@ -516,6 +539,10 @@ export interface RepeaterGroupSendItem {
  request: string;
  from_exchange?: number;
  options?: RepeaterSendOptions;
+ /** The tab's note, recorded on this item's exchange (jva5). */
+ note?: string;
+ /** The tab's Override SNI (k011). */
+ sni?: string;
 }
 
 /**
@@ -564,6 +591,8 @@ export interface RepeaterRedirectHop {
  to?: string;
  followed: boolean;
  reason?: string;
+ /** What carried a followed hop ("HTTP/1.1" | "HTTP/2") — what cross-domain enforcement (adkx) changes. */
+ protocol?: string;
  /**
   * The hop's request and response bytes, present only when the hop was followed —
   * a hop that was never sent has no bytes, and absence says exactly that.

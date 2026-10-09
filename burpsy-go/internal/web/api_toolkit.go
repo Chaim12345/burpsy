@@ -2200,13 +2200,27 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "An exchange id cannot be negative", http.StatusBadRequest)
 			return
 		}
-		if _, err := s.store.GetExchange(core.ExchangeID(req.Exchange)); err != nil {
+		ex, err := s.store.GetExchange(core.ExchangeID(req.Exchange))
+		if err != nil {
 			// Checked rather than trusted: the organizer stores the id, and saving one that resolves
 			// to nothing produces an entry whose "open in history" goes nowhere.
 			http.Error(w, fmt.Sprintf("No exchange %d has been captured", req.Exchange), http.StatusNotFound)
 			return
 		}
 		item := s.organizer.Add(req.Exchange)
+		// Burp copies notes and highlights across when a message is sent to another tool
+		// (burpsy-react-ui-jva5) — a Repeater tab's note rides its exchange's comment, and this is
+		// where it reaches Organizer. Copied once, at add time: the item's note is the Organizer's
+		// own from then on, and later edits to either side do not overwrite the other.
+		if note, highlight := organizerSeedFrom(ex); note != "" || highlight != "" {
+			s.organizer.Update(item.ID, item.Title, note, highlight)
+			for _, listed := range s.organizer.List() {
+				if listed.ID == item.ID {
+					item = listed
+					break
+				}
+			}
+		}
 		s.organizerChanged()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(item)
@@ -2564,4 +2578,14 @@ func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request
 	s.organizerChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"moved": moved})
+}
+
+// organizerSeedFrom is what an Organizer item inherits from the exchange it is made from: the
+// exchange's comment and highlight (burpsy-react-ui-jva5). Empty strings mean "nothing to copy" —
+// an unset highlight stays the item's own "none" default rather than being written as blank.
+func organizerSeedFrom(ex *core.Exchange) (note, highlight string) {
+	if ex.Notes != nil {
+		note = *ex.Notes
+	}
+	return note, ex.Highlight
 }

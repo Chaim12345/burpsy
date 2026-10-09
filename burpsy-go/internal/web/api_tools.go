@@ -49,6 +49,50 @@ type repeaterSendReq struct {
 	// standing behaviour in full — the zero options are the defaults, so an absent object and an
 	// empty one mean the same thing.
 	Options *repeaterSendOptions `json:"options,omitempty"`
+	// Note is the tab's Notes panel text (burpsy-react-ui-jva5), recorded as the new exchange's
+	// comment. Burp: "if you send a message from Repeater to another tool, your notes and
+	// highlights are copied across" — every tool that reads an exchange's notes (HTTP history's
+	// comment column, Organizer's add, Logger) then has it without a second channel. Empty records
+	// no comment rather than an empty one.
+	Note string `json:"note,omitempty"`
+	// SNI is the tab's Override SNI (burpsy-react-ui-k011): the server name the TLS ClientHello
+	// carries instead of the target's, to reproduce an SNI-based external service interaction with a
+	// Collaborator domain. Only the ClientHello changes — the address dialled, the Host header and
+	// certificate verification stay the target's — and a redirect hop never carries it. Empty is no
+	// override. Refused on a plaintext target, where there is no ClientHello to put it in.
+	SNI string `json:"sni,omitempty"`
+	// TabID is the Repeater tab this send comes from, which keys the tab's reused h2 connection when
+	// h2_connection_reuse is on (adkx). Opaque to the server; absent shares one key.
+	TabID string `json:"tab_id,omitempty"`
+}
+
+// validRepeaterSNI checks an Override SNI against the target it rides: a valid server name, on a TLS
+// target. field names the request key.
+func validRepeaterSNI(field, sni string, tls bool) error {
+	if sni == "" {
+		return nil
+	}
+	if !tls {
+		return fmt.Errorf("refused: %s is set but the target is plain HTTP; there is no TLS ClientHello to carry it", field)
+	}
+	if err := sender.ValidateSNI(field, sni); err != nil {
+		return fmt.Errorf("refused: %w", err)
+	}
+	return nil
+}
+
+// maxRepeaterNoteBytes bounds a tab note carried on a send. A note is prose about one request, and
+// it is persisted with the exchange; a megabyte "note" is a paste into the wrong box, refused with
+// the limit named rather than silently stored or truncated.
+const maxRepeaterNoteBytes = 64 << 10
+
+// validRepeaterNote refuses a note over the bound. field names the request key so a group send can
+// say which item carried it.
+func validRepeaterNote(field, note string) error {
+	if len(note) > maxRepeaterNoteBytes {
+		return fmt.Errorf("refused: %s is %d bytes; a tab note is at most %d bytes", field, len(note), maxRepeaterNoteBytes)
+	}
+	return nil
 }
 
 // repeaterSendResp mirrors repeater.ts's SendResp.
@@ -72,6 +116,22 @@ type repeaterSendResp struct {
 	// field means "not a redirect"; a field present with `followed: false` on every hop means the
 	// policy or the scope stopped it, which are different facts and are named differently.
 	Redirects *repeaterRedirects `json:"redirects,omitempty"`
+	// ResponseUnpacked is the response with its compressed body decoded for display, present only
+	// when the response declared a Content-Encoding this build decodes and the tab unpacks (Burp's
+	// default; of0z). `response` stays the bytes that arrived, which is also what is stored.
+	ResponseUnpacked string `json:"response_unpacked,omitempty"`
+	// ResponseUnpackedBodyBase64 is the unpacked body's exact octets when they are not UTF-8, by the
+	// same rule as response_body_base64.
+	ResponseUnpackedBodyBase64 string `json:"response_unpacked_body_base64,omitempty"`
+	// UnpackedFrom names the encoding that was decoded, or that could not be.
+	UnpackedFrom string `json:"unpacked_from,omitempty"`
+	// UnpackError says why a compressed response is shown packed: no decoder for its encoding, or a
+	// body that would not decode. Absent when there was nothing to unpack or it unpacked.
+	UnpackError string `json:"unpack_error,omitempty"`
+	// H2Connection says, when the tab reuses HTTP/2 connections (adkx), whether this request was the
+	// first on its connection ("new"), a later one ("reused"), or did not ride h2 at all ("not-h2").
+	// Absent when reuse is off, where every request is the first on a fresh connection.
+	H2Connection string `json:"h2_connection,omitempty"`
 }
 
 // repeaterRedirects is the follow outcome as the panel reads it.
@@ -127,6 +187,31 @@ type repeaterSendSpec struct {
 	AsWritten string
 	Options   repeaterSendOptions
 	From      *core.ExchangeID
+	// Note is the tab's note, written onto the exchange as its comment (jva5). Set by the handlers
+	// after prepareRepeaterSend, because it shapes the record, not the wire.
+	Note string
+	// SNI is the tab's Override SNI (k011), validated by the handlers against TLS.
+	SNI string
+	// TabID keys the tab's reused h2 connection, and H2Sessions is the pool it lives in — set only
+	// when the tab asked for HTTP/2 connection reuse (adkx).
+	TabID      string
+	H2Sessions *sender.H2Sessions
+}
+
+// sendContext is ctx carrying everything this send overrides: the tab's options (response timeout,
+// streaming window) and its Override SNI.
+func (spec repeaterSendSpec) sendContext(ctx context.Context) context.Context {
+	ctx = spec.Options.sendContext(ctx)
+	if spec.SNI == "" && spec.H2Sessions == nil {
+		return ctx
+	}
+	opts, _ := sender.SendOptionsFrom(ctx)
+	opts.SNI = spec.SNI
+	if spec.H2Sessions != nil {
+		opts.H2Sessions = spec.H2Sessions
+		opts.H2SessionKey = spec.TabID
+	}
+	return sender.WithSendOptions(ctx, opts)
 }
 
 // prepareRepeaterSend resolves one send's target, validates its options, applies its transforms and
@@ -170,9 +255,13 @@ func (s *Server) prepareRepeaterSend(
 	if !s.scope.MayContainHost(host, port, tls) {
 		return repeaterSendSpec{}, http.StatusForbidden, errors.New("refused: " + s.scope.Explain(host, port, "/", tls))
 	}
-	return repeaterSendSpec{
+	spec = repeaterSendSpec{
 		Host: host, Port: port, TLS: tls, Raw: raw, AsWritten: request, Options: opts, From: from,
-	}, 0, nil
+	}
+	if opts.H2ConnectionReuse {
+		spec.H2Sessions = s.repeaterH2Sessions()
+	}
+	return spec, 0, nil
 }
 
 // recordRepeaterExchange persists both halves of one completed send, writes its exchange row and its
@@ -230,6 +319,12 @@ func (s *Server) recordRepeaterExchange(
 		// Burp keeps a Repeater send out of Proxy history.
 		Source: core.SourceRepeater,
 	}
+	if spec.Note != "" {
+		// A copy: the spec outlives this row only briefly, but a pointer into a struct field that a
+		// later caller reuses is the kind of aliasing that writes one tab's note onto another's row.
+		note := spec.Note
+		ex.Notes = &note
+	}
 	s.store.AddExchange(ex)
 
 	// The cookie jar's monitored-tool set (burpsy-react-ui-sn3j): a Repeater response is a
@@ -250,7 +345,7 @@ func (s *Server) recordRepeaterExchange(
 	s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, ex.Method, ex.Path, intOrZero(status),
 		toollog.Bytes(len(rawResp)), ex.Duration.Millis(), "", &ex.ID)
 
-	return repeaterSendResp{
+	resp = repeaterSendResp{
 		Status:             intOrZero(status),
 		DurationMs:         ex.Duration.Millis(),
 		Response:           string(rawResp),
@@ -258,7 +353,20 @@ func (s *Server) recordRepeaterExchange(
 		ResponseMsgID:      uint64(respMsgID),
 		ExchangeID:         ex.ID,
 		ResponseBodyBase64: displayBodyBase64(rawResp),
-	}, ex
+	}
+	if spec.Options.unpack() {
+		// Display only (of0z): the stored response above is the bytes that arrived.
+		if unpacked, encoding, applies, uerr := unpackedResponse(rawResp); applies {
+			resp.UnpackedFrom = encoding
+			if uerr != nil {
+				resp.UnpackError = uerr.Error()
+			} else {
+				resp.ResponseUnpacked = string(unpacked)
+				resp.ResponseUnpackedBodyBase64 = displayBodyBase64(unpacked)
+			}
+		}
+	}
+	return resp, ex
 }
 
 // sendOneRepeaterRequest is one send on its own fresh connection, end to end: the wire, the stored
@@ -276,7 +384,7 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
 	// The tab's response timeout (mmca) rides the context, so it bounds this send and every redirect
 	// hop below without touching the network settings the next send reads.
-	ctx = spec.Options.sendContext(ctx)
+	ctx = spec.sendContext(ctx)
 	sendStarted := time.Now()
 	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
 	elapsed := time.Since(sendStarted)
@@ -290,7 +398,21 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 		return repeaterSendResp{}, err
 	}
 	resp, _ := s.recordRepeaterExchange(spec, rawResp, outcome.Protocol, core.MeasuredDuration(elapsed), sendStarted)
-	resp.Redirects = s.followRepeaterRedirects(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options)
+	if spec.H2Sessions != nil {
+		// Whether this request was the first on its connection — the fact HTTP/2 connection reuse
+		// exists to let an operator control (adkx).
+		switch {
+		case outcome.Protocol != core.ProtocolHTTP2:
+			resp.H2Connection = "not-h2"
+		case outcome.ConnectionReused:
+			resp.H2Connection = "reused"
+		default:
+			resp.H2Connection = "new"
+		}
+	}
+	// HopContext: a hop keeps the send's timeouts but never the SNI override, which names this
+	// target's handshake rather than wherever a Location points next (k011).
+	resp.Redirects = s.followRepeaterRedirects(sender.HopContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, rawResp, spec.Options, outcome.Protocol)
 	return resp, nil
 }
 
@@ -313,11 +435,22 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 		}
 		request = string(b)
 	}
+	if err := validRepeaterNote("note", req.Note); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	spec, code, err := s.prepareRepeaterSend(req.Target, req.Protocol, request, req.Options, req.FromExchange)
 	if err != nil {
 		http.Error(w, err.Error(), code)
 		return
 	}
+	spec.Note = req.Note
+	if err := validRepeaterSNI("sni", req.SNI, spec.TLS); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	spec.SNI = req.SNI
+	spec.TabID = req.TabID
 	resp, err := s.sendOneRepeaterRequest(r.Context(), spec)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -340,9 +473,17 @@ func (s *Server) handleRepeaterSend(w http.ResponseWriter, r *http.Request) {
 // Network panel gets one request per click, exactly as before.
 func (s *Server) followRepeaterRedirects(
 	ctx context.Context, host string, port uint16, tls bool, raw, rawResp []byte, opts repeaterSendOptions,
+	carried core.Protocol,
 ) *repeaterRedirects {
 	standing := s.sender.Network().Redirects
 	policy := opts.redirectPolicy(standing)
+	if opts.EnforceProtocolCrossDomain {
+		// Burp's "selected protocol" is the one this request went out over (adkx).
+		policy.CrossDomainProtocol = sender.ProtocolPreferenceHTTP1
+		if carried == core.ProtocolHTTP2 {
+			policy.CrossDomainProtocol = sender.ProtocolPreferenceForceH2
+		}
+	}
 	mode := string(policy.Mode)
 	authorised := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	result, err := authorised.FollowRedirectsAfterPolicy(ctx, raw, rawResp, policy)

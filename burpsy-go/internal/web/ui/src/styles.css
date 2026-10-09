@@ -4092,6 +4092,12 @@ tbody td {
   color: var(--muted);
 }
 
+/* The row the Inspector's arrow buttons move (ybmd). A left rule rather than a fill, so the
+   row's own inputs keep their contrast. */
+.inspector-row-selected dt {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .inspector-actions {
   display: flex;
   align-items: center;
@@ -4482,7 +4488,7 @@ tbody td {
 .skeleton-bar {
   display: block;
   height: 10px;
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless ("2", not "2px") in primitives.css, so var(--radius-sm) is invalid here; no other rule in this file consumes it either. Matches radius.sm = 2px per DESIGN.md. */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless ("2", not "2px") in primitives.css, so var(--radius-sm) is invalid here; no other rule in this file consumes it either. Matches radius.sm = 2px per DESIGN.md. */
   background: var(--row-skeleton, var(--skeleton-1));
 }
 
@@ -4651,7 +4657,7 @@ tbody td {
 .enc-span[data-encoding] {
   background: color-mix(in srgb, var(--enc-tint) var(--row-tint-alpha), transparent);
   border-bottom: var(--border-focus) solid var(--enc-tint);
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
   padding: 0 1px;
 }
 
@@ -4666,7 +4672,7 @@ tbody td {
   width: 8px;
   height: 8px;
   flex: none;
-  border-radius: 2px; /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
+  border-radius: var(--radius-sm); /* token-exempt: --radius-sm is emitted unitless, see .skeleton-bar */
   background: var(--enc-tint, var(--highlight-gray));
 }
 
@@ -4720,7 +4726,7 @@ tbody td {
   width: 14px;
   height: 10px;
   margin-inline-start: var(--s1);
-  border-radius: 2px; /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar above for why --radius-sm can't be used directly */
   background: #52565a; /* token-exempt: fixed literal badge, see the block comment above — not a themed role */
   color: #e8e8e8; /* token-exempt: fixed literal badge text, same rationale */
   font-size: 8px; /* token-exempt: fixed badge glyph, below the fluid floor */
@@ -4816,14 +4822,14 @@ tbody td {
    across the full track so a growing frontier never reads as stalled or as complete. */
 .progress-track {
   height: 4px;
-  border-radius: 2px; /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
   background: var(--line);
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  border-radius: 2px; /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
+  border-radius: var(--radius-sm); /* token-exempt: see .skeleton-bar — --radius-sm is emitted unitless, var() is invalid here */
   background: var(--accent);
   transition: width var(--t-fast) ease;
 }
@@ -5250,6 +5256,65 @@ tbody td {
 .crawl-stop-policy {
   border-left-color: var(--warn);
   color: var(--text);
+}
+
+/* An editable editor's Add row under a Headers/Query/Body/Cookies tab (11r8). */
+.typed-add {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+
+.typed-add .input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Repeater's "Open tab search" (qqcn): a query box over a list of matching tabs. */
+.repeater-tab-search {
+  display: grid;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+
+.repeater-tab-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+}
+
+.repeater-tab-search-results li {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  cursor: pointer;
+}
+
+/* A rule, not a fill, for the same contrast reason as the diff marks: the dim target text must keep
+   AA contrast on the highlighted row. */
+.repeater-tab-search-results li[data-active] {
+  box-shadow: inset var(--border-strong) 0 0 var(--accent);
+}
+
+/* Repeater's change highlighting against the previous response (b4gt). */
+/* An outline, not a fill: a tinted background under syntax-coloured text drops its contrast below
+   AA (axe color-contrast), and the mark must not make the changed text harder to read. */
+.cm-diff-changed {
+  outline: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.cm-diff-deleted {
+  display: inline-block;
+  width: 0;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  border-left: var(--border-strong) solid var(--accent);
 }
 
 /* History's tick cell (fe16): a span only so the tick's click can stop before the row's handler. */

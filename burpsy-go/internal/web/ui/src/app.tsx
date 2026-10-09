@@ -1005,6 +1005,8 @@ function App(): JSX.Element {
   [hotkeyTools, navigate],
  );
 
+ const requestRepeaterTabSearch = useApp((state) => state.requestRepeaterTabSearch);
+ const repeaterTabSearchChord = useChord("repeater.tabSearch");
  const paletteActions = useMemo<PaletteAction[]>(() => {
   const navigation: PaletteAction[] = TOOLS.flatMap((entry) =>
    entry.leaves.map((child) => ({
@@ -1047,6 +1049,20 @@ function App(): JSX.Element {
     run: () => {
      setDensity(density === "compact" ? "comfortable" : "compact");
      toast.success(`Table rows set to ${density === "compact" ? "comfortable" : "compact"}`);
+    },
+   },
+   {
+    // Burp's OPEN_TAB_SEARCH (qqcn): with forty named Repeater tabs, the palette is where an operator
+    // already goes to find things. Navigates to Repeater and asks the page to open its search.
+    id: "cmd:repeater-tab-search",
+    label: "Open tab search (Repeater)",
+    group: "Search",
+    keywords: "repeater tabs find filter named",
+    shortcut: repeaterTabSearchChord || undefined,
+    icon: Search,
+    run: () => {
+     navigate("repeater");
+     requestRepeaterTabSearch();
     },
    },
    {
@@ -1109,7 +1125,7 @@ function App(): JSX.Element {
   // it — and a second list written out here is exactly the thing that would drift the first
   // time a section was added.
   return [...navigation, ...settingsPaletteActions(navigate), ...commands];
- }, [themeChord, navigate, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
+ }, [themeChord, navigate, requestRepeaterTabSearch, repeaterTabSearchChord, theme, toggleTheme, density, setDensity, tableStripes, setTableStripes, setShortcutsOpen, project.data?.name, project.data?.persisted, project.data?.backupable, project.data?.database_note, renameProject, renameProjectViaDialog, saveProjectCopy, setProjectsOpen]);
 
  const hasSubTabs = tool.leaves.length > 1;
 

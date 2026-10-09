@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { ClipboardPaste, Copy, Download, MoreHorizontal, Pilcrow, Radar, RadioTower, Search, WrapText, Percent, EyeOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { copyToClipboard, downloadText, formatBytes } from "../lib/api";
-import { bodyOf, compactMessage, contentTypeOf, cookieSpans, cookiesOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, querySpans, bodyParamSpans, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
+import { bodyOf, compactMessage, contentTypeOf, hexDumpBytes, hideHeadersIn, isResponse, parseMessage, prettyMessage, withContentLength, requestTargetPath, cookieHeaderTokens } from "../lib/message";
 import {
  breakGlyphs, bodyTokens, byteOffsetToCharIndex, charIndexToByteOffset, decodeHoverToken, detectGraphQL, docPosToValuePos, findJwts, paramsOf,
  type BodyToken, type TokenClass
@@ -42,6 +42,9 @@ import { paragraphTarget } from "../lib/editor-paragraph";
 import { usePluginEditorTabs } from "../lib/plugin-editor-tabs";
 import { urlEncodeAsYouTypeExtension } from "../lib/url-encode-as-you-type";
 import { useApp, moveEditorTab, type OptionalEditorTab, defaultEditorTabPrefs } from "../lib/store";
+import { extraEditorTabs } from "../lib/editor-extra-tabs";
+import { valuePosToDocPos, type ChangeMark } from "../lib/response-diff";
+import { INTROSPECTION_QUERY, LEGACY_INTROSPECTION_QUERY, setGraphQLQuery } from "../lib/graphql-introspection";
 import { AttributesTab, BodyParamsTab, CookiesTab, HeadersTab, QueryParamsTab } from "./message-sections";
 import { SlidersHorizontal, ChevronDown, ChevronUp } from "lucide-react";
 import { useMintPayload } from "../lib/data.collab";
@@ -305,6 +308,41 @@ const nonPrintingGlyphs = highlightSpecialChars({
  * the smuggling-relevant case). Widgets are not document text: copying, saving and
  * sending are byte-identical with the toggle on or off.
  */
+/**
+ * Where a deletion happened in a changed response (b4gt): the old text is gone, so there is no span
+ * to paint, and a zero-width marker at the point is the honest way to show that something was there.
+ */
+class DeletedMarker extends WidgetType {
+ override eq(): boolean {
+  return true;
+ }
+ override toDOM(): HTMLElement {
+  const span = document.createElement("span");
+  span.className = "cm-diff-deleted";
+  // role="img" so the name is permitted: a bare span is the generic role, where aria-label is
+  // prohibited and dropped.
+  span.setAttribute("role", "img");
+  span.title = "Text the previous response had here is gone";
+  span.setAttribute("aria-label", "deleted text");
+  return span;
+ }
+}
+
+/** The change marks as a CodeMirror decoration set, mapped from message positions to the document. */
+function changeDecorations(value: string, docLength: number, marks: ChangeMark[]): Extension {
+ const ranges = [];
+ for (const mark of marks) {
+  const from = Math.min(valuePosToDocPos(value, mark.from), docLength);
+  const to = Math.min(valuePosToDocPos(value, mark.to), docLength);
+  if (mark.kind === "deleted" || to <= from) {
+   ranges.push(Decoration.widget({ widget: new DeletedMarker(), side: 1 }).range(from));
+  } else {
+   ranges.push(Decoration.mark({ class: "cm-diff-changed" }).range(from, to));
+  }
+ }
+ return EditorView.decorations.of(Decoration.set(ranges, true));
+}
+
 class EOLMarker extends WidgetType {
  constructor(readonly glyph: string) {
   super();
@@ -542,6 +580,10 @@ type MessageView =
 // The tab bar's labels, keyed by view. Kept next to the type so a view added to the
 // union fails to compile here first — a tab that renders its key instead of a label is
 // exactly the kind of half-wired view this editor shipped with once already.
+/** The views that take an Add in an editable context (11r8): the ones whose items an operator
+ *  adds to a request — never Attributes, which are facts about the message, not a list. */
+const ADDABLE_VIEWS: MessageView[] = ["headers", "queryparams", "bodyparams", "cookies"];
+
 const VIEW_LABELS: Record<MessageView, string> = {
  pretty: "Pretty",
  raw: "Raw",
@@ -557,17 +599,6 @@ const VIEW_LABELS: Record<MessageView, string> = {
  cookies: "Cookies",
  attributes: "Attributes",
 };
-
-/**
- * Whether a message has cookie rows to read: a response's Set-Cookie lines, or a request's
- * Cookie header. Decides whether the Cookies tab exists for this message.
- */
-function cookiesToRead(value: string): { name: string; value: string }[] {
- if (isResponse(value)) {
-  return cookiesOf(parseMessage(value).headers, true).map(([name, val]) => ({ name, value: val }));
- }
- return cookieSpans(value).map((pair) => ({ name: pair.name, value: pair.value }));
-}
 
 /**
  * Raw HTTP message editor with Burp's message-editor views.
@@ -605,6 +636,8 @@ export function HttpEditor({
  views = true,
  menuGroups,
  payloadMarks,
+ changeMarks,
+ saveGraphQLToSiteMap,
  auditSelection,
  onBodyBytesChange,
  messageId,
@@ -645,6 +678,19 @@ export function HttpEditor({
  payloadMarks?: {
   onAdd: (span: { start: number; end: number; text: string }) => void;
  };
+ /**
+  * Spans to highlight as changed (b4gt — Repeater's "highlights any changes between the new and
+  * original responses"), in UTF-16 positions of `value`. Painted on the Raw view only: Pretty
+  * reformats the text and a charset override shows other characters, so the positions would name
+  * the wrong thing there.
+  */
+ changeMarks?: ChangeMark[];
+ /**
+  * Burp's GraphQL > "Save GraphQL queries to site map" (7v1e). Given by a surface that knows the
+  * exchange behind the message (Repeater); `enabled` says whether that exchange's response is an
+  * introspection answer. Absent, the item is shown disabled with the reason.
+  */
+ saveGraphQLToSiteMap?: { enabled: boolean; run: () => void };
  /**
   * Actively audit a selected byte range (burpsy-react-ui-c6oq). When given, the Raw view's
   * context menu gains an "Actively audit this selection" entry that converts the CodeMirror
@@ -1017,17 +1063,15 @@ export function HttpEditor({
  const setEditorTabs = useApp((state) => state.setEditorTabs);
  const setUrlEncodeAsYouType = useApp((state) => state.setUrlEncodeAsYouType);
 
- // The five operator-added tabs (t94i). Each warrants itself by the message's own content —
- // a Headers tab exists for every HTTP message (every message has a head), Query/Body
- // params and Cookies exist when there is something to read, Attributes always. The
- // prefs decide which of these are hidden and their order, but never invent a tab the
- // message cannot fill.
- const extraTabs: OptionalEditorTab[] = ["headers", "attributes"];
- if (querySpans(value).length > 0) extraTabs.push("queryparams");
- if (bodyParamSpans(value).length > 0 || cookiesToRead(value).length > 0) {
-  if (bodyParamSpans(value).length > 0) extraTabs.push("bodyparams");
-  if (cookiesToRead(value).length > 0) extraTabs.push("cookies");
- }
+ // The five operator-added tabs (t94i). Read-only, each warrants itself by the message's own
+ // content — Headers and Attributes always, Query/Body params and Cookies when there is
+ // something to read. Editable, a request gets every view so an item can be ADDED where none
+ // exists yet (11r8: Burp's "in editable contexts … displays all views"). The prefs decide
+ // which of these are hidden and their order. The rule is lib/editor-extra-tabs.ts.
+ const extraTabs: OptionalEditorTab[] = extraEditorTabs(value, editable);
+ // Where an add from one of those tabs is written: the same onChange Raw writes through, so
+ // the raw text stays the single source of truth and the tab is a writer over it, not a copy.
+ const addInto = editable ? onChange : undefined;
 
  // Preferences: hidden tabs leave the strip, the order array reorders it. A pref naming a
  // tab the message does not warrant is inert — the strip still only offers what it can fill.
@@ -1106,6 +1150,13 @@ export function HttpEditor({
  // hexDump did not go away when the view became editable. Raw under a charset override copies
  // what is actually on screen, matching every other "what you see is what exports" surface in
  // this codebase (History and Organizer's CSV exports both follow the same rule).
+ // The change marks join the extensions only on the unconverted Raw text, where `value` and the
+ // document are the same characters (CRLF aside, which changeDecorations maps).
+ const markedExtensions = useMemo(() => {
+  if (!changeMarks || changeMarks.length === 0 || active !== "raw" || charsetActive) return extensions;
+  const docLength = value.length - (value.match(/\r\n/g)?.length ?? 0);
+  return [...extensions, changeDecorations(value, docLength, changeMarks)];
+ }, [extensions, changeMarks, active, charsetActive, value]);
  const hexDumpText = useMemo(() => (active === "hex" ? hexDumpBytes(bodyBytes ?? new TextEncoder().encode(value)) : ""), [active, bodyBytes, value]);
  // The clipboard copies the VISIBLE document (whr): with the eye on, a Pretty copy is
  // the filtered pretty — a copy that silently restored 15 hidden headers would contradict
@@ -1216,6 +1267,62 @@ export function HttpEditor({
     ],
    });
   }
+  // Burp's GraphQL submenu (7v1e, burp.Zu6): the two introspection documents replace the query of
+  // an editable REQUEST — on a response they carry Burp's own " [Request only]" and stay disabled —
+  // and Save GraphQL queries to site map acts on an introspection answer the surface can name.
+  if (views) {
+   const requestOnly = isResponse(value) ? " [Request only]" : "";
+   const canSet = editable && !isResponse(value) && Boolean(onChange);
+   const setQuery = (query: string, label: string) => () => {
+    if (!canSet) return;
+    onChange?.(setGraphQLQuery(value, query));
+    toast.success(`${label}: the request now carries it`);
+   };
+   groups.push({
+    id: "graphql",
+    actions: [
+     {
+      id: "graphql",
+      label: "GraphQL",
+      onSelect: () => {},
+      submenu: [
+       {
+        id: "graphql-introspection",
+        actions: [
+         {
+          id: "set-introspection",
+          label: `Set introspection query${requestOnly}`,
+          disabled: !canSet,
+          onSelect: setQuery(INTROSPECTION_QUERY, "Introspection query set"),
+         },
+         {
+          id: "set-legacy-introspection",
+          label: `Set legacy introspection query${requestOnly}`,
+          disabled: !canSet,
+          onSelect: setQuery(LEGACY_INTROSPECTION_QUERY, "Legacy introspection query set"),
+         },
+        ],
+       },
+       {
+        id: "graphql-sitemap",
+        actions: [
+         {
+          id: "save-to-sitemap",
+          label: saveGraphQLToSiteMap
+           ? saveGraphQLToSiteMap.enabled
+             ? "Save GraphQL queries to site map"
+             : "Save GraphQL queries to site map (send an introspection query first)"
+           : "Save GraphQL queries to site map (not available here — use Repeater)",
+          disabled: !saveGraphQLToSiteMap?.enabled,
+          onSelect: () => saveGraphQLToSiteMap?.run(),
+         },
+        ],
+       },
+      ],
+     },
+    ],
+   });
+  }
   if (active !== "raw") return groups;
   if (payloadMarks) {
    groups.push({
@@ -1319,7 +1426,7 @@ export function HttpEditor({
    },
   );
   return groups;
- }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value]);
+ }, [active, editable, hasSelection, charsetActive, runTransform, showTransform, insertCollaboratorPayload, mint.isPending, payloadMarks, auditSelection, value, views, onChange, saveGraphQLToSiteMap]);
 
  const allGroups = useMemo<MenuGroup[]>(
   () => [...(menuGroups ?? []), ...selectionGroups],
@@ -1708,13 +1815,13 @@ export function HttpEditor({
        }
       />
      ) : active === "headers" ? (
-      <HeadersTab raw={value} />
+      <HeadersTab raw={value} onAdd={addInto} />
      ) : active === "queryparams" ? (
-      <QueryParamsTab raw={value} />
+      <QueryParamsTab raw={value} onAdd={addInto} />
      ) : active === "bodyparams" ? (
-      <BodyParamsTab raw={value} />
+      <BodyParamsTab raw={value} onAdd={addInto} />
      ) : active === "cookies" ? (
-      <CookiesTab raw={value} />
+      <CookiesTab raw={value} onAdd={addInto} />
      ) : active === "attributes" ? (
       <AttributesTab raw={value} />
      ) : (
@@ -1744,7 +1851,7 @@ export function HttpEditor({
        readOnly={!(editable && !charsetActive && !hiding && (active === "raw" || active === "pretty"))}
        height="100%"
        theme={editorTheme}
-       extensions={extensions}
+       extensions={markedExtensions}
        placeholder={placeholder}
        onCreateEditor={(view) => {
         // The reveal effect below needs the mounted view to exist; the epoch bump
@@ -1806,7 +1913,9 @@ export function HttpEditor({
    </Modal>
    {editable && active !== "raw" && active !== "hex" && active !== "pretty" ? (
     <div className="editor-note">
-     Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back.
+     {ADDABLE_VIEWS.includes(active) && addInto
+      ? "Add an item here and it is written into the message. Edit, remove or reorder existing items in Raw or the Inspector."
+      : "Editing happens on the Raw, Hex and Pretty views — this one reads the message without writing one back."}
     </div>
    ) : null}
    {charsetError ? (

@@ -85,8 +85,12 @@ type Server struct {
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
-	advisories         *advisory.Catalogue
-	sitemap            *sitemap.SiteMap
+	advisories *advisory.Catalogue
+	sitemap    *sitemap.SiteMap
+	// repeaterH2 is Repeater's HTTP/2 connection reuse pool (adkx), made on first use by
+	// repeaterH2Sessions; repeaterH2Once guards that.
+	repeaterH2         *sender.H2Sessions
+	repeaterH2Once     sync.Once
 	sessionCoordinator *session.Coordinator
 	// prompts is the pending browser-recovery prompt registry behind the session rule action of
 	// the same name (burpsy-react-ui-dq1g): the task that hit the action blocks on the prompter
@@ -1038,6 +1042,10 @@ func (s *Server) setupRoutes() {
 	// caller sender's keep-alive primitive has ever had outside its own tests, and it is what makes a
 	// smuggling or desync test performable from Repeater at all.
 	s.mux.HandleFunc("/api/repeater/send-group", s.handleRepeaterSendGroup)
+	// Repeater's "Save entire history" (pznm): a tab's history as one file, bytes exported by id.
+	s.mux.HandleFunc("/api/repeater/history-export", s.handleRepeaterHistoryExport)
+	// Save GraphQL queries to site map (7v1e): an introspection answer's operations, recorded unsent.
+	s.mux.HandleFunc("/api/graphql/sitemap", s.handleGraphQLSitemap)
 	// Which protocol this tool's own traffic actually used, and a send path for a deliberately malformed
 	// frame program. See api_protocol.go: both are capabilities that existed and had no route to an
 	// operator.
