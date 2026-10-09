@@ -131,7 +131,22 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 40, 4, 14
+	const wantApplied, wantPartial, wantReported = 49, 3, 6
+	// 49/3/6 since burpsy-react-ui-o2p3 and 9mti: follow_redirections, the two
+	// audit_project_option_overrides and the four javascript_analysis keys use_static_analysis,
+	// use_dynamic_analysis, max_static_time_per_item and max_dynamic_time_per_item moved from reported
+	// to applied, each with a run-level mechanism and an AuditSession test.
+	//
+	// 42/3/13 since burpsy-react-ui-gmdk: skip_server_side_injection_for_parameters moved from
+	// reported to partial, the same reduced value shape as the skip-all list.
+	// 45 since burpsy-react-ui-o2p3 (commit 78d2126): follow_redirections,
+	// audit_project_option_overrides/connect_timeout and /normal_timeout became applied — the
+	// per-run overrides the run's own sender honours.
+	//
+	// 42/2/14 since burpsy-react-ui-saq3.1: select_individual_issues and scan_only_selected_issues
+	// moved from partial to applied. They are booleans that choose Burp's mode (Zmzw.java:80-87),
+	// which is all a boolean carries, and they now have fields; selected_issues stays partial because
+	// a method it enables that burpsy's check does not implement (Burp Infiltrator always) cannot run.
 	// 40/4/14 since burpsy-react-ui-ev7y: scan_speed and scan_accuracy moved from reported to
 	// applied together. Both had claimed "not applied" on a reading of Burp that was wrong about the
 	// mechanism — neither is run-level pacing; scan_speed selects per-check mutation SETS and

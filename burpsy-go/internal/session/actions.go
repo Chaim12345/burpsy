@@ -188,6 +188,28 @@ type Action struct {
 	// recorded login flow usable as the default for every macro in the rule.
 	Macro []MacroStep `json:"macro,omitempty"`
 
+	// The run-macro action's "after the macro" choices (burpsy-react-ui-8gk8), under Burp's own key
+	// names (burp.Zcft / burp.Zcfx). Every one reads, when absent, as what burpsy did before they
+	// existed, so a stored rule keeps its behaviour:
+	//
+	//   - UpdateWithParams: "Update current request with parameters matched from final macro
+	//     response". Absent = false, because nothing updated parameters before; the editor sets it
+	//     true on a new action, as Burp does.
+	//   - MatchParams / Params: "Update all parameters except for" (all_params_except, the default)
+	//     or "Update only the following parameters" (specified_params), and the names.
+	//   - TolerateURLMismatch: match a parameter by name alone rather than by name and URL.
+	//   - UpdateWithCookies: "Update current request with cookies from session handling cookie jar".
+	//     A pointer because absent must mean true: the jar's cookies always reached the retried
+	//     request, and a stored rule must not silently lose its session cookie.
+	//   - MatchCookies / Cookies: all_cookies_except (the default) or specified_cookies, and the names.
+	UpdateWithParams    bool     `json:"update_with_params,omitempty"`
+	MatchParams         string   `json:"match_params,omitempty"`
+	Params              []string `json:"params,omitempty"`
+	TolerateURLMismatch bool     `json:"tolerate_url_mismatch,omitempty"`
+	UpdateWithCookies   *bool    `json:"update_with_cookies,omitempty"`
+	MatchCookies        string   `json:"match_cookies,omitempty"`
+	Cookies             []string `json:"cookies,omitempty"`
+
 	// Validity overrides the rule's own validity rule for a CheckValidity action. Nil means the
 	// rule's.
 	Validity *ValidityRule `json:"validity,omitempty"`
@@ -252,6 +274,9 @@ func ValidateAction(a *Action, path string) error {
 			return fmt.Errorf("%s (%s): a %q is required", path, ActionKindLabel(a.Kind), name)
 		}
 		return nil
+	}
+	if err := validateMacroUpdate(a, path); err != nil {
+		return err
 	}
 	switch a.Kind {
 	case ActionSetCookie:

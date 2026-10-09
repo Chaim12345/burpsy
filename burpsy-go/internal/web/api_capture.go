@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,11 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// historyDeleteReq is the request body historyDelete decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type historyDeleteReq struct {
+	IDs []core.ExchangeID `json:"ids"`
+}
+
 // historyDelete removes exchanges from the operator's view. With a JSON body {"ids":[..]} the
 // named exchanges go; with no body (or an empty ids array) the whole capture clears — Burp's
 // "Clear (tool)". The response reports removed and requested separately, so a caller that named
@@ -37,12 +43,9 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // Deletion is a view-level tombstone (core.TrafficStore.DeleteExchanges): positional ids stay
 // stable, so nothing else on the wire is renumbered by a cleanup.
 func (s *Server) historyDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		IDs []core.ExchangeID `json:"ids"`
-	}
+	var req historyDeleteReq
 	if r.Body != nil {
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
-		if err := dec.Decode(&req); err != nil && err != io.EOF {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {\"ids\":[..]} or empty", http.StatusBadRequest)
 			return
 		}
@@ -164,6 +167,12 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Message not found", http.StatusNotFound)
 		return
 	}
+	// byte_offset / max_bytes / pattern / decoded read a window of the body instead of the whole
+	// message (burpsy-react-ui-yahm, api_message_window.go). Without them the reply is unchanged.
+	if wantsWindow(r) {
+		s.messageWindow(w, r, id, msg.Raw())
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(messageView(msg))
 }
@@ -216,6 +225,13 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// exchangePatchReq is PATCH /api/exchange/{id}'s body. Both members are raw so the handler can tell
+// "omitted" (nil: leave unchanged) from an explicit null (clear the notes) — a typed *string cannot.
+type exchangePatchReq struct {
+	Notes     json.RawMessage `json:"notes" desc:"a string sets the notes; null clears them; omit to leave them unchanged"`
+	Highlight json.RawMessage `json:"highlight" desc:"a highlight colour name, or \"\" for none; omit to leave it unchanged"`
+}
+
 // handlePatchExchange serves PATCH /api/exchange/{id}: body {"notes": string|null, "highlight":
 // string}, both optional. An omitted field is left unchanged; an explicit `null` on notes clears it
 // (there is no way to express "clear" for highlight other than sending ""="none", so an omitted
@@ -224,17 +240,17 @@ func (s *Server) handleExchange(w http.ResponseWriter, r *http.Request) {
 // core.ValidHighlights; anything else is a 400 and is never coerced to a nearby value. Responds with
 // the updated ExchangeView.
 func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id core.ExchangeID) {
-	var body map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var body exchangePatchReq
+	if err := requestJSON(w, r, nil).Decode(&body); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	var notes *string
 	notesSet := false
-	if raw, ok := body["notes"]; ok {
+	if body.Notes != nil {
 		notesSet = true
-		if err := json.Unmarshal(raw, &notes); err != nil {
+		if err := json.Unmarshal(body.Notes, &notes); err != nil {
 			http.Error(w, "notes must be a string or null", http.StatusBadRequest)
 			return
 		}
@@ -242,9 +258,9 @@ func (s *Server) handlePatchExchange(w http.ResponseWriter, r *http.Request, id 
 
 	highlight := ""
 	highlightSet := false
-	if raw, ok := body["highlight"]; ok {
+	if body.Highlight != nil {
 		highlightSet = true
-		if err := json.Unmarshal(raw, &highlight); err != nil {
+		if err := json.Unmarshal(body.Highlight, &highlight); err != nil {
 			http.Error(w, "highlight must be a string", http.StatusBadRequest)
 			return
 		}
@@ -300,9 +316,9 @@ type ScopeRequest struct {
 	// of the three library actions — "library_save", "library_load", "library_delete" — which operate
 	// on a named copy of the whole rule set rather than on one rule. See updateScopeLibrary for why
 	// they are actions here rather than a route of their own.
-	Action  string `json:"action"`
-	Kind    string `json:"kind"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
-	Pattern string `json:"pattern"`
+	Action  string `json:"action" enum:"include|exclude|remove|edit|clear|toggle|drop_out_of_scope|library_save|library_load|library_delete" desc:"what to do; include/exclude add a rule"`
+	Kind    string `json:"kind" enum:"include|exclude" desc:"the rule kind, for remove and toggle"` // optional rule kind for "remove" and "toggle": "include" or "exclude"
+	Pattern string `json:"pattern" desc:"the host pattern: a hostname, *.wildcard, regex:… or range:CIDR"`
 	// Name is the library a library_* action names. Unused by every other action, and deliberately
 	// separate from Pattern: a library is named after an engagement, not after a host.
 	Name string `json:"name,omitempty"`
@@ -328,6 +344,11 @@ type ScopeRequest struct {
 	// that did not send the field, refused rather than guessed. On "include"/"exclude" a nil
 	// reads as the default (true): a rule is created active unless a caller says otherwise.
 	Enabled *bool `json:"enabled,omitempty"`
+	// Mode and DropRules are the "drop_scope" action (burpsy-react-ui-47ed): Burp's "Use suite scope"
+	// ("suite") or "Use custom scope" ("custom") for which requests the drop switch drops, and the
+	// custom scope's rules, each in the include/exclude shape (action is the rule's kind).
+	Mode      string         `json:"mode,omitempty"`
+	DropRules []ScopeRequest `json:"drop_rules,omitempty"`
 }
 
 // normaliseScopePath validates an optional path prefix and returns nil for "no path".
@@ -402,6 +423,86 @@ func buildScopeRule(kind core.ScopeRuleKind, req ScopeRequest) (*core.ScopeRule,
 	return rule, nil
 }
 
+// buildDropScope reads a drop_scope action into the custom rules and whether they are in force.
+//
+// "suite" keeps the custom rules already set, as Burp's panel does. "custom" with drop_rules replaces
+// them; "custom" without drop_rules puts the kept rules back in force.
+//
+// A custom scope in force must include something. With no include rule core.Scope allows by default,
+// so an empty custom scope would drop nothing while the panel said a custom fence was up; refusing it
+// is clearer than either reading.
+func buildDropScope(req ScopeRequest, live *core.Scope) (*core.Scope, bool, error) {
+	kept, _ := live.DropScope()
+	switch req.Mode {
+	case "suite":
+		if len(req.DropRules) > 0 {
+			return nil, false, fmt.Errorf("drop_rules are only read with mode \"custom\"; mode \"suite\" drops by the suite scope")
+		}
+		return kept, false, nil
+	case "custom":
+		if req.DropRules == nil {
+			if kept == nil {
+				return nil, false, fmt.Errorf("mode \"custom\" needs drop_rules: no custom drop scope has been set yet")
+			}
+			return kept, true, nil
+		}
+	default:
+		return nil, false, fmt.Errorf("drop_scope wants mode \"suite\" (Use suite scope) or \"custom\" (Use custom scope), not %q", req.Mode)
+	}
+	custom := core.NewScope()
+	includes := 0
+	for i, dr := range req.DropRules {
+		kind, ok := scopeKindFromString(dr.Action)
+		if !ok {
+			return nil, false, fmt.Errorf("drop_rules[%d].action must be \"include\" or \"exclude\", not %q", i, dr.Action)
+		}
+		if dr.Pattern == "" {
+			return nil, false, fmt.Errorf("drop_rules[%d].pattern is required", i)
+		}
+		rule, err := buildScopeRule(kind, dr)
+		if err != nil {
+			return nil, false, fmt.Errorf("drop_rules[%d]: %v", i, err)
+		}
+		if kind == core.ScopeInclude && rule.Enabled {
+			includes++
+		}
+		custom.Add(rule)
+	}
+	if includes == 0 {
+		return nil, false, fmt.Errorf("a custom drop scope needs at least one enabled include rule: without one it would " +
+			"admit every request, and the drop switch would drop nothing")
+	}
+	if err := custom.Validate(); err != nil {
+		return nil, false, err
+	}
+	return custom, true, nil
+}
+
+type dropScopeViewBody struct {
+	Mode  string          `json:"mode"`
+	Rules []scopeRuleView `json:"rules"`
+}
+
+func dropScopeView(custom *core.Scope, use bool) dropScopeViewBody {
+	view := dropScopeViewBody{Mode: "suite", Rules: []scopeRuleView{}}
+	if use {
+		view.Mode = "custom"
+	}
+	if custom == nil {
+		return view
+	}
+	for _, rule := range custom.Rules() {
+		kind := "Include"
+		if rule.Kind == core.ScopeExclude {
+			kind = "Exclude"
+		}
+		pattern := rule.Pattern
+		view.Rules = append(view.Rules, scopeRuleView{Kind: kind, Host: &pattern, Path: rule.PathPrefix,
+			Port: rule.Port, Protocol: rule.Protocol, Enabled: rule.Enabled})
+	}
+	return view
+}
+
 // scopeKindFromString maps the wire's kind to the engine's. Kept beside the handler so both
 // "remove" (optional kind) and "toggle" (required kind) agree on the vocabulary.
 func scopeKindFromString(kind string) (core.ScopeRuleKind, bool) {
@@ -465,6 +566,8 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 		// Burp's "Out-of-scope request handling: Drop all out-of-scope requests". Reported
 		// unconditionally, like enabled: the UI's switch has to read the state it toggles.
 		"drop_out_of_scope": s.scope.DropOutOfScope(),
+		// Which scope the drop switch drops by (47ed): always present, rules always an array.
+		"drop_scope": dropScopeView(s.scope.DropScope()),
 		// Always an array, never null: the console reads .length on it, and a nil slice marshals to
 		// null, which would take the page down instead of showing an empty picker.
 		"libraries": libraries,
@@ -481,7 +584,7 @@ func (s *Server) getScope(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	var req ScopeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -509,6 +612,16 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 		s.scope.SetDropOutOfScope(*req.Enabled)
 		if s.persist != nil {
 			s.persist.SaveScopeDropOutOfScope(*req.Enabled)
+		}
+	case "drop_scope":
+		custom, use, err := buildDropScope(req, s.scope)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.scope.SetDropScope(custom, use)
+		if s.persist != nil {
+			s.persist.SaveScopeDropScope(custom, use)
 		}
 	case "include", "exclude":
 		kind := core.ScopeInclude
@@ -620,7 +733,7 @@ func (s *Server) updateScope(w http.ResponseWriter, r *http.Request) {
 	case "clear":
 		s.scope.Clear()
 	default:
-		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, library_save, library_load or library_delete", http.StatusBadRequest)
+		http.Error(w, "Unknown scope action: expected include, exclude, remove, edit, toggle, clear, drop_out_of_scope, drop_scope, library_save, library_load or library_delete", http.StatusBadRequest)
 		return
 	}
 	s.persistScope()
@@ -1170,6 +1283,16 @@ func (s *Server) handleIssueByID(w http.ResponseWriter, r *http.Request) {
 	s.handleIssueTriage(w, r, id)
 }
 
+// issueTriageReq is the request body handleIssueTriage decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type issueTriageReq struct {
+	// Severity/Confidence use the same lower-case vocabulary the views emit
+	// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
+	Severity      *string `json:"severity"`
+	Confidence    *string `json:"confidence"`
+	FalsePositive *bool   `json:"false_positive"`
+	Comment       *string `json:"comment"`
+}
+
 // handleIssueTriage serves PUT /api/issues/{id} (operator triage: severity, confidence,
 // false-positive, comment) and DELETE /api/issues/{id} (remove the finding). These are the write
 // paths the read-only /api/issues never had; the store applies every decision under one lock and
@@ -1200,21 +1323,14 @@ func (s *Server) handleIssueTriage(w http.ResponseWriter, r *http.Request, idStr
 		return
 	}
 
-	var req struct {
-		// Severity/Confidence use the same lower-case vocabulary the views emit
-		// ("informational".."critical", "certain"|"firm"|"tentative"). Empty clears the override.
-		Severity      *string `json:"severity"`
-		Confidence    *string `json:"confidence"`
-		FalsePositive *bool   `json:"false_positive"`
-		Comment       *string `json:"comment"`
-	}
+	var req issueTriageReq
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 	if len(body) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
+		if err := requestJSON(w, r, bytes.NewReader(body)).Decode(&req); err != nil {
 			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
 		}
@@ -1313,7 +1429,7 @@ func (s *Server) handleIssueRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req manualIssueReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

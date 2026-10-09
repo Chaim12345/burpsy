@@ -82,6 +82,11 @@ export interface SessionExtraction {
  name: string;
  from?: SessionExtractFrom;
  how: SessionExtractHow;
+ /** Burp's custom-parameter fields (355h): prefix and suffix wrap the extracted value. */
+ prefix?: string;
+ suffix?: string;
+ /** "Extracted value is URL-encoded". Absent is literal substitution; false percent-encodes it. */
+ url_encoded?: boolean;
 }
 
 export interface SessionMacroStep {
@@ -214,6 +219,17 @@ export interface SessionAction {
   * pre-field behaviour and what every rule written before it means.
   */
  validate_every?: number;
+ /**
+  * A run_macro action's "after the macro" choices (burpsy-react-ui-8gk8), under Burp's key names.
+  * update_with_cookies absent means the whole jar, the behaviour before the field existed.
+  */
+ update_with_params?: boolean;
+ match_params?: "all_params_except" | "specified_params";
+ params?: string[];
+ tolerate_url_mismatch?: boolean;
+ update_with_cookies?: boolean;
+ match_cookies?: "all_cookies_except" | "specified_cookies";
+ cookies?: string[];
 }
 
 /** One entry of the action palette, served so the editor cannot drift from what the server accepts. */
@@ -392,11 +408,35 @@ export interface ScopeView {
   * Always on the wire — the switch has to read the state it toggles.
   */
  drop_out_of_scope: boolean;
+ /**
+  * Which scope the drop switch drops by: Burp's "Use suite scope" or "Use custom scope". Always on
+  * the wire; rules is always an array (empty for the suite scope).
+  */
+ drop_scope?: DropScopeView;
+}
+
+export interface DropScopeView {
+ mode: "suite" | "custom";
+ rules: ScopeRuleView[];
+}
+
+/** One rule of a custom drop scope, in the include/exclude request shape. */
+export interface DropScopeRule {
+ action: "include" | "exclude";
+ pattern: string;
+ path?: string;
+ port?: number;
+ protocol?: "http" | "https";
+ enabled?: boolean;
 }
 
 /** POST /api/scope. Port, path and protocol are optional arms on include/exclude, and part of a remove's identity. */
 export interface ScopeUpdate {
- action: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope";
+ action: "include" | "exclude" | "remove" | "edit" | "clear" | "toggle" | "drop_out_of_scope" | "drop_scope";
+ /** On "drop_scope": which scope the drop switch drops by. */
+ mode?: "suite" | "custom";
+ /** On "drop_scope" with mode "custom": the custom scope's rules. */
+ drop_rules?: DropScopeRule[];
  kind?: "include" | "exclude";
  pattern?: string;
  path?: string;

@@ -86,6 +86,12 @@ type SessionCoordinator interface {
 	CookieHeader(host string, port uint16, tls bool, path string) string
 }
 
+// sessionAware reports whether this crawl has a way to restore a lost session — a coordinator's
+// macro or a recorded login — and therefore whether expiry detection runs at all.
+func (c *Crawler) sessionAware() bool {
+	return c.cfg.SessionCoordinator != nil || c.login != nil
+}
+
 // loggedOut is the expiry detector's verdict for one response.
 type loggedOut struct {
 	yes    bool
@@ -101,7 +107,7 @@ type loggedOut struct {
 // Rule 2 (login page): cfg.LoginPagePattern is set and matches `body`. The pattern is
 // compiled in New, so a malformed one is a construction error, never a per-URL surprise.
 func (c *Crawler) detectExpired(template string, status int, body []byte) loggedOut {
-	if c.cfg.SessionCoordinator == nil {
+	if !c.sessionAware() {
 		return loggedOut{yes: false}
 	}
 	if status != 0 && status != 200 && c.templateOK[template] {
@@ -145,6 +151,9 @@ const (
 // would, and running out records StopReloginBudget so the crawl reports as truncated
 // rather than as quietly unauthenticated.
 func (c *Crawler) recoverSession(ctx context.Context, item frontierItem, lim *LimitReport) (raw []byte, result recoverResult, detail string) {
+	if c.login != nil {
+		return c.reloginWithBrowser(ctx, item, lim)
+	}
 	host := item.url.Hostname()
 	// The full identity, not the hostname: a rule scoped to a path or port must not be the rule
 	// that fires a login macro for a crawl item its own editor excludes (7nh2). The suite-scope

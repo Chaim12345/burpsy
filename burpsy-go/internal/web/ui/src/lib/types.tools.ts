@@ -62,7 +62,14 @@ export interface PointView {
   label: string;
   offset: number;
   len: number;
+  /** The position's base value: what a payload replaces, or — placement "append" — what it is added to. */
   current: string;
+  /**
+   * Burp's "Automatic payload placement" for this position (burpsy-react-ui-1krs). "append" means the
+   * payload goes after `current` (offset/len is then the zero-length point at its end, or the whole
+   * value for a nested container whose encoding is rebuilt); "replace" means it overwrites `current`.
+   */
+  placement: "replace" | "append";
 }
 
 export interface DropReason {
@@ -96,11 +103,20 @@ export interface ResultBucket {
    */
   example_request_id: number | null;
   example_response_id: number | null;
+  /**
+   * The ordinal whose request and response the example ids name (ip2b). Normally `first_ordinal`; a later
+   * ordinal when the capture filter discarded the bucket's opening response; `null` while nothing in the
+   * bucket was captured and stored. Absent from an older server — read it as `first_ordinal`.
+   */
+  example_ordinal?: number | null;
   grep_matches: number;
   grep_extract: string | null;
   /** Per-expression occurrence totals summed over this bucket's responses (irt), parallel to the
    *  expression list. Empty when no list was configured. */
   grep_match_totals: number[];
+  /** Grep - Payloads' per-set occurrence totals over this bucket's responses (7qc3), one slot per
+   *  payload set. `[]` when Grep - Payloads was off; absent from an older server. */
+  reflected_count_totals?: number[];
 }
 
 export interface ErrorBucket {
@@ -111,10 +127,16 @@ export interface ErrorBucket {
 
 export interface Attempt {
   ordinal: number;
+  /** Set by the console when "Request item again" replaced this row's result (2rw7). */
+  requested_again?: boolean;
   status: number | null;
   response_len: number;
   duration_ms: number;
   reflected: boolean;
+  /** Grep - Payloads' count per payload set (7qc3): how many times that set's payload occurs in the
+   *  response, one slot per set in set order; zeros on the baseline row. `[]` when Grep - Payloads was
+   *  off or the send produced no response; absent from an older server. */
+  reflected_counts?: number[];
   /** The exact bytes this attempt sent, once the server stored them. `null` for a send that
    *  failed or was refused, and for every row on an older server. */
   request_id: number | null;
@@ -143,6 +165,13 @@ export interface Attempt {
    *  any other failure (connection refused, TLS failure, a guard refusal). Burp lists Timeout
    *  as its own column rather than folding it into Error. */
   timeout: boolean;
+  /** This row's place in the attack's anomaly ranking (pglp): 1 is the most unusual response, and
+   *  rows with equal scores share a rank. 0 when the attack had fewer than two rows to compare;
+   *  absent from an older server. */
+  anomaly_rank?: number;
+  /** The Collaborator addresses this attempt sent (nib6) — what ties a later out-of-band
+   *  interaction back to this row. Absent when the attack had no Collaborator payload set. */
+  collaborator_payloads?: string[];
 }
 
 /** How an attack ended. "paused" only appears on a report built from a still-live attack. */
@@ -184,6 +213,10 @@ export interface AttackReport {
   /** The Grep - Match expressions as typed (irt), in list order — the results-table headers for
    *  the per-expression count columns. Present only when a list ran. */
   grep_match_labels?: string[];
+  /** The response attributes that varied across the attack's rows (pglp, Burp's
+   *  variantAttributes) — the only ones the anomaly ranking scores. `[]` when nothing varied;
+   *  absent from an older server. */
+  variant_attributes?: string[];
   /** How many retry sends the attack made (n39) — Burp's error-handling count. Zero unless the
    *  attack configured retries. */
   retries_used: number;
@@ -192,6 +225,38 @@ export interface AttackReport {
   baseline: boolean;
   pool: string | null;
   auto_throttle_engaged: number;
+  /** Items the capture filter dropped (ip2b): counted in sent/failed and the buckets, with no row and no
+   *  stored messages. Absent from an older server, which had no capture filter. */
+  discarded?: number;
+  /** The capture filter the attack ran with, or null when it captured everything. */
+  capture_filter?: CaptureFilterSpec | null;
+  /** Whether this attack stored its exact requests and its exemplar responses (nqww: Burp's "Store
+   *  requests / responses"). false explains every null id of that half; absent from an older server,
+   *  which always stored both. */
+  requests_stored?: boolean;
+  responses_stored?: boolean;
+  /** The Grep - Payloads settings the attack ran with (7qc3). Absent from an older server, whose
+   *  reflection check was the fixed one: on, case-sensitive, headers included, matched as sent. */
+  grep_payloads?: GrepPayloadsSettings;
+}
+
+/** Burp's results capture filter (ip2b), as the run request takes it and the report echoes it. */
+export interface CaptureFilterSpec {
+  discard_no_response: boolean;
+  term: string;
+  regex: boolean;
+  case_sensitive: boolean;
+  negate: boolean;
+  /** Status classes captured; absent captures all four. */
+  statuses?: ("2xx" | "3xx" | "4xx" | "5xx")[];
+}
+
+/** Burp's Grep - Payloads settings, as the run request takes them and the report echoes them. */
+export interface GrepPayloadsSettings {
+  enabled: boolean;
+  case_sensitive: boolean;
+  exclude_headers: boolean;
+  match_pre_url_encoded: boolean;
 }
 
 export interface BucketExample {
@@ -210,6 +275,21 @@ export interface RunView {
    * absent reads as 0, which is what every such server's behaviour actually was.
    */
   redirects_followed?: number;
+  /**
+   * What HTTP/1 connection reuse did (xhqr): sockets the attack dialled, and requests that completed
+   * on a socket an earlier request had used. null when reuse was off — nothing was counted, every
+   * request had its own connection. Optional because an older server never sent either.
+   */
+  connections_opened?: number | null;
+  connections_reused?: number | null;
+  /**
+   * Update Host header to match target (ety8): whether it was applied, why not when it was asked for
+   * and stood aside, and how many requests a payload left with other than one Host header (sent as
+   * spliced). Optional because an older server never sent them.
+   */
+  host_header_updated?: boolean;
+  host_header_skipped?: string;
+  host_header_untouched?: number;
 }
 
 /** Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/settings.html). */

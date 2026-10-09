@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { scopeBadge } from "../lib/scope-state";
 import { Download, KeyRound, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
 import type { CaExportKind } from "../lib/ca-export";
 import { useBrowserSettings, useClearBrowserData, useSaveBrowserSettings, type BrowserSettingsEdit } from "../lib/data.browser";
-import { useInterceptStartup, useSaveInterceptStartup, useStats } from "../lib/data";
-import { useScanConfigLibrary, useScannerConfigs , useTriageSettings } from "../lib/data.attack";
-import { useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
+import { useInterceptStartup, useProxyHistoryLogging, useSaveInterceptStartup, useSaveProxyHistoryLogging, useStats } from "../lib/data";
+import { useScanConfigLibrary, useScannerConfigs , useSkills, useTriageSettings } from "../lib/data.attack";
+import { DEFAULT_REDIRECT_TYPES, useNetworkSettings, useSaveNetworkSettings } from "../lib/data.network";
 import type {
  AddressFamily,
  HostOverride,
@@ -56,12 +57,15 @@ import type { MessageVariant } from "../ui/variant-picker";
 import { actionForChord, chordKeys, shortcutGroups, validateChord, type ShortcutAction } from "../lib/shortcuts";
 import { chordFromEvent, resetAllChords, resetChord, setChord, useKeymap } from "../lib/keymap";
 import type { FrameProgramResponse } from "../lib/types.policy";
-import type { TriageSettingsView } from "../lib/types.attack";
+import type { SkillsView, TriageSettingsView } from "../lib/types.attack";
 import { DetailList } from "../ui/json";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Kbd, LinkButton, Metric, Modal, Select, Switch, Textarea, Toolbar, type Tone } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
-import { ClientCertificatesSection, PlatformAuthSection } from "./settings.network";
+import { BURP_HOTKEYS } from "../lib/burp-hotkeys";
+import { ClientCertificatesSection, PlatformAuthSection, ServerCertificatesSection } from "./settings.network";
+import { FileLoggingSection } from "./settings.logging";
+import { ScanConfigDetail } from "./settings.scanconfig";
 
 const THEMES: { value: Theme; label: string }[] = [
  { value: "system", label: "Follow the system" },
@@ -141,7 +145,7 @@ export function ScopeSection(): JSX.Element {
     detail="What the proxy is allowed to touch. Every change here is persisted immediately."
     actions={
      <>
-      {data ? <Badge tone={data.allow_all ? "warn" : "good"}>{data.allow_all ? "everything in scope" : "restricted"}</Badge> : null}
+      {data ? <Badge tone={scopeBadge(data).tone}>{scopeBadge(data).label}</Badge> : null}
       <Button variant="outline" size="small" onClick={() => setConfirmClear(true)} disabled={!data || data.empty}>
        <Trash2 size={13} />
        Clear scope
@@ -459,7 +463,49 @@ function ProxySettingsSection(): JSX.Element {
     <Metric label="Stored on disk" value={stats.data ? formatBytes(stats.data.stored_bytes) : "—"} />
    </div>
    <InterceptStartupPreference />
+   <ProxyHistoryLoggingPreference />
   </Card>
+ );
+}
+
+/**
+ * Burp's "Proxy history logging" (configPanelProxyHistoryLogging, burpsy-react-ui-z80e): when hosts
+ * are added to the target scope, whether to stop sending out-of-scope items to Proxy history, ask
+ * each time, or do nothing. Saved immediately, like the interception preference beside it.
+ */
+function ProxyHistoryLoggingPreference(): JSX.Element {
+ const { data } = useProxyHistoryLogging();
+ const save = useSaveProxyHistoryLogging();
+ const mode = data?.mode ?? "ask";
+ const options: { value: string; label: string; hint: string }[] = [
+  { value: "stop", label: "Stop logging out-of-scope items", hint: "adding to scope turns on Don't send out-of-scope items to Proxy history" },
+  { value: "ask", label: "Ask me what to do each time", hint: "adding to scope offers to stop logging (the default)" },
+  { value: "nothing", label: "Do nothing", hint: "adding to scope leaves Proxy history logging alone" },
+ ];
+ return (
+  <div style={{ marginTop: "var(--s2)" }}>
+   <div className="field-hint">Proxy history logging — what adding hosts to the target scope does about out-of-scope items.</div>
+   <div role="radiogroup" aria-label="Proxy history logging">
+    {options.map((option) => (
+     <label key={option.value} style={{ display: "flex", alignItems: "center", gap: "var(--s1)", margin: "var(--s1) 0" }}>
+      <input
+       type="radio"
+       name="proxy-history-logging"
+       checked={mode === option.value}
+       onChange={() =>
+        save.mutate(option.value, {
+         onSuccess: () => toast.success(`Proxy history logging: ${option.label}`),
+         onError: (cause) => toast.error(cause instanceof Error ? cause.message : "Could not save the Proxy history logging choice"),
+        })
+       }
+      />
+      <span>
+       {option.label} <span className="field-hint">— {option.hint}</span>
+      </span>
+     </label>
+    ))}
+   </div>
+  </div>
  );
 }
 
@@ -799,7 +845,9 @@ function DomEngineSection(): JSX.Element {
 // The audit-family switches Burp keeps under Scanner -> Options -> Scan issues moved to the
 // Scanner page (burpsy-react-ui-1yd): Burp puts scan configuration in the scan-launch dialogue,
 // and a switch's effect - what the next audit sends - is only readable next to the thing that
-// launches one. Settings keeps the read-only shipped-config table.
+// launches one. Settings keeps the configuration library: the shipped presets read-only, and the
+// operator's own saved configurations, whose issue selection and parameter exemptions are edited in
+// the panel a row opens (burpsy-react-ui-saq3.3.1).
 function ScannerSettingsSection(): JSX.Element {
  const configs = useScannerConfigs();
  // Burp's Configuration library (burpsy-react-ui-uxcs). One name box serves both "save as" and
@@ -807,11 +855,15 @@ function ScannerSettingsSection(): JSX.Element {
  const configLibrary = useScanConfigLibrary();
  const [configName, setConfigName] = useState("");
  const [configFrom, setConfigFrom] = useState("");
+ // Which configuration the detail panel shows, by name, so a refetch that brings a newer saved
+ // version re-renders the panel with it rather than with a stale copy held here.
+ const [opened, setOpened] = useState<string | null>(null);
+ const openedConfig = (configs.data?.configs ?? []).find((c) => c.name === opened && !c.damaged) ?? null;
  return (
   <Card>
    <SectionHeading
     title="Scanner"
-    detail="Shipped audit configurations and their concrete settings. Read-only."
+    detail="Audit configurations: the shipped presets, read-only, and your own saved ones, whose issue selection and parameter exemptions you can edit."
     actions={
      <RefreshButton onClick={() => void configs.refetch()} loading={configs.isFetching} />
     }
@@ -834,6 +886,19 @@ function ScannerSettingsSection(): JSX.Element {
         { label: "Consecutive unit failures (fail item)", value: configs.data.default.consecutive_unit_failures_to_fail_item },
         { label: "Pause session after failed items", value: configs.data.default.pause_session_after_failed_items },
         { label: "Pause at failed item %", value: configs.data.default.pause_session_at_failed_item_percentage + "%" },
+        {
+         label: "Issue selection",
+         value: (configs.data.default.issue_types ?? []).length > 0
+          ? `only ${formatCount((configs.data.default.issue_types ?? []).length)} selected issue types`
+          : "every issue type",
+        },
+        { label: "Issue types disabled", value: formatCount((configs.data.default.disabled_issue_types ?? []).length) },
+        { label: "Detection methods disabled", value: formatCount((configs.data.default.disabled_detection_methods ?? []).length) },
+        { label: "Skip all tests for", value: (configs.data.default.skip_all_tests_for_parameters ?? []).join(", ") || "no parameters" },
+        {
+         label: "Skip server-side injection for",
+         value: (configs.data.default.skip_server_side_injection_for_parameters ?? []).join(", ") || "no parameters",
+        },
        ]} />
       </div>
      ) : null}
@@ -892,13 +957,32 @@ function ScannerSettingsSection(): JSX.Element {
            <Badge>saved</Badge>
           )}
          </td>
-         <td><span className="cell-num">{c.keys.length}</span></td>
-         <td>{c.keys.map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
+         {/* `?? []` because a saved or damaged row carried "keys": null until saq3.3.1, and reading
+             .length off it took the whole Settings page down the moment one configuration was saved. */}
+         <td><span className="cell-num">{(c.keys ?? []).length}</span></td>
+         <td>{(c.keys ?? []).map((k) => k.name).join(", ") || <span className="cell-dim">no extra keys</span>}</td>
          <td>
           {c.shipped ? (
-           <span className="cell-dim" title="burpsy ships this configuration; clone it under another name to edit it">—</span>
+           <Button
+            variant="outline"
+            size="small"
+            aria-pressed={opened === c.name}
+            onClick={() => setOpened(opened === c.name ? null : c.name)}
+           >
+            View
+           </Button>
           ) : (
            <div className="toolbar">
+            {c.damaged ? null : (
+             <Button
+              variant="outline"
+              size="small"
+              aria-pressed={opened === c.name}
+              onClick={() => setOpened(opened === c.name ? null : c.name)}
+             >
+              Edit
+             </Button>
+            )}
             <Button
              variant="outline"
              size="small"
@@ -936,6 +1020,9 @@ function ScannerSettingsSection(): JSX.Element {
        ))}
       </SimpleTable>
      </div>
+     {openedConfig ? (
+      <ScanConfigDetail key={openedConfig.name} config={openedConfig} onClose={() => setOpened(null)} />
+     ) : null}
     </>
    ) : configs.isLoading ? <LoadingPanel label="Loading scanner configurations" /> : null}
    {configs.data ? <p className="field-hint">{configs.data.applies_to_server}</p> : null}
@@ -1028,6 +1115,7 @@ function NetworkSection(): JSX.Element {
  };
 
  const following = draft !== null && draft.redirects.mode !== "never";
+ const redirectTypes = draft?.redirects.types ?? DEFAULT_REDIRECT_TYPES;
 
  return (
   <Card>
@@ -1316,6 +1404,71 @@ function NetworkSection(): JSX.Element {
        ? "A hop's Set-Cookie is carried to the next hop on the same host. Off by default: a credential the target set mid-chain is not one you asked to send, and a target that sets throwaway cookies would keep resending them."
        : "Off. A login or SSO flow that sets a cookie on its 302 will arrive at the destination unauthenticated, which reads as a broken application rather than a missing cookie."}
      </p>
+
+     <h3 className="subheading">Allowed redirect types</h3>
+     <p className="field-hint">
+      Which responses count as a redirect when one is followed. A Refresh or meta-refresh hop is
+      sent as a GET with no body, the way a browser navigates it.
+     </p>
+     <div className="switch-grid">
+      {(
+       [
+        ["understand_3xx_status_code", "3xx status code with Location header", "On by default"],
+        ["understand_any_status_code_with_location_header", "Any status code with Location header", "Off by default: a 201 names what it created, not where to go"],
+        ["understand_refresh_header", "Refresh header", "On by default"],
+        ["understand_meta_refresh_tag", "Meta refresh tag", "On by default; HTML responses only"],
+       ] as const
+      ).map(([key, label, detail]) => (
+       <label key={key} className="switch-row" htmlFor={`redirect-type-${key}`}>
+        <span>
+         <span>{label}</span>
+         <span className="cell-dim" style={{ display: "block" }}>{detail}</span>
+        </span>
+        <Switch
+         id={`redirect-type-${key}`}
+         label={label}
+         checked={redirectTypes[key]}
+         onCheckedChange={(on) => patchSection("redirects", { types: { ...redirectTypes, [key]: on } })}
+        />
+       </label>
+      ))}
+     </div>
+     <p className="field-hint">
+      JavaScript-driven redirects are not followed: that would mean running the page's script, which
+      this sender does not do.
+     </p>
+
+     <h3 className="subheading">HTTP/1 and HTTP/2</h3>
+     <div className="switch-grid">
+      <label className="switch-row" htmlFor="network-http1-keep-alive">
+       <span>
+        <span>Use keep-alive for HTTP/1 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         Off by default: each request gets its own connection. On, a connection the response left reusable carries the next request to that host, and is closed after five seconds idle.
+        </span>
+       </span>
+       <Switch
+        id="network-http1-keep-alive"
+        label="Use keep-alive for HTTP/1 if the server supports it"
+        checked={draft.http1?.enable_keep_alive === true}
+        onCheckedChange={(on) => patchSection("http1", { enable_keep_alive: on })}
+       />
+      </label>
+      <label className="switch-row" htmlFor="network-http2-default">
+       <span>
+        <span>Default to HTTP/2 if the server supports it</span>
+        <span className="cell-dim" style={{ display: "block" }}>
+         On by default. Off, a request that names no protocol goes out as HTTP/1.1; one written as HTTP/2, or pinned to HTTP/2 in Repeater, still uses it.
+        </span>
+       </span>
+       <Switch
+        id="network-http2-default"
+        label="Default to HTTP/2 if the server supports it"
+        checked={draft.http2?.enable_http2 !== false}
+        onCheckedChange={(on) => patchSection("http2", { enable_http2: on })}
+       />
+      </label>
+     </div>
 
      <h3 className="subheading">100-continue</h3>
      <div className="stack">
@@ -1646,7 +1799,60 @@ function HotkeysSection(): JSX.Element {
      ))
     )}
    </div>
+   <BurpHotkeyTable term={term} />
   </Card>
+ );
+}
+
+const DISPOSITION_LABEL = { same: "Same chord", alternative: "Browser alternative", declined: "Declined" } as const;
+const DISPOSITION_TONE = { same: "good", alternative: "warn", declined: "neutral" } as const;
+
+/**
+ * Burp's 50 shipped hotkeys and what burpsy does with each (2czi, lib/burp-hotkeys.ts): the same
+ * chord, a browser-forced alternative with the reason, or declined with the reason. The answer to
+ * "where did my Ctrl+T go" lives here rather than in a wiki.
+ */
+function BurpHotkeyTable({ term }: { term: string }): JSX.Element {
+ const needle = term.trim().toLowerCase();
+ const rows = BURP_HOTKEYS.filter(
+  (row) =>
+   needle === "" ||
+   row.action.replace(/_/g, " ").includes(needle) ||
+   row.burpChord.toLowerCase().includes(needle) ||
+   (row.chord ?? "").includes(needle) ||
+   row.reason.toLowerCase().includes(needle),
+ );
+ const counts = { same: 0, alternative: 0, declined: 0 };
+ for (const row of BURP_HOTKEYS) counts[row.disposition] += 1;
+ return (
+  <div className="burp-hotkeys">
+   <div className="shortcut-group">Burp's default hotkeys</div>
+   <p className="field-hint">
+    Burp ships {BURP_HOTKEYS.length}: {counts.same} bound to the same chord, {counts.alternative} to a browser-forced
+    alternative, {counts.declined} declined. Every other Burp action has no default chord and is in the command palette.
+   </p>
+   {rows.length === 0 ? (
+    <Empty title="No matching Burp hotkey" detail="Nothing in Burp's default table matches that search." />
+   ) : (
+    <SimpleTable headers={["Burp action", "Burp", "burpsy", "Disposition", "Why"]}>
+     {rows.map((row) => (
+      <tr key={row.action}>
+       <td>
+        <code>{row.action}</code>
+       </td>
+       <td>
+        <Kbd>{row.burpChord}</Kbd>
+       </td>
+       <td>{row.chord ? <Kbd>{row.chord}</Kbd> : <span className="cell-dim">none</span>}</td>
+       <td>
+        <Badge tone={DISPOSITION_TONE[row.disposition]}>{DISPOSITION_LABEL[row.disposition]}</Badge>
+       </td>
+       <td className="burp-hotkeys-reason">{row.reason}</td>
+      </tr>
+     ))}
+    </SimpleTable>
+   )}
+  </div>
  );
 }
 
@@ -1655,6 +1861,8 @@ function AppearanceSection(): JSX.Element {
  const setTheme = useApp((state) => state.setTheme);
  const density = useApp((state) => state.density);
  const setDensity = useApp((state) => state.setDensity);
+ const tableStripes = useApp((state) => state.tableStripes);
+ const setTableStripes = useApp((state) => state.setTableStripes);
  const editorFont = useApp((state) => state.editorFont);
  const setEditorFont = useApp((state) => state.setEditorFont);
  const editorFontFamily = useApp((state) => state.editorFontFamily);
@@ -1674,6 +1882,16 @@ function AppearanceSection(): JSX.Element {
          {option.label}
         </option>
        ))}
+      </Select>
+     )}
+    </Field>
+    {/* Burp's Settings › Display › Table appearance (desktop/settings/ui/display.html): "Zebra
+        stripe" / "No zebra stripe", zebra by default. */}
+    <Field label="Table appearance" hint="Zebra stripes shade every other row, so a long table reads across.">
+     {(id) => (
+      <Select id={id} value={tableStripes ? "zebra" : "plain"} onChange={(event) => setTableStripes(event.target.value === "zebra")}>
+       <option value="zebra">Zebra stripe</option>
+       <option value="plain">No zebra stripe</option>
       </Select>
      )}
     </Field>
@@ -3268,11 +3486,14 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, () => JSX.Element> = {
  network: NetworkSection,
  scanner: ScannerSettingsSection,
  "llm-triage": LlmTriageSection,
+ skills: SkillsSection,
  "browser-engine": DomEngineSection,
  browser: BrowserSection,
  "upstream-proxy": UpstreamProxySection,
  "platform-auth": PlatformAuthSection,
  "client-certificates": ClientCertificatesSection,
+ "server-certificates": ServerCertificatesSection,
+ logging: FileLoggingSection,
  appearance: AppearanceSection,
  hotkeys: HotkeysSection,
  certificate: CertificateSection,
@@ -3399,7 +3620,14 @@ export function SettingsPage(): JSX.Element {
    // Smooth scrolling is motion, and this one crosses most of the page. An operator who has
    // asked the system for reduced motion gets the jump instantly instead.
    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-   target.scrollIntoView({ block: centred ? "center" : "start", behavior: reduced ? "auto" : "smooth" });
+   // The settings pane is scrolled, and only it: scrollIntoView scrolls EVERY scrollable ancestor,
+   // which pulled the document root up and took the menubar and tool tabs off screen (us6r.2).
+   {
+    const rect = target.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    const want = centred ? box.top + Math.max(0, (container.clientHeight - rect.height) / 2) : box.top;
+    container.scrollBy({ top: rect.top - want, behavior: reduced ? "auto" : "smooth" });
+   }
    setActive(id);
 
    // How far the target is from where it should be: the top of the page for a whole card,
@@ -4277,6 +4505,105 @@ function LlmTriageSection(): JSX.Element {
      </span>
     </div>
    </div>
+  </Card>
+ );
+}
+
+/**
+ * The skill library (burpsy-react-ui-ulsy): packaged prompt techniques from the operator's -skills
+ * directory, which burpsy-mcp publishes as MCP prompts. This card is where an engagement switches a
+ * skill off — a project setting, so another project keeps its own choice. A skill that needs the
+ * scripting runtime is listed as unavailable with the reason rather than hidden, and every manifest
+ * that did not load is listed with why: a library that silently showed fewer skills than its
+ * directory holds would read as complete.
+ */
+function SkillsSection(): JSX.Element {
+ const { get, setDisabled } = useSkills();
+ const heading = (
+  <SectionHeading
+   title="Skills"
+   detail="Packaged prompt techniques from the directory burpsy was started with (-skills DIR). An MCP client lists them as prompts, each naming the tools it calls. Turn a skill off here to stop offering it in this project."
+  />
+ );
+ if (get.error) {
+  return (
+   <Card>
+    {heading}
+    <ErrorNotice error={get.error} />
+   </Card>
+  );
+ }
+ if (!get.data) {
+  return (
+   <Card>
+    {heading}
+    <LoadingPanel />
+   </Card>
+  );
+ }
+ const view: SkillsView = get.data;
+ const toggle = (name: string, on: boolean) => {
+  const next = on ? view.disabled.filter((n) => n !== name) : [...view.disabled, name];
+  setDisabled.mutate(next, {
+   onSuccess: () => toast.success(on ? `Skill ${name} enabled for this project` : `Skill ${name} disabled for this project`),
+   onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : "The skill setting was refused"),
+  });
+ };
+ return (
+  <Card>
+   {heading}
+   {!view.configured ? (
+    <Empty title="No skill library is loaded" detail={view.hint ?? "Start burpsy with -skills DIR."} />
+   ) : (
+    <div className="stack">
+     <p className="field-hint">
+      Loaded from <code>{view.dir}</code>: {formatCount(view.skills.length)} skill{view.skills.length === 1 ? "" : "s"}
+      {view.refused.length > 0 ? `, ${formatCount(view.refused.length)} refused` : ""}.{" "}
+      {view.persisted ? "Which skills are off is saved with this project." : "No project database is attached, so which skills are off lasts until burpsy exits."}
+     </p>
+     {view.disabled_error ? <ErrorNotice error={new Error(`The stored list of disabled skills could not be read: ${view.disabled_error}`)} /> : null}
+     {view.skills.length === 0 ? (
+      <Empty title="The directory holds no loadable skill" detail="Add a <name>.json manifest with a name, a description and a prompt." />
+     ) : (
+      <SimpleTable headers={["Skill", "Calls", "Status", "On for this project"]}>
+       {view.skills.map((skill) => (
+        <tr key={skill.name}>
+         <td>
+          <code>{skill.name}</code>
+          <div className="cell-dim">{skill.description}</div>
+         </td>
+         <td>{skill.tools.length > 0 ? skill.tools.join(", ") : <span className="cell-dim">no tools named</span>}</td>
+         <td>
+          {skill.available ? <Badge tone="good">Available</Badge> : <Badge tone="warn">Unavailable</Badge>}
+          {skill.unavailable_reason ? <div className="cell-dim">{skill.unavailable_reason}</div> : null}
+         </td>
+         <td>
+          <Switch
+           checked={!skill.disabled}
+           onCheckedChange={(on) => {
+            if (!setDisabled.isPending) toggle(skill.name, on);
+           }}
+           label={`Skill ${skill.name}`}
+          />
+         </td>
+        </tr>
+       ))}
+      </SimpleTable>
+     )}
+     {view.refused.length > 0 ? (
+      <SimpleTable headers={["Refused manifest", "Why"]}>
+       {view.refused.map((r) => (
+        <tr key={r.file}>
+         <td>
+          <code>{r.file}</code>
+         </td>
+         <td>{r.error}</td>
+        </tr>
+       ))}
+      </SimpleTable>
+     ) : null}
+    </div>
+   )}
   </Card>
  );
 }

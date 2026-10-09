@@ -175,6 +175,9 @@ func (s *Server) taskAction(w http.ResponseWriter, r *http.Request, _ string) {
 		}
 	case strings.HasSuffix(rest, "/again"):
 		s.handleTaskAgain(w, r)
+	case r.Method == http.MethodGet && !strings.Contains(strings.Trim(rest, "/"), "/"):
+		// Read one task: its row and, for async work, its finished body (burpsy-react-ui-wdza).
+		s.handleTaskGet(w, r)
 	default:
 		s.handleTaskDelete(w, r)
 	}

@@ -239,6 +239,9 @@ export function useStartCrawl() {
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;
+   /** A saved recorded login sequence by id (burpsy-react-ui-xhtk): replayed before the crawl and on
+    *  session loss. An unknown id, an empty scope or no browser is refused before any task exists. */
+   recorded_login?: string;
     /**
      * The eight bounds the engine had but the wire did not (burpsy-react-ui-qzzy).
      *
@@ -272,7 +275,11 @@ export function useStartCrawl() {
    query?: string;
    retention_query?: string;
   // riskAttack: api() mints the gate's confirmation on the operator's Start click (p1uz).
-  }) => api<{ task_id: number; seeds: string[]; state: string; kind: string }>("/api/crawl", json("POST", body)),
+  }) =>
+   api<{ task_id: number; seeds: string[]; state: string; kind: string; out_of_scope_seeds?: { url: string; reason: string }[] }>(
+    "/api/crawl",
+    json("POST", body),
+   ),
   onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap]),
  });
 }

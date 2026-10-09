@@ -106,6 +106,9 @@ func mintPayload(t *testing.T, s *Server, body string) (m struct {
 }) {
 	t.Helper()
 	rec := postJSONRaw(t, s, "/api/collaborator/payload", body)
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Skipf("skipping live interactsh test: out-of-band channel unavailable: %s", strings.TrimSpace(rec.Body.String()))
+	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST /api/collaborator/payload %s = %d: %s", body, rec.Code, strings.TrimSpace(rec.Body.String()))
 	}

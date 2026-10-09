@@ -90,7 +90,11 @@ type sitemapNodeView struct {
 	//
 	// Never omitempty: absent and false are the same JSON, and a client that read an absent
 	// `inserted` as "this is a stored fact" would label every observed node as added.
-	Inserted     bool              `json:"inserted"`
+	Inserted bool `json:"inserted"`
+	// Unrequested marks a URL the live passive crawl saw linked from proxied traffic that nobody has
+	// requested (t3zk), Burp's grey item. LinkedFrom is the page that linked to it.
+	Unrequested  bool              `json:"unrequested,omitempty"`
+	LinkedFrom   string            `json:"linked_from,omitempty"`
 	AddedAt      *int64            `json:"added_at,omitempty"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`
@@ -137,6 +141,14 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sitemapInsertReq is the request body sitemapInsert decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sitemapInsertReq struct {
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	TLS  bool   `json:"tls"`
+	Path string `json:"path"`
+}
+
 // sitemapInsert records one operator-added site-map node (amu).
 //
 // The response says which of the two things happened, because they are different facts an operator
@@ -145,13 +157,8 @@ func (s *Server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 // was on the map for a stronger reason, and the distinction is the whole point of keeping inserts
 // separate from observations.
 func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host string `json:"host"`
-		Port uint16 `json:"port"`
-		TLS  bool   `json:"tls"`
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+	var req sitemapInsertReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"/p\"}",
 			http.StatusBadRequest)
 		return
@@ -184,18 +191,21 @@ func (s *Server) sitemapInsert(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(body)
 }
 
+// sitemapDeleteReq is the request body sitemapDelete decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type sitemapDeleteReq struct {
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+	TLS  bool   `json:"tls"`
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
 // sitemapDelete validates the node fields the UI sent and suppresses that host, branch or item.
 // A wrong-verb answer is the mux's business; a body naming no host, or a path with no kind, is a
 // 400 saying what was wrong — not a silent success that removed nothing.
 func (s *Server) sitemapDelete(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Host string `json:"host"`
-		Port uint16 `json:"port"`
-		TLS  bool   `json:"tls"`
-		Path string `json:"path"`
-		Kind string `json:"kind"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
+	var req sitemapDeleteReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil || req.Host == "" {
 		http.Error(w, "body must be JSON {\"host\": \"h\", \"port\": n, \"tls\": bool, \"path\": \"\", \"kind\": \"host\"} (path \"\" = whole host) or {.., \"path\": \"/p\", \"kind\": \"item\"|\"branch\"}", http.StatusBadRequest)
 		return
 	}
@@ -230,7 +240,10 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	var tree []sitemapNodeView
 	var nodeCount int
 
-	for _, host := range s.sitemap.Hosts() {
+	// One snapshot serves both the observed tree and the dedupe of inserted and unrequested items
+	// below, so the two agree with each other and the map is cloned once per request.
+	hosts := s.sitemap.Hosts()
+	for _, host := range hosts {
 		if hostFilter != "" && host.Host != hostFilter {
 			continue
 		}
@@ -274,6 +287,15 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	// know about them. An insert naming a path that was already observed is not emitted: the
 	// observation is the stronger fact, and the caller was told exactly that at insert time.
 	insertedPaths := make([]sitemapNodeView, 0)
+	// Built on first use, once per request: a lookup per merged item instead of a site-map clone and
+	// a scan of every observed path per merged item, which made this read O(merged x observed).
+	var observed observedIndex
+	isObserved := func(in *sitemap.InsertedNode) bool {
+		if observed == nil {
+			observed = newObservedIndex(hosts)
+		}
+		return observed.has(in)
+	}
 	for _, in := range s.sitemap.Inserts() {
 		if hostFilter != "" && in.Host != hostFilter {
 			continue
@@ -281,7 +303,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 		if pathFilter != "" && !strings.Contains(in.Path, pathFilter) {
 			continue
 		}
-		if in.Path != "" && observedPath(s.sitemap, in) {
+		if in.Path != "" && isObserved(in) {
 			continue
 		}
 		nodeCount++
@@ -303,6 +325,38 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
 		})
 	}
+	// Unrequested items (t3zk), merged the same way and dropped once anything has requested them.
+	for _, un := range s.sitemap.Unrequested() {
+		if hostFilter != "" && un.Host != hostFilter {
+			continue
+		}
+		if pathFilter != "" && !strings.Contains(un.Path, pathFilter) {
+			continue
+		}
+		as := &sitemap.InsertedNode{Host: un.Host, Port: un.Port, TLS: un.TLS, Path: un.Path}
+		if isObserved(as) {
+			continue
+		}
+		nodeCount++
+		seen := un.Seen.UnixMilli()
+		insertedPaths = append(insertedPaths, sitemapNodeView{
+			Key:         nodeKey(un.Host, un.Port, un.TLS, un.Path),
+			HostName:    un.Host,
+			Segment:     pathSegment(un.Path),
+			Path:        un.Path,
+			Port:        un.Port,
+			TLS:         un.TLS,
+			Depth:       len(ancestorPaths(un.Path)),
+			Unrequested: true,
+			LinkedFrom:  un.From,
+			AddedAt:     &seen,
+			Methods:     []string{},
+			Statuses:    []int{},
+			Mimes:       []string{},
+			Recent:      []core.ExchangeID{},
+			InScope:     s.scope.Contains(un.Host, un.Port, pathOrRoot(un.Path), un.TLS),
+		})
+	}
 	tree, nodeCount = mergeInsertedIntoTree(tree, insertedPaths, nodeCount)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -315,27 +369,68 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// observedPath reports whether the observed tree already holds this exact path under its host. An
-// insert that names one is not a new node: the observation is the stronger fact about that URL.
-func observedPath(sm *sitemap.SiteMap, in *sitemap.InsertedNode) bool {
-	for _, host := range sm.Hosts() {
-		if host.Host != in.Host || host.Port != in.Port || host.TLS != in.TLS {
-			continue
+// observedIndex answers whether the observed tree already holds a path under its host, for the
+// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its clean form
+// is a stored path key, or when it names a folder that anything observed sits beneath: the fold
+// synthesises ancestor folders, so an insert naming /api/ would otherwise produce a second /api/ node
+// beside the synthesised one. "/" is observed under any host that has a path at all.
+type observedIndex map[observedHostKey]*observedHost
+
+type observedHostKey struct {
+	host string
+	port uint16
+	tls  bool
+}
+
+type observedHost struct {
+	// keys are the stored path keys, exactly as the site map holds them.
+	keys map[string]struct{}
+	// folders holds every clean observed path's prefixes that end in "/" ("/", "/a/", "/a/b/" for
+	// /a/b/c), which is the set a folder query X matches as HasPrefix(path, X+"/").
+	folders map[string]struct{}
+	any     bool
+}
+
+func newObservedIndex(hosts []*sitemap.HostNode) observedIndex {
+	idx := observedIndex{}
+	for _, h := range hosts {
+		k := observedHostKey{h.Host, h.Port, h.TLS}
+		oh := idx[k]
+		if oh == nil {
+			oh = &observedHost{keys: map[string]struct{}{}, folders: map[string]struct{}{}}
+			idx[k] = oh
 		}
-		clean, _ := splitPathQuery(in.Path)
-		if _, ok := host.Paths[clean]; ok {
-			return true
-		}
-		// A folder is observed when anything beneath it is: the fold synthesises ancestor folders, so
-		// an insert naming /api/ would otherwise produce a second /api/ node beside the synthesised one.
-		for _, pn := range host.Paths {
+		for key, pn := range h.Paths {
+			oh.keys[key] = struct{}{}
+			oh.any = true
 			cleanPath, _ := splitPathQuery(pn.Path)
-			if clean == "/" || strings.HasPrefix(cleanPath, strings.TrimSuffix(clean, "/")+"/") {
-				return true
+			for i := 0; i < len(cleanPath); i++ {
+				if cleanPath[i] == '/' {
+					oh.folders[cleanPath[:i+1]] = struct{}{}
+				}
 			}
 		}
 	}
-	return false
+	return idx
+}
+
+func (idx observedIndex) has(in *sitemap.InsertedNode) bool {
+	oh := idx[observedHostKey{in.Host, in.Port, in.TLS}]
+	if oh == nil {
+		return false
+	}
+	clean, _ := splitPathQuery(in.Path)
+	if _, ok := oh.keys[clean]; ok {
+		return true
+	}
+	if !oh.any {
+		return false
+	}
+	if clean == "/" {
+		return true
+	}
+	_, ok := oh.folders[strings.TrimSuffix(clean, "/")+"/"]
+	return ok
 }
 
 // pathOrRoot is the path scope questions are asked about: an inserted host node has no path, and
@@ -1115,7 +1210,7 @@ func (s *Server) matchReplaceGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) matchReplacePut(w http.ResponseWriter, r *http.Request) {
 	var set matchReplaceSetSpec
-	if err := json.NewDecoder(r.Body).Decode(&set); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&set); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1226,6 +1321,13 @@ func (s *Server) handleMatchReplaceRules(w http.ResponseWriter, r *http.Request)
 	s.matchReplaceRulesHandler(w, r)
 }
 
+// matchReplaceTestReq is the request body handleMatchReplaceTest decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type matchReplaceTestReq struct {
+	Input      string                 `json:"input"`
+	Direction  string                 `json:"direction"`
+	DraftRules []matchReplaceRuleSpec `json:"draft_rules"`
+}
+
 // handleMatchReplaceTest compiles draft rules and applies them to an input, mirroring the UI's
 // "original vs auto-modified" test.
 //
@@ -1239,12 +1341,8 @@ func (s *Server) handleMatchReplaceTest(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input      string                 `json:"input"`
-		Direction  string                 `json:"direction"`
-		DraftRules []matchReplaceRuleSpec `json:"draft_rules"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req matchReplaceTestReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1342,6 +1440,10 @@ type toolLogEntry struct {
 	// never 0: the traffic store counts rows from zero, so 0 is a real exchange and a null-less zero
 	// would show the viewer the wrong message pair.
 	Exchange *uint64 `json:"exchange"`
+	// Mime is the response media type the row was recorded with (toollog.Entry.Mime), projected so the
+	// MIME view filter and a MIME column can read it. Null when no type was measured — a transport
+	// failure or a whole-run row — and "" when a response declared none; the two are different facts.
+	Mime *string `json:"mime"`
 }
 
 // toolLogResp mirrors toollog.ts's LogResp.
@@ -1420,7 +1522,7 @@ type toolLogSetCaptureReq struct {
 // deliberately not recorded, and the uncaptured counters start counting them.
 func (s *Server) toolLogSetCapture(w http.ResponseWriter, r *http.Request) {
 	var req toolLogSetCaptureReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "body must be JSON with tool and on", http.StatusBadRequest)
 		return
 	}
@@ -1473,6 +1575,7 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := q.Get("filter")
 	search := q.Get("search")
+	view := parseToolLogView(q)
 	limit := 0
 	if raw := q.Get("limit"); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
@@ -1492,21 +1595,21 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	}
 	matched := make([]*toollog.Entry, 0, len(entries))
 	for _, e := range entries {
-		if !toolLogMatches(e, filter, search) {
+		if !toolLogMatches(e, filter, search) || !s.toolLogViewMatches(e, view) {
 			continue
 		}
 		matched = append(matched, e)
 		counts[e.Tool.String()]++
 	}
 
-	view := make([]toolLogEntry, 0, len(matched))
+	rows := make([]toolLogEntry, 0, len(matched))
 	if limit > 0 {
-		for i := len(matched) - 1; i >= 0 && len(view) < limit; i-- {
-			view = append(view, toolLogEntryView(matched[i]))
+		for i := len(matched) - 1; i >= 0 && len(rows) < limit; i-- {
+			rows = append(rows, toolLogEntryView(matched[i]))
 		}
 	} else {
 		for _, e := range matched {
-			view = append(view, toolLogEntryView(e))
+			rows = append(rows, toolLogEntryView(e))
 		}
 	}
 
@@ -1532,10 +1635,10 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(toolLogResp{
 		Total:           len(matched),
-		Shown:           len(view),
+		Shown:           len(rows),
 		Dropped:         s.toolLog.Dropped(),
 		Counts:          counts,
-		Entries:         view,
+		Entries:         rows,
 		Capturing:       capturing,
 		Uncaptured:      uncaptured,
 		UncapturedTotal: uncapturedTotal,
@@ -1554,6 +1657,12 @@ func (s *Server) toolLogGet(w http.ResponseWriter, r *http.Request) {
 			MIME: f.MIME,
 		},
 	})
+}
+
+// toolLogSetCommentReq is the request body toolLogSetComment decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolLogSetCommentReq struct {
+	Comment   *string `json:"comment"`
+	Highlight *string `json:"highlight"`
 }
 
 // toolLogSetComment serves PATCH /api/tools/log/{id} — Burp's log comment
@@ -1580,11 +1689,8 @@ func (s *Server) toolLogSetComment(w http.ResponseWriter, r *http.Request) {
 	// comment-only PATCH decoded the absent highlight key as "" and SetHighlight wrote it over
 	// whatever colour the row already had. A key that is absent from the body now leaves that axis
 	// alone; a key present with "" still clears it, same as before.
-	var req struct {
-		Comment   *string `json:"comment"`
-		Highlight *string `json:"highlight"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolLogSetCommentReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1664,17 +1770,20 @@ func isUTF8(b []byte) bool {
 	return strings.ToValidUTF8(string(b), "") == string(b)
 }
 
+// toolsDecodeReq is the request body handleToolsDecode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsDecodeReq struct {
+	Input    string `json:"input"`
+	Encoding string `json:"encoding"`
+	Guess    bool   `json:"guess_alphabets"`
+}
+
 func (s *Server) handleToolsDecode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input    string `json:"input"`
-		Encoding string `json:"encoding"`
-		Guess    bool   `json:"guess_alphabets"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsDecodeReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1867,16 +1976,19 @@ func plausibleDecode(before, after string) bool {
 	return float64(nonPrint)/float64(len(after)) < 0.1
 }
 
+// toolsEncodeReq is the request body handleToolsEncode decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsEncodeReq struct {
+	Input    string `json:"input"`
+	Encoding string `json:"encoding"`
+}
+
 func (s *Server) handleToolsEncode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input    string `json:"input"`
-		Encoding string `json:"encoding"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsEncodeReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1943,39 +2055,59 @@ func encodableNames() []string {
 	return append(names, "ascii", "rot13")
 }
 
+// toolsHashReq is the request body handleToolsHash decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+// input_encoding / key_encoding: utf8 (default), hex or base64 (standard or URL-safe, padded or
+// not). output: hex (default), base64, or base64url (unpadded — a JWS signature). key is required
+// by the hmac-* family and refused by every other algorithm (burpsy-react-ui-wi55, -7tgt).
+type toolsHashReq struct {
+	Input         string `json:"input" desc:"the text to hash, decoded per input_encoding"`
+	InputEncoding string `json:"input_encoding" desc:"utf8 (default), hex or base64"`
+	Algorithm     string `json:"algorithm" desc:"a digest (md5, sha1, sha256, sha3-256, blake2b-256, …) or an hmac-* algorithm; empty means sha256"`
+	Key           string `json:"key" desc:"the HMAC key, decoded per key_encoding; required by hmac-* and refused otherwise"`
+	KeyEncoding   string `json:"key_encoding" desc:"utf8 (default), hex or base64"`
+	Output        string `json:"output" desc:"hex (default), base64 or base64url"`
+}
+
 func (s *Server) handleToolsHash(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		Input     string `json:"input"`
-		Algorithm string `json:"algorithm"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsHashReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	h := tools.NewHasher()
-	var digest string
-	// Named exhaustively, with no default branch. An unknown algorithm used to fall through to SHA-256
-	// while the reply echoed back the algorithm that was *asked for*, so a caller storing
-	// {algorithm, output} recorded a digest under a name that did not produce it — and a typo in the
-	// field ("sha-256", "sha265") silently returned a plausible-looking hash rather than a complaint.
-	// An empty algorithm still means SHA-256, because that is the documented default and every existing
-	// caller that omits the field relies on it; a *stated* algorithm now has to be one this can compute.
-	switch strings.ToLower(strings.TrimSpace(req.Algorithm)) {
-	case "md5":
-		digest = h.MD5(req.Input)
-	case "sha1":
-		digest = h.SHA1(req.Input)
-	case "sha512":
-		digest = h.SHA512(req.Input)
-	case "sha256", "":
-		digest = h.SHA256(req.Input)
-	default:
-		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of md5, sha1, sha256, sha512",
-			req.Algorithm), http.StatusBadRequest)
+	// Named exhaustively by the tools table, with no fallback. An unknown algorithm used to fall
+	// through to SHA-256 while the reply echoed back the algorithm that was *asked for*, so a caller
+	// storing {algorithm, output} recorded a digest under a name that did not produce it. An empty
+	// algorithm still means SHA-256, the documented default every caller that omits the field relies on.
+	alg, ok := tools.LookupDigest(req.Algorithm)
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown algorithm %q: expected one of %s",
+			req.Algorithm, strings.Join(tools.DigestAlgorithmNames(), ", ")), http.StatusBadRequest)
+		return
+	}
+	data, err := tools.DecodeDigestInput(req.Input, req.InputEncoding)
+	if err != nil {
+		http.Error(w, "input: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var key []byte
+	if req.Key != "" {
+		if key, err = tools.DecodeDigestInput(req.Key, req.KeyEncoding); err != nil {
+			http.Error(w, "key: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	sum, err := tools.ComputeDigest(alg, data, key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	digest, err := tools.EncodeDigest(sum, req.Output)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -2001,6 +2133,23 @@ type compareOp struct {
 	Uninteresting bool `json:"uninteresting,omitempty"`
 }
 
+// toolsCompareReq is the request body handleToolsCompare decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type toolsCompareReq struct {
+	A string `json:"a"`
+	B string `json:"b"`
+	// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
+	// request list, which is empty unless the operator populated it — so an old client that
+	// does not send this field gets exactly the behaviour it had before the field existed.
+	Response bool `json:"response"`
+	// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
+	Granularity string `json:"granularity"`
+	// ABase64 / BBase64 carry a side as base64 instead of text (burpsy-react-ui-ppqw): a file
+	// loaded from disk can be binary, and a JSON string would replace every non-UTF-8 byte
+	// with U+FFFD before the diff ever saw it. A side may be sent one way or the other, not both.
+	ABase64 string `json:"a_base64"`
+	BBase64 string `json:"b_base64"`
+}
+
 // handleToolsCompare mirrors comparer.ts's CompareResp. The engine aligns the two inputs —
 // byte-by-byte or word-by-word, the operator's choice — and this folds consecutive differences into
 // equal/replace/insert/delete ops so the UI can render unified columns.
@@ -2014,21 +2163,30 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		A string `json:"a"`
-		B string `json:"b"`
-		// Response selects which uninteresting-header list applies. Defaults to false, i.e. the
-		// request list, which is empty unless the operator populated it — so an old client that
-		// does not send this field gets exactly the behaviour it had before the field existed.
-		Response bool `json:"response"`
-		// Granularity is "bytes" (default, and what a client that omits it gets) or "words".
-		Granularity string `json:"granularity"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req toolsCompareReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	a, b := []byte(req.A), []byte(req.B)
+	for _, side := range []struct {
+		name, text, b64 string
+		into            *[]byte
+	}{{"a", req.A, req.ABase64, &a}, {"b", req.B, req.BBase64, &b}} {
+		if side.b64 == "" {
+			continue
+		}
+		if side.text != "" {
+			http.Error(w, fmt.Sprintf("side %s was sent both as %q and as %q; send one", side.name, side.name, side.name+"_base64"), http.StatusBadRequest)
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(side.b64)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%s_base64 is not standard base64: %v", side.name, err), http.StatusBadRequest)
+			return
+		}
+		*side.into = raw
+	}
 	granularity := strings.ToLower(strings.TrimSpace(req.Granularity))
 	if granularity == "" {
 		granularity = "bytes"
@@ -2129,6 +2287,11 @@ func (s *Server) handleToolsCompare(w http.ResponseWriter, r *http.Request) {
 
 // ---- Organizer ---------------------------------------------------------------------------------
 
+// organizerReq is the request body handleOrganizer decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerReq struct {
+	Exchange int `json:"exchange"`
+}
+
 func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -2143,10 +2306,8 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 		// member was moved out).
 		json.NewEncoder(w).Encode(map[string]interface{}{"items": s.organizerView(), "collections": s.organizer.Collections()})
 	case http.MethodPost:
-		var req struct {
-			Exchange int `json:"exchange"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2158,19 +2319,40 @@ func (s *Server) handleOrganizer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "An exchange id cannot be negative", http.StatusBadRequest)
 			return
 		}
-		if _, err := s.store.GetExchange(core.ExchangeID(req.Exchange)); err != nil {
+		ex, err := s.store.GetExchange(core.ExchangeID(req.Exchange))
+		if err != nil {
 			// Checked rather than trusted: the organizer stores the id, and saving one that resolves
 			// to nothing produces an entry whose "open in history" goes nowhere.
 			http.Error(w, fmt.Sprintf("No exchange %d has been captured", req.Exchange), http.StatusNotFound)
 			return
 		}
 		item := s.organizer.Add(req.Exchange)
+		// Burp copies notes and highlights across when a message is sent to another tool
+		// (burpsy-react-ui-jva5) — a Repeater tab's note rides its exchange's comment, and this is
+		// where it reaches Organizer. Copied once, at add time: the item's note is the Organizer's
+		// own from then on, and later edits to either side do not overwrite the other.
+		if note, highlight := organizerSeedFrom(ex); note != "" || highlight != "" {
+			s.organizer.Update(item.ID, item.Title, note, highlight)
+			for _, listed := range s.organizer.List() {
+				if listed.ID == item.ID {
+					item = listed
+					break
+				}
+			}
+		}
 		s.organizerChanged()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(item)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// organizerItemReq is the request body handleOrganizerItem decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerItemReq struct {
+	Title     string `json:"title"`
+	Note      string `json:"note"`
+	Highlight string `json:"highlight"`
 }
 
 func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
@@ -2190,12 +2372,8 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPost:
-		var req struct {
-			Title     string `json:"title"`
-			Note      string `json:"note"`
-			Highlight string `json:"highlight"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerItemReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2222,6 +2400,11 @@ func (s *Server) handleOrganizerItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// organizerItemStatusReq is the request body organizerItemStatus decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerItemStatusReq struct {
+	Status string `json:"status"`
+}
+
 // organizerItemStatus serves PUT /api/tools/organizer/{id}/status — the workflow-status write
 // path, separate from the POST edit form for the same reason the store keeps SetStatus apart
 // from Update: setting a status is one deliberate operator decision (Burp applies it from the
@@ -2240,10 +2423,8 @@ func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idS
 		http.Error(w, "Invalid item id", http.StatusBadRequest)
 		return
 	}
-	var req struct {
-		Status string `json:"status"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req organizerItemStatusReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -2261,6 +2442,22 @@ func (s *Server) organizerItemStatus(w http.ResponseWriter, r *http.Request, idS
 }
 
 // ---- Organizer collections ----------------------------------------------------------------------
+
+// organizerCollectionCreateReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionCreateReq struct {
+	Name string `json:"name"`
+}
+
+// organizerInboxMoveReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerInboxMoveReq struct {
+	ItemIDs []int `json:"item_ids"`
+}
+
+// organizerCollectionUpdateReq is the request body handleOrganizerCollections decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionUpdateReq struct {
+	Name string  `json:"name"`
+	Note *string `json:"note"`
+}
 
 // handleOrganizerCollections serves the /api/tools/organizer/collections surface — Burp's
 // organizer collections (tools/organizer/collections.html): New / Rename / Duplicate / Delete,
@@ -2284,10 +2481,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 	if rest == "" {
 		switch r.Method {
 		case http.MethodPost:
-			var req struct {
-				Name string `json:"name"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var req organizerCollectionCreateReq
+			if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 				http.Error(w, "Invalid request body", http.StatusBadRequest)
 				return
 			}
@@ -2316,10 +2511,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var req struct {
-			ItemIDs []int `json:"item_ids"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerInboxMoveReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2357,11 +2550,8 @@ func (s *Server) handleOrganizerCollections(w http.ResponseWriter, r *http.Reque
 	}
 	switch r.Method {
 	case http.MethodPut:
-		var req struct {
-			Name string  `json:"name"`
-			Note *string `json:"note"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req organizerCollectionUpdateReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
@@ -2478,6 +2668,12 @@ func (s *Server) nameTaken(name string) bool {
 	return false
 }
 
+// organizerCollectionItemsReq is the request body organizerCollectionItems decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type organizerCollectionItemsReq struct {
+	ItemIDs []int `json:"item_ids"`
+	Copy    bool  `json:"copy"`
+}
+
 // organizerCollectionItems moves (or copies) a set of items into one collection. copy=true
 // duplicates each item first — the Copy Link analogue — so the source keeps its own entry.
 func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request, id int) {
@@ -2485,11 +2681,8 @@ func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		ItemIDs []int `json:"item_ids"`
-		Copy    bool  `json:"copy"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req organizerCollectionItemsReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -2522,4 +2715,14 @@ func (s *Server) organizerCollectionItems(w http.ResponseWriter, r *http.Request
 	s.organizerChanged()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"moved": moved})
+}
+
+// organizerSeedFrom is what an Organizer item inherits from the exchange it is made from: the
+// exchange's comment and highlight (burpsy-react-ui-jva5). Empty strings mean "nothing to copy" —
+// an unset highlight stays the item's own "none" default rather than being written as blank.
+func organizerSeedFrom(ex *core.Exchange) (note, highlight string) {
+	if ex.Notes != nil {
+		note = *ex.Notes
+	}
+	return note, ex.Highlight
 }

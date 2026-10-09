@@ -103,6 +103,11 @@ const (
 	// the splice is skipped, never rewritten into something the operator did not
 	// type.
 	escapeBcheck
+	// escapeBcheckAppend is escapeBcheck for a nested point under "Append to base
+	// parameter value": the window is the whole outer value, rebuilt by
+	// bcheck.InsertionPoint.WireValueAppend with the payload after the inner
+	// value (see Placement).
+	escapeBcheckAppend
 )
 
 // InsertionPoint is an attack position: a span into the request plus what it is.
@@ -116,6 +121,114 @@ type InsertionPoint struct {
 	// (JSON, XML, multipart, nested), whose wire value is rebuilt per payload.
 	escape escapeKind
 	bc     *bcheck.InsertionPoint
+
+	// Append is true when this position appends to its base value rather than
+	// replacing it ("Append to base parameter value", see Placement). base is then
+	// the value's own span; for a replacing position the value is Span itself.
+	Append bool
+	base   core.Span
+}
+
+// BaseSpan is the base value this position carries in the request: the bytes a
+// payload replaces, or — for an appending position, whose Span is the zero-length
+// point after them — the bytes a payload is appended to.
+func (p *InsertionPoint) BaseSpan() core.Span {
+	if p.Append {
+		return p.base
+	}
+	return p.Span
+}
+
+// Placement is Burp's "Automatic payload placement" (Settings > Tools >
+// Intruder, configPanelIntruderAutomaticPayloadPlacement; burpsy-react-ui-1krs):
+// whether an automatically placed position replaces its base parameter value or
+// appends to it.
+//
+// Burp's own construction (Zrw7.Zz, and the form walk in Zrw7.ZD) builds each
+// automatic marker as Zswj(append ? valueEnd : valueStart, valueEnd) — under
+// append, a zero-length marker at the end of the value, so the payload is
+// inserted after the base value and the base value is sent as captured. That is
+// what PlacementAppend does to a discovered position here.
+//
+// Only parameter VALUES append: URL, body and cookie parameter values and the
+// body-container values (JSON, XML, multipart content, nested). Those are what
+// Burp's automatic placement marks. burpsy's further discovery families —
+// parameter names, path segments, header values, multipart attributes and the
+// entire body — keep replacing under either setting; gaps.md records the split.
+// Manual positions are never affected: the operator marked those bytes by hand.
+type Placement uint8
+
+const (
+	PlacementReplace Placement = iota
+	PlacementAppend
+)
+
+// ParsePlacement reads the wire form: "" and "replace" are replace, "append" is
+// append, anything else is refused by name.
+func ParsePlacement(s string) (Placement, error) {
+	switch s {
+	case "", "replace":
+		return PlacementReplace, nil
+	case "append":
+		return PlacementAppend, nil
+	}
+	return PlacementReplace, fmt.Errorf("payload_placement: unknown placement %q (want replace or append)", s)
+}
+
+func (p Placement) String() string {
+	if p == PlacementAppend {
+		return "append"
+	}
+	return "replace"
+}
+
+// appendsToValue is the set of position kinds "Append to base parameter value"
+// applies to. See Placement.
+func appendsToValue(k PointKind) bool {
+	switch k {
+	case PointURLParamValue, PointBodyParamValue, PointCookieValue,
+		PointBodyJSONValue, PointBodyNestedValue, PointBodyXMLValue, PointBodyMultipartValue:
+		return true
+	}
+	return false
+}
+
+// appended turns a replacing position into an appending one, when its kind
+// appends at all. A position whose base bytes are spliced verbatim becomes the
+// zero-length span at the end of its value; a nested position keeps its window,
+// because appending there rebuilds the whole outer value (escapeBcheckAppend).
+func (p InsertionPoint) appended() InsertionPoint {
+	if !appendsToValue(p.Kind) {
+		return p
+	}
+	p.Append = true
+	p.base = p.Span
+	if p.escape == escapeBcheck && p.bc.AppendRebuildsValue() {
+		p.escape = escapeBcheckAppend
+		return p
+	}
+	p.Span = core.Span{Offset: p.Span.End(), Len: 0}
+	return p
+}
+
+// SpansOverlap reports whether two positions would compete for the same bytes.
+// Two non-empty spans overlap when they share a byte; adjacency is not overlap.
+// A zero-length span — an appended position, or an empty base value — is an
+// insertion at one offset, and it overlaps any span it touches, edges included:
+// a payload inserted exactly where another position's bytes begin or end would
+// make the request depend on the splice order, which is the ambiguity the
+// earliest-span-wins rule (ApplyAll) and the manual-marker refusal exist to
+// prevent. Two zero-length spans overlap only at the same offset.
+func SpansOverlap(a, b core.Span) bool {
+	switch {
+	case a.Len == 0 && b.Len == 0:
+		return a.Offset == b.Offset
+	case a.Len == 0:
+		return b.Offset <= a.Offset && a.Offset <= b.End()
+	case b.Len == 0:
+		return a.Offset <= b.Offset && b.Offset <= a.End()
+	}
+	return a.Offset < b.End() && b.Offset < a.End()
 }
 
 // PointConfig is which position families to generate. Maps 1:1 onto Burp's
@@ -129,6 +242,9 @@ type PointConfig struct {
 	EntireBody     bool
 	Cookies        bool
 	Headers        bool
+	// Placement is whether discovered parameter values are replaced or appended
+	// to. The zero value is replace, what every caller got before it existed.
+	Placement Placement
 }
 
 // ManualSpan is an operator-marked payload position: a byte range of the base
@@ -154,7 +270,8 @@ func ManualPoints(base []byte, spans []ManualSpan) ([]InsertionPoint, error) {
 			if j >= i {
 				break
 			}
-			if span.Start < other.End && other.Start < span.End {
+			if SpansOverlap(core.Span{Offset: span.Start, Len: span.End - span.Start},
+				core.Span{Offset: other.Start, Len: other.End - other.Start}) {
 				return nil, fmt.Errorf("manual points %d and %d overlap", j+1, i+1)
 			}
 		}
@@ -312,6 +429,11 @@ func FindPoints(msg *core.StoredMessage, cfg *PointConfig) []InsertionPoint {
 			})
 		}
 	}
+	if cfg.Placement == PlacementAppend {
+		for i := range out {
+			out[i] = out[i].appended()
+		}
+	}
 	return out
 }
 
@@ -417,13 +539,21 @@ func applyAllChecked(raw []byte, places []ApplyPlace) (out []byte, refusals []st
 	}
 	built := make([]byte, 0, len(raw)+extra)
 	cursor := 0
-	for _, s := range sl {
-		if s.start < cursor {
+	// kept is the last splice written. Sorted by (start, end), a later span can only compete with
+	// the one before it, and SpansOverlap is the shared definition of "competes": a zero-length
+	// insertion (an appended value, 1krs) touching a kept span's edge loses to it, exactly as an
+	// overlapping non-empty span always has.
+	var kept *spliced
+	for i := range sl {
+		s := &sl[i]
+		if kept != nil && SpansOverlap(core.Span{Offset: kept.start, Len: kept.end - kept.start},
+			core.Span{Offset: s.start, Len: s.end - s.start}) {
 			continue
 		}
 		built = append(built, raw[cursor:s.start]...)
 		built = append(built, s.payload...)
 		cursor = s.end
+		kept = s
 	}
 	built = append(built, raw[cursor:]...)
 

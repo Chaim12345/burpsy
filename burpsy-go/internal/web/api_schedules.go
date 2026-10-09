@@ -99,7 +99,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.viewSchedules())
 
 	case http.MethodPost:
-		sc, err := s.decodeSchedule(r)
+		sc, err := s.decodeSchedule(w, r)
 		if err != nil {
 			http.Error(w, err.Error(), scheduleErrStatus(err))
 			return
@@ -135,7 +135,7 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPut:
-		sc, err := s.decodeSchedule(r)
+		sc, err := s.decodeSchedule(w, r)
 		if err != nil {
 			http.Error(w, err.Error(), scheduleErrStatus(err))
 			return
@@ -165,9 +165,9 @@ func (s *Server) handleScheduleDetail(w http.ResponseWriter, r *http.Request) {
 // pool saved" because it holds the registry. Both are refused at save time rather than at fire time,
 // which is the whole point — a schedule that fails at 02:00 fails where nobody is looking, and the
 // operator's next information about it is a target that was never scanned.
-func (s *Server) decodeSchedule(r *http.Request) (schedule.Schedule, error) {
+func (s *Server) decodeSchedule(w http.ResponseWriter, r *http.Request) (schedule.Schedule, error) {
 	var sc schedule.Schedule
-	if err := json.NewDecoder(r.Body).Decode(&sc); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&sc); err != nil {
 		return sc, errors.New("Body must be a JSON schedule: name, kind, first_ms, and optionally interval_secs, pool and params")
 	}
 	if sc.Pool != "" {

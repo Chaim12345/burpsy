@@ -1,7 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { RepeaterSendOptions } from "./types";
+import type { Exchange, RepeaterSendOptions } from "./types";
 import type { AttackMode, PayloadRuleSpec, PayloadSourceType, PointView, RunView } from "./types.tools";
+import * as intruderTabOps from "./intruder-tabs";
+import type { IntruderTabSlot } from "./intruder-tabs";
 import type { ManualSpanView } from "./intruder-marks";
 import { DEFAULT_HIDE_REQUEST_HEADERS, DEFAULT_HIDE_RESPONSE_HEADERS, requestBodyChanged } from "./message";
 import type { ImportedTheme } from "./theme-import";
@@ -206,6 +208,21 @@ export interface RepeaterTab {
   * operator overrides again, exactly as Burp's toggle does.
   */
  inheritsGlobal?: boolean;
+ /**
+  * The tab's Notes panel (burpsy-react-ui-jva5): Burp's "If you find something interesting in a
+  * request or response, you can add notes to the Repeater tab". Persisted with the tab, carried by
+  * duplicate and reopen (both copy the whole tab), seeded from an exchange's comment when the tab
+  * is opened from one, and sent with every send so the new exchange carries it as its comment —
+  * which is how it reaches Organizer and every other tool that reads an exchange's notes.
+  */
+ note?: string;
+ /**
+  * Override SNI (burpsy-react-ui-k011): Burp's target-dialog "Override SNI". The server name this
+  * tab's TLS ClientHello carries instead of the target's — a Collaborator domain, to reproduce an
+  * SNI-based external service interaction by hand. Empty or absent is no override. Only the
+  * ClientHello changes; the server refuses it on a plain-HTTP target.
+  */
+ sni?: string;
 }
 
 /** A coloured collapsible bucket of Repeater tabs — Burp's tab groups. Cosmetic by design:
@@ -257,6 +274,14 @@ export interface IntruderConfig {
  label: string;
  mode: AttackMode;
  allPoints: boolean;
+ /**
+  * Burp's "Automatic payload placement" (burpsy-react-ui-1krs): whether discovered parameter values are
+  * replaced by the payload or have it appended. Sent to /points and /run alike — the positions on screen
+  * must be the ones the attack splices — and changing it clears the discovered points, which were
+  * measured under the other placement. Burp keeps this as a user setting; here it travels with the
+  * attack, like every other setting on this page.
+  */
+ payloadPlacement: "replace" | "append";
  points: PointView[];
  selected: number[];
  /** Hand-marked payload positions (Burp's Add §), with the text they cover. */
@@ -280,6 +305,35 @@ export interface IntruderConfig {
  grepMatchCaseSensitive: boolean;
  /** Burp's "Exclude HTTP headers" — the list searches the response body only. */
  grepMatchExcludeHeaders: boolean;
+ /**
+  * Burp's Grep - Payloads (burpsy-react-ui-7qc3): search each response for the payloads that produced
+  * it, with a count column per payload set. Burp's own defaults are off / case-insensitive / headers
+  * included / match pre-URL-encoded ON; burpsy keeps the search ON by default, because reflection has
+  * always been a third of its result-bucket key (gaps.md). The other three are Burp's.
+  */
+ grepPayloadsEnabled: boolean;
+ grepPayloadsCaseSensitive: boolean;
+ grepPayloadsExcludeHeaders: boolean;
+ grepPayloadsMatchPreEncoded: boolean;
+ /**
+  * Burp's results capture filter (burpsy-react-ui-ip2b). Off by default — Burp captures everything until a
+  * filter is applied. Discarded items leave no row and no stored messages, and cannot be recovered; their
+  * counts survive. Statuses are the classes captured.
+  */
+ captureFilterEnabled: boolean;
+ captureDiscardNoResponse: boolean;
+ captureTerm: string;
+ captureRegex: boolean;
+ captureCaseSensitive: boolean;
+ captureNegate: boolean;
+ captureStatuses: ("2xx" | "3xx" | "4xx" | "5xx")[];
+ /**
+  * Burp's "Store requests" / "Store responses" (burpsy-react-ui-nqww). On by default, as in Burp. Off, the
+  * attack still sends, buckets and greps every request; it just does not keep that half in the traffic
+  * store, so its rows cannot be opened, resent or compared.
+  */
+ storeRequests: boolean;
+ storeResponses: boolean;
  /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
   *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
   *  two different requests rather than one request that means both. */
@@ -315,6 +369,31 @@ export interface IntruderConfig {
   */
  setConnectionClose: boolean;
  storePayloads: boolean;
+ /**
+  * Burp's per-request response timeout (RequestOptions.withResponseTimeout, burpsy-react-ui-mmca),
+  * in milliseconds, as typed. Empty means the standing network read timeout; the server receives
+  * `response_timeout_ms` only when this holds a positive number. Text, like `retries`, so "not set"
+  * and an explicit value stay two different attacks.
+  */
+ responseTimeoutMS: string;
+ /**
+  * Burp's "HTTP/1 connection reuse" (burpsy-react-ui-xhqr). On by default, as Burp's own reset
+  * defaults select it (the decompiled Intruder panel's reset sets both its override switch and
+  * "default HTTP/1 keep-alive if supported" to selected). The server's default for an absent field is
+  * off, so this is the one place the Burp default is chosen. Not sent while Set Connection header is
+  * on: the server refuses the pair, because a Connection: close request is never reused.
+  */
+ http1ConnectionReuse: boolean;
+ /** Burp's per-attack "HTTP version" override (xhqr): "" negotiates, "http1" pins HTTP/1.1, "http2"
+  *  requires h2 where the request can be carried over it. */
+ httpVersion: "" | "http1" | "http2";
+ /**
+  * Burp's "Update Host header to match target" (burpsy-react-ui-ety8). On by default, as in Burp
+  * ("By default, Update Host header to match target is selected"); the server's default for an
+  * absent field is off. The server stands the setting aside, and says so, when a position covers
+  * the Host header.
+  */
+ updateHostHeader: boolean;
 }
 
 /**
@@ -409,6 +488,7 @@ export function emptyIntruderConfig(): IntruderConfig {
   label: "",
   mode: "sniper",
   allPoints: false,
+  payloadPlacement: "replace",
   points: [],
   selected: [],
   manualSpans: [],
@@ -427,6 +507,19 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepMatchList: [],
   grepMatchCaseSensitive: false,
   grepMatchExcludeHeaders: false,
+  grepPayloadsEnabled: true,
+  grepPayloadsCaseSensitive: false,
+  grepPayloadsExcludeHeaders: false,
+  grepPayloadsMatchPreEncoded: true,
+  captureFilterEnabled: false,
+  captureDiscardNoResponse: false,
+  captureTerm: "",
+  captureRegex: false,
+  captureCaseSensitive: false,
+  captureNegate: false,
+  captureStatuses: ["2xx", "3xx", "4xx", "5xx"],
+  storeRequests: true,
+  storeResponses: true,
  autoPauseEnabled: false,
  autoPauseMode: "appears",
  autoPauseExpressions: [],
@@ -443,7 +536,33 @@ export function emptyIntruderConfig(): IntruderConfig {
   baseline: false,
   setConnectionClose: false,
   storePayloads: false,
+  responseTimeoutMS: "",
+  http1ConnectionReuse: true,
+  httpVersion: "",
+  updateHostHeader: true,
  };
+}
+
+/**
+ * Hydrate the persisted workspace over the live defaults.
+ *
+ * zustand's default merge is shallow, so a persisted `intruder` object REPLACES the default one
+ * wholesale — and an attack saved before a setting existed comes back with that setting undefined.
+ * For a boolean whose default is true (Burp's "Update Host header to match target", its HTTP/1
+ * connection reuse) undefined reads as off and sends nothing, so a reload would quietly change what
+ * the attack does. Filling the attack from emptyIntruderConfig() first means a field the page grew
+ * later arrives with its own default rather than with nothing.
+ */
+export function mergePersistedWorkspace<T extends { intruder: IntruderConfig }>(persisted: unknown, current: T): T {
+ if (typeof persisted !== "object" || persisted === null) return current;
+ const saved = persisted as Partial<T>;
+ const merged = { ...current, ...saved } as T;
+ if (saved.intruder && typeof saved.intruder === "object") {
+  merged.intruder = { ...emptyIntruderConfig(), ...saved.intruder };
+ }
+ // A workspace saved before attack tabs existed, or one whose active id names no tab (9bv2).
+ Object.assign(merged, intruderTabOps.repairIntruderTabs(saved as Partial<intruderTabOps.IntruderTabsState>));
+ return merged;
 }
 
 let sequence = 0;
@@ -511,6 +630,9 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Zebra-striped table rows (69p0): Burp's user_interface.table_appearance.zebra_striping, which
+  *  ships true — so this does too. */
+ tableStripes: boolean;
  /** Whether to ask before the console tab is closed or reloaded (burpsy-react-ui-fyua), Burp's
   *  suppress_confirm_on_close inverted to a positive opt-in. Off by default — a proxy console is
   *  not a document with unsaved edits, so the prompt is a preference, not a safety default. */
@@ -601,6 +723,13 @@ interface AppState {
 
  repeaterTabs: RepeaterTab[];
  activeRepeaterTab: string | null;
+ /**
+  * Bumped by the palette's "Open tab search" (qqcn) so the Repeater page opens its tab search even
+  * when it is already mounted. A counter, not a boolean: the page cannot reset a flag it did not set
+  * without racing the palette, and a second request must open the search again. Not persisted.
+  */
+ repeaterTabSearchNonce: number;
+ requestRepeaterTabSearch: () => void;
  /** Reopen-closed stack, most recent last. Session-only by design (see partialize). */
  closedRepeaterTabs: RepeaterTab[];
  repeaterGroups: RepeaterGroup[];
@@ -608,6 +737,9 @@ interface AppState {
  /** The live-capture request handed over by a Send to Sequencer action, consumed once by the
   *  page on mount (fhp). Session-only: a seed from yesterday is a request from yesterday. */
  sequencerSeed: SequencerSeed | null;
+ /** Exchanges sent to the custom scan check editor (kbu1) — the messages its Run test uses, as Burp's
+  *  "Send to Custom scan checks editor" collects them. Session-only. */
+ customCheckTestIds: number[];
  /** The one live Intruder attack configuration. Persisted — see IntruderConfig. */
  intruder: IntruderConfig;
  /** The last finished attack, or null when none has run. Persisted alongside its configuration:
@@ -615,6 +747,15 @@ interface AppState {
  intruderRun: IntruderRun | null;
  /** Which Intruder sub-tab is open, so returning to the page lands where it was left. */
  intruderTab: string;
+ /** Attack tabs (9bv2). The three fields above are the ACTIVE tab's live state; every other tab's
+  *  state is parked in its slot. lib/intruder-tabs.ts holds the rules. Persisted. */
+ intruderTabs: IntruderTabSlot[];
+ activeIntruderTabId: string;
+ intruderTabCounter: number;
+ /** Reopen stack. Session-only, like closedRepeaterTabs. */
+ closedIntruderTabs: IntruderTabSlot[];
+ /** Tabs with an attack in flight, for the strip's indicator. Session-only: a reload ends the wait. */
+ intruderRunningTabs: string[];
  /** A pending menubar instruction for the Intruder page (burpsy-react-ui-yinb). Session-only and
   *  cleared on arrival: it is a one-shot command, not a setting, and a stale one replayed after a
   *  reload would launch an attack nobody asked for. */
@@ -634,6 +775,10 @@ interface AppState {
  /** Set when another page hands the Decoder an input to transform. Session-only, like
   *  intruderSeed: a stale payload surviving a reload would masquerade as current work. */
  decoderSeed: { label: string; input: string } | null;
+ /** The exchange the "Guess hidden inputs" dialog is open for, or null when it is closed
+  *  (burpsy-react-ui-wlz8). One app-level dialog rather than one per page, because the row menu
+  *  that opens it is shared by every table. */
+ hiddenInputsTarget: Exchange | null;
  /** Set when another page asks History to focus one exchange. */
  historyFocus: number | null;
  /** Set when another page pushes a filter expression into History. */
@@ -656,6 +801,7 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setTableStripes: (on: boolean) => void;
  setConfirmOnClose: (confirmOnClose: boolean) => void;
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
@@ -673,7 +819,7 @@ interface AppState {
  setInspectorDock: (dock: InspectorDock) => void;
  setInspectorPanelState: (state: InspectorPanelState) => void;
 
- openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client" }) => string;
+ openRepeaterTab: (tab: { name: string; target: string; protocol?: string; request: string; requestBodyBase64?: string; fromExchange?: number; kind?: "http" | "ws"; wsPayload?: string; wsOpcode?: string; wsDirection?: "server" | "client"; note?: string }) => string;
  updateRepeaterTab: (id: string, patch: Partial<Omit<RepeaterTab, "id">>) => void;
  closeRepeaterTab: (id: string) => void;
  closeOtherRepeaterTabs: (id: string) => void;
@@ -698,16 +844,28 @@ interface AppState {
 
  setIntruderSeed: (seed: IntruderSeed | null) => void;
  setSequencerSeed: (seed: SequencerSeed | null) => void;
+ addCustomCheckTestId: (id: number) => void;
+ setCustomCheckTestIds: (ids: number[]) => void;
  /** Patch the attack configuration. Takes an updater so the page's field setters compose. */
  setIntruder: (next: IntruderConfig | ((current: IntruderConfig) => IntruderConfig)) => void;
  setIntruderRun: (run: IntruderRun | null) => void;
  setIntruderTab: (tab: string) => void;
+ openIntruderTab: () => void;
+ switchIntruderTab: (id: string) => void;
+ closeIntruderTab: (id: string) => void;
+ closeAllIntruderTabs: () => void;
+ reopenIntruderTab: () => void;
+ renameIntruderTab: (id: string, name: string) => void;
+ /** Store a report in the tab that launched the attack, whichever tab is active now. */
+ setIntruderRunFor: (id: string, run: IntruderRun | null) => void;
+ setIntruderTabRunning: (id: string, running: boolean) => void;
  /** Ask the Intruder page to start or stop its attack (burpsy-react-ui-yinb). The PAGE decides
   *  whether it can — the menubar cannot size an attack, so it asks rather than asserts. */
  requestIntruderCommand: (kind: IntruderCommand["kind"]) => void;
  clearIntruderCommand: () => void;
  setIntruderStatus: (status: IntruderStatus | null) => void;
  setDecoderSeed: (seed: { label: string; input: string } | null) => void;
+ setHiddenInputsTarget: (exchange: Exchange | null) => void;
  setComparerSlot: (slot: "a" | "b", value: string) => void;
  /** Append one item to a side's list (yy2): send-to adds; the comparison runs on the selected
   * item from each list, so sending no longer discards what was there. */
@@ -734,6 +892,7 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  tableStripes: state.tableStripes,
   confirmOnClose: state.confirmOnClose,
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
@@ -770,6 +929,11 @@ export function persistedWorkspace(state: AppState) {
   intruder: state.intruder,
   intruderRun: state.intruderRun,
   intruderTab: state.intruderTab,
+  // Every open attack tab is work in the same sense; each parked slot carries its own report, and
+  // the strip is capped (INTRUDER_TAB_CAP) so this stays bounded.
+  intruderTabs: state.intruderTabs,
+  activeIntruderTabId: state.activeIntruderTabId,
+  intruderTabCounter: state.intruderTabCounter,
   // Deliberately absent: closedRepeaterTabs, and every *Seed / focus / query flag. A reopen stack
   // that survived a reload would resurrect drafts the operator closed days ago, and a persisted
   // intruderSeed would re-seed Intruder on every load, overwriting the attack above.
@@ -787,6 +951,7 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   tableStripes: true,
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
@@ -813,16 +978,24 @@ export const useApp = create<AppState>()(
   setHideHeadersByDefault: (hideHeadersByDefault) => set({ hideHeadersByDefault }),
    repeaterTabs: [],
    activeRepeaterTab: null,
+   repeaterTabSearchNonce: 0,
    closedRepeaterTabs: [],
    repeaterGroups: [],
    intruderSeed: null,
+  customCheckTestIds: [],
   sequencerSeed: null,
    intruder: emptyIntruderConfig(),
    intruderRun: null,
    intruderTab: "positions",
+   intruderTabs: [{ id: "i1", name: "1", parked: null }],
+   activeIntruderTabId: "i1",
+   intruderTabCounter: 1,
+   closedIntruderTabs: [],
+   intruderRunningTabs: [],
  intruderCommand: null,
  intruderStatus: null,
    decoderSeed: null,
+   hiddenInputsTarget: null,
    comparerSlots: { a: "", b: "" },
  comparerItems: { a: [], b: [] },
    historyFocus: null,
@@ -833,6 +1006,7 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   setTableStripes: (tableStripes) => set({ tableStripes }),
    confirmOnClose: false,
    setConfirmOnClose: (confirmOnClose) => set({ confirmOnClose }),
    markCollaboratorRead: (id) =>
@@ -854,7 +1028,7 @@ export const useApp = create<AppState>()(
    setInspectorDock: (inspectorDock) => set({ inspectorDock }),
    setInspectorPanelState: (inspectorPanelState) => set({ inspectorPanelState }),
 
-   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection }) => {
+   openRepeaterTab: ({ name, target, protocol = "https", request, requestBodyBase64, fromExchange, kind, wsPayload, wsOpcode, wsDirection, note }) => {
     const id = nextId();
     set((state) => ({
      ...capRepeaterTabs(
@@ -880,6 +1054,9 @@ export const useApp = create<AppState>()(
         ...(wsPayload !== undefined ? { wsPayload } : {}),
         ...(wsOpcode ? { wsOpcode } : {}),
         ...(wsDirection ? { wsDirection } : {}),
+        // A note the tab was opened with (an exchange's comment, or the source tab's note on a
+        // Send to Repeater) — absent rather than empty when there is none (jva5).
+        ...(note ? { note } : {}),
        },
       ],
       state.closedRepeaterTabs,
@@ -982,6 +1159,7 @@ export const useApp = create<AppState>()(
      };
     }),
    setActiveRepeaterTab: (activeRepeaterTab) => set({ activeRepeaterTab }),
+   requestRepeaterTabSearch: () => set((state) => ({ repeaterTabSearchNonce: state.repeaterTabSearchNonce + 1 })),
 
    createRepeaterGroup: () => {
     // Palette order is stable, so group colours cycle predictably rather than looking random.
@@ -1053,16 +1231,33 @@ export const useApp = create<AppState>()(
 
    setIntruderSeed: (intruderSeed) => set({ intruderSeed }),
    setSequencerSeed: (sequencerSeed) => set({ sequencerSeed }),
+   addCustomCheckTestId: (id) =>
+    set((state) => ({ customCheckTestIds: state.customCheckTestIds.includes(id) ? state.customCheckTestIds : [...state.customCheckTestIds, id].slice(-20) })),
+   setCustomCheckTestIds: (customCheckTestIds) => set({ customCheckTestIds }),
    setIntruder: (next) =>
     set((state) => ({ intruder: typeof next === "function" ? next(state.intruder) : next })),
    setIntruderRun: (intruderRun) => set({ intruderRun }),
    setIntruderTab: (intruderTab) => set({ intruderTab }),
+   openIntruderTab: () => set((state) => intruderTabOps.openIntruderTab(state)),
+   switchIntruderTab: (id) => set((state) => intruderTabOps.switchIntruderTab(state, id)),
+   closeIntruderTab: (id) => set((state) => intruderTabOps.closeIntruderTab(state, id)),
+   closeAllIntruderTabs: () => set((state) => intruderTabOps.closeAllIntruderTabs(state)),
+   reopenIntruderTab: () => set((state) => intruderTabOps.reopenIntruderTab(state)),
+   renameIntruderTab: (id, name) => set((state) => intruderTabOps.renameIntruderTab(state, id, name)),
+   setIntruderRunFor: (id, run) => set((state) => intruderTabOps.withRunFor(state, id, run)),
+   setIntruderTabRunning: (id, running) =>
+    set((state) => ({
+     intruderRunningTabs: running
+      ? [...state.intruderRunningTabs.filter((t) => t !== id), id]
+      : state.intruderRunningTabs.filter((t) => t !== id),
+    })),
    // The nonce counts instructions, so two identical clicks are two commands rather than one
    // ignored repeat. Reusing the existing `sequence` counter keeps one source of monotonic ids.
    requestIntruderCommand: (kind) => set({ intruderCommand: { kind, nonce: ++sequence } }),
    clearIntruderCommand: () => set({ intruderCommand: null }),
    setIntruderStatus: (intruderStatus) => set({ intruderStatus }),
    setDecoderSeed: (decoderSeed) => set({ decoderSeed }),
+   setHiddenInputsTarget: (hiddenInputsTarget) => set({ hiddenInputsTarget }),
    setComparerSlot: (slot, value) => set({ comparerSlots: { ...get().comparerSlots, [slot]: value } }),
  addComparerItem: (slot, item) =>
   set({
@@ -1084,7 +1279,7 @@ export const useApp = create<AppState>()(
    setCheckedExchanges: (checkedExchanges) => set({ checkedExchanges }),
    focusIssue: (issueFocus) => set({ issueFocus }),
   }),
-  { name: "burpsy.workspace", partialize: persistedWorkspace },
+  { name: "burpsy.workspace", partialize: persistedWorkspace, merge: mergePersistedWorkspace },
  ),
 );
   /** Move one tab to `index` in the strip (fkj). A pure reorder: membership, colour and content

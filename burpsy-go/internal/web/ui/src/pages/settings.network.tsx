@@ -9,9 +9,12 @@ import {
   usePlatformAuth,
   useSaveClientCert,
   useSavePlatformAuth,
+  useSetPlatformAuthPrompt,
+  useServerCertificates,
+  useClearServerCertificates,
 } from "../lib/data.netauth";
 import { LoadingPanel, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Select, Switch, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /**
@@ -45,6 +48,7 @@ export function PlatformAuthSection(): JSX.Element {
   const { data, error, isFetching, isLoading, refetch } = usePlatformAuth();
   const save = useSavePlatformAuth();
   const remove = useDeletePlatformAuth();
+  const setPrompt = useSetPlatformAuthPrompt();
 
   const [host, setHost] = useState("");
   const [scheme, setScheme] = useState("basic");
@@ -89,6 +93,29 @@ export function PlatformAuthSection(): JSX.Element {
       />
       {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
       {isLoading ? <LoadingPanel label="Loading platform authentication" /> : null}
+
+      {data ? (
+        <label className="switch-row" htmlFor="platform-auth-prompt">
+          <span>
+            <span>Prompt for credentials on platform authentication failure</span>
+            <span className="cell-dim" style={{ display: "block" }}>
+              Off by default. On, a host that challenges for Basic, Digest or NTLM credentials and gets none it
+              accepts opens a prompt here to enter them; they apply from that host&apos;s next request.
+            </span>
+          </span>
+          <Switch
+            id="platform-auth-prompt"
+            label="Prompt for credentials on platform authentication failure"
+            checked={data.prompt_on_authentication_failure === true}
+            onCheckedChange={(on) =>
+              setPrompt.mutate(on, {
+                onSuccess: () => toast.success(on ? "Platform authentication failures will prompt for credentials" : "No prompt on platform authentication failure"),
+                onError: (failure) => toast.error(failureText(failure, "The setting was not saved")),
+              })
+            }
+          />
+        </label>
+      ) : null}
 
       {data && !data.presented_on_egress ? (
         <div className="notice">
@@ -345,6 +372,83 @@ export function ClientCertificatesSection(): JSX.Element {
                 >
                   <Trash2 size={13} />
                 </IconButton>
+              </td>
+            </tr>
+          ))}
+        </SimpleTable>
+      ) : null}
+    </Card>
+  );
+}
+
+/**
+ * Burp's Settings → Network → TLS → "Server TLS certificates" (burpsy-react-ui-t75m): information
+ * only. Every certificate a target presented — to the proxy's upstream leg, Repeater, Intruder, the
+ * scanner — once each, with where it was seen.
+ */
+export function ServerCertificatesSection(): JSX.Element {
+  const { data, error, isFetching, isLoading, refetch } = useServerCertificates();
+  const clear = useClearServerCertificates();
+  const certificates = data?.certificates ?? [];
+  return (
+    <Card>
+      <SectionHeading
+        title="Server TLS certificates"
+        detail={`Information only: the X.509 certificates target servers presented to this tool, each listed once with every host it was seen on. Kept in memory for this session, up to ${data?.max ?? 512} certificates; the least recently seen goes first.`}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="small"
+              disabled={certificates.length === 0 || clear.isPending}
+              onClick={() =>
+                clear.mutate(undefined, {
+                  onSuccess: () => toast.success("Server certificate list cleared"),
+                  onError: (failure) => toast.error(failureText(failure, "The list was not cleared")),
+                })
+              }
+            >
+              <Trash2 size={13} />
+              Clear
+            </Button>
+            <RefreshButton onClick={() => void refetch()} loading={isFetching} />
+          </>
+        }
+      />
+      {error ? <ErrorNotice error={error} onRetry={() => void refetch()} /> : null}
+      {isLoading ? <LoadingPanel label="Loading server certificates" /> : null}
+      {data && !data.attached ? (
+        <div className="notice">
+          <span>This build was assembled without a certificate record, so nothing is collected here.</span>
+        </div>
+      ) : null}
+      {data && data.attached && certificates.length === 0 ? (
+        <Empty title="No certificates yet" detail="A certificate appears here once a TLS target has presented one to the proxy or a tool." />
+      ) : null}
+      {certificates.length > 0 ? (
+        <SimpleTable headers={["Subject", "Issuer", "Names", "Valid until", "Seen on", "Count", "SHA-256"]}>
+          {certificates.map((cert) => (
+            <tr key={cert.sha256}>
+              <td>
+                <code>{cert.subject || "(empty)"}</code> {cert.leaf ? null : <Badge tone="neutral">chain</Badge>}
+              </td>
+              <td>
+                <code>{cert.issuer}</code>
+              </td>
+              <td>{[...cert.dns_names, ...cert.ip_addresses].join(", ") || <span className="field-hint">none</span>}</td>
+              <td>
+                {new Date(cert.not_after).toISOString().slice(0, 10)}
+                {new Date(cert.not_after).getTime() < Date.now() ? (
+                  <>
+                    {" "}
+                    <Badge tone="warn">expired</Badge>
+                  </>
+                ) : null}
+              </td>
+              <td>{cert.seen_on.join(", ")}</td>
+              <td>{cert.count}</td>
+              <td>
+                <code title={cert.sha256}>{cert.sha256.slice(0, 16)}…</code>
               </td>
             </tr>
           ))}

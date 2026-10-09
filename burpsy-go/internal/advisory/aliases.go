@@ -44,6 +44,15 @@ var aliases = map[string]int{
 	"jwt weak hmac secret scan 02":             0x00200903,
 	"vulnerable javascript dependency":         0x00500080,
 	"vulnerable javascript dependency scan 01": 0x00500080,
+
+	// Hidden-input guessing (burpsy-react-ui-wlz8). In Burp these "Secret input" issues are raised by
+	// the Param Miner BApp, and every issue an extension raises carries the catalogue's
+	// EXTENSION_GENERATED type — Burp's knowledge base has no Param Miner entry of its own. burpsy
+	// builds the guesser in, but the issue is the same issue, so it resolves to the same type and the
+	// finding keeps its own description for the detail, as an extension's does in Burp.
+	"secret input query parameter": 0x08000000, // Extension generated issue
+	"secret input cookie":          0x08000000,
+	"secret input header":          0x08000000,
 }
 
 // unmapped records checks that intentionally have no catalogue entry, and why. Kept as code rather

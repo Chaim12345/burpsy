@@ -749,6 +749,42 @@ func (p *parser) sendRequest() (Statement, error) {
 		return stmt, nil
 	}
 	for {
+		// `removing <target>` (movb): `removing headers:` and `removing queries:` take a list of
+		// names; `removing query_string|path|method|body` take nothing, with or without a colon.
+		if p.isWord(0, "removing") && p.at(1).kind == tokWord {
+			target := strings.ToLower(p.at(1).text)
+			switch target {
+			case "headers", "header", "queries", "query":
+				if p.at(2).kind != tokColon {
+					return nil, p.errf("expected ':' after 'removing %s'", target)
+				}
+				p.bump()
+				p.bump()
+				p.bump()
+				mod := RequestModifier{Target: target, Op: ModRemove}
+				for {
+					v, err := p.value()
+					if err != nil {
+						return nil, err
+					}
+					mod.Values = append(mod.Values, v)
+					if p.peek().kind != tokComma {
+						break
+					}
+					p.bump()
+				}
+				stmt.Modifiers = append(stmt.Modifiers, mod)
+				continue
+			case "query_string", "path", "method", "body":
+				p.bump()
+				p.bump()
+				if p.peek().kind == tokColon {
+					p.bump()
+				}
+				stmt.Modifiers = append(stmt.Modifiers, RequestModifier{Target: target, Op: ModRemove})
+				continue
+			}
+		}
 		op := ModReplace
 		opOff := 0
 		if p.peek().kind == tokWord {

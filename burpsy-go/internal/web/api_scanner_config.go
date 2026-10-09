@@ -119,10 +119,6 @@ func (s *Server) handleScannerConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, scannerConfigFrom(s.scanner.ConfigSnapshot()))
 	case http.MethodPut:
-		if s.scanner == nil {
-			http.Error(w, "No scanner is configured in this process", http.StatusServiceUnavailable)
-			return
-		}
 		s.applyScannerConfigPatch(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -131,8 +127,14 @@ func (s *Server) handleScannerConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request) {
 	var patch map[string]json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&patch); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	// After the decode so the schema sweep reaches it (burpsy-react-ui-3zw0); a malformed body is a
+	// 400 whatever this process carries.
+	if s.scanner == nil {
+		http.Error(w, "No scanner is configured in this process", http.StatusServiceUnavailable)
 		return
 	}
 

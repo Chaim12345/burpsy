@@ -132,7 +132,7 @@ func (s *Server) handleHTTP2Program(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req frameProgramReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable frame program: "+err.Error(), http.StatusBadRequest)
 		return
 	}

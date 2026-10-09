@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/intercept"
@@ -136,12 +137,19 @@ func TestAnH2ClientDowngradedByInterceptionIsRecordedAsSuch(t *testing.T) {
 		t.Logf("client saw %s (the client leg is offered what the upstream chose)", resp.Proto)
 	}
 
-	// Now the record: it must carry HTTP/1.1 AND say why.
+	// Now the record: it must carry HTTP/1.1 AND say why. The record lands asynchronously after the
+	// response reaches the client, so it is awaited rather than read once: a single read raced the
+	// relay and failed CI under load.
 	var found *core.Exchange
-	for _, ex := range store.Exchanges() {
-		if ex != nil && strings.Contains(ex.Host, thost) {
-			found = ex
-			break
+	for deadline := time.Now().Add(5 * time.Second); found == nil && time.Now().Before(deadline); {
+		for _, ex := range store.Exchanges() {
+			if ex != nil && strings.Contains(ex.Host, thost) {
+				found = ex
+				break
+			}
+		}
+		if found == nil {
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	if found == nil {

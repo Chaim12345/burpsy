@@ -81,6 +81,77 @@ type SiteMap struct {
 	// rebuild and would make reference.ts's disclosure ("a host on the map was observed at some
 	// point") false for every node on it. The two sets are merged on read, never on write.
 	inserted map[string]*InsertedNode
+	// unrequested is every URL the live passive crawl saw linked from proxied traffic and nobody has
+	// requested yet (burpsy-react-ui-t3zk), Burp's grey "unrequested items". Kept apart from the
+	// observed tree for the reason inserted is, and bounded by MaxUnrequested.
+	unrequested map[string]*UnrequestedNode
+	// pinned is every exchange an operator recorded into the map by id (burpsy-react-ui-4bfp) — Burp's
+	// add_to_sitemap. The map already follows the store, so a captured exchange is on it unless a
+	// suppression hides it; a pin is the operator saying "this one, anyway". It outranks the
+	// suppression that was in force when it was made, survives Sync rebuilds, and is dropped by a
+	// LATER suppression that covers it, because that is the newer decision.
+	pinned map[core.ExchangeID]pin
+}
+
+// MaxUnrequested bounds the unrequested set: a site that links to a calendar or a search with a fresh
+// query on every page would otherwise grow it without end.
+const MaxUnrequested = 20000
+
+// UnrequestedNode is a URL seen linked from proxied traffic but never requested (t3zk). From is the
+// page that linked to it.
+type UnrequestedNode struct {
+	Host string
+	Port uint16
+	TLS  bool
+	Path string
+	From string
+	Seen time.Time
+}
+
+// AddUnrequested records a linked-but-never-requested URL. It reports false when the URL is already
+// observed, inserted, suppressed, already known as unrequested, or the set is full.
+func (sm *SiteMap) AddUnrequested(host string, port uint16, tls bool, path, from string, seen time.Time) bool {
+	if host == "" || path == "" {
+		return false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if observedLocked(sm.hosts, host, port, tls, path) || sm.suppressedByLocked(hostKey(host, port, tls), path) {
+		return false
+	}
+	key := insertKey(host, port, tls, path)
+	if _, ok := sm.inserted[key]; ok {
+		return false
+	}
+	if _, ok := sm.unrequested[key]; ok || len(sm.unrequested) >= MaxUnrequested {
+		return false
+	}
+	sm.unrequested[key] = &UnrequestedNode{Host: host, Port: port, TLS: tls, Path: path, From: from, Seen: seen}
+	return true
+}
+
+// Unrequested returns the unrequested set, sorted by host and path.
+func (sm *SiteMap) Unrequested() []*UnrequestedNode {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	out := make([]*UnrequestedNode, 0, len(sm.unrequested))
+	for _, n := range sm.unrequested {
+		c := *n
+		out = append(out, &c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+// pin is where a pinned exchange sits, kept so a later Suppress can tell which pins it covers.
+type pin struct {
+	hostKey string
+	path    string
 }
 
 // InsertedNode is a host/path an operator put on the map without sending traffic to it.
@@ -101,7 +172,44 @@ func New() *SiteMap {
 		hosts:      make(map[string]*HostNode),
 		suppressed: make(map[string]struct{}),
 		inserted:   make(map[string]*InsertedNode),
+
+		unrequested: make(map[string]*UnrequestedNode),
+		pinned:      make(map[core.ExchangeID]pin),
 	}
+}
+
+// RecordResult is what Record did.
+type RecordResult struct {
+	// AlreadyOnMap: the exchange was already in its path node; nothing changed.
+	AlreadyOnMap bool
+	// WasSuppressed: a host, branch or item suppression hid it, and the pin now shows it anyway.
+	WasSuppressed bool
+	HostKey       string
+}
+
+// Record puts one stored exchange on the map by id, whatever suppression is in force
+// (burpsy-react-ui-4bfp). Idempotent: recording an exchange the map already holds changes nothing
+// and says so.
+func (sm *SiteMap) Record(ex *core.Exchange) RecordResult {
+	key := hostKey(ex.Host, ex.Port, ex.TLS)
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	res := RecordResult{HostKey: key}
+	if hn := sm.hosts[key]; hn != nil {
+		if pn := hn.Paths[ex.Path]; pn != nil {
+			if _, dup := idSlot(pn.ExchangeIDs, ex.ID); dup {
+				res.AlreadyOnMap = true
+				return res
+			}
+		}
+	}
+	res.WasSuppressed = sm.suppressedByLocked(key, ex.Path)
+	if sm.pinned == nil {
+		sm.pinned = make(map[core.ExchangeID]pin)
+	}
+	sm.pinned[ex.ID] = pin{hostKey: key, path: ex.Path}
+	sm.addExchangeLocked(ex)
+	return res
 }
 
 // Insert records a host/path an operator added to the map (amu).
@@ -245,7 +353,9 @@ func (sm *SiteMap) addExchangeLocked(ex *core.Exchange) {
 	// live path, but Sync's rebuild walks every stored exchange through here, so the check lives at
 	// the fold rather than only at the observer.
 	if sm.suppressedByLocked(key, ex.Path) {
-		return
+		if _, pinned := sm.pinned[ex.ID]; !pinned {
+			return
+		}
 	}
 	hn := sm.hosts[key]
 	if hn == nil {
@@ -344,6 +454,16 @@ func (sm *SiteMap) Suppress(hostKey string, path string, kind string) {
 	if sm.suppressed == nil {
 		sm.suppressed = make(map[string]struct{})
 	}
+	// A suppression is newer than any pin it covers, so those pins go: the operator's latest
+	// decision about that host or branch is what the map shows. Checked after the key is stored, by
+	// the same predicate the fold uses, so "covers" means exactly what it means everywhere else.
+	defer func() {
+		for id, p := range sm.pinned {
+			if sm.suppressedByLocked(p.hostKey, p.path) {
+				delete(sm.pinned, id)
+			}
+		}
+	}()
 	if path == "" {
 		sm.suppressed[hostKey] = struct{}{}
 		// Dropping the host drops its whole subtree from the in-memory tree now; suppressing each

@@ -53,6 +53,16 @@ dialling directly — that fallback was the defect it replaced. The scope check 
 bytes, per request, because a payload spliced into a `PointURLPathFolder`/`PointURLPathFilename`
 position rewrites the request line and may address something the named target never covered.
 
+### How a spliced request reaches the wire is decided in `internal/web/intruder_send.go`
+
+The engine hands each spliced request to a `SendFn`; the web layer's `buildIntruderSendPlan` builds
+that function from the run request and refuses a bad setting before anything is sent. Every setting
+that changes the wire rather than the payloads lives there: the session jar, follow-redirects, the
+total `timeout_ms`, the per-request `response_timeout_ms` (carried on the context as
+`sender.SendOptions`), `http_version`, HTTP/1 connection reuse (`sender.ConnPool` via
+`AuthorisedSender.SendReusing`) and Update Host header to match target. A new wire setting belongs in
+that plan, not in this package, so the engine stays a pure splice-send-bucket loop.
+
 ### Divergence from Rust: the `Guard` was kept, not removed
 
 The Rust `AGENTS.md` says the `Option<Guard>` was deleted and must not be reintroduced. **The Go
@@ -83,6 +93,18 @@ there and the position is skipped rather than spliced. Adding a container means 
 in `internal/bcheck` — a parser here would be the second model of the same format, which
 is the drift this design exists to prevent (burpsy-react-ui-33t, 63jg).
 
+### Append placement is a zero-length span, and overlap has one definition
+
+`PointConfig.Placement` is Burp's "Automatic payload placement" (1krs). Under `PlacementAppend`
+every discovered parameter VALUE becomes a zero-length span at the end of the value (Burp's
+`Zswj(valueEnd, valueEnd)`), with `BaseSpan()` still naming the value; a nested container keeps its
+window and is rebuilt by `bcheck.InsertionPoint.WireValueAppend`, because base64 cannot be extended
+by concatenation. Names, paths, headers, multipart attributes and the entire body keep replacing.
+`SpansOverlap` is the one definition of "two positions compete": a zero-length span overlaps any
+span it touches, edges included. `ApplyAll`'s earliest-span-wins skip and the web layer's
+manual-vs-discovered refusal both use it — a second, strict-inequality copy is how a zero-length
+insertion slips past one of them.
+
 ### Grep is reported but is not part of the bucket key
 
 `Grep` holds two optional `regexp` patterns applied to every response. Matches and the extracted
@@ -90,6 +112,23 @@ capture are reported per attempt and per bucket (as an exemplar), but the key st
 `(status, response_len, reflected)` — keying on a grep result would silently double the bucket count
 for any attack that turned a pattern on. `MAX_EXTRACT` (256) bounds the reported capture and a
 truncated value is marked as such.
+
+Reflection — the key's third slot — is Grep - Payloads (`grep_payloads.go`, 7qc3): enabled, case
+sensitivity (ASCII folding, no allocation), exclude headers, and matching the pre-URL-encoding form
+(`PayloadSet.Unencoded`, kept by `URLEncodeSet` only when it changed something). `Attempt.ReflectedCounts`
+has one slot per payload SET, never per position (battering ram counts once). `NewAttack` defaults to
+`LegacyGrepPayloads()`, the fixed check every attack ran before; the settings decide the key, so changing
+them can change the bucket count.
+
+### The capture filter drops rows and storage, never counts
+
+`Attack.Capture` (`capture.go`, ip2b) is Burp's results capture filter: the AND of discard-without-response,
+status classes and a search term. A discarded item still counts in Sent/Failed, its error group and its
+bucket, and in `AttackReport.Discarded`; it leaves no row and no stored bytes. A bucket whose opening
+response was discarded takes its exemplar from its first captured response (`ResultBucket.ExampleOrdinal`).
+With a filter, the DetailLimit row budget is spent on captured items, not on the first ordinals.
+`Attack.Observe` sees the opening response of every bucket regardless of capture or storage — the web
+layer's cookie jar learns there, so storing and learning stay independent.
 
 ### Payloads and rules resolve before the attack, never inside it
 

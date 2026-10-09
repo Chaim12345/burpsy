@@ -1387,6 +1387,32 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// the moment the traffic is captured. Counted separately (passiveFindings); the
 	// active session's own passive rows then merge into the same stored findings by
 	// identity — confirmed, not duplicated.
+	//
+	// The configuration is read ONCE, here, and both halves run under it (burpsy-react-ui-saq3.3.2).
+	// It used to be read after the passive loop and handed to the active half only, so a deselected
+	// passive issue type — or scan_type_passive false — stopped in the session and kept firing on
+	// every captured exchange one loop earlier.
+	cfg := s.scanner.AuditConfig()
+	// The live task's own scan configuration and pool (chct), resolved per tick so a change applies
+	// from the next batch, and resolved here — before the passive half — so both halves run under the
+	// task's configuration, not only the active one. A name that stopped resolving (a pool deleted
+	// since) falls back to the default with an event, rather than stopping the sweep.
+	if cfgName, poolName := s.liveAudit.RunSettings(); cfgName != "" || poolName != "" {
+		if cfgName != "" {
+			if named, _, _, err := s.resolveAuditConfig(cfgName); err == nil {
+				cfg = named
+			} else {
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's scan configuration no longer resolves; this batch runs the default: "+err.Error())
+			}
+		}
+		if poolName != "" {
+			if pctx, err := s.auditContext(ctx, poolName); err == nil {
+				ctx = pctx
+			} else {
+				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's resource pool no longer resolves; this batch runs at the global pace: "+err.Error())
+			}
+		}
+	}
 	passiveFindings := 0
 	if s.scanner != nil {
 		for _, id := range ids {
@@ -1394,7 +1420,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			if err != nil || ex == nil {
 				continue
 			}
-			for _, f := range s.scanner.RunPassiveChecks(ctx, ex) {
+			for _, f := range s.scanner.RunPassiveChecks(ctx, ex, cfg) {
 				if f == nil {
 					continue
 				}
@@ -1425,26 +1451,6 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	}
 	s.liveAudit.recordPassive(uint64(passiveFindings))
 
-	// The live task's own scan configuration and pool (chct), resolved per tick so a change applies
-	// from the next batch. A name that stopped resolving (a pool deleted since) falls back to the
-	// default with an event, rather than stopping the sweep.
-	cfg := s.scanner.AuditConfig()
-	if cfgName, poolName := s.liveAudit.RunSettings(); cfgName != "" || poolName != "" {
-		if cfgName != "" {
-			if named, _, _, err := s.resolveAuditConfig(cfgName); err == nil {
-				cfg = named
-			} else {
-				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's scan configuration no longer resolves; this batch runs the default: "+err.Error())
-			}
-		}
-		if poolName != "" {
-			if pctx, err := s.auditContext(ctx, poolName); err == nil {
-				ctx = pctx
-			} else {
-				s.events.Record(dash.EventLiveAuditScoped, dash.SeverityWarn, "the live audit's resource pool no longer resolves; this batch runs at the global pace: "+err.Error())
-			}
-		}
-	}
 	// The ledger is the one part of the config that outlives this tick — see liveAuditRun.
 	cfg.Ledger = run.auditLedger(s.liveAudit, s.events, s.logger)
 	// The sweep is the highest-volume producer of audit items, so it is the one that makes the queue

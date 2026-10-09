@@ -82,7 +82,11 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/history` | read | Proxy history, filtered by the typed query DSL. |
-| GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. |
+| GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. With any of `byte_offset`, `max_bytes` (1–65536, default 2048), `pattern` (RE2; anchors the window at the first match, `byte_offset` then relative to it), `case_insensitive`, `decoded`: a **window** of the body instead — `head` in full, `window_base64` (exact) and `window_text` (+ `window_utf8`), `next_offset` (null at the end), `anchor`, `matches` (≤100, always an array). Reads a body of any size to its last byte. |
+| GET | `/api/skills` | read | The skill library loaded with `-skills DIR`: each skill (tools it calls, arguments, available, disabled for this project) and every refused manifest with why. |
+| GET | `/api/skills/{name}` | read | One skill with its prompt rendered from `?argument=value`; 409 when disabled or unavailable, 400 for a missing required argument. |
+| PUT | `/api/skills/disabled` | local-write | `{"disabled":[names]}` — the whole list of skills this project turns off; an unknown name is a 400. |
+| GET | `/api/datasets/{source}` | read | One table view over a list: `history`, `issues`, `sitemap`, `tool-log`, `ws-history`, `intruder/{task_id}` (`/api/datasets/` lists them). Rows are each source's own view flattened to scalar columns. `pattern` (RE2) + `columns`, `sort_by`/`sort_order`, `offset`/`limit` (≤500) with `next_offset` (null on the last page), `return_columns`, `facets` (`true` or a column list; `facets` is null unless asked), `since` (rows with a greater id), and `wait_seconds` (≤60) + `min_rows` to long-poll for new rows. `rows` is always an array. An unfiltered id-ordered page (no `pattern`, `since` or `facets`) is cut before any row is rendered, so it costs its own rows; `columns_sampled: true` then says `columns` lists the returned rows' columns. |
 | GET | `/api/exchange/{id}` | read | One exchange row by id. |
 | GET | `/api/exchanges/{id}` | read | Legacy alias for `/api/exchange/`. |
 | GET | `/api/stats` | read | Exchange, message and stored-byte counts. |
@@ -102,6 +106,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET, POST | `/api/scope` | scope | The engagement scope: what every sender is allowed to reach. GET reads it, POST replaces it. |
+| GET, POST | `/api/scope/check` | read | Is a URL in scope? `GET ?url=` or `POST {"urls":[…]}` (≤1000) answers per URL `in_scope` (retained, and sendable by the tools), `proxy_forwards`, the `reason`, and the `matched_rule` that decided (null when none did). Decided by `core.Scope.Decide`, which a test holds to `Contains`' answer. |
 
 ## Scanner (passive coverage, audits, configs)
 
@@ -110,7 +115,8 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | GET | `/api/scanner/coverage` | read | What the check set covers, and what it declines to look at. |
 | GET | `/api/scanner/configs` | read | The built-in scan configurations. |
 | GET, POST | `/api/scanner/live` | attack | The live sweep over newly-completed proxied traffic; POST opts in. |
-| POST | `/api/audit/{id}` | attack | Run an active audit over one captured exchange, by id (`0` is a valid id). |
+| POST | `/api/audit/{id}` | attack | Run an active audit over one captured exchange, by id (`0` is a valid id). With `{"async": true}` it answers **202** `{task_id, poll, cancel}` at once and runs as a dashboard task. |
+| GET, POST, DELETE | `/api/tasks/{id}` | local-write | `GET` one task: `{task, result, done}` — `result` is an async audit's finished body (the last 64 kept), null otherwise. `POST {id}/cancel`, `POST {id}/again`, `POST pause`/`resume`, `DELETE {id}`. |
 | POST | `/api/audit/selected` | attack | Run one active audit over a selection: `{"exchange_ids":[1,2,3]}` (plus optional `config`, `pool`). Answers **202** with `{task_id, kind, count, exchange_ids, duplicates_dropped, target, config_name, unapplied, pool}` rather than with the outcome — a selection has no bound on its size, so the work is followed through the task row. Refuses an empty selection (400) and an unknown configuration or pool. |
 | POST | `/api/scanner/audit` | attack | Legacy alias for `/api/audit/{id}`, taking the id in the body. |
 
@@ -118,7 +124,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 
 | Method | Path | Risk | Summary |
 |---|---|---|---|
-| POST | `/api/repeater/send` | egress | Send one operator-authored request and record the exchange. |
+| POST | `/api/repeater/send` | egress | Send one operator-authored request and record the exchange. **Structured send** (vuxy): `from_message` / `from_exchange` as the base (target implied by the stored exchange), `edits` — ordered ops `set_method`, `set_path`, `set_query_string`, `set_query_param`, `delete_query_param`, `set_header`, `delete_header`, `set_body_param`, `delete_body_param`, `set_request_cookie`, `delete_request_cookie`, `set_body`, `set_form_fields`, `set_json_field`, `raw_insert_at`, `raw_replace` (internal/reqedit; each touches only its span, Content-Length fixed after a body op) — `http_version` (`auto`/`1.1`/`2`) and `dry_run` (the exact bytes, target and scope verdict; nothing sent). A structured send is authorised on the final bytes (`AuthoriseRaw`, path included); the stored base is never modified. |
 | GET | `/api/protocols` | read | Per-surface HTTP/1.1 vs HTTP/2 counts, and why a send was downgraded. |
 | POST | `/api/http2/program` | egress | Send a raw HTTP/2 frame program: the pseudo-header and frame-level surface. |
 
@@ -143,6 +149,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/sitemap` | read | The site map tree (also listed above). |
+| POST | `/api/sitemap/record` | local-write | Record a captured exchange into the map by id (`{"exchange_id":N}`) — Burp's add_to_sitemap. The map follows the store, so the answer is either `already_on_map` or `was_suppressed` (a Delete host/branch/item hid it; the exchange is now pinned onto the map until a later suppression covers it). |
 | GET, POST | `/api/crawl` | attack | GET: the last crawl's coverage report, or one run by `?task=N`. POST: crawl from a seed URL under stated bounds. |
 | POST | `/api/apiscan` | attack | Start an API-only scan — Burp's fourth scan kind. Body `{definition, base_url?, audit?, max_requests?, pool?, requests_per_second?, user_agent?, headers?}`, where `definition` is an OpenAPI 3.x or Swagger 2.0 document as text (JSON or YAML). Answers **202** with `{task_id, state, kind:"api-scan", audit, definition:{...}}`; the endpoints are sent by the crawl engine in seeds-only mode and `report.seeds_only` is `true` on the retained run. `dry_run: true` instead answers **200** with `{dry_run:true, definition}` and starts nothing — the New scan dialog's preview. Refusals are 400 and name what the document actually is (AsyncAPI, Postman, Swagger 1.x, RAML); a document naming no host is a 400 asking for `base_url`; a host no scope rule can reach is a 400 quoting the scope's own explanation. |
 
@@ -182,6 +189,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | POST, DELETE | `/api/tools/organizer/{id}` | local-write | One organizer item: POST updates title/note/highlight, DELETE removes it. |
 | GET, PUT | `/api/tools/rules` | local-write | Match & Replace rule set (PUT replaces the whole ordered set). Carries the two set-wide switches, `update_content_length` and Burp's `in_scope_only` ("Only apply to in-scope items"); GET also reports `scope_skipped`, how many messages the restriction turned away. A rule carrying a per-rule `scope` or `query` is refused with a 400 — Burp's rule model has neither, and dropping the condition on save would silently widen what the rule touches. |
 | POST | `/api/tools/rules/test` | read | Test a Match & Replace rule against a sample. Refuses the same unrepresentable rule fields the live path refuses. |
+| POST | `/api/collaborator/poll` | read | Re-read the out-of-band interaction log. An empty body answers the channel status, as always. `{"payload_ids":[…],"wait_seconds":N,"min_interactions":M}` filters to those payloads (address or marker, any case; an id this process never minted is a 400) and long-polls up to 60 s until `min_interactions` (default 1) attributable interactions are in the log. The reply adds a `poll` block: `status` complete / timeout / empty / unavailable, `received`, `distinct`, `waited_ms` and the index rows (always an array). |
 | GET, DELETE | `/api/tools/log` | **destructive** | GET: every request this process sent, per tool, with what it dropped at the bound. DELETE: **clears it**, discarding the record of what was sent to the target. |
 
 ## WebSocket capture

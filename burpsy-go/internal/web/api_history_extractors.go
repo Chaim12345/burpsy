@@ -108,6 +108,11 @@ func (s *Server) restoreHistoryExtractors(p *persist.Store) {
 	s.histExtractMu.Unlock()
 }
 
+// historyExtractorsReq is the request body handleHistoryExtractors decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type historyExtractorsReq struct {
+	Extractors []sessionExtractDto `json:"extractors"`
+}
+
 // handleHistoryExtractors serves GET/PUT /api/history/extractors — the saved column definitions.
 // riskLocal: it reads and writes burpsy's own view configuration and sends nothing.
 func (s *Server) handleHistoryExtractors(w http.ResponseWriter, r *http.Request) {
@@ -119,10 +124,8 @@ func (s *Server) handleHistoryExtractors(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"extractors": defs})
 	case http.MethodPut:
-		var body struct {
-			Extractors []sessionExtractDto `json:"extractors"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		var body historyExtractorsReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 			http.Error(w, `the body must be {"extractors":[...]}`, http.StatusBadRequest)
 			return
 		}
@@ -167,6 +170,12 @@ func (s *Server) handleHistoryExtractors(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// historyExtractReq is the request body handleHistoryExtract decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type historyExtractReq struct {
+	IDs      []core.ExchangeID `json:"ids"`
+	Messages []core.MsgId      `json:"messages"`
+}
+
 // handleHistoryExtract serves POST /api/history/extract — the saved extractors' values for the named
 // rows. riskLocal: it reads stored responses and sends nothing.
 //
@@ -185,11 +194,8 @@ func (s *Server) handleHistoryExtract(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var body struct {
-		IDs      []core.ExchangeID `json:"ids"`
-		Messages []core.MsgId      `json:"messages"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+	var body historyExtractReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"ids":[...]} or {"messages":[...]}`, http.StatusBadRequest)
 		return
 	}

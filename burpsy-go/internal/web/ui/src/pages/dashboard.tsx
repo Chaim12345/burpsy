@@ -9,6 +9,7 @@ import { useDashboard, useInvalidate, useIssues } from "../lib/data";
 import { useIssuesDetailedWithIsolated, useScannerConfigs, useScannerLive, useSetScannerLive } from "../lib/data.attack";
 import { usePools } from "../lib/data.pools";
 import type { FindingDetail } from "../lib/types.attack";
+import type { CrawlLoginReport } from "../lib/types.observe";
 import { useAPIScanCheck, useAuditSelected, useCrawlRun, useCrawls, useStartAPIScan, useStartCrawl } from "../lib/data.observe";
 import { crawlOutcome, crawlStopLabel, crawlStops, isPolicyPause } from "../lib/crawl-stops";
 import { useApp } from "../lib/store";
@@ -18,6 +19,8 @@ import { Badge, Button, Card, Empty, ErrorNotice, Field, IconButton, Input, Metr
 import { DetailList } from "../ui/json";
 import { DropdownMenu, type MenuGroup } from "../ui/menu";
 import { MenuRow, SimpleTable } from "../ui/table";
+import { RecordedLoginPicker } from "../ui/recorded-logins";
+import { CrawlLiveView } from "../ui/crawl-live";
 import { useDeleteTask, useScanTaskAgain } from "../lib/data.attack";
 import { severityTone } from "../lib/severity";
 
@@ -576,6 +579,73 @@ function selectedScanType(id: string) {
  return SCAN_TYPES.find((scan) => scan.id === id) ?? SCAN_TYPES[0];
 }
 
+// The recorded login's account of a crawl (burpsy-react-ui-xhtk): whether it was authenticated at
+// all, every replay, and what the replay's scope gate refused. A failed login is the first thing on
+// it, because an unauthenticated crawl of an application behind a login maps the login page.
+function CrawlLoginCard({ login }: { login: CrawlLoginReport }): JSX.Element {
+ return (
+  <Card>
+   <SectionHeading
+    title={
+     !login.authenticated
+      ? `The recorded login “${login.label}” failed`
+      : login.verified
+       ? `Logged in with “${login.label}”`
+       : `“${login.label}” ran — the login was not verified`
+    }
+    detail={
+     !login.authenticated
+      ? "The replay before the first request did not log in, so this crawl ran logged out."
+      : login.verified
+       ? "The recorded login was replayed in an isolated browser before the first request, confirmed by its status check, and its session was carried on every request."
+       : "Every step ran, but the sequence has no status check, so nothing confirmed the session was real. A rejected password looks the same."
+    }
+   />
+   <div className="metric-grid wide">
+    <Metric label="Replays" value={login.attempts} detail={`${login.succeeded} logged in, ${login.failed} failed`} tone={login.failed > 0 ? "warn" : undefined} />
+    <Metric label="Re-logins" value={login.relogins} detail="replays run because the session was detected as lost" />
+    <Metric label="Requests with the session" value={login.requests_with_session} />
+    <Metric label="Pages found after login" value={login.pages_found_after_login} tone={login.authenticated && login.pages_found_after_login === 0 ? "warn" : undefined} />
+   </div>
+   <DetailList
+    rows={[
+     ...(login.last_failure ? [{ label: "Last failure", value: <span className="warn-text">{login.last_failure}</span> }] : []),
+     { label: "Ended on", value: login.final_url ? <code>{login.final_url}</code> : "—" },
+     { label: "Cookies earned", value: login.cookie_names.length ? login.cookie_names.join(", ") : "none" },
+     {
+      label: "Refused by scope",
+      value: login.blocked.length ? (
+       <ul className="replay-blocked">
+        {login.blocked.map((line) => (
+         <li key={line}>
+          <code>{line}</code>
+         </li>
+        ))}
+       </ul>
+      ) : (
+       "nothing"
+      ),
+     },
+     {
+      label: "Refused while rendering",
+      value: login.render_blocked.length ? (
+       <ul className="replay-blocked">
+        {login.render_blocked.map((line) => (
+         <li key={line}>
+          <code>{line}</code>
+         </li>
+        ))}
+       </ul>
+      ) : (
+       "nothing"
+      ),
+     },
+    ]}
+   />
+  </Card>
+ );
+}
+
 function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): JSX.Element {
  const startCrawl = useStartCrawl();
  const auditSelected = useAuditSelected();
@@ -605,6 +675,8 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
  const [maxRequests, setMaxRequests] = useState("50");
  const [maxDepth, setMaxDepth] = useState("5");
  const [maxDuration, setMaxDuration] = useState("");
+ // The recorded login the crawl logs in with (burpsy-react-ui-xhtk); "" is none.
+ const [recordedLogin, setRecordedLogin] = useState("");
  // The API-only scan's own inputs. `definitionName` is only ever a label — it is what the operator
  // picked or pasted from, shown so a pasted document and an uploaded one are distinguishable after
  // the fact — and never travels to the server, which reads the bytes and not the filename.
@@ -697,9 +769,19 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     max_requests: Number(maxRequests) || undefined,
     max_depth: Number(maxDepth) || undefined,
     max_duration_secs: Number(maxDuration) || undefined,
+    recorded_login: recordedLogin || undefined,
    },
    {
-    onSuccess: () => toast.success(`${verb} started on ${seed.trim()}`),
+    onSuccess: (started) => {
+     // Seeds the scope refused (us6r.3): the crawl runs from the rest, and the operator is told which
+     // were left out and why, instead of the run silently being smaller than what was typed.
+     const refused = started.out_of_scope_seeds ?? [];
+     if (refused.length) {
+      toast.warning(`${verb} started without ${refused.length} out-of-scope URL(s): ${refused.map((r) => `${r.url} — ${r.reason}`).join("; ")}`);
+     } else {
+      toast.success(`${verb} started on ${seed.trim()}`);
+     }
+    },
     onError: (failure: unknown) => toast.error(failure instanceof Error ? failure.message : `Starting the ${verb.toLowerCase()} failed`),
    },
   );
@@ -990,6 +1072,7 @@ function NewScanModal({ open, onOpenChange }: { open: boolean; onOpenChange: (op
         {(id) => <Input id={id} type="number" min={1} value={maxDuration} onChange={(event) => setMaxDuration(event.target.value)} placeholder="uncapped" />}
        </Field>
       </div>
+      <RecordedLoginPicker value={recordedLogin} onChange={setRecordedLogin} />
      </>
     ) : null}
     <div className="toolbar-end">
@@ -1222,6 +1305,9 @@ function TaskDetail({
   setRoute("scanner");
  };
  const title = task.kind === "live audit" ? "Live audit from Proxy (all traffic)" : `${task.kind} (${task.target})`;
+ // Burp's "Live crawl view" tab, on a crawl's own detail (burpsy-react-ui-1l3x). An API-only scan
+ // shares the run registry but does not crawl, so it gets no tab.
+ const isCrawlRun = run.data !== undefined && run.data.kind !== "api-scan";
 
  return (
   <div className="task-detail">
@@ -1248,7 +1334,13 @@ function TaskDetail({
      <TabsTrigger value="issue-activity">Issue activity</TabsTrigger>
      <TabsTrigger value="events">Event log</TabsTrigger>
      <TabsTrigger value="activity">Activity</TabsTrigger>
+     {isCrawlRun ? <TabsTrigger value="live-crawl">Live crawl view</TabsTrigger> : null}
     </TabsList>
+    {isCrawlRun ? (
+     <TabsContent value="live-crawl">
+      <CrawlLiveView taskId={task.id} />
+     </TabsContent>
+    ) : null}
 
     <TabsContent value="issue-activity">
      <Card>
@@ -1378,6 +1470,8 @@ function TaskDetail({
         </ul>
        </Card>
       ) : null}
+
+      {run.data?.report?.login ? <CrawlLoginCard login={run.data.report.login} /> : null}
 
       {run.data?.definition ? (
        <Card>

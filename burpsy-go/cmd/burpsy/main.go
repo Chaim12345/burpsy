@@ -20,6 +20,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -28,7 +29,9 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
+	"github.com/burpsy-go/burpsy/internal/skills"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 	"github.com/burpsy-go/burpsy/internal/web"
@@ -69,6 +72,7 @@ func main() {
 	// this flag is the only way one is admitted. Nothing is started here — a load is an act the operator
 	// performs from the Extensions tab — and a name that is not on this list cannot be loaded at all,
 	// the same gate -tools puts in front of `run tool`.
+	skillsDir := flag.String("skills", "", "load the skill library from DIR: one <name>.json manifest per skill, published to MCP clients as prompts")
 	pluginsFlag := flag.String("plugins", "", "allowlist burpsy plugins for the Extender: name=/path/to/plugin (comma-separated name=path)")
 	// SCAN-03: the shipped configurations were reachable from nothing. This sets the default every
 	// audit this process runs uses; a per-audit override goes on the request body. "list" prints the
@@ -100,6 +104,12 @@ func main() {
 		`Interactsh server for out-of-band interactions, or "public" for interactsh's own pool. Unset disables the Collaborator tool`)
 	collaboratorClient := flag.String("collaborator-client", "",
 		"path to the interactsh-client binary (default: look it up on PATH)")
+	// Burp's restoreClient(SecretKey) (burpsy-react-ui-d657): the channel's identity is kept here, one
+	// directory per interaction server, so a payload minted before a restart is still polled after it.
+	// Empty keeps a fresh identity per process.
+	collaboratorStateDir := flag.String("collaborator-state-dir",
+		filepath.Join(filepath.Dir(proxy.DefaultCADir()), "collaborator"),
+		`directory keeping the Collaborator client identity across restarts, per server ("" = a fresh identity each run)`)
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -290,6 +300,21 @@ func main() {
 		web.InstallCaptureSinks(store, findingStore, persistStore)
 	}
 
+	// Burp's Project settings → Logging (burpsy-react-ui-nvfl): per-tool request/response log files.
+	// Observed after the restore, so the files receive new traffic only — never a replay of history.
+	fileLogger := filelog.New(store)
+	store.ObserveExchanges(fileLogger.Observe)
+	defer fileLogger.Close()
+	if persistStore != nil {
+		if saved, err := persistStore.LoadFileLogging(); err != nil {
+			log.Printf("file logging settings could not be read, so no log files are written: %v", err)
+		} else if saved != nil {
+			if err := fileLogger.Apply(*saved); err != nil {
+				log.Printf("file logging settings could not be applied, so no log files are written: %v", err)
+			}
+		}
+	}
+
 	// The upstream proxy policy every egress path in this process shares: the proxy listener's
 	// origin-facing leg and every sender built below hold this same object, so a rule edited in the
 	// console reaches both without a restart.
@@ -382,6 +407,7 @@ func main() {
 		oobProvider = scanner.NewLazyOOBProvider(oob.Options{
 			ServerURL:  serverURL,
 			BinaryPath: *collaboratorClient,
+			StateDir:   oob.StateDirFor(*collaboratorStateDir, serverURL),
 		})
 	}
 
@@ -420,6 +446,19 @@ func main() {
 		}
 	} else {
 		passiveScanner = scanner.NewPassiveScanner(store, logger)
+	}
+	// Custom scan checks imported in the console (kbu1) come back with the project, after the
+	// directory's, before anything reads the corpus.
+	if persistStore != nil {
+		if sources, err := persistStore.LoadCustomScanChecks(); err != nil {
+			logger.Warn("custom scan checks not restored", zap.Error(err))
+		} else {
+			for _, src := range sources {
+				if _, err := passiveScanner.ImportCheck(src, true); err != nil {
+					logger.Warn("a saved custom scan check no longer loads", zap.Error(err))
+				}
+			}
+		}
 	}
 
 	// Create proxy config.
@@ -471,6 +510,9 @@ func main() {
 	// later, and the restore below would write into a holder the server never reads
 	// (burpsy-react-ui-o1eu).
 	proxyNetwork := proxy.NewNetworkSettings()
+	// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): one store the proxy's upstream leg,
+	// the sender and the panel share, so the panel lists what any leg was shown.
+	serverCertStore := servercerts.New()
 
 	proxyConfig := proxy.NewProxyConfig(store).
 		WithNetworkSettings(proxyNetwork).
@@ -505,6 +547,7 @@ func main() {
 		// passthrough list — which is to say by giving up interception, which is the one
 		// thing the operator started this tool to do.
 		WithClientCerts(clientCerts).
+		WithServerCerts(serverCertStore).
 		// What the listener relayed for the operator's browser is logged beside what burpsy's
 		// own tools sent — Logger's coverage, not just the tools' (burpsy-react-ui-6dt).
 		WithToolLog(toolLog)
@@ -520,6 +563,14 @@ func main() {
 	// applied -- the panel and the leg disagreeing, which is the state burpsy-react-ui-f365 found with
 	// the setting absent entirely.
 	proxyConfig.WithUpstreamTLS(restoredTLSPolicy)
+
+	// The live passive crawl's observer (burpsy-react-ui-t3zk) is a web-server method, and the web
+	// server is built after the proxy starts. Relay goroutines read the config without a lock, so the
+	// hook is attached here, before NewServer, as a slot; the web server's method is installed into
+	// the slot once it exists, through an atomic pointer. Writing the config field after serving had
+	// begun was a data race.
+	var pageObserver proxy.PageObserverSlot
+	proxyConfig.WithPageObserver(pageObserver.Observe)
 
 	proxyServer := proxy.NewServer(proxyConfig)
 	go func() {
@@ -545,6 +596,7 @@ func main() {
 	// connection still went out direct.
 	senderConfig := egressSenderConfig(upstreamPolicy, platformAuth, clientCerts)
 	senderConfig.UpstreamCarrier = upstreamCarrier
+	senderConfig.ServerCerts = serverCertStore
 	httpSender := sender.NewSender(senderConfig).WithUpstreamCarrier(upstreamCarrier)
 
 	// Persisted network settings apply before either consumer sends anything. Same precedence argument
@@ -630,6 +682,10 @@ func main() {
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
+	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
+	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
+	// API-scan capture.
+	passiveScanner.WithRunConfigSource(activeScanner)
 
 	// Persisted scan-config overrides still apply last, after the flag chain — but through
 	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level
@@ -670,6 +726,7 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		WithCollaboratorStateDir(*collaboratorStateDir).
 		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
 		// because it is the scanner the web server audits with — so the channel the Collaborator tab
 		// displays and the channel a check plants in a payload are the same registration. Nil (no flag)
@@ -732,7 +789,26 @@ func main() {
 		// PKCS#12 file deleted between sessions shows up on the panel rather than only in a
 		// log the operator is not reading.
 		WithNetAuth(platformAuth, clientCerts).
-		WithNetAuthRestoreNotes(netAuthNotes)
+		WithNetAuthRestoreNotes(netAuthNotes).
+		WithServerCerts(serverCertStore).
+		WithFileLog(fileLogger)
+	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
+	// site-map items. Installed into the slot the proxy was built with, which is safe while it serves.
+	pageObserver.Set(webServer.ObserveProxiedPage)
+	// The skill library (burpsy-react-ui-ulsy). An unreadable directory refuses to start: the operator
+	// named it, and a console that came up without it would serve an empty library as though it were
+	// theirs. A refused manifest is logged and served in the library's refused list.
+	if *skillsDir != "" {
+		lib, serr := skills.Load(*skillsDir)
+		if serr != nil {
+			log.Fatalf("Failed to load skills from %s: %v", *skillsDir, serr)
+		}
+		for _, e := range lib.Errors {
+			logger.Warn("skill manifest refused", zap.String("file", e.File), zap.String("error", e.Error))
+		}
+		logger.Info("skills loaded", zap.String("dir", *skillsDir), zap.Int("skills", len(lib.Skills)), zap.Int("refused", len(lib.Errors)))
+		webServer.WithSkills(lib)
+	}
 	if persistStore != nil {
 		// Restore the web-owned stores (match & replace, session, organizer,
 		// tool log) and mirror their tool activity.
@@ -817,11 +893,16 @@ func main() {
 	// run that opened a channel leaves an interactsh-client behind, holding a registration and a temp
 	// file. Closed here rather than through CloseCapabilities because this is the provider this process
 	// built, and it is the one thing on this path with a subprocess to collect.
-	if oobProvider != nil {
-		if err := oobProvider.Close(); err != nil {
-			logger.Error("Failed to close the out-of-band channel", zap.Error(err))
-		}
+	//
+	// The scanner's current provider, not the start-up one: the console can install a different one
+	// (POST /api/collaborator/server), and a channel that keeps its identity has to be stopped
+	// gracefully for the next run to resume it (d657).
+	if err := activeScanner.CloseOOBChannel(); err != nil {
+		logger.Error("Failed to close the out-of-band channel", zap.Error(err))
 	}
+	// The headless browser a recorded login replays in when no -dom engine is configured
+	// (burpsy-react-ui-xhtk) is this process's child; reap it rather than leave a Chrome behind.
+	webServer.CloseLoginBrowser()
 	// Seal the capture's tail. Sync rather than Close: handlers may still be
 	// unwinding, and Close would unmap segments they are reading spans out of.
 	if err := store.Sync(); err != nil {
@@ -894,7 +975,7 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		}
 		fmt.Printf("\n%d of the %d configurations Burp ships are transcribed above; %d of them set at\n"+
 			"least one key this engine honours, so loading one of those files takes effect. The others\n"+
-			"set crawl tuning, per-issue selection or DOM analysis this engine has no equivalent of:\n"+
+			"set only crawl tuning or DOM analysis this engine has no equivalent of:\n"+
 			"every such key is attributed rather than dropped, listed by `-scan-config list-unapplied`.\n"+
 			"A Burp configuration file can be loaded directly by passing its path instead of a name.\n",
 			len(scanner.BuiltInConfigs), scanner.BurpShippedConfigCount,
@@ -917,11 +998,10 @@ func resolveScanConfig(name string) (scanner.AuditConfig, error) {
 		if err != nil {
 			return base, fmt.Errorf("-scan-config: reading configuration file: %w", err)
 		}
-		parsed, perr := scanner.ParseBurpConfig(data)
+		applied, unapplied, perr := scanner.ApplyBurpConfigFile(base, data)
 		if perr != nil {
 			return base, fmt.Errorf("-scan-config: %w", perr)
 		}
-		applied, unapplied := parsed.ApplyWithReport(base)
 		if len(unapplied) > 0 {
 			fmt.Printf("scan configuration %s: keys this engine cannot apply: %s\n", name, strings.Join(unapplied, ", "))
 		}
@@ -1131,6 +1211,10 @@ func restoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Cred
 			record(failure)
 		}
 	}
+
+	// Burp's "Prompt for credentials on platform authentication failure" (3xnt) survives a restart
+	// whether or not the rules themselves could be read.
+	credentials.SetPromptOnFailure(store.LoadPlatformAuthPrompt())
 
 	if rows, err := store.LoadClientCerts(); err != nil {
 		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))

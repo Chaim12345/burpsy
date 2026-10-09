@@ -25,6 +25,7 @@ export const CRAWL_STOP_LABELS: Readonly<Record<string, string>> = {
  "paused-auth-failures": "Paused by policy: re-logins kept failing",
  "follow-up-budget": "Failed requests not retried — the request budget was spent",
  "follow-up-cancelled": "Cancelled during the follow-up pass — some failures not retried",
+ "login-failed": "The recorded login failed — the whole crawl ran logged out",
 };
 
 /** A stop the console has no label for still shows, under its own name. */

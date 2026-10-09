@@ -41,11 +41,14 @@ package web
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,6 +111,73 @@ type collaboratorHub struct {
 	mu       sync.Mutex
 	minted   []mintedPayload
 	lastRead *collaboratorRead
+	// healthProbes and healthWait replace the health check's network actions and capture wait
+	// (api_collaborator_health.go). Nil and zero mean the real ones; only tests set them.
+	healthProbes *collaboratorProbes
+	healthWait   time.Duration
+	// stateDir is the open channel's identity directory (d657) the minted list was loaded from and is
+	// saved to, so the payloads handed out before a restart are still listed, and attributed, after it.
+	// Empty when the channel keeps no identity.
+	stateDir string
+}
+
+// mintedFileName holds the minted payloads in a channel's state directory.
+const mintedFileName = "minted.json"
+
+// syncState points the hub at the open channel's state directory, loading the payloads an earlier run
+// minted the first time it sees that directory.
+func (h *collaboratorHub) syncState(dir string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if dir == h.stateDir {
+		return
+	}
+	h.stateDir = dir
+	if dir == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, mintedFileName))
+	if err != nil {
+		return
+	}
+	var saved []mintedPayload
+	if json.Unmarshal(raw, &saved) != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, m := range h.minted {
+		known[m.Marker] = true
+	}
+	for _, m := range saved {
+		if !known[m.Marker] {
+			h.minted = append(h.minted, m)
+		}
+	}
+}
+
+// saveLocked writes the minted list to the state directory. The caller holds h.mu. A failed write is
+// returned so the mint can report it: an address the next run cannot list is one an operator would lose.
+func (h *collaboratorHub) saveLocked() error {
+	if h.stateDir == "" {
+		return nil
+	}
+	raw, err := json.Marshal(h.minted)
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(h.stateDir, mintedFileName+".tmp")
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(h.stateDir, mintedFileName))
+}
+
+// collabSync loads the open channel's saved payloads into the hub (d657). Every handler that lists or
+// attributes payloads calls it first.
+func (s *Server) collabSync() {
+	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open {
+		s.collab().syncState(reg.StateDir)
+	}
 }
 
 // mintedPayload is one address handed to an operator.
@@ -118,15 +188,15 @@ type collaboratorHub struct {
 // (`marker + "." + channel.Domain()`). Without it the page could say "something called back" but never
 // "the address you generated at 14:02 called back".
 type mintedPayload struct {
-	Address  string
-	Marker   string
-	MintedAt time.Time
+	Address  string    `json:"address"`
+	Marker   string    `json:"marker"`
+	MintedAt time.Time `json:"minted_at"`
 	// CustomData is the operator's own label, carried in the address so an interaction identifies
 	// which payload fired (burpsy-react-ui-80tc). Empty when none was given.
-	CustomData string
+	CustomData string `json:"custom_data,omitempty"`
 	// WithoutServerLocation records that the operator asked for a payload that does not disclose
 	// which server it was minted from — Burp's PayloadOption.WITHOUT_SERVER_LOCATION.
-	WithoutServerLocation bool
+	WithoutServerLocation bool `json:"without_server_location,omitempty"`
 }
 
 // collaboratorRead is the outcome of one read of the interaction log — the third state the UI has to
@@ -198,6 +268,11 @@ type collaboratorStatus struct {
 	DefaultPool bool   `json:"default_pool"`
 	// Domain is the registered payload domain. Empty until a channel is open.
 	Domain string `json:"domain,omitempty"`
+	// IdentityKept says the channel's identity is kept across restarts (d657), so payloads minted here
+	// are still polled after burpsy restarts. Resumed says the open channel took over such an identity
+	// from an earlier run.
+	IdentityKept bool `json:"identity_kept"`
+	Resumed      bool `json:"resumed"`
 	// Payloads are the addresses minted here, newest first.
 	Payloads []collaboratorPayloadView `json:"payloads"`
 	// Interactions is null — not a zero object — whenever no channel has ever been open. See the file
@@ -234,6 +309,11 @@ type collaboratorInteractionRow struct {
 	// Collapsed marks a row that oob.Deduplicate folds into an earlier one: a real record of a real
 	// callback, but not a separate event to count.
 	Collapsed bool `json:"collapsed"`
+	// RawRequestB64 and RawResponseB64 carry the interaction's bytes, base64 as Burp's CSV export
+	// represents them (aw2y). Present only when the caller asks with ?full=1, so the table's polling
+	// read does not carry every DNS packet and HTTP request on each tick.
+	RawRequestB64  *string `json:"raw_request_b64,omitempty"`
+	RawResponseB64 *string `json:"raw_response_b64,omitempty"`
 }
 
 // collaboratorInteractionDetail is one interaction's bytes and the reading of its client IP.
@@ -410,6 +490,7 @@ func domainFromAddress(address, marker string) string {
 
 // collaboratorStatusNow assembles the whole state. Never registers a channel.
 func (s *Server) collaboratorStatusNow(read bool) collaboratorStatus {
+	s.collabSync()
 	status := collaboratorStatus{
 		State:       collabNotConfigured,
 		Payloads:    []collaboratorPayloadView{},
@@ -430,6 +511,8 @@ func (s *Server) collaboratorStatusNow(read bool) collaboratorStatus {
 	status.Configured = true
 	status.Server = reg.Server
 	status.DefaultPool = reg.Server == ""
+	status.IdentityKept = reg.StateDir != ""
+	status.Resumed = reg.Resumed
 
 	switch {
 	case reg.Open:
@@ -566,12 +649,16 @@ type collaboratorServerRequest struct {
 // domain and no correlated payload, so nothing can be orphaned. That is also the most likely reason
 // anyone reaches for this endpoint — a mistyped server, or a machine without the client binary.
 func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodDelete {
+		s.handleCollaboratorServerUnset(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var req collaboratorServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -622,6 +709,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 	s.scanner.WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
 		ServerURL:  serverURL,
 		BinaryPath: req.ClientPath,
+		StateDir:   oob.StateDirFor(s.collabStateBase, serverURL),
 	}))
 
 	// The fresh status, not a bare ok. The provider is lazy, so what the operator most needs to know
@@ -642,7 +730,26 @@ func (s *Server) handleCollaboratorPoll(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+	// The body is optional: an empty POST is the original "re-read now" and answers exactly as it
+	// always did. payload_ids / wait_seconds / min_interactions are the filtered long-poll
+	// (burpsy-react-ui-myr2, api_collaborator_poll.go).
+	var req collaboratorPollReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "body must be empty or JSON {\"payload_ids\":[…],\"wait_seconds\":N,\"min_interactions\":M}", http.StatusBadRequest)
+		return
+	}
+	if req.empty() {
+		writeJSON(w, http.StatusOK, s.collaboratorStatusNow(true))
+		return
+	}
+	s.collaboratorLongPoll(w, r, req)
+}
+
+// collaboratorPayloadReq is the request body handleCollaboratorPayload decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type collaboratorPayloadReq struct {
+	Count                 int    `json:"count"`
+	CustomData            string `json:"custom_data"`
+	WithoutServerLocation bool   `json:"without_server_location"`
 }
 
 // handleCollaboratorPayload serves POST /api/collaborator/payload: mint one address.
@@ -676,12 +783,8 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 	var customData string
 	withoutLocation := false
 	if r.Body != nil {
-		var req struct {
-			Count                 int    `json:"count"`
-			CustomData            string `json:"custom_data"`
-			WithoutServerLocation bool   `json:"without_server_location"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
+		var req collaboratorPayloadReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil && err != io.EOF {
 			http.Error(w, "body must be JSON {'count': N} or empty", http.StatusBadRequest)
 			return
 		}
@@ -759,10 +862,17 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		minted = append(minted, payload)
 		addresses = append(addresses, payload.Address)
 	}
+	s.collabSync()
 	hub := s.collab()
 	hub.mu.Lock()
 	hub.minted = append(hub.minted, minted...)
+	saveErr := hub.saveLocked()
 	hub.mu.Unlock()
+	if saveErr != nil {
+		// The addresses exist and are polled now, but the next run will not list them, which is a fact
+		// the operator has to hear before planting them somewhere they will check back on later.
+		w.Header().Set("X-Burpsy-Warning", "minted payloads were not saved for the next run: "+saveErr.Error())
+	}
 
 	// One address in the response keeps the single-mint client working unchanged; a batch adds
 	// the full list under "addresses". Said plainly because it is the difference between these
@@ -817,6 +927,7 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	s.collabSync()
 	reg, configured := s.scanner.OOBRegistration()
 	if !configured || !reg.Open {
 		// 200 with a null count and an empty row set, for the same reason as the status route: a page
@@ -844,8 +955,16 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 		return
 	}
 	minted, _ := s.collab().snapshot()
+	rows := collaboratorRows(all, minted)
+	if truthy(r.URL.Query().Get("full")) {
+		for i := range rows {
+			req := base64.StdEncoding.EncodeToString([]byte(all[i].RawRequest))
+			resp := base64.StdEncoding.EncodeToString([]byte(all[i].RawResponse))
+			rows[i].RawRequestB64, rows[i].RawResponseB64 = &req, &resp
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"rows":         collaboratorRows(all, minted),
+		"rows":         rows,
 		"interactions": countsOf(all),
 		"configured":   true,
 		"state":        collabActive,
@@ -906,4 +1025,79 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 		RawRequest:    in.RawRequest,
 		RawResponse:   in.RawResponse,
 	})
+}
+
+// collaboratorServerUnsetReq is DELETE /api/collaborator/server's optional body.
+type collaboratorServerUnsetReq struct {
+	DiscardOpenChannel bool `json:"discard_open_channel" desc:"stop using the server even though a channel is registered, orphaning the payload addresses minted from it; without it an open channel is a 409"`
+}
+
+// handleCollaboratorServerUnset serves DELETE /api/collaborator/server: Burp's "Don't use Burp
+// Collaborator" (burpsy-react-ui-8e3n). The installation goes back to not_configured, and every
+// out-of-band check refuses again rather than reporting a clean result.
+//
+// An open channel is the same hazard the POST refuses on: the payloads minted from it, and any finding
+// that cites them, would point at a server nobody polls. Burp lets an operator make that choice, so this
+// does too, but only on purpose. Without {"discard_open_channel": true} it answers 409, naming the
+// domain and how many minted payloads would be orphaned. With it, the channel is closed, those payloads
+// are dropped from this surface and counted in the reply, and the interaction counts go back to null.
+// They do not go to 0, because a payload nobody polls has no interactions to count.
+func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Request) {
+	var req collaboratorServerUnsetReq
+	if r.Body != nil {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<12)).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "body must be JSON {\"discard_open_channel\": true} or empty", http.StatusBadRequest)
+			return
+		}
+	}
+	if s.scanner == nil {
+		http.Error(w, "no scanner is attached to this server, so there is no interaction channel to unset",
+			http.StatusServiceUnavailable)
+		return
+	}
+	hub := s.collab()
+	hub.mu.Lock()
+	minted := len(hub.minted)
+	hub.mu.Unlock()
+	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open && !req.DiscardOpenChannel {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":          "a collaborator channel is registered",
+			"domain":         reg.Domain,
+			"minted_payload": minted,
+			"detail": fmt.Sprintf("not using Collaborator closes the channel on %s, and the %d payload "+
+				"address(es) minted from it would point at a server nobody polls. Send "+
+				"{\"discard_open_channel\": true} to do it anyway.", reg.Domain, minted),
+		})
+		return
+	}
+	// Forget the saved identity only when the operator confirmed giving up an open channel's payloads.
+	// Otherwise it is kept, and setting the same server again resumes it with its payloads (d657).
+	openNow := false
+	if r, ok := s.scanner.OOBRegistration(); ok && r.Open {
+		openNow = true
+	}
+	reg, configured, err := s.scanner.ClearOOBProvider(openNow && req.DiscardOpenChannel)
+	orphaned := 0
+	if configured && reg.Open {
+		orphaned = minted
+	}
+	hub.mu.Lock()
+	hub.minted = nil
+	hub.lastRead = nil
+	hub.stateDir = ""
+	hub.mu.Unlock()
+	out := map[string]any{
+		"status":            s.collaboratorStatusNow(false),
+		"orphaned_payloads": orphaned,
+		"was_configured":    configured,
+	}
+	if reg.Open {
+		out["closed_domain"] = reg.Domain
+	}
+	if err != nil {
+		// The provider is already gone. Only the subprocess's shutdown complained, so report that and
+		// do not pretend the unset failed.
+		out["close_error"] = err.Error()
+	}
+	writeJSON(w, http.StatusOK, out)
 }

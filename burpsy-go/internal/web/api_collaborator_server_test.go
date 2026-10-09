@@ -235,7 +235,8 @@ func TestSettingTheServerWithNoScannerIsRefused(t *testing.T) {
 
 func TestCollaboratorServerRejectsNonPost(t *testing.T) {
 	ts := newTestServerWithScanner(t)
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+	// DELETE is "Don't use Collaborator" (8e3n), tested in api_collaborator_health_test.go.
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		req := httptest.NewRequest(method, "/api/collaborator/server", nil)
 		rec := httptest.NewRecorder()
 		ts.mux.ServeHTTP(rec, req)

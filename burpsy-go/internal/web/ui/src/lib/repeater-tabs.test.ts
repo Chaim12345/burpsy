@@ -3,7 +3,7 @@
 // decision without a browser — which is the only reason an off-by-one in a reorder is catchable
 // before it reaches an operator's drag.
 import { describe, expect, test } from "bun:test";
-import { reorderTabWithinGroup, reorderTabs, tabColour, tabDropdownGroups, type TabLike } from "./repeater-tabs";
+import { filterTabs, reorderTabWithinGroup, reorderTabs, tabColour, tabDropdownGroups, type TabLike } from "./repeater-tabs";
 
 const tab = (id: string, over: Partial<TabLike> = {}): TabLike => ({ id, name: id, ...over });
 
@@ -114,4 +114,33 @@ describe("a tab's colour", () => {
   test("a group id that names no group leaves the tab uncoloured", () => {
     expect(tabColour({ groupId: "gone" }, groups)).toEqual({ color: "", from: undefined });
   });
+});
+
+describe("Open tab search (burpsy-react-ui-qqcn)", () => {
+ const tabs = [
+  { id: "1", name: "login", target: "https://staging.example.com:443" },
+  { id: "2", name: "login", target: "https://prod.example.com:443" },
+  { id: "3", name: "Search API", target: "https://api.example.com:443" },
+  { id: "4", name: "upload", target: "http://10.0.0.5:8080" },
+ ];
+ const ids = (list: { id: string }[]) => list.map((tab) => tab.id);
+
+ test("an empty or blank query lists every tab, in strip order", () => {
+  expect(ids(filterTabs(tabs, ""))).toEqual(["1", "2", "3", "4"]);
+  expect(ids(filterTabs(tabs, "   "))).toEqual(["1", "2", "3", "4"]);
+ });
+
+ test("a word matches the name or the target, case-insensitively", () => {
+  expect(ids(filterTabs(tabs, "SEARCH"))).toEqual(["3"]);
+  expect(ids(filterTabs(tabs, "10.0.0.5"))).toEqual(["4"]);
+ });
+
+ test("every word must match, across name and target — two facts find one tab of two same-named ones", () => {
+  expect(ids(filterTabs(tabs, "login staging"))).toEqual(["1"]);
+  expect(ids(filterTabs(tabs, "staging login"))).toEqual(["1"]);
+ });
+
+ test("no match is an empty list, not the full one", () => {
+  expect(filterTabs(tabs, "nothing-like-this")).toEqual([]);
+ });
 });
