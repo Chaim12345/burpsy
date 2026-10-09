@@ -311,6 +311,41 @@ func (c *Credentials) Remove(host string, scheme Scheme) bool {
 	return false
 }
 
+// ReplaceWith makes c hold exactly src's rules and prompt setting, and forgets everything c
+// learned under the rules it held before: the cached Digest challenges, the NTLMv2 handshake
+// state, and the recorded authentication failures.
+//
+// In place, not a pointer swap, because the pointer is shared: cmd/burpsy hands the same
+// *Credentials to the web API, the sender and the proxy, and the sender's half is fixed at
+// construction (see sender.CarriesPlatformAuth). A project switch that built a fresh store and
+// pointed the API at it would leave the sender and proxy presenting the outgoing project's
+// passwords while the panel showed the incoming one's (burpsy-react-ui-oava).
+//
+// The learned state goes with the rules because it is the outgoing engagement's: a Digest
+// nonce or an NTLM challenge answered under project A's password is not something project B's
+// requests may ride, and a failure recorded against A's rule would prompt B's operator about a
+// credential B never configured. src is only read; nil empties c.
+func (c *Credentials) ReplaceWith(src *Credentials) {
+	if src == c {
+		return
+	}
+	var rules []Credential
+	prompt := false
+	if src != nil {
+		src.mu.RLock()
+		rules = append([]Credential(nil), src.rules...)
+		prompt = src.prompt
+		src.mu.RUnlock()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rules = rules
+	c.prompt = prompt
+	c.challenges = map[string]*digestState{}
+	c.ntlm = map[string]*ntlmSession{}
+	c.failures = nil
+}
+
 // Match returns the first rule covering host.
 //
 // Host only, no port: Burp's platform-authentication entry is keyed by destination
@@ -482,6 +517,25 @@ func (c *ClientCerts) Remove(host string) bool {
 		}
 	}
 	return false
+}
+
+// ReplaceWith makes c hold exactly src's bindings; nil empties it. In place for the reason
+// Credentials.ReplaceWith is: the sender's dialer and the proxy's upstream leg hold this pointer,
+// so a project switch that swapped in a new store would leave both presenting the outgoing
+// project's identity (burpsy-react-ui-oava). src is only read.
+func (c *ClientCerts) ReplaceWith(src *ClientCerts) {
+	if src == c {
+		return
+	}
+	var certs []ClientCert
+	if src != nil {
+		src.mu.RLock()
+		certs = append([]ClientCert(nil), src.certs...)
+		src.mu.RUnlock()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.certs = certs
 }
 
 // For returns the certificate to present to host, or nil when no binding covers it.

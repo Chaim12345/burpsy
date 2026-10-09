@@ -88,8 +88,9 @@ Two rules are enforced by tests rather than by review:
    annotations — `riskClass`, `requiresConfirmation`, the four MCP hints — are true of every
    operation the tool reaches. The class is always read from the manifest; the table only says which
    operations sit together. `readOnlyHint` is additionally false for any tool that can PUT, PATCH or
-   DELETE: that is why `DELETE /api/history`, which the manifest classes `read`
-   (burpsy-react-ui-gf68), is its own `history_delete` tool rather than an op of `history`.
+   DELETE. The removal of history rows is its own `history_delete` tool fronting
+   `DELETE /api/history/rows`, which the manifest classes `destructive` and the gate confirms; it was
+   `DELETE /api/history` under that read route's `read` class until burpsy-react-ui-gf68.
 
 Size, measured on this branch: the grouped surface is 64 tools and about 234 KB of `tools/list`
 JSON with every body and query typed; the route surface is 168 tools and about 350 KB typed; before

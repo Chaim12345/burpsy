@@ -1923,6 +1923,7 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, MatchRuleSettings, error
 	}
 	defer rows.Close()
 	var rules []*matchreplace.Rule
+	refused, saved := 0, 0
 	for rows.Next() {
 		var target, cat int
 		var match, replace, comment string
@@ -1930,12 +1931,28 @@ func (s *Store) LoadMatchRules() ([]*matchreplace.Rule, MatchRuleSettings, error
 		if err := rows.Scan(&target, &cat, &match, &replace, &comment, &enabled); err != nil {
 			return nil, MatchRuleSettings{}, err
 		}
+		saved++
 		r, err := matchreplace.NewRule(matchreplace.Target(target), matchreplace.Category(cat), match, replace, comment)
+		if errors.Is(err, matchreplace.ErrEmptyMatch) {
+			// A blank-match rule saved before NewRule refused them (burpsy-react-ui-wtm2). Every
+			// one of these corrupted or did nothing to the traffic it touched, so it is not
+			// installed — but it is named and counted, not dropped in silence, and the restore
+			// goes on: refusing the whole project over one rule would take scope, session rules
+			// and the organizer down with it, the same call the session-rule restore makes.
+			s.note("restore matchreplace rule", fmt.Errorf("saved rule %d (comment %q) not installed: %w", saved-1, comment, err))
+			refused++
+			continue
+		}
 		if err != nil {
 			return nil, MatchRuleSettings{}, err
 		}
 		r.Enabled = enabled != 0
 		rules = append(rules, r)
+	}
+	if refused > 0 {
+		s.note("restore matchreplace rules", fmt.Errorf(
+			"%d of %d saved match & replace rule(s) have a blank match this build no longer accepts and were not installed; "+
+				"re-create them in the Match & Replace panel", refused, saved))
 	}
 	return rules, MatchRuleSettings{
 		UpdateContentLength: s.loadFlag("matchreplace.update_content_length"),

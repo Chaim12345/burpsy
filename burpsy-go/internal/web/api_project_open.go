@@ -251,6 +251,11 @@ func (s *Server) handleProjectOpen(w http.ResponseWriter, r *http.Request) {
 	// log, intercept-startup and pools sinks — the same work main.go's startup path does,
 	// called here because the file it is restoring from has changed.
 	s.WithPersist(next)
+	// The network-authentication stores follow the project too, and are replaced here rather than
+	// in WithPersist because startup restores them before the sender is built (see restoreNetAuth):
+	// project A's passwords and client certificate must not stay live, on the wire, under project B
+	// (burpsy-react-ui-oava).
+	s.restoreNetAuth(next)
 
 	if previous != nil {
 		if err := previous.Close(); err != nil {

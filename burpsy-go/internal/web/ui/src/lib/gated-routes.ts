@@ -63,6 +63,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/history/extract": false,
  "/api/history/extractors": false,
  "/api/history/import/har": false,
+ "/api/history/rows": true,
  "/api/http2/kettle": false,
  "/api/http2/program": false,
  "/api/intercept": false,
