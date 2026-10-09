@@ -177,6 +177,14 @@ var manifest = map[string]route{
 		summary: "mint one blind-XSS correlation payload to plant: the token, the script URL and the " +
 			"script tag carrying it",
 	},
+	"/api/collaborator/health": {
+		// riskEgress, like /payload and for a stronger reason: it may register the channel, then sends
+		// DNS, HTTP, HTTPS and SMTP traffic to the interaction server, a third party, to see whether the
+		// interactions come back (Burp's "Run health check", 8e3n).
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "Burp's Collaborator health check: eight connection items against a fresh address on " +
+			"the registered domain, then whether each protocol's interaction came back through polling",
+	},
 	"/api/collaborator/interaction/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
@@ -217,9 +225,14 @@ var manifest = map[string]route{
 		//
 		// Refuses with 409 once a channel has registered, so it cannot orphan payloads already handed
 		// out; that is a correctness guard, not a reason to soften the class.
-		methods: []string{"POST"}, risk: riskScope,
+		//
+		// DELETE is Burp's "Don't use Burp Collaborator" (8e3n). It shares the class: it decides that no
+		// third party learns of the engagement from now on, and with an open channel it 409s unless the
+		// caller explicitly discards the payloads minted from it.
+		methods: []string{"POST", "DELETE"}, risk: riskScope,
 		summary: "point this installation at an interaction server without restarting: a URL, or " +
-			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered",
+			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered. " +
+			"DELETE stops using one (409 with an open channel unless discard_open_channel is set)",
 	},
 	"/api/collaborator/status": {
 		methods: []string{"GET"}, risk: riskRead,
@@ -262,6 +275,16 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "GET: the ffuf allowlist state and the retained discovery runs. POST: sweep a host's " +
 			"path space with a wordlist (Burp's \"Discover content\")",
+	},
+	"/api/target/analyze": {
+		// Burp's Target analyzer (burpsy-react-ui-dnvi): counts over captured content, nothing sent.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "Target analyzer: dynamic and static URLs, parameters and unique parameter names for a host or branch; format=html saves the report",
+	},
+	"/api/engagement/clickbandit.js": {
+		// burpsy's Clickbandit script (burpsy-react-ui-g67w), served as text for the console to copy.
+		methods: []string{"GET"}, risk: riskAsset,
+		summary: "the Clickbandit script to paste into a target page's developer console (clickjacking PoC recorder)",
 	},
 	"/api/engagement/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "1",
@@ -332,6 +355,16 @@ var manifest = map[string]route{
 		methods: []string{"GET", "PUT"}, risk: riskLocal,
 		summary: "the header names the Comparer discounts, per direction, with the response-side " +
 			"defaults and the list of surfaces that consult them",
+	},
+	"/api/hidden-inputs": {
+		// riskAttack, like /api/discovery and /api/audit/: a POST sends up to the run's request budget
+		// (500 by default) of guessed parameters, cookies and headers at a captured exchange's target.
+		// It is a deliberately separate pattern from /api/exchange/, which is riskLocal — nested there,
+		// the guess would inherit a class the confirmation gate does not stop. The GET is a read; the
+		// pattern takes the stronger verb's class, as /api/discovery's does.
+		methods: []string{"GET", "POST"}, risk: riskAttack,
+		summary: "GET: retained hidden-input guessing runs. POST: guess hidden query parameters, cookies " +
+			"and headers against one captured exchange (Burp's Param Miner \"Guess params\")",
 	},
 	"/api/history": {
 		// DELETE is Burp's "Delete items"/"Clear (tool)" (r6li): a tombstone on the operator's
@@ -683,7 +716,7 @@ var manifest = map[string]route{
 	},
 	"/api/report/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "json",
-		summary: "export findings as json, sarif or html",
+		summary: "export findings as json, sarif, html or Burp-XML (m7dk)",
 	},
 	"/api/scanner/audit": {
 		methods: []string{"POST"}, risk: riskAttack,
@@ -719,12 +752,49 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskLocal,
 		summary: "the scan configurations an audit can run under: the shipped presets, generated from the table rather than listed by hand, plus the operator's own saved ones (burpsy-react-ui-uxcs) in the same list and marked shipped:false. POST/PUT save, clone or rename one; DELETE removes one. A shipped name is read-only and every write refuses it with 409 — two lists answering the same name differently is what the refusal prevents. riskLocal rather than riskRead because the writes change what a later audit runs under, and riskDestructive is reserved for discarding recorded evidence; a deleted configuration is a setting, not a finding",
 	},
+	"/api/scanner/issue-types": {
+		// riskRead: a static table this binary carries; it answers what can be selected and sends nothing.
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the issue catalogue a scan configuration's per-issue selection is chosen from: every type by name with " +
+			"Burp's detection methods for it and which of them burpsy runs (burpsy-react-ui-saq3.3.1)",
+	},
 	"/api/scanner/checks": {
 		// The corpus inventory: which custom checks are loaded, and whether each is enabled. riskRead
 		// — it answers what this process already holds and sends nothing.
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "the loaded BCheck corpus as rows: each custom check's name, enablement and run count, " +
 			"so what the corpus covers is inspectable rather than only counted (burpsy-react-ui-kdqj)",
+	},
+	"/api/scanner/checks/validate": {
+		// riskRead: parses a draft and answers whether it would load; nothing changes, nothing is sent.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "Burp's Validate for a custom scan check: parse a BCheck draft and report its name, kind and " +
+			"the parse error with its line and column (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/import": {
+		// riskLocal: adds a check to the corpus the next audit and the passive scanner dispatch.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "Burp's Import / Save for a custom scan check: load a BCheck from the console into the corpus, " +
+			"persisted with the project (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/source": {
+		// GET is a read (Export, the editor); DELETE removes a console check — local-write, the stricter.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "a loaded check's BCheck source for Export and editing, and Delete for a console-imported " +
+			"check (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/reload": {
+		// riskLocal: re-reads the --bchecks directory into the corpus.
+		methods: []string{"POST"}, risk: riskLocal,
+		summary: "re-read the --bchecks directory, keeping console-imported checks (burpsy-react-ui-kbu1)",
+	},
+	"/api/scanner/checks/test": {
+		// riskAttack: an active draft sends its probes to each chosen exchange's target, through the same
+		// scope-gated sender an audit uses.
+		methods: []string{"POST"}, risk: riskAttack,
+		summary: "Burp's Run test for a custom scan check: run a BCheck draft against chosen captured exchanges " +
+			"and report its findings, probes sent and refused, and unresolved references, filing nothing " +
+			"(burpsy-react-ui-kbu1)",
 	},
 	"/api/scanner/checks/enable": {
 		// riskLocal, not riskRead: this changes what the NEXT audit dispatches. Not riskAttack —

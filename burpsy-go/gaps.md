@@ -1780,6 +1780,188 @@ nothing came back.
   session cookie jar still learns from the responses (the engine's `Observe` hook, independent of the recorder).
 - Burp greys "Store responses" while denial-of-service mode is on; burpsy has no denial-of-service mode (see
   the fmxv note in the UI), so the two never interact.
+## Scan-configuration selection: where burpsy diverges from Burp (saq3.1, 2hze, gmdk — 2026-10-07)
+
+Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than
+Burp rather than wider:
+
+- **A check is withheld only when every (type, method) pair it registers is disabled.** FIXED
+  2026-10-08 (saq3.2.1): burpsy used to withhold a check on ANY declared-disabled method, which
+  agreed with Burp (`Zwy6.java:170-184`) only while every check declared one method. The
+  SQL-injection check now declares its five implemented methods on one descriptor, so the rule
+  is Burp's own — kept while any pair is enabled — and the disabled METHOD's granularity is the
+  probe gate (`ProbeHarness.withhold`), which declines it by name with the count of probes it
+  withheld.
+- **Detection methods burpsy does not implement cannot run**, whatever a configuration enables:
+  Burp Infiltrator everywhere; for SQL injection Collaborator plus the Oracle and MySQL timing
+  banks — their payload text is inside ZKM string decoders this tree does not run, so burpsy
+  sends none rather than a guess (2026-10-08, saq3.2.1: Error messages, Boolean conditions,
+  Time delays, PostgreSQL specific and SQL Server specific ARE implemented now, gated per
+  technique inside the one SQL-injection check). They are declined by name
+  (`AuditConfig.DeclinedDetectionMethods`, `AuditOutcome.MethodsDeclined`), never silently ignored.
+- **SQL injection detection without a database**, by construction: the vulnapp blind endpoints
+  recognise the SHAPE of an injected condition or sleep directive, never burpsy's own payload
+  text, and the boolean differential the classifier needs is true-half-identical /
+  false-half-different. A finding on the timing bank is a delay against the baseline, so an
+  endpoint that sleeps for ANY reason can produce one; the confidence stays `firm` and the
+  detail names the exact request. Recovered Burp payload banks are limited to PostgreSQL
+  (`Zxpy`) and SQL Server (`Zuyg`) — see sqli_techniques.go's header for what is recovered
+  versus documented.
+- **Skip lists from a Burp file**: Burp's value is a list of match rules
+  (`{parameter, item, match_type, expression}`). burpsy honours parameter NAMES set through
+  `/api/scanner/configs`; a file's empty rule list is honoured and a non-empty one is reported unapplied.
+- **Server-side-injection class, PROBABLE rows**: Perl, Ruby, Python and unidentified code injection
+  take the code-injection family's class (`Zsn3.java:74-76`); their own Burp runner was not located.
+- **No console route imports a Burp configuration file.** The import path is the `-scan-config` flag;
+  the web console lists the six transcribed presets and saved configurations only.
+
+## Per-run project-option overrides: where burpsy differs from Burp (o2p3 — 2026-10-07)
+
+- **`follow_redirections` follows for the reflected-XSS check only.** Burp's documentation names that
+  check as the reason for the setting; its per-check "where necessary" predicate was not located in the
+  decompiled tree. Following inside every probe would break open redirection and header injection, which
+  read the 30x itself. Reopen if Burp's predicate is found to cover other checks (stored XSS, error-based
+  injection on an error page reached by redirect).
+- **The hop budget and cookie replay of a followed chain are the engagement's network settings**
+  (`redirects.max_hops`, default 5; `redirects.replay_cookies`), because Burp's scan configuration names
+  neither.
+- **Timeout overrides apply to the probes a run sends while it runs.** The deferred phase
+  (`FinishScan`: stored re-fetch, out-of-band polling) runs after the run returns and uses the
+  engagement's timeouts. A normal timeout plus a connect timeout above twenty minutes combined is capped
+  at the sender's ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## AMF bodies are not parsed — declined (2026-10-08, burpsy-react-ui-6v4d)
+- **Burp:** classes `ContentType.AMF` / `MimeType.LEGACY_SER_AMF` and audits `PARAM_AMF` insertion
+  points inside Action Message Format bodies (BlazeDS / GraniteDS, Flash and Flex remoting).
+- **burpsy:** no AMF codec; an AMF body is opaque, and gets no parameter-level audit — only the
+  entire-body point, which carries the scanner's payloads as raw bytes.
+- **Decision: declined.** Flash reached end of life in 2020 and AMF remoting endpoints are now rare
+  enough that an AMF0/AMF3 codec (object graphs, references, externalizable types) is not worth its
+  maintenance. **Re-open** when an engagement brings a live AMF endpoint; the codec would slot in as a
+  nested-point container beside JSON and XML in `bcheck/insertion.go`.
+
+## Hidden-input guessing: where burpsy differs from Param Miner (2026-10-08, burpsy-react-ui-wlz8)
+- **Burp:** Param Miner is a BApp (Extensions > Param Miner > Guess params: GET parameters, cookie
+  parameters, headers, everything). Confirmed inputs are logged to its Output tab and raised as
+  "Secret input" issues. burpsy builds it in as an on-demand row action ("Guess hidden inputs…",
+  `POST /api/hidden-inputs`), never as part of an audit. The issues are filed as "Secret input: query
+  parameter" / "Secret input: cookie" / "Secret input: header", Information severity, and resolve to
+  the catalogue's Extension generated issue type (0x08000000). That type is the one Burp gives any
+  extension's issue.
+- **Wordlist:** about 450 hand-assembled names (229 query, 93 cookie, 135 header;
+  `scanner/hidden_inputs_wordlist.go`). This is not Param Miner's list, which is far larger. Param
+  Miner also mines names from the target (scope, responses, JS). burpsy does no mining, so it cannot
+  find an input whose name is not on its list. The run summary says so.
+- **Method:** two identical baselines must match, or the run stops ("the response varies on its own").
+  Then, per kind:
+  - A control batch of random names. If it changes the response, the kind stops and its names are
+    counted as never sent.
+  - Batches of 40 query parameters, 30 cookies or 20 headers.
+  - Bisection of any batch that changes the response.
+  - Confirmation of each candidate: with it the response differs, without it the baseline returns,
+    and a second send with a fresh value differs again.
+
+  Param Miner's own heuristics (attribute-level response diffing, its "fuzzy" mode, value-type
+  guessing) are not ported. The fingerprint is status, Content-Type, Location and the
+  whitespace-normalised body, with every run token stripped. A change confined to another response
+  header (for example Set-Cookie or Vary) is missed.
+- **Confidence:** Firm when both confirming sends changed the response identically. Tentative when both
+  changed it but differently. A value that comes back in the response is also reported as Firm, but only
+  after two single-name sends and only when the control's values did not come back. This grading is
+  burpsy's. Param Miner's own confidence rules were not available to transcribe.
+- **Cache safety:** on by default, a fresh `burpsycb=<random>` query parameter on every request,
+  baselines included. It keys each guess to a cache entry nobody else requests, so a guessed unkeyed
+  header cannot poison a shared cache. An application that rejects unknown query parameters can have it
+  turned off in the dialog. Param Miner's cache-poisoning detection is not ported. The fixtures do not
+  exercise a cache.
+- **Bounds:** 500 requests by default (route cap 5000). A run that hits the bound says so (state
+  `budget`) and counts the names it never sent. A scope refusal or a failed request stops the run
+  instead of being counted as tested. Framing and routing headers (Host, Content-Length,
+  Transfer-Encoding, Connection, TE, Upgrade, Expect, Proxy-*, …) and Cookie and Authorization are never
+  sent as guesses. Method-override headers are sent only with random values, never a real verb.
+- **Not built:** guessing body parameters (form or JSON). Param Miner offers "Guess body params"; the
+  bead and Burp's tutorial name only the three kinds above. Also not built: multi-request
+  selection (Burp lets one launch cover several selected requests; burpsy guesses one exchange per
+  run).
+
+## Scanner C: BCheck interpreter and console authoring (burpsy-react-ui-saq3.4, 2026-10-08)
+
+### `removing` send-request actions (movb)
+- **Burp:** `bcheck-definition-reference.html` — `removing headers|queries: <names>`, `removing query_string|path|method|body`.
+- **burpsy:** all six. Two readings are burpsy's, because the BCheck engine is not in the decompiled tree:
+  `removing queries` ("Removes the value of the specified query parameter(s)") drops each named parameter,
+  name and value, rather than leaving `name=`; `removing path` ("Removes all path parameters") leaves the
+  path `/` and keeps the query. `removing method` sends a request line with no method.
+- The same pass fixed two mis-sends: `appending query_string` replaced the query, and `replacing queries`
+  appended a duplicate instead of replacing the named parameter's value.
+
+### Console authoring of custom scan checks (kbu1)
+- **Burp:** `desktop/extend-burp/custom-scan-checks/` — Import, New (from templates), Validate, Format BCheck,
+  Send to Custom scan checks editor + Run test, Export, Delete.
+- **burpsy:** the Custom scan checks page gains New (three templates), Import .bcheck…, Validate (with the
+  parse error's line and column), Run test against exchanges sent with "Send to custom scan check editor"
+  (active drafts send through the audit sender's scope gate; nothing is filed), Save, Export, Delete, and
+  Reload for the `--bchecks` directory. Console checks persist with the project (`scanner.custom_checks`).
+- **Differences:** a check loaded from the directory is read-only in the console (edit the file and Reload),
+  and Delete applies only to console checks, because the file would load it again. Format BCheck is not
+  offered: burpsy has no canonical BCheck printer, and a formatter that re-wrote a working check is a risk
+  the operator did not ask for. A test run against a Collaborator check needs a configured channel, like an
+  audit.
+- **Timeout overrides apply to every probe a run sends, its deferred phase included.** `FinishScan`
+  (stored re-fetch, then the stored-DOM render) takes the run's configuration and re-fetches through the
+  run's derived sender (saq3.3.4). Out-of-band polling sends nothing, so it has no timeout to apply. A
+  normal timeout plus a connect timeout above twenty minutes combined is capped at the sender's
+  ceiling; either one alone above twenty minutes is refused at import, naming the limit.
+
+## JavaScript analysis keys: where burpsy differs from Burp (9mti — 2026-10-07)
+
+- **Zero means no limit**, from Burp's documentation ("zero or a blank value"); Burp's settings panel
+  itself bounds the fields at 1 and above (`Zrde.java:36-37`).
+- **A limit keeps the partial result and counts the stop** (`javascript_analysis_skips`, and Skipped for
+  a stopped DOM check). Burp "truncates analysis" and raises an alert naming the item; there is no
+  separate alert channel here.
+- **Reached by these keys since saq3.3.3 and saq3.3.4:**
+  - the capture-time static pass (`Capture.ScanExchange`) obeys `use_static_analysis` and
+    `max_static_time_per_item`, using the engagement's run configuration;
+  - the deferred stored-DOM render in `FinishScan` refuses the browser when the run sets
+    `use_dynamic_analysis` false, and counts the pages it declined (`Render.DeclinedByRun` in the deferred block).
+- **Still not reached:** the crawl's rendered-location pass honours `use_dynamic_analysis` but not
+  `max_dynamic_time_per_item`, because it has its own location cap.
+- **`fetch_out_of_scope_resources` and `request_missing_dependencies` remain unapplied**, as before.
+
+## Audit queue priority: Burp's documented rule, burpsy's constants (2026-10, burpsy-react-ui-ftk2)
+
+`AuditSession` starts items in priority order (`internal/scanner/audit_priority.go`). The score is
+0.8 × attack-surface exposure + 0.2 × interest level, the rule `scanner/auditing.html` documents.
+Outcomes still come back in the order requested, and `start_order` reports the order and each item's
+score. Where burpsy's version differs from Burp's:
+
+- **The constants are burpsy's.** The decompiled tree has no readable scoring class.
+  - Exposure is an item's new insertion points, identified by host, path, kind and name, as a share of
+    the most any remaining item adds.
+  - Interest is the mean of three factors: a state-changing method, structured content, and
+    authentication (an Authorization or Cookie header).
+- **Recalculation happens once per placement within a batch.** It is not repeated each time the crawl
+  adds an item. Above 2,000 items, scoring is a single pass.
+- **No cross-session memory.** Burp discounts points already audited in the current scan. burpsy does
+  so only within one session, so a later sweep tick does not discount what an earlier tick covered.
+
+## Light-audit tier: the response-shape half of "repetitive behaviour" (2026-10, burpsy-react-ui-vjjs)
+
+7bkj implemented the type-occurrence half of Burp's "Skipped due to repetitive behavior" (`Zq5`) and
+declined the content half, because the engine could not then say what it had compared. The probe
+harness now records each probe's response shape. A point raises its type's repetition prior only when
+both of these hold:
+- it was clean, meaning no probe found evidence;
+- every probe's response matched the baseline's status, with a body length within 2% or 32 bytes,
+  whichever is larger (`ProbeHarness.inertSince`).
+
+A point whose input changed the status or the page is behaving rather than repeating. It no longer
+counts toward skipping later points of its type (`TestAPointWhoseInputChangesTheResponseIsNotRepetitive`).
+Where this differs from Burp:
+- **Shape, not content.** Status and length are compared, not a structural diff. Echoing the input back
+  is repetition, the same behaviour for every point, so reflection alone does not break it.
+- **The constants are burpsy's.** Burp's similarity measure is not in the readable decompiled tree.
 
 ## Platform decisions: Burp capability families mapped and declined (2026-10, burpsy-react-ui-4ep5)
 
@@ -1871,3 +2053,199 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Burp-XML issue export: deliberate divergences (2026-10-08, burpsy-react-ui-m7dk)
+
+The XML export reproduces Burp's grammar — the internal DTD verbatim from the decompiled writer
+`burp.Zb2g.ZI`, the element sequence from `Zb2g.Zk`, the requestresponse shape from `Zpa6` — and
+where burpsy's data model cannot fill a field the divergence is recorded here, not papered over.
+
+- **burpVersion says "burpsy", not a Burp version number.** The attribute is CDATA and undocumented
+  beyond its name; writing "2026.7.1" would be a false claim about which tool produced the file, and
+  the DTD — the thing a consumer actually validates — is identical either way.
+- **Messages are always `base64="true"`; the `base64="false"` variant is not offered.** Burp's own
+  export notes that the raw variant leaves NULL bytes that "strictly break the XML syntax"
+  (report-settings.html) and recommends Base64 for strict parsers; raw bytes also cannot round-trip
+  through the text-node control-character mapping `Zfkt.ZG` applies (control chars become '.').
+  Byte-identical decode is this bead's acceptance bar, and only base64 can meet it.
+- **`host ip=""` is always empty.** Burp writes the resolved IP (`Zb2g.Zk`: `var1.ZDe().ZLo()`).
+  burpsy's capture store records the host name, not the dialled address, per exchange; inventing an
+  IP is worse than the attribute's own documented default. Re-open: record the remote address on
+  `core.Exchange` at capture time.
+- **No `responseRedirected` element.** Optional in the DTD; Burp writes the pair's redirect flag
+  (`Zpa6.Zh`). burpsy does not track whether a stored response was redirect-followed, so the
+  element is omitted rather than written with a guessed value.
+- **Severity and confidence use burpsy's own grade names.** Burp's XML vocabulary is
+  Information/Low/Medium/High/Undefined/False positive (`Ze1r.ZX`) and Undefined/Tentative/Firm/
+  Certain (`Zeue.ZZ`). burpsy additionally has Critical (which Burp's enum lacks entirely) and
+  Suppressed-negative, and says "Informational" where Burp says "Information". Remapping Critical
+  down to High would understate a finding; emitting burpsy's real grade is the honest option.
+- **Merged findings export as one `issue` element.** Burp holds one issue per host; burpsy's store
+  merges same-issue observations across hosts into one `Row`. The first host leads the `host`
+  element, and every occurrence's `requestresponse` still carries its bytes, so no evidence is lost
+  — but a consumer tallying issues per host sees one row where Burp would show several.
+- **`serialNumber` is the burpsy finding id.** Unique per finding instance for the life of the
+  store, which is the property Burp documents ("unique to that individual issue instance"); it is
+  not Burp's serial space and a consumer must not read burp-specific ranges into it.
+- **`location` is synthesized.** Burp's issue classes build their own location strings
+  (`Zco9.Zxy`); burpsy's rows carry the evidence host/path and the parameter set, so location is
+  `host + path [param, …]` in Burp's own "[parameter]" shape. The path element (documented as
+  query-excluded) and the location element (the entry point, query included) deliberately differ.
+- **Advisory text arrives as plain text via a tag scanner, not an HTML parser.**
+  `sanitisedHTMLToText` mirrors Burp's HTML strip (`net.portswigger.Zhs.Zq`) over input that is
+  already `advisory.SanitisedHTML` output — allowed elements only, no attributes — which is what
+  makes a scanner safe. Its contract is stated in its doc comment; widening the input would need a
+  real parser.
+- **The "relevant extract" message mode is the header block, not Burp's highlight window.** Burp
+  extracts "the parts of the message that are highlighted in the in-tool results" plus context
+  (report-settings.html); burpsy's findings carry no highlight spans — no producer populates
+  `core.Occurrence.Span` — so those locations cannot be recovered. The header block (through the
+  blank line) is the deterministic substitute, labelled "[relevant extract — body omitted]" in the
+  HTML and carried as bytes in the XML. Re-open: populate Occurrence.Span at finding production.
+
+### Report settings: query-string shape and the TOC clamp (burpsy-react-ui-a9qy)
+
+- **The wizard is a query string, not a saved profile.** Burp's report settings are chosen in a
+  wizard per export; burpsy's are parameters on `/api/report/html` and `/api/report/xml`
+  (`title`, `organise_by`, `toc_depth`, `sections`, `message_mode`, `max_message_len`), so an
+  export link carries its own configuration. There is no persisted settings store — each export is
+  configured for itself, which is what Burp's wizard does too.
+- **`toc_depth` is clamped to 2, not 3+.** Burp's wizard offers more levels; in burpsy's report the
+  third level would repeat the same rows (groups, then findings, then the same findings again), so
+  asking for more is clamped rather than rendered as fake depth.
+- **`sections=` present but empty means every detail section is off.** Burp's wizard allows
+  unticking all five detail options; a query string cannot otherwise distinguish "all off" from
+  "parameter absent" (all on). The nil-vs-empty list split carries the two states; the renderer's
+  `sectionOn` documents it.
+- **"Affected parameters" is always printed, not a section.** Burp prints an issue's location and
+  entry point beside the issue header, not under a detail section; burpsy's params list follows
+  that, so it survives an all-off report the way the finding's name does.
+
+## CSRF PoC techniques: the generator's four ways to replay one request (2026-10-08, burpsy-react-ui-0z10)
+
+Burp's generator (generate-csrf-poc.html) is the ground truth for the technique set; where its
+exact behaviour is not recoverable from the documentation, the divergence is recorded here.
+
+- **Auto's choice is burpsy's reading of "most appropriate technique capable of generating the
+  required request".** urlencoded gives the form; multipart gives the multipart form; anything
+  else with an equals character gives the plain-text form (the exact-body technique that needs no
+  CORS); anything else gives the cross-domain XHR. The docs say only that Auto picks the most
+  appropriate technique, and that JSON/XML bodies "can only be generated using either a form with
+  plain text encoding, or a cross-domain XHR" — which of the two Auto prefers for a given body is
+  not stated, so burpsy prefers the one with no CORS dependency whenever the body splits at an
+  equals.
+- **"Test in browser" is one-shot.** Burp's URL keeps serving "the currently displayed HTML"; the
+  epic's acceptance (and the security reading behind it) is that a token that keeps replaying an
+  attack page outlives its purpose, so burpsy's PoC host spends the token on the first fetch and
+  answers 410 after. Regenerating is one click.
+- **The PoC page moved off the console origin.** burpsy's previous generator opened the PoC as a
+  blob URL, which inherits the console's origin — the one surface attacker-shaped HTML must never
+  run on. The dialog now shows the HTML, and Test in browser opens the PoC host's URL on its own
+  port, which has no console routes and no console cookies.
+- **No request editing.** Burp's panel lets the operator edit the request and Regenerate from the
+  edit; burpsy's dialog generates from the captured exchange. The generated HTML is copyable and
+  downloadable, which is the same capability by another path. Re-open: an editable request pane in
+  the dialog.
+- **The XHR technique sets withCredentials and every header the browser allows scripts to set.**
+  The fetch specification's forbidden headers (Host, Cookie, Content-Length and kin) are omitted
+  rather than set-and-ignored — a setRequestHeader the browser silently ignores is a PoC that lies
+  about what the victim's browser will send. The docs' warnings (the CORS dependency, the
+  application/json preflight, the no-reflected-XSS limit) are carried as notes verbatim in intent.
+- **The plain-text form's trailing CRLF is accounted for.** The browser's text/plain submission
+  appends a CRLF after every entry, so a captured body ending in CRLF reproduces byte-exactly
+  (it is cut from the value and the browser puts it back) and one that does not gets a note saying
+  the sent body is the captured one plus two bytes.
+
+## Content discovery: the session shape (2026-10-08, burpsy-react-ui-dgbi)
+
+Burp's "Discover content" builds a session, not one run (content-discovery.html); where its exact
+algorithms are not in the documentation, burpsy's stated rules are recorded here.
+
+- **The derivation rule set is burpsy's own.** Burp's docs give one example — "if Burp discovers
+  the directory AnnualReport2018, it also checks for AnnualReport2019, AnnualReport2020" — and no
+  algorithm. burpsy's deterministic set (see `deriveDiscoveryNames`): trailing-number +1 and +2,
+  name + "_old", name + ".bak", and the all-lower and all-upper case variants of each discovered
+  item's last path segment, swept in the directory the discovery was made in.
+- **Recursion is breadth-first, not priority-ordered.** Burp "may add a task" per discovery and
+  "new tasks are prioritized by how likely they are to discover new content"; burpsy sweeps each
+  depth's discovered directories in the order they were found, one bounded ffuf run per directory,
+  scope-checked before launch (which is also why ffuf's own -recursion is not used: it dials paths
+  burpsy never checked against scope). Re-open: a priority ordering when there is evidence for one.
+- **Observed names come from the capture store's exchanges on the target host** — the directory
+  segments and filename stems burpsy has actually seen — where Burp reads its site map. The two
+  stores agree for burpsy's purposes (the site map is built from the same exchanges); burpsy
+  matches the host only, not the scheme or port, and sorts the names so the merged wordlist file is
+  reproducible from the request by hand.
+- **The built-in lists are the four Burp ships**: short/long file lists and short/long directory
+  lists, from the bundled PortSwigger corpus (`internal/intruder/wordlists/burp-*`). A custom list
+  is the operator's wordlist path, which merges with them.
+- **Not implemented from Burp's Config tab**: "Test all extensions observed in use on target site,
+  except for…" (the always-test extension list is the `extensions` field) and the case-sensitivity
+  mode (ffuf matches paths as the target serves them). Neither is in this bead's scope; both are
+  one-option follow-ups if an engagement needs them.
+- **A running run's `by_status` serialises as []** — a pre-existing null that crashed the console's
+  status chips the first time an e2e sweep rendered a running run (the tool had never been
+  allowlisted in a browser suite before, so nothing had exercised the shape). Fixed at both ends:
+  the server initialises the counts and the page tolerates an older server's null.
+
+## Clickbandit is burpsy's own script (2026-10-08, burpsy-react-ui-g67w)
+- **Burp:** top-level Burp Clickbandit copies a script to paste into the target page's console:
+  Start, record clicks, Finish, then review (toggle transparency, reset, zoom, arrow keys) and Save
+  the overlay as HTML; options Disable click actions and Sandbox iframe.
+- **burpsy:** burpsy → Clickbandit offers the same workflow and options with its own script
+  (`internal/web/clickbandit/clickbandit.js`, served at `/api/engagement/clickbandit.js`). PortSwigger's
+  script is not reused. The saved proof of concept frames the target transparently and shows one decoy
+  per recorded click, advancing when a click on the frame blurs the page.
+- **Divergence:** recording needs the page to be same-origin with itself in a frame; a target that
+  refuses framing (X-Frame-Options / frame-ancestors) cannot be recorded, which is itself the
+  clickjacking defence working.
+
+## Decoder digests: 23 of Burp's 62 DigestAlgorithm values (2026-10, burpsy-react-ui-7tgt)
+
+Burp's `CryptoUtils.generateDigest` takes the 62-constant `DigestAlgorithm` enum
+(`/root/burp-re/out/burp/api/montoya/utilities/DigestAlgorithm.java`, Montoya 2026.7). burpsy's hash
+step (`internal/tools/digest.go`, one table; the UI list is test-pinned to it) computes the 23 that the
+Go standard library and `golang.org/x/crypto` provide: MD4, MD5, SHA-1, RIPEMD-160, SHA-224/256/384/512,
+SHA-512/224, SHA-512/256, SHA3-224/256/384/512, Keccak-256/512, SHAKE128-256, SHAKE256-512,
+BLAKE2b-160/256/384/512 and BLAKE2s-256 — plus eight HMACs (MD5, SHA-1, SHA-224/256/384/512,
+SHA3-256/512), which Burp exposes through its Decoder rather than this enum.
+
+**Not offered (39), by name:** BLAKE2S_128, BLAKE2S_160, BLAKE2S_224, BLAKE3_256, DSTU7564_256/384/512,
+GOST3411, GOST3411_2012_256/512, HARAKA_256/512, KECCAK_224/288/384, MD2, PARALLEL_HASH_128_256,
+PARALLEL_HASH_256_512, RIPEMD_128/256/320, SKEIN (all 13 variants), SM3, TIGER, TUPLEHASH_128_256,
+TUPLEHASH_256_512, WHIRLPOOL.
+
+**Why:** Burp gets these from BouncyCastle. None is in Go's standard library or `x/crypto` (BLAKE2s
+there exposes only the 256-bit and the keyed 128-bit form; legacy Keccak only 256/512), so each would be a
+new third-party dependency in a security tool, for algorithms that rarely appear in a web engagement.
+The route refuses every one by name (400 listing the supported set), never by falling back to SHA-256.
+**Re-open:** a concrete engagement need for a specific algorithm, and a vetted pure-Go implementation.
+
+## Sequencer per-position FIPS: Burp's pass rules, computed significance (2026-10, burpsy-react-ui-c0k3)
+
+The FIPS battery now also runs at each bit position across tokens, as Burp's bit-level analysis does
+(`internal/sequencer/fips_position.go`, report field `fips_positions`). The pass rules are Burp
+2026.7.1's `Zpu3`, copied exactly:
+- At N = 20,000 the FIPS 140-2 intervals apply.
+- At other N a position passes when its significance exceeds 1e-4 (monobit, poker), 1.8e-5 (runs) or
+  2.98e-4 (long run).
+- A longest run under 12 always passes.
+- The sample size is limited to Burp's range, 100 to 20,000 tokens.
+
+The significance is **computed exactly at N**, not read from Burp's tables (`Zw_0`, `Zcmb` →
+`Zx79`/`Zb74`/`Zgrh`/`Zxh7`/`Zi0_`, `Zphy`) and interpolated across their 28 sample sizes as
+`Zc6a.ZH` does. Where the two differ, it is deliberate:
+
+- **Monobit.** The tables equal the exact two-sided binomial tail to 8 digits, but they shift by one
+  key at and above the centre. burpsy uses the symmetric exact value.
+- **Runs counting.** Burp's counter pools zero-runs and one-runs in one histogram. It restarts the run
+  length at 0 instead of 1 on a change, never counts the final run, and scores the "6 or more" bucket
+  with its exactly-5 table. burpsy counts each symbol separately, as FIPS specifies, and scores each
+  of the twelve cells against its exact distribution, with a dynamic programme checked against brute
+  enumeration. Burp's run tables do match that distribution, verified on `Zxh7` and `Zi0_` at N = 100.
+  A position's runs significance is its least likely cell.
+- **Long run.** burpsy scores the exact upper tail P(longest ≥ l). Burp's `Zphy` rows do not match the
+  exact distribution; they sit roughly one sample-size row off. They are also two-sided, which is why
+  Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
+  one-sided tail at N ≥ 100.
+- **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).

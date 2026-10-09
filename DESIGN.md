@@ -186,6 +186,13 @@ exist; column show/hide is driven by `menu / column-visibility` (a checkbox list
 plus a "Reset columns" action in `accent-strong`). A highlighted row tints its
 background with the chosen `highlight.*` value at low alpha.
 
+Rows are zebra-striped by default (Burp's `table_appearance.zebra_striping`), switchable in
+Settings › Appearance: a stripe is `color.ink` mixed into `paper-raised` at
+`opacity.stripe-dark` (20%) or `opacity.stripe-light` (4%). Dark has to darken, because its
+muted text clears 4.5:1 on `paper-raised` by a hair. Hover, selection and highlight all win
+over a stripe. Both tokens are **pending**: they are in `penpot-export.json`'s
+`_pendingPenpot` block and must be created in Penpot (see `PENDING-TOKEN-CHANGES.md`).
+
 ### Filter toggles
 Pill, height 18px, radius 10, 11px label. `off` = `paper-sunken` fill with a
 `line-strong` hairline and a `muted` dot. `on` = `accent` fill with near-black

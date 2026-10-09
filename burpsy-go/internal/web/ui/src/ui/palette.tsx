@@ -255,8 +255,16 @@ export function CommandPalette({
     if (action.disabled) return;
     onOpenChange(false);
     recordPaletteUse(action.id);
+    ranCommand.current = true;
     action.run();
   };
+  // Whether this close was a command running. If so the palette does not hand focus back on its
+  // way out (onCloseAutoFocus below): a command that opens a dialog of its own — Drop all's
+  // confirmation, a rename prompt — has already moved focus into it, and the palette's late focus
+  // return pulled it back out, which Radix answers by dismissing that dialog. The confirmation
+  // flashed and vanished (found in the 2czi live drive). Deferring the command until after the
+  // close fixed that too, but measured 300-800 ms slower on every palette command.
+  const ranCommand = useRef(false);
 
   // Group headings are rendered inline, so the flat list stays keyboard-addressable.
   let lastGroup = "";
@@ -265,7 +273,14 @@ export function CommandPalette({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="palette" aria-label="Command palette">
+        <Dialog.Content
+          className="palette"
+          aria-label="Command palette"
+          onCloseAutoFocus={(event) => {
+            if (ranCommand.current) event.preventDefault();
+            ranCommand.current = false;
+          }}
+        >
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
           <div className="palette-input">
             <Search size={16} />

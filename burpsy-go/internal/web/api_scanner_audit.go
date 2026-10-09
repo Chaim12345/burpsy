@@ -198,9 +198,11 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string) map[string]interface{} {
 	s.scanner = s.activeScanner()
 	body := map[string]interface{}{
-		"started":       true,
-		"exchange_id":   id,
-		"active_checks": s.scanner.ActiveCheckCount(),
+		"started":     true,
+		"exchange_id": id,
+		// The check set THIS run dispatches, so it equals outcome.considered for a dispatched item. The
+		// configuration-free count overstated it whenever the run's configuration removed checks.
+		"active_checks": s.scanner.ActiveCheckCountUnder(cfg),
 		"unimplemented": s.scanner.UnimplementedCheckCount(),
 		// The configuration this run actually used. Reported for SCAN-03: a reply that looked the same
 		// whether or not a named preset was honoured could not be told apart from one that accepted the
@@ -211,7 +213,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	}
 	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
 	// which is known up front for a single item.
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCount()))
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
 	// Attached here, in the one place both audit routes and the re-audit action pass through, so no
 	// entry point can run an audit that never appears in the queue. The reply's `config` block above
 	// is deliberately rendered from the caller's cfg rather than this one: the queue is observation,
@@ -247,7 +249,7 @@ func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.A
 	// second-pass traffic at all: a stored re-fetch is real traffic to the target, and paying it when
 	// no claim could settle would be a request the operator never got value from.
 	if s.scanner.PendingCount() > 0 {
-		deferred, completion := s.scanner.FinishScan(ctx)
+		deferred, completion := s.scanner.FinishScan(ctx, cfg)
 		body["deferred"] = completion
 		for _, f := range deferred {
 			s.findings.Add(s.activeFinding(f, task.ID()))
@@ -395,7 +397,7 @@ func (s *Server) runBulkAudit(ctx context.Context, task *dash.Handle, target str
 	// re-fetch pass mid-flight. The stored re-fetch needs the live context, so it runs first and
 	// its findings land on the same task row the audit's did.
 	if active.PendingCount() > 0 {
-		deferred, completion := active.FinishScan(ctx)
+		deferred, completion := active.FinishScan(ctx, cfg)
 		s.events.RecordFor(task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
 			"deferred phase of %s: %s (outstanding: %d)", target, completion.Pending, len(completion.Outstanding)))
 		for _, f := range deferred {
