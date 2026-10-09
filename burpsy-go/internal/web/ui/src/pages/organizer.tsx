@@ -10,6 +10,7 @@ import { FilterPresetsMenu } from "../ui/filter-presets";
 import {
  HIGHLIGHTS,
  HIGHLIGHT_TONE,
+ highlightName,
  WORKFLOW_STATUSES,
  WORKFLOW_STATUS_LABEL,
  WORKFLOW_STATUS_TONE,
@@ -35,7 +36,7 @@ interface Draft {
 const INBOX = "inbox" as const;
 
 function draftOf(item: OrganizerItem): Draft {
- return { title: item.title, note: item.note, highlight: item.highlight || "none" };
+ return { title: item.title, note: item.note, highlight: highlightName(item.highlight) || "none" };
 }
 
 /* --- filters (burpsy-react-ui-k4r) -----------------------------------------
@@ -327,7 +328,7 @@ export function OrganizerPage(): JSX.Element {
    if (extensionFilter !== "all" && rowExtension(item) !== extensionFilter) continue;
    // "none" is the highlight picker's no-colour value, not an annotation — a row carrying it
    // has no highlight, whatever the string's length says.
-   const annotated = item.note.trim() !== "" || ((item.highlight ?? "").trim() !== "" && item.highlight !== "none");
+   const annotated = item.note.trim() !== "" || highlightName(item.highlight) !== "";
    if (annotatedOnly && !annotated) continue;
    kept.push(item);
   }
@@ -578,7 +579,7 @@ export function OrganizerPage(): JSX.Element {
          id: name,
          label: name === "none" ? "Clear highlight" : name.charAt(0).toUpperCase() + name.slice(1),
          icon: HIGHLIGHT_ICONS[name],
-         disabled: (item.highlight || "") === wire,
+         disabled: highlightName(item.highlight) === wire,
          onSelect: () => patchItem(item, { highlight: wire }, wire === "" ? `Highlight cleared on ${item.id}` : `Item ${item.id} highlighted ${wire}`),
         };
        }),
@@ -1084,8 +1085,8 @@ export function OrganizerPage(): JSX.Element {
          case "title":
           return item.title ? <>{item.title}</> : <span className="cell-dim">untitled</span>;
          case "highlight":
-          return item.highlight ? (
-           <Badge tone={HIGHLIGHT_TONE[item.highlight] ?? "neutral"}>{item.highlight}</Badge>
+          return highlightName(item.highlight) ? (
+           <Badge tone={HIGHLIGHT_TONE[highlightName(item.highlight)] ?? "neutral"}>{highlightName(item.highlight)}</Badge>
           ) : (
            <span className="cell-dim">—</span>
           );

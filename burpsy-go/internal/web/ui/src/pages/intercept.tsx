@@ -25,6 +25,7 @@ import {
  type InterceptTarget,
 } from "../lib/intercept-target";
 import type { HeldMessageDetail, InterceptRuleSpec } from "../lib/types.attack";
+import { highlightName } from "../lib/types";
 import { HttpEditor } from "../ui/editor";
 import { faithfulRequestBase64, requestBodyChanged } from "../lib/message";
 import { Inspector } from "../ui/inspector";
@@ -673,7 +674,7 @@ export function InterceptPage(): JSX.Element {
   setRaw(selected?.raw ?? "");
   setRawBodyBase64(selected?.raw_body_base64);
   setCommentDraft(selected?.comment ?? "");
-  setHighlightDraft(selected?.highlight ?? "");
+  setHighlightDraft(highlightName(selected?.highlight));
   // The destination draft follows the selection for the same reason: a target edited on one held
   // message must not become the destination of the next one the operator clicks.
   setTargetDraft(selected ? targetOf(selected) : null);
@@ -1324,7 +1325,7 @@ export function InterceptPage(): JSX.Element {
       variant="outline"
       size="small"
       onClick={saveAnnotation}
-      disabled={annotateHeld.isPending || (commentDraft === (selected.comment ?? "") && highlightDraft === (selected.highlight ?? ""))}
+      disabled={annotateHeld.isPending || (commentDraft === (selected.comment ?? "") && highlightDraft === highlightName(selected.highlight))}
      >
       <MessageSquare size={13} />
       Save annotation

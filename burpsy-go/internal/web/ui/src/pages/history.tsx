@@ -10,7 +10,7 @@ import { useAuditSelected } from "../lib/data.observe";
 import { useScopeView } from "../lib/data.policy";
 import { QUERY_PANEL } from "../lib/reference";
 import { useApp } from "../lib/store";
-import { HIGHLIGHTS, type Exchange } from "../lib/types";
+import { HIGHLIGHTS, highlightName, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { decodedMarker, messageReading, type MessageReading } from "../lib/message-decoded";
@@ -797,7 +797,7 @@ export function HistoryPage(): JSX.Element {
    // does not exist.
    if (listenerPortSet.size > 0 && !listenerPortSet.has(row.listener_port ?? 0)) return false;
    if (onlyCommented && (row.notes ?? "").trim() === "") return false;
-   if (onlyHighlighted && (row.highlight ?? "") === "") return false;
+   if (onlyHighlighted && highlightName(row.highlight) === "") return false;
    if (showList.length > 0 && !showList.includes(extension)) return false;
    if (hideList.length > 0 && hideList.includes(extension)) return false;
 
@@ -1567,7 +1567,7 @@ export function HistoryPage(): JSX.Element {
           tool just to comment on it. */}
    <div className="annotate-bar">
     <HighlightPicker
-     value={selected.highlight}
+     value={highlightName(selected.highlight)}
      onChange={(next) => annotate.mutate({ id: selected.id, highlight: next })}
     />
     <Input
@@ -1989,7 +1989,7 @@ export function HistoryPage(): JSX.Element {
         // just binds the `--row-tint` custom property a single generic rule reads. That
         // keeps this to 9 one-line classes plus 3 shared rules instead of 9 colours x 3
         // states of duplicated color-mix() — see styles.css's Task 5 section and the report.
-        row.highlight ? cn("row-highlight", `row-highlight-${row.highlight}`) : undefined,
+        highlightName(row.highlight) ? cn("row-highlight", `row-highlight-${highlightName(row.highlight)}`) : undefined,
        ) || undefined
       }
       loading={isFetching && !data}
