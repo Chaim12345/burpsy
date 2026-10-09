@@ -115,7 +115,7 @@ var routeSchemas = map[string]opSchema{
 	}},
 
 	// ---- Requests & Responses -----------------------------------------------------------------
-	"DELETE /api/history":               {body: typeOf[historyDeleteReq](), optional: true},
+	"DELETE /api/history/rows":          {body: typeOf[historyDeleteReq](), optional: true},
 	"PATCH /api/exchange/":              {body: typeOf[exchangePatchReq]()},
 	"PUT /api/history/extractors":       {body: typeOf[historyExtractorsReq]()},
 	"POST /api/history/extract":         {body: typeOf[historyExtractReq]()},

@@ -123,6 +123,23 @@ func (s *Sender) CloseIdleConnections() {
 	}
 }
 
+// DropKeptConnections closes every connection this sender is holding open for reuse: the raw path's
+// HTTP/1 keep-alive pool and the typed path's idle pooled connections.
+//
+// For a change of identity rather than of settings (burpsy-react-ui-oava). A kept TLS connection
+// already completed its handshake, so it carries whatever client certificate was presented when it
+// was dialled; after a project switch replaces the client-certificate bindings, reusing it would
+// send the incoming project's requests under the outgoing project's identity. Closing them makes the
+// next send dial, and present, under the bindings now in force. Sends in flight finish on the
+// connection they already hold, as for ApplyNetwork.
+func (s *Sender) DropKeptConnections() {
+	if s == nil {
+		return
+	}
+	s.pool.closeAll()
+	s.CloseIdleConnections()
+}
+
 func durationMS(d time.Duration) int {
 	if d <= 0 {
 		return 0
