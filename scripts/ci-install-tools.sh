@@ -58,15 +58,24 @@ xmllint --version 2>&1 | head -1
 
 stamps="$bin/.burpsy-ci-stamps"
 mkdir -p "$stamps"
-# current NAME SHA256 FILE...: true when NAME was installed from the archive pinned as SHA256 and
-# every listed file is still there.
+# A stamp's first line is the pinned archive's SHA-256; each further line is a sha256sum line for a
+# binary installed from it, so a binary replaced in place after the stamp was written is caught.
+# current NAME SHA256 PATH...: true when NAME was installed from the archive pinned as SHA256, every
+# PATH still exists, and every stamped binary still has the hash it was installed with.
 current() {
-  local name=$1 sha=$2; shift 2
-  [ "$(cat "$stamps/$name" 2>/dev/null)" = "$sha" ] || return 1
+  local name=$1 sha=$2 f; shift 2
+  [ "$(head -n1 "$stamps/$name" 2>/dev/null)" = "$sha" ] || return 1
   for f in "$@"; do [ -e "$f" ] || return 1; done
+  if [ "$(wc -l < "$stamps/$name")" -gt 1 ]; then
+    tail -n +2 "$stamps/$name" | sha256sum -c --status - || return 1
+  fi
   echo "$name already at its pin"
 }
-stamp() { echo "$2" > "$stamps/$1"; }
+# stamp NAME SHA256 [BINARY...]
+stamp() {
+  local name=$1 sha=$2; shift 2
+  { echo "$sha"; if [ $# -gt 0 ]; then sha256sum "$@"; fi; } > "$stamps/$name"
+}
 
 # fetch FILE SHA256 URL: reuse a cached archive only if it already matches its pin, and check the
 # pin on whatever was used. A hash pinned here proves the release is the reviewed one, which the
@@ -87,20 +96,20 @@ if ! current ffuf "$FFUF_SHA256" "$bin/ffuf"; then
   fetch ffuf.tar.gz "$FFUF_SHA256" \
     "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz"
   tar -xzf "$dl/ffuf.tar.gz" -C "$bin" ffuf
-  stamp ffuf "$FFUF_SHA256"
+  stamp ffuf "$FFUF_SHA256" "$bin/ffuf"
 fi
 if ! current nuclei "$NUCLEI_SHA256" "$bin/nuclei"; then
   fetch nuclei.zip "$NUCLEI_SHA256" \
     "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
   unzip -o -q "$dl/nuclei.zip" nuclei -d "$bin"
-  stamp nuclei "$NUCLEI_SHA256"
+  stamp nuclei "$NUCLEI_SHA256" "$bin/nuclei"
 fi
 # interactsh-client: internal/web's batch-mint test registers against the real public pool.
 if ! current interactsh "$INTERACTSH_SHA256" "$bin/interactsh-client"; then
   fetch interactsh.zip "$INTERACTSH_SHA256" \
     "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
   unzip -o -q "$dl/interactsh.zip" interactsh-client -d "$bin"
-  stamp interactsh "$INTERACTSH_SHA256"
+  stamp interactsh "$INTERACTSH_SHA256" "$bin/interactsh-client"
 fi
 
 # The nuclei template corpus, as a pinned archive rather than `nuclei -update-templates` (which
@@ -119,6 +128,7 @@ test -d "$templates/http" || { echo "ci-install-tools: nuclei template corpus di
 
 if [ -n "${GITHUB_PATH:-}" ]; then echo "$bin" >> "$GITHUB_PATH"; fi
 export PATH="$bin:$PATH"
+# Run, not just present: a binary that cannot start fails here, as the old inline step did.
 "$bin/ffuf" -V
-"$bin/nuclei" -version 2>&1 | grep -m1 -i 'engine version' || true
-"$bin/interactsh-client" -version 2>&1 | grep -m1 -i version || true
+"$bin/nuclei" -version
+"$bin/interactsh-client" -version
