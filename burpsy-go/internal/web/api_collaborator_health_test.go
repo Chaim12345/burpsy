@@ -131,7 +131,7 @@ func runHealth(t *testing.T, world probeWorld) (healthReply, string) {
 	t.Helper()
 	s := newTestServerWithScanner(t)
 	ch := &healthChannel{domain: "abc123.oast.example"}
-	s.scanner.WithOOBProvider(&healthProvider{ch: ch})
+	s.wiredScanner().WithOOBProvider(&healthProvider{ch: ch})
 	hub := s.collab()
 	hub.healthProbes = world.probes(ch)
 	hub.healthWait = 300 * time.Millisecond
@@ -227,7 +227,7 @@ func Test_health_check_refuses_without_a_channel(t *testing.T) {
 	if rec.Code != http.StatusConflict || strings.Contains(rec.Body.String(), `"captures"`) {
 		t.Errorf("unconfigured: %d %s, want 409 and no report", rec.Code, rec.Body.String())
 	}
-	s.scanner.WithOOBProvider(&healthProvider{openErr: errors.New("interactsh-client not found")})
+	s.wiredScanner().WithOOBProvider(&healthProvider{openErr: errors.New("interactsh-client not found")})
 	rec = httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/collaborator/health", nil))
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "interactsh-client not found") {
@@ -246,7 +246,7 @@ func deleteCollaboratorServer(s *Server, body string) *httptest.ResponseRecorder
 func Test_unsetting_the_collaborator_server(t *testing.T) {
 	s := newTestServerWithScanner(t)
 	p := &healthProvider{ch: &healthChannel{domain: "abc123.oast.example"}}
-	s.scanner.WithOOBProvider(p)
+	s.wiredScanner().WithOOBProvider(p)
 	hub := s.collab()
 	hub.minted = []mintedPayload{{Address: "a.abc123.oast.example", Marker: "a"}, {Address: "b.abc123.oast.example", Marker: "b"}}
 
@@ -286,13 +286,13 @@ func Test_unsetting_the_collaborator_server(t *testing.T) {
 
 	// Configuring a server again must not resurrect the old payloads. They belong to the closed domain, so
 	// listing them under the new channel would show interactions nobody can see as "none yet".
-	s.scanner.WithOOBProvider(&healthProvider{ch: &healthChannel{domain: "fresh99.other.example"}})
+	s.wiredScanner().WithOOBProvider(&healthProvider{ch: &healthChannel{domain: "fresh99.other.example"}})
 	rec = httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/collaborator/status", nil))
 	if !strings.Contains(rec.Body.String(), `"payloads":[]`) || strings.Contains(rec.Body.String(), "abc123") {
 		t.Errorf("a new channel after unset lists the closed domain's payloads: %s", rec.Body.String())
 	}
-	s.scanner.ClearOOBProvider(false)
+	s.wiredScanner().ClearOOBProvider(false)
 
 	// Idempotent: unsetting nothing is not an error.
 	if rec := deleteCollaboratorServer(s, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"was_configured":false`) {
@@ -306,7 +306,7 @@ func Test_interaction_rows_carry_base64_bytes_only_when_asked(t *testing.T) {
 	s := newTestServerWithScanner(t)
 	ch := &healthChannel{domain: "abc123.oast.example"}
 	ch.log = []oob.Interaction{{Protocol: "http", RawRequest: "GET /x HTTP/1.1\r\n", RawResponse: "HTTP/1.1 200 OK\r\n"}}
-	s.scanner.WithOOBProvider(&healthProvider{ch: ch})
+	s.wiredScanner().WithOOBProvider(&healthProvider{ch: ch})
 	get := func(q string) string {
 		rec := httptest.NewRecorder()
 		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/collaborator/interactions"+q, nil))

@@ -60,7 +60,7 @@ func decodeMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 
 func corpusNames(s *Server) []string {
 	var out []string
-	for _, c := range s.scanner.CorpusChecks() {
+	for _, c := range s.wiredScanner().CorpusChecks() {
 		out = append(out, c.Name)
 	}
 	return out
@@ -253,7 +253,7 @@ func TestRunTestRunsADraftAgainstChosenExchangesAndFilesNothing(t *testing.T) {
 	if res[1].Sent != 0 || res[1].Refused == 0 || len(res[1].Findings) != 0 {
 		t.Errorf("active run out of scope must be refused, not sent: %+v", res[1])
 	}
-	if n := len(s.scanner.CorpusChecks()); n != 0 {
+	if n := len(s.wiredScanner().CorpusChecks()); n != 0 {
 		t.Errorf("a test run loaded the draft into the corpus (%d checks)", n)
 	}
 	if rec := postJSON(t, s, "/api/scanner/checks/test", map[string]any{"source": draft("x", passiveBody), "exchange_ids": []uint64{}}); rec.Code != http.StatusBadRequest {

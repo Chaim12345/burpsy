@@ -19,9 +19,9 @@ import (
 // A project that saved no overrides gets the LAUNCH defaults, not whatever the previous project set:
 // the baseline is captured the first time this runs, before any project's overrides are applied.
 func (s *Server) restoreProjectScanState(p *persist.Store) {
-	if s.scanner != nil {
+	if s.wiredScanner() != nil {
 		if s.scanBaseline == nil {
-			base := cloneScanConfig(s.scanner.UpdateScanConfig(func(*scanner.ScanConfig) {}))
+			base := cloneScanConfig(s.wiredScanner().UpdateScanConfig(func(*scanner.ScanConfig) {}))
 			s.scanBaseline = &base
 		}
 		next := cloneScanConfig(*s.scanBaseline)
@@ -30,7 +30,7 @@ func (s *Server) restoreProjectScanState(p *persist.Store) {
 		} else if saved != nil {
 			next = cloneScanConfig(*saved)
 		}
-		s.scanner.UpdateScanConfig(func(c *scanner.ScanConfig) { *c = next })
+		s.wiredScanner().UpdateScanConfig(func(c *scanner.ScanConfig) { *c = next })
 	}
 
 	// An empty ledger resets the sweep's memory: the incoming project's traffic has never been audited

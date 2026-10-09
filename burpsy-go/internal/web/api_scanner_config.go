@@ -113,11 +113,11 @@ func (s *Server) handleScannerConfig(w http.ResponseWriter, r *http.Request) {
 	// what the manifest test holds the route to.
 	switch r.Method {
 	case http.MethodGet:
-		if s.scanner == nil {
+		if s.wiredScanner() == nil {
 			http.Error(w, "No scanner is configured in this process", http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, http.StatusOK, scannerConfigFrom(s.scanner.ConfigSnapshot()))
+		writeJSON(w, http.StatusOK, scannerConfigFrom(s.wiredScanner().ConfigSnapshot()))
 	case http.MethodPut:
 		s.applyScannerConfigPatch(w, r)
 	default:
@@ -133,12 +133,12 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 	}
 	// After the decode so the schema sweep reaches it (burpsy-react-ui-3zw0); a malformed body is a
 	// 400 whatever this process carries.
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		http.Error(w, "No scanner is configured in this process", http.StatusServiceUnavailable)
 		return
 	}
 
-	view := scannerConfigFrom(s.scanner.ConfigSnapshot())
+	view := scannerConfigFrom(s.wiredScanner().ConfigSnapshot())
 	for key, raw := range patch {
 		if get := scannerConfigBoolKeys[key]; get != nil {
 			var b bool
@@ -171,7 +171,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	confirmed := s.scanner.UpdateScanConfig(func(c *scanner.ScanConfig) {
+	confirmed := s.wiredScanner().UpdateScanConfig(func(c *scanner.ScanConfig) {
 		c.MaxConcurrency = view.MaxConcurrency
 		c.Timeout = time.Duration(view.TimeoutMs) * time.Millisecond
 		c.ProbeTimeout = time.Duration(view.ProbeTimeoutMs) * time.Millisecond

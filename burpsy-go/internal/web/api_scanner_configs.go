@@ -488,10 +488,10 @@ func (s *Server) handleScannerConfigs(w http.ResponseWriter, r *http.Request) {
 // auditBaseConfig is the configuration an audit runs under when no preset is named — the scanner's own,
 // which honours a -scan-config default set at startup.
 func (s *Server) auditBaseConfig() scanner.AuditConfig {
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		return scanner.DefaultAuditConfig()
 	}
-	return s.scanner.AuditConfig()
+	return s.wiredScanner().AuditConfig()
 }
 
 // resolveAuditConfig turns an optional preset name into the configuration to audit under, plus the

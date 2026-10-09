@@ -22,7 +22,7 @@ import (
 func collaboratorWithFakeChannel(t *testing.T) *Server {
 	t.Helper()
 	s := newTestServerWithScanner(t)
-	s.scanner.WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
+	s.wiredScanner().WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
 	return s
 }
 

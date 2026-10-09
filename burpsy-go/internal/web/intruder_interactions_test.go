@@ -36,7 +36,7 @@ func (f *callbackOOB) InteractionsFor(string) ([]oob.Interaction, error) {
 func TestIntruderAttemptsNameTheirCollaboratorAddressesAndCallbacksAttributeToThem(t *testing.T) {
 	s := newTestServerWithScanner(t)
 	channel := &callbackOOB{mintableOOB: mintableOOB{domain: "oobtest.oast.example"}}
-	s.scanner.WithOOBProvider(channel)
+	s.wiredScanner().WithOOBProvider(channel)
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("seen")) }))
 	defer origin.Close()

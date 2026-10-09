@@ -175,7 +175,7 @@ func (h *collaboratorHub) saveLocked() error {
 // collabSync loads the open channel's saved payloads into the hub (d657). Every handler that lists or
 // attributes payloads calls it first.
 func (s *Server) collabSync() {
-	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open {
+	if reg, configured := s.wiredScanner().OOBRegistration(); configured && reg.Open {
 		s.collab().syncState(reg.StateDir)
 	}
 }
@@ -344,7 +344,7 @@ type collaboratorInteractionDetail struct {
 func (s *Server) collaboratorInteractions() ([]oob.Interaction, error) {
 	// Background rather than a request context: the provider memoises an already-open channel and does
 	// not consult the context, and cancelling a read that is a local file open buys nothing.
-	channel, err := s.scanner.OOBChannel(context.Background())
+	channel, err := s.wiredScanner().OOBChannel(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +522,7 @@ func (s *Server) collaboratorStatusNow(read bool) collaboratorStatus {
 		Client:      "ProjectDiscovery interactsh-client, driven as a subprocess",
 	}
 
-	reg, configured := s.scanner.OOBRegistration()
+	reg, configured := s.wiredScanner().OOBRegistration()
 	if !configured {
 		status.Hint = "no interaction server is configured, so there is no out-of-band channel and no " +
 			"address to hand out. Start burpsy with -collaborator-server <url> (or " +
@@ -698,7 +698,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		// No scanner means nothing would ever consult the provider, so accepting the setting would
 		// be storing a value that changes nothing — a decorative control by another route.
 		http.Error(w, "no scanner is attached to this server, so an interaction channel cannot be "+
@@ -709,7 +709,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 	// The open-channel refusal. Read before installing, and note that this is not a
 	// check-then-act race worth locking against: two operators racing here both get a coherent
 	// outcome, and the losing one sees the new server in the status they poll a moment later.
-	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open {
+	if reg, configured := s.wiredScanner().OOBRegistration(); configured && reg.Open {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":  "a collaborator channel is already registered",
 			"domain": reg.Domain,
@@ -729,7 +729,7 @@ func (s *Server) handleCollaboratorServer(w http.ResponseWriter, r *http.Request
 		// which of the two set it.
 		serverURL = ""
 	}
-	s.scanner.WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
+	s.wiredScanner().WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
 		ServerURL:  serverURL,
 		BinaryPath: req.ClientPath,
 		StateDir:   oob.StateDirFor(s.collabStateBase, serverURL),
@@ -841,7 +841,7 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if _, configured := s.scanner.OOBRegistration(); !configured {
+	if _, configured := s.wiredScanner().OOBRegistration(); !configured {
 		status := s.collaboratorStatusNow(false)
 		writeJSON(w, http.StatusConflict, map[string]interface{}{
 			"error": "no out-of-band interaction channel is configured, so no payload address can be " +
@@ -853,7 +853,7 @@ func (s *Server) handleCollaboratorPayload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	channel, err := s.scanner.OOBChannel(r.Context())
+	channel, err := s.wiredScanner().OOBChannel(r.Context())
 	if err != nil {
 		// Configured and broken. 503 rather than 409: the operator asked for a capability this
 		// installation is meant to have, and the reason it is missing is a runtime fact about the
@@ -951,7 +951,7 @@ func (s *Server) handleCollaboratorInteractions(w http.ResponseWriter, r *http.R
 	}
 
 	s.collabSync()
-	reg, configured := s.scanner.OOBRegistration()
+	reg, configured := s.wiredScanner().OOBRegistration()
 	if !configured || !reg.Open {
 		// 200 with a null count and an empty row set, for the same reason as the status route: a page
 		// that polls should not be told it made a bad request when the honest answer is "there is no
@@ -1012,7 +1012,7 @@ func (s *Server) handleCollaboratorInteraction(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	reg, configured := s.scanner.OOBRegistration()
+	reg, configured := s.wiredScanner().OOBRegistration()
 	if !configured || !reg.Open {
 		http.Error(w, "No out-of-band channel is open, so no interaction has been recorded",
 			http.StatusNotFound)
@@ -1073,7 +1073,7 @@ func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		http.Error(w, "no scanner is attached to this server, so there is no interaction channel to unset",
 			http.StatusServiceUnavailable)
 		return
@@ -1082,7 +1082,7 @@ func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Re
 	hub.mu.Lock()
 	minted := len(hub.minted)
 	hub.mu.Unlock()
-	if reg, configured := s.scanner.OOBRegistration(); configured && reg.Open && !req.DiscardOpenChannel {
+	if reg, configured := s.wiredScanner().OOBRegistration(); configured && reg.Open && !req.DiscardOpenChannel {
 		writeJSON(w, http.StatusConflict, map[string]any{
 			"error":          "a collaborator channel is registered",
 			"domain":         reg.Domain,
@@ -1096,10 +1096,10 @@ func (s *Server) handleCollaboratorServerUnset(w http.ResponseWriter, r *http.Re
 	// Forget the saved identity only when the operator confirmed giving up an open channel's payloads.
 	// Otherwise it is kept, and setting the same server again resumes it with its payloads (d657).
 	openNow := false
-	if r, ok := s.scanner.OOBRegistration(); ok && r.Open {
+	if r, ok := s.wiredScanner().OOBRegistration(); ok && r.Open {
 		openNow = true
 	}
-	reg, configured, err := s.scanner.ClearOOBProvider(openNow && req.DiscardOpenChannel)
+	reg, configured, err := s.wiredScanner().ClearOOBProvider(openNow && req.DiscardOpenChannel)
 	orphaned := 0
 	if configured && reg.Open {
 		orphaned = minted

@@ -323,7 +323,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if s.domEngine != "" {
 		view.DOMEngine = s.domEngine
 	}
-	view.DOMChecks = s.scanner.DOMCapabilityConfigured()
+	view.DOMChecks = s.wiredScanner().DOMCapabilityConfigured()
 	json.NewEncoder(w).Encode(view)
 }
 

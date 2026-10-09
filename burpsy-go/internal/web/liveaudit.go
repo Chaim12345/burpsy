@@ -1364,7 +1364,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 		s.events.Record(dash.EventLiveAuditSkipped, dash.SeverityInfo, fmt.Sprintf(
 			"exchange the sweep had given up on got its response; auditing it now (retry)"))
 	}
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		s.logger.Warn("live audit enabled but no active scanner wired")
 		return
 	}
@@ -1392,7 +1392,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// It used to be read after the passive loop and handed to the active half only, so a deselected
 	// passive issue type — or scan_type_passive false — stopped in the session and kept firing on
 	// every captured exchange one loop earlier.
-	cfg := s.scanner.AuditConfig()
+	cfg := s.wiredScanner().AuditConfig()
 	// The live task's own scan configuration and pool (chct), resolved per tick so a change applies
 	// from the next batch, and resolved here — before the passive half — so both halves run under the
 	// task's configuration, not only the active one. A name that stopped resolving (a pool deleted
@@ -1414,13 +1414,13 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 		}
 	}
 	passiveFindings := 0
-	if s.scanner != nil {
+	if s.wiredScanner() != nil {
 		for _, id := range ids {
 			ex, err := s.store.GetExchange(id)
 			if err != nil || ex == nil {
 				continue
 			}
-			for _, f := range s.scanner.RunPassiveChecks(ctx, ex, cfg) {
+			for _, f := range s.wiredScanner().RunPassiveChecks(ctx, ex, cfg) {
 				if f == nil {
 					continue
 				}
@@ -1602,5 +1602,5 @@ func (s *Server) auditGroupedByHost(ctx context.Context, ids []core.ExchangeID, 
 // oneSession is the single AuditSession call the sweep has always made, isolated so the
 // per-host path and the single-host path share one spelling.
 func oneSession(s *Server, ctx context.Context, ids []core.ExchangeID, cfg scanner.AuditConfig) (*scanner.SessionOutcome, []*scanner.Finding) {
-	return s.scanner.AuditSession(ctx, ids, cfg)
+	return s.wiredScanner().AuditSession(ctx, ids, cfg)
 }

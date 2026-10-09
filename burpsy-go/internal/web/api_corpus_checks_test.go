@@ -111,7 +111,7 @@ func TestADisabledCheckIsNotInTheAuditDispatchSet(t *testing.T) {
 
 	// Before: every corpus check dispatches. ActiveCheckCount is the exported count of the set a run
 	// actually dispatches — the property the criterion names — not a flag the route set.
-	before := s.scanner.ActiveCheckCount()
+	before := s.wiredScanner().ActiveCheckCount()
 	if before < corpusSize {
 		t.Fatalf("dispatch set = %d before the disable, want at least the %d corpus checks", before, corpusSize)
 	}
@@ -128,12 +128,12 @@ func TestADisabledCheckIsNotInTheAuditDispatchSet(t *testing.T) {
 		t.Error("the confirm read back enabled=true; a response that echoes the request instead of the state is a fake confirmation")
 	}
 
-	after := s.scanner.ActiveCheckCount()
+	after := s.wiredScanner().ActiveCheckCount()
 	if after != before-1 {
 		t.Errorf("dispatch set = %d after disabling one check, want %d: a switch the audit engine does "+
 			"not read is a control that changes nothing", after, before-1)
 	}
-	if !s.scanner.CheckDisabled("dispatch-test") {
+	if !s.wiredScanner().CheckDisabled("dispatch-test") {
 		t.Error("the named check is not marked disabled in the set the engine filters by")
 	}
 
@@ -142,7 +142,7 @@ func TestADisabledCheckIsNotInTheAuditDispatchSet(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT re-enable = %d; body %s", rec.Code, rec.Body.String())
 	}
-	if got := s.scanner.ActiveCheckCount(); got != before {
+	if got := s.wiredScanner().ActiveCheckCount(); got != before {
 		t.Errorf("dispatch set = %d after re-enabling, want %d", got, before)
 	}
 }

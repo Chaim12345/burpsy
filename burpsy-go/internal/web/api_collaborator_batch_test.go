@@ -43,7 +43,7 @@ func TestTheCollaboratorBatchMintAgainstThePublicPool(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Close() })
 
 	s := newTestServerWithScanner(t)
-	s.scanner.WithOOBProvider(provider)
+	s.wiredScanner().WithOOBProvider(provider)
 
 	// Single mint: the contract the existing client reads — one "address" plus a 1-entry
 	// "addresses" — must survive the batch change unchanged.

@@ -93,9 +93,9 @@ func (s *Server) handleCorpusChecks(w http.ResponseWriter, r *http.Request) {
 	// nothing could ever have loaded.
 	var corpus []*bcheck.Check
 	var disabled map[string]bool
-	if s.scanner != nil {
-		corpus = s.scanner.CorpusChecks()
-		disabled = s.scanner.DisabledChecks()
+	if s.wiredScanner() != nil {
+		corpus = s.wiredScanner().CorpusChecks()
+		disabled = s.wiredScanner().DisabledChecks()
 	}
 
 	origins := map[string]string{}
@@ -188,7 +188,7 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if s.scanner == nil {
+	if s.wiredScanner() == nil {
 		http.Error(w, "no corpus is loaded; start with --bchecks DIR", http.StatusNotFound)
 		return
 	}
@@ -201,7 +201,7 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 	// The name is checked against the corpus BEFORE anything is recorded, so a disable that names
 	// nothing is refused here rather than taking effect silently later.
 	found := false
-	for _, c := range s.scanner.CorpusChecks() {
+	for _, c := range s.wiredScanner().CorpusChecks() {
 		if c.Name == body.Name {
 			found = true
 			break
@@ -213,9 +213,9 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 	}
 
 	if body.Enabled {
-		s.scanner.EnableCheck(body.Name)
+		s.wiredScanner().EnableCheck(body.Name)
 	} else {
-		s.scanner.DisableCheck(body.Name)
+		s.wiredScanner().DisableCheck(body.Name)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -224,6 +224,6 @@ func (s *Server) handleCorpusCheckEnable(w http.ResponseWriter, r *http.Request)
 		"enabled": body.Enabled,
 		// The switch's own state after the write, read back from the same set the engine filters by:
 		// a response that echoed the request instead of the state would be a fake confirmation.
-		"disabled": s.scanner.CheckDisabled(body.Name),
+		"disabled": s.wiredScanner().CheckDisabled(body.Name),
 	})
 }

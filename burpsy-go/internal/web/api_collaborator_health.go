@@ -187,7 +187,7 @@ func (s *Server) handleCollaboratorHealth(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	reg, configured := s.scanner.OOBRegistration()
+	reg, configured := s.wiredScanner().OOBRegistration()
 	if !configured {
 		status := s.collaboratorStatusNow(false)
 		writeJSON(w, http.StatusConflict, map[string]any{
@@ -197,7 +197,7 @@ func (s *Server) handleCollaboratorHealth(w http.ResponseWriter, r *http.Request
 		})
 		return
 	}
-	channel, err := s.scanner.OOBChannel(r.Context())
+	channel, err := s.wiredScanner().OOBChannel(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"error":  err.Error(),
