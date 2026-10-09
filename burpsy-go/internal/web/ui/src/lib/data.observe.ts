@@ -8,6 +8,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { api, json } from "./api";
 import { keys, useDebounced, useInvalidate, useResource } from "./data";
 import type { Exchange } from "./types";
+import type { ReviewFields } from "./apiscan-review";
 import type { APIScanAccepted, APIScanCheck, CrawlRun, SiteMapDetail, WsMessageDetail } from "./types.observe";
 import type { SitemapDiffResponse } from "./sitemap-diff";
 
@@ -195,6 +196,43 @@ export function useAPIScanCheck(definition: string, baseUrl: string) {
 }
 
 /**
+ * The same dry run with the API-details review applied (burpsy-react-ui-vuw7): the exclusions,
+ * overrides and auth method the operator set, read by the server's one prepareAPIScan.
+ *
+ * A second query rather than the review riding on useAPIScanCheck, because the review tables are built
+ * from the *unreviewed* parse — an excluded endpoint has to stay in the endpoints table so it can be
+ * restored, and a parameter's document value has to stay visible beside the override. This one exists
+ * for the server's verdict on the review: a row that matches nothing is refused by name here, before
+ * the launch, and the reviewed request paths are what the endpoints table shows as "Request".
+ *
+ * `fields` is keyed by its JSON, so an unchanged review is not re-sent; disabled while the review
+ * changes nothing (the plain check already answered) or is incomplete (a missing username is the
+ * dialog's own message, not a server round trip).
+ */
+export function useAPIScanReviewCheck(definition: string, baseUrl: string, fields: ReviewFields, enabled: boolean) {
+ const live = JSON.stringify({ definition, base_url: baseUrl.trim() || undefined, dry_run: true, ...fields });
+ const body = useDebounced(live, 420);
+ // `settled` is whether the answer on screen is for the review as it stands now. The debounce means a
+ // verdict can be for the previous keystroke, and a launch gated on that one would be approved by a
+ // check of something else.
+ const check = useQuery({
+  queryKey: ["apiscan-review-check", body],
+  queryFn: ({ signal }) =>
+   api<APIScanCheck>("/api/apiscan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    signal,
+   }),
+  enabled: enabled && definition.trim() !== "",
+  retry: false,
+  // Holds credentials when an auth method is set: not kept once the dialog stops asking.
+  gcTime: 0,
+ });
+ return { check, settled: body === live && !check.isFetching };
+}
+
+/**
  * Start an API-only scan — Burp's fourth scan kind.
  *
  * Resolves as soon as the server has read the document and registered the task, for the same reason
@@ -211,7 +249,7 @@ export function useStartAPIScan() {
    max_requests?: number;
    requests_per_second?: number;
    pool?: string;
-  }) => api<APIScanAccepted>("/api/apiscan", json("POST", body)),
+  } & ReviewFields) => api<APIScanAccepted>("/api/apiscan", json("POST", body)),
   // The same three keys a crawl-and-audit invalidates: the sweep writes history, its audit half writes
   // findings, and both move the dashboard's counters and the site map.
   onSuccess: () => invalidate([keys.crawls, keys.dashboard, keys.sitemap, ["issues"]]),

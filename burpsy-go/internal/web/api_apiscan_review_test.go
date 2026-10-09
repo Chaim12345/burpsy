@@ -154,3 +154,49 @@ func TestAFixedParameterIsNotAttackedByTheAudit(t *testing.T) {
 		t.Errorf("the audit never attacked q, so the fixed-parameter assertion proves nothing: %+v", onPets)
 	}
 }
+
+// A Postman path override is refused by name: its template cannot be re-rendered, and accepting it
+// sent a garbled path while reporting the operator's value (vuw7).
+func TestAPostmanPathOverrideIsRefused(t *testing.T) {
+	s := newTestServer()
+	s.scope.AddInclude("127.0.0.1")
+	collection := `{"info":{"name":"c","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},` +
+		`"item":[{"name":"g","request":{"method":"GET","url":{"raw":"http://127.0.0.1:9/users/{{id}}?x=1"}}}]}`
+	rec := postJSON(t, s, "/api/apiscan", map[string]any{"definition": collection, "dry_run": true,
+		"parameters": []map[string]any{{"in": "path", "name": "id", "value": "42"}}})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Postman") {
+		t.Errorf("a Postman path override = %d %s; want a 400 naming why", rec.Code, rec.Body.String())
+	}
+	// The query override on the same collection is still accepted.
+	rec = postJSON(t, s, "/api/apiscan", map[string]any{"definition": collection, "dry_run": true,
+		"parameters": []map[string]any{{"in": "query", "name": "x", "value": "2"}}})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "x=2") {
+		t.Errorf("a Postman query override = %d %s; want 200 with x=2 in the path", rec.Code, rec.Body.String())
+	}
+}
+
+// The auth method replaces a header of the same name the document declares, rather than going out
+// beside it: two Authorization headers on one request is not what either party asked for (vuw7).
+func TestTheAuthMethodReplacesADeclaredHeaderOfTheSameName(t *testing.T) {
+	var mu sync.Mutex
+	var seen [][]string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Values("Authorization"))
+		mu.Unlock()
+		w.Write([]byte("ok"))
+	}))
+	t.Cleanup(target.Close)
+	s := newTestServer()
+	s.scope.AddInclude("127.0.0.1")
+	doc := fmt.Sprintf(`{"openapi":"3.0.3","info":{"title":"A","version":"1"},"servers":[{"url":%q}],"paths":{"/me":{"get":{`+
+		`"parameters":[{"name":"Authorization","in":"header","schema":{"type":"string","example":"Bearer from-the-doc"}}],`+
+		`"responses":{"200":{"description":"ok"}}}}}}`, target.URL)
+	apiScan(t, s, map[string]any{"definition": doc, "audit": false, "auth": map[string]any{"type": "bearer", "token": "t0k"}})
+	waitForTaskKind(t, s, "api-scan")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 1 || len(seen[0]) != 1 || seen[0][0] != "Bearer t0k" {
+		t.Errorf("Authorization headers on the wire = %q; want exactly one, the review's", seen)
+	}
+}
