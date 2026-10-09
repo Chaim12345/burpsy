@@ -78,7 +78,20 @@ jobs:
           fi
           xmllint --version
 
-      # tlsx and interactsh-client are NOT installed here, so the rows that shell out to them stay
+      # The four pinned archives below are downloaded once and then restored from the Actions
+      # cache rather than fetched from GitHub releases on every run. Only the DOWNLOAD is cached:
+      # every run still checks each archive against the SHA-256 pinned in this file (a cached
+      # file that fails it is fetched again, and the check runs on whatever was fetched), and
+      # still extracts and installs it exactly as before. The key is this file's hash, so bumping
+      # any version or hash here starts a fresh cache rather than reusing an archive for the old
+      # pin. A miss costs nothing but the download the step always used to make.
+      - name: Restore the pinned tool and template archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/burpsy-ci-downloads
+          key: burpsy-ci-downloads-${{ runner.os }}-${{ hashFiles('.github/workflows/go.yml') }}
+
+      # tlsx is NOT installed here (interactsh-client is, below), so the rows that shell out to it stay
       # undemonstrated and their tests skip with a reason naming the missing binary. That is the
       # honest outcome rather than a hidden one: those rows are already counted as registered-only
       # in docs/SCANNER-COVERAGE.md, so CI is not claiming something the local gate does not.
@@ -113,18 +126,29 @@ jobs:
           set -euo pipefail
           bin="$HOME/.local/bin"
           mkdir -p "$bin"
-          curl -fsSL -o ffuf.tar.gz \
+          # fetch FILE SHA256 URL: reuse a cached archive only if it already matches its pin.
+          fetch() {
+            if [ -f "$1" ] && echo "$2  $1" | sha256sum -c --status -; then
+              echo "using the cached $1"
+            else
+              curl -fsSL -o "$1" "$3"
+            fi
+          }
+          dl="$HOME/.cache/burpsy-ci-downloads"
+          mkdir -p "$dl"
+          cd "$dl"
+          fetch ffuf.tar.gz "${FFUF_SHA256}" \
             "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_amd64.tar.gz"
           echo "${FFUF_SHA256}  ffuf.tar.gz" | sha256sum -c -
           tar -xzf ffuf.tar.gz -C "$bin" ffuf
-          curl -fsSL -o nuclei.zip \
+          fetch nuclei.zip "${NUCLEI_SHA256}" \
             "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip"
           echo "${NUCLEI_SHA256}  nuclei.zip" | sha256sum -c -
           unzip -o -q nuclei.zip nuclei -d "$bin"
           # interactsh-client: internal/web's batch-mint test registers against the real public
           # interactsh pool through this binary (api_collaborator_batch_test.go). Without it the
           # test fails the web package. v1.3.1 is the version the test was written against.
-          curl -fsSL -o interactsh.zip \
+          fetch interactsh.zip "${INTERACTSH_SHA256}" \
             "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_amd64.zip"
           echo "${INTERACTSH_SHA256}  interactsh.zip" | sha256sum -c -
           unzip -o -q interactsh.zip interactsh-client -d "$bin"
@@ -148,7 +172,18 @@ jobs:
           set -euo pipefail
           dir="$HOME/.local/nuclei-templates"
           mkdir -p "$dir"
-          curl -fsSL -o templates.tar.gz \
+          # fetch FILE SHA256 URL: reuse a cached archive only if it already matches its pin.
+          fetch() {
+            if [ -f "$1" ] && echo "$2  $1" | sha256sum -c --status -; then
+              echo "using the cached $1"
+            else
+              curl -fsSL -o "$1" "$3"
+            fi
+          }
+          dl="$HOME/.cache/burpsy-ci-downloads"
+          mkdir -p "$dl"
+          cd "$dl"
+          fetch templates.tar.gz "${TEMPLATES_SHA256}" \
             "https://github.com/projectdiscovery/nuclei-templates/archive/refs/tags/v${TEMPLATES_VERSION}.tar.gz"
           echo "${TEMPLATES_SHA256}  templates.tar.gz" | sha256sum -c -
           tar -xzf templates.tar.gz -C "$dir" --strip-components=1
