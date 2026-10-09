@@ -1,8 +1,6 @@
 package web
 
 import (
-	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 
@@ -21,24 +19,26 @@ func (s *Server) handleFileLogging(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.fileLog == nil {
-		http.Error(w, "No file logger is attached to this server", http.StatusServiceUnavailable)
-		return
-	}
 	switch r.Method {
 	case http.MethodGet:
-		s.writeFileLogging(w)
-	case http.MethodPut:
-		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-		if err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if s.fileLog == nil {
+			http.Error(w, "No file logger is attached to this server", http.StatusServiceUnavailable)
 			return
 		}
+		s.writeFileLogging(w)
+	case http.MethodPut:
+		// Decoded before the attachment check, so the body is refused or accepted on its own terms
+		// whatever the server carries — and so the schema probe (route_schema.go) reaches the decode.
+		// Strict for every caller: an unknown key names the mistake rather than logging nothing.
 		var settings filelog.Settings
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.DisallowUnknownFields()
+		dec := requestJSON(w, r, io.LimitReader(r.Body, 1<<20))
+		dec.dec.DisallowUnknownFields()
 		if err := dec.Decode(&settings); err != nil {
 			http.Error(w, "Body must be {\"requests\": {tool: path}, \"responses\": {tool: path}}: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if s.fileLog == nil {
+			http.Error(w, "No file logger is attached to this server", http.StatusServiceUnavailable)
 			return
 		}
 		if err := s.fileLog.Apply(settings); err != nil {

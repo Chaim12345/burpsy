@@ -247,13 +247,13 @@ func (s *Server) handleProxyHistoryLogging(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
 	case http.MethodPost:
-		if s.persist == nil {
-			http.Error(w, "No persistence is attached to this server, so the choice would not survive a restart", http.StatusServiceUnavailable)
-			return
-		}
 		var req proxyHistoryLoggingReq
 		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if s.persist == nil {
+			http.Error(w, "No persistence is attached to this server, so the choice would not survive a restart", http.StatusServiceUnavailable)
 			return
 		}
 		switch req.Mode {
