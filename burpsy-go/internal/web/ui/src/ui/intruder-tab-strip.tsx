@@ -52,7 +52,7 @@ export function IntruderTabStrip(): JSX.Element {
     // and a tablist may own nothing but tabs (axe aria-required-children).
     <div className="tabs-list" role="group" aria-label="Intruder attack tabs" style={{ marginBottom: 10 }}>
       {tabs.map((tab) => (
-        <ContextMenu key={tab.id} groups={menu(tab.id, tab.name)}>
+        <ContextMenu key={tab.id} groups={menu(tab.id, tab.name)} docTopic="intruder">
           <span style={{ display: "inline-flex", alignItems: "center" }}>
             <button
               type="button"
