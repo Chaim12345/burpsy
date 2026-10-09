@@ -15,8 +15,9 @@ name: Go
 # full gate run once per round on the exact tree that lands. That is deliberate, not an oversight:
 # an item PR into a round branch shows no checks.
 #
-# The review-gate check lives in its own workflow (review-gate.yml) because it must re-run when a
-# label changes; here a label event would restart a half-hour gate run for nothing.
+# The review gate lives in its own workflow (review-gate.yml): it must re-run when a verdict is
+# posted as a comment or review, and it runs under pull_request_target with the default branch's
+# rules; neither fits this workflow.
 on:
   push:
     branches: [master]

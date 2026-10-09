@@ -117,8 +117,9 @@ Merge commits only — no squash, no rebase — so every closure sha stays in ma
 
 ## 7. Review
 
-The `review-gate` check (`.github/workflows/review-gate.yml`, logic in `scripts/review-gate.sh`)
-fails while a PR into master touches a risk-class path and lacks the label `agent-reviewed`:
+The `review-gate` commit status (posted by `.github/workflows/review-gate.yml`; rules in
+`scripts/review-gate.sh` and `scripts/review-verdict.sh`) fails while a PR into master touches a
+risk-class path without a valid agent review:
 
 - `internal/sender/` and the HTTP/2 authorisation it shares;
 - scope and authorisation (`internal/core/scope*.go`, the scope check, authz and same-origin
@@ -134,30 +135,61 @@ fails while a PR into master touches a risk-class path and lacks the label `agen
 
 The exact globs are the list in `scripts/review-gate.sh`; the list names files, not semantics, so
 a risk-class change in an unlisted file is added to the list in the same PR. A file name git has to
-quote counts as a risk path. A change to `crates/` (the frozen parity oracle) fails the check
-regardless of the label: it is refused, not reviewed.
+quote counts as a risk path. A change to `crates/` (the frozen parity oracle) fails regardless of
+any review: it is refused, not reviewed.
 
-**What the label means.** The reviewer is a fresh agent given the diff and this list — never the
-author — and posts its verdict on the PR, naming the head sha it reviewed, before the label is
-applied. The label then means "reviewed since the last change to a risk path", and the workflow
-keeps it meaning that: when a push to the PR touches a risk path the PR changes, the check removes
-`agent-reviewed` and fails. A force-push (the previous head is not an ancestor of the new one) and
-a reopen (pushes to a closed PR fire no event) count as every risk path changed. The reviewer
-re-reviews the PR at its new head and re-applies the label, which re-runs the check. A push that
-touches no risk path leaves the label in place.
+**The verdict.** The reviewer is a fresh agent given the diff and this list — never the author. It
+reviews the PR at its current head and posts its verdict on the PR, as a PR review (event
+`COMMENT` is enough; one account cannot approve its own PR) or a PR comment, containing a line
+that is exactly
 
-**A round PR.** CI, and so this check, runs only on PRs into master, so a risk-class item is
-reviewed on its item PR into the round branch, at the sha the lead then merges. The lead applies
-`agent-reviewed` to the round PR only when every risk-class item in it was reviewed at its final
-sha and nothing merged after touched a risk path (the bundle rebuild and the beads closure commit
-do not); a fix-forward on the round branch that touches a risk path is reviewed like an item.
+    agent-review: approve <full 40-hex sha of the head it reviewed>
+    agent-review: changes-required
 
-**Where the check's rules come from.** The workflow is `pull_request_target`: the workflow file
-and `scripts/review-gate.sh` are taken from the default branch, and the PR's commits are fetched as
-data and diffed, never checked out or run, so a PR cannot loosen the gate it is judged by. Two
-consequences: a change to the gate takes effect from the next PR, and the PR that introduced
-`review-gate.yml` (#348) was not checked by it at all — the check cannot run before the workflow is
-on master — so it was reviewed by hand.
+    sha=$(gh pr view <N> --json headRefOid -q .headRefOid)   # BEFORE reading the diff
+    git diff origin/master..."$sha"                           # review exactly this
+    gh pr comment <N> --body "$(printf 'Review notes...\n\nagent-review: approve %s' "$sha")"
+
+Record the sha when the review starts, not when the verdict is posted: stamping the head at posting
+time would approve commits pushed while the review was running.
+
+Only verdicts by an OWNER, MEMBER or COLLABORATOR count; a review's approve counts only if the review
+was submitted on that same commit, and a dismissed review does not count. The latest verdict wins.
+
+**How it is judged.** Every run reads the PR's current head and all verdicts from the API when it
+runs — nothing but the PR number comes from the triggering event — and passes when the PR touches
+no risk path, or when the latest verdict approves a sha S that is in the PR's history and
+`git diff S <head>` touches no risk path. So a verdict is about code, not about timing: a later push
+that touches a risk path invalidates it automatically, whichever order events arrive or runs finish
+in; a later push that touches none (docs, tests elsewhere, the bundle) keeps it; retargeting the
+base changes nothing. Merging master into the PR branch invalidates it if master brought risk-path
+changes (they are in S..head) — deliberate, and one re-review. A latest verdict of
+`changes-required` fails a risk-path PR until a newer approve. Posting a verdict re-runs the check
+(`issue_comment` and `pull_request_review` are triggers).
+
+**A round PR.** CI runs only on PRs into master, so a risk-class item is reviewed on its item PR
+into the round branch, at the sha the lead then merges. The round PR needs its own verdict at its
+head: the lead asks the reviewer for it once the round branch is final, and the reviewer approves
+only when every risk-class item was reviewed at the sha that was merged and nothing merged after
+touched a risk path (the bundle rebuild and the beads closure do not). A fix-forward on the round
+branch that touches a risk path is reviewed like an item, and the round PR needs a new verdict.
+
+**Where the rules come from.** For `pull_request_target` and `issue_comment` the workflow file is
+the default branch's, and in every event the two scripts are read from the default branch; the PR's
+commits are fetched as data and diffed, never checked out or run, so a PR cannot loosen the rules it
+is judged by. A change to them therefore takes effect from the next PR, and #348, which introduced
+the workflow, was not judged by it at all — it was reviewed by hand.
+
+**Residual risk, stated plainly.** The status is a name, and anything holding a token with
+`statuses: write` can post a `review-gate` status: a PR could add its own workflow (on
+`pull_request`, which runs the PR's workflow files on a branch of this repository) that posts
+`review-gate: success` on its own head, and for `pull_request_review` runs GitHub uses the PR's
+copy of this workflow. Every such PR touches `.github/`, a risk path, and the honest gate's run
+posts a failure on the same sha — but whichever status is posted last for a context is the one
+GitHub keeps. The real mitigations are CODEOWNERS with required human review on `.github/**`, or
+a ruleset restricting who may change workflows; neither works with a single account. Until then,
+a PR touching `.github/` is not merged on a green `review-gate` alone: the lead reads its workflow
+diff.
 
 ## 8. Design decisions
 
@@ -209,13 +241,13 @@ and why, and anything waiting on the user.
 
 The PR that introduced this document could not do these; they are the lead's, in this order.
 
-1. **Create the `agent-reviewed` label** (the review gate checks for it by name):
-   `gh label create agent-reviewed --repo Chaim12345/burpsy --description "Risk-class change reviewed by an independent agent"`.
-2. **Branch protection on `master`**, once the four checks have each run on master at least once
-   (GitHub only offers a check it has seen). Required: `gate`, `ui`, `beads`, `review-gate`, each
-   bound to the GitHub Actions app (`app_id` 15368) so that no other app or a hand-posted commit
-   status of the same name can satisfy it; strict (branch up to date before merging); enforced for
-   admins; no force-push, no deletion:
+1. **The `review-gate` status needs no setup** beyond this workflow being on master. (An earlier
+   draft used an `agent-reviewed` label; labels are not used.)
+2. **Branch protection on `master`**, once each requirement has been reported at least once
+   (GitHub only offers a check it has seen). Required: the `gate`, `ui` and `beads` checks and the
+   `review-gate` commit status, each bound to the GitHub Actions app (`app_id` 15368) so that no
+   other app can satisfy it; strict (branch up to date before merging); enforced for admins; no
+   force-push, no deletion:
 
        gh api -X PUT repos/Chaim12345/burpsy/branches/master/protection --input - <<'JSON'
        {"required_status_checks": {"strict": true, "checks": [
@@ -225,9 +257,12 @@ The PR that introduced this document could not do these; they are the lead's, in
         "allow_force_pushes": false, "allow_deletions": false}
        JSON
 
-   Before requiring `review-gate`, confirm on the first PR after #348 that its check run appears on
-   the PR's head commit: it is a `pull_request_target` run, and if GitHub attached it elsewhere the
-   requirement could never be met.
+   Require the `review-gate` STATUS, not the `review-gate-run` check: the status is posted on the
+   PR's head sha by design, while a `pull_request_target` check run may be attached to the base
+   commit. Confirm on the first PR after #348 that the status appears on the head commit and that
+   GitHub lists its app as GitHub Actions (15368); if the app differs, drop `app_id` for that entry.
+   The `app_id` binding does not stop another workflow in this repository posting the same status
+   with its own token — see the residual risk in section 7.
 
    Check first that the plan allows it (branch protection on a private repository needs a paid
    plan), and that GitHub's merge queue is not available here before relying on it — on a
