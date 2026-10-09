@@ -257,6 +257,8 @@ func TestExchangeAllowsReuseNamesEachRule(t *testing.T) {
 		{"HEAD", []byte("HEAD / HTTP/1.1\r\nHost: h\r\n\r\n"), []byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n"), false},
 		{"interim 100", get, []byte("HTTP/1.1 100 Continue\r\n\r\n"), false},
 		{"101 upgrade", get, []byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"), false},
+		{"request with bytes past its framing", []byte("GET / HTTP/1.1\r\nHost: h\r\n\r\nGET /b HTTP/1.1\r\nHost: h\r\n\r\n"), ok, false},
+		{"request with a framed body", []byte("POST / HTTP/1.1\r\nHost: h\r\nContent-Length: 2\r\n\r\nok"), ok, true},
 	}
 	for _, tc := range cases {
 		if got := exchangeAllowsReuse(tc.req, tc.resp); got != tc.want {
@@ -413,4 +415,52 @@ func disableLiveness() func() {
 	old := aliveCheck
 	aliveCheck = func(*pooledConn) bool { return true }
 	return func() { aliveCheck = old }
+}
+
+// The ConnPool counterpart of keepalive_test.go's TestARequestWithBytesPastItsFramingDoesNotPoolItsConnection:
+// a request carrying a second request past its own framing — pipelined, or a smuggling payload an
+// Intruder attack sends on purpose — must not leave its connection pooled. The second request's
+// response arrives after the first was read, and the next payload's send would read it as its own:
+// a fabricated per-payload result, which is exactly what this pool's reuse rules exist to prevent.
+func TestAConnPoolRequestWithBytesPastItsFramingDoesNotPoolItsConnection(t *testing.T) {
+	host, port, conns := startPathEchoServer(t, 50*time.Millisecond)
+	auth := NewAuthorisedSender(allowAll{}, NewSender(DefaultSenderConfig()), host, port, false)
+	pool := NewConnPool(1)
+	defer pool.Close()
+	hostHeader := "Host: " + formatHostPort(host, port) + "\r\n"
+	send := func(raw string) string {
+		t.Helper()
+		res, err := auth.SendReusing(context.Background(), pool, []byte(raw), ProtocolPreferenceHTTP1)
+		if err != nil {
+			t.Fatalf("send %q: %v", firstLineOf(raw), err)
+		}
+		_, body, _ := strings.Cut(string(res.Raw), "\r\n\r\n")
+		return body
+	}
+
+	if got := send("GET /first HTTP/1.1\r\n" + hostHeader + "\r\nGET /smuggled HTTP/1.1\r\n" + hostHeader + "\r\n"); got != "/first" {
+		t.Fatalf("the pipelined send read %q, want /first", got)
+	}
+	if got := send("GET /second HTTP/1.1\r\n" + hostHeader + "\r\n"); got != "/second" {
+		t.Fatalf("the next send to the host read %q, want its own /second", got)
+	}
+	if got := pool.Reused(); got != 0 {
+		t.Errorf("the pool reused a connection %d time(s); the pipelined send's must not be", got)
+	}
+	if got := conns.Load(); got != 2 {
+		t.Errorf("%d connection(s) for 2 sends, want 2: the pipelined one must not be reused", got)
+	}
+
+	// The check must not cost an ordinary request its reuse: a single request with a body is exactly
+	// its framing, so both ride the connection /second left pooled.
+	before := conns.Load()
+	for _, raw := range []string{
+		"POST /cl HTTP/1.1\r\n" + hostHeader + "Content-Length: 5\r\n\r\nhello",
+		"POST /chunked HTTP/1.1\r\n" + hostHeader + "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
+	} {
+		send(raw)
+	}
+	if got := conns.Load() - before; got != 0 {
+		t.Errorf("%d new connection(s) for two single-request sends with bodies, want 0: each is exactly its framing", got)
+	}
 }

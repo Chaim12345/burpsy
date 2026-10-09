@@ -233,6 +233,9 @@ export function useStartCrawl() {
    max_requests?: number;
    max_depth?: number;
    max_duration_secs?: number;
+   /** A saved recorded login sequence by id (burpsy-react-ui-xhtk): replayed before the crawl and on
+    *  session loss. An unknown id, an empty scope or no browser is refused before any task exists. */
+   recorded_login?: string;
     /**
      * The eight bounds the engine had but the wire did not (burpsy-react-ui-qzzy).
      *

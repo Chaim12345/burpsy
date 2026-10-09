@@ -180,8 +180,8 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "scan_queue", group: groupScanning,
-		short: "Reads the audit queue: which items each audit is working on and their state.",
-		ops:   []string{"GET /api/scanner/audit-items"},
+		short: "Reads the audit queue (which items each audit is working on and their state) and a running crawl's live view.",
+		ops:   []string{"GET /api/scanner/audit-items", "GET /api/crawl/live"},
 	},
 	{
 		name: "tasks", group: groupScanning,
@@ -234,13 +234,14 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "proxy_settings", group: groupConfig,
-		short: "Reads or sets proxy options, listeners, TLS pass-through, the embedded browser's settings and the upstream proxy.",
+		short: "Reads or sets proxy options, listeners, TLS pass-through, the embedded browser's settings, the upstream proxy, and what adding to scope does about out-of-scope history logging.",
 		ops: []string{
 			"GET /api/proxy/options", "PUT /api/proxy/options",
 			"GET /api/proxy/listener", "PUT /api/proxy/listener", "POST /api/proxy/listener", "DELETE /api/proxy/listener",
 			"GET /api/proxy/passthrough", "POST /api/proxy/passthrough", "PUT /api/proxy/passthrough", "DELETE /api/proxy/passthrough",
 			"GET /api/browser/settings", "PUT /api/browser/settings",
 			"GET /api/network/proxy", "POST /api/network/proxy", "DELETE /api/network/proxy",
+			"GET /api/proxy/history-logging", "POST /api/proxy/history-logging",
 		},
 	},
 	{
@@ -270,19 +271,28 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "network_credentials", group: groupConfig,
-		short: "Reads or sets platform authentication and TLS client certificates for the target.",
+		short: "Reads or sets platform authentication, whether a failed challenge prompts for credentials, and TLS client certificates for the target.",
 		ops: []string{
-			"GET /api/network/auth", "POST /api/network/auth", "DELETE /api/network/auth",
+			"GET /api/network/auth", "POST /api/network/auth", "PUT /api/network/auth", "DELETE /api/network/auth",
 			"GET /api/network/client-certs", "POST /api/network/client-certs", "DELETE /api/network/client-certs",
 		},
 	},
 	{
+		name: "network_tls_auth_records", group: groupConfig,
+		short: "Lists the TLS certificates target servers presented and the platform-authentication failures awaiting credentials; clears the certificate list or dismisses one failure.",
+		ops: []string{
+			"GET /api/network/server-certificates", "DELETE /api/network/server-certificates",
+			"GET /api/network/auth/failures", "DELETE /api/network/auth/failures",
+		},
+	},
+	{
 		name: "session", group: groupConfig,
-		short: "Reads the cookie jar, session rules and login, replays a login, and resolves a recovery prompt.",
+		short: "Reads the cookie jar, session rules and login, replays a login, resolves a recovery prompt, and reads, saves, removes or replays recorded login sequences.",
 		ops: []string{
 			"GET /api/session/cookies", "POST /api/session/cookies", "POST /api/session/login",
 			"POST /api/session/prompts/", "GET /api/session/rules", "POST /api/session/rules",
 			"PUT /api/session/rules/", "DELETE /api/session/rules/", "POST /api/session/rules/",
+			"GET /api/crawl/logins", "POST /api/crawl/logins", "DELETE /api/crawl/logins", "POST /api/crawl/logins/replay",
 		},
 	},
 	{
@@ -304,6 +314,11 @@ var groupedTools = []groupSpec{
 		name: "project_settings", group: groupConfig,
 		short: "Reads or sets the project name and the automatic-backup settings.",
 		ops:   []string{"GET /api/project/name", "PUT /api/project/name", "GET /api/backup/config", "PUT /api/backup/config"},
+	},
+	{
+		name: "project_logging", group: groupConfig,
+		short: "Reads or sets the per-tool files that requests and responses are appended to (Burp's Logging settings).",
+		ops:   []string{"GET /api/project/logging", "PUT /api/project/logging"},
 	},
 	{
 		name: "project_admin", group: groupConfig,

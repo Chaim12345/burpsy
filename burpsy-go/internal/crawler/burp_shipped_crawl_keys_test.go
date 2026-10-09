@@ -95,6 +95,9 @@ func buildBurpCrawlDocument(t *testing.T) []byte {
 			crawler[section][leaf] = 1
 		case section == "error_handling":
 			crawler[section][leaf] = 0
+		case leaf == "crawl_strategy":
+			// A named level, applied since burpsy-react-ui-8bp2: seeded with one of Burp's five names.
+			crawler[section][leaf] = "more complete"
 		case leaf == "maximum_speculative_links":
 			// The one numeric key outside crawl_limits/error_handling (burpsy-react-ui-t5m0):
 			// seeded as a count, not the boolean the other customization keys take.
@@ -145,16 +148,17 @@ func TestEveryShippedCrawlKeyIsClassifiedNoneIsDropped(t *testing.T) {
 	// Three crawl_limits keys plus the four error_handling keys (burpsy-react-ui-o0c5), which
 	// stopped being a silent no-op on import: two of Burp's shipped configurations name three of
 	// them by value. The two speculative keys (burpsy-react-ui-t5m0) make nine, the four
-	// API-discovery customization keys (burpsy-react-ui-bwwg) make thirteen, and
-	// application_uses_fragments_for_routing (burpsy-react-ui-wbqx) makes fourteen.
+	// API-discovery customization keys (burpsy-react-ui-bwwg) make thirteen, crawl_strategy
+	// (burpsy-react-ui-8bp2) makes fourteen, and application_uses_fragments_for_routing
+	// (burpsy-react-ui-wbqx) makes fifteen.
 	//
 	// The number is a census, not a target: it moves when this engine gains a field for a key Burp
 	// ships, and that is the point of the test — a key that becomes applicable and is still reported
 	// unrepresentable tells an operator migrating a configuration that their setting was dropped.
-	const wantApplied = 14
+	const wantApplied = 15
 	if len(cfg.AppliedKeys) != wantApplied {
 		t.Errorf("AppliedKeys = %v (%d), want exactly %d: crawl_limits' three keys plus "+
-			"error_handling's four, the two speculative keys, and the four API-discovery keys are the "+
+			"error_handling's four, the two speculative keys, the four API-discovery keys, crawl_strategy and application_uses_fragments_for_routing are the "+
 			"ones this engine has a field for",
 			cfg.AppliedKeys, len(cfg.AppliedKeys), wantApplied)
 	}

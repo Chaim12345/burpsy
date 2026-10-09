@@ -22,7 +22,7 @@ func TestEveryCrawlStopIsNamedExplainedAndRoundTripsByName(t *testing.T) {
 		}
 	}
 	// The legend must be the whole enum: the last stop's value + 1 is the count.
-	if want := int(StopFollowUpCancelled) + 1; len(CrawlStopAll) != want {
+	if want := int(StopLoginFailed) + 1; len(CrawlStopAll) != want {
 		t.Errorf("CrawlStopAll has %d stops, the enum has %d", len(CrawlStopAll), want)
 	}
 

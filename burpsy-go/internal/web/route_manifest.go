@@ -256,6 +256,22 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST"}, risk: riskAttack,
 		summary: "GET: the last crawl's coverage report. POST: crawl from a seed URL under stated bounds",
 	},
+	"/api/crawl/live": {
+		methods: []string{"GET"}, risk: riskRead,
+		summary: "the live crawl view for ?task=N: the request in flight, the phase, the last 50 fetches, and a throttled frame from the render pass (null with a stated reason when there is no browser)",
+	},
+	"/api/crawl/logins": {
+		// riskCredential: a sequence carries typed passwords and TOTP secrets. GET is the redacted
+		// library (no secret on the wire); POST imports or edits one; DELETE removes one.
+		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
+		summary: "recorded login sequences (Burp's Login Recorder or Chrome Recorder import, step editor, See as JSON): GET redacted list, POST save/import, DELETE ?id=",
+	},
+	"/api/crawl/logins/replay": {
+		// riskCredential: replays a stored login — typed passwords and a TOTP code — against the
+		// target, in a browser session gated by scope on every request.
+		methods: []string{"POST"}, risk: riskCredential,
+		summary: "Burp's Replay: run a recorded login in an isolated, scope-gated browser and report each step, the status check, blocked requests and a screenshot",
+	},
 	"/api/dashboard": {
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "running tasks, the activity log, and every coverage summary with its breakdown",
@@ -465,6 +481,12 @@ var manifest = map[string]route{
 		pathValidatedFirst: true,
 		summary:            "the match rules deciding which messages are held, per direction",
 	},
+	"/api/proxy/history-logging": {
+		// Burp's "Proxy history logging" (burpsy-react-ui-z80e): a preference the console's Add to
+		// scope reads. Writes only the operator's own preference, so riskLocal.
+		methods: []string{"GET", "POST"}, risk: riskLocal,
+		summary: "read or set what adding to scope does about out-of-scope proxy logging: stop, ask or nothing",
+	},
 	"/api/intercept/startup": {
 		// Burp's "Default Proxy interception state" (burpsy-react-ui-7vy): a preference about
 		// the NEXT server start, not a live toggle — /enable stays the switch. Writes only the
@@ -535,14 +557,28 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "raw bytes of one stored message, with pretty and hex views",
 	},
+	"/api/network/server-certificates": {
+		// Burp's "Server TLS certificates" (burpsy-react-ui-t75m): an information-only list of the
+		// certificates target servers presented. DELETE clears the list. riskLocal: public
+		// certificates, no egress.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "the X.509 certificates target servers presented to the sender and the proxy, deduplicated; DELETE clears",
+	},
+	"/api/network/auth/failures": {
+		// Burp's "Prompt for credentials on platform authentication failure" (burpsy-react-ui-3xnt):
+		// the hosts whose challenge failed, for the console to ask about. Names hosts and schemes,
+		// never a credential; DELETE only dismisses one. riskLocal: it changes no egress.
+		methods: []string{"GET", "DELETE"}, risk: riskLocal,
+		summary: "platform-authentication failures waiting for credentials: list them, or dismiss one by host",
+	},
 	"/api/network/auth": {
 		// riskCredential, and not riskLocal, because that is what these rows are: an
 		// operator's account on the target. A GET cannot disclose the password — the wire
 		// shape has no field for it — but it does enumerate which accounts are configured
 		// against which hosts, and a POST arms every subsequent send to replay one. Both
 		// are things an unattended caller should have to ask about.
-		methods: []string{"GET", "POST", "DELETE"}, risk: riskCredential,
-		summary: "platform authentication: per-host HTTP credentials (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
+		methods: []string{"GET", "POST", "PUT", "DELETE"}, risk: riskCredential,
+		summary: "platform authentication: per-host HTTP credentials, and (PUT) whether a failure prompts for them (Basic and Digest; NTLM and Negotiate are not implemented). Never serves a password",
 	},
 	"/api/network/client-certs": {
 		// Same class for the same reason: a TLS client identity is a credential, and DELETE
@@ -605,6 +641,13 @@ var manifest = map[string]route{
 		methods: []string{"GET"}, risk: riskRead,
 		summary: "which project this instance is: the persisted project name (\"Unnamed\" when never set), " +
 			"the -db file it lives in, and whether anything is durable at all — the readout the Project menu shows",
+	},
+	"/api/project/logging": {
+		// Burp's Project settings → Logging (burpsy-react-ui-nvfl): which tools append their requests
+		// and responses to which files. riskCredential: the files receive the raw messages, cookies
+		// and Authorization headers included, at a path the caller names.
+		methods: []string{"GET", "PUT"}, risk: riskCredential,
+		summary: "per-tool request/response log files (Burp's Logging settings): read, or set the paths; empty is off",
 	},
 	"/api/project/name": {
 		methods: []string{"GET", "PUT"}, risk: riskLocal,

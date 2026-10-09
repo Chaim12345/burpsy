@@ -250,6 +250,16 @@ func NewBrowser(ctx context.Context, opts Options) (*Browser, error) {
 			chromedp.Flag("safebrowsing-disable-auto-update", true),
 			chromedp.Flag("password-store", "basic"),
 			chromedp.Flag("use-mock-keychain", true),
+			// More of Chrome's own background services, added after a recorded login's scope-gated
+			// session (burpsy-react-ui-xhtk) showed its proxy refusing tunnels to www.google.com and
+			// content-autofill.googleapis.com that no page asked for — noise in a refusal list an operator
+			// reads to decide what to add to scope. With this set, the refusals outside a replay went from
+			// one to none in the measurement; which single flag did it was not bisected. Like the rest of
+			// this list, none is a web platform API a page or a taint check can observe. One CONNECT to
+			// www.google.com per new window remains during a replay and is documented in gaps.md.
+			chromedp.Flag("disable-component-update", true),
+			chromedp.Flag("disable-domain-reliability", true),
+			chromedp.Flag("disable-features", "OptimizationHints,MediaRouter,DialMediaRouteProvider,AutofillServerCommunication,Translate,NetworkTimeServiceQuerying,PreconnectToSearch"),
 		}
 		if !opts.Headed {
 			execOpts = append(execOpts, chromedp.Headless)

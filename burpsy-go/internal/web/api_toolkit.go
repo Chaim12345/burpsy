@@ -90,7 +90,11 @@ type sitemapNodeView struct {
 	//
 	// Never omitempty: absent and false are the same JSON, and a client that read an absent
 	// `inserted` as "this is a stored fact" would label every observed node as added.
-	Inserted     bool              `json:"inserted"`
+	Inserted bool `json:"inserted"`
+	// Unrequested marks a URL the live passive crawl saw linked from proxied traffic that nobody has
+	// requested (t3zk), Burp's grey item. LinkedFrom is the page that linked to it.
+	Unrequested  bool              `json:"unrequested,omitempty"`
+	LinkedFrom   string            `json:"linked_from,omitempty"`
 	AddedAt      *int64            `json:"added_at,omitempty"`
 	LastExchange *int64            `json:"last_exchange"`
 	Recent       []core.ExchangeID `json:"recent_exchanges"`
@@ -236,7 +240,10 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	var tree []sitemapNodeView
 	var nodeCount int
 
-	for _, host := range s.sitemap.Hosts() {
+	// One snapshot serves both the observed tree and the dedupe of inserted and unrequested items
+	// below, so the two agree with each other and the map is cloned once per request.
+	hosts := s.sitemap.Hosts()
+	for _, host := range hosts {
 		if hostFilter != "" && host.Host != hostFilter {
 			continue
 		}
@@ -280,6 +287,15 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	// know about them. An insert naming a path that was already observed is not emitted: the
 	// observation is the stronger fact, and the caller was told exactly that at insert time.
 	insertedPaths := make([]sitemapNodeView, 0)
+	// Built on first use, once per request: a lookup per merged item instead of a site-map clone and
+	// a scan of every observed path per merged item, which made this read O(merged x observed).
+	var observed observedIndex
+	isObserved := func(in *sitemap.InsertedNode) bool {
+		if observed == nil {
+			observed = newObservedIndex(hosts)
+		}
+		return observed.has(in)
+	}
 	for _, in := range s.sitemap.Inserts() {
 		if hostFilter != "" && in.Host != hostFilter {
 			continue
@@ -287,7 +303,7 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 		if pathFilter != "" && !strings.Contains(in.Path, pathFilter) {
 			continue
 		}
-		if in.Path != "" && observedPath(s.sitemap, in) {
+		if in.Path != "" && isObserved(in) {
 			continue
 		}
 		nodeCount++
@@ -309,6 +325,38 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 			InScope:  s.scope.Contains(in.Host, in.Port, pathOrRoot(in.Path), in.TLS),
 		})
 	}
+	// Unrequested items (t3zk), merged the same way and dropped once anything has requested them.
+	for _, un := range s.sitemap.Unrequested() {
+		if hostFilter != "" && un.Host != hostFilter {
+			continue
+		}
+		if pathFilter != "" && !strings.Contains(un.Path, pathFilter) {
+			continue
+		}
+		as := &sitemap.InsertedNode{Host: un.Host, Port: un.Port, TLS: un.TLS, Path: un.Path}
+		if isObserved(as) {
+			continue
+		}
+		nodeCount++
+		seen := un.Seen.UnixMilli()
+		insertedPaths = append(insertedPaths, sitemapNodeView{
+			Key:         nodeKey(un.Host, un.Port, un.TLS, un.Path),
+			HostName:    un.Host,
+			Segment:     pathSegment(un.Path),
+			Path:        un.Path,
+			Port:        un.Port,
+			TLS:         un.TLS,
+			Depth:       len(ancestorPaths(un.Path)),
+			Unrequested: true,
+			LinkedFrom:  un.From,
+			AddedAt:     &seen,
+			Methods:     []string{},
+			Statuses:    []int{},
+			Mimes:       []string{},
+			Recent:      []core.ExchangeID{},
+			InScope:     s.scope.Contains(un.Host, un.Port, pathOrRoot(un.Path), un.TLS),
+		})
+	}
 	tree, nodeCount = mergeInsertedIntoTree(tree, insertedPaths, nodeCount)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -321,27 +369,68 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// observedPath reports whether the observed tree already holds this exact path under its host. An
-// insert that names one is not a new node: the observation is the stronger fact about that URL.
-func observedPath(sm *sitemap.SiteMap, in *sitemap.InsertedNode) bool {
-	for _, host := range sm.Hosts() {
-		if host.Host != in.Host || host.Port != in.Port || host.TLS != in.TLS {
-			continue
+// observedIndex answers whether the observed tree already holds a path under its host, for the
+// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its clean form
+// is a stored path key, or when it names a folder that anything observed sits beneath: the fold
+// synthesises ancestor folders, so an insert naming /api/ would otherwise produce a second /api/ node
+// beside the synthesised one. "/" is observed under any host that has a path at all.
+type observedIndex map[observedHostKey]*observedHost
+
+type observedHostKey struct {
+	host string
+	port uint16
+	tls  bool
+}
+
+type observedHost struct {
+	// keys are the stored path keys, exactly as the site map holds them.
+	keys map[string]struct{}
+	// folders holds every clean observed path's prefixes that end in "/" ("/", "/a/", "/a/b/" for
+	// /a/b/c), which is the set a folder query X matches as HasPrefix(path, X+"/").
+	folders map[string]struct{}
+	any     bool
+}
+
+func newObservedIndex(hosts []*sitemap.HostNode) observedIndex {
+	idx := observedIndex{}
+	for _, h := range hosts {
+		k := observedHostKey{h.Host, h.Port, h.TLS}
+		oh := idx[k]
+		if oh == nil {
+			oh = &observedHost{keys: map[string]struct{}{}, folders: map[string]struct{}{}}
+			idx[k] = oh
 		}
-		clean, _ := splitPathQuery(in.Path)
-		if _, ok := host.Paths[clean]; ok {
-			return true
-		}
-		// A folder is observed when anything beneath it is: the fold synthesises ancestor folders, so
-		// an insert naming /api/ would otherwise produce a second /api/ node beside the synthesised one.
-		for _, pn := range host.Paths {
+		for key, pn := range h.Paths {
+			oh.keys[key] = struct{}{}
+			oh.any = true
 			cleanPath, _ := splitPathQuery(pn.Path)
-			if clean == "/" || strings.HasPrefix(cleanPath, strings.TrimSuffix(clean, "/")+"/") {
-				return true
+			for i := 0; i < len(cleanPath); i++ {
+				if cleanPath[i] == '/' {
+					oh.folders[cleanPath[:i+1]] = struct{}{}
+				}
 			}
 		}
 	}
-	return false
+	return idx
+}
+
+func (idx observedIndex) has(in *sitemap.InsertedNode) bool {
+	oh := idx[observedHostKey{in.Host, in.Port, in.TLS}]
+	if oh == nil {
+		return false
+	}
+	clean, _ := splitPathQuery(in.Path)
+	if _, ok := oh.keys[clean]; ok {
+		return true
+	}
+	if !oh.any {
+		return false
+	}
+	if clean == "/" {
+		return true
+	}
+	_, ok := oh.folders[strings.TrimSuffix(clean, "/")+"/"]
+	return ok
 }
 
 // pathOrRoot is the path scope questions are asked about: an inserted host node has no path, and

@@ -253,8 +253,8 @@ function TreeRow({
      {isHost ? <Globe size={12} /> : hasChildren ? expanded ? <FolderOpen size={12} /> : <Folder size={12} /> : null}
     </span>
     <span
-     className={cn("tree-row-label", inferred && "cell-dim", node.inserted && "tree-row-inserted")}
-     title={`${node.path}${inferred ? " (no request to this path itself)" : ""}${node.inserted ? " — added by you: nothing has been requested here" : ""}${outOfScope ? " — out of scope: the tools will not touch this" : ""}`}
+     className={cn("tree-row-label", (inferred || node.unrequested) && "cell-dim", node.inserted && "tree-row-inserted")}
+     title={`${node.path}${inferred ? " (no request to this path itself)" : ""}${node.inserted ? " — added by you: nothing has been requested here" : ""}${node.unrequested ? ` — linked from ${node.linked_from ?? "a proxied page"}, never requested` : ""}${outOfScope ? " — out of scope: the tools will not touch this" : ""}`}
     >
      {node.segment || "/"}
     </span>
@@ -265,6 +265,13 @@ function TreeRow({
      {node.inserted ? (
       <span className="tree-row-scope tree-row-added" title="Added to the site map by you. No traffic has been observed here.">
        added by you
+      </span>
+     ) : null}
+     {/* An unrequested item (t3zk): linked from proxied traffic, never fetched. Marked like an
+         operator-added node, for the same reason: its zero counts are not a clean observation. */}
+     {node.unrequested ? (
+      <span className="tree-row-scope tree-row-added" title={`Linked from ${node.linked_from ?? "a proxied page"}. Nothing has requested it yet.`}>
+       unrequested
       </span>
      ) : null}
      {outOfScope && isHost ? <span className="tree-row-scope">out of scope</span> : null}

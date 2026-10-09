@@ -57,11 +57,13 @@ type ActionRan struct {
 
 // actionWalk is one run of a rule's action list.
 type actionWalk struct {
-	c        *Coordinator
-	rule     *SessionRule
-	runner   MacroStepRunner
-	request  MacroStep
-	response *StepResult
+	// cookieScope is the last run-macro action's jar-cookie choice; see actionResult.CookieScope.
+	cookieScope *cookieScope
+	c           *Coordinator
+	rule        *SessionRule
+	runner      MacroStepRunner
+	request     MacroStep
+	response    *StepResult
 	// values are the {{name}} values the most recent macro run produced. Shared with anything the
 	// walk runs afterwards, which is the whole point: the CSRF recipe is a macro that extracts a
 	// token followed by an action that writes it into the request.
@@ -126,6 +128,9 @@ func (w *actionWalk) recordSkipped(kind ActionKind, reason string) {
 type actionResult struct {
 	// Request is the request the walk arrived at, which is what the caller re-sends.
 	Request MacroStep
+	// CookieScope is the jar-cookie choice of the last run-macro action that stated one, applied to
+	// the re-sent request only (8gk8). Nil keeps the whole-jar behaviour.
+	CookieScope *cookieScope
 	// CookieOverrides are the cookies set_cookie actions named. Separate from Request.Headers
 	// because the send path rebuilds the Cookie header from the jar and would otherwise drop them.
 	CookieOverrides []CookieOverride
@@ -171,6 +176,7 @@ func (c *Coordinator) runActions(rule *SessionRule, request MacroStep, response 
 	return actionResult{
 		Request:         w.request,
 		CookieOverrides: w.cookieOverrides,
+		CookieScope:     w.cookieScope,
 		Trace:           w.trace,
 		Changed:         !sameMacroStep(original, w.request),
 		Checked:         w.checked,
@@ -359,6 +365,9 @@ func (w *actionWalk) runMacro(a *Action) {
 		}
 		w.record(a.Kind, fmt.Sprintf("ran the macro: %d attempt(s), %d extracted value(s)",
 			outcome.Attempts, len(outcome.Values)), true)
+		if a.Kind == ActionRunMacro {
+			w.updateFromMacro(a, outcome)
+		}
 	case LoginGaveUp:
 		w.record(a.Kind, fmt.Sprintf("ran the macro %d time(s) and the session never became valid",
 			outcome.Attempts), false)

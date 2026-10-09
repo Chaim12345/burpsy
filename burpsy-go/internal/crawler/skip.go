@@ -275,11 +275,32 @@ const (
 	// within a tolerance, which is a different and weaker thing to rely on, and is the difference
 	// between a coverage claim and a claim about coverage.
 	SkipLocationFolded
+	// SkipSoftNotFound means the response was a 2xx whose page matched the shape this directory answers
+	// a request for a nonexistent sibling with (burpsy-react-ui-s92h), Burp's not-found-detection edge:
+	// a custom "page not found" served with 200. It is not a location, and its links were not walked.
+	SkipSoftNotFound
+	// The four below split events Burp's crawl telemetry names separately (burpsy-react-ui-ai64,
+	// burp/Zwkv.java), which were folded into one generic skip or into none.
+	//
+	// SkipAPILocationOutOfScope is an operation an API definition declared whose location is outside
+	// scope, Burp's API_DEFINITION_LOCATION_OUT_OF_SCOPE: the definition was read, and scope refused
+	// what it named.
+	SkipAPILocationOutOfScope
+	// SkipWSDLInvalid is a WSDL that is not well-formed XML, Burp's WSDL_XML_INVALID. Any operations
+	// read before the break are still crawled.
+	SkipWSDLInvalid
+	// SkipWSDLNoOperations is a WSDL that parsed but declares no operation, Burp's
+	// SOAP_NO_PORTTYPE_OPERATION_FOUND: the service is published and names nothing to call.
+	SkipWSDLNoOperations
+	// SkipSeedRedirectedOutOfScope is a seed whose redirect leaves scope, Burp's
+	// SEED_URL_REDIRECTED_OUT_OF_SCOPE: the crawl's starting point contributed nothing, and this says
+	// why instead of an ordinary out-of-scope link.
+	SkipSeedRedirectedOutOfScope
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [40]Skip{
+var SkipAll = [45]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -320,6 +341,11 @@ var SkipAll = [40]Skip{
 	SkipFormSubmissionCap,
 	SkipFormDestinationExhausted,
 	SkipLocationFolded,
+	SkipSoftNotFound,
+	SkipAPILocationOutOfScope,
+	SkipWSDLInvalid,
+	SkipWSDLNoOperations,
+	SkipSeedRedirectedOutOfScope,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -407,6 +433,16 @@ func (s Skip) slot() int {
 		return 38
 	case SkipLocationFolded:
 		return 39
+	case SkipSoftNotFound:
+		return 40
+	case SkipAPILocationOutOfScope:
+		return 41
+	case SkipWSDLInvalid:
+		return 42
+	case SkipWSDLNoOperations:
+		return 43
+	case SkipSeedRedirectedOutOfScope:
+		return 44
 	}
 	panic("unknown Skip")
 }
@@ -494,6 +530,16 @@ func (s Skip) String() string {
 		return "form-destination-exhausted"
 	case SkipLocationFolded:
 		return "location-folded"
+	case SkipSoftNotFound:
+		return "soft-not-found"
+	case SkipAPILocationOutOfScope:
+		return "api-location-out-of-scope"
+	case SkipWSDLInvalid:
+		return "wsdl-invalid"
+	case SkipWSDLNoOperations:
+		return "wsdl-no-operations"
+	case SkipSeedRedirectedOutOfScope:
+		return "seed-redirected-out-of-scope"
 	}
 	return "unknown"
 }
@@ -584,6 +630,16 @@ func (s Skip) Explanation() string {
 		return "the page loads this from a host outside the engagement scope. Burp's crawler fetches such resources by default (allow_out_of_scope_resources); burpsy refuses them, so a page whose content lives on a CDN or a third-party API contributes no locations"
 	case SkipLocationFolded:
 		return "this page was recognised as one already seen within a tolerance: the same structure and the same set of link paths, with a few link values changed, so its links were not walked again. Counted apart from an exact duplicate because the location count it contributes rests on a tolerance rather than on identical contents"
+	case SkipSoftNotFound:
+		return "the server answered 200, but the page matched what it serves for a request for a nonexistent sibling: a custom \"page not found\". It is not a location, and its links were not walked"
+	case SkipAPILocationOutOfScope:
+		return "an API definition declared this operation, and its location is outside the engagement scope, so it was not requested"
+	case SkipWSDLInvalid:
+		return "the WSDL is not well-formed XML; any operations read before the break were still crawled"
+	case SkipWSDLNoOperations:
+		return "the WSDL parsed but declares no operation, so the published service named nothing to call"
+	case SkipSeedRedirectedOutOfScope:
+		return "a seed URL redirected outside the engagement scope, so the crawl's starting point contributed nothing"
 	}
 	return "unknown skip"
 }
@@ -651,17 +707,18 @@ func (s Skip) Category() SkipCategory {
 		return CategoryDestructive
 	case SkipUnsupportedScheme, SkipMalformedURL, SkipCredentialsInURL:
 		return CategorySafety
-	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource:
+	case SkipOutOfScope, SkipSendRefused, SkipQueryExcluded, SkipOutOfScopeResource,
+		SkipAPILocationOutOfScope, SkipSeedRedirectedOutOfScope:
 		return CategoryScope
 	case SkipFormSubmissionDisabled, SkipFormNotSubmittable, SkipFormSubmissionCap,
 		SkipFormDestinationExhausted:
 		return CategoryPolicy
-	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded:
+	case SkipAlreadyQueued, SkipDuplicateLocation, SkipLocationFolded, SkipSoftNotFound:
 		return CategoryDuplicate
 	case SkipDepthLimit, SkipFrontierFull, SkipLinksPerPage, SkipTemplateQuota, SkipFingerprintBudget,
 		SkipSpeculativeLimit, SkipGraphQLIntrospection:
 		return CategoryLimit
-	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed,
+	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed, SkipWSDLInvalid, SkipWSDLNoOperations,
 		SkipGraphQLUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
 		SkipRenderUnavailable:

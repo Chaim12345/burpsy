@@ -15,6 +15,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/dash"
 	"github.com/burpsy-go/burpsy/internal/dominvader"
 	"github.com/burpsy-go/burpsy/internal/extension"
+	"github.com/burpsy-go/burpsy/internal/filelog"
 	"github.com/burpsy-go/burpsy/internal/intercept"
 	"github.com/burpsy-go/burpsy/internal/matchreplace"
 	"github.com/burpsy-go/burpsy/internal/netauth"
@@ -26,6 +27,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/schedule"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"github.com/burpsy-go/burpsy/internal/sequencer"
+	"github.com/burpsy-go/burpsy/internal/servercerts"
 	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/sitemap"
 	"github.com/burpsy-go/burpsy/internal/skills"
@@ -36,9 +38,13 @@ import (
 
 // Server represents the web API server.
 type Server struct {
-	store  *core.TrafficStore
-	scope  *core.Scope
-	logger *zap.Logger
+	// fileLog is Burp's Project settings → Logging writer (nvfl); nil until attached.
+	fileLog *filelog.Logger
+	// serverCerts is Burp's "Server TLS certificates" record (t75m); nil until attached.
+	serverCerts *servercerts.Store
+	store       *core.TrafficStore
+	scope       *core.Scope
+	logger      *zap.Logger
 	// proxyBind and webBind are the -proxy and -web flag values the binary was
 	// started with, so the Settings page can show where it listens.
 	proxyBind string
@@ -271,6 +277,14 @@ type Server struct {
 	// rebuilt at startup, reported by the GET rather than dropped. See
 	// WithNetAuthRestoreNotes.
 	netAuthRestoreNotes []string
+	// recordedLogins is the recorded login sequences store (burpsy-react-ui-xhtk), built lazily by
+	// recordedLoginStore() and restored from the project on first use. loginBrowser is the headless
+	// browser a recorded login replays in when no -dom engine is configured: Burp replays recorded
+	// logins in its browser "even if you have not selected Use Burp's browser for crawl and audit".
+	recordedLogins     *recordedLoginStore
+	recordedLoginsOnce sync.Once
+	loginBrowserMu     sync.Mutex
+	loginBrowser       scanner.BrowserProvider
 	// live is the change-event hub behind /api/events: every store the UI reads signals it, and it
 	// coalesces those signals into "this kind changed" frames the browser refetches on. See events.go
 	// for why the frames carry no data and why the producer side is atomics only.
@@ -599,6 +613,9 @@ func (s *Server) WithPersist(p *persist.Store) *Server {
 		s.restoreAuthzIdentities(p)
 		// And whether captured responses are scanned for leaked secrets (burpsy-react-ui-8j0d).
 		s.restoreSecretDetection(p)
+		// And the recorded login sequences, which carry credentials and must never cross from one
+		// project into another (burpsy-react-ui-xhtk).
+		s.restoreRecordedLogins(p)
 	}
 	return s
 }
@@ -805,6 +822,20 @@ func (s *Server) WithNetAuth(credentials *netauth.Credentials, certs *netauth.Cl
 // leaves a binding that was on the panel yesterday and will never be presented again.
 // Carried here rather than logged and forgotten because the operator reading the panel is
 // the person who can fix it, and they are not reading the log.
+// WithServerCerts attaches the store of certificates target servers presented (t75m), the same one
+// the sender and the proxy record into.
+// WithFileLog attaches Burp's Project settings → Logging writer (nvfl), the one main observes the
+// traffic store with.
+func (s *Server) WithFileLog(l *filelog.Logger) *Server {
+	s.fileLog = l
+	return s
+}
+
+func (s *Server) WithServerCerts(store *servercerts.Store) *Server {
+	s.serverCerts = store
+	return s
+}
+
 func (s *Server) WithNetAuthRestoreNotes(notes []string) *Server {
 	s.netAuthRestoreNotes = notes
 	return s
@@ -1170,6 +1201,9 @@ func (s *Server) setupRoutes() {
 	// Network: platform authentication and client TLS certificates. Neither route ever
 	// serves a secret — see api_network.go.
 	s.mux.HandleFunc("/api/network/auth", s.handleNetworkAuth)
+	s.mux.HandleFunc("/api/network/auth/failures", s.handleNetworkAuthFailures)
+	s.mux.HandleFunc("/api/network/server-certificates", s.handleServerCertificates)
+	s.mux.HandleFunc("/api/project/logging", s.handleFileLogging)
 	s.mux.HandleFunc("/api/network/client-certs", s.handleNetworkClientCerts)
 
 	// Intercept (condition lists + held queue)
@@ -1212,6 +1246,7 @@ func (s *Server) setupRoutes() {
 	// the same reason in-scope-only has one — an endpoint named "enable" that also carried a
 	// startup preference would let a caller set one and silently send the other.
 	s.mux.HandleFunc("/api/intercept/startup", s.handleInterceptStartup)
+	s.mux.HandleFunc("/api/proxy/history-logging", s.handleProxyHistoryLogging)
 	s.mux.HandleFunc("/api/intercept/", s.handleInterceptHeld)
 
 	// Network: the upstream proxy / SOCKS chain every egress path follows (Unit 9).
@@ -1223,6 +1258,12 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/sitemap/record", s.handleSitemapRecord)
 	s.mux.HandleFunc("/api/tasks/", s.handleTaskCancel)
 	s.mux.HandleFunc("/api/crawl", s.handleCrawl)
+	// Recorded login sequences (burpsy-react-ui-xhtk): the library, and Burp's "Replay".
+	// The live crawl view (burpsy-react-ui-1l3x): what the crawl is fetching now, its recent fetches,
+	// and a throttled frame from the render pass.
+	s.mux.HandleFunc("/api/crawl/live", s.handleCrawlLive)
+	s.mux.HandleFunc("/api/crawl/logins", s.handleRecordedLogins)
+	s.mux.HandleFunc("/api/crawl/logins/replay", s.handleRecordedLoginReplay)
 	// The fourth scan kind's door. Unlike /api/crawl it answers POST only: a run started here is
 	// retained in the same registry the crawls are, so GET /api/crawl?task=N reads it back — see
 	// api_apiscan.go's package comment for why there is one read door and not two.

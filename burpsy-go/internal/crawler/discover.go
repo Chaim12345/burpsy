@@ -21,12 +21,13 @@
 //
 // Discovered and queued: `a[href]`, `area[href]`, `iframe[src]`, `frame[src]`, and every `form`.
 //
-// Neither queued nor fingerprinted: `img`, `script`, `link`, `source`, `embed`, `video`, `audio`.
-// These are subresources. Burp's crawler does fetch them; this slice does not, because fetching them
-// spends the request budget on bytes no application logic is behind. Their `src` values are also kept
-// out of the location skeleton, because a rebuilt asset hash in a bundle filename would otherwise
-// make every page a new location on every deploy. Two named consequences: a crawl of this application
-// will not tell you that `/static/app.js` returned 500, and two pages differing only in their images
+// Queued but not fingerprinted: the subresources `img`, `link` (stylesheets, icons, preloads, the
+// manifest), `source`, `video` and `audio` (burpsy-react-ui-4ocj), plus `script` (jwy5) and
+// `object`/`embed` (u967). Burp's crawler fetches them, so a crawl can report that `/static/app.js`
+// returned 500 or that a page loads an asset from outside scope, and the site map shows the assets.
+// Config.NoSubresources turns the media and stylesheet ones off to save request budget. Their URLs
+// are kept out of the location skeleton, because a rebuilt asset hash in a bundle filename would
+// otherwise make every page a new location on every deploy: two pages differing only in their images
 // are one location.
 //
 // Not discovered at all: URLs built by script, URLs in CSS, `srcset` candidate lists, `<meta
@@ -288,6 +289,20 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 						})
 					}
 				}
+			// <meta http-equiv="refresh" content="N; url=..."> (burpsy-react-ui-q0qr), Burp's
+			// DELAYED_REDIRECT edge. A landing page that only meta-refreshes into the app was a one-page
+			// crawl, because the target is in an attribute no navigational tag carries.
+			case "meta":
+				if equiv, ok := attr(n, "http-equiv"); ok && strings.EqualFold(strings.TrimSpace(equiv), "refresh") {
+					if content, ok := attr(n, "content"); ok {
+						if target, ok := refreshTarget(content); ok {
+							linkTargets = append(linkTargets, resolvedTarget(effective, target))
+							if admit() {
+								out.links = append(out.links, discoveredLink{raw: target, tag: tagMetaRefresh})
+							}
+						}
+					}
+				}
 			case "iframe", "frame":
 				if src, ok := attr(n, "src"); ok {
 					linkTargets = append(linkTargets, resolvedTarget(effective, src))
@@ -331,6 +346,22 @@ func parsePage(body []byte, base *url.URL, limits Limits, speculative bool) page
 					if admit() {
 						out.links = append(out.links, discoveredLink{raw: src, text: linkText(n), tag: "embed"})
 					}
+				}
+			// Subresources (4ocj): fetched like any discovered link, but kept out of linkTargets so asset
+			// hashes cannot split a location. srcset is not read: it names alternatives of one image.
+			case "img", "source", "audio", "track":
+				if src, ok := attr(n, "src"); ok && strings.TrimSpace(src) != "" && admit() {
+					out.links = append(out.links, discoveredLink{raw: src, tag: n.Data})
+				}
+			case "video":
+				for _, a := range []string{"src", "poster"} {
+					if v, ok := attr(n, a); ok && strings.TrimSpace(v) != "" && admit() {
+						out.links = append(out.links, discoveredLink{raw: v, tag: "video"})
+					}
+				}
+			case "link":
+				if href, ok := attr(n, "href"); ok && strings.TrimSpace(href) != "" && isAssetRel(n) && admit() {
+					out.links = append(out.links, discoveredLink{raw: href, tag: "link"})
 				}
 			case "script":
 				// An EXTERNAL script is fetched so its contents can be read for locations
@@ -439,9 +470,6 @@ var structuralAttrs = [...]string{"name", "type", "method", "action", "rel"}
 //     and not others, on a heuristic this project cannot cite, is exactly the fabrication the
 //     refusal-first design exists to prevent. A handler-delivered link is found by the rendered
 //     pass instead (nx7b), which executes the page and reads the DOM a browser produced.
-//   - `<meta http-equiv="refresh">`. Redirect handling here is explicit (`understand_meta_refresh_tag`
-//     is a Burp config key burpsy does not implement), and following it would make the crawl's
-//     fetch list disagree with the redirect policy the rest of the tree enforces.
 //   - `classid`, `archive` and `codebase` on `<object>`. They name plugin binaries and Java
 //     archives, not web locations, and a crawl that fetched them would be requesting files the
 //     application never exposed as URLs.
@@ -937,4 +965,96 @@ func sourceMapSourcesContent(body []byte) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// tagMetaRefresh and tagRefreshHeader name the two delayed-redirect sources (q0qr), Burp's
+// DELAYED_REDIRECT edge kind.
+const (
+	tagMetaRefresh   = "meta[refresh]"
+	tagRefreshHeader = "refresh-header"
+)
+
+// refreshTarget reads the URL out of a refresh value, the same grammar for the meta element's content
+// and the Refresh response header (HTML's "shared declarative refresh steps"): a delay, then a ';' or
+// ',', then an optional "url=", then the URL, optionally quoted. A value that is only a delay reloads
+// the page itself and names no new location.
+func refreshTarget(value string) (string, bool) {
+	v := strings.TrimSpace(value)
+	i := 0
+	for i < len(v) && (v[i] >= '0' && v[i] <= '9' || v[i] == '.') {
+		i++
+	}
+	if i == 0 {
+		return "", false
+	}
+	v = strings.TrimLeft(v[i:], " \t")
+	if v == "" || (v[0] != ';' && v[0] != ',') {
+		return "", false
+	}
+	v = strings.TrimLeft(v[1:], " \t")
+	if len(v) >= 3 && strings.EqualFold(v[:3], "url") {
+		rest := strings.TrimLeft(v[3:], " \t")
+		if strings.HasPrefix(rest, "=") {
+			v = strings.TrimLeft(rest[1:], " \t")
+		}
+	}
+	if v != "" && (v[0] == '\'' || v[0] == '"') {
+		q := v[0]
+		v = v[1:]
+		if j := strings.IndexByte(v, q); j >= 0 {
+			v = v[:j]
+		}
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// subresourceTags are the tags whose targets a page loads rather than links to (4ocj).
+var subresourceTags = map[string]bool{"img": true, "source": true, "audio": true, "track": true, "video": true, "link": true}
+
+// isAssetRel reports whether a <link> loads an asset the page needs: a stylesheet, an icon, a preload
+// or module preload, or the web app manifest. A rel=alternate, canonical or next link names another
+// document and is not fetched as a subresource.
+func isAssetRel(n *html.Node) bool {
+	rel, _ := attr(n, "rel")
+	for _, r := range strings.Fields(strings.ToLower(rel)) {
+		switch r {
+		case "stylesheet", "icon", "apple-touch-icon", "preload", "modulepreload", "manifest", "mask-icon":
+			return true
+		}
+	}
+	return false
+}
+
+// navigationalTags are the tags whose targets a person navigates to, as opposed to assets a page loads.
+var navigationalTags = map[string]bool{
+	"a": true, "area": true, "iframe": true, "frame": true, "math": true,
+	"button[formaction]": true, "input[formaction]": true, tagMetaRefresh: true,
+}
+
+// LinkTargets returns the absolute http(s) navigational targets an HTML body links to, resolved
+// against base, deduplicated, in document order (burpsy-react-ui-t3zk: the live passive crawl). It is
+// the crawler's own parse, so a link the proxy observes is the link a crawl would have followed.
+func LinkTargets(body []byte, base *url.URL) []*url.URL {
+	page := parsePage(body, base, DefaultLimits(), false)
+	seen := map[string]bool{}
+	var out []*url.URL
+	for _, l := range page.links {
+		if !navigationalTags[l.tag] {
+			continue
+		}
+		u, err := resolveAgainst(base, l.raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			continue
+		}
+		u.Fragment = ""
+		if k := u.String(); !seen[k] {
+			seen[k] = true
+			out = append(out, u)
+		}
+	}
+	return out
 }
