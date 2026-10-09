@@ -83,10 +83,10 @@ func (c *Crawler) SeedFromSiteMap(sm *sitemap.SiteMap, origins []string, scopeAl
 	// crawl; the site map may only spare requests the crawl would otherwise have found on its own.
 	own := make(map[string]bool, len(c.seedURLs)+len(c.seedRequests))
 	for _, u := range c.seedURLs {
-		own[requestFingerprint("GET", u, nil)] = true
+		own[requestFingerprint("GET", u, nil, "")] = true
 	}
 	for _, item := range c.seedRequests {
-		own[requestFingerprint(item.method, item.url, item.body)] = true
+		own[requestFingerprint(item.method, item.url, item.body, item.fragment)] = true
 	}
 
 	seeded := 0
@@ -107,7 +107,7 @@ func (c *Crawler) SeedFromSiteMap(sm *sitemap.SiteMap, origins []string, scopeAl
 					Host:   hostPort(hn.Host, hn.Port),
 					Path:   pn.Path,
 				}
-				key := requestFingerprint(method, u, nil)
+				key := requestFingerprint(method, u, nil, "")
 				if own[key] {
 					continue
 				}

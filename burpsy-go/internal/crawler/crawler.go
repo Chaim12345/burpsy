@@ -211,6 +211,15 @@ type Scope interface {
 	Contains(host string, port uint16, path string, isTLS bool) bool
 }
 
+// LoginCredential represents one set of login credentials for application authentication.
+// Mirrors Burp's username/password pairs (burpsy-react-ui-uzil).
+type LoginCredential struct {
+	// Username is the login username. Empty means no username for this credential set.
+	Username string
+	// Password is the login password. Empty means no password for this credential set.
+	Password string
+}
+
 // Config configures one crawl. Zero-valued Limits and RequestsPerSecond take their defaults; the
 // collaborators are required and New says so rather than crawling with a piece missing.
 type Config struct {
@@ -263,6 +272,41 @@ type Config struct {
 	// SubmitForms turns form submission on (CRAWL-03). The zero value is off, and that is the
 	// requirement, not a default: a crawl that submits forms writes to the application.
 	SubmitForms bool
+	// FragmentsRoute turns on Burp's "Application uses fragments for routing"
+	// (customization/application_uses_fragments_for_routing, scanning-spas.html): a fragment that
+	// contains any of `/ \ ? = &` is treated as a client-side route, so `#/orders/7` and `#/orders/8`
+	// are two locations of one GET rather than one location.
+	//
+	// OFF by default, matching Burp, which needs the operator to select the option when its automatic
+	// character test is not enough. The automatic half is always on: a fragment that looks like a
+	// route is carried as identity even when this is false, because that is what the donor does and a
+	// crawl that dropped it would silently collapse a hash-routed SPA to one location (wbqx).
+	//
+	// The fragment is NEVER sent. It is identity only — see resolveAgainstRoute.
+	FragmentsRoute bool
+	// FormSubmissionOptimizationThreshold bounds how many DISTINCT destinations the crawl submits
+	// ONE form to before it treats that form's input strategy as exhausted
+	// (burpsy-react-ui-ddln). Burp's crawler.crawl_optimization.form_submission_optimization_threshold,
+	// whose own decompiled name is
+	// minimumFormInputStrategyChainLengthBeforeDiscontinuationStrategyApplied (Zclg.java:47 via
+	// Zeuc.java:16) — the length of a form's input-strategy chain at which Burp stops generating
+	// further strategies for it.
+	//
+	// A Config field rather than a Limits field, and for the same reason
+	// Limits.MaxSubmissionsPerForm is not one either: it bounds a PHASE, not the crawl. The request
+	// count is unchanged by it, which is why folding it into Limits would make a report claim the
+	// crawl ran out of budget when it ran out of form targets.
+	//
+	// The two form bounds answer different questions and neither implies the other.
+	// MaxSubmissionsPerForm bounds how many times ONE destination may be submitted; this bounds how
+	// many DESTINATIONS are worth trying. A pagination control whose page parameter walks forward
+	// forever passes the first with its cap untouched, because every submission is a new URL, and is
+	// stopped only by this one.
+	//
+	// 0 means off, the same reading MaxSubmissionsPerForm gives its own zero, and left as written by
+	// normalise for the same reason: an operator who never set the key gets the zero value, and a
+	// bound that silently appeared would be a behaviour change disguised as a default.
+	FormSubmissionOptimizationThreshold int
 	// NoMetaRefresh and NoRefreshHeader turn off following a <meta http-equiv="refresh"> target and a
 	// Refresh response header (q0qr). They are Burp's project options
 	// http.redirections.understand_meta_refresh_tag and understand_refresh_header set false. Both
@@ -349,6 +393,21 @@ type Config struct {
 	// that the session is gone. Empty (the default) disables this signal and keeps the
 	// status-flip rule. Compiled in New; a malformed pattern is a construction error.
 	LoginPagePattern string
+	// LoginCredentials are the username/password pairs the crawler uses to authenticate
+	// to the application (burpsy-react-ui-uzil). When set, the crawler attempts to identify
+	// login forms (input elements with type=password) and submits the provided credentials.
+	// Empty means no credential submission; static headers (Headers) are the only auth.
+	LoginCredentials []LoginCredential
+	// AuthenticatedCrawlOnly, when true, restricts the crawl to only authenticated areas of
+	// the application — pages that require login (burpsy-react-ui-uzil). This prevents the
+	// crawler from exploring public/unauthenticated parts of the site.
+	AuthenticatedCrawlOnly bool
+	// AttemptSelfRegister, when true, attempts to self-register a new user account if the
+	// crawler encounters registration forms (burpsy-react-ui-uzil).
+	AttemptSelfRegister bool
+	// UseInvalidUsernames, when true, tests login with intentionally invalid usernames to
+	// help identify login forms and error responses (burpsy-react-ui-uzil).
+	UseInvalidUsernames bool
 	// OnFetch, when set, is called once for every fetch that reached the shared capture path, at the
 	// moment its exchange exists in the store — while the crawl is still running.
 	//
@@ -536,6 +595,13 @@ type Fetch struct {
 	ExchangeID core.ExchangeID `json:"exchange_id"`
 	// Depth is how many links from a seed this was. A seed is 0.
 	Depth int `json:"depth"`
+	// Fragment is the client-side ROUTE this fetch stood for, when the application routes on its
+	// fragment (burpsy-react-ui-wbqx). Empty for every ordinary fetch.
+	//
+	// Reported because the route is the whole point: `#/orders/7` and `#/orders/8` produce the same
+	// URL, status and often the same body, so without this field a report of a hash-routed crawl
+	// would show N identical rows and an operator could not tell which route each one was.
+	Fragment string `json:"fragment,omitempty"`
 	// Fingerprint is the location fingerprint, empty for a redirect (which is an edge, not a
 	// location) and for a response whose body could not be read.
 	Fingerprint string `json:"fingerprint,omitempty"`
@@ -872,6 +938,15 @@ type frontierItem struct {
 	// the flag exists so the crawl-wide cap can count it and the report can say how many
 	// hidden links the crawl followed.
 	speculative bool
+	// fragment is the client-side ROUTE this item stands for, when the application routes on its
+	// fragment (burpsy-react-ui-wbqx). It is identity ONLY and never goes on the wire: url is
+	// always the fragment-less form, so buildRequest and the sender's authorisation both see a
+	// request that is safe to send, while the frontier, the request fingerprint and the location
+	// map all key on this so `#/orders/7` and `#/orders/8` stay two locations of one GET.
+	//
+	// Empty for every ordinary item, including an in-page anchor (`#top`), which is still
+	// stripped at resolveAgainst as it always was.
+	fragment string
 }
 
 // Crawler runs one crawl. Not safe for concurrent Run calls: the frontier, the seen sets and the
@@ -958,6 +1033,17 @@ type Crawler struct {
 	// actually submitted, and that form is never submitted again once the cap is reached, so the map
 	// grows with the number of DISTINCT forms submitted rather than with the number of submissions.
 	formSubmissions map[string]int
+	// formDestinations maps a FORM SIGNATURE to the set of distinct destinations it has already been
+	// submitted to, for the optimization threshold (burpsy-react-ui-ddln). The SET, not a count, is
+	// what the bound is about: Burp's own name for the setting is the length of the form's input
+	// strategy CHAIN, so submitting the same destination twice — which MaxSubmissionsPerForm already
+	// bounds — must not spend this budget, or the two bounds would double-count one submission and
+	// the threshold would fire sooner than its number says.
+	//
+	// Bounded in use by the threshold itself: a form whose set has reached the bound is never
+	// submitted again, so the total growth is (forms submitted x threshold) rather than unbounded.
+	// The inner sets are small for the same reason.
+	formDestinations map[string]map[string]struct{}
 	// guessHiddenGraphQL is the armed state of the guess, as opposed to guessedGraphQL which is
 	// the set of paths already probed. Two names because one is a switch and one is a ledger.
 	guessHiddenGraphQL bool
@@ -1281,6 +1367,9 @@ func New(cfg Config) (*Crawler, error) {
 	}
 	if c.formSubmissions == nil {
 		c.formSubmissions = map[string]int{}
+	}
+	if c.formDestinations == nil {
+		c.formDestinations = map[string]map[string]struct{}{}
 	}
 
 	// The GraphQL reader, armed only if the operator's configuration asks for it. Here rather than at
@@ -1892,6 +1981,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		URL: item.url.String(), Method: item.method, ExchangeID: ex.ID, Depth: item.depth,
 		FoundAt: item.foundAt, LinkText: item.text,
 		FoundByRender: item.renderedOrigin,
+		// The route, when this item stands for one (burpsy-react-ui-wbqx). URL above stays
+		// fragment-less on purpose: it is the request that actually went out, and the fragment is
+		// reported separately so a reader can see the route without being able to mistake it for
+		// part of the sent request.
+		Fragment: item.fragment,
 	}
 	if ex.Status != nil {
 		fetch.Status = int(*ex.Status)
@@ -1952,7 +2046,7 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// is never consulted, so the static-Headers crawl behaves exactly as before. The robots probe
 	// carries no session and is skipped. See session_gate.go.
 	if c.sessionAware() && !item.robots {
-		template := urlTemplate(item.method, item.url, item.fieldNames)
+		template := urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
 		if verdict := c.detectExpired(template, fetch.Status, body); verdict.yes {
 			// The expired response is real traffic and stays in history as a Fetch, but it is a login
 			// page, not application content: it is not fingerprinted and its links are not followed.
@@ -2779,7 +2873,11 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 	// answered by a number that says no when the answer is yes.
 	c.countPhase(rep, PhaseOfTag(l.tag))
 	c.countEdge(rep, EdgeKindOfTag(l.tag))
-	u, err := resolveAgainst(base, l.raw)
+	// The routing-fragment decision (burpsy-react-ui-wbqx): a hash-routed SPA's location lives in
+	// the fragment, so it is captured here as identity while `u` stays fragment-less and safe to
+	// send. Burp's automatic half is always on — see fragmentIsRouting — and Config.FragmentsRoute
+	// forces it for an application the character test misses.
+	u, fragment, err := resolveAgainstRoute(base, l.raw, c.cfg.FragmentsRoute)
 	if err != nil {
 		c.skips.record(SkipRecord{
 			Reason: SkipMalformedURL, URL: strings.TrimSpace(l.raw), Text: l.text,
@@ -2818,7 +2916,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 		})
 		return
 	}
-	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, tag: l.tag, renderedOrigin: l.foundAtRendered, speculative: l.speculative}, base.String(), lim)
+	c.enqueue(frontierItem{url: u, method: "GET", depth: depth, foundAt: base.String(), text: l.text, tag: l.tag, renderedOrigin: l.foundAtRendered, speculative: l.speculative, fragment: fragment}, base.String(), lim)
 }
 
 // admitForm turns one discovered form into a request, or records why it did not.
@@ -2859,6 +2957,32 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 				FoundAt: base.String(),
 				Detail: fmt.Sprintf("this form has already been submitted %d times, the configured cap "+
 					"(max_submissions_per_form); raise it to explore further", c.formSubmissions[sig]),
+			})
+			return
+		}
+	}
+
+	// The optimization threshold (burpsy-react-ui-ddln), checked on the DESTINATION the submission is
+	// about to reach rather than on a submission count. Burp's own name for the setting is the length
+	// of the form's input-strategy chain at which further strategies are discontinued, so the budget is
+	// spent by reaching a new destination and not by repeating one — a repeat of a destination already
+	// in the set is bounded by MaxSubmissionsPerForm above, and charging it here as well would make the
+	// threshold fire before its number says.
+	//
+	// Checked after the per-form cap and before the shape checks, so a form this threshold has
+	// exhausted is reported as exhausted rather than as unsubmittable. The destination key is computed
+	// from the request the crawler would actually send — the resolved action plus the encoded field
+	// values, GET query or POST body — because two forms with the same signature that submit to
+	// different actions are, for this bound, two different destinations.
+	if threshold := c.cfg.FormSubmissionOptimizationThreshold; threshold > 0 {
+		sig := f.signature(base)
+		if len(c.formDestinations[sig]) >= threshold {
+			c.skips.record(SkipRecord{
+				Reason: SkipFormDestinationExhausted, URL: target, Method: f.method, Text: f.label,
+				FoundAt: base.String(),
+				Detail: fmt.Sprintf("this form has been submitted to %d distinct destinations, the configured "+
+					"optimization threshold (form_submission_optimization_threshold); raise it to explore "+
+					"further", len(c.formDestinations[sig])),
 			})
 			return
 		}
@@ -2951,6 +3075,23 @@ func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Rep
 		if cap := c.limits.MaxSubmissionsPerForm; cap > 0 {
 			c.formSubmissions[f.signature(base)]++
 		}
+		// The destination is recorded on the same success path and for the same reason: a form that
+		// was refused by a later gate was never submitted anywhere, and charging its destination to the
+		// optimization threshold would spend the budget on a request that did not go out.
+		//
+		// Keyed on what actually goes on the wire — the method, the URL the request will reach (query
+		// string included for a GET submission) and the body for a POST — so a form whose field values
+		// change which resource it targets is submitting to a NEW destination, which is exactly the
+		// signal this bound exists to read.
+		if threshold := c.cfg.FormSubmissionOptimizationThreshold; threshold > 0 {
+			sig := f.signature(base)
+			set := c.formDestinations[sig]
+			if set == nil {
+				set = make(map[string]struct{})
+				c.formDestinations[sig] = set
+			}
+			set[item.method+" "+item.url.String()+" "+string(item.body)] = struct{}{}
+		}
 	}
 }
 
@@ -3016,7 +3157,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		})
 		return false
 	}
-	key := requestFingerprint(item.method, item.url, item.body)
+	key := requestFingerprint(item.method, item.url, item.body, item.fragment)
 	if c.queued[key] {
 		c.skips.record(SkipRecord{
 			Reason: SkipAlreadyQueued, URL: item.url.String(), Method: item.method,
@@ -3028,7 +3169,7 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 	// space. Checked after the exact key so that a genuine repeat reports as a repeat, and before the
 	// frontier bound so that an infinite application reports as an infinite application rather than as
 	// a full queue — see SkipTemplateQuota for why that distinction is the whole point.
-	template := urlTemplate(item.method, item.url, item.fieldNames)
+	template := urlTemplate(item.method, item.url, item.fieldNames, item.fragment)
 	if n := c.templates[template]; n >= c.limits.MaxTemplateVisits {
 		lim.record(StopTemplateQuota)
 		lim.TemplateQuotaDropped++
