@@ -71,6 +71,9 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 	// other tool's rows are printed either way — they are real — but exiting 0
 	// would tell a script that both phases ran, and one of them did not.
 	var didNotLook []error
+	// A tool that ran but was cut short reported real rows, which are kept, and
+	// still fails the command for the same reason.
+	var didNotFinish []error
 
 	if sub == "ffuf" || sub == "all" {
 		res := extscan.RunFFUF(runCtx, cfg, ctx.scope, authorised, extscan.FFUFOptions{
@@ -114,15 +117,19 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 			RateLimit:  *rate,
 		})
 		reportOutcome(ctx, "nuclei", res.Outcome, res.Err, res.Command)
-		if res.Outcome != extscan.OutcomeCompleted {
+		switch {
+		case res.Outcome == extscan.OutcomePartial:
+			// Cut short but with real hits (burpsy-react-ui-b2wh): the rows are
+			// printed and written, and the command still fails, because a script
+			// reading exit 0 would take a timed-out scan for a finished one.
+			fmt.Fprintf(ctx.out, "nuclei: WARNING the run did not finish (%s); the hits below are what "+
+				"it reported before that, not a complete scan\n", res.Incomplete)
+			didNotFinish = append(didNotFinish, fmt.Errorf("nuclei: %w", res.Err))
+		case res.Outcome != extscan.OutcomeCompleted:
 			if sub == "nuclei" {
 				return res.Err
 			}
 			didNotLook = append(didNotLook, fmt.Errorf("nuclei: %w", res.Err))
-		}
-		if res.Truncated {
-			fmt.Fprintf(ctx.out, "nuclei: WARNING output hit the capture cap; the hits below are a "+
-				"prefix of what nuclei reported, not all of it\n")
 		}
 		nucleiRows := res.Rows()
 		rows = append(rows, nucleiRows...)
@@ -145,7 +152,7 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 	}
 
 	if *format == "" {
-		return joinDidNotLook(didNotLook)
+		return joinDidNotLook(didNotLook, didNotFinish)
 	}
 	var doc []byte
 	switch *format {
@@ -166,22 +173,27 @@ func cmdExtScan(ctx *cliContext, args []string) error {
 			return werr
 		}
 		fmt.Fprintf(ctx.out, "wrote %s (%d bytes)\n", *out, len(doc))
-		return joinDidNotLook(didNotLook)
+		return joinDidNotLook(didNotLook, didNotFinish)
 	}
 	if _, werr := ctx.out.Write(doc); werr != nil {
 		return werr
 	}
-	return joinDidNotLook(didNotLook)
+	return joinDidNotLook(didNotLook, didNotFinish)
 }
 
-// joinDidNotLook turns the tools that could not look into the command's exit
-// status. The report was still written — whatever did run is real — but the
+// joinDidNotLook turns the tools that could not look, and those that were cut
+// short (burpsy-react-ui-b2wh), into the command's exit status. The report was still written — whatever did run is real — but the
 // command must not exit 0 having skipped half the phase it was asked for.
-func joinDidNotLook(errs []error) error {
-	if len(errs) == 0 {
-		return nil
+func joinDidNotLook(errs, unfinished []error) error {
+	var out []error
+	if len(errs) > 0 {
+		out = append(out, fmt.Errorf("%d of the requested tools did not run: %w", len(errs), errors.Join(errs...)))
 	}
-	return fmt.Errorf("%d of the requested tools did not run: %w", len(errs), errors.Join(errs...))
+	if len(unfinished) > 0 {
+		out = append(out, fmt.Errorf("%d of the requested tools did not finish; their rows are partial: %w",
+			len(unfinished), errors.Join(unfinished...)))
+	}
+	return errors.Join(out...)
 }
 
 // reportOutcome prints what actually happened before any rows are shown. The
