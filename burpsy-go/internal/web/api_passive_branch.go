@@ -116,7 +116,7 @@ func (s *Server) handlePassiveBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req passiveBranchReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

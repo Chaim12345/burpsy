@@ -757,6 +757,11 @@ const (
 	// It is kept distinct from SourceProxy for the same reason Repeater is: history must not claim the
 	// operator's own client sent a request that in fact arrived from a colleague's session or a CI run.
 	SourceImport Source = "import"
+	// SourceSchema is a request generated from an API schema and recorded WITHOUT being sent — Burp's
+	// "Save GraphQL queries to site map" (burpsy-react-ui-7v1e), whose items reach the site map as
+	// unrequested. It has a request and no response, and it must never read as traffic: nothing
+	// went on the wire.
+	SourceSchema Source = "schema"
 )
 
 // Attributed reports whether a producer named this exchange's origin.

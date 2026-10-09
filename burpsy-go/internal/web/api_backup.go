@@ -23,7 +23,6 @@ package web
 // their own files in is entirely likely.
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -200,7 +199,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		// An empty body is a valid request meaning "defaults", so a decode failure is only an error
 		// when there was something to decode.
-		if err := json.NewDecoder(r.Body).Decode(&params); err != nil && err.Error() != "EOF" {
+		if err := requestJSON(w, r, nil).Decode(&params); err != nil && err.Error() != "EOF" {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}

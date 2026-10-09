@@ -1,17 +1,22 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Send, SlidersHorizontal, X } from "lucide-react";
+import { ArrowRightLeft, ChevronDown, ChevronLeft, ChevronRight, Columns3, Combine, Copy, Crosshair, FileOutput, List, Palette, Plus, Repeat2, RotateCcw, Rows3, Search, Send, SlidersHorizontal, StickyNote, X } from "lucide-react";
 import { TAB_COLOURS } from "../ui/highlight-icons";
 import { faithfulRequestBase64, requestTargetPath } from "../lib/message";
 import { cn } from "../lib/cn";
-import { reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
+import { filterTabs, reorderTabWithinGroup, tabColour, tabDropdownGroups, type TabView } from "../lib/repeater-tabs";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
-import { api, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
+import { api, downloadText, formatDuration, json, statusTone, templateRequest , formatBytes } from "../lib/api";
+import { historyExportBody } from "../lib/repeater-history-export";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
-import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useSendRepeaterGroup } from "../lib/data.tools";
+import { useCommandHandler } from "../lib/commands";
+import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useResponseChanges, useSendRepeaterGroup } from "../lib/data.tools";
+import { changeMarksFor, MAX_DIFF_BYTES } from "../lib/response-diff";
+import { isIntrospectionAnswer } from "../lib/graphql-introspection";
+import { mergeRepeaterOptions, parseResponseTimeoutMS, parseStreamingTimeoutMS } from "../lib/send-settings";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
 import { useApp, type RepeaterTab } from "../lib/store";
@@ -28,7 +33,7 @@ import { HttpEditor } from "../ui/editor";
 import { Inspector } from "../ui/inspector";
 import { PageHeader } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Tooltip } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Select, Textarea, Tooltip } from "../ui/primitives";
 import { ContextMenu, DropdownMenu, type MenuGroup } from "../ui/menu";
 import { SimpleTable } from "../ui/table";
 
@@ -71,6 +76,9 @@ function groupModeLabel(mode: RepeaterGroupSendMode): string {
 
 const DEFAULT_TARGET = "https://example.com:443";
 
+/** The last palette tab-search request this page has acted on (qqcn). See the effect that reads it. */
+let consumedTabSearchNonce = 0;
+
 /** The transport is read off the target URL rather than tracked separately. */
 function schemeOf(target: string): "http" | "https" {
   return /^http:\/\//i.test(target.trim()) ? "http" : "https";
@@ -87,6 +95,24 @@ function schemeOf(target: string): "http" | "https" {
 // overrides.
 function sendOptionsFor(tab: RepeaterTab): RepeaterSendOptions | undefined {
   return tab.inheritsGlobal === false ? tab.options : undefined;
+}
+
+/** The tab's note as a send carries it (jva5): absent when blank, so a send with no note records no
+ *  comment rather than an empty one. */
+/** The response the pane shows for an HTTP entry: the unpacked rendering when the send produced one
+ *  (of0z, Burp's default), else the bytes that arrived. */
+function shownResponse(entry: { response: string; response_unpacked?: string }): string {
+  return entry.response_unpacked ?? entry.response;
+}
+
+/** The tab's Override SNI as a send carries it (k011): absent unless set and the target is TLS. */
+function sniFor(tab: RepeaterTab): { sni: string } | Record<string, never> {
+  const sni = tab.sni?.trim() ?? "";
+  return sni !== "" && schemeOf(tab.target) === "https" ? { sni } : {};
+}
+
+function noteFor(tab: RepeaterTab): { note: string } | Record<string, never> {
+  return tab.note && tab.note.trim() !== "" ? { note: tab.note } : {};
 }
 
 export function RepeaterPage(): JSX.Element {
@@ -209,6 +235,42 @@ export function RepeaterPage(): JSX.Element {
   const [groupRenameValue, setGroupRenameValue] = useState("");
   /** Whether the config-override panel (U20) is open for the active tab. */
   const [configOpen, setConfigOpen] = useState(false);
+  /** Whether the Notes panel (jva5) is open. The note itself lives on the tab and persists. */
+  const [notesOpen, setNotesOpen] = useState(false);
+  /**
+   * Burp's "Open tab search" (qqcn): null while closed, the query while open. With the tab cap
+   * raised, finding one of forty named tabs by scrolling the strip is the gap this closes.
+   */
+  const [tabSearch, setTabSearch] = useState<string | null>(null);
+  /** Which match Enter activates; arrow keys move it. */
+  const [searchCursor, setSearchCursor] = useState(0);
+  const tabSearchNonce = useApp((state) => state.repeaterTabSearchNonce);
+  // The palette's "Open tab search" bumps the nonce; a page that is already mounted opens the search
+  // on the bump, and a page mounted BY that navigation opens it on mount. The consumed value lives at
+  // module scope so a later, unrelated visit to Repeater does not reopen a search nobody asked for.
+  useEffect(() => {
+    if (tabSearchNonce > consumedTabSearchNonce) {
+      consumedTabSearchNonce = tabSearchNonce;
+      setTabSearch("");
+      setSearchCursor(0);
+    }
+  }, [tabSearchNonce]);
+  const tabSearchChord = useChord("repeater.tabSearch");
+  useHotkeys(
+    tabSearchChord,
+    (event) => {
+      event.preventDefault();
+      setTabSearch("");
+      setSearchCursor(0);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [tabSearchChord],
+  );
+  const searchMatches = tabSearch === null ? [] : filterTabs(tabs, tabSearch);
+  const openFromSearch = (id: string) => {
+    setActiveRepeaterTab(id);
+    setTabSearch(null);
+  };
 
   const active = useMemo(() => tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null, [tabs, activeId]);
 
@@ -271,6 +333,10 @@ export function RepeaterPage(): JSX.Element {
         // Absent options means "standing behaviour" — the backend validates and applies whatever
         // arrives, so an empty object is never sent when the operator set nothing.
         ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+        ...noteFor(tab),
+        ...sniFor(tab),
+        // Keys the tab's reused HTTP/2 connection when that override is on (adkx).
+        tab_id: tab.id,
       },
       {
         onSuccess: (result) => {
@@ -401,6 +467,8 @@ export function RepeaterPage(): JSX.Element {
           protocol: schemeOf(tab.target),
           ...(tab.fromExchange != null ? { from_exchange: tab.fromExchange } : {}),
           ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+          ...noteFor(tab),
+          ...sniFor(tab),
         })),
       },
       {
@@ -445,6 +513,17 @@ export function RepeaterPage(): JSX.Element {
     { enableOnFormTags: true, enableOnContentEditable: true },
     [sendChord, active],
   );
+  // burpsy's own mod+Enter, kept as a second binding beside Burp's Ctrl+Space (2czi).
+  const sendEnterChord = useChord("repeater.sendEnter");
+  useHotkeys(
+    sendEnterChord,
+    (event) => {
+      event.preventDefault();
+      if (active) active.kind === "ws" ? submitWs(active) : submit(active);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [sendEnterChord, active],
+  );
 
   /**
    * Intruder splices payloads into a *stored* message, so a Repeater draft has to
@@ -467,6 +546,8 @@ export function RepeaterPage(): JSX.Element {
             request: tab.request,
             protocol: schemeOf(tab.target),
             ...(sendOptionsFor(tab) ? { options: sendOptionsFor(tab) } : {}),
+            ...noteFor(tab),
+            ...sniFor(tab),
           }),
         );
         // Same pairing rule as a normal send: the entry this hand-off adds carries the draft it
@@ -509,6 +590,39 @@ export function RepeaterPage(): JSX.Element {
   /** The ws entry's reply frames, or null when it is an HTTP send's. */
   const wsResult = result && "ws" in result ? result.ws : null;
 
+  // Burp's tab and history actions (2czi), registered for the palette and the catalogue chords
+  // (lib/commands.ts). Each passes null when it cannot run — no tab, nothing closed, already at the
+  // first send — so the palette says so and the chord is left to the browser.
+  const tabIndex = active ? tabs.findIndex((tab) => tab.id === active.id) : -1;
+  useCommandHandler("tab.close", active ? () => closeRepeaterTab(active.id) : "No Repeater tab is open");
+  useCommandHandler("tab.reopen", closedTabs.length > 0 ? () => reopenClosedRepeaterTab() : "No closed tab to reopen");
+  useCommandHandler("tab.duplicate", active ? () => duplicateRepeaterTab(active.id) : "No Repeater tab is open");
+  useCommandHandler("tab.next", tabs.length > 1 ? () => setActiveRepeaterTab(tabs[(tabIndex + 1) % tabs.length]!.id) : "Only one Repeater tab is open");
+  useCommandHandler("tab.prev", tabs.length > 1 ? () => setActiveRepeaterTab(tabs[(tabIndex - 1 + tabs.length) % tabs.length]!.id) : "Only one Repeater tab is open");
+  useCommandHandler(
+    "tab.rename",
+    active
+      ? () => {
+          setRenamingTab(active.id);
+          setTabRenameValue(active.name);
+        }
+      : "No Repeater tab is open",
+  );
+  useCommandHandler(
+    "repeater.historyBack",
+    active && viewIndex > 0 ? () => setViewing((c) => ({ ...c, [active.id]: Math.max(0, viewIndex - 1) })) : "Already at this tab's first send",
+  );
+  useCommandHandler(
+    "repeater.historyForward",
+    active && viewIndex < activeHistory.length - 1
+      ? () =>
+          setViewing((c) => {
+            const next = Math.min(activeHistory.length - 1, viewIndex + 1);
+            return { ...c, [active.id]: next === activeHistory.length - 1 ? null : next };
+          })
+      : "Already at this tab's newest send",
+  );
+
   /**
    * The request that produced the entry on screen, or null while the tab is following its newest
    * send — where the request pane is the live, editable draft and must stay that way.
@@ -547,6 +661,59 @@ export function RepeaterPage(): JSX.Element {
    * store has never seen under an id it does not have.
    */
   const sentExchange = useExchange(httpResult?.exchange_id ?? null);
+
+  /**
+   * Change highlighting (b4gt): the response on screen against the previous HTTP send in the same
+   * tab. Only when the pane shows that send's own response — a redirect hop on screen is a different
+   * message, and painting the first response's diff over it would mark the wrong bytes.
+   */
+  const [highlightChanges, setHighlightChanges] = useState(true);
+  const previousHttp = (() => {
+    for (let index = viewIndex - 1; index >= 0; index--) {
+      const entry = activeHistory[index];
+      if (entry && "status" in entry) return entry;
+    }
+    return null;
+  })();
+  const diffTooLarge =
+    previousHttp !== null &&
+    httpResult !== null &&
+    (new TextEncoder().encode(shownResponse(previousHttp)).length > MAX_DIFF_BYTES ||
+      new TextEncoder().encode(shownResponse(httpResult)).length > MAX_DIFF_BYTES);
+  // Compared as shown: an unpacked response is diffed decoded, which is what the pane paints.
+  const changes = useResponseChanges(
+    previousHttp ? { exchange_id: previousHttp.exchange_id, response: shownResponse(previousHttp) } : null,
+    httpResult ? { exchange_id: httpResult.exchange_id, response: shownResponse(httpResult) } : null,
+    highlightChanges && !diffTooLarge && chainSide === "first",
+  );
+  /**
+   * GraphQL > Save GraphQL queries to site map (7v1e): enabled when the response on screen is an
+   * introspection answer; the server reads the schema off that exchange and records one unsent
+   * request per query and mutation.
+   */
+  const introspected = httpResult != null && chainResponse == null && isIntrospectionAnswer(shownResponse(httpResult));
+  const saveGraphQLToSiteMap = {
+    enabled: introspected,
+    run: () => {
+      if (!httpResult) return;
+      void api<{ operations: unknown[]; truncated: boolean; limit: number; endpoint: string; placement: string }>(
+        "/api/graphql/sitemap",
+        json("POST", { exchange_id: httpResult.exchange_id }),
+      )
+        .then((out) => {
+          const count = out.operations.length;
+          const where = out.placement === "body" ? "in the JSON body" : "in the query parameter";
+          if (count === 0) toast.info(`The schema declares no queries or mutations — nothing was added for ${out.endpoint}`);
+          else if (out.truncated) toast.warning(`${count} operations saved to the site map under ${out.endpoint} (${where}); the schema has more than the ${out.limit} limit`);
+          else toast.success(`${count} GraphQL operation${count === 1 ? "" : "s"} saved to the site map under ${out.endpoint} (${where}), not sent`);
+        })
+        .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)));
+    },
+  };
+  const changeMarks = useMemo(
+    () => (changes.data && httpResult ? changeMarksFor(shownResponse(httpResult), changes.data.ops) : null),
+    [changes.data, httpResult],
+  );
   const actions = usePluginExchangeActions();
   const messageMenu = sentExchange.data ? actions.menu(sentExchange.data) : undefined;
 
@@ -613,6 +780,8 @@ export function RepeaterPage(): JSX.Element {
               target: active.target,
               protocol: active.protocol,
               request: draftRequest,
+              // Burp copies the tab's notes across with the message (jva5).
+              ...(active.note ? { note: active.note } : {}),
             });
             setRoute("repeater");
             toast.success(`Copied to a new Repeater tab (from ${active.name})`);
@@ -787,12 +956,8 @@ export function RepeaterPage(): JSX.Element {
    */
   const applyOptions = (patch: Partial<RepeaterSendOptions>) => {
     if (!active) return;
-    const merged: RepeaterSendOptions = { ...(active.options ?? {}), ...patch };
-    for (const key of Object.keys(merged) as (keyof RepeaterSendOptions)[]) {
-      const value = merged[key];
-      if (value === undefined || value === "" || value === false) delete merged[key];
-    }
-    setRepeaterTabOptions(active.id, merged);
+    // The standing-value rules (unpack_responses defaults ON) live in lib/send-settings.ts.
+    setRepeaterTabOptions(active.id, mergeRepeaterOptions(active.options, patch));
     // Touching any option makes the tab an override of the global default (Burp's blue marker).
     if (active.inheritsGlobal !== false) updateRepeaterTab(active.id, { inheritsGlobal: false });
   };
@@ -819,6 +984,13 @@ export function RepeaterPage(): JSX.Element {
         id: "edit",
         actions: [
           { id: "duplicate", label: "Duplicate tab", icon: Copy, onSelect: () => duplicateRepeaterTab(tab.id) },
+          {
+            id: "save-history",
+            label: (history[tab.id]?.length ?? 0) > 0 ? `Save entire history (${history[tab.id]!.length})` : "Save entire history",
+            icon: FileOutput,
+            disabled: (history[tab.id]?.length ?? 0) === 0,
+            onSelect: () => void saveEntireHistory(tab),
+          },
           // A tab's own colour (fkj). Burp colours a GROUP, and its tabs take that colour; the
           // gap this closes is that an UNGROUPED tab had no way to be marked at all, so an operator
           // pointing at the one request to attack next could not colour a whole group to say so.
@@ -900,7 +1072,7 @@ export function RepeaterPage(): JSX.Element {
     // Keyed here rather than at the .map call sites because the key must sit on the element the
     // function returns: a wrapper added without one makes every multi-tab strip render unkeyed
     // children, which React answers with a console error the e2e suite refuses to ship with.
-    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)}>
+    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)} docTopic="repeater">
       <div
         role="tab"
         aria-selected={tab.id === active.id}
@@ -982,6 +1154,9 @@ export function RepeaterPage(): JSX.Element {
               <span title="This tab overrides the global send settings" style={{ color: "var(--accent)", marginRight: 3 }}>●</span>
             ) : null}
             {tab.name}
+            {tab.note && tab.note.trim() !== "" ? (
+              <StickyNote size={10} aria-label="has notes" style={{ display: "inline", marginLeft: 4, verticalAlign: "-1px" }} />
+            ) : null}
           </span>
         )}
         <button
@@ -998,6 +1173,36 @@ export function RepeaterPage(): JSX.Element {
       </div>
     </ContextMenu>
    );
+  };
+
+  /**
+   * Burp's "Save entire history" (pznm): every send this tab made, as one file. The server exports
+   * the stored bytes by message id, so a binary body round-trips exactly; entries it cannot export (a
+   * WebSocket send, a send with no stored message) come back counted under `skipped`, and the toast
+   * says how many — "saved 3 of 5" never reads as "saved all 5".
+   */
+  const saveEntireHistory = async (tab: RepeaterTab) => {
+    const entries = history[tab.id] ?? [];
+    if (entries.length === 0) {
+      toast.info(`${tab.name} has no sends yet — the history is the sends this tab made in this session`);
+      return;
+    }
+    try {
+      const file = await api<{ exported: number; requested: number; skipped: unknown[]; missing_responses: number }>(
+        "/api/repeater/history-export",
+        json("POST", historyExportBody(tab, entries)),
+      );
+      const safe = tab.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "") || "tab";
+      downloadText(`repeater-history-${safe}.json`, JSON.stringify(file, null, 2), "application/json");
+      const partial = file.exported < file.requested || file.missing_responses > 0;
+      const detail = `${file.exported} of ${file.requested} send${file.requested === 1 ? "" : "s"} saved` +
+        (file.skipped.length ? `, ${file.skipped.length} skipped (reasons are in the file)` : "") +
+        (file.missing_responses ? `, ${file.missing_responses} without a response` : "");
+      if (partial) toast.warning(detail);
+      else toast.success(detail);
+    } catch (error) {
+      toast.error(`Could not save the history: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   /** Bulk closes can orphan response history keys; the pruning effect above owns cleanup. */
@@ -1091,12 +1296,76 @@ export function RepeaterPage(): JSX.Element {
                     </Tooltip>
                   ) : null}
                   {httpResult.framing ? <Badge>framing: {httpResult.framing}</Badge> : null}
+                  {/* HTTP/2 connection reuse (adkx): whether this was the first request on its
+                      connection — the fact the setting exists to control. */}
+                  {httpResult.h2_connection ? (
+                    <Tooltip
+                      content={
+                        httpResult.h2_connection === "reused"
+                          ? "This request rode the tab's open HTTP/2 connection — it was not the first request on it."
+                          : httpResult.h2_connection === "new"
+                            ? "This request was the first on a new HTTP/2 connection, which the tab keeps open for its next send."
+                            : "HTTP/2 connection reuse is on, but this send did not ride HTTP/2."
+                      }
+                    >
+                      <Badge tone={httpResult.h2_connection === "reused" ? "accent" : "neutral"}>
+                        {httpResult.h2_connection === "reused" ? "h2: reused connection" : httpResult.h2_connection === "new" ? "h2: new connection" : "h2 reuse: not h2"}
+                      </Badge>
+                    </Tooltip>
+                  ) : null}
+                  {/* Unpack compressed responses (of0z): say which bytes the pane shows. */}
+                  {httpResult.response_unpacked != null ? (
+                    <Tooltip content={`The pane shows the ${httpResult.unpacked_from} body decoded. The stored response is the compressed bytes that arrived; turn off "Unpack compressed responses" in Config to see them.`}>
+                      <Badge tone="info">unpacked {httpResult.unpacked_from}</Badge>
+                    </Tooltip>
+                  ) : httpResult.unpack_error ? (
+                    <Tooltip content={`Shown as it arrived: ${httpResult.unpack_error}`}>
+                      <Badge tone="warn">{httpResult.unpacked_from} not unpacked</Badge>
+                    </Tooltip>
+                  ) : null}
                   {httpResult.response_complete === false ? (
                     <Tooltip content="The response was not read to a boundary burpsy is confident of — see the group send panel. On a shared socket that ambiguity is evidence, not a glitch.">
                       <Badge tone="warn">incomplete read</Badge>
                     </Tooltip>
                   ) : null}
                 </>
+              ) : null}
+              {httpResult && previousHttp ? (
+                <Tooltip
+                  content={
+                    !highlightChanges
+                      ? "Highlight what changed against the previous send's response (Raw view)"
+                      : diffTooLarge
+                        ? `Not compared: a response is over ${formatBytes(MAX_DIFF_BYTES)}. Use Comparer for large bodies.`
+                        : changes.isError
+                          ? `The comparison failed: ${changes.error instanceof Error ? changes.error.message : String(changes.error)}`
+                          : "Changes against the previous send's response, highlighted in the Raw view. Click to turn off."
+                  }
+                >
+                  <Button
+                    variant="outline"
+                    size="small"
+                    aria-pressed={highlightChanges}
+                    onClick={() => setHighlightChanges((on) => !on)}
+                  >
+                    {!highlightChanges
+                      ? "Highlight changes"
+                      : diffTooLarge
+                        ? "Changes: too large to diff"
+                        : changes.isPending
+                          ? "Comparing…"
+                          : changes.isError
+                            ? "Changes: comparison failed"
+                            : changes.data?.identical
+                              ? "Identical to previous"
+                              : `${changeMarks?.marks.length ?? 0} change${(changeMarks?.marks.length ?? 0) === 1 ? "" : "s"} vs previous` +
+                                (changeMarks?.discounted ? ` (+${changeMarks.discounted} ignored)` : "") +
+                                (changes.data?.truncated ? " (diff truncated)" : "") +
+                                // Painted on the Raw view only — Pretty reformats the text, so the
+                                // positions would name the wrong characters there.
+                                ((changeMarks?.marks.length ?? 0) > 0 ? " · Raw view" : "")}
+                  </Button>
+                </Tooltip>
               ) : null}
               {/* Labelled "send" rather than "response" because stepping moves both panes: the
                   request that was sent and the response it got, together. */}
@@ -1133,6 +1402,17 @@ export function RepeaterPage(): JSX.Element {
                 </span>
               ) : null}
               <IconButton
+                label={`Search tabs${tabSearchChord ? ` (${tabSearchChord})` : ""}`}
+                size="small"
+                aria-pressed={tabSearch !== null}
+                onClick={() => {
+                  setTabSearch((current) => (current === null ? "" : null));
+                  setSearchCursor(0);
+                }}
+              >
+                <Search size={13} />
+              </IconButton>
+              <IconButton
                 label={inspector ? "Hide Inspector" : "Show Inspector"}
                 size="small"
                 aria-pressed={inspector}
@@ -1140,6 +1420,12 @@ export function RepeaterPage(): JSX.Element {
               >
                 <Columns3 size={13} />
               </IconButton>
+              <Tooltip content={active.note ? "This tab's notes (they go with every send, into the exchange's comment)" : "Add notes to this tab"}>
+                <Button variant="outline" aria-pressed={notesOpen} onClick={() => setNotesOpen((open) => !open)}>
+                  <StickyNote size={14} />
+                  Notes{active.note && active.note.trim() !== "" ? " •" : ""}
+                </Button>
+              </Tooltip>
               <Tooltip content="Per-send overrides for this tab">
                 <Button variant="outline" aria-pressed={configOpen} onClick={() => setConfigOpen((open) => !open)}>
                   <SlidersHorizontal size={14} />
@@ -1224,6 +1510,65 @@ export function RepeaterPage(): JSX.Element {
           }
         />
 
+        {tabSearch !== null ? (
+          <div className="repeater-tab-search">
+            <Input
+              aria-label="Search Repeater tabs by name or target"
+              role="combobox"
+              // Only while the listbox exists: a dangling aria-controls is an invalid attribute value
+              // to axe, and a miss renders a status line instead of the list.
+              aria-expanded={searchMatches.length > 0}
+              aria-controls={searchMatches.length > 0 ? "repeater-tab-search-results" : undefined}
+              aria-activedescendant={searchMatches[searchCursor] ? `tab-search-${searchMatches[searchCursor]!.id}` : undefined}
+              autoFocus
+              value={tabSearch}
+              placeholder={`Search ${tabs.length} tab${tabs.length === 1 ? "" : "s"} by name or target — every word must match`}
+              onChange={(event) => {
+                setTabSearch(event.target.value);
+                setSearchCursor(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setTabSearch(null);
+                } else if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setSearchCursor((at) => Math.min(at + 1, Math.max(0, searchMatches.length - 1)));
+                } else if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setSearchCursor((at) => Math.max(0, at - 1));
+                } else if (event.key === "Enter") {
+                  event.preventDefault();
+                  const chosen = searchMatches[searchCursor];
+                  if (chosen) openFromSearch(chosen.id);
+                }
+              }}
+            />
+            {searchMatches.length === 0 ? (
+              <p className="field-hint" role="status">
+                No tab's name or target contains every word of “{tabSearch}”.
+              </p>
+            ) : (
+              <ul id="repeater-tab-search-results" role="listbox" aria-label="Matching Repeater tabs" className="repeater-tab-search-results">
+                {searchMatches.map((tab, index) => (
+                  <li
+                    key={tab.id}
+                    id={`tab-search-${tab.id}`}
+                    role="option"
+                    aria-selected={index === searchCursor}
+                    data-active={index === searchCursor ? true : undefined}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => openFromSearch(tab.id)}
+                  >
+                    <span>{tab.name}</span>
+                    <span className="cell-dim">{tab.target}</span>
+                    {tab.id === active.id ? <Badge>open</Badge> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 10 }}>
           <div className="tabs-list" role="tablist" aria-label="Ungrouped Repeater requests">
             {ungrouped.map(renderTabTrigger)}
@@ -1323,6 +1668,23 @@ export function RepeaterPage(): JSX.Element {
               />
             )}
           </Field>
+          {active.kind !== "ws" ? (
+            /* Burp's target-dialog "Override SNI" (k011): the ClientHello's server name, for
+             * reproducing an SNI-based external service interaction with a Collaborator domain.
+             * Only the handshake changes — Host and the address dialled stay the target's. */
+            <Field label="Override SNI" style={{ maxWidth: "var(--w-md)" }}>
+              {(id) => (
+                <Input
+                  id={id}
+                  value={active.sni ?? ""}
+                  disabled={schemeOf(active.target) !== "https"}
+                  placeholder={schemeOf(active.target) === "https" ? "target's name" : "TLS targets only"}
+                  title="The server name the TLS ClientHello carries instead of the target's. Blank sends the target's own. Redirect hops never carry it."
+                  onChange={(event) => updateRepeaterTab(active.id, { sni: event.target.value })}
+                />
+              )}
+            </Field>
+          ) : null}
           <Field label="Tab name" style={{ maxWidth: "var(--w-md)" }}>
             {(id) => <Input id={id} value={active.name} onChange={(event) => updateRepeaterTab(active.id, { name: event.target.value })} />}
           </Field>
@@ -1388,6 +1750,25 @@ export function RepeaterPage(): JSX.Element {
             onDismiss={() => setGroupOutcome(null)}
           />
         ) : null}
+        {notesOpen ? (
+          <Card style={{ marginTop: 10, padding: 12, display: "grid", gap: 6 }}>
+            <Field label={`Notes · ${active.name}`}>
+              {(id) => (
+                <Textarea
+                  id={id}
+                  rows={4}
+                  value={active.note ?? ""}
+                  placeholder="What you found, what to try next. Saved with the tab."
+                  onChange={(event) => updateRepeaterTab(active.id, { note: event.target.value })}
+                />
+              )}
+            </Field>
+            <p className="field-hint">
+              Kept with this tab across reloads, duplicate and reopen. Every send records it as the new exchange's comment,
+              so it travels with the request — Add to Organizer copies it onto the item, and Send to Repeater onto the new tab.
+            </p>
+          </Card>
+        ) : null}
         {configOpen ? <SendOptionsPanel options={active.options} overriding={overriding} onChange={applyOptions} onReset={() => setRepeaterTabOptions(active.id, {})} onRestoreGlobal={restoreGlobalDefault} /> : null}
         {httpResult?.redirects ? (
           <RedirectChain chain={httpResult.redirects} chainSide={chainSide} onViewHop={setChainSide} />
@@ -1428,6 +1809,7 @@ export function RepeaterPage(): JSX.Element {
             filename="repeater-request.txt"
             placeholder="GET / HTTP/1.1"
             menuGroups={[...(messageMenu ?? []), ...(sentExchange.data ? [] : draftSendMenu), ...bodyEncodingMenu]}
+            saveGraphQLToSiteMap={saveGraphQLToSiteMap}
             auditSelection={sentExchange.data && viewedRequest != null ? (span) => void actions.auditSelection(sentExchange.data!, [span]) : undefined}
           />
         )}
@@ -1479,7 +1861,7 @@ export function RepeaterPage(): JSX.Element {
               readOnly
               value={
                     chainResponse ??
-                    httpResult?.response ??
+                    (httpResult ? shownResponse(httpResult) : undefined) ??
                     (send.isPending
                       ? "Waiting for the response…"
                       : send.error instanceof SendCancelled
@@ -1489,7 +1871,15 @@ export function RepeaterPage(): JSX.Element {
               // The reply's exact body when `response` cannot carry it, and the call path it answers, so
               // a gRPC reply decodes — and names its fields — in the Protobuf tab (burpsy-react-ui-3pco).
               // Only for the response itself: a redirect hop on screen is a different message.
-              bodyBase64={chainResponse == null ? httpResult?.response_body_base64 : undefined}
+              bodyBase64={
+                chainResponse != null
+                  ? undefined
+                  : httpResult?.response_unpacked != null
+                    ? httpResult.response_unpacked_body_base64
+                    : httpResult?.response_body_base64
+              }
+              changeMarks={highlightChanges && chainResponse == null ? changeMarks?.marks : undefined}
+              saveGraphQLToSiteMap={saveGraphQLToSiteMap}
               requestPath={requestTargetPath(viewedRequest ?? active.request)}
               filename="repeater-response.txt"
               menuGroups={messageMenu}
@@ -1514,7 +1904,7 @@ export function RepeaterPage(): JSX.Element {
             />
           ) : (
             <Inspector
-              raw={chainResponse ?? httpResult?.response ?? ""}
+              raw={chainResponse ?? (httpResult ? shownResponse(httpResult) : "")}
               label="Inspector · response"
               readOnlyNote="A response that has already arrived cannot be edited — change the request and send it again."
               onSwitch={() => setInspecting("request")}
@@ -1678,6 +2068,34 @@ function SendOptionsPanel({
             </Select>
           )}
         </Field>
+        <Field label="Response timeout (ms)">
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={1}
+              style={{ width: 140 }}
+              value={options?.response_timeout_ms ?? ""}
+              placeholder="standing"
+              title="How long this tab's send waits for its response. Blank uses the Network settings' read timeout."
+              onChange={(event) => onChange({ response_timeout_ms: parseResponseTimeoutMS(event.target.value) })}
+            />
+          )}
+        </Field>
+        <Field label="Streaming response timeout (ms)">
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              style={{ width: 140 }}
+              value={options?.streaming_timeout_ms ?? ""}
+              placeholder="standing"
+              title="How long this tab reads a streaming response (an event stream, a held long-poll) before showing what arrived. 0 is no cutoff; blank uses the Network settings' streaming window."
+              onChange={(event) => onChange({ streaming_timeout_ms: parseStreamingTimeoutMS(event.target.value) })}
+            />
+          )}
+        </Field>
         <Button variant="outline" onClick={onRestoreGlobal} disabled={!overriding} title="Send this tab with the global defaults instead of its own overrides">
           <RotateCcw size={14} />
           Restore global default
@@ -1698,6 +2116,23 @@ function SendOptionsPanel({
           checked={!!options?.update_content_length}
           label="Update Content-Length from body"
           onCheckedChange={(checked) => onChange({ update_content_length: checked })}
+        />
+        {/* On unless turned off (Burp's default). Display only: the stored response is always the
+            bytes that arrived. */}
+        <Checkbox
+          checked={!!options?.h2_connection_reuse}
+          label="HTTP/2 connection reuse"
+          onCheckedChange={(checked) => onChange({ h2_connection_reuse: checked })}
+        />
+        <Checkbox
+          checked={!!options?.enforce_protocol_cross_domain}
+          label="Use selected protocol for cross-domain redirects"
+          onCheckedChange={(checked) => onChange({ enforce_protocol_cross_domain: checked })}
+        />
+        <Checkbox
+          checked={options?.unpack_responses !== false}
+          label="Unpack compressed responses"
+          onCheckedChange={(checked) => onChange({ unpack_responses: checked })}
         />
       </div>
       <p className="field-hint">
@@ -1856,7 +2291,7 @@ function RedirectChain({
           {chain.error}
         </p>
       ) : null}
-      <SimpleTable headers={["From", "Status", "Location", "Followed", "Why not", "Bytes"]}>
+      <SimpleTable headers={["From", "Status", "Location", "Followed", "Protocol", "Why not", "Bytes"]}>
         {chain.hops.map((hop, index) => (
           <tr key={`${hop.from}-${index}`}>
             <td>
@@ -1871,6 +2306,7 @@ function RedirectChain({
             <td>
               <Badge tone={hop.followed ? "good" : "warn"}>{hop.followed ? "sent" : "not sent"}</Badge>
             </td>
+            <td>{hop.protocol ? <code>{hop.protocol}</code> : <span className="cell-dim">—</span>}</td>
             <td>{hop.reason ? hop.reason : <span className="cell-dim">—</span>}</td>
             <td>
               {hop.followed ? (

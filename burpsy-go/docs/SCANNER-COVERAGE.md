@@ -237,3 +237,91 @@ ever wanted again.
 
 None. All 183 catalog issues fall into exactly one bucket above; the partition is exhaustive and
 sums to 183, asserted by `TestDeclinedCatalogDescriptors`.
+
+## Per-issue selection in an imported scan configuration (saq3.1, 2hze, gmdk)
+
+A Burp scan configuration loaded with `-scan-config /path/to/file.json` (`scanner.ApplyBurpConfigFile`)
+selects issues the way Burp 2026.7.1 (build 51467) does — `internal/scanner/issue_selection.go` carries
+the citations:
+
+| Burp key | What burpsy does |
+|---|---|
+| `select_individual_issues` / `scan_only_selected_issues` | Either one puts the run in per-issue mode, where the `scan_type_*` keys are **not consulted** (`Zmzw.java:80-87`). |
+| `selected_issues` without `scan_only_selected_issues` | **Per-issue overrides**, not a whitelist (`Zwnn.java:13-25`): an unlisted type still runs, `enabled: false` removes the type. |
+| `selected_issues` with `scan_only_selected_issues` | A whitelist of the enabled entries; an empty list restricts nothing. |
+| `selected_issues[].detection_methods[]` set false | Keyed per issue type (`Zwx_.java:43-61`). A check whose declared method is disabled is not dispatched; a probe of a disabled method is withheld at the harness and counted in the item's `methods_declined` with the requests withheld. |
+| `selected_issues[].detection_methods[]` set true that burpsy does not implement | Named in `declined_detection_methods` with the reason and repeated on every item whose check of that type runs. **Burp Infiltrator** always lands here. |
+| `skip_server_side_injection_for_parameters` | Parameter names (API) are not probed by Burp's server-side-injection set: SQL injection, second-order SQL injection and XPath always (`Zppj.java:166`); the rest — reflected and stored XSS included — only while `skip_ineffective_checks` is on (`Zfhb.java:81-82`). See `server_side_injection.go`. |
+
+The live sweep's passive pass (`RunPassiveChecks`, run over every admitted exchange before the sweep's
+audit session) reads the same run configuration through the same `enabledChecksUnder` selection: a
+deselected passive type, a disabled method, or `scan_type_passive` false stops it there too
+(saq3.3.2, `TestTheSweepPassivePassDoesNotRaiseAnIssueTypeTheRunConfigurationDeselected`). Before
+that fix the sweep's active half honoured the selection and its passive half, one loop earlier, did
+not. The capture pass (`Capture.ScanExchange`, run for every proxied, crawled, Repeater and API-scan
+exchange) reads it too (saq3.3.3). The shared `PassiveScanner` carries the engagement's run configuration
+from the `ActiveScanner`, so capture honours the following:
+- `scan_type_passive` false skips the passive BChecks;
+- `use_static_analysis` false skips the static DOM pass, and `max_static_time_per_item` bounds it;
+- a deselected type, or a disabled "Passive checks" or "Javascript static analysis" method, drops the
+  finding (`Test_capture_honours_the_run_configuration`).
+
+A finding outside the catalogue cannot be filtered by type, as on the audit side. That covers a corpus
+BCheck's own issue, and the four no-corpus built-in header and cookie rows, whose names are not
+catalogue names.
+
+What each check detects by, in Burp's method vocabulary, is `burpsyDetectionMethods`. What that shows
+is real coverage, not a configuration artefact (saq3.2.1): SQL injection's one check sends three probe
+banks through three method gates — error signatures ("Error messages"), the boolean differential
+("Boolean conditions") and the timing bank ("Time delays", whose PostgreSQL and SQL Server forms are
+additionally gated by "PostgreSQL specific" / "SQL Server specific") — so blind SQLi is detectable,
+and a disabled method withholds exactly its own probes and names the decline. Still not implemented
+for SQL injection: "Burp Collaborator", and the MySQL/Oracle timing banks whose payload text sits
+inside ZKM string decoders this tree does not run; both are declined by name. No other native check
+sends a time-delay probe.
+
+Every shipped configuration that sets `issues_reported` is pinned to behaviour matching its name by
+`TestEveryShippedSelectionConfigurationBehavesAsItsNameSays`, over the 29 files vendored byte-for-byte
+in `internal/scanner/testdata/burp-configs`.
+
+## Per-run project-option overrides (o2p3)
+
+Read from Burp 2026.7.1 (build 51467); `internal/scanner/run_overrides.go` carries the citations.
+
+| Burp key | What burpsy does |
+|---|---|
+| `audit_optimization/follow_redirections` | A boolean (`Zhd_.java:41`), not the four-way project redirect mode (`Zxt4.java`). True makes the **reflected-XSS check** follow a probe's redirect — within the engagement scope, or to the same host and port when no scope is configured (the documented in-scope / out-of-scope rule) — with every hop authorised on its own bytes, paced by the run's resource pool and counted against its request budget, and look for the breakout on the landing page. **Every other check reads the 30x itself**: open redirection and header injection depend on it, and Burp's own per-check "where necessary" predicate was not located. False or unset follows nothing. |
+| `audit_project_option_overrides/connect_timeout`, `normal_timeout` | Whole seconds (`Zbuj.java:19-22`); `-1` is "not overridden" and is honoured as such; `0` never times out. The run gets its **own derived sender** (`sender.DeriveWithTimeouts`) behind the same scope gate: connect bounds the dial and handshake, normal bounds the wait for the response, and a shorter per-probe budget still wins. The engagement sender Repeater, Intruder and every other run share is never changed. Probes sent after the run returns (the deferred stored and out-of-band phases) use the engagement's timeouts. |
+
+Proved through `AuditSession` against vulnapp by
+`TestFollowRedirectionsDecidesWhetherTheReflectedXSSProbeFollowsAVulnappRedirect` (a 302 whose landing
+page reflects input: not requested and no finding when false, requested and found when true, under both
+scope rules) and `TestNormalTimeoutBoundsTheRunsProbesAndLeavesTheEngagementSenderAlone` (a 1.5 s
+endpoint is a counted send failure under `normal_timeout` 1 and runs under no override; the engagement
+sender is the same object with the same settings afterwards and still waits the answer out).
+
+## JavaScript analysis keys (9mti)
+
+Read from Burp 2026.7.1 (build 51467) at `Zxc3.java:27-31`; `internal/scanner/js_analysis.go` carries
+the citations. In burpsy, **static** is the audit's lexical source-to-sink pass over an item's own
+response (`AnalyzeDOMDocument`) and **dynamic** is everything that drives the headless browser: the DOM
+check families and the confirmation of static candidates.
+
+| Burp key | What burpsy does |
+|---|---|
+| `use_static_analysis` | False stops the static pass and the confirmation it seeds; the browser-driven DOM checks still run. |
+| `use_dynamic_analysis` | False takes every browser-driven DOM check out of the run's check set and skips confirmation, so **the run starts no browser**; the static candidates are then reported as tentative findings that say dynamic analysis was off. The crawl's rendered-location pass declines with the reason. |
+| `max_static_time_per_item` | Seconds (Burp's panel labels it so, `Zrde.java:204,230`); 0 is no limit, as the documentation says of zero or blank. When it runs out the pass keeps what it found, marks the analysis incomplete, and the item's `javascript_analysis_skips` names the static pass and the limit. |
+| `max_dynamic_time_per_item` | Seconds; 0 is no limit. One clock per item, started by its first browser use and shared by its DOM checks and the confirmation tier. A DOM check it stops, or never lets start, is counted **Skipped** — not clean, and not a send failure that trips the breaker — and named in `javascript_analysis_skips`. |
+| `max_time_per_item` | Burp's pre-split spelling, which Burp reads into the static limit (`Zxc3.java:30`). No shipped file carries it, so it has no row: a file naming it is told the key did nothing. |
+
+The selection a run carries applies to what this tail reports: a deselected type, or "Javascript static
+analysis" disabled for a type, removes its static candidates; "Javascript dynamic analysis" disabled for
+a type reports its candidates static-only. `scan_type_javascript_analysis` false now stops the tail
+too — before, it removed the DOM checks and left the confirmation tier starting the browser.
+
+Proved through `AuditSession` against vulnapp: `TestAStaticOnlyRunStartsNoBrowserAndReportsTheStaticCandidate`
+(zero `Browser()` calls, a tentative DOM-based finding, and a control run that does call it),
+`TestMaxStaticTimePerItemStopsThePassAndCountsTheSkip`, and
+`TestMaxDynamicTimePerItemIsACountedSkipNotACleanResultOrABreakerTrip` (real Chrome against a page that
+answers after 1.5 s under a 1 s limit; skipped, and says so, where Chrome is absent).

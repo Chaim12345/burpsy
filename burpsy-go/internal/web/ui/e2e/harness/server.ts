@@ -22,6 +22,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createConnection, createServer } from "node:net";
 import {
+ chmodSync,
  existsSync,
  mkdirSync,
  mkdtempSync,
@@ -317,6 +318,13 @@ export async function start(): Promise<Harness> {
  // sweep that removes it would take out the origin's `import` at any later restart.
  const targetScript = join(artifactsDir(), "origin.mjs");
  writeFileSync(targetScript, ORIGIN_SOURCE);
+ // The fake ffuf, executable, allowlisted by the -tools flag the operator-side
+ // policy uses in production. Deterministic on purpose: the content-discovery
+ // spec asserts which levels ran, which is a claim about the session driver,
+ // not about what a live target happens to answer.
+ const ffufScript = join(artifactsDir(), "ffuf-fake.sh");
+ writeFileSync(ffufScript, FAKE_FFUF_SOURCE);
+ chmodSync(ffufScript, 0o755);
  // detached: true puts each child in its OWN process group, and it is load-bearing.
  //
  // Playwright runs globalSetup in a process of its own and tears that process's group down when it
@@ -334,7 +342,7 @@ export async function start(): Promise<Harness> {
  // has to outlive both the run and anything that tidies /tmp.
  const logPath = join(artifactsDir(), "burpsy.log");
  const log = openSync(logPath, "w");
- const burpsy = spawn(bin, ["--proxy", `127.0.0.1:${proxyPort}`, "--web", `127.0.0.1:${webPort}`], {
+ const burpsy = spawn(bin, ["--proxy", `127.0.0.1:${proxyPort}`, "--web", `127.0.0.1:${webPort}`, "-tools", `ffuf=${ffufScript}`], {
   stdio: ["ignore", log, log],
   detached: true,
  });
@@ -437,6 +445,46 @@ export function stop(harness: Harness): void {
  * from another, and pads the body by a per-path amount so response lengths differ — which is what
  * makes "sort by Length actually reorders the rows" a real assertion rather than a tautology.
  */
+/**
+ * A deterministic ffuf stand-in (burpsy-react-ui-dgbi). The console boots with -tools ffuf=<this
+ * script>, so the content-discovery page's tool card reports available and a sweep can be started,
+ * watched and read without the real binary. What it answers, for BASE = the -u argument minus FUZZ:
+ *
+ *   BASE/FUZZ finds the directory /admin (301 to /admin/);
+ *   BASE/admin/FUZZ finds the directory /admin/deep and the file /admin/report.txt;
+ *   BASE/admin/deep/FUZZ finds the file /admin/deep/notes.txt;
+ *   anything else finds nothing.
+ *
+ * The responses use ffuf's own JSON shape, so the run record is exactly what a real sweep would
+ * produce for a site with this shape.
+ */
+const FAKE_FFUF_SOURCE = `#!/usr/bin/env bash
+set -eu
+out="" url="" prev=""
+for a in "$@"; do
+  case "$prev" in
+    -o) out="$a" ;;
+    -u) url="$a" ;;
+  esac
+  prev="$a"
+done
+base="\${url%FUZZ}"
+case "$url" in
+  */admin/deep/FUZZ)
+    printf '{"results":[{"url":"%snotes.txt","input":{"FUZZ":"notes.txt"},"status":200,"length":5,"words":1,"lines":1,"content-type":"text/plain","redirectlocation":"","host":"127.0.0.1"}]}' "$base" > "$out"
+    ;;
+  */admin/FUZZ)
+    printf '{"results":[{"url":"%sdeep","input":{"FUZZ":"deep"},"status":301,"length":10,"words":2,"lines":1,"content-type":"text/html","redirectlocation":"%sdeep/","host":"127.0.0.1"},{"url":"%sreport.txt","input":{"FUZZ":"report.txt"},"status":200,"length":6,"words":1,"lines":1,"content-type":"text/plain","redirectlocation":"","host":"127.0.0.1"}]}' "$base" "$base" "$base" > "$out"
+    ;;
+  */FUZZ)
+    printf '{"results":[{"url":"%sadmin","input":{"FUZZ":"admin"},"status":301,"length":10,"words":2,"lines":1,"content-type":"text/html","redirectlocation":"%sadmin/","host":"127.0.0.1"}]}' "$base" "$base" > "$out"
+    ;;
+  *)
+    printf '{"results":[]}' > "$out"
+    ;;
+esac
+`;
+
 const ORIGIN_SOURCE = `import http from "node:http";
 const port = Number(process.argv[2]);
 let counter = 0;

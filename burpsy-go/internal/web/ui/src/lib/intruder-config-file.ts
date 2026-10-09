@@ -112,7 +112,7 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   mode: oneOf(ATTACK_MODE_VALUES),
   allPoints: bool,
   points: arrayOf(
-    shape({ index: int, kind: str, label: str, offset: int, len: int, current: str }),
+    shape({ index: int, kind: str, label: str, offset: int, len: int, current: str, placement: oneOf(["replace", "append"]) }),
   ),
   selected: arrayOf(int),
   payloadTexts: arrayOf(str),
@@ -150,6 +150,22 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   grepMatchList: arrayOf(str),
   grepMatchCaseSensitive: bool,
   grepMatchExcludeHeaders: bool,
+  // Grep - Payloads (7qc3).
+  grepPayloadsEnabled: bool,
+  grepPayloadsCaseSensitive: bool,
+  grepPayloadsExcludeHeaders: bool,
+  grepPayloadsMatchPreEncoded: bool,
+  // The results capture filter (ip2b).
+  captureFilterEnabled: bool,
+  captureDiscardNoResponse: bool,
+  captureTerm: str,
+  captureRegex: bool,
+  captureCaseSensitive: bool,
+  captureNegate: bool,
+  captureStatuses: arrayOf(oneOf(["2xx", "3xx", "4xx", "5xx"])),
+  // Store requests / Store responses (nqww).
+  storeRequests: bool,
+  storeResponses: bool,
   // The resource pool's delay variation (burpsy-react-ui-nn0n). Held as text by the page, so saved
   // as text: "" is "not set", which is not the same attack as an explicit 0.
   delayJitterPct: str,
@@ -162,6 +178,16 @@ const CHECKS: Record<keyof IntruderConfig, Check> = {
   // third state a saved configuration could be in.
   setConnectionClose: bool,
   storePayloads: bool,
+  // Burp's per-request response timeout (mmca). Text, like retries: "" is "the standing read
+  // timeout", which is not the same attack as any number.
+  responseTimeoutMS: str,
+  // HTTP/1 connection reuse and the HTTP version override (xhqr).
+  http1ConnectionReuse: bool,
+  httpVersion: oneOf(["", "http1", "http2"]),
+  // Update Host header to match target (ety8).
+  updateHostHeader: bool,
+  // Automatic payload placement (1krs): the saved points were measured under it, so it is saved too.
+  payloadPlacement: oneOf(["replace", "append"]),
   // Burp's auto-pause (2cvk). The block is saved whole, enabled flag first, because a saved
   // configuration that dropped it would resume as a different attack that looks like the saved
   // one — the exact failure this file exists to prevent, and the one fmxv's settings had.

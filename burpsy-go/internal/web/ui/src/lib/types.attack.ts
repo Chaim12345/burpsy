@@ -239,6 +239,89 @@ export interface AuditConfigView {
  consecutive_unit_failures_to_fail_item: number;
  pause_session_after_failed_items: number;
  pause_session_at_failed_item_percentage: number;
+ /* The scan-type switches. Null inherits the base switch set; true/false is the overlay's answer. */
+ passive_checks: boolean | null;
+ light_active_checks: boolean | null;
+ medium_active_checks: boolean | null;
+ intrusive_active_checks: boolean | null;
+ javascript_analysis: boolean | null;
+ store_queue_items: boolean | null;
+ insertion_kinds: string[] | null;
+ max_insertion_points_per_request: number | null;
+ nested_insertion_points: boolean | null;
+ auto_backoff_ms: number | null;
+ /**
+  * Burp's two parameter skip lists, by parameter NAME (matched case-insensitively, at any
+  * location). The skip-all list reads null when empty and the server-side one reads [] — treat both
+  * as empty. Burp's own value is a list of match rules ({parameter, item, match_type, expression});
+  * this engine has no matcher for those, which is why the console edits names only.
+  */
+ skip_all_tests_for_parameters: string[] | null;
+ skip_server_side_injection_for_parameters: string[] | null;
+ /** The deny half of the per-issue selection (saq3.1, 2hze): always arrays, [] when empty. */
+ disabled_issue_types: number[];
+ disabled_detection_methods: IssueDetectionMethod[];
+ /** Derived, never written: what the configuration's selection named that this engine did not act on. */
+ declined_detection_methods: MethodDecline[];
+ light_audit_kinds_excluded?: string[];
+ /** The allow list: catalogue type indexes a run is restricted to. Null or [] is NO restriction. */
+ issue_types: number[] | null;
+ number_of_follow_up_passes: number | null;
+ per_host_throttle_ms: number | null;
+ per_host_throttle_random: boolean;
+ per_host_max_in_flight: number | null;
+ /* The per-run project-option overrides (o2p3): null is "not overridden". Timeouts in seconds. */
+ follow_redirections: boolean | null;
+ connect_timeout_s: number | null;
+ normal_timeout_s: number | null;
+ /* The javascript_analysis keys (9mti): null is unset — both techniques on, no per-item limit. */
+ javascript_static_analysis: boolean | null;
+ javascript_dynamic_analysis: boolean | null;
+ max_static_time_per_item_s: number | null;
+ max_dynamic_time_per_item_s: number | null;
+}
+
+/** One detection method of one issue type. Burp resolves a method name inside its type. */
+export interface IssueDetectionMethod {
+ type_index: number;
+ method: string;
+}
+
+/** A selection entry the engine did not act on, and why. `method` is "" for a whole issue type. */
+export interface MethodDecline {
+ type_index: number;
+ issue: string;
+ method: string;
+ reason: string;
+ probes_withheld: number;
+}
+
+/**
+ * The fields of a saved configuration the console writes through the library's `settings` block.
+ * Every key is optional and an absent key leaves the saved value alone; [] is an explicit clear.
+ */
+export interface AuditConfigSettings {
+ issue_types?: number[];
+ disabled_issue_types?: number[];
+ disabled_detection_methods?: IssueDetectionMethod[];
+ skip_all_tests_for_parameters?: string[];
+ skip_server_side_injection_for_parameters?: string[];
+}
+
+/** One row of GET /api/scanner/issue-types: the catalogue the selection is chosen from. */
+export interface IssueTypeRow {
+ type_index: number;
+ name: string;
+ typical_severity: string;
+ /** Burp's methods for the type; [] when Burp selects it by type alone. */
+ detection_methods: string[];
+ /** The subset burpsy runs. A method outside it can be switched off and never runs here when on. */
+ implemented_methods: string[];
+}
+
+export interface IssueTypeCatalogue {
+ issue_types: IssueTypeRow[];
+ count: number;
 }
 
 /** One key a shipped Burp configuration can carry. `set` false is not `value` 0: unset inherits the
@@ -340,6 +423,9 @@ export interface CorpusCheckView {
   severity?: string;
   author?: string;
   description?: string;
+  /** "console" for a check imported or written in the console (kbu1), "file" for one from --bchecks. */
+  origin?: "console" | "file";
+  file?: string;
 }
 
 export interface CorpusChecks {
@@ -448,4 +534,30 @@ export interface TriageSettingsView {
  model: string;
  api_key?: string;
  configured: boolean;
+}
+
+/** One skill in GET /api/skills (burpsy-react-ui-ulsy): a packaged prompt technique from the
+ * operator's -skills directory, the tools it calls, and whether this project has it on. */
+export interface SkillView {
+ name: string;
+ description: string;
+ tools: string[];
+ arguments: { name: string; description?: string; required?: boolean }[];
+ file: string;
+ available: boolean;
+ unavailable_reason?: string;
+ disabled: boolean;
+}
+
+/** GET /api/skills and the answer of PUT /api/skills/disabled. `refused` is every manifest that
+ * did not load, with why; `persisted` is false when no project database holds the disabled list. */
+export interface SkillsView {
+ configured: boolean;
+ dir?: string;
+ hint?: string;
+ skills: SkillView[];
+ refused: { file: string; error: string }[];
+ disabled: string[];
+ persisted: boolean;
+ disabled_error?: string;
 }

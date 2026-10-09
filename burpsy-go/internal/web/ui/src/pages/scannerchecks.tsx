@@ -1,7 +1,14 @@
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { useCorpusChecks, useSetCorpusCheckEnabled } from "../lib/data.attack";
+import { downloadText } from "../lib/api";
+import { confirmDialog } from "../lib/dialogs";
+import { CHECK_TEMPLATES, fetchCheckSource, useDeleteCheck, useReloadChecks } from "../lib/data.customchecks";
+import { CustomCheckEditor, type EditorTarget } from "../ui/custom-check-editor";
+import { DropdownMenu } from "../ui/menu";
 import type { CorpusCheckView } from "../lib/types.attack";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Card, Empty, ErrorNotice, Switch } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, Switch } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /**
@@ -31,7 +38,19 @@ function bucketOf(row: CorpusCheckView): { label: string; tone: "info" | "neutra
  return { label: "active", tone: "info" };
 }
 
-function CheckRow({ row, onToggle }: { row: CorpusCheckView; onToggle: (next: boolean) => void }): JSX.Element {
+function CheckRow({
+ row,
+ onToggle,
+ onOpen,
+ onExport,
+ onDelete,
+}: {
+ row: CorpusCheckView;
+ onToggle: (next: boolean) => void;
+ onOpen: () => void;
+ onExport: () => void;
+ onDelete: () => void;
+}): JSX.Element {
  const bucket = bucketOf(row);
  return (
   <tr key={row.name}>
@@ -48,12 +67,28 @@ function CheckRow({ row, onToggle }: { row: CorpusCheckView; onToggle: (next: bo
    </td>
    <td className="cell-num">{(row.run_count ?? 0).toLocaleString()}</td>
    <td>{row.severity || "—"}</td>
+   <td>{row.origin === "console" ? <Badge tone="info">console</Badge> : <span title={row.file}>{row.file ?? "file"}</span>}</td>
    <td>
     <Switch
      checked={!row.disabled}
      label={`${row.disabled ? "Enable" : "Disable"} ${row.name}`}
      onCheckedChange={(next) => onToggle(next)}
     />
+   </td>
+   <td>
+    <div className="toolbar" style={{ gap: 4 }}>
+     <Button variant="outline" size="small" onClick={onOpen} aria-label={`${row.origin === "console" ? "Edit" : "View"} ${row.name}`}>
+      {row.origin === "console" ? "Edit" : "View"}
+     </Button>
+     <Button variant="outline" size="small" onClick={onExport} aria-label={`Export ${row.name}`}>
+      Export
+     </Button>
+     {row.origin === "console" ? (
+      <Button variant="outline" size="small" onClick={onDelete} aria-label={`Delete ${row.name}`}>
+       Delete
+      </Button>
+     ) : null}
+    </div>
    </td>
   </tr>
  );
@@ -67,6 +102,84 @@ export function ScannerChecksPage(): JSX.Element {
  const toggle = (row: CorpusCheckView, next: boolean) => {
   setEnabled.mutate({ name: row.name, enabled: next });
  };
+ // Authoring (kbu1): the editor, Import, Export, Delete and Reload.
+ const [editor, setEditor] = useState<EditorTarget | null>(null);
+ const fileInput = useRef<HTMLInputElement>(null);
+ const del = useDeleteCheck();
+ const reload = useReloadChecks();
+ const failed = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error));
+ const open = (row: CorpusCheckView) =>
+  void fetchCheckSource(row.name).then(
+   (src) =>
+    setEditor({
+     source: src.source,
+     editing: src.origin === "console" ? src.name : null,
+     readOnly: src.origin === "file",
+     title: src.origin === "console" ? `Edit custom scan check — ${src.name}` : `View custom scan check — ${src.file ?? src.name}`,
+    }),
+   failed,
+  );
+ const exportRow = (row: CorpusCheckView) =>
+  void fetchCheckSource(row.name).then((src) => {
+   const file = (src.file ?? `${src.name.replace(/[^A-Za-z0-9._-]+/g, "_")}.bcheck`).replace(/\.bcheck$/i, "") + ".bcheck";
+   downloadText(file, src.source);
+  }, failed);
+ const deleteRow = async (row: CorpusCheckView) => {
+  const ok = await confirmDialog({
+   title: `Delete the custom scan check "${row.name}"?`,
+   description: "It is removed from the corpus and the project.",
+   confirmLabel: "Delete",
+   danger: true,
+  });
+  if (!ok) return;
+  del.mutate(row.name, { onSuccess: () => toast.success(`Deleted "${row.name}"`), onError: failed });
+ };
+ const onReload = () =>
+  reload.mutate(undefined, {
+   onSuccess: (out) => {
+    toast.success(`Reloaded: ${out.summary}`);
+    if (out.shadowed.length) toast.warning(`A file now provides ${out.shadowed.join(", ")}; the console version was dropped`);
+    if (out.errors.length) toast.error(`${out.errors.length} file(s) did not parse: ${out.errors.map((e) => e.file).join(", ")}`);
+   },
+   onError: failed,
+  });
+ const onImportFile = (file: File) =>
+  void file.text().then((text) => setEditor({ source: text, editing: null, title: `Import custom scan check — ${file.name}` }), failed);
+ const toolbar = (
+  <div className="toolbar" style={{ gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+   <DropdownMenu
+    groups={[
+     {
+      id: "templates",
+      actions: CHECK_TEMPLATES.map((t) => ({
+       id: t.id,
+       label: t.label,
+       onSelect: () => setEditor({ source: t.source, editing: null, title: `New custom scan check — ${t.label}` }),
+      })),
+     },
+    ]}
+    trigger={<Button>New check</Button>}
+   />
+   <Button variant="outline" onClick={() => fileInput.current?.click()}>
+    Import .bcheck…
+   </Button>
+   <input
+    ref={fileInput}
+    type="file"
+    accept=".bcheck,text/plain"
+    hidden
+    aria-label="Import a BCheck file"
+    onChange={(event) => {
+     const file = event.target.files?.[0];
+     if (file) onImportFile(file);
+     event.target.value = "";
+    }}
+   />
+   <Button variant="outline" onClick={onReload} disabled={reload.isPending}>
+    {reload.isPending ? "Reloading…" : "Reload --bchecks directory"}
+   </Button>
+  </div>
+ );
 
  return (
   <div className="page">
@@ -78,10 +191,13 @@ export function ScannerChecksPage(): JSX.Element {
    {error ? <ErrorNotice error={error} /> : null}
    {!data && isFetching ? <LoadingPanel /> : null}
 
+   {toolbar}
+   <CustomCheckEditor target={editor} onClose={() => setEditor(null)} />
+
    {data && !data.enabled ? (
     <div className="notice notice-warn">
-     No BCheck corpus is loaded. Start burpsy with <code>--bchecks DIR</code> to load one; the
-     scanner then audits with the built-in checks alone.
+     No BCheck corpus is loaded. Write or import a check here, or start burpsy with <code>--bchecks DIR</code>;
+     until then the scanner audits with the built-in checks alone.
     </div>
    ) : null}
 
@@ -94,9 +210,16 @@ export function ScannerChecksPage(): JSX.Element {
      {(data.checks ?? []).length === 0 ? (
       <Empty title="No checks" detail="The loader classified no checks; see the server log for parse errors." />
      ) : (
-      <SimpleTable headers={["Check", "Bucket", "Status", "Run count", "Severity", "Enabled"]}>
+      <SimpleTable headers={["Check", "Bucket", "Status", "Run count", "Severity", "Source", "Enabled", "Actions"]}>
        {(data.checks ?? []).map((row: CorpusCheckView) => (
-        <CheckRow key={row.name} row={row} onToggle={(next) => toggle(row, next)} />
+        <CheckRow
+         key={`${row.name}-${row.passive ? "p" : "a"}`}
+         row={row}
+         onToggle={(next) => toggle(row, next)}
+         onOpen={() => open(row)}
+         onExport={() => exportRow(row)}
+         onDelete={() => deleteRow(row)}
+        />
        ))}
       </SimpleTable>
      )}

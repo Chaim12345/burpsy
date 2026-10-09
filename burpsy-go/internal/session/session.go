@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -320,8 +321,17 @@ type Extraction struct {
 	// Added after Pattern existed, so an extraction saved before this field did loads with it empty and
 	// goes on being a regex extraction.
 	JSONPath string `json:"json_path,omitempty"`
-	re       *regexp.Regexp
-	path     jsonPath
+	// Prefix, Suffix and URLEncoded are Burp's "Define Custom Parameter" fields for a macro item's
+	// custom parameter (burpsy-react-ui-355h): "Parameter value prefix (optional)", "Parameter
+	// value suffix (optional)" and "Extracted value is URL-encoded" (url_encoded). The value a later
+	// step receives is prefix + extracted + suffix. URLEncoded is a pointer so a rule saved before it
+	// existed keeps substituting the value literally: true says the value is already URL-encoded
+	// (literal, as before); false says it is raw, so it is percent-encoded where it is substituted.
+	Prefix     string `json:"prefix,omitempty"`
+	Suffix     string `json:"suffix,omitempty"`
+	URLEncoded *bool  `json:"url_encoded,omitempty"`
+	re         *regexp.Regexp
+	path       jsonPath
 }
 
 func NewExtraction(name, from, pattern string, group int) (*Extraction, error) {
@@ -505,6 +515,19 @@ func (e *Extraction) Run(hdrs map[string]string, body []byte) string {
 
 // RunResult runs the extraction and says exactly what happened.
 func (e *Extraction) RunResult(hdrs map[string]string, body []byte) ExtractResult {
+	out := e.runRaw(hdrs, body)
+	if e != nil && out.Outcome.Resolved() && out.Value != "" {
+		value := e.Prefix + out.Value + e.Suffix
+		if e.URLEncoded != nil && !*e.URLEncoded {
+			value = url.QueryEscape(value)
+		}
+		out.Value = value
+	}
+	return out
+}
+
+// runRaw is RunResult before the custom-parameter prefix, suffix and encoding are applied.
+func (e *Extraction) runRaw(hdrs map[string]string, body []byte) ExtractResult {
 	if e == nil {
 		return ExtractResult{Outcome: ExtractInert, Detail: "there is no extraction to run"}
 	}

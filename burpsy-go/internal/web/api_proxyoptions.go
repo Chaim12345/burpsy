@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -49,13 +48,14 @@ func (s *Server) handleProxyOptions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.viewProxyOptions())
 
 	case http.MethodPut:
-		if s.proxyOptions == nil {
-			http.Error(w, "No proxy option set is attached to this server, so there are no response modification rules to manage", http.StatusServiceUnavailable)
+		// Decoded before the dependency check so the schema sweep reaches it (burpsy-react-ui-3zw0).
+		var req map[string]bool
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+			http.Error(w, "Body must be a JSON object of option keys to booleans", http.StatusBadRequest)
 			return
 		}
-		var req map[string]bool
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Body must be a JSON object of option keys to booleans", http.StatusBadRequest)
+		if s.proxyOptions == nil {
+			http.Error(w, "No proxy option set is attached to this server, so there are no response modification rules to manage", http.StatusServiceUnavailable)
 			return
 		}
 		if len(req) == 0 {

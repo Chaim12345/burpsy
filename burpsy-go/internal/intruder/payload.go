@@ -108,6 +108,10 @@ type PayloadSet struct {
 	Kind string `json:"kind"`
 	// Items is what the attack will actually use.
 	Items []string `json:"-"`
+	// Unencoded is Items as they were before "URL-encode these characters" rewrote them
+	// (URLEncodeSet), parallel to Items, for Grep - Payloads' "Match against pre-URL-encoded
+	// payloads" (7qc3). Nil when the encoding changed nothing — the common case keeps no second copy.
+	Unencoded []string `json:"-"`
 	// Count is the number of items actually produced.
 	Count int `json:"count"`
 	// Total is payloads the source describes with no bound applied, saturating at MaxUint64.

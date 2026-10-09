@@ -462,7 +462,7 @@ func probeCORSOrigin(ctx context.Context, s *ActiveScanner, exchange *core.Excha
 	if meter != nil {
 		meter.attempt()
 	}
-	gate := s.probeGate(exchange)
+	gate := s.probeGate(ctx, exchange)
 	resp, err := gate.SendRequest(ctx, &sender.Request{
 		Method:  "GET",
 		Host:    exchange.Host,

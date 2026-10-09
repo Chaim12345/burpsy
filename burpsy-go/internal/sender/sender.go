@@ -69,6 +69,10 @@ type Sender struct {
 	// with it: an operator who configured a proxy must not have their traffic go out direct because
 	// the configuration was unusable. See NewSender.
 	upstreamErr error
+	// strictBounds marks a sender derived for one scan run (DeriveWithTimeouts). Its own bounds are
+	// the run's configured timeouts, so a context deadline may only tighten them: see deadlineFor.
+	// False on every sender NewSender builds, where the context's deadline has always won outright.
+	strictBounds bool
 }
 
 // SenderConfig holds configuration for the sender.
@@ -401,6 +405,15 @@ func (s *Sender) userAgent() string {
 	return s.config.UserAgent
 }
 
+// UserAgent is the User-Agent this sender puts on a request that carries none — what a BCheck's
+// reserved {user_agent} names (bcheck u411).
+func (s *Sender) UserAgent() string {
+	if s == nil {
+		return ""
+	}
+	return s.userAgent()
+}
+
 // resolveUpstream turns the two proxy fields into the one policy every dial follows.
 //
 // Both set is refused rather than resolved by precedence: ProxyURL and Upstream are two answers to
@@ -533,6 +546,9 @@ func (s *Sender) dialTLS(ctx context.Context, host string, port uint16, offer []
 		Timeout:            connect,
 		Resolver:           settings.dialer().Resolver,
 		ClientCerts:        s.config.ClientCerts,
+		// Repeater's Override SNI (k011), when this send carries one. Every raw TLS path dials here,
+		// so the override reaches h2 and HTTP/1 sends alike.
+		SNI: sniOverride(ctx),
 	}
 	// The carrier is on the path whether or not an upstream policy is configured. Gating it on
 	// `s.upstream != nil && !s.upstream.Empty()` is the bug the live pass caught: with no HTTP proxy
@@ -929,21 +945,58 @@ func (s *Sender) SendRawOutcome(
 		return resp, out, err
 	}
 
+	// HTTP/2 connection reuse (adkx): a carriable request rides the tab's open h2 session when there
+	// is one. Keyed by the caller's key, the authority and the SNI override, so a session opened under
+	// one ClientHello is never handed to a send asking for another.
+	opts, _ := SendOptionsFrom(ctx)
+	sessionKey := ""
+	if opts.H2Sessions != nil && plan.wantH2 {
+		sessionKey = opts.H2SessionKey + "\x00" + formatAuthority(host, port, true) + "\x00" + opts.SNI
+		if sess := opts.H2Sessions.take(sessionKey); sess != nil {
+			opts.H2Sessions.reused.Add(1)
+			resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
+			out := s.finish(host, port, useTLS, alpn.H2, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
+			out.ConnectionReused = true
+			return resp, out, err
+		}
+	}
+
 	conn, negotiated, err := s.dialTLS(ctx, host, port, alpn.EgressOffer(plan.wantH2))
 	if err != nil {
 		return nil, SendOutcome{}, fmt.Errorf("connection failed: %w", err)
 	}
-	defer conn.Close()
+	keep := false
+	defer func() {
+		if !keep {
+			conn.Close()
+		}
+	}()
 	// See cancel.go: without this, cancelling the context leaves the read blocked until the
 	// configured timeout, whatever the caller asked for.
 	defer watchCancel(ctx, conn)()
-	if plan.wantH2 {
-		// Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
+	if plan.wantH2 && sniOverride(ctx) == "" {
+		// Not learnt under an SNI override (k011): a server can negotiate differently for the probe
+		// name than for its own, and caching that answer would misdescribe the target to every later
+		// send. Learnt only when h2 was actually offered. A handshake that offered http/1.1 alone and got
 		// http/1.1 back is no evidence at all about whether the target speaks h2, and recording it as
 		// ProtocolSupportHTTP11 would turn our own choice into a claim about the target.
 		s.protocols.learn(host, port, useTLS, negotiated)
 	}
 
+	if plan.wantH2 && negotiated == alpn.H2 && sessionKey != "" {
+		// A fresh session for the pool: this send is the first request on it, and the connection
+		// stays open for the next send with the same key.
+		cc, cerr := opts.H2Sessions.newClientConn(conn)
+		if cerr != nil {
+			return nil, SendOutcome{}, fmt.Errorf("h2 client conn: %w", cerr)
+		}
+		opts.H2Sessions.opened.Add(1)
+		keep = true
+		sess := &h2Session{cc: cc, conn: conn, ip: remoteIP(conn)}
+		resp, err := s.roundTripSession(ctx, opts.H2Sessions, sessionKey, sess, host, plan.http2)
+		out := s.finish(host, port, useTLS, negotiated, nil, plan.rewrites, plan.http2.render(), sess.ip, err)
+		return resp, out, err
+	}
 	if plan.wantH2 && negotiated == alpn.H2 {
 		s.setDeadline(ctx, conn, host)
 		resp, err := sendOverH2(ctx, conn, plan.http2)
@@ -970,6 +1023,25 @@ func (s *Sender) SendRawOutcome(
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
 	return resp, out, err
+}
+
+// roundTripSession runs one request on a pooled h2 session and returns the session to the pool when
+// the exchange completed and the connection can take another request; on failure the session is
+// closed, never retried — the request may already have reached the server.
+func (s *Sender) roundTripSession(
+	ctx context.Context, pool *H2Sessions, key string, sess *h2Session, host string, req h2Request,
+) ([]byte, error) {
+	s.setDeadline(ctx, sess.conn, host)
+	resp, err := h2RoundTrip(ctx, sess.cc, sess.conn, req)
+	// A pooled connection must not carry this send's deadline into its idle life: x/net/http2's read
+	// loop reads the socket continuously, and an expired deadline would kill the session between sends.
+	_ = sess.conn.SetDeadline(time.Time{})
+	if err != nil || ctx.Err() != nil {
+		sess.cc.Close()
+		return resp, err
+	}
+	pool.put(key, sess)
+	return resp, nil
 }
 
 // finish builds one send's outcome, counts it when the exchange actually completed, and returns it stamped
@@ -1138,11 +1210,17 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 	}
 	// Read exactly one *final* response; keep-alive connections never EOF, and an interim 1xx is not
 	// the response — see read.go.
+	promote := eventStreamPromoter(ctx, conn, settings)
+	if window, ok := streamingOverride(ctx); ok {
+		// The tab's own streaming window (of0z) replaces the network setting's promotion rule and
+		// window for this send.
+		promote = overridePromoter(ctx, conn, window)
+	}
 	response, err := readResponse(
 		bufio.NewReader(conn),
 		settings.Continue.Understand100,
 		settings.Streaming.isStreaming(host),
-		eventStreamPromoter(ctx, conn, settings),
+		promote,
 	)
 	if err != nil {
 		// explainCancellation, because an unblocked read reports a deadline error: reporting a
@@ -1163,13 +1241,19 @@ func (s *Sender) writeHTTP1(ctx context.Context, conn net.Conn, host string, raw
 // not express that, because a zero SenderConfig.Timeout set a deadline in the past and failed every
 // read instantly.
 func (s *Sender) setDeadline(ctx context.Context, conn net.Conn, host string) {
-	if deadline, ok := ctx.Deadline(); ok {
+	// A per-send streaming window (of0z) bounds a declared streaming host's read for this send.
+	if window, ok := streamingOverride(ctx); ok && s.Network().Streaming.isStreaming(host) {
+		conn.SetDeadline(streamingDeadline(ctx, window))
+		return
+	}
+	// A per-send response timeout (sendopts.go) replaces the standing read bound for this send only,
+	// clamped to the context's deadline when that is earlier.
+	if deadline, ok := overrideDeadline(ctx); ok {
 		conn.SetDeadline(deadline)
 		return
 	}
-	if bound := s.Network().readTimeout(host); bound > 0 {
-		conn.SetDeadline(time.Now().Add(bound))
-	}
+	deadline, ok := ctx.Deadline()
+	s.applyDeadline(conn, deadline, ok, host)
 }
 
 // WithTimeout sets the total timeout for the sender, rebuilding the transport so the change reaches

@@ -10,14 +10,17 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, Copy, GripVertical } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, Copy, EyeOff, GripVertical, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useApp } from "../lib/store";
+import { canHideColumn, reconcileVisibility, visibilityStorageKey } from "../lib/table-columns";
+import { clickAction, contextKeepsSelection, reduceSelection, sameIds, type SelectionAction, type SelectionState } from "../lib/table-selection";
 import { ColumnVisibilityMenu } from "./column-visibility-menu";
 import { ContextMenu, type MenuGroup } from "./menu";
+import type { DocTopic } from "../lib/docs";
 import { Spinner } from "./primitives";
 
 // Re-exported so a page wiring `columnVisibility`/`onColumnVisibilityChange` does
@@ -158,6 +161,40 @@ function useColumnOrder(defaultOrder: string[]): [ColumnOrderState, (updater: Co
   return [order, setOrder];
 }
 
+/**
+ * Uncontrolled column visibility, persisted per table shape (bae7) — the same fingerprint, and the
+ * same reasoning, as useColumnOrder. A page that owns the state (History, Logger) passes it in and
+ * this hook is bypassed; every other table now remembers what the operator hid, as Burp does.
+ */
+function usePersistedVisibility(ids: string[]): [VisibilityState, (next: VisibilityState) => void] {
+  const storageKey = visibilityStorageKey(ids);
+  const read = (): VisibilityState => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? reconcileVisibility(JSON.parse(raw), ids) : {};
+    } catch {
+      return {};
+    }
+  };
+  const [visibility, setVisibility] = useState<VisibilityState>(read);
+  // A different table shape reusing the hook (Site map's table across node clicks keeps its shape;
+  // a page adding a column changes it) re-reads rather than carrying the old map over.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setVisibility(read()), [storageKey]);
+  const write = useCallback(
+    (next: VisibilityState) => {
+      setVisibility(next);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // Private window or blocked storage: the choice still holds for this session.
+      }
+    },
+    [storageKey],
+  );
+  return [visibility, write];
+}
+
 /** Move `moving` to sit immediately before `target` in `order`. A `target` no longer present
  *  (dropped between drag-start and drop, or a stale event) is a no-op rather than a silent drop
  *  of the moved column off the end. */
@@ -196,9 +233,9 @@ export interface VirtualTableProps<T> {
   height?: string;
   initialSort?: SortingState;
   /**
-   * Shows the column show/hide trigger in the header. Off by default so a table
-   * that never opts in behaves exactly as before — no button, no menu, no
-   * change to `columns.length`-based layout.
+   * Shows the column show/hide trigger in the header and the header's "Hide column" item. On by
+   * default (bae7): Burp offers both on every table it lets you customise, and a table that opts
+   * out should have a reason. Uncontrolled tables persist the choice per table shape.
    *
    * Mark a column non-removable with TanStack's own `enableHiding: false` on its
    * `ColumnDef`, not a parallel prop.
@@ -219,6 +256,28 @@ export interface VirtualTableProps<T> {
    * this flag exists to avoid, so following is always opt-in per table (burpsy-react-ui-c13).
    */
   followNewRows?: boolean;
+  /**
+   * Multi-row selection (burpsy-react-ui-fe16): click, Ctrl/Cmd-click, Shift-click, Shift+arrows
+   * and Ctrl+A, as Burp's JTables do. Opt-in per table, because a table that turns it on changes
+   * what its right-click menu acts on. `selectedId` stays the focus row — the one the detail pane
+   * shows — and the selection is the set of rows a multi-row menu acts on.
+   */
+  multiSelect?: boolean;
+  /** Controlled selection, as row ids. Omit both to let the table hold the selection itself. */
+  selectedIds?: readonly string[];
+  onSelectionChange?: (ids: string[]) => void;
+  /**
+   * The menu for a right-click inside a selection of two or more rows, given those rows in
+   * displayed order. Burp builds a different menu for N rows (Zr2s.java: "Delete selected items",
+   * "Copy URLs", a multi "Send to Comparer"); a table without one falls back to `menuGroups` for
+   * the clicked row.
+   */
+  menuGroupsMany?: (rows: T[]) => MenuGroup[];
+  /**
+   * The documentation topic the row menu's trailing "<Tool> documentation" entry opens (u9zz,
+   * lib/docs.ts). Defaults to the generic Tables panel; a tool's own table names its tool.
+   */
+  docTopic?: DocTopic;
 }
 
 export function VirtualTable<T>({
@@ -237,10 +296,15 @@ export function VirtualTable<T>({
   density: densityProp,
   height = "100%",
   initialSort = [],
-  enableColumnVisibility = false,
+  enableColumnVisibility = true,
   columnVisibility: controlledVisibility,
   onColumnVisibilityChange,
   followNewRows = false,
+  multiSelect = false,
+  selectedIds: controlledIds,
+  onSelectionChange,
+  menuGroupsMany,
+  docTopic = "tables",
 }: VirtualTableProps<T>): JSX.Element {
   // The operator's density preference is the default when a page does not name
   // one — the store is the single source of truth for it, so a table that never
@@ -250,6 +314,10 @@ export function VirtualTable<T>({
   // when no prop is passed), and an explicit prop still wins when a page supplies one.
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  // Zebra striping (69p0), Burp's table_appearance.zebra_striping. Applied per row from the
+  // virtual index, never :nth-child — the virtualizer's padding row and its windowing would flip
+  // the parity as the table scrolls, and the stripes would swap under the operator.
+  const stripes = useApp((state) => state.tableStripes);
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -257,7 +325,8 @@ export function VirtualTable<T>({
   // the same split `Field`-adjacent components in this codebase use, so a table
   // that never opts in stays on the internal `{}` (every column visible) and a
   // page that wants to persist the choice can own the state instead.
-  const [internalVisibility, setInternalVisibility] = useState<VisibilityState>({});
+  const columnIds = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const [internalVisibility, setInternalVisibility] = usePersistedVisibility(columnIds);
   const visibility = controlledVisibility ?? internalVisibility;
   const setVisibility = useCallback(
     (next: VisibilityState) => {
@@ -273,7 +342,7 @@ export function VirtualTable<T>({
 
   // Drag-to-reorder (burpsy-react-ui-mem3): always on, unlike visibility, because every page gets
   // it for free — see useColumnOrder for why persistence needs no prop from the caller either.
-  const defaultColumnOrder = useMemo(() => columns.map((def, index) => columnKey(def, index)), [columns]);
+  const defaultColumnOrder = columnIds;
   const [columnOrder, setColumnOrder] = useColumnOrder(defaultColumnOrder);
   // Which column's header is mid-drag, purely to know what a drop on another header should move.
   // Not persisted itself — only the resulting order is.
@@ -335,11 +404,29 @@ export function VirtualTable<T>({
   const rows = table.getRowModel().rows;
   const [rowHeight, setProbe] = useFluidRowHeight(density);
 
+  // The sticky header sits inside the scroll element, above row 0, and the virtualizer knows nothing
+  // of it: its row offsets start at 0 while the real rows start a header's height lower. Scrolling a
+  // row into view from below therefore stopped one header short and left the row hidden under the
+  // bottom edge — found when Go to entry (vfu2) "selected" #30 out of sight. Telling the virtualizer
+  // the header's height as end padding makes "in view" mean in view.
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  useEffect(() => {
+    const head = theadRef.current;
+    if (!head) return;
+    const measure = () => setHeaderHeight(Math.round(head.getBoundingClientRect().height));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
     overscan: 14,
+    scrollPaddingEnd: headerHeight,
   });
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -388,31 +475,138 @@ export function VirtualTable<T>({
     [rows, onSelect, selectedIndex],
   );
 
+  // --- multi-row selection (fe16) ---------------------------------------------------------------
+  // The displayed order is the one every range is computed over (lib/table-selection.ts says why).
+  const order = useMemo(() => rows.map((row) => row.id), [rows]);
+  const rowById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
+  const [internalIds, setInternalIds] = useState<string[]>([]);
+  const selectionIds: readonly string[] = multiSelect ? (controlledIds ?? internalIds) : selectedId ? [selectedId] : [];
+  const selectedSet = useMemo(() => new Set(selectionIds), [selectionIds]);
+  const anchorRef = useRef<string | null>(null);
+  // The focus this table last asked the page to show, so an outside change to `selectedId` (a jump
+  // from another page, Go to entry) can be told apart from one the table made itself.
+  const ownFocusRef = useRef<string | null>(null);
+
+  const writeIds = useCallback(
+    (ids: string[]) => {
+      onSelectionChange?.(ids);
+      if (!controlledIds) setInternalIds(ids);
+    },
+    [controlledIds, onSelectionChange],
+  );
+
+  const dispatchSelection = (action: SelectionAction) => {
+    const current: SelectionState = { ids: [...selectionIds], anchor: anchorRef.current, focus: selectedId ?? null };
+    const next = reduceSelection(current, action, order);
+    anchorRef.current = next.anchor;
+    if (!sameIds(next.ids, selectionIds)) writeIds(next.ids);
+    if (next.focus !== null && next.focus !== selectedId) {
+      const row = rowById.get(next.focus);
+      if (row) {
+        ownFocusRef.current = next.focus;
+        onSelect?.(row.original);
+      }
+    }
+  };
+
+  // A row selected from outside becomes the selection, so the menu and the detail pane agree.
+  useEffect(() => {
+    if (!multiSelect || !selectedId || selectedId === ownFocusRef.current) return;
+    ownFocusRef.current = selectedId;
+    if (!(selectionIds.length === 1 && selectionIds[0] === selectedId) && order.includes(selectedId)) {
+      anchorRef.current = selectedId;
+      writeIds([selectedId]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId, multiSelect]);
+
+  // Prune rows the filter no longer shows. Not while loading: an empty interim row model would
+  // otherwise clear a selection the reload is about to show again.
+  useEffect(() => {
+    if (!multiSelect || loading) return;
+    const kept = selectionIds.filter((id) => rowById.has(id));
+    if (kept.length !== selectionIds.length) writeIds(order.filter((id) => kept.includes(id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order, multiSelect, loading]);
+
+  const selectedRows = useMemo(
+    () => (multiSelect ? order.filter((id) => selectedSet.has(id)).map((id) => rowById.get(id)!.original) : []),
+    [multiSelect, order, selectedSet, rowById],
+  );
+  // Built once per render rather than per row: every selected row on screen shares one menu.
+  const manyGroups = useMemo(
+    () => (multiSelect && menuGroupsMany && selectedRows.length > 1 ? menuGroupsMany(selectedRows) : null),
+    [multiSelect, menuGroupsMany, selectedRows],
+  );
+  const menuFor = menuGroups || manyGroups
+    ? (row: Row<T>): MenuGroup[] =>
+        manyGroups && selectedSet.has(row.id) ? manyGroups : (menuGroups?.(row.original) ?? [])
+    : undefined;
+
+  const onRowClick = (row: Row<T>, event: React.MouseEvent) => {
+    if (!multiSelect) {
+      onSelect?.(row.original);
+      return;
+    }
+    dispatchSelection(clickAction(row.id, { shift: event.shiftKey, mod: event.ctrlKey || event.metaKey }));
+  };
+
+  const onRowContextMenu = (row: Row<T>) => {
+    if (!multiSelect) {
+      onSelect?.(row.original);
+      return;
+    }
+    const current: SelectionState = { ids: [...selectionIds], anchor: anchorRef.current, focus: selectedId ?? null };
+    if (!contextKeepsSelection(current, row.id)) dispatchSelection({ type: "only", id: row.id });
+  };
+
+  const step = (delta: number | "start" | "end", extend: boolean) => {
+    if (!multiSelect) {
+      move(delta);
+      return;
+    }
+    dispatchSelection(extend ? { type: "extend", delta } : { type: "move", delta });
+  };
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // React bubbles events through the component tree, not the DOM, so a key pressed in a row's
+    // context menu — rendered in a portal, but a React child of the row — arrives here too. Enter
+    // on a menu item then also "activated" the selected row (History: sent it to Repeater), and
+    // arrows moving through the menu moved the table's selection behind it. Pre-existing; found
+    // in the u9zz live drive, where choosing "Proxy history documentation" with Enter opened a
+    // Repeater tab. Only keys aimed at the table itself are the table's.
+    if (!event.currentTarget.contains(event.target as Node)) return;
+    const extend = event.shiftKey;
+    // Ctrl/Cmd+A on the table itself only: inside a cell's own control it keeps its meaning.
+    if (multiSelect && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && event.target === event.currentTarget) {
+      event.preventDefault();
+      dispatchSelection({ type: "all" });
+      return;
+    }
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
-        move(1);
+        step(1, extend);
         break;
       case "ArrowUp":
         event.preventDefault();
-        move(-1);
+        step(-1, extend);
         break;
       case "PageDown":
         event.preventDefault();
-        move(12);
+        step(12, extend);
         break;
       case "PageUp":
         event.preventDefault();
-        move(-12);
+        step(-12, extend);
         break;
       case "Home":
         event.preventDefault();
-        move("start");
+        step("start", extend);
         break;
       case "End":
         event.preventDefault();
-        move("end");
+        step("end", extend);
         break;
       case "Enter": {
         const row = rows[selectedIndex];
@@ -431,7 +625,7 @@ export function VirtualTable<T>({
   const visibleColumnCount = table.getVisibleLeafColumns().length;
 
   return (
-    <div className={cn("table-frame", `density-${density}`)}>
+    <div className={cn("table-frame", `density-${density}`, stripes && "table-stripes")}>
       <div
         ref={setProbe}
         aria-hidden="true"
@@ -477,8 +671,15 @@ export function VirtualTable<T>({
       >
         {/* Column sizes are the floor; with table-layout:fixed the browser shares any
             leftover width across them so the grid still spans the viewport. */}
-        <table style={{ width: "100%", minWidth: table.getCenterTotalSize() }}>
-          <thead>
+        <table
+          style={{ width: "100%", minWidth: table.getCenterTotalSize() }}
+          // aria-multiselectable is only valid on a grid (or listbox/tree/tablist), not on a plain
+          // table or the group around it, so a multi-select table is announced as a grid.
+          role={multiSelect ? "grid" : undefined}
+          aria-multiselectable={multiSelect ? true : undefined}
+          aria-label={multiSelect ? ariaLabel : undefined}
+        >
+          <thead ref={theadRef}>
             {table.getHeaderGroups().map((group) => (
               <tr key={group.id}>
                 {group.headers.map((header) => {
@@ -559,11 +760,53 @@ export function VirtualTable<T>({
                         <GripVertical size={11} />
                       </span>
                       <ContextMenu
+                        docTopic="tables"
                         groups={[
                           {
                             id: "column",
-                            actions: [{ id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn }],
+                            actions: [
+                              { id: "copy-column", label: `Copy ${columnLabel} column`, icon: Copy, onSelect: copyColumn },
+                              // Burp's "Hide column" (customize-tables.html). Absent on a column the page
+                              // marked enableHiding:false (History's tick column); disabled, with the
+                              // reason, on the last visible one, because hiding it would leave no header
+                              // to bring anything back from.
+                              ...(enableColumnVisibility && header.column.getCanHide()
+                                ? [
+                                    {
+                                      id: "hide-column",
+                                      label: `Hide ${columnLabel} column`,
+                                      icon: EyeOff,
+                                      disabled: !canHideColumn(columnIds, visibility, header.column.id),
+                                      hint: canHideColumn(columnIds, visibility, header.column.id)
+                                        ? "Show it again from the columns button at the right of the header"
+                                        : "The last visible column cannot be hidden",
+                                      onSelect: () => header.column.toggleVisibility(false),
+                                    },
+                                  ]
+                                : []),
+                            ],
                           },
+                          ...(enableColumnVisibility
+                            ? [
+                                {
+                                  id: "layout",
+                                  actions: [
+                                    {
+                                      // Burp's "Restore default table": every column shown, in the
+                                      // page's own order.
+                                      id: "restore-table",
+                                      label: "Restore default table layout",
+                                      icon: RotateCcw,
+                                      onSelect: () => {
+                                        table.resetColumnVisibility();
+                                        setVisibility({});
+                                        setColumnOrder(columnIds);
+                                      },
+                                    },
+                                  ],
+                                },
+                              ]
+                            : []),
                         ]}
                       >
                         {label}
@@ -597,12 +840,19 @@ export function VirtualTable<T>({
                   key={row.id}
                   row={row}
                   height={rowHeight}
-                  selected={row.id === selectedId}
+                  selected={multiSelect ? selectedSet.has(row.id) : row.id === selectedId}
+                  focused={multiSelect && row.id === selectedId}
+                  striped={virtualRow.index % 2 === 1}
                   className={rowClassName?.(row.original)}
+                  clickable={Boolean(onSelect) || multiSelect}
+                  onRowClick={onRowClick}
+                  onRowContextMenu={onRowContextMenu}
+                  shiftSelects={multiSelect}
                   onSelect={onSelect}
                   onActivate={onActivate}
                   onDoubleActivate={onDoubleActivate}
-                  menuGroups={menuGroups}
+                  menuFor={menuFor}
+                  docTopic={docTopic}
                 />
               );
             })}
@@ -628,33 +878,53 @@ function TableRow<T>({
   row,
   height,
   selected,
+  focused,
   className,
+  clickable,
+  onRowClick,
+  onRowContextMenu,
+  shiftSelects,
   onSelect,
   onActivate,
   onDoubleActivate,
-  menuGroups,
+  menuFor,
+  docTopic,
+  striped,
 }: {
   row: Row<T>;
   height: number;
   selected: boolean;
+  focused: boolean;
+  striped: boolean;
   className?: string;
+  clickable: boolean;
+  onRowClick: (row: Row<T>, event: React.MouseEvent) => void;
+  onRowContextMenu: (row: Row<T>) => void;
+  shiftSelects: boolean;
   onSelect?: (row: T) => void;
   onActivate?: (row: T) => void;
   onDoubleActivate?: (row: T) => void;
-  menuGroups?: (row: T) => MenuGroup[];
+  menuFor?: (row: Row<T>) => MenuGroup[];
+  docTopic: DocTopic;
 }): JSX.Element {
   const element = (
     <tr
       style={{ height }}
       aria-selected={selected}
-      className={cn("data-row", selected && "selected-row", onSelect && "clickable", className)}
-      onClick={() => onSelect?.(row.original)}
+      className={cn("data-row", striped && "row-stripe", selected && "selected-row", focused && "focus-row", clickable && "clickable", className)}
+      // Shift-click is a range select here, not a text selection: without this the browser also
+      // paints a text selection across every row between the two clicks.
+      onMouseDown={(event) => {
+        if (shiftSelects && event.shiftKey) event.preventDefault();
+      }}
+      onClick={(event) => onRowClick(row, event)}
       // Double-click prefers the dedicated handler, then onActivate, then plain selection — so a
       // table that was not given one behaves exactly as it always did, and one that was gets the
       // gesture it asked for without losing the other two.
       onDoubleClick={() => (onDoubleActivate ?? onActivate ?? onSelect)?.(row.original)}
-      // Right-clicking a row should act on that row, matching desktop tools.
-      onContextMenu={() => onSelect?.(row.original)}
+      // Right-clicking a row should act on that row, matching desktop tools — or, inside a
+      // multi-row selection, on the whole selection (onRowContextMenu decides which).
+      onContextMenu={() => onRowContextMenu(row)}
     >
       {row.getVisibleCells().map((cell) => (
         <td key={cell.id} style={{ width: cell.column.getSize() }}>
@@ -663,8 +933,12 @@ function TableRow<T>({
       ))}
     </tr>
   );
-  if (!menuGroups) return element;
-  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
+  if (!menuFor) return element;
+  return (
+    <ContextMenu groups={menuFor(row)} docTopic={docTopic}>
+      {element}
+    </ContextMenu>
+  );
 }
 
 /**
@@ -685,11 +959,12 @@ function TableRow<T>({
  */
 export function MenuRow({
   groups,
+  docTopic = "tables",
   children,
   ...rowProps
-}: { groups: MenuGroup[]; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
+}: { groups: MenuGroup[]; docTopic?: DocTopic; children: ReactNode } & React.HTMLAttributes<HTMLTableRowElement>): JSX.Element {
   return (
-    <ContextMenu groups={groups}>
+    <ContextMenu groups={groups} docTopic={docTopic}>
       <tr {...rowProps}>{children}</tr>
     </ContextMenu>
   );
@@ -726,6 +1001,7 @@ export function SortableTable<T>({
   rowClassName,
   menuGroups,
   density: densityProp,
+  docTopic = "tables",
 }: {
   data: T[];
   columns: Column<T>[];
@@ -735,9 +1011,12 @@ export function SortableTable<T>({
   rowClassName?: (row: T) => string | undefined;
   menuGroups?: (row: T) => MenuGroup[];
   density?: "comfortable" | "compact";
+  /** See VirtualTable's `docTopic`. */
+  docTopic?: DocTopic;
 }): JSX.Element {
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  const stripes = useApp((state) => state.tableStripes);
   const [sorting, setSorting] = useState<SortingState>(initialSort);
   const table = useReactTable({
     data,
@@ -750,7 +1029,7 @@ export function SortableTable<T>({
   });
 
   return (
-    <div className={cn("table-frame", `density-${density}`)} role="group" aria-label={ariaLabel}>
+    <div className={cn("table-frame", `density-${density}`, stripes && "table-stripes")} role="group" aria-label={ariaLabel}>
       <div className="table-scroll">
         <table>
           <thead>
@@ -785,12 +1064,13 @@ export function SortableTable<T>({
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((row) => (
+            {table.getRowModel().rows.map((row, index) => (
               <SortableRow
                 key={row.id}
                 row={row}
-                className={rowClassName?.(row.original)}
+                className={cn(index % 2 === 1 && "row-stripe", rowClassName?.(row.original))}
                 menuGroups={menuGroups}
+                docTopic={docTopic}
               />
             ))}
           </tbody>
@@ -812,10 +1092,12 @@ function SortableRow<T>({
   row,
   className,
   menuGroups,
+  docTopic,
 }: {
   row: Row<T>;
   className?: string;
   menuGroups?: (row: T) => MenuGroup[];
+  docTopic: DocTopic;
 }): JSX.Element {
   const element = (
     <tr className={className}>
@@ -825,7 +1107,11 @@ function SortableRow<T>({
     </tr>
   );
   if (!menuGroups) return element;
-  return <ContextMenu groups={menuGroups(row.original)}>{element}</ContextMenu>;
+  return (
+    <ContextMenu groups={menuGroups(row.original)} docTopic={docTopic}>
+      {element}
+    </ContextMenu>
+  );
 }
 
 /** Static table for short, non-virtualized lists where a scroll viewport would be wrong. */
@@ -844,8 +1130,11 @@ export function SimpleTable({
   // place and consumed here, and the crossing must not silently stop working.
   const storeDensity = useApp((state) => state.density);
   const density = densityProp ?? storeDensity;
+  const stripes = useApp((state) => state.tableStripes);
   return (
-    <div className={cn("table-frame", "density-" + density, className)}>
+    // SimpleTable renders every row with no padding rows, so :nth-child parity is stable here and
+    // the page's own <tr>s need no class (styles.css, .simple-stripes).
+    <div className={cn("table-frame", "density-" + density, stripes && "table-stripes simple-stripes", className)}>
       <div className="table-scroll">
         <table>
           <thead>

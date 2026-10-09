@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
+import { parseListenerPorts } from "../lib/listener-filter";import { BookOpen, Columns3, Combine, Crosshair, Download, Hash, HelpCircle, Repeat2, ScanText, Search, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import { useSendShortcuts, exchangeUrl } from "../lib/actions";
 import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
-import { downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
+import { api, downloadText, formatBytes, formatCount, formatDuration, historyToCSV, isProtocolDowngrade, mimeLabel, relativeTime, statusTone } from "../lib/api";
 import { cn } from "../lib/cn";
 import { useAnnotateExchange, useDebounced, useDeleteHistory, useHistory, useImportHar, useMessage, useStats } from "../lib/data";
 import { useAuditSelected } from "../lib/data.observe";
@@ -15,6 +15,11 @@ import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
 import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
+import { useCommandHandler } from "../lib/commands";
+import { confirmDialog, promptDialog } from "../lib/dialogs";
+import { classifyEntry, parseEntryNumber } from "../lib/go-to-entry";
+import { differsFromDefaults, FILTER_DEFAULTS, HISTORY_POPOVER_KEYS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
+import { FilterPresetsMenu } from "../ui/filter-presets";
 import { MessageLayoutSwitch, PageHeader, RefreshButton, SplitPane, useMessageLayout } from "../ui/layout";
 import { Badge, Button, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Toolbar, Tooltip } from "../ui/primitives";
 import { BucketMenu } from "../ui/column-visibility-menu";
@@ -45,6 +50,13 @@ const MIME_TYPES = [
 ];
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
+/** The status, MIME and method selects' closed values, for saved presets (mntt). */
+const HISTORY_FILTER_ALLOWED = {
+ statusSet: STATUS_BUCKETS.map((bucket) => bucket.value),
+ mimeSet: MIME_TYPES.map((mime) => mime.value),
+ method: ["all", ...METHODS],
+};
 
 /**
  * Whether one MIME bucket matches a row (burpsy-react-ui-9my). The single-select memo below
@@ -428,6 +440,13 @@ export function HistoryPage(): JSX.Element {
  // persisted per surface. History's pre-switcher arrangement was stacked, so that is the
  // fallback a first visitor gets.
  const [messageLayout, setMessageLayout] = useMessageLayout("history", "vertical");
+ // Burp's EDITOR_CYCLE_REQUEST_RESPONSE_LAYOUT (2czi): the three-icon switch's own order.
+ useCommandHandler("editor.cycleLayout", () => {
+  const order = ["horizontal", "vertical", "combined"] as const;
+  const next = order[(order.indexOf(messageLayout) + 1) % order.length]!;
+  setMessageLayout(next);
+  toast.info(`Message layout: ${next}`);
+ });
  const [scopeOnly, setScopeOnly] = useState(false);
  const [hideNoResponse, setHideNoResponse] = useState(false);
  // Burp's remaining row-type filters (proxyHttpShowOnly*Checkbox). Each is "show only", so all
@@ -570,6 +589,7 @@ export function HistoryPage(): JSX.Element {
  const checkedExchanges = useApp((state) => state.checkedExchanges);
  const setCheckedExchanges = useApp((state) => state.setCheckedExchanges);
  const checkedRows = useMemo(() => new Set(checkedExchanges), [checkedExchanges]);
+ const selectedIdStrings = useMemo(() => checkedExchanges.map(String), [checkedExchanges]);
  const auditSelected = useAuditSelected();
 
  // Another page asked to filter here (for example "filter by this host").
@@ -616,6 +636,61 @@ export function HistoryPage(): JSX.Element {
   });
   injectedFragment.current = wanted;
  }, [scopeOnly, scopeFragment]);
+
+ // Saved filters (mntt): everything a filter preset carries, as it stands, and the one function
+ // that puts a preset back. The query box is saved without the scope fragment "In scope only"
+ // splices into it, and the fragment is re-spliced on apply from the scope as it is NOW — a preset
+ // saved under last week's scope must not resurrect last week's hosts as typed text.
+ const filterSnapshot: FilterSettings = {
+  term: injectedFragment.current ? stripFragment(term, injectedFragment.current) : term,
+  statusSet,
+  mimeSet,
+  filterOn,
+  method,
+  limit,
+  scopeOnly,
+  hideNoResponse,
+  onlyParameterized,
+  listenerPorts,
+  onlyCommented,
+  onlyHighlighted,
+  showExtensions,
+  hideExtensions,
+  searchText,
+  searchCase,
+  searchRegex,
+  searchNegate,
+  columnFilters,
+ };
+ // Extractor-column filters (28n8) are not part of a preset: they name this project's extractor
+ // columns, which another project's preset cannot know. So applying a preset, or the defaults,
+ // clears them — otherwise "Restore defaults" would report success while they still narrowed the
+ // table. History's own "Show all" (the More filters popover) keeps them, as it always did.
+ const applyFilterSettings = (next: FilterSettings, options: { keepExtractorFilters?: boolean } = {}) => {
+  if (!options.keepExtractorFilters) setExtractorFilters({});
+  const v = sanitizeSettings("history", next, HISTORY_FILTER_ALLOWED).settings;
+  const fragment = v.scopeOnly === true ? scopeFragment : null;
+  injectedFragment.current = fragment;
+  setTerm(fragment ? combineQuery(v.term as string, fragment) : (v.term as string));
+  setStatusSet(v.statusSet as string[]);
+  setMimeSet(v.mimeSet as string[]);
+  setFilterOn(v.filterOn as boolean);
+  setMethod(v.method as string);
+  setLimit(v.limit as number);
+  setScopeOnly(v.scopeOnly as boolean);
+  setHideNoResponse(v.hideNoResponse as boolean);
+  setOnlyParameterized(v.onlyParameterized as boolean);
+  setListenerPorts(v.listenerPorts as string);
+  setOnlyCommented(v.onlyCommented as boolean);
+  setOnlyHighlighted(v.onlyHighlighted as boolean);
+  setShowExtensions(v.showExtensions as string);
+  setHideExtensions(v.hideExtensions as string);
+  setSearchText(v.searchText as string);
+  setSearchCase(v.searchCase as boolean);
+  setSearchRegex(v.searchRegex as boolean);
+  setSearchNegate(v.searchNegate as boolean);
+  setColumnFilters(v.columnFilters as Record<ColumnFilterField, string>);
+ };
 
  // Extension lists, normalised once: lower-cased, dot-stripped, blanks dropped, so "PNG", ".png"
  // and " png " are one entry.
@@ -801,6 +876,93 @@ export function HistoryPage(): JSX.Element {
    }),
   );
  }, [baseRows, filterOn, activeExtractorFilters, extractValuesMap]);
+
+ // Burp's TABLE_GO_TO_ENTRY (vfu2): jump to a row by its # number. lib/go-to-entry.ts names the
+ // four outcomes; each is said out loud rather than leaving the table looking unchanged.
+ const pendingGoTo = useRef<number | null>(null);
+ const showEntry = (id: number) => {
+  setSelectedId(id);
+  toast.success(`Entry #${id}`);
+ };
+ const goToEntry = async () => {
+  const raw = await promptDialog({
+   title: "Go to entry",
+   description: "The number in the # column. The row is selected and scrolled into view.",
+   label: "Entry number",
+   placeholder: "1843",
+   confirmLabel: "Go",
+  });
+  if (raw === null) return;
+  const id = parseEntryNumber(raw);
+  if (id === null) {
+   toast.error(`Not an entry number: ${raw.trim() || "(empty)"}`);
+   return;
+  }
+  const displayed = new Set(rows.map((row) => row.id));
+  let exchange: Exchange | null = null;
+  if (!displayed.has(id)) {
+   try {
+    exchange = await api<Exchange>(`/api/exchange/${id}`);
+   } catch {
+    exchange = null;
+   }
+  }
+  const filtered =
+   filterOn &&
+   (differsFromDefaults("history", { ...filterSnapshot, limit: FILTER_DEFAULTS.history.limit!, filterOn: true }) ||
+    Object.values(extractorFilters).some((value) => value.trim() !== ""));
+  const outcome = classifyEntry({ id, displayed, exists: exchange !== null, filtered });
+  if (outcome === "shown") {
+   showEntry(id);
+   return;
+  }
+  if (outcome === "missing") {
+   toast.error(`There is no entry #${id} — it was deleted, or the capture never reached it`);
+   return;
+  }
+  if (outcome === "filtered") {
+   const clear = await confirmDialog({
+    title: `Entry #${id} is hidden by the current filter`,
+    description: "Clear every filter (the row limit stays) and show it?",
+    confirmLabel: "Clear filters and show it",
+    cancelLabel: "Keep the filter",
+   });
+   if (!clear) return;
+   applyFilterSettings({ ...structuredClone(FILTER_DEFAULTS.history), limit });
+   setExtractorFilters({});
+   pendingGoTo.current = id;
+   return;
+  }
+  await offerOlderEntry(exchange!);
+ };
+ const offerOlderEntry = async (exchange: Exchange) => {
+  const open = await confirmDialog({
+   title: `Entry #${exchange.id} is older than the newest ${limit} rows loaded`,
+   description: `${exchange.method} ${exchange.host}${exchange.path}. Raise the row limit to load further back, or open this one on its own.`,
+   confirmLabel: "Open it in a new window",
+   cancelLabel: "Not now",
+  });
+  if (open) openDetailWindow(exchange);
+ };
+ // After "Clear filters and show it": select the entry once the unfiltered rows arrive, or, if it is
+ // still not among them, say it is beyond the row limit rather than leaving the jump unanswered.
+ useEffect(() => {
+  const id = pendingGoTo.current;
+  // Wait for the cleared filter to be the one the rows reflect: the query box is debounced, so for
+  // a moment after clearing, nothing is fetching and the rows are still the filtered ones — judging
+  // then reported a 219-row capture's #4 as "older than the newest 500 rows" (live drive).
+  if (id === null || isFetching || debouncedTerm !== term) return;
+  pendingGoTo.current = null;
+  if (rows.some((row) => row.id === id)) {
+   showEntry(id);
+   return;
+  }
+  void api<Exchange>(`/api/exchange/${id}`)
+   .then((exchange) => offerOlderEntry(exchange))
+   .catch(() => toast.error(`Entry #${id} is no longer in the capture`));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [rows, isFetching, debouncedTerm, term]);
+ useCommandHandler("table.goToEntry", () => void goToEntry());
 
  // The extractor filters join the page's one honest list of what is narrowing the view, so the empty
  // state and the status bar name them like any other filter rather than reporting "no traffic".
@@ -1022,7 +1184,10 @@ export function HistoryPage(): JSX.Element {
     enableHiding: false,
     cell: (info) => {
      const id = info.row.original.id;
+     // The tick is the selection's mirror (fe16): ticking is a Ctrl-click on this row. The click is
+     // stopped here so the row's own click handler does not then collapse the selection to it.
      return (
+      <span className="tick-cell" onClick={(event) => event.stopPropagation()}>
       <Checkbox
        label={<span className="sr-only">{`Select row ${id}`}</span>}
        checked={checkedRows.has(id)}
@@ -1033,6 +1198,7 @@ export function HistoryPage(): JSX.Element {
         setCheckedExchanges([...next]);
        }}
       />
+      </span>
      );
     },
    },
@@ -1076,6 +1242,11 @@ export function HistoryPage(): JSX.Element {
     size: 78,
     cell: (info) => {
      const value = info.getValue<number | null>();
+     // A request generated from a schema and never sent (7v1e) has no status because nothing went
+     // out — "pending" would claim a response is on its way.
+     if (value === null && (info.row.original as { source?: string }).source === "schema") {
+      return <Badge tone="warn">not sent</Badge>;
+     }
      return value === null ? <Badge>pending</Badge> : <Badge tone={statusTone(value)}>{value}</Badge>;
     },
    },
@@ -1301,7 +1472,7 @@ export function HistoryPage(): JSX.Element {
      </strong>
     </div>
     <div className="detail-actions">
-     <Badge tone={statusTone(selected.status)}>{selected.status ?? "pending"}</Badge>
+     <Badge tone={statusTone(selected.status)}>{selected.status ?? (selected.source === "schema" ? "not sent" : "pending")}</Badge>
      <Badge>{formatDuration(selected.duration_ms)}</Badge>
      <Badge>{selected.protocol}</Badge>
      {/* The protocol badge answers "what carried this". On a tunnel interception moved off HTTP/2 it
@@ -1462,8 +1633,8 @@ export function HistoryPage(): JSX.Element {
         disabled={checkedRows.size === 0 || auditSelected.isPending}
         title={
          checkedRows.size === 0
-          ? "Tick rows to audit"
-          : `Audit ${checkedRows.size} ticked item${checkedRows.size === 1 ? "" : "s"} as one scan`
+          ? "Select rows to audit (click, Ctrl-click or Shift-click)"
+          : `Audit ${checkedRows.size} selected item${checkedRows.size === 1 ? "" : "s"} as one scan`
         }
        >
         <Crosshair size={14} />
@@ -1474,7 +1645,7 @@ export function HistoryPage(): JSX.Element {
         size="small"
         onClick={() => setConfirmDelete({ scope: "selected" })}
         disabled={checkedRows.size === 0}
-        title={checkedRows.size === 0 ? "Tick rows to delete" : `Delete ${checkedRows.size} ticked rows`}
+        title={checkedRows.size === 0 ? "Select rows to delete" : `Delete ${checkedRows.size} selected rows`}
        >
         <Trash2 size={14} />
         Delete items
@@ -1516,6 +1687,17 @@ export function HistoryPage(): JSX.Element {
       onClick={() => setFilterOpen(true)}
      >
       More filters{filtersActive > 0 ? ` (${filtersActive})` : ""}
+     </Button>
+     <FilterPresetsMenu
+      table="history"
+      current={filterSnapshot}
+      apply={(settings) => applyFilterSettings(settings)}
+      allowed={HISTORY_FILTER_ALLOWED}
+      outsidePreset={Object.values(extractorFilters).some((value) => value.trim() !== "") ? "extractor-column filters" : undefined}
+     />
+     <Button variant="quiet" size="small" onClick={() => void goToEntry()} title="Burp's Go to entry: jump to a row by its # number">
+      <Hash size={13} />
+      Go to entry
      </Button>
      {/* Burp/Caido's custom extractor columns (burpsy-react-ui-28n8): define a named regex-group,
          JSON-path or whole-value extractor and read its capture as a column across history rows. */}
@@ -1675,6 +1857,7 @@ export function HistoryPage(): JSX.Element {
     master={
      <VirtualTable
       ariaLabel="Captured HTTP exchanges"
+      docTopic="proxy-history"
       data={rows}
       columns={columns}
       getRowId={(row) => String(row.id)}
@@ -1684,6 +1867,36 @@ export function HistoryPage(): JSX.Element {
       onColumnVisibilityChange={setColumnVisibility}
       selectedId={selectedId === null ? null : String(selectedId)}
       onSelect={(row) => setSelectedId(row.id)}
+      // Multi-row selection (fe16) IS the tick set: one list, in the store, that Delete items,
+      // Audit selected items and the dashboard's "Audit selected items" all read. A plain click
+      // therefore selects (and ticks) one row, as a Burp selection would; the tick column stays as
+      // a visible mirror and a mouse-only way to build a selection.
+      multiSelect
+      selectedIds={selectedIdStrings}
+      onSelectionChange={(ids) => setCheckedExchanges(ids.map(Number))}
+      menuGroupsMany={(rows) =>
+       actions.menuMany(rows, [
+        {
+         id: "selected",
+         actions: [
+          {
+           id: "audit-selected",
+           label: `Audit ${rows.length} selected items`,
+           icon: Crosshair,
+           disabled: auditSelected.isPending,
+           onSelect: launchSelectedAudit,
+          },
+          {
+           id: "delete-selected",
+           label: "Delete selected items",
+           icon: Trash2,
+           danger: true,
+           onSelect: () => setConfirmDelete({ scope: "selected" }),
+          },
+         ],
+        },
+       ])
+      }
       onActivate={(row) => void actions.sendToRepeater(row)}
       // Burp: "Double-click an item to open it in a pop-up window" (wvcl). A SEPARATE handler from
       // onActivate because that one is Enter-or-double-click and already means "send to Repeater" —
@@ -1903,15 +2116,11 @@ export function HistoryPage(): JSX.Element {
        variant="quiet"
        size="small"
        onClick={() => {
-        setOnlyParameterized(false);
-        setOnlyCommented(false);
-        setOnlyHighlighted(false);
-        setShowExtensions("");
-        setHideExtensions("");
-        setSearchText("");
-        setSearchCase(false);
-        setSearchRegex(false);
-        setSearchNegate(false);
+        // The popover's own keys back to their defaults — from the same table of defaults the
+        // filter menu's Restore defaults uses, so the two cannot disagree about "nothing hidden".
+        const reset: FilterSettings = { ...filterSnapshot };
+        for (const key of HISTORY_POPOVER_KEYS) reset[key] = structuredClone(FILTER_DEFAULTS.history[key]!);
+        applyFilterSettings(reset, { keepExtractorFilters: true });
        }}
       >
        Show all
@@ -1927,10 +2136,10 @@ export function HistoryPage(): JSX.Element {
     onOpenChange={(open) => {
      if (!open) setConfirmDelete(undefined);
     }}
-    title={confirmDelete?.scope === "selected" ? "Delete the ticked items?" : "Clear the capture?"}
+    title={confirmDelete?.scope === "selected" ? "Delete the selected items?" : "Clear the capture?"}
     description={
      confirmDelete?.scope === "selected"
-      ? "The ticked rows leave the history view. The underlying capture is not renumbered, and this cannot be undone."
+      ? "The selected rows leave the history view. The underlying capture is not renumbered, and this cannot be undone."
       : "Every history row leaves the view. Message bytes stay on disk in a persisted store, and this cannot be undone."
     }
    >

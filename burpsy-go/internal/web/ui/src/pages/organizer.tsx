@@ -4,6 +4,9 @@ import { toast } from "sonner";
 import { copyToClipboard, downloadText, organizerToCSV } from "../lib/api";
 import { useMessage, useOrganizer, useOrganizerMutations } from "../lib/data";
 import { useApp } from "../lib/store";
+import { promptDialog } from "../lib/dialogs";
+import { FILTER_DEFAULTS, sanitizeSettings, type FilterSettings } from "../lib/filter-presets";
+import { FilterPresetsMenu } from "../ui/filter-presets";
 import {
  HIGHLIGHTS,
  HIGHLIGHT_TONE,
@@ -81,6 +84,12 @@ const STATUS_CLASSES = [
 ] as const;
 
 type StatusClass = (typeof STATUS_CLASSES)[number]["value"];
+
+/** The organizer filter selects' closed option sets, for saved presets (mntt). */
+const ORGANIZER_FILTER_ALLOWED = {
+ statusClass: STATUS_CLASSES.map((entry) => entry.value),
+ workflowFilter: ["all", ...WORKFLOW_STATUSES],
+};
 
 function matchesStatusClass(item: OrganizerItem, want: StatusClass): boolean {
  if (want === "all") return true;
@@ -244,6 +253,36 @@ export function OrganizerPage(): JSX.Element {
  /** The collection delete dialog: its choice is the items' fate, so it is asked, never defaulted silently. */
  const [confirmDeleteCollection, setConfirmDeleteCollection] = useState<OrganizerCollection | null>(null);
  const [newCollectionName, setNewCollectionName] = useState("");
+
+ // Saved filters (mntt): the filter row as it stands, and the one function that puts a preset —
+ // or the defaults, for Clear filters — back.
+ const filterSnapshot: FilterSettings = {
+  term,
+  termRegex,
+  termCase,
+  termNegative,
+  inScopeOnly,
+  statusClass,
+  mimeFilter,
+  toolFilter,
+  workflowFilter,
+  extensionFilter,
+  annotatedOnly,
+ };
+ const applyFilterSettings = (next: FilterSettings) => {
+  const v = sanitizeSettings("organizer", next, ORGANIZER_FILTER_ALLOWED).settings;
+  setTerm(v.term as string);
+  setTermRegex(v.termRegex as boolean);
+  setTermCase(v.termCase as boolean);
+  setTermNegative(v.termNegative as boolean);
+  setInScopeOnly(v.inScopeOnly as boolean);
+  setStatusClass(v.statusClass as StatusClass);
+  setMimeFilter(v.mimeFilter as string);
+  setToolFilter(v.toolFilter as string);
+  setWorkflowFilter(v.workflowFilter as WorkflowStatus | "all");
+  setExtensionFilter(v.extensionFilter as string);
+  setAnnotatedOnly(v.annotatedOnly as boolean);
+ };
 
  const filtering =
   inScopeOnly ||
@@ -484,9 +523,17 @@ export function OrganizerPage(): JSX.Element {
      label: item.title ? "Rename" : "Add a title",
      icon: Pencil,
      onSelect: () => {
-      const next = window.prompt(`Title for saved item ${item.id} (exchange #${item.exchange})`, item.title);
-      if (next === null || next.trim() === item.title) return;
-      patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
+      void promptDialog({
+       title: item.title ? `Rename saved item ${item.id}` : `Add a title to saved item ${item.id}`,
+       description: `Exchange #${item.exchange}. An empty title clears it.`,
+       label: "Title",
+       initial: item.title,
+       confirmLabel: "Save title",
+       allowEmpty: true,
+      }).then((next) => {
+       if (next === null || next.trim() === item.title) return;
+       patchItem(item, { title: next.trim() }, `Item ${item.id} renamed`);
+      });
      },
     },
     {
@@ -781,24 +828,13 @@ export function OrganizerPage(): JSX.Element {
       )}
      </Field>
      <Checkbox label="Annotated only" checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} />
+     <FilterPresetsMenu table="organizer" current={filterSnapshot} apply={applyFilterSettings} allowed={ORGANIZER_FILTER_ALLOWED} />
      {filtering ? (
       <>
        <Button
         variant="outline"
         size="small"
-        onClick={() => {
-         setInScopeOnly(false);
-         setStatusClass("all");
-         setMimeFilter("all");
-         setToolFilter("all");
-         setWorkflowFilter("all");
-         setTerm("");
-         setTermRegex(false);
-         setTermCase(false);
-         setTermNegative(false);
-         setExtensionFilter("all");
-         setAnnotatedOnly(false);
-        }}
+        onClick={() => applyFilterSettings(structuredClone(FILTER_DEFAULTS.organizer))}
        >
         <RotateCcw size={13} />
         Clear filters
@@ -888,8 +924,13 @@ export function OrganizerPage(): JSX.Element {
            <IconButton
             label={`Rename ${collection.name}`}
             size="small"
-            onClick={() => {
-             const next = window.prompt(`Rename collection ${collection.name}`, collection.name);
+            onClick={async () => {
+             const next = await promptDialog({
+              title: `Rename collection ${collection.name}`,
+              label: "Collection name",
+              initial: collection.name,
+              confirmLabel: "Rename",
+             });
              if (next === null || next.trim() === collection.name) return;
              mutations.updateCollection.mutate(
               { id: collection.id, name: next.trim() },
@@ -905,8 +946,16 @@ export function OrganizerPage(): JSX.Element {
            <IconButton
             label={`Edit note on ${collection.name}`}
             size="small"
-            onClick={() => {
-             const next = window.prompt(`Note for collection ${collection.name} (About tab)`, collection.note);
+            onClick={async () => {
+             const next = await promptDialog({
+              title: `Note for collection ${collection.name}`,
+              description: "Shown on the collection's About tab. An empty note clears it.",
+              label: "Note",
+              initial: collection.note,
+              confirmLabel: "Save note",
+              multiline: true,
+              allowEmpty: true,
+             });
              if (next === null) return;
              mutations.updateCollection.mutate(
               { id: collection.id, note: next },
@@ -969,6 +1018,7 @@ export function OrganizerPage(): JSX.Element {
      <SimpleTable headers={["#", "Exchange", "Tool", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
       {visible.map((item) => (
        <MenuRow
+        docTopic="organizer"
         key={item.id}
         groups={menuFor(item)}
         className={item.id === selectedId ? "data-row clickable selected-row" : "data-row clickable"}

@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+ moveItem,
  addBodyParam,
  addCookie,
  addHeader,
@@ -575,5 +576,53 @@ describe("hexDumpBytes", () => {
   // Non-printable bytes show as "." in the ASCII gutter.
   const lines = dump.split("\n");
   expect(lines[0]).toBe("00000000  c9 e8 e8 20 63 61 66 65  20 92 93                 |... cafe ..|");
+ });
+});
+
+
+describe("moveItem — Inspector reorder (burpsy-react-ui-ybmd)", () => {
+ test("a header moves one place and every other byte stays put, mixed line endings included", () => {
+  // Line 2 ends in a bare LF on purpose: a reorder must not normalise it, because the line
+  // ending is itself something a desync test may be varying.
+  const raw = "GET / HTTP/1.1\r\nHost: a\r\nX-One: 1\nX-Two: 2\r\n\r\nbody";
+  const moved = moveItem(raw, "header", 2, -1);
+  expect(moved).toBe("GET / HTTP/1.1\r\nHost: a\r\nX-Two: 2\nX-One: 1\r\n\r\nbody");
+  // Same bytes, different order: the multiset of characters is unchanged.
+  expect([...moved].sort().join("")).toBe([...raw].sort().join(""));
+ });
+
+ test("duplicate names keep their own spelling and value, and only the two lines swap", () => {
+  const raw = "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\ntransfer-encoding : identity\r\nHost: h\r\n\r\n0\r\n\r\n";
+  expect(moveItem(raw, "header", 0, 1)).toBe(
+   "POST /x HTTP/1.1\r\ntransfer-encoding : identity\r\nTransfer-Encoding: chunked\r\nHost: h\r\n\r\n0\r\n\r\n",
+  );
+ });
+
+ test("moving off either end is a no-op, not a wrap", () => {
+  const raw = "GET / HTTP/1.1\r\nA: 1\r\nB: 2\r\n\r\n";
+  expect(moveItem(raw, "header", 0, -1)).toBe(raw);
+  expect(moveItem(raw, "header", 1, 1)).toBe(raw);
+  expect(moveItem(raw, "header", 7, 1)).toBe(raw);
+ });
+
+ test("query parameters swap and keep their separator", () => {
+  const raw = "GET /p?a=1&b=2&c=3 HTTP/1.1\r\nHost: h\r\n\r\n";
+  expect(moveItem(raw, "query", 2, -1)).toBe("GET /p?a=1&c=3&b=2 HTTP/1.1\r\nHost: h\r\n\r\n");
+ });
+
+ test("cookies swap inside the one Cookie header", () => {
+  const raw = "GET / HTTP/1.1\r\nCookie: a=1; b=2\r\n\r\n";
+  expect(moveItem(raw, "cookie", 0, 1)).toBe("GET / HTTP/1.1\r\nCookie: b=2; a=1\r\n\r\n");
+ });
+
+ test("a body reorder keeps the body length, so Content-Length stays true untouched", () => {
+  const raw = "POST / HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\nx=1&yy=22&z";
+  const moved = moveItem(raw, "body", 0, 1);
+  expect(moved).toBe("POST / HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 11\r\n\r\nyy=22&x=1&z");
+ });
+
+ test("JSON members swap as whole members", () => {
+  const raw = 'POST / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"a": 1, "b": "two"}';
+  expect(moveItem(raw, "body", 1, -1)).toBe('POST / HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{"b": "two", "a": 1}');
  });
 });

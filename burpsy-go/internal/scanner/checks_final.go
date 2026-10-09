@@ -371,7 +371,7 @@ func checkHiddenHTTP2(ctx context.Context, cc *CheckContext) ([]*Finding, error)
 	program := burpsyhttp2.NewH2FrameProgram(
 		burpsyhttp2.NewFrameSpec(burpsyhttp2.TypeSettings, 0, 0, nil),
 	)
-	res, err := cc.Scanner.probeGate(cc.Exchange).SendFrameProgramForcingHTTP2(ctx, program)
+	res, err := cc.Scanner.probeGate(ctx, cc.Exchange).SendFrameProgramForcingHTTP2(ctx, program)
 	if err != nil {
 		// A refusal or a connection the origin tore down on seeing the preface is the *safe*
 		// answer for this row: it did not read our frames.

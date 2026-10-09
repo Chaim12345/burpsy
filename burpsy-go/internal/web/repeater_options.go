@@ -2,9 +2,11 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/burpsy-go/burpsy/internal/sender"
 )
@@ -44,6 +46,39 @@ type repeaterSendOptions struct {
 	// operator who edited a body without fixing the header sends a request that truncates or
 	// overruns; this makes the header follow the body instead of the other way round.
 	UpdateContentLength bool `json:"update_content_length,omitempty"`
+	// ResponseTimeoutMS is Burp's per-request response timeout (RequestOptions.withResponseTimeout,
+	// burpsy-react-ui-mmca): how long this send waits for its response, in place of the network
+	// settings' read timeout — for this send only. A deliberately slow time-based probe in one tab
+	// used to mean raising the global read timeout for every tool. Nil is the standing read timeout.
+	// It rides the send's context (sender.WithSendOptions), so it bounds every hop of a followed
+	// redirect chain too and never mutates NetworkSettings.
+	ResponseTimeoutMS *int64 `json:"response_timeout_ms,omitempty"`
+	// StreamingTimeoutMS is Burp's per-tab "Streaming response timeout" (burpsy-react-ui-of0z): how
+	// long this send reads a response it treats as streaming before returning what arrived — see
+	// sender.SendOptions.StreamingTimeout for which responses those are. 0 is no cutoff (Burp's own
+	// "set it to 0"); nil is the network settings' streaming window and promotion rule.
+	StreamingTimeoutMS *int64 `json:"streaming_timeout_ms,omitempty"`
+	// UnpackResponses is Burp's "Unpack compressed responses" (of0z). Nil is Burp's default, ON: a
+	// gzip- or deflate-encoded response is also returned decoded (response_unpacked) for the pane to
+	// show. false shows the compressed bytes. Display only either way — the stored response is always
+	// the bytes that arrived.
+	UnpackResponses *bool `json:"unpack_responses,omitempty"`
+	// H2ConnectionReuse is Burp's "HTTP/2 connection reuse" (burpsy-react-ui-adkx): this tab's h2
+	// sends ride one connection per target, kept open between sends (idle TTL repeaterH2SessionTTL),
+	// and each answer says whether it was the connection's first request ("new") or a later one
+	// ("reused"). Off — every send the first on a fresh connection — is burpsy's default, where
+	// Burp's is on; gaps.md records it.
+	H2ConnectionReuse bool `json:"h2_connection_reuse,omitempty"`
+	// EnforceProtocolCrossDomain is Burp's "Use selected protocol for cross-domain redirects"
+	// (adkx): a followed hop to another host uses the protocol that carried this send, instead of
+	// negotiating its own. Off (Burp's default) negotiates each hop as normal.
+	EnforceProtocolCrossDomain bool `json:"enforce_protocol_cross_domain,omitempty"`
+}
+
+// unpack reports whether this send's response is unpacked for display: Burp's default, on, unless
+// the tab turned it off.
+func (o repeaterSendOptions) unpack() bool {
+	return o.UnpackResponses == nil || *o.UnpackResponses
 }
 
 // validate refuses the whole options object when any key it names is not understood, naming the key
@@ -60,7 +95,34 @@ func (o repeaterSendOptions) validate() error {
 	default:
 		return fmt.Errorf("protocol_preference: unknown preference %q (want auto, http1, http2, or empty for auto)", o.ProtocolPreference)
 	}
+	if o.ResponseTimeoutMS != nil {
+		if err := sender.ValidateResponseTimeoutMS("response_timeout_ms", *o.ResponseTimeoutMS); err != nil {
+			return err
+		}
+	}
+	if o.StreamingTimeoutMS != nil {
+		if err := sender.ValidateStreamingTimeoutMS("streaming_timeout_ms", *o.StreamingTimeoutMS); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// sendContext is ctx carrying this send's response timeout, or ctx itself when there is none. Only
+// called post-validate.
+func (o repeaterSendOptions) sendContext(ctx context.Context) context.Context {
+	if o.ResponseTimeoutMS == nil && o.StreamingTimeoutMS == nil {
+		return ctx
+	}
+	var opts sender.SendOptions
+	if o.ResponseTimeoutMS != nil {
+		opts.ResponseTimeout = time.Duration(*o.ResponseTimeoutMS) * time.Millisecond
+	}
+	if o.StreamingTimeoutMS != nil {
+		opts.StreamingTimeout = time.Duration(*o.StreamingTimeoutMS) * time.Millisecond
+		opts.StreamingTimeoutSet = true
+	}
+	return sender.WithSendOptions(ctx, opts)
 }
 
 // protocolPreference maps the wire value onto the sender's enum. Only called post-validate.

@@ -67,6 +67,12 @@ func descriptorWithTier(name string, scope DispatchScope, enabled func(*ScanConf
 		Enabled:        enabled,
 		Run:            run,
 		Invasiveness:   tier,
+		// What this check detects by, in Burp's vocabulary (burpsy-react-ui-2hze). Read from one
+		// table for every descriptor, so a selection is enforced the same way for all of them.
+		DetectionMethods: append([]string(nil), burpsyDetectionMethods[issue.TypeIndex]...),
+		// Whether skip_server_side_injection_for_parameters exempts a parameter from this check
+		// (burpsy-react-ui-gmdk) — the classification audit.go's skip-list comment said was missing.
+		ServerSideInjection: serverSideInjectionByType[issue.TypeIndex],
 	}
 	if declineReason != "" {
 		d.Implementation = ImplementationDeclined
@@ -155,6 +161,8 @@ func nativeActiveCheckSet() []activeCheck {
 			speed:        d.Speed,
 			phase:        d.Phase,
 			passive:      d.Passive,
+			methods:      d.DetectionMethods,
+			dynamicJS:    isDynamicJavaScriptCheck(d.Enabled),
 			run:          run,
 		})
 	}
@@ -173,7 +181,7 @@ func wrapDescriptor(d CheckDescriptor) func(*ActiveScanner, context.Context, *co
 		if d.Scope == DispatchScopeStoredPerInsertionPoint && s != nil && s.store != nil && exchange != nil {
 			stored, _ = s.store.PriorExchange(exchange.Host, exchange.Port, exchange.TLS, exchange.Path, exchange.ID)
 		}
-		return d.Run(ctx, newCheckContextForRun(ctx, s, exchange, stored))
+		return d.Run(ctx, newCheckContextForCheck(ctx, s, exchange, stored, d))
 	}
 }
 

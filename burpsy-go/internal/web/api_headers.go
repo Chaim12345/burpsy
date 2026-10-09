@@ -39,7 +39,6 @@ package web
 // operator controls those bytes, so a difference in them is a difference they made.
 
 import (
-	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
@@ -251,6 +250,14 @@ func (s *Server) uninterestingHeadersView() uninterestingHeadersResponse {
 	}
 }
 
+// uninterestingHeadersReq is the request body handleUninterestingHeaders decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type uninterestingHeadersReq struct {
+	// Pointers so "not mentioned" and "explicitly empty" are different requests. Without
+	// this, a caller updating only the response list would silently clear the request one.
+	Request  *[]string `json:"request"`
+	Response *[]string `json:"response"`
+}
+
 // handleUninterestingHeaders serves GET and PUT /api/headers/uninteresting.
 //
 // PUT replaces both lists in one call, so a caller cannot end up with one direction saved and the
@@ -260,13 +267,8 @@ func (s *Server) handleUninterestingHeaders(w http.ResponseWriter, r *http.Reque
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.uninterestingHeadersView())
 	case http.MethodPut:
-		var req struct {
-			// Pointers so "not mentioned" and "explicitly empty" are different requests. Without
-			// this, a caller updating only the response list would silently clear the request one.
-			Request  *[]string `json:"request"`
-			Response *[]string `json:"response"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var req uninterestingHeadersReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}

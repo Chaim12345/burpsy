@@ -85,7 +85,7 @@ func TestTheActiveSessionMergesIntoTheSweepPassiveFinding(t *testing.T) {
 	target := core.FindingTarget{Host: "app.test", Port: 80, TLS: false, Path: "/login"}
 
 	// The sweep's passive pass (the same shape liveaudit.go builds):
-	passive := scan.RunPassiveChecks(context.Background(), ex)
+	passive := scan.RunPassiveChecks(context.Background(), ex, scanner.DefaultAuditConfig())
 	if len(passive) == 0 {
 		t.Fatal("control: the passive pass found nothing to add")
 	}

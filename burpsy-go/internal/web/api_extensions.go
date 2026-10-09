@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -194,7 +193,7 @@ func (s *Server) handleExtensionInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req extensionInvokeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable invocation: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -246,7 +245,7 @@ func (s *Server) handleExtensionOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req extensionOrderRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable move: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -283,7 +282,7 @@ func decodeExtensionName(w http.ResponseWriter, r *http.Request) (string, bool) 
 		return "", false
 	}
 	var req extensionNameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "unreadable request: "+err.Error(), http.StatusBadRequest)
 		return "", false
 	}

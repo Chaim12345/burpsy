@@ -96,13 +96,13 @@ func (s *Server) handleBackupConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.loadBackupConfig())
 
 	case http.MethodPut:
-		if s.persist == nil {
-			http.Error(w, "this instance has no project database, so backup settings cannot be saved; start burpsy with -db to persist the project", http.StatusServiceUnavailable)
+		var cfg backupConfig
+		if err := requestJSON(w, r, nil).Decode(&cfg); err != nil {
+			http.Error(w, "Body must be a JSON backup config: interval_minutes, dir, retention, delete_on_shutdown", http.StatusBadRequest)
 			return
 		}
-		var cfg backupConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			http.Error(w, "Body must be a JSON backup config: interval_minutes, dir, retention, delete_on_shutdown", http.StatusBadRequest)
+		if s.persist == nil {
+			http.Error(w, "this instance has no project database, so backup settings cannot be saved; start burpsy with -db to persist the project", http.StatusServiceUnavailable)
 			return
 		}
 		if err := validateBackupConfig(cfg); err != nil {

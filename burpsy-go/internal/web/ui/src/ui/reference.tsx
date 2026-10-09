@@ -29,7 +29,8 @@ export function ReferencePanelView({
   showHeading?: boolean;
 }): JSX.Element {
   return (
-    <section className="reference-panel" id={panelAnchor(panel.id)}>
+    // tabIndex -1 so a documentation link (lib/docs.ts) can move focus here; not in the tab order.
+    <section className="reference-panel" id={panelAnchor(panel.id)} tabIndex={-1} aria-label={panel.title}>
       {showHeading ? <SectionHeading title={panel.title} detail={panel.summary} /> : null}
 
       {(panel.blocks ?? []).map((block) => (
@@ -41,7 +42,7 @@ export function ReferencePanelView({
 
       <dl className="reference-rows">
         {panel.rows.map((row) => (
-          <div key={row.term}>
+          <div key={row.key ?? row.term}>
             <dt>
               {row.keys ? (
                 <span className="reference-keys">
