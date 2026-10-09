@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -275,6 +274,9 @@ func (s *Server) sendOneRepeaterRequest(ctx context.Context, spec repeaterSendSp
 	// SendRawOutcome rather than SendRaw because this row records a Protocol, and since H2-04 the answer is
 	// no longer knowable from the request bytes: an HTTP/1.1 request to a target that negotiates h2 goes out
 	// as h2. The field used to be a hardcoded ProtocolHTTP1, which was already wrong whenever an operator
+	// The tab's response timeout (mmca) rides the context, so it bounds this send and every redirect
+	// hop below without touching the network settings the next send reads.
+	ctx = spec.Options.sendContext(ctx)
 	sendStarted := time.Now()
 	rawResp, outcome, err := s.sender.SendRawOutcome(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, spec.Options.protocolPreference())
 	elapsed := time.Since(sendStarted)
@@ -445,17 +447,43 @@ const (
 type intruderPointsReq struct {
 	MsgID uint64 `json:"msg_id"`
 	All   bool   `json:"all"`
+	// PayloadPlacement is Burp's "Automatic payload placement" (burpsy-react-ui-1krs): "" or
+	// "replace" (the default, what every request got before) or "append". The run request carries the
+	// same field, and the two must agree: these are the spans the UI shows, and /run builds its own.
+	PayloadPlacement string `json:"payload_placement,omitempty"`
 }
 
 // PointView is one discoverable insertion point. Index is the position in the returned slice —
 // that is the handle the UI echoes back in a run's `points`, not a byte offset.
+//
+// Offset and Len are the bytes a payload goes into: for an appending position (placement "append",
+// burpsy-react-ui-1krs) that is the zero-length point after the value — or, for a nested value whose
+// outer encoding is rebuilt, the whole value. Current is always the base value the position carries,
+// so an appended position still names the text its payloads are added to rather than "".
 type PointView struct {
-	Index   int    `json:"index"`
-	Kind    string `json:"kind"`
-	Label   string `json:"label"`
-	Offset  int    `json:"offset"`
-	Len     int    `json:"len"`
-	Current string `json:"current"`
+	Index     int    `json:"index"`
+	Kind      string `json:"kind"`
+	Label     string `json:"label"`
+	Offset    int    `json:"offset"`
+	Len       int    `json:"len"`
+	Current   string `json:"current"`
+	Placement string `json:"placement"`
+}
+
+// intruderPointConfig is the discovery configuration both /points and /run build from a request, so
+// the positions the UI shows are the positions the attack splices — the same family set and the same
+// placement, from one function.
+func intruderPointConfig(all bool, placement string) (*intruder.PointConfig, error) {
+	cfg := intruder.DefaultPointConfig()
+	if all {
+		cfg = intruder.AllPointConfig()
+	}
+	p, err := intruder.ParsePlacement(placement)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Placement = p
+	return cfg, nil
 }
 
 // handleIntruderPoints inspects a stored request for attack insertion points. The UI sends the
@@ -479,20 +507,26 @@ func (s *Server) handleIntruderPoints(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such message", http.StatusNotFound)
 		return
 	}
-	cfg := intruder.DefaultPointConfig()
-	if req.All {
-		cfg = intruder.AllPointConfig()
+	cfg, err := intruderPointConfig(req.All, req.PayloadPlacement)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	found := intruder.FindPoints(msg, cfg)
 	out := make([]PointView, 0, len(found))
 	for i, p := range found {
+		placement := intruder.PlacementReplace
+		if p.Append {
+			placement = intruder.PlacementAppend
+		}
 		out = append(out, PointView{
-			Index:   i,
-			Kind:    p.Kind.String(),
-			Label:   p.Label,
-			Offset:  p.Span.Offset,
-			Len:     p.Span.Len,
-			Current: msg.Text(p.Span),
+			Index:     i,
+			Kind:      p.Kind.String(),
+			Label:     p.Label,
+			Offset:    p.Span.Offset,
+			Len:       p.Span.Len,
+			Current:   msg.Text(p.BaseSpan()),
+			Placement: placement.String(),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -511,17 +545,21 @@ type autoPauseReq struct {
 }
 
 type intruderRunReq struct {
-	MsgID          uint64                    `json:"msg_id"`
-	Target         string                    `json:"target"`
-	All            bool                      `json:"all"`
-	PointIndex     *int                      `json:"point_index"`
-	ManualPoints   *[]intruder.ManualSpan    `json:"manual_points"`
-	Payloads       *[]string                 `json:"payloads"`
-	Mode           *string                   `json:"mode"`
-	Points         *[]int                    `json:"points"`
-	PayloadSets    *[][]string               `json:"payload_sets"`
-	PayloadSources *[]intruder.PayloadSource `json:"payload_sources"`
-	PayloadRules   *[]intruder.RuleSpec      `json:"payload_rules"`
+	MsgID      uint64 `json:"msg_id"`
+	Target     string `json:"target"`
+	All        bool   `json:"all"`
+	PointIndex *int   `json:"point_index"`
+	// PayloadPlacement is "Automatic payload placement" (1krs), the same field /points takes: the
+	// discovered positions `points` indexes are rebuilt here with it, so it must be what the UI
+	// discovered with. Manual points are never affected.
+	PayloadPlacement string                    `json:"payload_placement,omitempty"`
+	ManualPoints     *[]intruder.ManualSpan    `json:"manual_points"`
+	Payloads         *[]string                 `json:"payloads"`
+	Mode             *string                   `json:"mode"`
+	Points           *[]int                    `json:"points"`
+	PayloadSets      *[][]string               `json:"payload_sets"`
+	PayloadSources   *[]intruder.PayloadSource `json:"payload_sources"`
+	PayloadRules     *[]intruder.RuleSpec      `json:"payload_rules"`
 	// AutoPause is Burp's auto-pause (burpsy-react-ui-8f2): pause the attack when any listed
 	// expression appears in a response (or, with missing=true, when none does). Nil is
 	// unconfigured. Simple strings are case-folded unless case_sensitive; regex entries
@@ -556,6 +594,25 @@ type intruderRunReq struct {
 	GrepMatchCaseSensitive *bool `json:"grep_match_case_sensitive"`
 	// GrepMatchExcludeHeaders searches the response body only — Burp's "Exclude HTTP headers".
 	GrepMatchExcludeHeaders *bool `json:"grep_match_exclude_headers"`
+	// GrepPayloads is Burp's Grep - Payloads (burpsy-react-ui-7qc3): {enabled, case_sensitive,
+	// exclude_headers, match_pre_url_encoded}, each false when omitted from the object. Nil — the field
+	// absent — is the reflection check every attack ran before it existed (intruder.LegacyGrepPayloads:
+	// on, case-sensitive, headers included, matched as sent), so a scripted attack's buckets do not
+	// change unless the request says so. The bundled UI always sends the object.
+	GrepPayloads *intruder.GrepPayloads `json:"grep_payloads,omitempty"`
+	// CaptureFilter is Burp's results capture filter (burpsy-react-ui-ip2b): {discard_no_response, term,
+	// regex, case_sensitive, negate, statuses}. Items it rejects are counted (sent/failed, buckets, the
+	// report's discarded) but leave no results row and no stored request or response. Nil captures
+	// everything, as every attack did before it existed. Distinct from the page's view filter, which only
+	// hides rows that were captured.
+	CaptureFilter *intruder.CaptureFilterSpec `json:"capture_filter,omitempty"`
+	// StoreRequests and StoreResponses are Burp's "Store requests / responses" attack-results settings
+	// (burpsy-react-ui-nqww): whether the exact requests (the attempt rows' and each bucket's) and each
+	// bucket's exemplar response go into the traffic store. Nil is true — Burp's default and what every
+	// attack did before the fields existed. Off, the ids go out null and the report's requests_stored /
+	// responses_stored say why; the attack still sends, buckets, greps and feeds the session jar.
+	StoreRequests  *bool `json:"store_requests,omitempty"`
+	StoreResponses *bool `json:"store_responses,omitempty"`
 	// Retries is Burp's "Number of retries on network failure" (n39). Nil means Burp's own
 	// default of 3 — Zrur: requireNonNullElse(numretries, "3") — because the operator who
 	// never thought about error handling is exactly the person Burp's default protects, and a
@@ -588,7 +645,17 @@ type intruderRunReq struct {
 	// a different number. See intruder.DelayVariation.
 	DelaySeed   *uint64 `json:"delay_seed"`
 	MaxRequests *int    `json:"max_requests"`
-	TimeoutMS   *uint64 `json:"timeout_ms"`
+	// TimeoutMS is the TOTAL per-attempt deadline: the whole send, a followed redirect chain included.
+	// Nil is intruderDefaultTimeoutMS. Unchanged by response_timeout_ms below, which is a different
+	// bound.
+	TimeoutMS *uint64 `json:"timeout_ms"`
+	// ResponseTimeoutMS is Burp's per-request response timeout (RequestOptions.withResponseTimeout,
+	// burpsy-react-ui-mmca): how long each request in this attack waits for its response, replacing
+	// the network settings' read timeout for this attack's sends only — the shared settings every
+	// other tool reads are not touched. Nil is the standing read timeout. It is clamped by timeout_ms
+	// when that is shorter, and refused when it is longer than a timeout_ms that was given, because
+	// the operator typed two bounds and one of them could never apply.
+	ResponseTimeoutMS *int64 `json:"response_timeout_ms,omitempty"`
 	// FollowRedirects is Burp's Intruder "Follow redirections" (tools/intruder/configure-attack/
 	// settings.html: Never / On-site only / In-scope only / Always). Nil or empty is the standing
 	// network policy — the same fallback repeaterSendOptions.RedirectMode uses for Repeater's own
@@ -609,6 +676,27 @@ type intruderRunReq struct {
 	// whether a client's saved attack resumes with the setting on or off.
 	SetConnectionClose *bool `json:"set_connection_close,omitempty"`
 	StorePayloads      *bool `json:"store_full_payloads,omitempty"`
+	// HTTP1ConnectionReuse is Burp's "HTTP/1 connection reuse" (burpsy-react-ui-xhqr): requests ride
+	// idle HTTP/1 connections to the target, at most max_in_flight of them, instead of dialling once
+	// per request. Every request is still authorised on its own bytes (AuthorisedSender.SendReusing).
+	// Nil or false is the old behaviour — one connection per request, closed after the response. The
+	// bundled UI sends true, Burp's own default; an API client that never names it keeps what it had.
+	// Refused together with set_connection_close: a request that says Connection: close is never
+	// reused, so the pair would describe an attack that asked for reuse and could never get any.
+	HTTP1ConnectionReuse *bool `json:"http1_connection_reuse,omitempty"`
+	// HTTPVersion is Burp's per-attack "HTTP version" override (xhqr): "" (or absent) negotiates as
+	// every send does, "http1" pins HTTP/1.1 so the bytes go out as written, "http2" requires h2
+	// where the request can be carried over it. Pins that do not happen are reported as downgrades,
+	// the same as Repeater's protocol_preference.
+	HTTPVersion *string `json:"http_version,omitempty"`
+	// UpdateHostHeader is Burp's "Update Host header to match target" (burpsy-react-ui-ety8): every
+	// request's Host header is rewritten to the attack's target authority, after the payload splice,
+	// so a captured request retargeted at another host does not go out naming the old one. Skipped —
+	// and the report says why — when a selected position covers the Host header (the position being
+	// fuzzed wins, Burp's rule for cookies too) or the base request does not carry exactly one Host
+	// header. The bundled UI sends true, Burp's default; an absent field means false, which is what
+	// every API client got before this existed. gaps.md records the split.
+	UpdateHostHeader *bool `json:"update_host_header,omitempty"`
 }
 
 // intruderLimits resolves one attack's bounds: a saved pool by name, or the inline form.
@@ -779,6 +867,23 @@ type RunView struct {
 	// or every hop was refused by policy or scope — the same "prove the setting did something"
 	// discipline AutoThrottleEngaged already holds the rate limiter to.
 	RedirectsFollowed int `json:"redirects_followed"`
+	// ConnectionsOpened and ConnectionsReused are what HTTP/1 connection reuse did (xhqr): sockets
+	// this attack dialled, and requests that completed on a socket an earlier request had used. Both
+	// null when reuse was off — every request then had a connection of its own and nothing was
+	// counted — so "reuse was off" and "reuse was on and never happened" are different JSON. Redirect
+	// hops always dial their own connection and are in neither count.
+	ConnectionsOpened *int64 `json:"connections_opened"`
+	ConnectionsReused *int64 `json:"connections_reused"`
+	// HostHeaderUpdated says "Update Host header to match target" (ety8) was applied: every request's
+	// Host header was rewritten to the target authority, except the HostHeaderUntouched ones.
+	// HostHeaderSkipped is why it was not applied at all when it was asked for — a position covers
+	// the Host header, or the base request does not carry exactly one — and empty otherwise.
+	// HostHeaderUntouched counts requests a payload left with other than one Host header, which were
+	// sent as spliced rather than rewritten: a payload that adds a Host header is a probe, and
+	// choosing which of two to rewrite would change what it tests.
+	HostHeaderUpdated   bool   `json:"host_header_updated"`
+	HostHeaderSkipped   string `json:"host_header_skipped"`
+	HostHeaderUntouched int    `json:"host_header_untouched"`
 }
 
 // intruderSessionCookies reports the jar's contribution to one attack, by cookie name.
@@ -866,9 +971,10 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		kind = k
 	}
 
-	cfg := intruder.DefaultPointConfig()
-	if req.All {
-		cfg = intruder.AllPointConfig()
+	cfg, err := intruderPointConfig(req.All, req.PayloadPlacement)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	discovered := intruder.FindPoints(msg, cfg)
 	wanted, err := selectPoints(req.Points, req.PointIndex, len(discovered))
@@ -891,10 +997,12 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		selected = append(selected, discovered[i])
 	}
 	// Manual-vs-discovered overlap is refused here, naming the marking, rather than left to the
-	// splice's earliest-span-wins rule, which would silently drop one of the two payloads.
+	// splice's earliest-span-wins rule, which would silently drop one of the two payloads. The splice's
+	// own predicate, so a zero-length appended position touching a manual marker's edge is refused
+	// here rather than dropped there (1krs).
 	for _, m := range manual {
 		for _, d := range selected {
-			if m.Span.Offset < d.Span.Offset+d.Span.Len && d.Span.Offset < m.Span.Offset+m.Span.Len {
+			if intruder.SpansOverlap(m.Span, d.Span) {
 				http.Error(w, fmt.Sprintf("manual point %q overlaps discovered point %q", m.Label, d.Label), http.StatusBadRequest)
 				return
 			}
@@ -910,6 +1018,15 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("%s requires between 2 and 20 payload positions, got %d", kind, len(selected)), http.StatusBadRequest)
 		return
 	}
+	// The send settings, resolved before any payload is generated: a refused setting must not leave
+	// minted Collaborator addresses behind in the hub, and must not be discovered on the first send.
+	// See intruder_send.go.
+	sendPlan, err := s.buildIntruderSendPlan(req, msg.Raw(), selected, host, port, tls)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer sendPlan.close()
 
 	// A literal list is a PayloadSource variant, so the three request shapes collapse to one type
 	// here and everything downstream — count checks, resolution, processing — happens once.
@@ -1090,6 +1207,15 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Compiled before any request is sent, like the grep patterns: a filter whose term does not compile
+	// would otherwise capture everything or nothing, and either is a filter the operator did not set.
+	var capture *intruder.CaptureFilter
+	if req.CaptureFilter != nil {
+		if capture, err = intruder.NewCaptureFilter(*req.CaptureFilter); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// A named pool and inline limits are two ways of saying the same thing, and an attack may use
 	// either — a pool is a resolution step in front of the inline form, not a replacement for it. What
 	// it may not do is say both: the operator would have typed two different sets of bounds and had
@@ -1112,100 +1238,23 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	plan := intruder.NewAttackPlan(kind, len(selected), setLens, bound).WithCopies(copyFrom)
 
-	timeout := time.Duration(intruderDefaultTimeoutMS) * time.Millisecond
-	if req.TimeoutMS != nil {
-		timeout = time.Duration(*req.TimeoutMS) * time.Millisecond
-	}
-
-	// Burp's "Follow redirections" (tirx): resolved once, before the send closure, so a bad mode
-	// is refused before any request goes out rather than discovered on the first 30x.
-	redirectPolicy, rerr := intruderRedirectPolicy(req.FollowRedirects, s.sender.Network().Redirects)
-	if rerr != nil {
-		http.Error(w, rerr.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// One authorising sender for the whole attack. The scope decision still happens once per
-	// spliced request — which is what matters, because a payload landing in a path position
-	// rewrites the request line, so the request that goes out may address something a host-level
-	// check never saw.
-	auth := sender.NewAuthorisedSender(s.scope, s.sender, host, port, tls)
 	ctx := r.Context()
-
-	// The session cookie jar, applied to every spliced request. Burp's jar "is shared between all of
-	// Burp's tools"; before this it reached only the Repeater, so an attack against an authenticated
-	// endpoint reported the login wall instead of the endpoint. Resolved once here rather than per
-	// request: an attack must ask the same question of every payload, and a jar that changed
-	// mid-attack would make the buckets incomparable.
-	//
-	// exemptCookies are the cookie names this attack is fuzzing. Burp: "when the Scanner or Intruder
-	// makes a request that manipulates a cookie […] the session handling action is not applied to
-	// that request." Refreshing the position being fuzzed from the jar would send the same request
-	// every time and produce one meaningless bucket. See internal/web/intruder_cookies.go.
-	jarHeader := s.cookieHeaderFor(host, port, tls, targetPathOf(req.Target))
-	exemptCookies := exemptCookieNames(selected)
-
-	// redirectsFollowed counts every hop this attack actually sent, across every attempt — the
-	// report's own proof that the setting did something, the same discipline AutoThrottleEngaged
-	// already holds to. Atomic because every attempt's send runs on its own goroutine (engine.go's
-	// driver loop), all writing through this one closure.
-	var redirectsFollowed atomic.Int64
-	send := func(raw []byte) (intruder.Sent, error) {
-		sendStarted := time.Now()
-		sctx := ctx
-		var cancel context.CancelFunc
-		if timeout > 0 {
-			sctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-		// After the splice, never before: insertion points are byte spans into the base request, and
-		// a header added to the base would shift every span after it.
-		raw = applyJarCookies(raw, jarHeader, exemptCookies)
-		res, err := auth.Send(sctx, raw)
-		if err != nil {
-			return intruder.Sent{}, err
-		}
-		respRaw, status := res.Raw, res.Status
-		if redirectPolicy.Mode != sender.RedirectNever {
-			// Every hop re-authorised on its own rendered bytes through the same AuthorisedSender the
-			// first send used — the intruder.go file header's whole point: "if an attack ever needs to
-			// follow a redirect it must do so per hop, re-authorising the new authority through the
-			// scope chokepoint, because a 30x is exactly how a target steers an attack somewhere nobody
-			// authorised." A chain FollowRedirectsAfterPolicy could not evaluate, or that the policy or
-			// scope refused past the first hop, leaves respRaw as the 30x itself — result.Final is
-			// always that response in that case, never a fabrication (see FollowRedirectsAfterPolicy's
-			// own doc), which is exactly what an operator who asked to follow and got refused should see.
-			if result, ferr := auth.FollowRedirectsAfterPolicy(sctx, raw, res.Raw, redirectPolicy); ferr == nil && result.Final != nil {
-				// Final.Raw is always set on this entry point (FollowRedirectsAfterPolicy builds Final
-				// from responseFromRaw or a followed hop's own wire bytes, never the typed transport
-				// path that has none — see FollowResult.Final's own doc), so this is the response the
-				// engine's grep, reflection and bucketing will actually see.
-				respRaw = result.Final.Raw
-				status = &result.Final.StatusCode
-				if result.Sent > 1 {
-					redirectsFollowed.Add(int64(result.Sent - 1))
-				}
-			}
-		}
-		// Timed across the whole closure, not just the first hop's res.Duration: once redirects are
-		// being followed, "how long this attempt took" means the whole chain, the same way Burp's own
-		// timing describes what an operator waited for, not the first response of several.
-		return intruder.Sent{Raw: respRaw, Duration: time.Since(sendStarted), Status: status}, nil
-	}
+	send := sendPlan.sendFn(ctx)
 	// The response recorder remains the engine's one-per-bucket exemplar rule. The exact-request
 	// recorder is attached to the attack after construction below, for the bounded attempt rows.
 	record := func(raw []byte) uint64 {
 		id, _ := s.store.Put(raw, core.DirectionResponse)
-		// The jar's monitored-tool set (burpsy-react-ui-sn3j): the exemplar is one stored
-		// response per result bucket, so this offers the jar the Set-Cookie lines of each
-		// distinct behaviour the attack actually saw — not one per request, which would multiply
-		// the same lines by the bucket's count and is the same restraint the engine's memory
-		// contract already holds. Absorbing here, beside the store write, keeps the capture
-		// point the one place a response becomes observable.
+		return uint64(id)
+	}
+	// The jar's monitored-tool set (burpsy-react-ui-sn3j): the response opening each result bucket
+	// offers the jar its Set-Cookie lines — one per distinct behaviour the attack saw, not one per
+	// request, the restraint the engine's memory contract already holds. It is the engine's Observe
+	// hook rather than part of record, because a response the capture filter discards (ip2b) or an
+	// attack that does not store responses (nqww) must not silently stop the jar learning.
+	observe := func(raw []byte) {
 		if s.sessionCoordinator != nil {
 			s.sessionCoordinator.AbsorbResponseCookies(session.SourceIntruder, host, port, tls, raw)
 		}
-		return uint64(id)
 	}
 
 	control := intruder.NewControl()
@@ -1218,6 +1267,11 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 		// "off" at the engine, which is the same thing — the fields exist so the UI can ask.
 		WithSetConnectionClose(req.SetConnectionClose != nil && *req.SetConnectionClose).
 		WithStorePayloads(req.StorePayloads != nil && *req.StorePayloads)
+	if req.GrepPayloads != nil {
+		attack.WithGrepPayloads(*req.GrepPayloads)
+	}
+	attack.WithCapture(capture)
+	attack.Observe = observe
 	// Recursive grep (ztuu): the chain driver. Attached only when the request names it, so an
 	// ordinary attack's Run path is byte-for-byte what it always was. Two wire shapes carry the
 	// config: the explicit request field, and a per-position payload_sources entry (Burp's own
@@ -1297,7 +1351,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	// questions, and an operator who pressed "pause everything" should not have to find this
 	// attack's own button as well.
 	attack.SuiteGate = s.tasks.GateCheck
-	attack.RecordRequest = true
+	// "Store requests" / "Store responses" (nqww), Burp's defaults on.
+	attack.RecordRequest = req.StoreRequests == nil || *req.StoreRequests
+	attack.StoreResponses = req.StoreResponses == nil || *req.StoreResponses
 	attack.RequestFn = func(raw []byte) uint64 {
 		id, err := s.store.Put(raw, core.DirectionRequest)
 		if err != nil {
@@ -1333,6 +1389,9 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	})
 	defer s.attacks.remove(task.ID())
 
+	// HTTP/1 connection reuse (xhqr) is bounded by the attack's own concurrency, read off the attack
+	// after every adjustment above, so the pool can never hold more sockets than the attack can use.
+	sendPlan.startPool(attack.Limits.MaxInFlight)
 	report := intruder.Run(attack, send, record)
 	task.Advance(uint64(report.Sent + report.Failed))
 	// Stop, not Finish, for an attack that was halted. A stopped run reported as done is a report over
@@ -1405,6 +1464,14 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 			Payloads:     examplePayloads(b.FirstOrdinal),
 		})
 		seenOrdinal[b.FirstOrdinal] = true
+		// A bucket whose opening response the capture filter discarded keeps its exemplar from a later
+		// ordinal (ip2b); that ordinal's payloads are what its stored exchange carries.
+		if eo := b.ExampleOrdinal; eo != nil && !seenOrdinal[*eo] {
+			seenOrdinal[*eo] = true
+			if pl := examplePayloads(*eo); len(pl) > 0 {
+				examples = append(examples, BucketExample{FirstOrdinal: *eo, Payloads: pl})
+			}
+		}
 	}
 	for _, a := range report.Attempts {
 		if seenOrdinal[a.Ordinal] {
@@ -1417,11 +1484,16 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RunView{
-		Report:            *report,
-		Examples:          examples,
-		PayloadSets:       resolved,
-		SessionCookies:    intruderSessionCookieView(jarHeader, exemptCookies),
-		RedirectsFollowed: int(redirectsFollowed.Load()),
+		Report:              *report,
+		Examples:            examples,
+		PayloadSets:         resolved,
+		SessionCookies:      intruderSessionCookieView(sendPlan.jarHeader, sendPlan.exemptCookies),
+		RedirectsFollowed:   int(sendPlan.redirectsFollowed.Load()),
+		ConnectionsOpened:   sendPlan.connectionsOpened(),
+		ConnectionsReused:   sendPlan.connectionsReused(),
+		HostHeaderUpdated:   sendPlan.hostValue != "",
+		HostHeaderSkipped:   sendPlan.hostSkipped,
+		HostHeaderUntouched: int(sendPlan.hostUntouched.Load()),
 	})
 }
 

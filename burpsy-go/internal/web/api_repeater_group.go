@@ -345,7 +345,7 @@ func (s *Server) sendGroupItemSynchronized(
 	ctx context.Context, tabID string, spec repeaterSendSpec, sync sender.SyncPoints,
 ) repeaterGroupItemResult {
 	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendSynchronized(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
+	rawResp, outcome, err := s.sender.SendSynchronized(spec.Options.sendContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
@@ -430,7 +430,19 @@ func (s *Server) sendGroupOnOneConnection(
 		raws[i] = spec.Raw
 	}
 
-	exchanges, err := s.sender.SendKeepAlive(ctx, first.Host, first.Port, first.TLS, raws)
+	// One socket, one context: SendKeepAlive bounds every exchange with the same per-send deadline, so
+	// a per-tab response timeout (mmca) can apply here only when every tab in the group agrees on it.
+	// Tabs that disagree are refused by name rather than having all but one tab's setting dropped.
+	for i, spec := range specs {
+		if !sameResponseTimeout(spec.Options.ResponseTimeoutMS, first.Options.ResponseTimeoutMS) {
+			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
+				"refused: on one connection every request shares one response timeout, and tab %s says %s while tab %s says %s. "+
+					"Give the tabs the same response timeout, or send on separate connections",
+				sent[0].TabID, describeResponseTimeout(first.Options.ResponseTimeoutMS),
+				sent[i].TabID, describeResponseTimeout(spec.Options.ResponseTimeoutMS))}
+		}
+	}
+	exchanges, err := s.sender.SendKeepAlive(first.Options.sendContext(ctx), first.Host, first.Port, first.TLS, raws)
 	if err != nil {
 		// SendKeepAlive's error return is reserved for a failure before any exchange could be attempted
 		// — the dial. Nothing went out, so this is the group's failure, not an item's.
@@ -477,4 +489,20 @@ func repeaterAuthority(spec repeaterSendSpec) string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d", scheme, spec.Host, spec.Port)
+}
+
+// sameResponseTimeout reports whether two tabs' response-timeout overrides are the same setting.
+func sameResponseTimeout(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// describeResponseTimeout names a tab's response-timeout setting for a refusal.
+func describeResponseTimeout(ms *int64) string {
+	if ms == nil {
+		return "the standing read timeout"
+	}
+	return fmt.Sprintf("%d ms", *ms)
 }

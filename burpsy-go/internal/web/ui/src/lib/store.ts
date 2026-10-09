@@ -257,6 +257,14 @@ export interface IntruderConfig {
  label: string;
  mode: AttackMode;
  allPoints: boolean;
+ /**
+  * Burp's "Automatic payload placement" (burpsy-react-ui-1krs): whether discovered parameter values are
+  * replaced by the payload or have it appended. Sent to /points and /run alike — the positions on screen
+  * must be the ones the attack splices — and changing it clears the discovered points, which were
+  * measured under the other placement. Burp keeps this as a user setting; here it travels with the
+  * attack, like every other setting on this page.
+  */
+ payloadPlacement: "replace" | "append";
  points: PointView[];
  selected: number[];
  /** Hand-marked payload positions (Burp's Add §), with the text they cover. */
@@ -280,6 +288,35 @@ export interface IntruderConfig {
  grepMatchCaseSensitive: boolean;
  /** Burp's "Exclude HTTP headers" — the list searches the response body only. */
  grepMatchExcludeHeaders: boolean;
+ /**
+  * Burp's Grep - Payloads (burpsy-react-ui-7qc3): search each response for the payloads that produced
+  * it, with a count column per payload set. Burp's own defaults are off / case-insensitive / headers
+  * included / match pre-URL-encoded ON; burpsy keeps the search ON by default, because reflection has
+  * always been a third of its result-bucket key (gaps.md). The other three are Burp's.
+  */
+ grepPayloadsEnabled: boolean;
+ grepPayloadsCaseSensitive: boolean;
+ grepPayloadsExcludeHeaders: boolean;
+ grepPayloadsMatchPreEncoded: boolean;
+ /**
+  * Burp's results capture filter (burpsy-react-ui-ip2b). Off by default — Burp captures everything until a
+  * filter is applied. Discarded items leave no row and no stored messages, and cannot be recovered; their
+  * counts survive. Statuses are the classes captured.
+  */
+ captureFilterEnabled: boolean;
+ captureDiscardNoResponse: boolean;
+ captureTerm: string;
+ captureRegex: boolean;
+ captureCaseSensitive: boolean;
+ captureNegate: boolean;
+ captureStatuses: ("2xx" | "3xx" | "4xx" | "5xx")[];
+ /**
+  * Burp's "Store requests" / "Store responses" (burpsy-react-ui-nqww). On by default, as in Burp. Off, the
+  * attack still sends, buckets and greps every request; it just does not keep that half in the traffic
+  * store, so its rows cannot be opened, resent or compared.
+  */
+ storeRequests: boolean;
+ storeResponses: boolean;
  /** Burp's auto-pause (2cvk). `autoPauseEnabled` is the switch: when it is off the whole block is
   *  omitted from the launch body, so "did not choose" and "chose an empty expression list" stay
   *  two different requests rather than one request that means both. */
@@ -315,6 +352,31 @@ export interface IntruderConfig {
   */
  setConnectionClose: boolean;
  storePayloads: boolean;
+ /**
+  * Burp's per-request response timeout (RequestOptions.withResponseTimeout, burpsy-react-ui-mmca),
+  * in milliseconds, as typed. Empty means the standing network read timeout; the server receives
+  * `response_timeout_ms` only when this holds a positive number. Text, like `retries`, so "not set"
+  * and an explicit value stay two different attacks.
+  */
+ responseTimeoutMS: string;
+ /**
+  * Burp's "HTTP/1 connection reuse" (burpsy-react-ui-xhqr). On by default, as Burp's own reset
+  * defaults select it (the decompiled Intruder panel's reset sets both its override switch and
+  * "default HTTP/1 keep-alive if supported" to selected). The server's default for an absent field is
+  * off, so this is the one place the Burp default is chosen. Not sent while Set Connection header is
+  * on: the server refuses the pair, because a Connection: close request is never reused.
+  */
+ http1ConnectionReuse: boolean;
+ /** Burp's per-attack "HTTP version" override (xhqr): "" negotiates, "http1" pins HTTP/1.1, "http2"
+  *  requires h2 where the request can be carried over it. */
+ httpVersion: "" | "http1" | "http2";
+ /**
+  * Burp's "Update Host header to match target" (burpsy-react-ui-ety8). On by default, as in Burp
+  * ("By default, Update Host header to match target is selected"); the server's default for an
+  * absent field is off. The server stands the setting aside, and says so, when a position covers
+  * the Host header.
+  */
+ updateHostHeader: boolean;
 }
 
 /**
@@ -409,6 +471,7 @@ export function emptyIntruderConfig(): IntruderConfig {
   label: "",
   mode: "sniper",
   allPoints: false,
+  payloadPlacement: "replace",
   points: [],
   selected: [],
   manualSpans: [],
@@ -427,6 +490,19 @@ export function emptyIntruderConfig(): IntruderConfig {
   grepMatchList: [],
   grepMatchCaseSensitive: false,
   grepMatchExcludeHeaders: false,
+  grepPayloadsEnabled: true,
+  grepPayloadsCaseSensitive: false,
+  grepPayloadsExcludeHeaders: false,
+  grepPayloadsMatchPreEncoded: true,
+  captureFilterEnabled: false,
+  captureDiscardNoResponse: false,
+  captureTerm: "",
+  captureRegex: false,
+  captureCaseSensitive: false,
+  captureNegate: false,
+  captureStatuses: ["2xx", "3xx", "4xx", "5xx"],
+  storeRequests: true,
+  storeResponses: true,
  autoPauseEnabled: false,
  autoPauseMode: "appears",
  autoPauseExpressions: [],
@@ -443,7 +519,31 @@ export function emptyIntruderConfig(): IntruderConfig {
   baseline: false,
   setConnectionClose: false,
   storePayloads: false,
+  responseTimeoutMS: "",
+  http1ConnectionReuse: true,
+  httpVersion: "",
+  updateHostHeader: true,
  };
+}
+
+/**
+ * Hydrate the persisted workspace over the live defaults.
+ *
+ * zustand's default merge is shallow, so a persisted `intruder` object REPLACES the default one
+ * wholesale — and an attack saved before a setting existed comes back with that setting undefined.
+ * For a boolean whose default is true (Burp's "Update Host header to match target", its HTTP/1
+ * connection reuse) undefined reads as off and sends nothing, so a reload would quietly change what
+ * the attack does. Filling the attack from emptyIntruderConfig() first means a field the page grew
+ * later arrives with its own default rather than with nothing.
+ */
+export function mergePersistedWorkspace<T extends { intruder: IntruderConfig }>(persisted: unknown, current: T): T {
+ if (typeof persisted !== "object" || persisted === null) return current;
+ const saved = persisted as Partial<T>;
+ const merged = { ...current, ...saved } as T;
+ if (saved.intruder && typeof saved.intruder === "object") {
+  merged.intruder = { ...emptyIntruderConfig(), ...saved.intruder };
+ }
+ return merged;
 }
 
 let sequence = 0;
@@ -1107,7 +1207,7 @@ export const useApp = create<AppState>()(
    setCheckedExchanges: (checkedExchanges) => set({ checkedExchanges }),
    focusIssue: (issueFocus) => set({ issueFocus }),
   }),
-  { name: "burpsy.workspace", partialize: persistedWorkspace },
+  { name: "burpsy.workspace", partialize: persistedWorkspace, merge: mergePersistedWorkspace },
  ),
 );
   /** Move one tab to `index` in the strip (fkj). A pure reorder: membership, colour and content

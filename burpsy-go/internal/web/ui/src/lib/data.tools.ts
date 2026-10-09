@@ -295,7 +295,7 @@ export function useSetInterceptNewlineCorrection() {
 
 export function useIntruderPoints() {
   return useMutation({
-    mutationFn: (body: { msg_id: number; all: boolean }) =>
+    mutationFn: (body: { msg_id: number; all: boolean; payload_placement?: "append" }) =>
       api<PointView[]>("/api/intruder/points", json("POST", body)),
   });
 }

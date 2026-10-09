@@ -27,8 +27,8 @@ function fullConfig(): IntruderConfig {
     mode: "cluster_bomb",
     allPoints: true,
     points: [
-      { index: 0, kind: "param_body", label: "user", offset: 120, len: 5, current: "admin" },
-      { index: 1, kind: "header", label: "X-Token", offset: 60, len: 8, current: "deadbeef" },
+      { index: 0, kind: "param_body", label: "user", offset: 125, len: 0, current: "admin", placement: "append" },
+      { index: 1, kind: "header", label: "X-Token", offset: 60, len: 8, current: "deadbeef", placement: "replace" },
     ],
     selected: [0, 1],
     payloadTexts: ["admin\nroot", "a\nb\nc"],
@@ -84,6 +84,25 @@ function fullConfig(): IntruderConfig {
   autoPauseExpressions: ["account locked", "", "429"],
   autoPauseSimple: false,
   autoPauseCaseSensitive: true,
+  // The send settings (xixe.1 Phase 1), non-default for the same reason.
+  responseTimeoutMS: "20000",
+  http1ConnectionReuse: false,
+  httpVersion: "http1",
+  updateHostHeader: false,
+  payloadPlacement: "append",
+  grepPayloadsEnabled: false,
+  grepPayloadsCaseSensitive: true,
+  grepPayloadsExcludeHeaders: true,
+  grepPayloadsMatchPreEncoded: false,
+  captureFilterEnabled: true,
+  captureDiscardNoResponse: true,
+  captureTerm: "Welcome",
+  captureRegex: true,
+  captureCaseSensitive: true,
+  captureNegate: true,
+  captureStatuses: ["2xx", "5xx"],
+  storeRequests: false,
+  storeResponses: false,
   };
 }
 

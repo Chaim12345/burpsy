@@ -1588,6 +1588,198 @@ work: record the discovered-but-not-queued subresource hosts as an explicit cove
 report (no new egress), or fetch them behind a switch that defaults off like Burp's. The first is the
 honest one and is the smaller.
 
+## Intruder and Repeater send settings (burpsy-react-ui-xixe.1, Phase 1, 2026-10-08)
+
+Burp-parity, not Rust-parity: `crates/` has none of these. Recorded here because each one is a
+place burpsy's defaults or reach differ from Burp's in a way an operator cannot see from the UI.
+
+### Per-send response timeout (mmca)
+
+**Burp:** `RequestOptions.withResponseTimeout` — "the timeout to be used while reading the response".
+**burpsy:** `response_timeout_ms` on the Intruder run request and on Repeater's per-tab options. It
+rides the send's context (`sender.WithSendOptions`) and `setDeadline` prefers it over
+`NetworkSettings.readTimeout`, so one tab's slow time-based probe no longer means raising the global
+read timeout for every tool. The shared settings are never mutated.
+
+- Intruder keeps its existing `timeout_ms` as the TOTAL per-attempt deadline (redirect chain
+  included). `response_timeout_ms` is clamped by it, and refused when it is longer than a `timeout_ms`
+  the request also gave.
+- Zero is refused rather than read as "no bound": the network settings use 0 for "no deadline of our
+  own", and a field named for a bound must not be able to mean its opposite.
+- Repeater's single-connection group mode shares one deadline across every request on the socket,
+  so tabs that disagree about the timeout are refused by name rather than having all but one dropped.
+- Not covered: the typed `Sender.Send` path (net/http's client). Nothing that offers the option sends
+  through it.
+
+### HTTP/1 connection reuse and the HTTP version override (xhqr)
+
+**Burp:** Intruder settings "HTTP/1 connection reuse … can greatly increase the speed of your
+attacks"; "HTTP version … Override the project-level HTTP/2 setting". Reuse is on by default: the
+decompiled panel's reset (`Zruy.Zc5`) selects both `intruderOverrideHttp1KeepAliveSwitch` and
+`intruderDefaultHttp1KeepAliveIfSupportedCheckbox`.
+**burpsy:** `http1_connection_reuse` and `http_version` on the run request; `sender.ConnPool` +
+`AuthorisedSender.SendReusing` (`internal/sender/connpool.go`). Every request is still authorised on
+its own bytes before a connection is checked out. The report carries `connections_opened` and
+`connections_reused` (both `null` when reuse is off, so "off" and "on but never reused" differ).
+
+- **Default differs by surface, on purpose.** The bundled UI sends `http1_connection_reuse: true`
+  (Burp's default). An API request that omits the field gets `false` — one connection per request,
+  what every client got before this field existed — so no scripted attack changes behaviour silently.
+- **h2 is not pooled.** Burp has a separate "HTTP/2 connection reuse"; burpsy does not. A send that
+  offers h2 to an authority not already known to decline it dials fresh, and an h2 exchange closes
+  its connection (counted as opened, never as reused). Against an h2 target with `http_version`
+  negotiating, `connections_reused` is therefore 0 — reported, not hidden. Pin `http1` to reuse.
+- **Stricter than Burp about what is reused.** A connection goes back only after a response delimited
+  by its own framing (never read-to-close), with nothing buffered past it, no `Connection: close` or
+  HTTP/1.0 on either side, a final status, and not after HEAD or CONNECT. An idle connection is
+  probed (1 ms read) before reuse; one that died between the probe and the write is retried on a
+  fresh connection only for an idempotent method (net/http's rule).
+- `http1_connection_reuse` with `set_connection_close` is refused naming both: the pair asks for
+  reuse that can never happen.
+- Redirect hops (`follow_redirects`) dial their own connections and are in neither count.
+
+### Update Host header to match target (ety8)
+
+**Burp:** positions.html — "By default, Update Host header to match target is selected."
+**burpsy:** `update_host_header` on the run request. Every request's Host header is rewritten to the
+target authority (default port omitted, IPv6 bracketed, the typed name — never a resolved address)
+after the payload splice, where the session jar is applied, so no span offset moves.
+
+- **Default differs by surface, on purpose.** The bundled UI sends `true` (Burp's default); an API
+  request that omits the field gets `false`, the captured Host as before, so no scripted attack
+  changes the bytes it sends without saying so.
+- Stood aside, and reported in `host_header_skipped`, when a selected position covers the Host
+  header (the position being fuzzed wins — the jar's rule for fuzzed cookies) or the base request
+  does not carry exactly one Host header (none to keep in step, or a duplicated-Host probe that a
+  rewrite would defeat).
+- A request a payload left with other than one Host header is sent as spliced and counted in
+  `host_header_untouched`, rather than having one of two Host headers chosen for it.
+
+## Intruder payload placement, grep and capture (burpsy-react-ui-xixe.1, Phases 2-3, 2026-10-08)
+
+### Automatic payload placement: Append to base parameter value (1krs)
+
+**Burp:** Settings > Tools > Intruder, "Automatic payload placement" (`configPanelIntruderAutomaticPayloadPlacement`,
+`Zrv9`; the same radio pair in the Intruder tab menu, `Zcur`). Each automatic marker is built as
+`Zswj(append ? valueEnd : valueStart, valueEnd)` (`Zrw7.Zz`, and the form walk `Zrw7.ZD`): under append the
+marker is zero-length at the end of the value.
+**burpsy:** `payload_placement` (`""`/`"replace"`/`"append"`) on both `POST /api/intruder/points` and
+`POST /api/intruder/run`, which build the discovered list through one function so the positions shown are the
+positions spliced. `PointView` gains `placement`; `current` stays the base value.
+
+- **Per attack, not a user setting.** Burp stores the choice once for every tab; burpsy keeps it in the attack's
+  configuration (persisted and saved with it), like every other Intruder setting here. Changing it rediscovers
+  the positions so stale spans are never shown beside an attack that splices differently.
+- **Values only.** URL, body and cookie parameter values and the body-container values (JSON, XML, multipart
+  content, nested) append. burpsy's extra discovery families — parameter names, path segments, header values,
+  multipart `name`/`filename` attributes and the entire body — are not in Burp's automatic placement at all, and
+  keep replacing under either setting.
+- **Nested values rebuild.** A base64/JSON/XML value nested in a parameter cannot be extended by concatenating
+  onto its encoded text, so the payload is appended inside the decoded value and the outer value re-encoded
+  (`bcheck.InsertionPoint.WireValueAppend`, the scanner's own appending branch). Every other value keeps its
+  captured bytes exactly.
+- **Touching counts as overlapping.** A zero-length insertion touching another position's edge is an overlap
+  (`intruder.SpansOverlap`): the splice keeps the earlier-starting position, and a manual marker that touches an
+  appended position is refused by name. The same predicate now also applies to an empty value at the very end
+  of the entire body under replace, which used to splice both.
+
+### Grep - Payloads (7qc3)
+
+**Burp:** configure-attack/settings.html "Grep - payloads": Case sensitive match, Exclude HTTP headers,
+Match against pre-URL-encoded payloads, and "a separate column … for each payload set". The panel (`Zruj`)
+persists `payloadgrep.dogrep/casesensitive/excludeheaders/matchpreencoded`, reset off/off/off/**on**
+(`Zruj.Zc5`). The engine (`Zu8d.Zb`) counts, per payload set, either the pre-encoding payload or the sent
+one (`Zw_x.Zl(…, !matchpreencoded)`) — one form, not both — from the body offset when excluding headers.
+**burpsy:** `grep_payloads {enabled, case_sensitive, exclude_headers, match_pre_url_encoded}` on the run
+request; `reflected_counts` (one slot per set) on every attempt, `reflected_count_totals` on every bucket,
+and the effective settings echoed as `report.grep_payloads`.
+
+- **Default differs by surface, and from Burp.** Burp's search is off by default. burpsy's reflection check
+  has always been on — it is a third of the result-bucket key — so the bundled UI sends it on, with Burp's
+  other three defaults (case-insensitive, headers included, pre-URL-encoded). An API request that omits
+  `grep_payloads` keeps the fixed check it always had: on, case-sensitive, headers included, matched as sent.
+- **The settings change the buckets.** `reflected` stays the bucket key and is computed with the configured
+  options, so turning the search off, or loosening it, can merge or split buckets. The per-set counts are
+  reported, never keyed on.
+- Case-insensitive matching folds ASCII letters only: a payload is a byte string, and Unicode folding can
+  change a sequence's length. Counts are non-overlapping and capped at 10,000 per payload per response.
+- "Pre-URL-encoded" means before Intruder's final "URL-encode these characters" pass, i.e. after the payload
+  processing rules — the same point Burp takes it. Recursive-grep and Collaborator payloads are never
+  URL-encoded, so both forms are the same bytes.
+- Not exported to the CSV; the JSON report carries the counts.
+
+### Define extract grep from response (df8r)
+
+**Burp:** results workflow "Define extract grep from response — Open the response extraction rule dialog"; the
+dialog (`Zh5c`) rebuilds its rule from a highlighted selection ("Update config based on selection"), growing a
+start-after anchor and an end-at delimiter at token boundaries (6 to 200 characters) until each occurs first
+against the selection, and offers it as `quote(prefix)(.*?)quote(suffix)`, or `$` with no suffix.
+**burpsy:** the row menu's "Define extract grep from response" opens the row's stored response; highlighting
+in the Raw view rebuilds the rule (`lib/intruder-extract.ts`), the rule is previewed against that response,
+and it is saved into the attack's Grep extract field.
+
+- **One rule, in regex form.** burpsy's Grep - Extract is a single regex (first group of the first match), not
+  Burp's list of start/end items, so the rule is stored in Burp's regex-group form, and an existing rule is
+  named and replaced deliberately.
+- **`([\s\S]*?)`, not `(.*?)`.** A highlighted value can span lines, and neither Go's RE2 nor the browser's
+  RegExp lets `.` cross a newline by default. The same pattern string runs in both: the browser preview and
+  the engine are checked against shared golden cases (`intruder-extract.golden.json`, run through
+  `/api/intruder/run` in `intruder_extract_golden_test.go`).
+- **Anchors are cut at 200, not abandoned.** Burp gives up on a delimiter whose token runs past 200
+  characters (a JWT, a base64 blob) and extracts to the end of the response; burpsy keeps the first 200
+  characters, and the first-occurrence check decides whether that is enough.
+- **Save requires the preview to extract exactly the highlighted text at the highlighted offset.** Only rows
+  with a stored response offer the action (the bucket exemplar, or the attempt that opened its bucket).
+- **Applies to the next attack.** Burp can re-run grep over stored results when full payloads are stored; the
+  rows of an existing burpsy report keep what they extracted.
+- The preview runs on the response as text; a response whose bytes are not valid UTF-8 can preview
+  differently from what the engine matches.
+
+### Results capture filter (ip2b)
+
+**Burp:** results/filtering-results.html "Capture filter — Choose which items Intruder captures during the
+attack to control resource usage": Discard items without responses, Capture by search term (regex, case
+sensitive, negative search), Capture by status code, Capture by annotation. The predicates combine with AND
+(`Zbjk.allMatch`): `Zpoo` (no response or a zero-length one), `Zht8` (2xx/3xx/4xx/5xx toggles; no response and
+statuses outside 200-599 pass), `Zs3t` (the term in the response; no response does not contain it; negative
+inverts), `Zefp` (annotation).
+**burpsy:** `capture_filter {discard_no_response, term, regex, case_sensitive, negate, statuses}` on the run
+request; the report carries `discarded` and echoes `capture_filter`; buckets gain `example_ordinal`.
+
+- **Counts never shrink.** A discarded item is counted in sent/failed, its error group and its bucket, and in
+  `discarded`; it leaves no results row and no stored request or response. Burp has no buckets; burpsy's are a
+  summary of everything sent, so they keep counting.
+- **A bucket's exemplar is its first captured response.** When the response that opened a bucket was
+  discarded, the first captured response landing in it later is stored as the exemplar, and `example_ordinal`
+  names it; a bucket with nothing captured has null example ids.
+- **The row budget follows the filter.** Without a filter the attempts table keeps ordinals below
+  `detail_limit`, as before. With one it keeps the first `detail_limit` captured items in completion order, so
+  a filtered attack spends its rows on what the filter keeps. Under concurrency, which captured items fill the
+  last rows can vary between runs.
+- **Capture by annotation is not offered.** A burpsy result has no comment or highlight at capture time (row
+  comments are typed in the browser afterwards), so the predicate could only ever discard everything.
+- **Applied from launch.** Burp's filter can be changed mid-attack and "only impacts items generated after it's
+  applied"; burpsy's is part of the attack's configuration.
+- The session cookie jar still learns from discarded responses: it is fed by the engine's `Observe` hook on
+  each bucket's opening response, not by the recorder.
+
+### Store requests / Store responses (nqww)
+
+**Burp:** configure-attack/settings.html "Store requests / responses - Specify whether the attack saves the
+contents of individual requests and responses"; `intruderAttackConfigSettingsStoreRequests` /
+`…StoreResponses` (`Zrua`), persisted as `storerequests` / `storeresponses` and read as on unless "false".
+**burpsy:** `store_requests` and `store_responses` on the run request (absent = on); the report carries
+`requests_stored` and `responses_stored`, and every null id of a half that was not stored is explained by them —
+the results table, row menus, extractor columns and CSV say "not stored (attack setting)" rather than implying
+nothing came back.
+
+- What is stored differs from Burp by design: burpsy keeps each bucket's exemplar response plus the exact requests
+  of the rows and exemplars (one response per distinct behaviour, the engine's memory contract), so these switch
+  that set off rather than one request and response per result.
+- Off, the attack is otherwise unchanged: every request is sent, bucketed, grepped and reflection-checked, and the
+  session cookie jar still learns from the responses (the engine's `Observe` hook, independent of the recorder).
+- Burp greys "Store responses" while denial-of-service mode is on; burpsy has no denial-of-service mode (see
+  the fmxv note in the UI), so the two never interact.
 ## Scan-configuration selection: where burpsy diverges from Burp (saq3.1, 2hze, gmdk — 2026-10-07)
 
 Burp's semantics are ported; these are the places the port knowingly differs, each one narrower than

@@ -426,6 +426,10 @@ export interface RepeaterSendOptions {
  strip_connection?: boolean;
  normalize_line_endings?: boolean;
  update_content_length?: boolean;
+ /** Burp's per-request response timeout, in ms (burpsy-react-ui-mmca). Absent is the standing
+  *  network read timeout; the server refuses zero or a negative value rather than reading it as
+  *  "no bound". */
+ response_timeout_ms?: number;
 }
 
 export interface RepeaterResult {

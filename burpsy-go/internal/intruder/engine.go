@@ -372,6 +372,12 @@ type Attack struct {
 	Plan *AttackPlan
 	// setBytes is Sets re-encoded as bytes, so the per-request splice does not allocate.
 	setBytes [][][]byte
+	// GrepPayloads is Burp's Grep - Payloads (7qc3): whether and how each response is searched for
+	// the payloads that produced it. NewAttack sets LegacyGrepPayloads. See grep_payloads.go.
+	GrepPayloads GrepPayloads
+	// setPreBytes is the pre-URL-encoding form of each set that has one, built by prepareReflection
+	// only when pre-encoded matching will read it; nil otherwise.
+	setPreBytes [][][]byte
 	// Limits bound how hard the attack may hit the target.
 	Limits RateLimit
 	// DetailLimit is how many per-request rows to keep. Beyond this only bucket counts survive.
@@ -388,6 +394,12 @@ type Attack struct {
 	// stays tied to the rows an operator can act on rather than multiplying the 100k-request
 	// memory profile the report is designed to avoid.
 	RequestFn func(raw []byte) uint64
+	// StoreResponses is Burp's "Store responses" attack-results setting (burpsy-react-ui-nqww): whether
+	// the recorder is asked to store each bucket's exemplar response. True by NewAttack, Burp's default
+	// (Zrua reads storeresponses as anything but "false"). False trades the stored bodies for memory and
+	// disk: every response is still read, bucketed and grepped, and the session jar still learns from it
+	// (Observe), but no response id is handed out. "Store requests" is RecordRequest above.
+	StoreResponses bool
 	// SuiteGate blocks while the dashboard's suite-wide pause is set, checked between enumerations
 	// alongside the attack's own Control. Two pauses rather than one because they answer different
 	// questions — "hold this attack" and "hold everything" — and an operator who pressed the second
@@ -467,6 +479,16 @@ type Attack struct {
 	// resolved sets and replaying the plan's arithmetic — which is fine inside the handler that
 	// just ran the attack and impossible for anything handed the report afterwards.
 	StorePayloads bool
+	// Capture is Burp's results capture filter (ip2b): which items are captured as result rows and stored
+	// messages. Nil captures everything. A discarded item is still counted — Sent/Failed, its error
+	// group, its bucket — and in AttackReport.Discarded; it just leaves no row and no stored bytes.
+	// See capture.go.
+	Capture *CaptureFilter
+	// Observe is shown the response that opens each new result bucket, whether or not it is captured or
+	// stored — the web layer's session cookie jar learns Set-Cookie lines here (one per distinct
+	// behaviour, the same restraint the exemplar store holds to). Separate from the recorder so that
+	// discarding or not storing a response never silently stops the jar learning from the attack.
+	Observe func(raw []byte)
 	// Evasion is the optional WAF-evasion composition (burpsy-react-ui-tfqk): User-Agent rotation,
 	// jitter, and header-order randomisation applied around every send this attack makes. Nil —
 	// the default — leaves the attack byte-for-byte and timing-for-timing what it was.
@@ -493,14 +515,18 @@ func NewAttack(base []byte, points []InsertionPoint, sets []PayloadSet, plan *At
 		}
 	}
 	return &Attack{
-		Base:        base,
-		Points:      points,
-		Sets:        sets,
-		setBytes:    setBytes,
-		Plan:        plan,
-		Limits:      DefaultRateLimit(),
-		DetailLimit: 500,
-		MaxBuckets:  2_000,
+		Base:     base,
+		Points:   points,
+		Sets:     sets,
+		setBytes: setBytes,
+		Plan:     plan,
+		// The reflection check every attack ran before Grep - Payloads had settings (7qc3).
+		GrepPayloads: LegacyGrepPayloads(),
+		// Burp's default, and what every attack did before the switch existed (nqww).
+		StoreResponses: true,
+		Limits:         DefaultRateLimit(),
+		DetailLimit:    500,
+		MaxBuckets:     2_000,
 	}
 }
 
@@ -674,11 +700,21 @@ type ResultBucket struct {
 	Reflected    bool `json:"reflected"`
 	Count        int  `json:"count"`
 	FirstOrdinal int  `json:"first_ordinal"`
+	// ReflectedCountTotals is Grep - Payloads' per-set occurrence count summed over this bucket's
+	// responses (7qc3), one slot per payload set — the bucket-table counterpart of an attempt's
+	// ReflectedCounts, as GrepMatchTotals is of GrepMatchCounts. Empty when Grep - Payloads is off.
+	ReflectedCountTotals []int `json:"reflected_count_totals"`
 	// ExampleRequestID and ExampleResponseID name the one stored exchange kept for this bucket —
 	// the bytes of FirstOrdinal's send and the response it produced. One per bucket, not one per
 	// request: a 100k-request attack that lands in four buckets stores four exchanges.
+	//
+	// With a capture filter (ip2b) the response that opened the bucket may have been discarded; the
+	// bucket then takes its exemplar from the first CAPTURED response in it, and ExampleOrdinal names
+	// that ordinal. Both ids are null, and ExampleOrdinal too, while no response in the bucket was
+	// captured and stored.
 	ExampleRequestID  *uint64 `json:"example_request_id"`
 	ExampleResponseID *uint64 `json:"example_response_id"`
+	ExampleOrdinal    *int    `json:"example_ordinal"`
 	GrepMatches       int     `json:"grep_matches"`
 	GrepExtract       *string `json:"grep_extract"`
 	// GrepMatchTotals is the match list's occurrence count summed over this bucket's
@@ -706,16 +742,21 @@ type ErrorBucket struct {
 // bucketing matches on status, length and reflection, which is not a claim that two bodies are
 // equal, and handing a row someone else's response would make the results table lie.
 type Attempt struct {
-	Ordinal     int     `json:"ordinal"`
-	Status      *int    `json:"status"`
-	ResponseLen int     `json:"response_len"`
-	DurationMS  int64   `json:"duration_ms"`
-	Reflected   bool    `json:"reflected"`
-	RequestID   *uint64 `json:"request_id"`
-	ResponseID  *uint64 `json:"response_id"`
-	Error       *string `json:"error"`
-	GrepMatched *bool   `json:"grep_matched"`
-	GrepExtract *string `json:"grep_extract"`
+	Ordinal     int   `json:"ordinal"`
+	Status      *int  `json:"status"`
+	ResponseLen int   `json:"response_len"`
+	DurationMS  int64 `json:"duration_ms"`
+	Reflected   bool  `json:"reflected"`
+	// ReflectedCounts is Grep - Payloads' column per payload set (7qc3): "the number of times the
+	// payload is found in the response … If more than one payload set is used, a separate column is
+	// added for each payload set." One slot per set, in set order; the baseline row has zeros. Empty
+	// (never null) when Grep - Payloads is off, and for an attempt that produced no response.
+	ReflectedCounts []int   `json:"reflected_counts"`
+	RequestID       *uint64 `json:"request_id"`
+	ResponseID      *uint64 `json:"response_id"`
+	Error           *string `json:"error"`
+	GrepMatched     *bool   `json:"grep_matched"`
+	GrepExtract     *string `json:"grep_extract"`
 	// GrepMatchCounts is the Grep - Match list's per-expression occurrence count for this
 	// response (irt), parallel to the attack's expression list. Empty (not nil) when no list
 	// was configured, so the wire shape never varies (the nil-slice note on newCollector).
@@ -809,6 +850,22 @@ type AttackReport struct {
 	// 0's row is "Baseline request (no payloads)" — the base response the attack responses hang
 	// against. The wire view reads this to shift payloadsAt's plan arithmetic.
 	Baseline bool `json:"baseline"`
+	// Discarded is how many items the capture filter dropped (ip2b): counted in Sent or Failed, in their
+	// error group or bucket, and in nothing else — no row, no stored request or response. Zero with no
+	// filter. Captured items plus Discarded is Sent plus Failed.
+	Discarded int `json:"discarded"`
+	// CaptureFilter is the capture filter the attack ran with, or null when it captured everything.
+	CaptureFilter *CaptureFilterSpec `json:"capture_filter"`
+	// RequestsStored and ResponsesStored say whether this attack stored the exact requests and the
+	// exemplar responses at all (nqww: Burp's "Store requests" / "Store responses"). A null id on a row is
+	// then read through them: not stored because the attack was told not to, rather than because nothing
+	// came back — the two mean different things about the target.
+	RequestsStored  bool `json:"requests_stored"`
+	ResponsesStored bool `json:"responses_stored"`
+	// GrepPayloads is the Grep - Payloads configuration this attack ran with (7qc3) — always present,
+	// so the report says whether reflected and its count columns were asked at all, and how, rather
+	// than leaving a reader to infer it from an all-false column.
+	GrepPayloads GrepPayloads `json:"grep_payloads"`
 }
 
 // bucketKey is the distinct-behaviour triple. hasStatus distinguishes "no response" from a
@@ -824,12 +881,14 @@ type bucketKey struct {
 // request bytes only while they are needed to attach their stored id to this attempt's report row;
 // the collector does not retain them after absorb returns.
 type hit struct {
-	status      *int
-	length      int
-	durationMS  int64
-	reflected   bool
-	grepMatched *bool
-	grepExtract *string
+	status     *int
+	length     int
+	durationMS int64
+	reflected  bool
+	// reflectedCounts is Grep - Payloads' per-set count (7qc3); [] when it is off.
+	reflectedCounts []int
+	grepMatched     *bool
+	grepExtract     *string
 	// grepCounts is the match list's per-expression occurrence count (irt), one slot per
 	// item, in list order. Nil when no list was configured.
 	grepCounts []int
@@ -872,6 +931,18 @@ type collector struct {
 	failed       int
 	unbucketed   int
 	grepMatched  int
+	// capture is the attack's capture filter (nil captures everything); discarded counts what it
+	// dropped and captured what it kept. With a filter, the DetailLimit row budget is spent on the
+	// first captured items rather than on the first ordinals — see detailRow.
+	capture   *CaptureFilter
+	discarded int
+	captured  int
+	// observe is Attack.Observe; pendingExemplar marks buckets whose opening response was not stored
+	// (discarded by the capture filter), so the first captured response in them becomes the exemplar.
+	observe         func([]byte)
+	pendingExemplar map[int]bool
+	// storeResponses is Attack.StoreResponses with a recorder present (nqww).
+	storeResponses bool
 	// chain is the recursive driver's payload-per-ordinal record (ztuu); nil for every
 	// plan-driven attack, which is how finish() knows to leave ChainPayloads empty.
 	chain []string
@@ -890,17 +961,35 @@ func newCollector(a *Attack, record RecordFn) *collector {
 	// attack whose sends all succeeded (burpsy-react-ui-9pxd). Nothing in Go noticed, because a nil
 	// slice and an empty one range and len identically.
 	return &collector{
-		record:       record,
-		request:      a.RequestFn,
-		recordDetail: a.RecordRequest && a.RequestFn != nil,
-		index:        map[bucketKey]int{},
-		buckets:      []ResultBucket{},
-		errorIndex:   map[string]int{},
-		errors:       []ErrorBucket{},
-		attempts:     []Attempt{},
-		detailLimit:  a.DetailLimit,
-		maxBuckets:   mb,
+		record:          record,
+		request:         a.RequestFn,
+		recordDetail:    a.RecordRequest && a.RequestFn != nil,
+		index:           map[bucketKey]int{},
+		buckets:         []ResultBucket{},
+		errorIndex:      map[string]int{},
+		errors:          []ErrorBucket{},
+		attempts:        []Attempt{},
+		detailLimit:     a.DetailLimit,
+		maxBuckets:      mb,
+		capture:         a.Capture,
+		observe:         a.Observe,
+		pendingExemplar: map[int]bool{},
+		storeResponses:  a.StoreResponses && record != nil,
 	}
+}
+
+// detailRow decides whether a captured item gets a results row. Without a capture filter the row
+// budget is the first DetailLimit ordinals, as it always was. With one it is the first DetailLimit
+// CAPTURED items: the filter is how an operator spends the row budget on the items that matter, and
+// spending it on ordinals the filter then discards would leave a filtered 50,000-request attack with a
+// handful of rows from its first 500 requests. The cost is order: concurrent sends complete out of
+// order, so which captured items fill the last rows can vary between runs; at max_in_flight 1 it does
+// not. finish() sorts the rows by ordinal either way. Called after c.captured counted this item.
+func (c *collector) detailRow(ordinal int) bool {
+	if c.capture == nil {
+		return ordinal < c.detailLimit
+	}
+	return c.captured <= c.detailLimit
 }
 
 // chainOrEmpty is the wire-shape guard for ChainPayloads: never nil, so the JSON is [] and not
@@ -916,7 +1005,15 @@ func (c *collector) chainOrEmpty() []string {
 func (c *collector) absorb(o outcome) {
 	if o.err != nil {
 		c.failed++
-		if o.ordinal < c.detailLimit {
+		// No response to judge: only "discard items without responses" and a positive search term can
+		// drop it (capture.go).
+		if !c.capture.captures(nil, nil) {
+			c.discarded++
+			c.noteError(o.ordinal, o.err.Error())
+			return
+		}
+		c.captured++
+		if c.detailRow(o.ordinal) {
 			e := o.err.Error()
 			c.attempts = append(c.attempts, Attempt{
 				// Cookies is []string{}, not nil: a failed send never reached a response, but the
@@ -925,7 +1022,7 @@ func (c *collector) absorb(o outcome) {
 				// match-count array holds to the same contract: [] for a send that never produced
 				// a response, not null (irt).
 				Ordinal: o.ordinal, Error: &e, TimeOfDay: o.sentAt, Timeout: isTimeout(o.err),
-				Cookies: []string{}, GrepMatchCounts: []int{}, Payloads: o.payloads,
+				Cookies: []string{}, GrepMatchCounts: []int{}, ReflectedCounts: []int{}, Payloads: o.payloads,
 			})
 		}
 		c.noteError(o.ordinal, o.err.Error())
@@ -937,21 +1034,44 @@ func (c *collector) absorb(o outcome) {
 		c.grepMatched++
 	}
 	key := bucketKey{status: derefInt(h.status), hasStatus: h.status != nil, length: h.length, reflected: h.reflected}
-	_, seen := c.index[key]
+	bucketIndex, seen := c.index[key]
 	newBucket := !seen && len(c.buckets) < c.maxBuckets
-	detailRow := o.ordinal < c.detailLimit
+	// The capture filter (ip2b) decides whether this item leaves a row and stored bytes. It never
+	// decides whether it is counted: sent, the bucket's count and its totals include it either way.
+	keep := c.capture.captures(h.raw, h.status)
+	if keep {
+		c.captured++
+	} else {
+		c.discarded++
+	}
+	if newBucket && c.observe != nil {
+		c.observe(h.raw)
+	}
+	// The exemplar: the bucket's opening response when it is captured, or — when that one was
+	// discarded — the first captured response that lands in the bucket afterwards.
+	exemplar := keep && (newBucket || (seen && c.pendingExemplar[bucketIndex]))
+	detailRow := keep && c.detailRow(o.ordinal)
 	// One store per outcome, shared by the bucket exemplar and the detail row. Both want the same
 	// bytes, and storing them twice would put two ids on the same send — the operator would open
 	// the bucket's request and the attempt's request and be shown two copies with no way to tell
 	// they are one request.
 	var requestID *uint64
-	if c.recordDetail && (newBucket || detailRow) {
+	if c.recordDetail && (exemplar || detailRow) {
 		id := c.request(h.request)
 		requestID = &id
 	}
 	var responseID *uint64
+	if exemplar && c.storeResponses {
+		id := c.record(h.raw)
+		responseID = &id
+	}
 	if seen {
-		i := c.index[key]
+		i := bucketIndex
+		if exemplar {
+			ordinal := o.ordinal
+			c.buckets[i].ExampleRequestID, c.buckets[i].ExampleResponseID, c.buckets[i].ExampleOrdinal = requestID, responseID, &ordinal
+			delete(c.pendingExemplar, i)
+		}
 		c.buckets[i].Count++
 		if h.grepMatched != nil && *h.grepMatched {
 			c.buckets[i].GrepMatches++
@@ -963,10 +1083,19 @@ func (c *collector) absorb(o outcome) {
 				c.buckets[i].GrepMatchTotals[j] += v
 			}
 		}
+		for j, v := range h.reflectedCounts {
+			if j < len(c.buckets[i].ReflectedCountTotals) {
+				c.buckets[i].ReflectedCountTotals[j] += v
+			}
+		}
 	} else if newBucket {
-		if c.record != nil {
-			id := c.record(h.raw)
-			responseID = &id
+		var exampleOrdinal *int
+		if exemplar && (requestID != nil || responseID != nil) {
+			ordinal := o.ordinal
+			exampleOrdinal = &ordinal
+		}
+		if !keep {
+			c.pendingExemplar[len(c.buckets)] = true
 		}
 		c.index[key] = len(c.buckets)
 		gm := 0
@@ -976,8 +1105,12 @@ func (c *collector) absorb(o outcome) {
 		c.buckets = append(c.buckets, ResultBucket{
 			Status: h.status, ResponseLen: h.length, Reflected: h.reflected, Count: 1,
 			FirstOrdinal: o.ordinal, ExampleRequestID: requestID, ExampleResponseID: responseID,
-			GrepMatches: gm, GrepExtract: h.grepExtract,
+			ExampleOrdinal: exampleOrdinal,
+			GrepMatches:    gm, GrepExtract: h.grepExtract,
 			GrepMatchTotals: emptyCounts(h.grepCounts),
+			// A copy: the bucket's totals grow with every later response, and the opening attempt's
+			// row keeps its own counts.
+			ReflectedCountTotals: append([]int{}, h.reflectedCounts...),
 		})
 	} else {
 		c.unbucketed++
@@ -988,6 +1121,7 @@ func (c *collector) absorb(o outcome) {
 			Reflected: h.reflected, RequestID: requestID, ResponseID: responseID,
 			GrepMatched: h.grepMatched, GrepExtract: h.grepExtract,
 			GrepMatchCounts: emptyCounts(h.grepCounts),
+			ReflectedCounts: emptyCounts(h.reflectedCounts),
 			TimeOfDay:       o.sentAt, Cookies: h.cookies, Payloads: o.payloads,
 		})
 	}
@@ -1069,6 +1203,11 @@ func (c *collector) finish(a *Attack, limiter *RateLimiter, elapsed time.Duratio
 		GrepMatchLabels: a.Grep.MatchList.labelsOrEmpty(),
 		RetriesUsed:     a.RetriesUsed(),
 		Baseline:        a.Baseline,
+		GrepPayloads:    a.GrepPayloads,
+		Discarded:       c.discarded,
+		CaptureFilter:   captureSpec(a.Capture),
+		RequestsStored:  c.recordDetail,
+		ResponsesStored: c.storeResponses,
 	}
 }
 
@@ -1094,6 +1233,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 	// Nil Evasion returns the caller's SendFn unchanged, so an attack that configured none is
 	// byte-for-byte and timing-for-timing what it was.
 	send = a.Evasion.wrapOrIdentity(send)
+	a.prepareReflection()
 	limiter := NewRateLimiter(&a.Limits)
 	col := newCollector(a, record)
 
@@ -1196,6 +1336,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 			enumerated++
 			places := make([]ApplyPlace, 0, len(asg.Slots))
 			payloads := make([][]byte, 0, len(asg.Slots))
+			probes := make([]reflectProbe, 0, len(asg.Slots))
 			for _, s := range asg.Slots {
 				if s.Point < 0 || s.Point >= len(a.Points) ||
 					s.Set < 0 || s.Set >= len(a.setBytes) ||
@@ -1205,6 +1346,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				payload := a.setBytes[s.Set][s.Payload]
 				places = append(places, ApplyPlace{Point: &a.Points[s.Point], Payload: payload})
 				payloads = append(payloads, payload)
+				probes = append(probes, a.probe(s.Set, s.Payload))
 			}
 
 			// applyAllChecked, not ApplyAll: a payload its container cannot hold is dropped from
@@ -1232,7 +1374,7 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 				}
 			}
 			wg.Add(1)
-			go func(ordinal int, raw []byte, payloads [][]byte, stored []string, permit *Permit) {
+			go func(ordinal int, raw []byte, probes []reflectProbe, stored []string, permit *Permit) {
 				defer wg.Done()
 				defer permit.Release()
 				// Captured here, not before the permit or the guard: this is the closest point to the
@@ -1245,12 +1387,12 @@ func Run(a *Attack, send SendFn, record RecordFn) *AttackReport {
 						results <- outcome{ordinal: ordinal, err: fmt.Errorf("send task failed: %v", r), sentAt: sentAt, payloads: stored}
 					}
 				}()
-				h, err := doSend(a, limiter, send, raw, payloads, ctx)
+				h, err := doSend(a, limiter, send, raw, probes, ctx)
 				if h != nil {
 					h.request = raw
 				}
 				results <- outcome{ordinal: ordinal, hit: h, err: err, sentAt: sentAt, payloads: stored}
-			}(baselineShift(a)+i, req, payloads, stored, permit)
+			}(baselineShift(a)+i, req, probes, stored, permit)
 		}
 		wg.Wait()
 	}()
@@ -1348,7 +1490,9 @@ func runRecursive(a *Attack, send SendFn, limiter *RateLimiter, col *collector) 
 			}
 		}
 		sentAt := time.Now()
-		h, err := doSend(a, limiter, send, req, payloads, ctx)
+		// The chain's one payload set: response-derived, never URL-encoded, so both forms are the bytes
+		// that were sent.
+		h, err := doSend(a, limiter, send, req, []reflectProbe{{set: 0, sent: current, pre: current}}, ctx)
 		// Released immediately after the send, matching the plan loop's defer-permit in its
 		// goroutine (which releases the moment doSend returns): the serial driver holds one
 		// permit across exactly one request, and holding it across the extraction would
@@ -1410,7 +1554,7 @@ func baselineShift(a *Attack) int {
 //
 // A send error whose context is already done is not a failure to retry — it is the attack (or
 // the operator) giving up — so ctx.Err() short-circuits before the loop.
-func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [][]byte, ctx context.Context) (*hit, error) {
+func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, probes []reflectProbe, ctx context.Context) (*hit, error) {
 	sent, err := send(raw)
 	for attempt := 0; err != nil && attempt < a.Retries && ctx.Err() == nil; attempt++ {
 		if !a.retryWait(ctx) {
@@ -1423,13 +1567,9 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 		return nil, err
 	}
 	limiter.Observe(sent.Status)
-	reflected := false
-	for _, p := range payloads {
-		if containsBytes(sent.Raw, p) {
-			reflected = true
-			break
-		}
-	}
+	// Grep - Payloads (7qc3), with the attack's settings; the legacy settings ask exactly the old
+	// question — any payload, as sent, case-sensitive, anywhere in the response.
+	reflected, reflectedCounts := a.reflection(sent.Raw, probes)
 	grepMatched, grepExtract := a.Grep.run(sent.Raw)
 	grepCounts := a.Grep.MatchList.counts(sent.Raw)
 	// Auto-pause, evaluated on the same bytes grep just read (burpsy-react-ui-8f2). The
@@ -1454,7 +1594,7 @@ func doSend(a *Attack, limiter *RateLimiter, send SendFn, raw []byte, payloads [
 	}
 	return &hit{
 		status: sent.Status, length: len(sent.Raw), durationMS: sent.Duration.Milliseconds(),
-		reflected: reflected, grepMatched: grepMatched, grepExtract: grepExtract,
+		reflected: reflected, reflectedCounts: reflectedCounts, grepMatched: grepMatched, grepExtract: grepExtract,
 		grepCounts: grepCounts, raw: sent.Raw, cookies: cookies,
 	}, nil
 }

@@ -119,3 +119,191 @@ func TestACleanIntruderRunSendsArraysNotNullsForEveryRowField(t *testing.T) {
 	// request_id on a row with nothing stored — so only the fields named above are contractual
 	// arrays, and naming them is what makes this a check rather than a grep.
 }
+
+// The send-settings fields the Results tab reads (burpsy-react-ui-xixe.1, Phase 1) are always present
+// in the marshalled report, and each has the JSON type types.tools.ts declares. None of them is an
+// array, so the hazard is different from the one above: an absent key, or a null where the page does
+// arithmetic. connections_* are null BY DESIGN when reuse is off — "not counted" — and a number when
+// it is on, and the two runs below pin both.
+func TestIntruderSendSettingsFieldsAreOnTheWireWithTheirTypes(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+
+	for _, reuse := range []bool{false, true} {
+		var body json.RawMessage
+		code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+			"msg_id":                 id,
+			"target":                 "http://" + addr,
+			"mode":                   "sniper",
+			"manual_points":          []map[string]int{{"start": start, "end": start + 3}},
+			"payload_sets":           [][]string{{"xyz", "wxyz"}},
+			"rps":                    1000,
+			"http1_connection_reuse": reuse,
+			"update_host_header":     true,
+		}, &body)
+		if code != http.StatusOK {
+			t.Fatalf("reuse=%v: run status = %d: %s", reuse, code, body)
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(body, &top); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		kind := func(name string) string {
+			t.Helper()
+			raw, ok := top[name]
+			if !ok {
+				t.Fatalf("reuse=%v: %s is absent from the response: %s", reuse, name, body)
+			}
+			switch {
+			case string(raw) == "null":
+				return "null"
+			case string(raw) == "true" || string(raw) == "false":
+				return "bool"
+			case raw[0] == '"':
+				return "string"
+			case raw[0] == '-' || (raw[0] >= '0' && raw[0] <= '9'):
+				return "number"
+			}
+			return "other:" + string(raw)
+		}
+		wantCount := "null"
+		if reuse {
+			wantCount = "number"
+		}
+		for name, want := range map[string]string{
+			"connections_opened":    wantCount,
+			"connections_reused":    wantCount,
+			"host_header_updated":   "bool",
+			"host_header_skipped":   "string",
+			"host_header_untouched": "number",
+		} {
+			if got := kind(name); got != want {
+				t.Fatalf("reuse=%v: %s is %s on the wire, want %s: %s", reuse, name, got, want, top[name])
+			}
+		}
+		if string(top["host_header_updated"]) != "true" {
+			t.Fatalf("update_host_header was asked for and the report says %s", top["host_header_updated"])
+		}
+	}
+}
+
+// Grep - Payloads' count arrays (burpsy-react-ui-7qc3) are arrays on every row the page reads —
+// attempts and buckets, with the setting on, off, and on a row whose send failed — and the report
+// carries the settings it ran with as an object. types.tools.ts declares the arrays non-nullable.
+func TestGrepPayloadsCountArraysAreArraysOnEveryRow(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+
+	type row struct {
+		Error           *string         `json:"error"`
+		ReflectedCounts json.RawMessage `json:"reflected_counts"`
+	}
+	type bucket struct {
+		ReflectedCountTotals json.RawMessage `json:"reflected_count_totals"`
+	}
+	for _, tc := range []struct {
+		name   string
+		target string
+		grep   any
+		want   string // the attempt rows' reflected_counts
+	}{
+		{"absent (legacy, on)", "http://" + addr, nil, "[1]"},
+		{"off", "http://" + addr, map[string]any{"enabled": false}, "[]"},
+		{"on, send failed", "http://127.0.0.1:1", map[string]any{"enabled": true}, "[]"},
+	} {
+		body := map[string]any{
+			"msg_id": id, "target": tc.target, "mode": "sniper",
+			"manual_points": []map[string]int{{"start": start, "end": start + 3}},
+			"payload_sets":  [][]string{{"xyz", "wxyz"}}, "rps": 1000, "retries": 0,
+		}
+		if tc.grep != nil {
+			body["grep_payloads"] = tc.grep
+		}
+		var out json.RawMessage
+		if code := postJSONInto(t, srv, "/api/intruder/run", body, &out); code != http.StatusOK {
+			t.Fatalf("%s: run = %d: %s", tc.name, code, out)
+		}
+		var view struct {
+			Report struct {
+				Attempts     []row           `json:"attempts"`
+				Buckets      []bucket        `json:"buckets"`
+				GrepPayloads json.RawMessage `json:"grep_payloads"`
+			} `json:"report"`
+		}
+		if err := json.Unmarshal(out, &view); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(view.Report.Attempts) != 2 {
+			t.Fatalf("%s: %d attempt rows, want 2: %s", tc.name, len(view.Report.Attempts), out)
+		}
+		for i, a := range view.Report.Attempts {
+			if string(a.ReflectedCounts) != tc.want {
+				t.Fatalf("%s: attempts[%d].reflected_counts = %s, want %s", tc.name, i, a.ReflectedCounts, tc.want)
+			}
+		}
+		for i, b := range view.Report.Buckets {
+			if len(b.ReflectedCountTotals) == 0 || b.ReflectedCountTotals[0] != '[' {
+				t.Fatalf("%s: buckets[%d].reflected_count_totals = %s, want an array", tc.name, i, b.ReflectedCountTotals)
+			}
+		}
+		if len(view.Report.GrepPayloads) == 0 || view.Report.GrepPayloads[0] != '{' {
+			t.Fatalf("%s: report.grep_payloads = %s, want the settings object", tc.name, view.Report.GrepPayloads)
+		}
+	}
+}
+
+// A capture filter that discards every item leaves the row arrays empty — [] on the wire, not null —
+// while the counts still describe the whole attack (ip2b).
+func TestACaptureFilterThatDiscardsEverythingSendsEmptyArrays(t *testing.T) {
+	addr := echoServer(t)
+	scope := core.NewScope()
+	scope.AddInclude("127.0.0.1")
+	store := core.NewTrafficStore()
+	srv := NewServer(store, scope)
+	raw := "GET /search?q=alpha HTTP/1.1\r\nHost: shop.test\r\n\r\n"
+	id := requestMessage(t, store, raw)
+	start := strings.Index(raw, "pha")
+	var body json.RawMessage
+	if code := postJSONInto(t, srv, "/api/intruder/run", map[string]any{
+		"msg_id": id, "target": "http://" + addr, "mode": "sniper",
+		"manual_points":  []map[string]int{{"start": start, "end": start + 3}},
+		"payload_sets":   [][]string{{"xyz", "wxyz"}},
+		"capture_filter": map[string]any{"term": "this text is in no response"},
+		"rps":            1000,
+	}, &body); code != http.StatusOK {
+		t.Fatalf("run = %d: %s", code, body)
+	}
+	var view struct {
+		Report struct {
+			Sent      int             `json:"sent"`
+			Discarded int             `json:"discarded"`
+			Attempts  json.RawMessage `json:"attempts"`
+			Errors    json.RawMessage `json:"errors"`
+			Buckets   json.RawMessage `json:"buckets"`
+		} `json:"report"`
+	}
+	if err := json.Unmarshal(body, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Report.Sent != 2 || view.Report.Discarded != 2 {
+		t.Fatalf("sent=%d discarded=%d, want both sent and both discarded", view.Report.Sent, view.Report.Discarded)
+	}
+	if string(view.Report.Attempts) != "[]" || string(view.Report.Errors) != "[]" {
+		t.Fatalf("attempts=%s errors=%s, want [] for both", view.Report.Attempts, view.Report.Errors)
+	}
+	if len(view.Report.Buckets) == 0 || view.Report.Buckets[0] != '[' || string(view.Report.Buckets) == "[]" {
+		t.Fatalf("buckets = %s, want the discarded items still bucketed", view.Report.Buckets)
+	}
+}

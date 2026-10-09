@@ -609,6 +609,7 @@ export function HttpEditor({
  onBodyBytesChange,
  messageId,
  requestPath,
+ onRawSelection,
 }: {
  value: string;
  /** The body's exact octets, base64 (MessageView.body_base64). Given, the Render view's image
@@ -673,6 +674,15 @@ export function HttpEditor({
   * render from bytes that do not exist, and the strip stays honest by not offering it.
   */
  messageId?: number;
+ /**
+  * The Raw view's selection, reported as it changes, as [start, end) positions in `value` — CRLF
+  * restored, so they index the message string the caller holds rather than CodeMirror's normalised
+  * document (docPosToValuePos). null when nothing is selected, or when the active view is not the
+  * unconverted Raw text (Pretty reformats; a charset override shows other characters), because a
+  * position there would name the wrong text. Intruder's "Define extract grep from response" builds
+  * its rule from this (burpsy-react-ui-df8r).
+  */
+ onRawSelection?: (selection: { start: number; end: number } | null) => void;
 }): JSX.Element {
  const [wrap, setWrap] = useState(true);
  // Burp's eye button (burpsy-react-ui-whr): hide the headers named in the Settings > Message
@@ -722,6 +732,13 @@ export function HttpEditor({
  // listener closes over it; per-editor, so two editors do not fight over one marker.
  const lastSearchSpecRef = useRef("");
  const rawTextRef = useRef("");
+ // onRawSelection's inputs, refreshed every render (below, once `active` exists) so the selection
+ // listener inside the memoised extensions reads the current callback, view and text.
+ const rawSelectionRef = useRef<{
+  report?: (selection: { start: number; end: number } | null) => void;
+  rawView: boolean;
+  value: string;
+ }>({ rawView: false, value: "" });
  // Paste-from-file (burpsy-react-ui-cto2): a hidden input is the only way a web page reads a
  // file the operator picked, and it must live in the DOM to be clickable. Cleared after every
  // change so choosing the same file twice still fires (the app's config import does the same).
@@ -783,6 +800,14 @@ export function HttpEditor({
    EditorView.updateListener.of((update) => {
     if (!update.selectionSet && !update.docChanged) return;
     setHasSelection(update.state.selection.ranges.some((range) => !range.empty));
+    const raw = rawSelectionRef.current;
+    if (!raw.report) return;
+    const sel = update.state.selection.main;
+    if (!raw.rawView || sel.empty) {
+     raw.report(null);
+     return;
+    }
+    raw.report({ start: docPosToValuePos(raw.value, sel.from), end: docPosToValuePos(raw.value, sel.to) });
    }),
    // burpsy-react-ui-czw9: when the search panel is open and the query text changes, scroll
    // to the first match immediately — Burp's message search steps through matches as the
@@ -1075,6 +1100,7 @@ export function HttpEditor({
  // whole extension set on every keystroke. This must stay outside that useMemo: its factory
  // runs on mount, before this line exists, which is a first-render TDZ crash.
  rawTextRef.current = shown;
+ rawSelectionRef.current = { report: onRawSelection, rawView: active === "raw" && !charsetActive, value };
  // What the toolbar's Copy hands over. Hex still copies a dump — that is what an
  // operator pasting into a ticket wants, and it is why message.ts's read-only
  // hexDump did not go away when the view became editable. Raw under a charset override copies

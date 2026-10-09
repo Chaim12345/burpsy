@@ -54,8 +54,11 @@ func TestTheIssueTypeCatalogueRouteListsEveryTypeWithItsMethods(t *testing.T) {
 	if got := string(sqli["name"]); got != `"SQL injection"` {
 		t.Errorf("name = %s, want \"SQL injection\"", got)
 	}
-	if got := string(sqli["implemented_methods"]); got != `["Error messages"]` {
-		t.Errorf("implemented_methods = %s, want only the method burpsy's SQL injection check uses", got)
+	// The five methods the SQL injection check probes since saq3.2.1 (error signatures, boolean
+	// differentials, and time delays from the SQL Server and PostgreSQL banks); Burp's other four stay
+	// out because burpsy does not send them.
+	if got := string(sqli["implemented_methods"]); got != `["Error messages","Boolean conditions","Time delays","SQL Server specific","PostgreSQL specific"]` {
+		t.Errorf("implemented_methods = %s, want exactly the methods burpsy's SQL injection check uses", got)
 	}
 	if !strings.Contains(string(sqli["detection_methods"]), `"Time delays"`) {
 		t.Errorf("detection_methods = %s, want Burp's full set including Time delays", sqli["detection_methods"])
