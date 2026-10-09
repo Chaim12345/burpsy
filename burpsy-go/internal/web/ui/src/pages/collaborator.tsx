@@ -33,6 +33,7 @@ import {
 import { api, copyToClipboard, downloadText } from "../lib/api";
 import { collaboratorToCSV, type CollaboratorExportRow } from "../lib/collaborator-csv";
 import { useApp } from "../lib/store";
+import { confirmDialog } from "../lib/dialogs";
 import { toast } from "sonner";
 
 function formatTime(ms: number): string {
@@ -165,13 +166,16 @@ export function CollaboratorPage(): JSX.Element {
                 size="small"
                 variant="outline"
                 disabled={unsetServer.isPending}
-                onClick={() => {
+                onClick={async () => {
                   const open = Boolean(s.domain);
                   if (
                     open &&
-                    !window.confirm(
-                      `Stop using Collaborator? The channel on ${s.domain} is closed, and the ${s.payloads.length} payload address(es) minted from it will point at a server nobody polls — a late callback to them is lost.`,
-                    )
+                    !(await confirmDialog({
+                      title: "Stop using Collaborator?",
+                      description: `The channel on ${s.domain} is closed, and the ${s.payloads.length} payload address(es) minted from it will point at a server nobody polls — a late callback to them is lost.`,
+                      confirmLabel: "Stop using Collaborator",
+                      danger: true,
+                    }))
                   )
                     return;
                   unsetServer.mutate(
