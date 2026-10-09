@@ -95,24 +95,43 @@ export const usePassthrough = (): UseQueryResult<PassthroughView> =>
  useResource<PassthroughView>(policyKeys.passthrough, "/api/proxy/passthrough");
 
 /**
- * Whether there is a CA to import. /ca.crt is not JSON and answers 404 when TLS
- * interception is off, which is exactly the case the operator needs told — so it is
- * probed with HEAD and the failure text is kept.
+ * Whether there is a CA to import.
+ *
+ * Asks /api/proxy/ca first and touches /ca.crt only when that says a CA is configured
+ * (burpsy-react-ui-bntf). The old probe went straight to `HEAD /ca.crt`, which answers 404 whenever
+ * TLS interception is off — so every console load on a default start logged a failed request in
+ * the browser's devtools for a state the JSON status already reports. The two agree in practice
+ * (both come from the one TLS engine burpsy builds under -intercept-tls), and when the status says
+ * a CA exists the HEAD probe still runs, so a route that disagrees with the status is reported
+ * rather than offered as a download that fails.
  */
+export async function probeCaCert(
+ status: () => Promise<Pick<CaStatus, "configured" | "hint">>,
+ head: () => Promise<Pick<Response, "ok" | "status">>,
+): Promise<CaCertState> {
+ const ca = await status();
+ if (!ca.configured) {
+  return {
+   available: false,
+   detail: ca.hint?.trim() || "TLS interception is not enabled, so there is no CA to trust. Start burpsy with -intercept-tls.",
+  };
+ }
+ const response = await head();
+ if (response.ok) return { available: true, detail: "" };
+ return {
+  available: false,
+  detail: `A CA is configured, but the proxy answered ${response.status} for /ca.crt.`,
+ };
+}
+
 export function useCaCert(): UseQueryResult<CaCertState> {
  return useQuery({
   queryKey: policyKeys.caCert,
-  queryFn: async ({ signal }): Promise<CaCertState> => {
-   const response = await fetch("/ca.crt", { method: "HEAD", signal });
-   if (response.ok) return { available: true, detail: "" };
-   return {
-    available: false,
-    detail:
-     response.status === 404
-      ? "TLS interception is not enabled, so there is no CA to trust. Start burpsy with -intercept-tls."
-      : `The proxy answered ${response.status} for /ca.crt.`,
-   };
-  },
+  queryFn: ({ signal }): Promise<CaCertState> =>
+   probeCaCert(
+    () => api<CaStatus>("/api/proxy/ca", { signal }),
+    () => fetch("/ca.crt", { method: "HEAD", signal }),
+   ),
  });
 }
 
