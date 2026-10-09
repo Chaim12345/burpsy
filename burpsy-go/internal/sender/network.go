@@ -36,7 +36,33 @@ type NetworkSettings struct {
 	Continue   ContinueSettings   `json:"continue"`
 	Streaming  StreamingSettings  `json:"streaming"`
 	TLS        TLSSettings        `json:"tls"`
+	// HTTP1 and HTTP2 are Burp's project-wide protocol defaults (burpsy-react-ui-ry5n), under Burp's
+	// own key names (project_options.http.http1 / http2). Pointers because a settings document written
+	// before they existed is unmarshalled onto a zero struct, and the zero value of HTTP2 would turn
+	// h2 off for every send: nil means Burp's default, which is keep-alive off and h2 on.
+	HTTP1 *HTTP1Settings `json:"http1,omitempty"`
+	HTTP2 *HTTP2Settings `json:"http2,omitempty"`
 }
+
+// HTTP1Settings is Burp's "HTTP/1" panel.
+type HTTP1Settings struct {
+	// EnableKeepAlive is "Use keep-alive for HTTP/1 if the server supports it". See keepalive.go.
+	EnableKeepAlive bool `json:"enable_keep_alive"`
+}
+
+// HTTP2Settings is Burp's "HTTP/2" panel.
+type HTTP2Settings struct {
+	// EnableHTTP2 is "Default to HTTP/2 if the server supports it". Off, a send that names no protocol
+	// goes out as HTTP/1.1 whatever the target negotiates; a request written as HTTP/2, or pinned to
+	// h2 by its caller, still rides h2, as Burp's per-request protocol toggle overrides this default.
+	EnableHTTP2 bool `json:"enable_http2"`
+}
+
+// KeepAliveHTTP1 reports whether HTTP/1 connections are kept for reuse.
+func (n NetworkSettings) KeepAliveHTTP1() bool { return n.HTTP1 != nil && n.HTTP1.EnableKeepAlive }
+
+// DefaultToHTTP2 reports whether a send that names no protocol may use h2.
+func (n NetworkSettings) DefaultToHTTP2() bool { return n.HTTP2 == nil || n.HTTP2.EnableHTTP2 }
 
 // TLSSettings is how the operator governs the certificate the TARGET presents.
 //
@@ -312,12 +338,43 @@ type RedirectSettings struct {
 	// throwaway cookies is the other reason: without a switch, following its redirects would keep
 	// resending them.
 	ReplayCookies bool `json:"replay_cookies"`
+	// Types is Burp's "Allowed redirect types" (project_options.http.redirections, burpsy-react-ui-z9zi):
+	// which kinds of response count as a redirect to follow. nil means Burp's defaults (3xx with
+	// Location, the Refresh header and the meta refresh tag; not any status with a Location, not
+	// JavaScript), so a settings document written before this existed behaves as Burp does. A pointer
+	// because the zero value of the struct would be "follow nothing".
+	Types *RedirectTypes `json:"types,omitempty"`
 	// CrossDomainProtocol is the protocol a hop to ANOTHER host must use (burpsy-react-ui-adkx —
 	// Burp's "Use selected protocol for cross-domain redirects" / "Enforce protocol choice on
 	// cross-domain redirections"). ProtocolPreferenceAuto, the zero value and Burp's default, lets
 	// each hop negotiate as normal. A per-send choice, never a stored setting: it is not serialised,
 	// so a network-settings document can neither carry nor persist it.
 	CrossDomainProtocol ProtocolPreference `json:"-"`
+}
+
+// RedirectTypes are Burp's five redirect kinds, under Burp's own key names.
+type RedirectTypes struct {
+	Understand3xx           bool `json:"understand_3xx_status_code"`
+	UnderstandAnyLocation   bool `json:"understand_any_status_code_with_location_header"`
+	UnderstandRefreshHeader bool `json:"understand_refresh_header"`
+	UnderstandMetaRefresh   bool `json:"understand_meta_refresh_tag"`
+	// UnderstandJavaScript is accepted only as false: following a JavaScript-driven redirect means
+	// executing the page's script, which the sender does not do. Setting it true is refused by name
+	// rather than stored as a promise nothing keeps.
+	UnderstandJavaScript bool `json:"understand_javascript_driven"`
+}
+
+// DefaultRedirectTypes is Burp's shipped default (Preferences/ProjectDefaults.json).
+func DefaultRedirectTypes() RedirectTypes {
+	return RedirectTypes{Understand3xx: true, UnderstandRefreshHeader: true, UnderstandMetaRefresh: true}
+}
+
+// EffectiveTypes is the redirect types in force: the configured ones, or Burp's defaults.
+func (r RedirectSettings) EffectiveTypes() RedirectTypes {
+	if r.Types == nil {
+		return DefaultRedirectTypes()
+	}
+	return *r.Types
 }
 
 // ContinueSettings makes the 100-continue handling explicit.
@@ -559,6 +616,10 @@ func (r RedirectSettings) validate() error {
 	if r.MaxHops < 0 || r.MaxHops > MaxRedirectHops {
 		return fmt.Errorf("redirects.max_hops is %d, and a chain is bounded to between 0 and %d hops",
 			r.MaxHops, MaxRedirectHops)
+	}
+	if r.Types != nil && r.Types.UnderstandJavaScript {
+		return fmt.Errorf("redirects.types.understand_javascript_driven cannot be true: following a " +
+			"JavaScript-driven redirect means executing the page's script, which this sender does not do")
 	}
 	if r.Mode != RedirectNever && r.MaxHops == 0 {
 		return fmt.Errorf("redirects.mode is %q but redirects.max_hops is 0, which follows nothing: "+

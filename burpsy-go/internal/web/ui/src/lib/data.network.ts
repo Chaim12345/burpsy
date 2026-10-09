@@ -60,7 +60,19 @@ export interface NetworkSettings {
      * so a panel must not read `false` off a missing key and claim the operator declined it.
      */
     replay_cookies?: boolean | null;
+    /**
+     * Burp's "Allowed redirect types": which responses count as a redirect to follow. The server
+     * always answers the types in force, Burp's defaults included. JavaScript-driven is refused if
+     * set: following it would mean running the page's script.
+     */
+    types?: RedirectTypes;
   };
+  /**
+   * Burp's project-wide protocol defaults. The server always answers them, Burp's defaults
+   * included: keep-alive off, HTTP/2 on.
+   */
+  http1?: { enable_keep_alive: boolean };
+  http2?: { enable_http2: boolean };
   continue: {
     understand_100_continue: boolean;
     remove_expect_header: boolean;
@@ -116,6 +128,23 @@ export interface NetworkSettingsState {
  */
 export type NetworkPatch = {
   [S in keyof NetworkSettings]?: Partial<NetworkSettings[S]>;
+};
+
+export interface RedirectTypes {
+  understand_3xx_status_code: boolean;
+  understand_any_status_code_with_location_header: boolean;
+  understand_refresh_header: boolean;
+  understand_meta_refresh_tag: boolean;
+  understand_javascript_driven: boolean;
+}
+
+/** Burp's shipped defaults, for a document from a server that predates the types. */
+export const DEFAULT_REDIRECT_TYPES: RedirectTypes = {
+  understand_3xx_status_code: true,
+  understand_any_status_code_with_location_header: false,
+  understand_refresh_header: true,
+  understand_meta_refresh_tag: true,
+  understand_javascript_driven: false,
 };
 
 export function useNetworkSettings(): ReturnType<typeof useQuery<NetworkSettingsState>> {
