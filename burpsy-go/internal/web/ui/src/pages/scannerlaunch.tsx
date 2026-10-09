@@ -9,7 +9,7 @@ import type { ScannerConfig } from "../lib/types";
 import { useApp } from "../lib/store";
 import type { AuditResult } from "../lib/types.attack";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, ErrorNotice, Field, Input, Metric, Select, Switch } from "../ui/primitives";
+import { Badge, Button, Card, ErrorNotice, Field, Input, Metric, NeedsValueButton, Select, Switch } from "../ui/primitives";
 import { DetailList, JsonView } from "../ui/json";
 import { SimpleTable } from "../ui/table";
 
@@ -430,7 +430,7 @@ function TargetedAudit(): JSX.Element {
     const id = Number(exchangeId);
     // `< 0` and Number.isInteger, not `<= 0` and isFinite: exchange 0 is a real exchange, and 1.5 is
     // finite but is not an id.
-    if (!Number.isInteger(id) || id < 0) {
+    if (!exchangeId.trim() || !Number.isInteger(id) || id < 0) {
       toast.error("Enter an exchange id — a whole number, counting from 0");
       return;
     }
@@ -474,10 +474,10 @@ function TargetedAudit(): JSX.Element {
             placeholder="Exchange ID"
             style={{ maxWidth: "var(--w-xs)" }}
           />
-          <Button onClick={run} disabled={!exchangeId || runAudit.isPending}>
+          <NeedsValueButton onClick={run} disabled={runAudit.isPending} missing={exchangeId ? null : "needs an exchange id"}>
             <Play size={14} />
             {runAudit.isPending ? "Auditing…" : "Audit"}
-          </Button>
+          </NeedsValueButton>
         </div>
       </Card>
       {auditResult ? (

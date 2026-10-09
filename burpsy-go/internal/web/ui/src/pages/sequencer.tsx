@@ -46,6 +46,7 @@ import {
  Field,
  Input,
  Metric,
+ NeedsValueButton,
  Select,
  Spinner,
  Tabs,
@@ -990,6 +991,18 @@ export function SequencerPage(): JSX.Element {
    },
   );
 
+ // What Start capture still needs, shown beside the disabled button rather than toasted on click
+ // (z2l5). startCaptureRun keeps its own checks for the Retry path.
+ const captureMissing = !captureTarget.trim()
+  ? "needs a target"
+  : !captureRequest.trim()
+   ? "needs a request"
+   : (locationKind === "body_regex" ? !locationPattern.trim() : !locationName.trim())
+    ? locationKind === "body_regex"
+     ? "needs a token pattern"
+     : "needs the name to read the token from"
+    : null;
+
  const startCaptureRun = () => {
   const target = captureTarget.trim();
   if (!target) {
@@ -1393,10 +1406,10 @@ export function SequencerPage(): JSX.Element {
           />
          )}
         </Field>
-        <Button onClick={startCaptureRun} disabled={startCapture.isPending}>
+        <NeedsValueButton onClick={startCaptureRun} disabled={startCapture.isPending} missing={captureMissing}>
          <Radio size={14} />
          {startCapture.isPending ? "Starting…" : "Start capture"}
-        </Button>
+        </NeedsValueButton>
         <Button onClick={togglePause} disabled={!capture.data?.capturing || pauseCapture.isPending}>
          {(capture.data?.paused ?? false) ? <Play size={14} /> : <Pause size={14} />}
          {(capture.data?.paused ?? false) ? "Resume" : "Pause"}
@@ -1443,8 +1456,9 @@ export function SequencerPage(): JSX.Element {
        placeholder="or follow capture id"
        style={{ maxWidth: "var(--w-sm)" }}
       />
-      <Button
+      <NeedsValueButton
        variant="outline"
+       missing={captureId.trim() ? null : "needs a capture id"}
        onClick={() => {
         const next = captureId.trim();
         if (!next) {
@@ -1457,7 +1471,7 @@ export function SequencerPage(): JSX.Element {
       >
        <Radio size={14} />
        {attached ? "Re-attach" : "Attach"}
-      </Button>
+      </NeedsValueButton>
      </Toolbar>
 
      {capture.error ? <ErrorNotice error={capture.error} onRetry={() => void capture.refetch()} /> : null}
