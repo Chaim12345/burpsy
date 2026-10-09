@@ -342,10 +342,12 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 				dialer.Carry = upstream.Dialer{Policy: policy, Timeout: config.Timeout, Base: settings.dialer()}.DialContext
 			}
 			addr = settings.overrideAddr(addr)
-			// EgressOffer(true) matches ForceAttemptHTTP2 above: the transport inspects the negotiated
-			// protocol on the connection it is handed and uses h2 when ALPN chose it, so offering h2
-			// here keeps the protocol behaviour the same as the stdlib dial it replaces.
-			conn, _, err := dialer.Dial(ctx, host, addr, alpn.EgressOffer(true))
+			// The offer matches ForceAttemptHTTP2 above: the transport inspects the negotiated protocol
+			// on the connection it is handed and uses h2 when ALPN chose it, so offering h2 here keeps
+			// the protocol behaviour the same as the stdlib dial it replaces. With h2 off it must not
+			// be offered: a transport with no h2 configured would write HTTP/1.1 onto a connection the
+			// server had agreed to speak h2 on (and the connection-bound NTLM client depends on that).
+			conn, _, err := dialer.Dial(ctx, host, addr, alpn.EgressOffer(settings.DefaultToHTTP2()))
 			if err != nil {
 				return nil, err
 			}
@@ -722,12 +724,21 @@ func (s *Sender) Render(req *Request) ([]byte, error) {
 // callers want the authorised entry point.
 // # Platform authentication
 //
-// A credential configured for the target's host is presented here — preemptively for Basic, and after
-// one challenge for Digest. See sendOnce and the retry below.
+// A credential configured for the target's host is presented here — preemptively for Basic, after
+// one challenge for Digest (see sendOnce and the retry below), and for NTLM as a handshake on one
+// dedicated connection (connauth.go).
 func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 	target, err := effectiveTarget(req)
 	if err != nil {
 		return nil, err
+	}
+
+	// NTLM authenticates a connection, not a request, so a host whose rule is connection-bound
+	// takes its own path: the three legs on one dedicated HTTP/1.1 connection that nothing else
+	// ever rides (connauth.go). The host-keyed Authorization/Learn flow below is the wrong shape
+	// for it — see netauth.NTLMExchange.
+	if exchange, ok := s.connectionHandshake(req, target); ok {
+		return s.sendConnectionBound(ctx, req, target, exchange)
 	}
 
 	resp, challenges, err := s.sendOnce(ctx, req, target)
@@ -774,6 +785,13 @@ func (s *Sender) Send(ctx context.Context, req *Request) (*Response, error) {
 // original in a way nobody intended. The body is rebuilt from req.Body on each call, which is what
 // makes a retry possible at all — an io.Reader would already be drained.
 func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*Response, []string, error) {
+	return s.exchangeOn(ctx, s.httpClient(), req, target, "", false)
+}
+
+// exchangeOn is sendOnce on a given client. authorization, when set, is the platform credential for
+// this leg of a connection-bound handshake and replaces the per-host lookup; connectionBound marks
+// such a leg so its protocol outcome is recorded for what it was (see observeConnectionBound).
+func (s *Sender) exchangeOn(ctx context.Context, client *http.Client, req *Request, target *url.URL, authorization string, connectionBound bool) (*Response, []string, error) {
 	startTime := time.Now()
 
 	var bodyReader io.Reader
@@ -810,7 +828,11 @@ func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*
 	// A caller's own Authorization header always wins. An operator editing a request in Repeater and
 	// typing a credential into it means that credential, and a per-host rule silently replacing it
 	// would make the request they are looking at not the request that goes out.
-	if s.config.PlatformAuth != nil && httpReq.Header.Get("Authorization") == "" {
+	if authorization != "" {
+		// A connection-bound leg: the caller (sendConnectionBound) already checked the request
+		// carries no Authorization of its own, and this value is the leg's message.
+		httpReq.Header.Set("Authorization", authorization)
+	} else if s.config.PlatformAuth != nil && httpReq.Header.Get("Authorization") == "" {
 		if host, _, _, err := authorityOf(target.String()); err == nil {
 			method := req.Method
 			if method == "" {
@@ -827,7 +849,7 @@ func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*
 
 	// httpClient(), not s.client: the accessor takes the read lock, and ApplyNetwork rebuilds the
 	// client under the write lock when a timeout changes. Reading the field directly would race it.
-	httpResp, err := s.httpClient().Do(httpReq)
+	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -864,8 +886,30 @@ func (s *Sender) sendOnce(ctx context.Context, req *Request, target *url.URL) (*
 		Body:       body,
 		Version:    httpResp.Proto,
 		Duration:   duration,
-		Outcome:    s.observe(target, httpResp),
+		Outcome:    s.observeLeg(target, httpResp, connectionBound),
 	}, challenges, nil
+}
+
+// observeLeg is observe, except for a connection-bound leg, which was never offered h2: learning
+// the target's protocol from it would record "this host speaks HTTP/1.1" for a host that was not
+// asked, and the downgrade it records is the credential's, not the target's.
+func (s *Sender) observeLeg(target *url.URL, resp *http.Response, connectionBound bool) SendOutcome {
+	if !connectionBound {
+		return s.observe(target, resp)
+	}
+	host, port, isTLS, err := authorityOf(target.String())
+	if err != nil {
+		return newOutcome("", ProtocolSupportUnknown, &Downgrade{Reason: DowngradeConnectionBoundAuth}, nil, nil)
+	}
+	negotiated := ""
+	if resp.TLS != nil {
+		negotiated = resp.TLS.NegotiatedProtocol
+	}
+	down := &Downgrade{Reason: DowngradeConnectionBoundAuth}
+	if !isTLS {
+		down = &Downgrade{Reason: DowngradePlaintextTarget}
+	}
+	return s.finish(host, port, isTLS, negotiated, down, nil, nil, "", nil)
 }
 
 // observe records what the stdlib transport actually negotiated for one typed send.
