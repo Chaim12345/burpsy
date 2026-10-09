@@ -428,6 +428,19 @@ func main() {
 	} else {
 		passiveScanner = scanner.NewPassiveScanner(store, logger)
 	}
+	// Custom scan checks imported in the console (kbu1) come back with the project, after the
+	// directory's, before anything reads the corpus.
+	if persistStore != nil {
+		if sources, err := persistStore.LoadCustomScanChecks(); err != nil {
+			logger.Warn("custom scan checks not restored", zap.Error(err))
+		} else {
+			for _, src := range sources {
+				if _, err := passiveScanner.ImportCheck(src, true); err != nil {
+					logger.Warn("a saved custom scan check no longer loads", zap.Error(err))
+				}
+			}
+		}
+	}
 
 	// Create proxy config.
 	//

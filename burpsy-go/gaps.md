@@ -1691,6 +1691,30 @@ Burp rather than wider:
   bead and Burp's tutorial name only the three kinds above. Also not built: multi-request
   selection (Burp lets one launch cover several selected requests; burpsy guesses one exchange per
   run).
+
+## Scanner C: BCheck interpreter and console authoring (burpsy-react-ui-saq3.4, 2026-10-08)
+
+### `removing` send-request actions (movb)
+- **Burp:** `bcheck-definition-reference.html` — `removing headers|queries: <names>`, `removing query_string|path|method|body`.
+- **burpsy:** all six. Two readings are burpsy's, because the BCheck engine is not in the decompiled tree:
+  `removing queries` ("Removes the value of the specified query parameter(s)") drops each named parameter,
+  name and value, rather than leaving `name=`; `removing path` ("Removes all path parameters") leaves the
+  path `/` and keeps the query. `removing method` sends a request line with no method.
+- The same pass fixed two mis-sends: `appending query_string` replaced the query, and `replacing queries`
+  appended a duplicate instead of replacing the named parameter's value.
+
+### Console authoring of custom scan checks (kbu1)
+- **Burp:** `desktop/extend-burp/custom-scan-checks/` — Import, New (from templates), Validate, Format BCheck,
+  Send to Custom scan checks editor + Run test, Export, Delete.
+- **burpsy:** the Custom scan checks page gains New (three templates), Import .bcheck…, Validate (with the
+  parse error's line and column), Run test against exchanges sent with "Send to custom scan check editor"
+  (active drafts send through the audit sender's scope gate; nothing is filed), Save, Export, Delete, and
+  Reload for the `--bchecks` directory. Console checks persist with the project (`scanner.custom_checks`).
+- **Differences:** a check loaded from the directory is read-only in the console (edit the file and Reload),
+  and Delete applies only to console checks, because the file would load it again. Format BCheck is not
+  offered: burpsy has no canonical BCheck printer, and a formatter that re-wrote a working check is a risk
+  the operator did not ask for. A test run against a Collaborator check needs a configured channel, like an
+  audit.
 - **Timeout overrides apply to every probe a run sends, its deferred phase included.** `FinishScan`
   (stored re-fetch, then the stored-DOM render) takes the run's configuration and re-fetches through the
   run's derived sender (saq3.3.4). Out-of-band polling sends nothing, so it has no timeout to apply. A

@@ -1067,6 +1067,12 @@ func (s *Server) setupRoutes() {
 	// the audit engine reads.
 	s.mux.HandleFunc("/api/scanner/checks", s.handleCorpusChecks)
 	s.mux.HandleFunc("/api/scanner/checks/enable", s.handleCorpusCheckEnable)
+	// Console authoring of custom scan checks (kbu1): Validate, Import, source (Export/Delete), Reload, Run test.
+	s.mux.HandleFunc("/api/scanner/checks/validate", s.handleCheckValidate)
+	s.mux.HandleFunc("/api/scanner/checks/import", s.handleCheckImport)
+	s.mux.HandleFunc("/api/scanner/checks/source", s.handleCheckSource)
+	s.mux.HandleFunc("/api/scanner/checks/reload", s.handleCheckReload)
+	s.mux.HandleFunc("/api/scanner/checks/test", s.handleCheckTest)
 	s.mux.HandleFunc("/api/scanner/configs", s.handleScannerConfigs)
 	// The catalogue the per-issue selection is chosen from, by name, with each type's detection
 	// methods and which of them burpsy runs (burpsy-react-ui-saq3.3.1).

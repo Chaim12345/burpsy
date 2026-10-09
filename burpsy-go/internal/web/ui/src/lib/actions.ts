@@ -802,6 +802,17 @@ const showResponseInBrowser = (exchange: Exchange) => {
     { id: "sequencer", label: "Send to Sequencer", icon: Activity, shortcut: "Q", onSelect: () => void sendToSequencer(exchange) },
     { id: "compare-a", label: "Send to Comparer (A)", icon: Combine, onSelect: () => void sendToComparer(exchange, "a") },
     { id: "compare-b", label: "Send to Comparer (B)", icon: ArrowRightLeft, onSelect: () => void sendToComparer(exchange, "b") },
+    // Burp's "Send to Custom scan checks editor" (kbu1): the exchange joins the editor's test set.
+    {
+     id: "custom-check",
+     label: "Send to custom scan check editor",
+     icon: FileCode2,
+     onSelect: () => {
+      useApp.getState().addCustomCheckTestId(exchange.id);
+      setRoute("scannerchecks");
+      toast.success(`Exchange #${exchange.id} added to the custom scan check test set`);
+     },
+    },
     // Decoder is a client-side transform pipeline, so this is a seed hand-off, not a wire call.
     { id: "decoder", label: "Send to Decoder", icon: FileOutput, onSelect: () => void sendToDecoder(exchange) },
    ],

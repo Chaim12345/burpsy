@@ -249,6 +249,70 @@ func (e *RequestEdit) SetHeader(name, value string) {
 	e.Headers = kept
 }
 
+// RemoveHeader drops every header with this name (case-insensitive).
+func (e *RequestEdit) RemoveHeader(name string) {
+	kept := e.Headers[:0]
+	for _, h := range e.Headers {
+		if !strings.EqualFold(h[0], name) {
+			kept = append(kept, h)
+		}
+	}
+	e.Headers = kept
+}
+
+// queryName is a query clause's parameter name: everything before the first '='.
+func queryName(clause string) string {
+	name, _, _ := strings.Cut(clause, "=")
+	return name
+}
+
+// SetQuery replaces the value of the parameter a `name=value` clause names — the first occurrence,
+// with later duplicates dropped, as SetHeader does — or appends the clause when the parameter is
+// absent.
+func (e *RequestEdit) SetQuery(clause string) {
+	clause = strings.TrimLeft(clause, "?&")
+	if clause == "" {
+		return
+	}
+	name := queryName(clause)
+	if e.Query == "" {
+		e.Query = clause
+		return
+	}
+	parts := strings.Split(e.Query, "&")
+	kept := parts[:0]
+	replaced := false
+	for _, part := range parts {
+		if queryName(part) == name {
+			if replaced {
+				continue
+			}
+			replaced = true
+			part = clause
+		}
+		kept = append(kept, part)
+	}
+	if !replaced {
+		kept = append(kept, clause)
+	}
+	e.Query = strings.Join(kept, "&")
+}
+
+// RemoveQuery drops every occurrence of the named query parameter.
+func (e *RequestEdit) RemoveQuery(name string) {
+	if e.Query == "" {
+		return
+	}
+	parts := strings.Split(e.Query, "&")
+	kept := parts[:0]
+	for _, part := range parts {
+		if queryName(part) != name {
+			kept = append(kept, part)
+		}
+	}
+	e.Query = strings.Join(kept, "&")
+}
+
 // AddHeader adds a header, keeping any existing ones of the same name.
 func (e *RequestEdit) AddHeader(name, value string) {
 	e.Headers = append(e.Headers, [2]string{name, value})
@@ -272,8 +336,12 @@ func (e *RequestEdit) AddQuery(clause string) {
 func (e *RequestEdit) ToRaw() []byte {
 	var sb strings.Builder
 	sb.Grow(256 + len(e.Body))
-	sb.WriteString(e.Method)
-	sb.WriteByte(' ')
+	// An empty method (a BCheck's `removing method`) leaves the request line without one rather than
+	// starting it with a space.
+	if e.Method != "" {
+		sb.WriteString(e.Method)
+		sb.WriteByte(' ')
+	}
 	sb.WriteString(e.Target())
 	sb.WriteByte(' ')
 	sb.WriteString(e.Version)

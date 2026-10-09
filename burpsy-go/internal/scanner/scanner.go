@@ -796,6 +796,21 @@ type PassiveScanner struct {
 	report   LoadReport
 	coverage *CoverageTracker
 
+	// setsMu guards the check sets above (passive, active, insertion, tools, report, coverage) and
+	// entries: the console can import, remove and reload checks while scans run (kbu1). Readers take a
+	// snapshot under RLock; a change rebuilds every set from entries and swaps them in together, so a
+	// scan never sees a passive list from one generation and a coverage table from another.
+	setsMu sync.RWMutex
+	// entries are every loaded check with its source text and where it came from, in load order —
+	// the --bchecks directory's files first, then console imports (custom_checks.go).
+	entries []checkEntry
+	// dir is the --bchecks directory, for Reload; fromDir records that this scanner was built from
+	// one, which is what makes Scan run the corpus instead of the built-in header and cookie checks.
+	dir      string
+	fromDir  bool
+	dirErrs  []LoadError
+	dirFiles int
+
 	findings   []*Finding
 	findingsMu sync.RWMutex
 
@@ -871,7 +886,7 @@ func NewPassiveScanner(store *core.TrafficStore, logger *zap.Logger) *PassiveSca
 
 // Scan performs passive scanning on an exchange.
 func (s *PassiveScanner) Scan(exchange *core.Exchange) []*Finding {
-	if s.coverage != nil {
+	if s.fromDir {
 		return s.scanBChecks(exchange)
 	}
 
@@ -891,6 +906,11 @@ func (s *PassiveScanner) Scan(exchange *core.Exchange) []*Finding {
 	s.findings = append(s.findings, findings...)
 	s.findingsMu.Unlock()
 
+	// Checks imported from the console (kbu1) run on top of the built-ins: importing one custom
+	// check must not switch the built-in header and cookie checks off.
+	if s.Loaded() > 0 {
+		findings = append(findings, s.scanBChecks(exchange)...)
+	}
 	return findings
 }
 
