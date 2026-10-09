@@ -253,7 +253,7 @@ func (c *Crawler) foldWithinTolerance(page pageStructure) (string, bool) {
 	keys := relaxedLinkKeys(page.linkTargets)
 	for _, fingerprint := range c.locationShapes[page.shape] {
 		entry, known := c.locations[fingerprint]
-		if known && withinTolerance(page.linkTargets, keys, entry, locationToleranceBand) {
+		if known && withinTolerance(page.linkTargets, keys, entry, c.toleranceBand()) {
 			return entry.at, true
 		}
 	}
@@ -291,7 +291,7 @@ func (c *Crawler) recordStructuredLocation(page pageStructure, at string, fetch 
 		fetch.DuplicateOf = first
 		c.skips.record(SkipRecord{
 			Reason: SkipLocationFolded, URL: at,
-			Detail: "the same page with at most " + strconv.Itoa(locationToleranceBand) +
+			Detail: "the same page with at most " + strconv.Itoa(c.toleranceBand()) +
 				" link value(s) moved was already seen at " + first,
 		})
 		return false
@@ -341,4 +341,12 @@ func shapeDigest(skeleton string, textLen int) string {
 	b.WriteString(shapeSeparator)
 	b.WriteString(strconv.Itoa(bits.Len(uint(textLen))))
 	return hashSkeleton(b.String())
+}
+
+// toleranceBand is the band in force: the crawl strategy's (8bp2), or Burp's normal default.
+func (c *Crawler) toleranceBand() int {
+	if c.limits.LocationToleranceBand != nil {
+		return *c.limits.LocationToleranceBand
+	}
+	return locationToleranceBand
 }

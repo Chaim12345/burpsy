@@ -48,6 +48,12 @@ export interface SiteNodeDetail {
   * would be a lie about coverage.
   */
  inserted?: boolean;
+ /**
+  * True for a URL the live passive crawl saw linked from proxied traffic that nothing has requested
+  * (burpsy-react-ui-t3zk), Burp's grey "unrequested item". linked_from is the page that linked to it.
+  */
+ unrequested?: boolean;
+ linked_from?: string;
  /** When the operator added it, in Unix milliseconds. Absent on an observed node. */
  added_at?: number;
  /** Findings recorded at this exact path. */

@@ -74,9 +74,10 @@ func PhaseOfTag(tag string) CrawlPhase {
 		// A plain navigational link, a form, or a seed. All frontier walk, and grouping them is the
 		// point: an operator asking "how much of this came from ordinary links" gets one number.
 		return PhaseFrontierWalk
-	case "iframe", "frame", "redirect":
+	case "iframe", "frame", "redirect", tagMetaRefresh, tagRefreshHeader:
 		return PhaseRedirect
-	case "object", "embed":
+	case "object", "embed", "img", "source", "audio", "track", "video", "link":
+		// Subresources (4ocj) are embedded content the page loads, the same phase as object/embed.
 		return PhaseEmbeddedObject
 	case "rendered":
 		return PhaseRendered
@@ -121,4 +122,60 @@ const PhaseNone CrawlPhase = "00-unknown"
 // hasTagPrefix reports whether tag starts with prefix.
 func hasTagPrefix(tag, prefix string) bool {
 	return len(tag) > len(prefix) && tag[:len(prefix)] == prefix
+}
+
+// EdgeKindsAll is Burp's crawl-telemetry edge vocabulary (burpsy-react-ui-ylr1), in report order:
+// every kind is present in Report.EdgeKinds, zero included, so a kind the crawl never produced reads
+// as 0 rather than as a key that is missing. burpsy's own discovery sources that Burp has no edge for
+// (robots, sitemaps, well-known paths, embedded objects, scripts, JSON documents) are reported
+// beside them under their own names.
+var EdgeKindsAll = []string{
+	"anchor", "form", "frame", "iframe", "area", "redirect", "delayed_redirect", "origin", "submit",
+	"clickable", "speculative", "api", "soap", "graphql",
+	"embedded", "subresource", "robots", "sitemap", "well_known", "script", "json",
+}
+
+// EdgeKindOfTag maps a discovered link's tag onto Burp's edge vocabulary.
+func EdgeKindOfTag(tag string) string {
+	switch tag {
+	case "a":
+		return "anchor"
+	case "area", "frame", "iframe", "redirect", "form", "speculative", "script":
+		return tag
+	case tagMetaRefresh, tagRefreshHeader:
+		return "delayed_redirect"
+	case "seed", "":
+		return "origin"
+	case "button[formaction]", "input[formaction]":
+		return "submit"
+	case "math":
+		return "anchor"
+	case "object", "embed":
+		return "embedded"
+	case "img", "source", "audio", "track", "video", "link":
+		return "subresource"
+	case "robots":
+		return "robots"
+	case "robots-sitemap", "sitemap":
+		return "sitemap"
+	case "well-known":
+		return "well_known"
+	case "source map":
+		return "speculative"
+	}
+	switch {
+	case hasTagPrefix(tag, "api:wsdl"):
+		return "soap"
+	case hasTagPrefix(tag, "api:"):
+		return "api"
+	case hasTagPrefix(tag, "graphql:"):
+		return "graphql"
+	case hasTagPrefix(tag, "rendered"):
+		return "clickable"
+	case hasTagPrefix(tag, "json:"):
+		return "json"
+	case hasTagPrefix(tag, "js:"):
+		return "script"
+	}
+	return "other"
 }

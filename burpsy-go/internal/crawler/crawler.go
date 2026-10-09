@@ -263,6 +263,21 @@ type Config struct {
 	// SubmitForms turns form submission on (CRAWL-03). The zero value is off, and that is the
 	// requirement, not a default: a crawl that submits forms writes to the application.
 	SubmitForms bool
+	// NoMetaRefresh and NoRefreshHeader turn off following a <meta http-equiv="refresh"> target and a
+	// Refresh response header (q0qr). They are Burp's project options
+	// http.redirections.understand_meta_refresh_tag and understand_refresh_header set false. Both
+	// default to true in Burp (Preferences/ProjectDefaults.json), so the zero value here follows them.
+	// Negative names keep the zero value equal to Burp's default.
+	NoMetaRefresh   bool
+	NoRefreshHeader bool
+	// NoNotFoundProbe turns off not-found detection (s92h): the per-directory probe for a
+	// nonexistent sibling that teaches the crawl what a soft 404 looks like. On by default, as Burp's
+	// is.
+	NoNotFoundProbe bool
+	// NoSubresources stops the crawl fetching images, stylesheets, icons and media (4ocj). Burp's
+	// crawler fetches them, which is the default here. Scripts and embedded objects are fetched
+	// regardless, because their contents are read for locations.
+	NoSubresources bool
 	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
 	// candidate URLs are also mined from HTML comments and script bodies — the places
 	// single-page apps and comment-leaked admin paths live. Off by default is NOT a statement
@@ -499,8 +514,12 @@ type SeedRequest struct {
 // Fetch is one request the crawl actually sent, and what came back. The list of these is the "what
 // it did reach" half of the coverage story CRAWL-07 asks about; LimitReport.Unfetched is the other.
 type Fetch struct {
-	URL    string `json:"url"`
-	Method string `json:"method"`
+	// SoftNotFound marks a 2xx response that was its directory's custom "not found" page (s92h).
+	SoftNotFound bool `json:"soft_not_found,omitempty"`
+	// NotFoundProbe marks the request the crawl made itself to learn a directory's not-found page.
+	NotFoundProbe bool   `json:"not_found_probe,omitempty"`
+	URL           string `json:"url"`
+	Method        string `json:"method"`
 	// Status is the response status, or 0 when the response could not be parsed.
 	Status int `json:"status"`
 	// ExchangeID is the store id, so a caller can pull the request and response bytes out of history.
@@ -651,6 +670,12 @@ type Report struct {
 	// rendered pass", and the numbers sum to the discovered total because an unrecognised tag is
 	// counted under PhaseNone rather than dropped.
 	Phases map[CrawlPhase]int `json:"phases,omitempty"`
+	// EdgeKinds counts discovered locations by the kind of edge that led to them, in Burp's crawl
+	// telemetry vocabulary (burpsy-react-ui-ylr1, EdgeKindsAll): anchor, form, frame, iframe, area,
+	// redirect, delayed redirect, origin, submit, clickable, speculative, API, SOAP and GraphQL. Counted
+	// at discovery, before any gate, like Phases. Burp's non-deterministic-location count is
+	// LocationFolds: a page that came back with its links moved under the same structure.
+	EdgeKinds map[string]int `json:"edge_kinds"`
 	// SitemapSeeded counts requests this crawl did not make because the site map already held that
 	// exact request (burpsy-react-ui-z8qf). Zero for a crawl seeded from nothing, which is the
 	// common case and the one that must not read as a failure.
@@ -701,6 +726,10 @@ type Report struct {
 	// rather than a guess at one: a folded page's links were NOT queued again, so this is the
 	// number of pages the band kept out of the frontier.
 	LocationFolds int `json:"location_folds,omitempty"`
+	// SoftNotFound counts 2xx responses recognised as their directory's custom "not found" page (s92h).
+	SoftNotFound int `json:"soft_not_found"`
+	// NotFoundProbes counts the per-directory probes for a nonexistent name (s92h). Each is also a Fetch.
+	NotFoundProbes int `json:"not_found_probes"`
 	// RenderedAudit is the browser's second look over the crawl's locations (burpsy-react-ui-xuim):
 	// which distinct locations were rendered in a headless browser, and at how many of them the
 	// page's own script produced content the wire response never contained. Nil when the pass did
@@ -959,6 +988,10 @@ type Crawler struct {
 	// itself is: one entry per distinct shape, and a shape cannot exist without a location, so the
 	// index is never the largest of the two. See location_band.go for what a fold may tolerate.
 	locationShapes map[string][]string
+	// notFound is each probed directory's answer for a nonexistent name (s92h); nil marks a directory
+	// whose probe could not be read. notFoundProbes counts probes against maxNotFoundProbes.
+	notFound       map[string]*notFoundShape
+	notFoundProbes int
 	// templates counts fetches admitted per URL template, for the quota. Bounded by
 	// Limits.MaxFingerprints as well: an entry is created for every template not seen before, including
 	// for links dropped at a full frontier, so this one grows even while the crawl fetches nothing new.
@@ -1195,6 +1228,7 @@ func New(cfg Config) (*Crawler, error) {
 		queued:            make(map[string]bool),
 		locations:         make(map[string]locationEntry),
 		locationShapes:    make(map[string][]string),
+		notFound:          make(map[string]*notFoundShape),
 		templates:         make(map[string]int),
 		templateOK:        make(map[string]bool),
 		hostLimiters:      make(map[string]*intruder.RateLimiter),
@@ -1342,6 +1376,9 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		// of it at Run time would report a seed it did not cause.
 		SitemapSeeded: c.sitemapSeeded,
 	}
+	// Every edge kind is on the wire from the start, zeros included (ylr1), so a crawl that found
+	// nothing reports {"anchor":0,...} rather than null.
+	seedEdgeKinds(&rep)
 	lim := LimitReport{Limits: c.limits}
 
 	if c.cfg.SeedsOnly {
@@ -1353,6 +1390,7 @@ func (c *Crawler) Run(ctx context.Context) Report {
 		}
 	} else {
 		for _, u := range c.seedURLs {
+			c.countEdge(&rep, "origin")
 			c.admitSeed(u, &lim)
 		}
 		// One robots.txt per seed authority, queued behind the seeds so the operator's own starting
@@ -1960,7 +1998,11 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	// link walk, form submit, base-href resolution — and none of that applies here; admitting XML
 	// through that gate would hand every non-HTML response to the HTML extractor looking for anchors
 	// it will never find. A PDF below still records SkipNotHTML exactly as before.
-	if LooksLikeSitemap(contentType, body) {
+	// Not a document that sniffs as an API definition: LooksLikeSitemap claims every XML content type,
+	// so a WSDL served as text/xml or application/wsdl+xml was read as a sitemap and its operations
+	// never crawled (found by burpsy-react-ui-ai64; an existing WSDL test had been passing only because
+	// the HTML page linking to the WSDL was itself misread as one).
+	if LooksLikeSitemap(contentType, body) && sniffAPIDocument(contentType, body) == APIDocNone {
 		c.consumeSitemap(item, contentType, body, &fetch, rep, lim)
 		rep.Fetches = append(rep.Fetches, fetch)
 		return
@@ -2034,8 +2076,23 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 	}
 
 	page := parsePage(body, item.url, c.limits, c.cfg.RequestSpeculative)
+	if c.cfg.NoSubresources {
+		for tag := range subresourceTags {
+			page.links = withoutTag(page.links, tag)
+		}
+	}
+	if c.cfg.NoMetaRefresh {
+		page.links = withoutTag(page.links, tagMetaRefresh)
+	}
 	if page.truncated {
 		lim.record(StopParseBytes)
+	}
+	// The Refresh response header (q0qr), the header form of a meta refresh: a delayed redirect the
+	// body never mentions.
+	if msg != nil && !c.cfg.NoRefreshHeader {
+		if target, ok := refreshTarget(string(msg.Header("Refresh"))); ok {
+			page.links = append(page.links, discoveredLink{raw: target, tag: tagRefreshHeader})
+		}
 	}
 	// A source map the page's scripts named (burpsy-react-ui-jwy5, criterion 2). Fetched through the
 	// ordinary perform() path rather than from a side channel, so the request is scope-authorised,
@@ -2055,6 +2112,19 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 		})
 	}
 	fetch.Fingerprint = page.fingerprint
+	// A 2xx page that matches its directory's answer for a missing name is that directory's custom
+	// "not found" page, not a location (s92h): it is neither recorded as one nor walked.
+	if fetch.Status >= 200 && fetch.Status <= 299 && c.isSoftNotFound(ctx, item, page, rep) {
+		fetch.SoftNotFound = true
+		rep.SoftNotFound++
+		c.skips.record(SkipRecord{
+			Reason: SkipSoftNotFound, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt, Text: item.text,
+			Detail: "matched what " + notFoundKey(item.url) + " answers for a nonexistent name",
+		})
+		rep.Fetches = append(rep.Fetches, fetch)
+		return
+	}
 	if !c.recordStructuredLocation(page, item.url.String(), &fetch, rep) {
 		// Already seen at another URL, exactly or within the tolerance band: the links here are the
 		// links there, so descending again would spend budget re-walking a subtree already covered.
@@ -2435,6 +2505,23 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 		return false
 	}
 	rep.APIDocumentsRead++
+	if format == APIDocWSDL {
+		// Burp names WSDL failures apart from API-definition failures (ai64), and a WSDL that broke
+		// mid-document still names the operations read before the break, which are crawled below.
+		switch {
+		case failure != "":
+			c.skips.record(SkipRecord{
+				Reason: SkipWSDLInvalid, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt, Detail: failure,
+			})
+		case len(eps) == 0:
+			c.skips.record(SkipRecord{
+				Reason: SkipWSDLNoOperations, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt, Detail: "no wsdl:operation was declared",
+			})
+		}
+		failure = ""
+	}
 	if failure != "" {
 		// The acceptance criterion, and the reason this is a distinct skip: the target PUBLISHED an
 		// API definition and the crawl still cannot see it. Reporting zero endpoints here would tell
@@ -2620,6 +2707,23 @@ func (c *Crawler) countPhase(rep *Report, phase CrawlPhase) {
 	rep.Phases[phase]++
 }
 
+// countEdge counts one discovered edge by kind (ylr1), seeding every kind at zero on first use.
+func (c *Crawler) countEdge(rep *Report, kind string) {
+	seedEdgeKinds(rep)
+	rep.EdgeKinds[kind]++
+}
+
+// seedEdgeKinds puts every kind in EdgeKindsAll on the report at zero, once.
+func seedEdgeKinds(rep *Report) {
+	if rep.EdgeKinds != nil {
+		return
+	}
+	rep.EdgeKinds = make(map[string]int, len(EdgeKindsAll)+1)
+	for _, k := range EdgeKindsAll {
+		rep.EdgeKinds[k] = 0
+	}
+}
+
 // admit runs one discovered link through the frontier's gates, in this order:
 //
 //  1. resolution — a href that cannot be resolved to a host is nothing to fetch;
@@ -2641,6 +2745,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 	// rather than discovery, and an operator asking "did this crawl ever reach the sitemap" would be
 	// answered by a number that says no when the answer is yes.
 	c.countPhase(rep, PhaseOfTag(l.tag))
+	c.countEdge(rep, EdgeKindOfTag(l.tag))
 	u, err := resolveAgainst(base, l.raw)
 	if err != nil {
 		c.skips.record(SkipRecord{
@@ -2690,6 +2795,7 @@ func (c *Crawler) admit(l discoveredLink, base *url.URL, depth int, rep *Report,
 // a GET form is still a form the application meant a user to fill in, and the operator's decision
 // was about forms, not about methods.
 func (c *Crawler) admitForm(f discoveredForm, base *url.URL, depth int, rep *Report, lim *LimitReport) {
+	c.countEdge(rep, "form")
 	target := f.action
 	if strings.TrimSpace(target) == "" {
 		// The HTML specification: an empty action submits to the document's own URL.
@@ -2841,7 +2947,14 @@ func (c *Crawler) enqueue(item frontierItem, foundAt string, lim *LimitReport) b
 		// The refusal itself is unchanged. This records WHICH refusal happened, which is all the
 		// bead asks for: nothing here relaxes the chokepoint.
 		reason := SkipOutOfScope
-		if isResourceTag(item.tag) {
+		switch {
+		case hasTagPrefix(item.tag, "api:"):
+			reason = SkipAPILocationOutOfScope
+		case item.tag == "redirect" && item.depth == 1:
+			// A redirect admitted at depth 1 came from a depth-0 item, and only seeds are depth 0.
+			reason = SkipSeedRedirectedOutOfScope
+		}
+		if reason == SkipOutOfScope && isResourceTag(item.tag) {
 			reason = SkipOutOfScopeResource
 			// Counted on the LIMITS rather than only in the ledger, because the caveat a complete
 			// crawl prints is built from the limits and would otherwise never mention it.
@@ -3263,6 +3376,19 @@ func isResourceTag(tag string) bool {
 	case "iframe", "frame", "object", "embed":
 		return true
 	default:
-		return false
+		// The subresources the crawl now fetches (4ocj): an out-of-scope image or stylesheet is a
+		// refused resource, not a refused link.
+		return subresourceTags[tag]
 	}
+}
+
+// withoutTag drops the links a page contributed through one tag, keeping the rest in order.
+func withoutTag(links []discoveredLink, tag string) []discoveredLink {
+	out := links[:0:0]
+	for _, l := range links {
+		if l.tag != tag {
+			out = append(out, l)
+		}
+	}
+	return out
 }

@@ -564,6 +564,14 @@ func main() {
 	// the setting absent entirely.
 	proxyConfig.WithUpstreamTLS(restoredTLSPolicy)
 
+	// The live passive crawl's observer (burpsy-react-ui-t3zk) is a web-server method, and the web
+	// server is built after the proxy starts. Relay goroutines read the config without a lock, so the
+	// hook is attached here, before NewServer, as a slot; the web server's method is installed into
+	// the slot once it exists, through an atomic pointer. Writing the config field after serving had
+	// begun was a data race.
+	var pageObserver proxy.PageObserverSlot
+	proxyConfig.WithPageObserver(pageObserver.Observe)
+
 	proxyServer := proxy.NewServer(proxyConfig)
 	go func() {
 		logger.Info("Starting proxy", zap.String("bind", *proxyBind))
@@ -784,6 +792,9 @@ func main() {
 		WithNetAuthRestoreNotes(netAuthNotes).
 		WithServerCerts(serverCertStore).
 		WithFileLog(fileLogger)
+	// The live passive crawl (burpsy-react-ui-t3zk): links in proxied in-scope pages become unrequested
+	// site-map items. Installed into the slot the proxy was built with, which is safe while it serves.
+	pageObserver.Set(webServer.ObserveProxiedPage)
 	// The skill library (burpsy-react-ui-ulsy). An unreadable directory refuses to start: the operator
 	// named it, and a console that came up without it would serve an empty library as though it were
 	// theirs. A refused manifest is logged and served in the library's refused list.
