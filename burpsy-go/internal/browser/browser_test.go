@@ -146,7 +146,9 @@ func TestAnHTTPSPageLoadedInTheBrowserReachesHistoryWithNoCertificateWarning(t *
 	}
 	ca, _, _ := engine.ExportCA()
 
-	launch := func(path string, pin bool) {
+	// launch returns the launcher so the caller can tell when this browser has exited. Each launch
+	// gets its own launcher and its own profile, so one browser's exit says nothing about another's.
+	launch := func(path string, pin bool) *Launcher {
 		t.Helper()
 		l := New(t.TempDir())
 		// Fresh profile per launch, and no sandbox because CI runs as root.
@@ -159,32 +161,62 @@ func TestAnHTTPSPageLoadedInTheBrowserReachesHistoryWithNoCertificateWarning(t *
 		if _, err := l.Launch(spec); err != nil {
 			t.Fatalf("Launch: %v", err)
 		}
+		return l
 	}
-	reached := func(path string, within time.Duration) bool {
+	// awaitHit waits for the origin to see path, or for the browser to exit, or for the deadline,
+	// and reports which. --dump-dom makes Chromium exit once the page (or its certificate error)
+	// has finished loading, so the exit is the event that settles the question: a browser that
+	// has exited can request nothing more. A request already in flight through the proxy when it
+	// exits is still given exitGrace to land, so an exit can never cut a hit short.
+	//
+	// Running() is false both after the process exits and when it exited inside Launch's startup
+	// window (a fast --dump-dom), which Launch reports as a hand-off and never registers.
+	const exitGrace = time.Second
+	awaitHit := func(l *Launcher, path string, within time.Duration) (hit, exited bool) {
 		deadline := time.After(within)
+		poll := time.NewTicker(20 * time.Millisecond)
+		defer poll.Stop()
+		var grace <-chan time.Time
 		for {
 			select {
 			case p := <-hits:
 				if p == path {
-					return true
+					return true, false
 				}
+			case <-poll.C:
+				if grace == nil && !l.Running() {
+					grace = time.After(exitGrace)
+				}
+			case <-grace:
+				return false, true
 			case <-deadline:
-				return false
+				return false, false
 			}
 		}
 	}
 
 	// Negative control first: without the pin, Chromium refuses burpsy's certificate and the request
-	// never reaches the origin.
-	launch("/unpinned", false)
-	if reached("/unpinned", 8*time.Second) {
+	// never reaches the origin. This used to wait out a fixed 8s on every run; it now ends when the
+	// browser does, and the 8s stays as the cap for a browser that never exits.
+	unpinned := launch("/unpinned", false)
+	if hit, _ := awaitHit(unpinned, "/unpinned", 8*time.Second); hit {
 		t.Fatal("the origin was reached WITHOUT the CA pin — the test cannot tell the pin from a browser " +
 			"that ignores certificate errors")
 	}
 
-	launch("/pinned", true)
-	if !reached("/pinned", 20*time.Second) {
-		t.Fatal("the pinned launch never reached the origin: the page did not load through burpsy")
+	// The pinned load ends either at the hit or at the browser's exit. A browser that exited
+	// without the origin seeing the request is a definite failure and is reported at once; one
+	// still loading on a slow runner is given until the cap. The old fixed 20s was the cap AND the
+	// only signal, so a loaded runner's slow Chromium start read as "the pin does not work".
+	pinned := launch("/pinned", true)
+	hit, exited := awaitHit(pinned, "/pinned", 60*time.Second)
+	if !hit {
+		if exited {
+			t.Fatal("the pinned browser loaded and exited without the origin ever seeing /pinned: the " +
+				"page did not load through burpsy")
+		}
+		t.Fatal("the pinned launch never reached the origin within 60s and the browser never finished " +
+			"loading: the page did not load through burpsy")
 	}
 	var found bool
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && !found; time.Sleep(50 * time.Millisecond) {
