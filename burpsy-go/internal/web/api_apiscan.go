@@ -212,6 +212,13 @@ func applyReview(doc *apidoc.Document, req apiScanReq) error {
 		if o.Mode != "" && o.Mode != "fixed" && o.Mode != "dynamic" {
 			return fmt.Errorf("parameter %s mode %q: expected fixed or dynamic", o.Name, o.Mode)
 		}
+		// A Postman request's path is the collection's raw URL with its {{variables}} and :path
+		// variables already substituted, and the template keeps neither in a form this build can
+		// re-render. Refused by name rather than accepted, because the alternative is a path that
+		// is reported as the operator's value and sent garbled (vuw7).
+		if o.In == "path" && doc.Format == apidoc.FormatPostman {
+			return fmt.Errorf("path parameter %q cannot be overridden in a Postman collection: edit the collection's variable instead", o.Name)
+		}
 		hit := false
 		for i := range doc.Operations {
 			op := &doc.Operations[i]

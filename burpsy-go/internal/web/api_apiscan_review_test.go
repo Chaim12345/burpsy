@@ -154,3 +154,23 @@ func TestAFixedParameterIsNotAttackedByTheAudit(t *testing.T) {
 		t.Errorf("the audit never attacked q, so the fixed-parameter assertion proves nothing: %+v", onPets)
 	}
 }
+
+// A Postman path override is refused by name: its template cannot be re-rendered, and accepting it
+// sent a garbled path while reporting the operator's value (vuw7).
+func TestAPostmanPathOverrideIsRefused(t *testing.T) {
+	s := newTestServer()
+	s.scope.AddInclude("127.0.0.1")
+	collection := `{"info":{"name":"c","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},` +
+		`"item":[{"name":"g","request":{"method":"GET","url":{"raw":"http://127.0.0.1:9/users/{{id}}?x=1"}}}]}`
+	rec := postJSON(t, s, "/api/apiscan", map[string]any{"definition": collection, "dry_run": true,
+		"parameters": []map[string]any{{"in": "path", "name": "id", "value": "42"}}})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Postman") {
+		t.Errorf("a Postman path override = %d %s; want a 400 naming why", rec.Code, rec.Body.String())
+	}
+	// The query override on the same collection is still accepted.
+	rec = postJSON(t, s, "/api/apiscan", map[string]any{"definition": collection, "dry_run": true,
+		"parameters": []map[string]any{{"in": "query", "name": "x", "value": "2"}}})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "x=2") {
+		t.Errorf("a Postman query override = %d %s; want 200 with x=2 in the path", rec.Code, rec.Body.String())
+	}
+}
