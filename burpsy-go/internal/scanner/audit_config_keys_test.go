@@ -131,7 +131,12 @@ func Test_burps_shipped_scanner_keys_all_have_a_row(t *testing.T) {
 	// settings page telling an operator their skip list is unsupported while it silently works) or
 	// "applied" (claiming full support for a value shape that cannot be read) is a false statement
 	// in an operator-facing table either way (burpsy-react-ui-86le).
-	const wantApplied, wantPartial, wantReported = 45, 3, 10
+	const wantApplied, wantPartial, wantReported = 49, 3, 6
+	// 49/3/6 since burpsy-react-ui-o2p3 and 9mti: follow_redirections, the two
+	// audit_project_option_overrides and the four javascript_analysis keys use_static_analysis,
+	// use_dynamic_analysis, max_static_time_per_item and max_dynamic_time_per_item moved from reported
+	// to applied, each with a run-level mechanism and an AuditSession test.
+	//
 	// 42/3/13 since burpsy-react-ui-gmdk: skip_server_side_injection_for_parameters moved from
 	// reported to partial, the same reduced value shape as the skip-all list.
 	// 45 since burpsy-react-ui-o2p3 (commit 78d2126): follow_redirections,

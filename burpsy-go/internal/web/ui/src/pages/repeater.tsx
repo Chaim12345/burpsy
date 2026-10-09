@@ -11,6 +11,7 @@ import { usePluginExchangeActions } from "../lib/plugin-exchange-actions";
 import { BODY_ENCODINGS, BODY_ENCODING_LABELS, changeBodyEncoding, detectBodyEncoding, type BodyEncoding } from "../lib/body-encoding";
 import { useExchange } from "../lib/data.observe";
 import { useChord } from "../lib/keymap";
+import { useCommandHandler } from "../lib/commands";
 import { SendCancelled, useRepeaterSend, useRepeaterWsSend, useSendRepeaterGroup } from "../lib/data.tools";
 import type { RepeaterWsHistoryEntry, WsRepeaterSendResult } from "../lib/types";
 import { appendGroupResultsToHistory, followNewestAfterGroupSend } from "../lib/repeater-group";
@@ -445,6 +446,17 @@ export function RepeaterPage(): JSX.Element {
     { enableOnFormTags: true, enableOnContentEditable: true },
     [sendChord, active],
   );
+  // burpsy's own mod+Enter, kept as a second binding beside Burp's Ctrl+Space (2czi).
+  const sendEnterChord = useChord("repeater.sendEnter");
+  useHotkeys(
+    sendEnterChord,
+    (event) => {
+      event.preventDefault();
+      if (active) active.kind === "ws" ? submitWs(active) : submit(active);
+    },
+    { enableOnFormTags: true, enableOnContentEditable: true },
+    [sendEnterChord, active],
+  );
 
   /**
    * Intruder splices payloads into a *stored* message, so a Repeater draft has to
@@ -508,6 +520,39 @@ export function RepeaterPage(): JSX.Element {
   const httpResult = result && "status" in result ? result : null;
   /** The ws entry's reply frames, or null when it is an HTTP send's. */
   const wsResult = result && "ws" in result ? result.ws : null;
+
+  // Burp's tab and history actions (2czi), registered for the palette and the catalogue chords
+  // (lib/commands.ts). Each passes null when it cannot run — no tab, nothing closed, already at the
+  // first send — so the palette says so and the chord is left to the browser.
+  const tabIndex = active ? tabs.findIndex((tab) => tab.id === active.id) : -1;
+  useCommandHandler("tab.close", active ? () => closeRepeaterTab(active.id) : "No Repeater tab is open");
+  useCommandHandler("tab.reopen", closedTabs.length > 0 ? () => reopenClosedRepeaterTab() : "No closed tab to reopen");
+  useCommandHandler("tab.duplicate", active ? () => duplicateRepeaterTab(active.id) : "No Repeater tab is open");
+  useCommandHandler("tab.next", tabs.length > 1 ? () => setActiveRepeaterTab(tabs[(tabIndex + 1) % tabs.length]!.id) : "Only one Repeater tab is open");
+  useCommandHandler("tab.prev", tabs.length > 1 ? () => setActiveRepeaterTab(tabs[(tabIndex - 1 + tabs.length) % tabs.length]!.id) : "Only one Repeater tab is open");
+  useCommandHandler(
+    "tab.rename",
+    active
+      ? () => {
+          setRenamingTab(active.id);
+          setTabRenameValue(active.name);
+        }
+      : "No Repeater tab is open",
+  );
+  useCommandHandler(
+    "repeater.historyBack",
+    active && viewIndex > 0 ? () => setViewing((c) => ({ ...c, [active.id]: Math.max(0, viewIndex - 1) })) : "Already at this tab's first send",
+  );
+  useCommandHandler(
+    "repeater.historyForward",
+    active && viewIndex < activeHistory.length - 1
+      ? () =>
+          setViewing((c) => {
+            const next = Math.min(activeHistory.length - 1, viewIndex + 1);
+            return { ...c, [active.id]: next === activeHistory.length - 1 ? null : next };
+          })
+      : "Already at this tab's newest send",
+  );
 
   /**
    * The request that produced the entry on screen, or null while the tab is following its newest
@@ -900,7 +945,7 @@ export function RepeaterPage(): JSX.Element {
     // Keyed here rather than at the .map call sites because the key must sit on the element the
     // function returns: a wrapper added without one makes every multi-tab strip render unkeyed
     // children, which React answers with a console error the e2e suite refuses to ship with.
-    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)}>
+    <ContextMenu key={tab.id} groups={tabMenuGroups(tab)} docTopic="repeater">
       <div
         role="tab"
         aria-selected={tab.id === active.id}

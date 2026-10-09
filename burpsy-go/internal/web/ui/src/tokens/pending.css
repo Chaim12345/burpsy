@@ -27,6 +27,8 @@
   --case-none: none;
   --opacity-disabled: 0.45;
   --opacity-faint: 0.55;
+  --opacity-stripe-dark: 0.2;
+  --opacity-stripe-light: 0.04;
   --shadow-scrim-menu: #00000029;
   --shadow-scrim-dialog: #00000042;
   --shadow-menu: 0 6px 20px var(--shadow-scrim-menu);

@@ -71,6 +71,7 @@ export const keys = {
  sessionCookies: ["session", "cookies"] as const,
  protocols: ["protocols"] as const,
  scannerConfigs: ["scanner", "configs"] as const,
+ scannerIssueTypes: ["scanner", "issue-types"] as const,
  scannerConfig: ["scanner", "config"] as const,
  scannerCoverage: ["scanner", "coverage"] as const,
  scannerChecks: ["scanner", "checks"] as const,

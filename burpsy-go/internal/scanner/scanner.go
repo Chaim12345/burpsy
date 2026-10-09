@@ -804,6 +804,44 @@ type PassiveScanner struct {
 	// Capture around this one scanner. Off by default: a module that always ran would be a surface
 	// reporting findings nobody enabled.
 	secrets atomic.Bool
+
+	// runConfig is where capture-time scanning reads the engagement's run configuration
+	// (burpsy-react-ui-saq3.3.3). Every Capture handle is built around this one scanner, so setting it
+	// here reaches proxy, crawl, Repeater and API-scan capture alike. Nil keeps the old, unconfigured
+	// behaviour.
+	runConfig atomic.Pointer[RunConfigSource]
+}
+
+// RunConfigSource is what capture-time scanning reads its configuration from: the audit run
+// configuration, and the scan-wide issue whitelist that admitsIssue intersects it with. ActiveScanner
+// is the production source, so proxy capture and an audit read one configuration.
+type RunConfigSource interface {
+	AuditConfig() AuditConfig
+	ConfigSnapshot() ScanConfig
+}
+
+// WithRunConfigSource makes every capture that runs this scanner honour src's run configuration:
+// scan_type_passive, the per-issue selection and detection methods, and the JavaScript static-analysis
+// keys (saq3.3.3).
+func (s *PassiveScanner) WithRunConfigSource(src RunConfigSource) *PassiveScanner {
+	if s != nil && src != nil {
+		s.runConfig.Store(&src)
+	}
+	return s
+}
+
+// captureRunConfig returns the run configuration and scan-wide whitelist capture applies, and false
+// when no source is set.
+func (s *PassiveScanner) captureRunConfig() (AuditConfig, []uint32, bool) {
+	if s == nil {
+		return AuditConfig{}, nil, false
+	}
+	p := s.runConfig.Load()
+	if p == nil {
+		return AuditConfig{}, nil, false
+	}
+	src := *p
+	return src.AuditConfig(), src.ConfigSnapshot().IssueTypes, true
 }
 
 // SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.

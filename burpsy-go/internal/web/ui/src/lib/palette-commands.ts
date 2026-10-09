@@ -14,6 +14,7 @@ import { recentActionIds } from "./palette-recency";
 import { SELECTION_CODECS, type SelectionCodec } from "./selection-codecs";
 import { pluginInvocations, type PluginInvocation } from "./plugin-registrations";
 import type { ExtensionList } from "./types.extensions";
+import { chordFor, type Keymap, type ShortcutAction } from "./shortcuts";
 
 /** What `ui/palette.tsx` consumes: the shape of a `PaletteAction`, restated so lib stays a leaf. */
 export interface PaletteCommand {
@@ -123,4 +124,41 @@ export function extensionCommands(
     icon: Plug,
     run: () => invoke(invocation),
   }));
+}
+
+/**
+ * One palette row per registry action flagged `palette` (2czi): Burp's action catalogue, reachable
+ * from the palette as Burp's own is ("all commands … through the command palette",
+ * desktop/settings/ui/hotkeys.html).
+ *
+ * `available` and `run` come from lib/commands.ts. An action with no mounted handler is listed
+ * disabled with the registry's `where` as the reason, never hidden: an operator searching for
+ * "drop all" from Repeater should learn where it lives, not conclude it does not exist.
+ */
+export function catalogueCommands(
+  actions: readonly ShortcutAction[],
+  keymap: Keymap,
+  available: (id: string) => boolean,
+  run: (id: string) => void,
+  /** The owner's own "cannot run now" reason, when it registered one (lib/commands.ts). */
+  reasonFor: (id: string) => string | undefined = () => undefined,
+): PaletteCommand[] {
+  return actions
+    .filter((action) => action.palette)
+    .map((action) => {
+      const can = available(action.id);
+      const chord = chordFor(keymap, action.id);
+      const why = can ? undefined : (reasonFor(action.id) ?? `Available in ${action.where ?? "another tool"}`);
+      return {
+        id: `action:${action.id}`,
+        label: action.label,
+        group: action.group,
+        shortcut: chord ?? undefined,
+        keywords: [action.burp?.toLowerCase().replace(/_/g, " "), action.where].filter(Boolean).join(" "),
+        disabled: !can,
+        disabledReason: why,
+        hint: why,
+        run: () => run(action.id),
+      };
+    });
 }

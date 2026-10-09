@@ -162,6 +162,7 @@ func nativeActiveCheckSet() []activeCheck {
 			phase:        d.Phase,
 			passive:      d.Passive,
 			methods:      d.DetectionMethods,
+			dynamicJS:    isDynamicJavaScriptCheck(d.Enabled),
 			run:          run,
 		})
 	}

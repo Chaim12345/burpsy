@@ -208,6 +208,14 @@ func isNumericBurpKey(burpKey string) bool {
 	if burpKey == "scanner/audit_optimization/follow_redirections" {
 		return false
 	}
+	// The javascript_analysis section is booleans beside two per-item limits in seconds
+	// (Zxc3.java:29-31 read them with the int getter). Named, like the two exceptions above: without
+	// this a limit falls to the boolean decoder, which reads 600 as "true" and stores 1.
+	switch burpKey {
+	case "scanner/javascript_analysis/max_static_time_per_item",
+		"scanner/javascript_analysis/max_dynamic_time_per_item":
+		return true
+	}
 	return strings.HasPrefix(burpKey, "scanner/error_handling/") ||
 		strings.HasPrefix(burpKey, "scanner/audit_optimization/") ||
 		// Whole seconds (Zbuj.java:19-22). Without this they would fall to the boolean decoder, which
@@ -321,6 +329,15 @@ func setBurpConfigField(c *BuiltInConfig, name string, val OptUint32) {
 		c.AuditConnectTimeout = val
 	case "audit_normal_timeout":
 		c.AuditNormalTimeout = val
+	// The javascript_analysis keys (burpsy-react-ui-9mti).
+	case "javascript_use_static_analysis":
+		c.JSUseStaticAnalysis = val
+	case "javascript_use_dynamic_analysis":
+		c.JSUseDynamicAnalysis = val
+	case "javascript_max_static_time_per_item":
+		c.JSMaxStaticSecondsPerItem = val
+	case "javascript_max_dynamic_time_per_item":
+		c.JSMaxDynamicSecondsPerItem = val
 	}
 }
 

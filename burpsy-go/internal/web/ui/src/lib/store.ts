@@ -511,6 +511,9 @@ interface AppState {
  route: string;
  theme: Theme;
  density: Density;
+ /** Zebra-striped table rows (69p0): Burp's user_interface.table_appearance.zebra_striping, which
+  *  ships true — so this does too. */
+ tableStripes: boolean;
  /** Whether to ask before the console tab is closed or reloaded (burpsy-react-ui-fyua), Burp's
   *  suppress_confirm_on_close inverted to a positive opt-in. Off by default — a proxy console is
   *  not a document with unsaved edits, so the prompt is a preference, not a safety default. */
@@ -660,6 +663,7 @@ interface AppState {
  setRoute: (route: string) => void;
  setTheme: (theme: Theme) => void;
  setDensity: (density: Density) => void;
+ setTableStripes: (on: boolean) => void;
  setConfirmOnClose: (confirmOnClose: boolean) => void;
  markCollaboratorRead: (id: number) => void;
  setCollaboratorAnnotation: (id: number, annotation: CollaboratorAnnotation) => void;
@@ -739,6 +743,7 @@ export function persistedWorkspace(state: AppState) {
  return {
   theme: state.theme,
   density: state.density,
+  tableStripes: state.tableStripes,
   confirmOnClose: state.confirmOnClose,
   collaboratorRead: state.collaboratorRead,
   collaboratorAnnotations: state.collaboratorAnnotations,
@@ -792,6 +797,7 @@ export const useApp = create<AppState>()(
    route: "dashboard",
    theme: "dark",
    density: "compact",
+   tableStripes: true,
    collaboratorRead: [],
    collaboratorAnnotations: {},
    editorFont: "12px",
@@ -839,6 +845,7 @@ export const useApp = create<AppState>()(
    setRoute: (route) => set({ route, paletteOpen: false }),
    setTheme: (theme) => set({ theme }),
    setDensity: (density) => set({ density }),
+   setTableStripes: (tableStripes) => set({ tableStripes }),
    confirmOnClose: false,
    setConfirmOnClose: (confirmOnClose) => set({ confirmOnClose }),
    markCollaboratorRead: (id) =>
