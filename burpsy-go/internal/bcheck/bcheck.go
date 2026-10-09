@@ -254,6 +254,9 @@ type Finding struct {
 	// per-host or per-request finding is about a resource, not a parameter, and
 	// saying so is what keeps a report's Parameter column from lying.
 	Param string
+	// Interactions are the collaborator callbacks that made the check's interactions condition
+	// true — the evidence for a collaborator finding. Empty for every other finding.
+	Interactions []Interaction
 }
 
 // IsPassive reports whether the check needs no outbound traffic — it binds to
@@ -269,8 +272,18 @@ func (c *Check) IsPassive() bool {
 // NeedsCollaborator reports whether the check requires an interaction server.
 // Such checks cannot produce a verdict without a Collaborator-style service,
 // and are counted as such at load time rather than run against nothing.
+//
+// Both halves count: a `<type> interactions` condition, and a generate_collaborator_address() call
+// anywhere in the check. The second matters on its own — a check that plants an address it then
+// never asks about still needs an interaction server to mint one.
 func (c *Check) NeedsCollaborator() bool {
-	return containsInteractions(c.Statements)
+	return containsInteractions(c.Statements) || usesCollaboratorAddress(c)
+}
+
+// NeedsInsertionPoint reports whether the check can only run at an insertion point: it is a
+// `given insertion point` check, or it carries `send payload`, which has nowhere else to go.
+func (c *Check) NeedsInsertionPoint() bool {
+	return c.Given == "insertion point" || containsSendPayload(c.Statements)
 }
 
 // NeedsTool reports whether the check invokes an external tool via `run tool`.
@@ -284,9 +297,7 @@ func (c *Check) NeedsTool() bool {
 // M2Runnable reports whether the evaluator can run this check with a sender but
 // no interaction server — the active set the audit engine dispatches.
 func (c *Check) M2Runnable() bool {
-	return !c.NeedsCollaborator() &&
-		c.Given != "insertion point" &&
-		!containsSendPayload(c.Statements)
+	return !c.NeedsCollaborator() && !c.NeedsInsertionPoint()
 }
 
 func containsSendPayload(stmts []Statement) bool {
@@ -346,7 +357,6 @@ func containsSend(stmts []Statement) bool {
 }
 
 // containsInteractions walks conditions for a `<type> interactions` construct.
-// The parser represents it as an equality with the right operand "interactions".
 func containsInteractions(stmts []Statement) bool {
 	for _, s := range stmts {
 		switch t := s.(type) {
@@ -369,10 +379,12 @@ func exprHasInteractions(e BoolExpr) bool {
 		return (e.LHS != nil && exprHasInteractions(*e.LHS)) ||
 			(e.RHS != nil && exprHasInteractions(*e.RHS))
 	}
-	// A bare `<type> interactions` parses as a comparison with operator "is" and
-	// right operand "interactions" (e.g. `http interactions`).
-	return strings.EqualFold(e.Operator, "is") &&
-		strings.EqualFold(e.Right.StringVal, "interactions")
+	// The parser emits `<type> interactions` as Operator "interactions" with the type in Left
+	// (parser.go boolTerm). This used to look for Operator "is" with Right "interactions" — a shape
+	// the parser never produces — so no parsed check was ever classified as needing a collaborator:
+	// they were counted runnable, sent an empty address, and their conditions read false
+	// (burpsy-react-ui-ar8v).
+	return e.Operator == "interactions"
 }
 
 // Context holds the execution context.
@@ -434,6 +446,20 @@ type Context struct {
 
 	respFields *messageFields
 	reqFields  *messageFields
+	// collaborator is the interaction server `generate_collaborator_address()` mints from and the
+	// `<type> interactions` conditions read (collaborator.go). Nil refuses a check that needs one.
+	collaborator Collaborator
+	// unit records (live pass) or replays (Deferred.Resolve) one run of a collaborator check. Nil
+	// for every check that needs no collaborator. Shared by the forks of one run.
+	unit *collabUnit
+	// collabAddrs are the addresses minted in this context, which an interactions condition asks
+	// about; a fork inherits its parent's.
+	collabAddrs []string
+	// observed are the interactions that made a condition true here, carried into a finding's
+	// evidence.
+	observed []Interaction
+	// deferred are the runs whose interactions conditions were unknown when the live pass ended.
+	deferred []*Deferred
 	// rng is the `random_str` state, seeded from the message so probes are
 	// reproducible per target. ensureRNG seeds it lazily on first use; the
 	// zero value means "not yet seeded", and FNV-1a is a bijection so a raw
@@ -611,6 +637,8 @@ func (ctx *Context) resolveRef(name string) string {
 		return hex.EncodeToString(sum[:])
 	case strings.HasPrefix(name, "base64_encode(") && strings.HasSuffix(name, ")"):
 		return base64.StdEncoding.EncodeToString([]byte(ctx.resolveCallArg(innerCall(name, "base64_encode("))))
+	case hasCallPrefix(name, "generate_collaborator_address("):
+		return ctx.generateCollaboratorAddress(name)
 	case strings.HasPrefix(name, "random_str(") && strings.HasSuffix(name, ")"):
 		n, err := strconv.Atoi(ctx.resolveCallArg(innerCall(name, "random_str(")))
 		if err != nil {
@@ -1326,6 +1354,9 @@ func (ctx *Context) fork() *Context {
 	c.sent = nil
 	c.tools = nil
 	c.unresolved = nil
+	// An iteration asks about the addresses it and its parent minted, never a sibling's.
+	c.collabAddrs = append([]string(nil), ctx.collabAddrs...)
+	c.observed = append([]Interaction(nil), ctx.observed...)
 	return &c
 }
 
@@ -1431,6 +1462,11 @@ func executeBlock(stmts []Statement, ctx *Context) (execOutcome, error) {
 	var out execOutcome
 	for _, stmt := range stmts {
 		o, err := executeStatement(stmt, ctx)
+		if err == nil && ctx.unit != nil && ctx.unit.err != nil {
+			// A collaborator address could not be minted, or a replay diverged: the run cannot
+			// go on judging (collaborator.go).
+			err = ctx.unit.err
+		}
 		if err != nil {
 			return out, err
 		}
@@ -1482,6 +1518,13 @@ func executeStatement(stmt Statement, ctx *Context) (execOutcome, error) {
 		// one parameter — the entire reason the construct exists.
 		if ctx.point != nil {
 			f.Param = ctx.point.Name
+		}
+		// The callbacks that made an interactions condition true are this finding's evidence.
+		if len(ctx.observed) > 0 {
+			f.Interactions = append([]Interaction(nil), ctx.observed...)
+		}
+		if !s.Continue && ctx.unit != nil {
+			ctx.unit.halted = true
 		}
 		return execOutcome{
 			findings: []Finding{f},
@@ -1552,8 +1595,17 @@ func executeForEach(s *RunForEachStatement, ctx *Context) (execOutcome, error) {
 }
 
 func executeIf(stmt *IfStatement, ctx *Context) (execOutcome, error) {
-	if evalBoolExpr(stmt.Condition, ctx) {
+	switch evalTri(stmt.Condition, ctx) {
+	case triTrue:
 		return executeBlock(stmt.Then, ctx)
+	case triUnknown:
+		// An interactions condition that has no answer yet: neither branch runs, and the run is
+		// marked so the caller defers it (collaborator.go). Taking the else branch here would
+		// treat "no callback yet" as "no callback".
+		if ctx.unit != nil {
+			ctx.unit.unknown = true
+		}
+		return execOutcome{}, nil
 	}
 	if stmt.Else != nil {
 		return executeBlock(stmt.Else, ctx)
@@ -1561,25 +1613,68 @@ func executeIf(stmt *IfStatement, ctx *Context) (execOutcome, error) {
 	return execOutcome{}, nil
 }
 
-// evalBoolExpr evaluates a boolean expression against the context.
+// evalBoolExpr evaluates a boolean expression against the context. An undecidable
+// interactions condition is not true.
 func evalBoolExpr(expr BoolExpr, ctx *Context) bool {
+	return evalTri(expr, ctx) == triTrue
+}
+
+// evalTri evaluates a boolean expression with Kleene's three-valued logic. Only an interactions
+// atom can be unknown (collaborator.go); every other comparison is decided. `and` and `or` still
+// short-circuit on a decided operand, so the right side is not evaluated when the left decides.
+func evalTri(expr BoolExpr, ctx *Context) tri {
 	switch expr.Operator {
 	case "and":
 		if expr.LHS == nil || expr.RHS == nil {
-			return false
+			return triFalse
 		}
-		return evalBoolExpr(*expr.LHS, ctx) && evalBoolExpr(*expr.RHS, ctx)
+		l := evalTri(*expr.LHS, ctx)
+		if l == triFalse {
+			return triFalse
+		}
+		r := evalTri(*expr.RHS, ctx)
+		if r == triFalse {
+			return triFalse
+		}
+		if l == triTrue && r == triTrue {
+			return triTrue
+		}
+		return triUnknown
 	case "or":
 		if expr.LHS == nil || expr.RHS == nil {
-			return false
+			return triFalse
 		}
-		return evalBoolExpr(*expr.LHS, ctx) || evalBoolExpr(*expr.RHS, ctx)
+		l := evalTri(*expr.LHS, ctx)
+		if l == triTrue {
+			return triTrue
+		}
+		r := evalTri(*expr.RHS, ctx)
+		if r == triTrue {
+			return triTrue
+		}
+		if l == triFalse && r == triFalse {
+			return triFalse
+		}
+		return triUnknown
 	case "not":
 		if expr.LHS == nil {
-			return false
+			return triFalse
 		}
-		return !evalBoolExpr(*expr.LHS, ctx)
+		switch evalTri(*expr.LHS, ctx) {
+		case triTrue:
+			return triFalse
+		case triFalse:
+			return triTrue
+		}
+		return triUnknown
+	case "interactions":
+		return ctx.interactionsAtom(strings.ToLower(expr.Left.StringVal))
 	}
+	return triOf(evalCompare(expr, ctx))
+}
+
+// evalCompare evaluates one comparison.
+func evalCompare(expr BoolExpr, ctx *Context) bool {
 
 	// An operand this context cannot supply makes a comparison false, never true: absence is not
 	// evidence. Coercing an absent binding to "" would make `{typo.response.body} in

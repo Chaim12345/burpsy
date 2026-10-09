@@ -39,6 +39,14 @@ import (
 // are different answers and a bool cannot carry both.
 type PendingResolver func(context.Context) (*Finding, bool, error)
 
+// PendingBatchResolver is PendingResolver for a claim that can produce several findings, and can
+// produce some before it is settled: a BCheck run whose `report issue and continue` fired for one
+// collaborator address while another condition still has no answer (burpsy-react-ui-ar8v). It
+// returns the findings that are new since the last poll; settled is true once nothing about the
+// claim is still unknown. A claim that produced findings and then hit its deadline unsettled is
+// still outstanding — part of it was never answered.
+type PendingBatchResolver func(context.Context) (found []*Finding, settled bool, err error)
+
 // PendingItem is one claim awaiting evidence from outside this process.
 type PendingItem struct {
 	// Row is the catalog row that will be reported if the evidence arrives.
@@ -51,6 +59,8 @@ type PendingItem struct {
 	Deadline time.Time
 
 	resolve PendingResolver
+	batch   PendingBatchResolver
+	found   int
 	polls   int
 	err     error
 }
@@ -79,10 +89,30 @@ func (r *PendingRegistry) Register(item PendingItem, resolve PendingResolver) er
 	if item.Row == "" || item.What == "" {
 		return fmt.Errorf("pending registry: an item must name its row and what it planted")
 	}
+	item.resolve = resolve
+	return r.add(item)
+}
+
+// RegisterBatch records a claim whose resolver may report several findings, some before it
+// settles. The same requirements as Register apply.
+func (r *PendingRegistry) RegisterBatch(item PendingItem, resolve PendingBatchResolver) error {
+	if r == nil {
+		return fmt.Errorf("pending registry: nil registry, so this claim would be dropped silently")
+	}
+	if resolve == nil {
+		return fmt.Errorf("pending registry: %q registered with no resolver", item.Row)
+	}
+	if item.Row == "" || item.What == "" {
+		return fmt.Errorf("pending registry: an item must name its row and what it planted")
+	}
+	item.batch = resolve
+	return r.add(item)
+}
+
+func (r *PendingRegistry) add(item PendingItem) error {
 	if item.Deadline.IsZero() {
 		item.Deadline = nowUTC().Add(DefaultPendingDeadline)
 	}
-	item.resolve = resolve
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,14 +149,27 @@ func (r *PendingRegistry) Poll(ctx context.Context) (findings []*Finding, outsta
 			keep = append(keep, it)
 			continue
 		}
-		f, done, err := it.resolve(ctx)
+		var found []*Finding
+		var done bool
+		var err error
+		if it.batch != nil {
+			found, done, err = it.batch(ctx)
+		} else {
+			var f *Finding
+			f, done, err = it.resolve(ctx)
+			if f != nil {
+				found = []*Finding{f}
+			}
+		}
 		it.polls++
 		if err != nil {
 			it.err = err
 		}
+		settled = append(settled, found...)
+		it.found += len(found)
 		switch {
-		case done && f != nil:
-			settled = append(settled, f)
+		case done && it.found > 0:
+			// Settled affirmatively; its findings are already in settled.
 		case done:
 			rejected = append(rejected, it)
 		case nowUTC().After(it.Deadline):

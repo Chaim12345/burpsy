@@ -89,7 +89,7 @@ func LoadDir(dir string, store *core.TrafficStore, scope *core.Scope, logger *za
 // buildPassiveScanner splits an already-parsed corpus into passive and active
 // buckets, mirroring crates/scanner/src/lib.rs PassiveScanner::build.
 func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *zap.Logger, checks []*bcheck.Check, report LoadReport) *PassiveScanner {
-	passive, active, insertion, tools, report := classifyChecks(checks, report)
+	passive, active, insertion, tools, collab, report := classifyChecks(checks, report)
 	return &PassiveScanner{
 		store:     store,
 		logger:    logger,
@@ -98,6 +98,7 @@ func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *za
 		active:    active,
 		insertion: insertion,
 		tools:     tools,
+		collab:    collab,
 		report:    report,
 		coverage:  newCoverageTracker(passive),
 	}
@@ -105,15 +106,22 @@ func buildPassiveScanner(store *core.TrafficStore, scope *core.Scope, logger *za
 
 // classifyChecks splits a parsed corpus into the passive, active, insertion-point and tool buckets
 // and counts each into the report — shared by the startup load and every console change (kbu1).
-func classifyChecks(checks []*bcheck.Check, report LoadReport) (passive, active, insertion, tools []*bcheck.Check, _ LoadReport) {
+func classifyChecks(checks []*bcheck.Check, report LoadReport) (passive, active, insertion, tools, collab []*bcheck.Check, _ LoadReport) {
 	passive = make([]*bcheck.Check, 0, len(checks))
 	active = make([]*bcheck.Check, 0)
 	insertion = make([]*bcheck.Check, 0)
 	tools = make([]*bcheck.Check, 0)
+	collab = make([]*bcheck.Check, 0)
 	for _, c := range checks {
 		switch {
 		case c.NeedsCollaborator():
+			// Counted here whatever else the check needs, and kept for the active engine
+			// (burpsy-react-ui-ar8v): it runs when the scan has an out-of-band channel and is
+			// refused per item, with the reason, when it has none. Before ar8v this bucket was
+			// always empty — the classifier never recognised a parsed interactions condition — so
+			// these checks were counted active, sent an empty address and read clean.
 			report.Collaborator++
+			collab = append(collab, c)
 		case c.NeedsTool():
 			// Never passive — it executes an external process — and active only
 			// when a caller attaches a tool runner. Counted here regardless, and
@@ -136,7 +144,7 @@ func classifyChecks(checks []*bcheck.Check, report LoadReport) (passive, active,
 			insertion = append(insertion, c)
 		}
 	}
-	return passive, active, insertion, tools, report
+	return passive, active, insertion, tools, collab, report
 }
 
 // Loaded returns how many passive BCheck files will run on each response.
@@ -157,19 +165,20 @@ func (s *PassiveScanner) ActiveLoaded() int {
 // in load order: the M2-runnable set (`given host` / `path` / `request`) plus
 // the insertion-point set (`given insertion point`, or any check carrying
 // `send payload`), plus the tool set (`run tool`, which the ActiveScanner
-// gates on its configured runner). Passive and collaborator checks are
-// excluded here — the passive set is this scanner's own, and a collaborator
-// check cannot run without an interaction server.
+// gates on its configured runner), plus the collaborator set, which the
+// ActiveScanner runs on its out-of-band channel and refuses, with the reason,
+// when it has none. Passive checks are excluded — that set is this scanner's own.
 //
 // A fresh slice each call: the caller (the ActiveScanner) must be free to hold
 // it without this scanner's later loads mutating it under it.
 func (s *PassiveScanner) ActiveChecks() []*bcheck.Check {
 	s.setsMu.RLock()
 	defer s.setsMu.RUnlock()
-	out := make([]*bcheck.Check, 0, len(s.active)+len(s.insertion)+len(s.tools))
+	out := make([]*bcheck.Check, 0, len(s.active)+len(s.insertion)+len(s.tools)+len(s.collab))
 	out = append(out, s.active...)
 	out = append(out, s.insertion...)
 	out = append(out, s.tools...)
+	out = append(out, s.collab...)
 	return out
 }
 

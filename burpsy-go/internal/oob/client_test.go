@@ -168,3 +168,21 @@ func TestAMissingBinaryIsReportedAsNoChannelRatherThanNoInteractions(t *testing.
 		t.Errorf("error %q does not name %q, so an operator cannot tell what to install", err.Error(), binaryName)
 	}
 }
+
+// A DNS raw request carries the query name with DNS-0x20 randomised casing, so a resolver may ask
+// for bC1a2b.<id>.oast.online when the payload said bc1a2b. The marker must still match, or a real
+// DNS callback reads as none — the exact silence an out-of-band check exists to break
+// (burpsy-react-ui-ar8v).
+func TestInteractionsForMatchesAMarkerTheResolverReCased(t *testing.T) {
+	all := []Interaction{
+		{Protocol: "dns", RawRequest: ";; QUESTION SECTION:\n;bC1A2b3C.D9UoNjrm27J35OMjson0Jo63Uk6dB5PZc.oast.online.\tIN\t A"},
+		{Protocol: "dns", RawRequest: ";; QUESTION SECTION:\n;ff99ee.d9uonjrm27j35omjson0jo63uk6db5pzc.oast.online.\tIN\t A"},
+	}
+	got := filterByMarker(all, "bc1a2b3c")
+	if len(got) != 1 || got[0].RawRequest != all[0].RawRequest {
+		t.Fatalf("filterByMarker kept %d interaction(s), want exactly the re-cased lookup of bc1a2b3c", len(got))
+	}
+	if n := len(filterByMarker(all, "")); n != 2 {
+		t.Errorf("an empty marker kept %d, want every interaction", n)
+	}
+}

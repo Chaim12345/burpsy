@@ -415,21 +415,32 @@ func readInteractionLog(path string) ([]Interaction, error) {
 // InteractionsFor returns only the interactions whose raw request carries marker, so two
 // checks polling the same client cannot read each other's callbacks. An empty marker
 // returns everything.
+//
+// The match ignores case. A DNS raw request carries the query name with DNS-0x20 randomised
+// casing (the same reason FullID must never be compared exactly), so an exact match missed a
+// lowercase marker in a lookup the resolver had re-cased — a real DNS callback read as none
+// (burpsy-react-ui-ar8v). Hostnames are case-insensitive, so nothing legitimate is lost.
 func (c *Client) InteractionsFor(marker string) ([]Interaction, error) {
 	all, err := c.Interactions()
 	if err != nil {
 		return nil, err
 	}
+	return filterByMarker(all, marker), nil
+}
+
+// filterByMarker keeps the interactions whose raw request carries marker, ignoring case.
+func filterByMarker(all []Interaction, marker string) []Interaction {
 	if marker == "" {
-		return all, nil
+		return all
 	}
+	want := strings.ToLower(marker)
 	var out []Interaction
 	for _, in := range all {
-		if strings.Contains(in.RawRequest, marker) {
+		if strings.Contains(strings.ToLower(in.RawRequest), want) {
 			out = append(out, in)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // Deduplicate collapses interactions that describe the same observable event.
