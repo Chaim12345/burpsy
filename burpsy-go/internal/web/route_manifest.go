@@ -419,6 +419,11 @@ var manifest = map[string]route{
 		summary: "import a HAR (HTTP Archive 1.2) file: its log.entries become history rows, viewable " +
 			"and resendable in Repeater; nothing is sent to any target — the requests are recorded, not replayed",
 	},
+	"/api/http2/kettle": {
+		// riskRead: it classifies a header list and sends nothing. POST because the list is a body.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "whether an HTTP/2 header list is kettled (HTTP/1 text cannot carry it) and whether a send would be refused",
+	},
 	"/api/http2/program": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send a raw HTTP/2 frame program: the pseudo-header and frame-level surface",
@@ -1116,11 +1121,15 @@ var manifest = map[string]route{
 		methods: []string{"GET", "POST", "DELETE"}, risk: riskLocal, subPath: "1",
 		actionPaths: map[string][]string{
 			"1/cancel": {"POST"},
+			"1/pause":  {"POST"},
+			"1/resume": {"POST"},
 			"pause":    {"POST"},
 			"resume":   {"POST"},
 		},
 		summary: "GET {id}: one task's row and an async task's finished body. " +
 			"POST {id}/cancel asks a running task to stop (unknown or finished id answers 404); " +
+			"POST {id}/pause and {id}/resume hold one task at its next gate and release it (a task kind that " +
+			"never reaches a gate answers 409; g0ba); " +
 			"POST {id}/again re-runs a crawl task at its target (only crawl kind re-runs; 409 otherwise); " +
 			"DELETE {id} removes a finished task's row (a running task answers 409 — cancel first)",
 	},

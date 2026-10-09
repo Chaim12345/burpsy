@@ -1108,6 +1108,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/api/project/open", s.handleProjectOpen)
 	s.mux.HandleFunc("/api/projects", s.handleProjectList)
 	s.mux.HandleFunc("/api/http2/program", s.handleHTTP2Program)
+	s.mux.HandleFunc("/api/http2/kettle", s.handleHTTP2Kettle)
 	s.mux.HandleFunc("/api/intruder/points", s.handleIntruderPoints)
 	s.mux.HandleFunc("/api/intruder/run", s.handleIntruderRun)
 	// Reaching a *running* attack. Two patterns because they are two shapes: the exact path lists what

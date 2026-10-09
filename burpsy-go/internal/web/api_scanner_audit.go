@@ -400,6 +400,8 @@ func (s *Server) handleAuditSelected(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := task.WithCancel(context.Background())
 		defer cancel()
+		// The audit engine calls its suite gate between checks with this context (g0ba).
+		ctx = task.Pausable(ctx)
 		s.runBulkAudit(pool.WithLimiter(ctx, limiter), task, target, ids, cfg, "no items were selected")
 	}()
 

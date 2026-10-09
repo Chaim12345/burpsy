@@ -133,7 +133,13 @@ const volatilePlaceholder = "\x00volatile"
 // different field values would be one queue entry, and a crawl with form submission on would cover
 // one of them — the wrong kind of deduplication, since the body is the request here in the way the
 // query string is for a GET.
-func requestFingerprint(method string, u *url.URL, body []byte) string {
+// requestFingerprint is the exact-request identity used for dedupe. fragment is the client-side
+// route the item stands for (burpsy-react-ui-wbqx) and is part of the key when set: without it
+// `#/orders/7` and `#/orders/8` — two locations of one GET — would collapse to one, which is the
+// defect the field exists to prevent. It is appended LAST so the wire form it is derived from is
+// still the prefix of the key, which is what makes a fragment-bearing item and the bare request it
+// came from recognisably related when read in a log.
+func requestFingerprint(method string, u *url.URL, body []byte, fragment string) string {
 	var b strings.Builder
 	b.WriteString(strings.ToUpper(method))
 	b.WriteByte(' ')
@@ -155,6 +161,10 @@ func requestFingerprint(method string, u *url.URL, body []byte) string {
 		sum := sha256.Sum256(body)
 		b.WriteByte(0)
 		b.WriteString(hex.EncodeToString(sum[:8]))
+	}
+	if fragment != "" {
+		b.WriteByte(0)
+		b.WriteString(fragment)
 	}
 	return b.String()
 }
@@ -234,7 +244,10 @@ const idPlaceholder = "{id}"
 // merging two genuinely different sections of an application under one template would apply one
 // quota to both and cut the crawl short in a way the operator cannot see. Failing to recognise an id
 // only costs quota granularity, which the exact key and the location fingerprint both still cover.
-func urlTemplate(method string, u *url.URL, bodyFields []string) string {
+// fragment is the client-side route the item stands for (burpsy-react-ui-wbqx). It is part of the
+// template so a hash-routed SPA's `#/orders/{id}` shapes are counted separately from the bare
+// document, which would otherwise be ONE template sampling every route under a single quota.
+func urlTemplate(method string, u *url.URL, bodyFields []string, fragment string) string {
 	var b strings.Builder
 	b.WriteString(strings.ToUpper(method))
 	b.WriteByte(' ')
@@ -263,6 +276,10 @@ func urlTemplate(method string, u *url.URL, bodyFields []string) string {
 		sort.Strings(keys)
 		b.WriteByte('?')
 		b.WriteString(strings.Join(keys, "&"))
+	}
+	if fragment != "" {
+		b.WriteByte('#')
+		b.WriteString(fragment)
 	}
 	if len(bodyFields) > 0 {
 		names := make([]string, len(bodyFields))
@@ -364,9 +381,28 @@ func portOf(u *url.URL) uint16 {
 	return 80
 }
 
-// resolveAgainst resolves raw against base, or parses it absolutely when base is nil. The fragment
-// is stripped here rather than at each call site, because a fragment never reaches the server and a
-// crawler that treated `#top` as a new location would fetch every page once per anchor on it.
+// resolveAgainst resolves raw against base, or parses it absolutely when base is nil.
+//
+// # Why the fragment is stripped HERE
+//
+// A fragment never reaches the server, so a crawler that kept `#top` would fetch every page once per
+// anchor on it. Stripping at the one resolution point rather than at each call site is what makes
+// that guarantee hold for links, forms, redirects and API documents alike.
+//
+// # The one case that is NOT stripped
+//
+// A hash-ROUTED single-page application puts the location in the fragment — `#/orders/7` is a
+// different page from `#/orders/8` while both are the same GET. Burp detects this by character ("if
+// a fragment contains any of / \ ? = & the crawler assumes it is used for client-side routing",
+// scanning-spas.html) and offers `application_uses_fragments_for_routing` to force it on.
+//
+// The fragment therefore has to survive resolution as a crawl IDENTITY while still being kept off
+// the wire. Splitting it across two fields is what does that: the returned URL carries the
+// fragment in FrontierItem.fragment (see resolveAgainstRoute) and the request is built from the
+// fragment-less form, so `FrontierItem.url` is always safe to send. Keeping the fragment on the URL
+// itself would be the tempting shortcut and is wrong: the sender authorises the bytes it renders
+// from that URL, and a fragment on it would either be sent (a malformed request line) or silently
+// dropped, and the second is how a crawl ends up reporting a route it never fetched.
 func resolveAgainst(base *url.URL, raw string) (*url.URL, error) {
 	ref, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -379,4 +415,49 @@ func resolveAgainst(base *url.URL, raw string) (*url.URL, error) {
 	out.Fragment = ""
 	out.RawFragment = ""
 	return out, nil
+}
+
+// fragmentIsRouting reports whether a fragment looks like a client-side route rather than an
+// in-page anchor, using Burp's own rule: any of `/ \ ? = &` in the fragment means the application
+// is taken to route on it (scanning-spas.html, "Routing fragments").
+//
+// `#top` and `#section-2` are anchors and are still stripped; `#/orders/7` and `#!?page=2` are
+// routes and become crawl identities. The character set is deliberately Burp's rather than a
+// cleverer heuristic — matching the donor's detection is the point, and a fragment that trips it
+// on a page that is NOT hash-routed only costs the crawl a duplicate fetch it already dedupes.
+func fragmentIsRouting(fragment string) bool {
+	return strings.ContainsAny(fragment, "/\\?=&") == true
+}
+
+// resolveAgainstRoute is resolveAgainst plus the routing-fragment decision: when this fragment
+// looks like a client-side route it is returned alongside the fragment-less URL so the caller can
+// carry it as identity without ever sending it.
+//
+// force is Config.FragmentsRoute, the operator's override, and the two halves are NOT the same
+// test. Burp's automatic character rule is always on — that is what "By default, if a fragment
+// contains any of ... the crawler assumes that it is used for client-side routing" says — and the
+// scan-configuration option exists for the app the character rule MISSES ("If an app that uses
+// fragments for client-side routing does not perform as expected, make sure that the ... option is
+// selected"). So an anchor-shaped fragment becomes a route when EITHER the automatic rule fires OR
+// the operator forced it. Gating the automatic half on the switch as well was a real bug caught by
+// TestTwoRoutingFragmentsAreTwoLocations: with the switch off — its default — every routing
+// fragment was stripped and a hash-routed SPA collapsed to one location, which is the exact defect
+// this work exists to fix.
+func resolveAgainstRoute(base *url.URL, raw string, force bool) (*url.URL, string, error) {
+	ref, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, "", err
+	}
+	frag := ref.Fragment
+	out := ref
+	if base != nil {
+		out = base.ResolveReference(ref)
+		frag = ref.Fragment
+	}
+	out.Fragment = ""
+	out.RawFragment = ""
+	if fragmentIsRouting(frag) || (force && frag != "") {
+		return out, frag, nil
+	}
+	return out, "", nil
 }

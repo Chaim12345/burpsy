@@ -131,6 +131,10 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	{burpKey: "crawler/customization/parse_soap_wsdls", configField: "ParseSOAPWSDLs"},
 	{burpKey: "crawler/customization/perform_graphql_introspection", configField: "PerformGraphQLIntrospection"},
 	{burpKey: "crawler/customization/guess_hidden_graphql_endpoints", configField: "GuessHiddenGraphQLEndpoints"},
+	// Burp's "Application uses fragments for routing" (burpsy-react-ui-wbqx). It lives in the
+	// customization section beside the other discovery-logic switches, and is the operator's way to
+	// tell the crawler that a fragment is a route when the automatic character test disagrees.
+	{burpKey: "crawler/customization/application_uses_fragments_for_routing", configField: "FragmentsRoute"},
 	// The two form-submission bounds (burpsy-react-ui-u0k3). Both live in crawler/crawl_optimization/
 	// in Burp (Zgjj.java:143-144), which this table already recognises as a section with no keys behind
 	// it — so before this, a migrated configuration naming either was reported UNREPRESENTABLE for the
@@ -201,6 +205,11 @@ type CrawlConfig struct {
 	// (/graphql, /api/graphql, etc.) for hidden endpoints. A bool rather than a Limits
 	// field because it is a switch, not a bound.
 	GuessHiddenGraphQLEndpoints bool
+	// FragmentsRoute is the crawler/customization/application_uses_fragments_for_routing flag
+	// (burpsy-react-ui-wbqx): force the crawler to treat a fragment as a client-side route even
+	// when Burp's character test would not have. A bool rather than a Limits field because it is
+	// a switch, not a bound — the same reason RequestSpeculative has no Limits row.
+	FragmentsRoute bool
 	// ErrorHandling is the `crawler/error_handling/*` family as the file set it, every field a POINTER
 	// so a 0 the operator wrote is distinguishable from a key the file never mentioned
 	// (burpsy-react-ui-o0c5). See errorhandling.go for why that distinction is the whole feature.
@@ -318,6 +327,8 @@ func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage)
 			c.PerformGraphQLIntrospection = b
 		case "GuessHiddenGraphQLEndpoints":
 			c.GuessHiddenGraphQLEndpoints = b
+		case "FragmentsRoute":
+			c.FragmentsRoute = b
 		}
 		return nil
 	}

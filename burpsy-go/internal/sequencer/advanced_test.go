@@ -406,16 +406,16 @@ func rawByteTokens(count int, seed string) []string {
 	return tokens
 }
 
-// 512 tokens of one byte is exactly the floor, and random bytes must not
-// compress better than the incompressible control.
+// 1024 tokens of one byte is exactly the floor (see MinTokensForCompression for why it is 1024
+// and not 512), and random bytes must not compress better than the incompressible control.
 func TestCompressionPassesOnRandomBits(t *testing.T) {
-	tokens := make([]string, 0, 512)
-	for _, b := range streamBytes(512, "compress-random") {
+	tokens := make([]string, 0, 1024)
+	for _, b := range streamBytes(1024, "compress-random") {
 		tokens = append(tokens, string([]byte{b}))
 	}
 	test := findByID(t, AnalyseReport(tokens), "compression")
 	if !test.Tested {
-		t.Fatalf("compression did not run at its own 512-token floor: %s", test.Reason)
+		t.Fatalf("compression did not run at its own 1024-token floor: %s", test.Reason)
 	}
 	if test.Flagged != 0 || !test.Passed {
 		t.Fatalf("random bits were flagged: %d of %d position(s), observed %s", test.Flagged, test.Examined, test.Observed)
@@ -429,8 +429,11 @@ func TestCompressionPassesOnRandomBits(t *testing.T) {
 // A bit position that never varies compresses to almost nothing, which is the
 // structure this test exists to find.
 func TestCompressionFlagsABitPositionThatNeverVaries(t *testing.T) {
-	tokens := make([]string, 0, 512)
-	raw := streamBytes(512, "compress-fixed")
+	// 1024 tokens, the compression floor. At 512 the constant position and the control produced
+	// IDENTICAL zlib output — a 0.0000 gap — so the test could not tell structure from noise at
+	// all, and only Go 1.26's flate happened to break the tie (burpsy-react-ui-jdgq).
+	tokens := make([]string, 0, 1024)
+	raw := streamBytes(1024, "compress-fixed")
 	for _, b := range raw {
 		// Bit 7 is always zero; the other seven carry the random byte.
 		tokens = append(tokens, string([]byte{b & 0x7f}))
@@ -453,7 +456,7 @@ func TestCompressionFlagsABitPositionThatNeverVaries(t *testing.T) {
 // the control, and it would silently hand every position five free percentage
 // points of slack it never earned.
 func TestTheIncompressibleControlReportsItsOwnNegativeReduction(t *testing.T) {
-	const tokens = 512
+	const tokens = 1024
 	small := incompressibleReduction(tokens)
 	if small >= 0 {
 		t.Fatalf("incompressibleReduction(%d) = %.4f, want a negative reduction: at %d bytes of bits DEFLATE's framing makes an incompressible sequence larger, so a control that reports 0%% is not being measured",
@@ -496,8 +499,8 @@ func TestCompressionRefusesASampleTooShortToCompress(t *testing.T) {
 // built so the FIPS suite cannot run at all (4,096 bits, a fifth of one block)
 // while the compression test has a real finding.
 func TestTheGradeStaysTheFipsVerdictEvenWhenAnExtendedTestFlags(t *testing.T) {
-	tokens := make([]string, 0, 512)
-	raw := streamBytes(512, "grade-independence")
+	tokens := make([]string, 0, 1024)
+	raw := streamBytes(1024, "grade-independence")
 	for _, b := range raw {
 		tokens = append(tokens, string([]byte{b & 0x7f}))
 	}

@@ -301,7 +301,9 @@ func (c *Crawler) crawlSessionRunner(ctx context.Context) session.MacroStepRunne
 				req.Headers["Cookie"] = cookie
 			}
 		}
-		resp, err := sender.NewAuthorisedSender(c.cfg.Scope, c.cfg.Sender, host, port, tls).SendRequest(ctx, req)
+		// The engagement scope, not this crawl's narrower prefixes (501u): a login page outside the
+		// directory being crawled must still be reachable to restore the session.
+		resp, err := sender.NewAuthorisedSender(engagementScope(c.cfg.Scope), c.cfg.Sender, host, port, tls).SendRequest(ctx, req)
 		if err != nil {
 			return nil, err
 		}

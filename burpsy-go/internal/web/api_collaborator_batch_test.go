@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,15 @@ import (
 func TestTheCollaboratorBatchMintAgainstThePublicPool(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live registration against the public interactsh pool; not a short-mode test")
+	}
+	// The comment above promises this skips when the binary is not available, and until
+	// burpsy-react-ui-qcng it did not: it skipped only on -short, so a machine without
+	// interactsh-client failed the whole internal/web package with `503: "interactsh-client" not
+	// found on PATH`. That is the failure the honest-failure contract is supposed to prevent, and
+	// it was reported as a package failure rather than a skip.
+	if _, err := exec.LookPath("interactsh-client"); err != nil {
+		t.Skip("interactsh-client is not on PATH; the live registration cannot run, and a skip is " +
+			"the honest outcome here rather than a failure that reads as a broken handler")
 	}
 
 	// Real registration via the real binary and the real public pool (empty ServerURL = the

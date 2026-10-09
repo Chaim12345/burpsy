@@ -2054,6 +2054,33 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
 
+## Scan launch, API scans and task control (burpsy-react-ui-cmx5, 2026-10-08)
+
+### Crawl scope (501u)
+- **Burp:** `desktop/running-scans/setting-pro-scope.html` — the crawl is restricted to the configured URLs'
+  final directory by default; "Detailed scope configuration" takes URL prefixes or advanced matching rules.
+- **burpsy:** seed directories (the New scan dialog's default), the engagement scope, or include/exclude URL
+  prefixes — always inside the engagement scope, at the frontier and at the send gate. Burp's "advanced
+  matching rules" (per-field host/port/file regexes) are not offered: the engagement scope already has that
+  rule shape, and a second rule editor scoped to one crawl would duplicate it. An API caller that omits
+  `scope` keeps the engagement scope alone, as before.
+
+### Postman Collections for API scans (r39r)
+- **burpsy:** Postman Collection v2.0/v2.1 is read into the same operation model as OpenAPI: folders walked in order,
+  collection variables substituted (an undefined `{{var}}` is counted as a placeholder; an undefined leading
+  `{{baseUrl}}` makes the request relative to the scan's base URL), disabled headers/query/body fields left out,
+  bearer/basic/header-apikey auth inherited collection → folder → request with `noauth` overriding, and raw,
+  urlencoded, form-data (text fields; a file part names a file on the author's machine and is skipped) and
+  GraphQL bodies. Pre-request and test scripts are not run.
+- **Not done:** SOAP WSDL on the API-only path is still refused by name — tracked as the rest of this bead.
+
+### Isolated scans (13uw)
+- **burpsy:** "Run isolated scan" in New scan (and `isolated: true` on `POST /api/crawl`) tags the crawl's traffic
+  with the source `isolated-scan`; the site map skips those exchanges, and `/api/issues` / `/api/findings` omit
+  findings whose every occurrence is on one (a finding also seen on ordinary traffic stays). The task's own view
+  reads `/api/issues?include_isolated=1` and gets them flagged. Burp keeps an isolated scan's results in a store
+  of their own; burpsy keeps them in the project, filtered by source, so they survive a restart and HTTP history
+  still lists the traffic.
 ## Crawler B (burpsy-react-ui-re16.2, 2026-10-08)
 
 ### Recorded login sequences (burpsy-react-ui-xhtk) — built, with these differences from Burp
@@ -2582,3 +2609,78 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
   one-sided tail at N ≥ 100.
 - **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).
+
+## Repeater B: HTTP/2 kettled requests and Inspector CRLF injection (burpsy-react-ui-i9ti.2, 2026-10-08)
+
+### Inspector detail view and Shift+Return — how CR/LF is shown, and where it can be written (ln2a)
+- **Burp:** `desktop/tools/inspector/modify-requests.html` — "Copy name or Copy value from the context menu",
+  and the detail view where "Press Shift + Return. The carriage return and line feed characters are injected";
+  `desktop/http2/performing-http2-exclusive-attacks.html` — drill into a header with the chevron and press
+  Shift+Return in the Name or Value field "to enter the sequence \r\n".
+- **burpsy:** every Inspector row has a context menu (right-click, the Menu key or Shift+F10) with *Copy name*,
+  *Copy value* and *Open in detail view*, on read-only mounts too, and a chevron button opening the detail view
+  for that item. In the detail view Shift+Return inserts CR LF at the caret and Return applies.
+- **Divergence:** CR and LF are shown in the fields as the Control Pictures ␍ and ␊, not as the text `\r\n`: a
+  browser `<input>` strips CR and LF and a `<textarea>` folds CR LF to LF before any script sees it, and `\r`
+  as text would collide with a literal backslash-r in a value. An item that already contains ␍ or ␊ is shown but
+  not written back from the detail view (the mapping would invent a CR). Shift+Return is offered on request
+  *header* items only — a query, cookie or body parameter refuses it by name — and only where an HTTP/2 header
+  list can be sent as written: on an HTTP/1 request it is refused with "This would split the header: only HTTP/2
+  can carry CR/LF inside a header", and on the Proxy intercept, HTTP history and Target mounts it is refused with
+  the reason that only a Repeater tab sends a kettled request. Burp's Proxy supports kettled requests; burpsy's
+  intercept does not (it holds HTTP/1-shaped bytes). The detail view is a panel at the foot of the Inspector, not
+  a drill-down page that replaces the item list.
+
+### Kettled HTTP/2 requests — what is refused, what the editor shows, what the record says (jae5)
+- **Burp:** `desktop/http2/index.html` "Kettled requests" — an Inspector edit HTTP/1 cannot represent (an uppercase
+  letter or colon in a header name, a newline in a name or value, a modified `:scheme`, a space in `:path` or
+  `:method`, a duplicate pseudo-header, "; " in a cookie value) kettles the request; the editor then shows "This
+  request is kettled because:" with the reasons in place of the headers and keeps the body editable; reversing the
+  edits or downgrading to HTTP/1 (with a warning that the changes are lost) unkettles it; Proxy, Repeater, Logger and
+  Scanner support kettled requests, Intruder normalises them.
+- **burpsy:** a Repeater tab kettles when a detail-view edit puts CR/LF into a header of an HTTP/2 draft (ln2a). The
+  tab then carries the field list (`h2Headers`); the request pane shows the note — reasons from
+  `POST /api/http2/kettle` (`internal/http2.KettleReasons`) — and the body editor; the Inspector's Request headers edit
+  the list, pseudo-headers included. Send carries `h2_headers`, and `sender.AuthorisedSender.SendH2Fields` writes it as
+  literal HPACK fields (no indexing, no Huffman) on a fresh h2 connection, acknowledging SETTINGS and PING, pacing DATA
+  by flow control, and reading stream 1 to END_STREAM/RST_STREAM/GOAWAY, whichever is named.
+- **How a tab becomes kettled:** from the Inspector's detail view, on an HTTP/2 draft with an https target —
+  applying a header name or value that contains CR/LF (Shift+Return), or renaming a header to a name with an
+  uppercase letter or a colon. Inline row edits on a draft that is still text keep writing the text (where an
+  HTTP/2 send lowercases names), as before; once the tab is kettled every Inspector header edit writes the list,
+  and Burp's remaining triggers (`:scheme`, a space in `:path`/`:method`, a duplicate pseudo-header) are reached by
+  editing the pseudo-header rows that then appear. Burp kettles from any Inspector edit.
+- **Paging back:** a kettled send's history entry keeps the list it sent; the request pane shows that list (CR/LF as
+  ␍␊) labelled "sent … as a kettled HTTP/2 field list", and the Inspector reads the list read-only.
+- **Decline — some of Burp's triggers are kettled but never sent.** A space (or CR/LF) in `:path`/`:method` and a
+  duplicate pseudo-header are refused by the frame-program classifier (`http2/authorise.go`): the engagement-scope gate
+  reads a request line, and a path with a space in it would be authorised up to the space and sent whole. A modified
+  `:scheme` other than `http`/`https` is refused at send time by the sender's second scope check, which cannot read an
+  authority under a scheme it cannot dial (`:scheme: http` on a TLS connection is authorised against the http authority
+  and sends). There is no override, by design. For the classifier's refusals the note says "Sending it will be
+  refused:" with the classifier's own sentence before Send; every refusal answers Send with 403 and the reason. Lifting this needs a scope
+  check that authorises a raw `:path` without rendering it into a request line — a CEO-level decision, not made here.
+- **The cookie trigger, read at the field level:** burpsy's kettled Inspector has no cookie list, so "; " in a cookie
+  value is read as RFC 9113 §8.2.3 frames it — more than one `cookie` field, one of which contains "; " — because
+  joining crumbs with "; " for HTTP/1 is exactly where that loss happens. A single `cookie` field containing "; " is
+  one Cookie line and is not kettled.
+- **burpsy addition:** a pseudo-header after a regular header is a kettle reason (HTTP/1 text cannot say where it
+  sat). Burp's list does not name it.
+- **Unkettling** is automatic only when HTTP/1 text provably carries the list unchanged (it re-seeds to the same
+  fields) and nothing would refuse it; a list that is merely "not kettled by Burp's rules" but would still change
+  (say, no `:path`) stays a field list and the note says so. The downgrade (Inspector > HTTP/1) asks first, then
+  normalises: CR/LF removed, extra pseudo-headers and colon names dropped, cookie fields joined.
+- **Raw text edits:** the request pane hides the head while kettled, as Burp does; any other path that rewrites the
+  head of the text (a body-encoding transform, a GraphQL action) drops the list at the store chokepoint and the tab
+  falls back to the normalised text, rather than sending a list the operator's edit no longer matches.
+- **The stored exchange:** history stores HTTP/1-shaped bytes and a kettled list has none, so the stored request is
+  a rendering with CR and LF inside a field written as the text `\r` `\n`, pseudo-headers folded into the request line
+  and Host, and the exchange note lists every field as sent, Go-quoted, in order. Burp stores the HTTP/2 message.
+- **Tab settings on a kettled send:** Override SNI, the response timeout, Unpack, the note, Process cookies, Strip
+  Connection and Update Content-Length apply (the last three to the field list). Normalize line endings applies to the
+  body only. HTTP/2 connection reuse does not (always a fresh connection) and redirects are not followed; each is named
+  in the answer's `kettled.notes` and the result badge. A plain-HTTP target and an HTTP/1 protocol pin are refused
+  (Repeater speaks HTTP/2 only over TLS).
+- **Not supported elsewhere:** Proxy intercept, Logger and Scanner do not carry kettled requests (Burp's do); a group
+  send refuses a kettled member by name; To Intruder refuses an unsent kettled tab and otherwise hands Intruder the
+  stored rendering, saying so — Burp normalises.
