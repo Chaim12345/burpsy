@@ -274,9 +274,11 @@ type Server struct {
 	clientCerts  *netauth.ClientCerts
 	netAuthOnce  sync.Once
 	// netAuthRestoreNotes is why a persisted client-certificate binding could not be
-	// rebuilt at startup, reported by the GET rather than dropped. See
-	// WithNetAuthRestoreNotes.
+	// rebuilt at startup or on the last project switch, reported by the GET rather than
+	// dropped. See WithNetAuthRestoreNotes and restoreNetAuth; netAuthNotesMu guards it,
+	// because a switch rewrites it while the panel reads it.
 	netAuthRestoreNotes []string
+	netAuthNotesMu      sync.Mutex
 	// recordedLogins is the recorded login sequences store (burpsy-react-ui-xhtk), built lazily by
 	// recordedLoginStore() and restored from the project on first use. loginBrowser is the headless
 	// browser a recorded login replays in when no -dom engine is configured: Burp replays recorded
@@ -837,6 +839,8 @@ func (s *Server) WithServerCerts(store *servercerts.Store) *Server {
 }
 
 func (s *Server) WithNetAuthRestoreNotes(notes []string) *Server {
+	s.netAuthNotesMu.Lock()
+	defer s.netAuthNotesMu.Unlock()
 	s.netAuthRestoreNotes = notes
 	return s
 }
