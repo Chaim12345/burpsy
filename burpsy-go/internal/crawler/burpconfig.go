@@ -141,12 +141,6 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	// wrong reason: not "burpsy has no field" but "the loader never recognised the section it is in".
 	{burpKey: "crawler/crawl_optimization/max_submissions_per_form", field: "MaxSubmissionsPerForm"},
 	{burpKey: "crawler/crawl_optimization/form_submission_optimization_threshold", configCountField: "FormSubmissionOptimizationThreshold"},
-	// Login credential settings (burpsy-react-ui-uzil): login functions from Burp's crawler/login_functions/
-	// section. These control how the crawler handles authentication during crawling.
-	{burpKey: "crawler/login_functions/login_can_use_credentials", configField: "LoginCredentials"},
-	{burpKey: "crawler/login_functions/authenticated_crawl_only", configField: "AuthenticatedCrawlOnly"},
-	{burpKey: "crawler/login_functions/attempt_to_self_register_new_user", configField: "AttemptSelfRegister"},
-	{burpKey: "crawler/login_functions/use_invalid_usernames_during_crawling", configField: "UseInvalidUsernames"},
 	// Burp's five-level crawl strategy (burpsy-react-ui-8bp2). See strategy.go for what it sets.
 	{burpKey: "crawler/crawl_optimization/crawl_strategy", strategy: true},
 }
