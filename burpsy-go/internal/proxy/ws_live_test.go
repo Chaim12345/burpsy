@@ -10,6 +10,7 @@ package proxy
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"net"
 	"strconv"
@@ -155,7 +156,7 @@ func TestAnAttachedFrameReachesEachPeerWholeAndIsRecordedAsTheOperators(t *testi
 	f := openLiveWs(t)
 
 	// Toward the server: masked (a client frame), whole, carrying the operator's bytes.
-	if _, err := f.srv.InjectWsFrame(f.id, false, core.WsOpcodeText, []byte("from repeater")); err != nil {
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("from repeater")); err != nil {
 		t.Fatalf("inject to server: %v", err)
 	}
 	hdr, payload := readWsFrame(t, f.origin.Reader)
@@ -165,7 +166,7 @@ func TestAnAttachedFrameReachesEachPeerWholeAndIsRecordedAsTheOperators(t *testi
 	}
 
 	// Toward the client: unmasked (a server frame).
-	if _, err := f.srv.InjectWsFrame(f.id, true, core.WsOpcodeText, []byte("to the browser")); err != nil {
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, true, core.WsOpcodeText, []byte("to the browser")); err != nil {
 		t.Fatalf("inject to client: %v", err)
 	}
 	hdr, payload = readWsFrame(t, f.cr)
@@ -227,7 +228,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 		read += n
 	}
 
-	_, err := f.srv.InjectWsFrame(f.id, false, core.WsOpcodeText, []byte("spliced"))
+	_, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("spliced"))
 	if !errors.Is(err, ErrWsMidMessage) {
 		t.Fatalf("inject mid-frame: err = %v, want ErrWsMidMessage — anything else means the frame was written inside another", err)
 	}
@@ -248,7 +249,7 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		_, err = f.srv.InjectWsFrame(f.id, false, core.WsOpcodeText, []byte("now"))
+		_, err = f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("now"))
 		if err == nil || time.Now().After(deadline) {
 			break
 		}
@@ -263,10 +264,10 @@ func TestAnAttachedFrameIsNotSplicedIntoAMessageInFlight(t *testing.T) {
 
 func TestOnlyAConnectionTheRelayHoldsCanBeAttachedTo(t *testing.T) {
 	f := openLiveWs(t)
-	if _, err := f.srv.InjectWsFrame(f.id+1000, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsNotLive) {
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id+1000, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsNotLive) {
 		t.Fatalf("inject into an unknown id: err = %v, want ErrWsNotLive", err)
 	}
-	if _, err := f.srv.InjectWsFrame(f.id, false, core.WsOpcodeClose, nil); err == nil {
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeClose, nil); err == nil {
 		t.Fatal("a close frame was accepted: attach sends data frames only")
 	}
 
@@ -283,7 +284,114 @@ func TestOnlyAConnectionTheRelayHoldsCanBeAttachedTo(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := f.srv.InjectWsFrame(f.id, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsNotLive) {
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsNotLive) {
 		t.Fatalf("inject into a closed connection: err = %v, want ErrWsNotLive", err)
+	}
+}
+
+// Review regression (burpsy-react-ui-wuwf): a peer that stops reading leaves the relay blocked in a
+// write while it holds the sink. The injection must still answer within its bound — refused, not
+// queued to go out later after the operator was told it did not.
+func TestAnInjectionIntoAStalledDirectionIsRefusedWithinItsBound(t *testing.T) {
+	old := wsInjectBoundaryWait
+	wsInjectBoundaryWait = 500 * time.Millisecond
+	t.Cleanup(func() { wsInjectBoundaryWait = old })
+	f := openLiveWs(t)
+	big := core.EncodeWsFrame(core.WsOpcodeBinary, make([]byte, 64<<10), nil)
+	go func() {
+		for i := 0; i < 400; i++ { // ~25 MiB at a client that reads nothing
+			f.origin.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			if _, err := f.origin.conn.Write(big); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := f.srv.InjectWsFrame(context.Background(), f.id, true, core.WsOpcodeText, []byte("x"))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrWsRelayStalled) && !errors.Is(err, ErrWsMidMessage) {
+			t.Fatalf("inject into a stalled direction: %v, want a stalled/mid-message refusal", err)
+		}
+		if took := time.Since(start); took > 3*time.Second {
+			t.Fatalf("the refusal took %s, past its bound", took)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("InjectWsFrame is still blocked after 10s: the wait is not bounded while the relay's write is stalled")
+	}
+
+	// A cancelled caller (the HTTP request went away) is honoured too.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := f.srv.InjectWsFrame(ctx, f.id, true, core.WsOpcodeText, []byte("x")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("inject with a cancelled context: %v, want context.Canceled", err)
+	}
+}
+
+// A header split across reads leaves the stream mid-frame even though no payload is in flight: the
+// injection must wait for it, not write between the header's bytes.
+func TestAnAttachedFrameIsNotSplicedIntoAHalfHeader(t *testing.T) {
+	old := wsInjectBoundaryWait
+	wsInjectBoundaryWait = 200 * time.Millisecond
+	t.Cleanup(func() { wsInjectBoundaryWait = old })
+	f := openLiveWs(t)
+
+	mask := [4]byte{1, 2, 3, 4}
+	whole := core.EncodeWsFrame(core.WsOpcodeText, []byte("hello"), &mask)
+	f.client.Write(whole[:3]) // two header bytes and one mask byte
+	got := make([]byte, 3)
+	for read := 0; read < 3; {
+		n, err := f.origin.Read(got[read:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		read += n
+	}
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, false, core.WsOpcodeText, []byte("x")); !errors.Is(err, ErrWsMidMessage) {
+		t.Fatalf("inject into a half-read header: %v, want ErrWsMidMessage", err)
+	}
+	f.client.Write(whole[3:])
+	rest := make([]byte, len(whole)-3)
+	for read := 0; read < len(rest); {
+		n, err := f.origin.Read(rest[read:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		read += n
+	}
+	if string(append(got, rest...)) != string(whole) {
+		t.Fatal("the origin did not receive the client's frame byte-for-byte")
+	}
+}
+
+// Review fix (burpsy-react-ui-wuwf): an injected write that fails part-way leaves half a frame on the
+// wire, and the relay would append the next bytes after it. The connection is ended on both sides
+// instead of being left silently corrupt.
+func TestAFailedInjectedWriteClosesTheConnection(t *testing.T) {
+	oldW := wsInjectWriteTimeout
+	wsInjectWriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { wsInjectWriteTimeout = oldW })
+	f := openLiveWs(t)
+
+	// A frame far larger than the socket buffers, toward a client that reads nothing: the write
+	// times out with part of it sent.
+	_, err := f.srv.InjectWsFrame(context.Background(), f.id, true, core.WsOpcodeBinary, make([]byte, 32<<20))
+	if err == nil {
+		t.Fatal("a 32 MiB frame to a client that reads nothing was reported written")
+	}
+	// The origin's side of the relay is closed: its read ends.
+	f.origin.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, rerr := f.origin.Reader.ReadByte(); rerr == nil {
+		t.Fatal("the origin's connection is still open after a partial injected write")
+	} else if ne, ok := rerr.(net.Error); ok && ne.Timeout() {
+		t.Fatal("the origin's connection is still open after a partial injected write (read timed out instead of ending)")
+	}
+	if _, err := f.srv.InjectWsFrame(context.Background(), f.id, true, core.WsOpcodeText, []byte("x")); err == nil {
+		t.Fatal("a later injection into the broken connection succeeded")
 	}
 }

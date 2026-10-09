@@ -310,3 +310,24 @@ func TestRepeaterCloneOutOfScopeIsRefusedBeforeTheDial(t *testing.T) {
 		t.Errorf("clone with a target: %d, want 400", rec.Code)
 	}
 }
+
+// Review fix (burpsy-react-ui-wuwf): attach's scope decision is about the peer the relay actually
+// dialled. A stored handshake row that names an in-scope host does not authorise writing into a
+// socket whose live peer is out of scope.
+func TestRepeaterAttachIsScopedOnTheLivePeerNotTheStoredRow(t *testing.T) {
+	f := openProxiedWs(t, newTestServer())
+	ex, err := f.s.store.GetExchange(f.socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex.Host = "in-scope.example"
+	f.s.scope.Clear()
+	f.s.scope.AddInclude("in-scope.example")
+
+	rec := postJSON(t, f.s, "/api/repeater/ws-attach", map[string]any{
+		"socket": uint64(f.socket), "opcode": "text", "payload": "nope",
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("attach whose live peer is out of scope: %d %s, want 403", rec.Code, rec.Body.String())
+	}
+}

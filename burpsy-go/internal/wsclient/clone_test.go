@@ -45,3 +45,17 @@ func TestCloneHandshakeRefusesWhatIsNotAnUpgrade(t *testing.T) {
 		}
 	}
 }
+
+// Review fix: a head-only replay must not keep framing headers that announce a body.
+func TestCloneHandshakeDropsBodyFramingHeaders(t *testing.T) {
+	orig := "GET /ws HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Content-Length: 5\r\nTransfer-Encoding: chunked\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\nhello"
+	got, err := CloneHandshake([]byte(orig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.ToLower(string(got))
+	if strings.Contains(s, "content-length") || strings.Contains(s, "transfer-encoding") || strings.Contains(s, "hello") {
+		t.Errorf("the clone kept body framing or the body:\n%s", got)
+	}
+}

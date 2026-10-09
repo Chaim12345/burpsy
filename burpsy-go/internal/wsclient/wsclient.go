@@ -100,6 +100,7 @@ func HandshakeRequest(host string, port uint16, tls bool, path, subprotocol stri
 //     negotiation would make every frame this package writes a DEFLATE stream.
 //   - An absolute-form request target (what a browser sends to a proxy) becomes origin-form,
 //     which is what an origin is sent directly.
+//   - Content-Length and Transfer-Encoding are dropped with the body (see below).
 //
 // Anything after the head is dropped: an upgrade GET has no body, and a stored one that claims
 // one is not a handshake to replay. A request that is not a GET upgrade is refused rather than
@@ -143,7 +144,9 @@ func CloneHandshake(original []byte) ([]byte, error) {
 			sawKey = true
 			fmt.Fprintf(&b, "%s: %s\r\n", name, base64.StdEncoding.EncodeToString(keyBytes))
 			continue
-		case "sec-websocket-extensions":
+		case "sec-websocket-extensions", "content-length", "transfer-encoding":
+			// Framing headers go with the head-only replay: a GET upgrade carries no body, and a
+			// replayed Content-Length or Transfer-Encoding would tell the server one is coming.
 			continue
 		case "upgrade":
 			upgrade = strings.EqualFold(strings.TrimSpace(value), "websocket")
