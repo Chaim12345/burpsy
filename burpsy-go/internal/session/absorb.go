@@ -75,6 +75,10 @@ type JarObservation struct {
 	// sent, and hiding it would make a jar that stayed empty after a real Set-Cookie look like a jar
 	// that was never offered one.
 	SetCookiesAbsorbed uint64
+	// RequestCookiesAbsorbed is how many cookies the browser's own request Cookie headers fed the jar
+	// (burpsy-react-ui-sm1k). Counted per cookie pair, apart from Set-Cookie lines, so an operator can
+	// see that a persistent cookie the browser already held reached the jar.
+	RequestCookiesAbsorbed uint64
 }
 
 // absorption is the coordinator's record of who feeds the jar and how much they have offered it.
@@ -94,6 +98,8 @@ type absorption struct {
 
 	responses atomic.Uint64
 	cookies   atomic.Uint64
+	// requestCookies counts cookie pairs absorbed from request Cookie headers (sm1k).
+	requestCookies atomic.Uint64
 }
 
 // monitors answers whether one source may absorb. Unbuilt map = every source may, which is the
@@ -129,6 +135,8 @@ func (a *absorption) observation() JarObservation {
 		Sources:            out,
 		ResponsesObserved:  a.responses.Load(),
 		SetCookiesAbsorbed: a.cookies.Load(),
+
+		RequestCookiesAbsorbed: a.requestCookies.Load(),
 	}
 }
 
@@ -196,6 +204,89 @@ func (c *Coordinator) AbsorbResponseCookies(src AbsorptionSource, host string, p
 		return n
 	}
 	return 0
+}
+
+// AbsorbRequestCookies folds the cookies a browser sent in one raw request's Cookie headers into the
+// jar (burpsy-react-ui-sm1k). It returns how many cookie pairs it absorbed.
+//
+// Burp's rule (desktop/settings/sessions/index.html): "In the case of the Proxy, Burp also inspects
+// incoming requests from the browser ... all the necessary cookies are added to the cookie jar even if
+// the application does not update the value of the cookie during your visit." A persistent cookie the
+// browser already held never arrives in a Set-Cookie during the visit, so a jar that learned only from
+// responses ran every jar-fed tool without it.
+//
+// A request cookie carries a name and a value and nothing else, so it never invents attributes. A
+// cookie the jar already sends to this request (same name, domain- and path-matching) takes the
+// browser's value and keeps its own Domain, Path, Expires and flags. One the jar does not have is added
+// host-only at Path=/: the browser's evidence is that it holds the cookie for this host, not the path
+// it was set at. The monitored-source switch applies as it does to responses.
+func (c *Coordinator) AbsorbRequestCookies(src AbsorptionSource, host string, port uint16, tls bool, request []byte) int {
+	if c == nil || !c.absorb.monitors(src) {
+		return 0
+	}
+	path, pairs := requestCookiePairs(request)
+	for _, p := range pairs {
+		c.jarMgr.AbsorbRequestCookie(host, port, tls, path, p.name, p.value)
+	}
+	if n := len(pairs); n > 0 {
+		c.absorb.requestCookies.Add(uint64(n))
+		return n
+	}
+	return 0
+}
+
+// requestCookiePairs reads a raw request's path and every cookie pair in its Cookie headers, in order.
+// A malformed pair (no "=") or an empty name is skipped: it is not a cookie.
+func requestCookiePairs(request []byte) (string, []cookiePair) {
+	sep := bytes.Index(request, []byte("\r\n\r\n"))
+	if sep < 0 {
+		if sep = bytes.Index(request, []byte("\n\n")); sep < 0 {
+			return "", nil
+		}
+		sep += 2
+	} else {
+		sep += 4
+	}
+	head := request[:sep]
+	nl := bytes.IndexByte(head, '\n')
+	if nl < 0 || nl+1 >= len(head) {
+		return "", nil
+	}
+	path := "/"
+	if fields := strings.Fields(string(head[:nl])); len(fields) >= 2 {
+		target := fields[1]
+		if i := strings.Index(target, "://"); i >= 0 {
+			// Absolute-form: the path starts at the first slash after the authority.
+			rest := target[i+3:]
+			if j := strings.IndexByte(rest, '/'); j >= 0 {
+				target = rest[j:]
+			} else {
+				target = "/"
+			}
+		}
+		if q := strings.IndexAny(target, "?#"); q >= 0 {
+			target = target[:q]
+		}
+		if strings.HasPrefix(target, "/") {
+			path = target
+		}
+	}
+	r := textproto.NewReader(bufio.NewReader(bytes.NewReader(head[nl+1:])))
+	hdr, err := r.ReadMIMEHeader()
+	if err != nil && len(hdr) == 0 {
+		return path, nil
+	}
+	var out []cookiePair
+	for _, line := range hdr.Values("Cookie") {
+		for _, part := range strings.Split(line, ";") {
+			name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+			if name = strings.TrimSpace(name); !ok || name == "" {
+				continue
+			}
+			out = append(out, cookiePair{name, strings.TrimSpace(value)})
+		}
+	}
+	return path, out
 }
 
 // SetMonitoredSources sets which surfaces may absorb cookies (burpsy-react-ui-sn3j) — Burp's

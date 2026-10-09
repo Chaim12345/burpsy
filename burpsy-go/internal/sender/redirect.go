@@ -31,6 +31,9 @@ type RedirectHop struct {
 	// Reason names why an unfollowed hop was not followed: the policy that filtered it, the scope that
 	// refused it, the budget that ran out, or the Location that could not be read. Empty when Followed.
 	Reason string `json:"reason,omitempty"`
+	// Protocol is what carried a followed hop ("HTTP/1.1" or "HTTP/2"), empty when it was not sent —
+	// the fact an operator enforcing a protocol on cross-domain hops (adkx) has to be able to check.
+	Protocol string `json:"protocol,omitempty"`
 
 	// RequestRaw and ResponseRaw capture what this hop put on the wire and what came back, set when the
 	// hop was followed and nil when it was not — a hop that was never sent has no bytes, and inventing
@@ -268,7 +271,7 @@ func (a *AuthorisedSender) followChain(
 		// the hop is authorised on the same terms as a first request. Reusing `current` would not work
 		// and must not be made to — a request naming another authority is exactly what makes a
 		// cross-authority hop deliberate, and the render below is where that naming becomes bytes.
-		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS)
+		hopSender := NewAuthorisedSender(a.scope, a.net, nextHost, nextPort, nextTLS).WithPace(a.pace)
 
 		// The hop's request is rendered exactly once: these bytes are what the scope gate reads and
 		// what the transport writes, so the gate's decision and the wire cannot disagree. They are also
@@ -316,7 +319,14 @@ func (a *AuthorisedSender) followChain(
 		// transparent gzip — and the bytes that come back are the bytes that arrived, which is the whole
 		// point of following. The gate is unchanged: SendAs runs AuthoriseRaw on exactly these rendered
 		// bytes for the authority it is bound to.
-		hopRes, err := hopSender.SendAs(ctx, rendered, ProtocolPreferenceAuto)
+		// Each hop negotiates as normal unless the caller enforces its protocol on a hop to another
+		// host (adkx) — "cross-domain" meaning a different host name than the request that started
+		// the chain, which is the case Burp's setting names.
+		hopPref := ProtocolPreferenceAuto
+		if !strings.EqualFold(nextHost, a.host) {
+			hopPref = policy.CrossDomainProtocol
+		}
+		hopRes, err := hopSender.SendAs(ctx, rendered, hopPref)
 		if err != nil {
 			// The hop cleared every gate and then failed at the transport. That is not a refusal and not
 			// a completed chain: Final stays the 30x that named it, and the reason says what happened.
@@ -325,6 +335,7 @@ func (a *AuthorisedSender) followChain(
 			return
 		}
 		hop.Followed = true
+		hop.Protocol = hopRes.Outcome.Protocol.VersionToken()
 		hop.RequestRaw = rendered
 		hop.ResponseRaw = hopRes.Raw
 		parsed, perr := responseFromRaw(hopRes.Raw)
@@ -364,7 +375,16 @@ func (a *AuthorisedSender) followChain(
 // request is sent. Headers are flattened to the map sender.Response carries; a repeated header keeps
 // the first value, matching redirectLocation's own "first Location wins" reading.
 func responseFromRaw(raw []byte) (*Response, error) {
-	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(raw)), nil)
+	// An h2 response is stored in the HTTP/1-shaped rendering, whose status line says "HTTP/2" —
+	// which net/http's parser refuses as a malformed version ("HTTP/2.0" is the form it reads). Read
+	// through a copy with that one token widened; Raw below stays the bytes as rendered. Without this
+	// every h2 send reported "the response cannot be read well enough to decide a redirect from", and
+	// a chain stopped at its first h2 hop (found by adkx's cross-domain tests).
+	parseable := raw
+	if bytes.HasPrefix(raw, []byte("HTTP/2 ")) {
+		parseable = append([]byte("HTTP/2.0 "), raw[len("HTTP/2 "):]...)
+	}
+	parsed, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(parseable)), nil)
 	if err != nil {
 		return nil, err
 	}

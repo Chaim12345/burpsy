@@ -417,6 +417,10 @@ type SendOutcome struct {
 	// connection existed. Under an upstream proxy it is the hop's address, which is the honest
 	// answer to "where did these bytes go" (burpsy-react-ui-gj4f).
 	ServerIP string
+	// ConnectionReused is true when this send rode an h2 connection an earlier send left open
+	// (SendOptions.H2Sessions, adkx) — so it was NOT the first request on its connection. False for
+	// every fresh dial, which without H2Sessions is every send.
+	ConnectionReused bool
 }
 
 // Downgraded reports whether this send went out as HTTP/1.1.

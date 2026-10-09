@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -15,6 +14,11 @@ import (
 // declined in the menu rather than omitted, the same way the settings page names its absent
 // sections: a menu that silently omits them reads as "this build never had them" rather than
 // "this build chose not to ship them", and those are different facts.
+
+// projectNameReq is the request body handleProjectName decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type projectNameReq struct {
+	Name string `json:"name"`
+}
 
 // handleProjectName serves GET and PUT /api/project/name.
 //
@@ -39,15 +43,13 @@ func (s *Server) handleProjectName(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, projectView{Name: name, Unnamed: name == "Unnamed"})
 	case http.MethodPut:
-		if s.persist == nil {
-			http.Error(w, "persistence is not attached to this process: the project name cannot be stored", http.StatusServiceUnavailable)
+		var req projectNameReq
+		if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		var req struct {
-			Name string `json:"name"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		if s.persist == nil {
+			http.Error(w, "persistence is not attached to this process: the project name cannot be stored", http.StatusServiceUnavailable)
 			return
 		}
 		if strings.TrimSpace(req.Name) == "" {

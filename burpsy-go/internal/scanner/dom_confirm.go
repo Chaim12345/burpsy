@@ -192,46 +192,10 @@ func domexecSourceFor(f DOMFlow) (domexec.SourceKind, bool) {
 	return domexec.SourceStored, false
 }
 
-// confirmDOMAnalysisFor runs the static DOM analysis over one exchange's response and the
-// dynamic confirmation tier over its findings, returning the analysis whose Findings() now
-// carry confirm-state. It is the audit's entry into Phase 12: one place that reads the stored
-// response, runs the SAME static pass the passive path runs (AnalyzeDOMDocument is free-
-// standing so the two cannot drift), and confirms what a browser can.
-//
-// A skip (no script, not HTML, empty body) returns no findings — the static tier's own skip
-// vocabulary already says why, and a confirmation pass with nothing to confirm is not a
-// claim of safety.
-func (s *ActiveScanner) confirmDOMFindingsFor(ex *core.Exchange) []*Finding {
-	if s == nil || ex == nil || ex.Response == nil {
-		return nil
-	}
-	msg, err := s.store.Get(*ex.Response)
-	if err != nil || msg == nil {
-		return nil
-	}
-	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), DOMBudget{})
-	a.ExchangeID = ex.ID
-	a.Method = ex.Method
-	a.URL = domURL(ex)
-	if len(a.Flows) == 0 {
-		return nil
-	}
-	confirmed := s.ConfirmDOMFindings(context.Background(), ex, a)
-	// The audit reports only what a browser CONFIRMED. A retired candidate is dropped here —
-	// not because the retire verdict is useless, but because this tier's job in an audit is to
-	// add evidence, and a negative about a flow the passive path never reported would itself
-	// be a finding nobody asked for: the safe-counterpart suite is the exact case, a page
-	// whose script carries a path a real load never fires. Retire semantics belong where the
-	// tentative finding already exists (the passive path's own findings); the confirm pass
-	// exposed on the scanner mutates those for any caller that holds them.
-	out := confirmed[:0]
-	for _, f := range confirmed {
-		if f.Confirm == DOMConfirmPromoted {
-			out = append(out, f)
-		}
-	}
-	return out
-}
+// The audit's entry into this tier is javascriptAnalysisFor (js_analysis.go), which runs the same
+// static pass the passive path runs (AnalyzeDOMDocument is free-standing so the two cannot drift),
+// applies the run's javascript_analysis keys and issue selection, and hands the candidates a browser
+// may confirm to ConfirmDOMFindings.
 
 // domConfirmObserve is the confirm pass's observation seam. Production always uses the real
 // browser.ObserveTaint; the var exists because ObserveTaint is a concrete method on a concrete

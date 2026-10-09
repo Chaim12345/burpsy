@@ -2,7 +2,6 @@ package web
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"strings"
@@ -57,7 +56,7 @@ func (s *Server) handleCAExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req caExportRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCAExportRequestBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxCAExportRequestBytes)).Decode(&req); err != nil {
 		http.Error(w, `the body must be a JSON object such as {"kind":"cert"}`, http.StatusBadRequest)
 		return
 	}

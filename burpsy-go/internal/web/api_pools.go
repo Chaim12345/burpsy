@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -65,7 +64,7 @@ func (s *Server) handlePools(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		var p pool.Pool
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&p); err != nil {
 			http.Error(w, "Body must be a JSON resource pool: name, max_concurrent, delay_ms and an optional throttle", http.StatusBadRequest)
 			return
 		}
@@ -112,7 +111,7 @@ func (s *Server) handlePoolDetail(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
 		var p pool.Pool
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+		if err := requestJSON(w, r, nil).Decode(&p); err != nil {
 			http.Error(w, "Body must be a JSON resource pool", http.StatusBadRequest)
 			return
 		}

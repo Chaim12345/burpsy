@@ -93,6 +93,12 @@ func (s *Server) restoreFindingConsolidation(p *persist.Store) {
 	s.applyConsolidation(policy)
 }
 
+// issueConsolidationReq is the request body handleIssueConsolidation decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type issueConsolidationReq struct {
+	Default string            `json:"default"`
+	PerRow  map[string]string `json:"per_row"`
+}
+
 // handleIssueConsolidation serves GET/PUT /api/issues/consolidation. riskLocal: it writes burpsy's
 // own intake policy and sends nothing; a policy change applies to findings filed after it — a merge
 // already made is not reversible from what the store keeps.
@@ -101,11 +107,8 @@ func (s *Server) handleIssueConsolidation(w http.ResponseWriter, r *http.Request
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.viewConsolidation())
 	case http.MethodPut:
-		var body struct {
-			Default string            `json:"default"`
-			PerRow  map[string]string `json:"per_row"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		var body issueConsolidationReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 			http.Error(w, `the body must be {"default":"keep_existing|keep_both|keep_new","per_row":{...}}`, http.StatusBadRequest)
 			return
 		}

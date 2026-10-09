@@ -77,6 +77,11 @@ type Type struct {
 	Name        string       `json:"name"`
 	Fields      []Field      `json:"fields"`
 	InputFields []InputValue `json:"inputFields"`
+	// EnumValues are an ENUM's members, read so a generated operation can give an enum argument a
+	// value the server will accept (see Operations).
+	EnumValues []struct {
+		Name string `json:"name"`
+	} `json:"enumValues"`
 }
 
 // Schema is the introspected schema.

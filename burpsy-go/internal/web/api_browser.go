@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -89,6 +90,11 @@ func (s *Server) browserProxyAddr() string {
 	return ""
 }
 
+// browserLaunchReq is the request body handleBrowserLaunch decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type browserLaunchReq struct {
+	URL string `json:"url"`
+}
+
 // handleBrowserLaunch serves POST /api/browser/launch {url?}. riskEgress: the browser it opens loads
 // the URL through the proxy, which is traffic to a target.
 func (s *Server) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
@@ -96,12 +102,10 @@ func (s *Server) handleBrowserLaunch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		URL string `json:"url"`
-	}
+	var req browserLaunchReq
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
 	if len(strings.TrimSpace(string(body))) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
+		if err := requestJSON(w, r, bytes.NewReader(body)).Decode(&req); err != nil {
 			http.Error(w, `the body must be empty or {"url": "..."}`, http.StatusBadRequest)
 			return
 		}
@@ -167,7 +171,7 @@ func (s *Server) handleBrowserSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		// A whole document, merged onto the current one so a client sending one field changes one field.
 		next := s.browserLauncher().Settings()
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&next); err != nil {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&next); err != nil {
 			http.Error(w, "the body must be a JSON object of browser settings", http.StatusBadRequest)
 			return
 		}

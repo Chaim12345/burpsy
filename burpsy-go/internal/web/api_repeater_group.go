@@ -83,6 +83,10 @@ type repeaterGroupSendItem struct {
 	Request      string               `json:"request"`
 	FromExchange *core.ExchangeID     `json:"from_exchange,omitempty"`
 	Options      *repeaterSendOptions `json:"options,omitempty"`
+	// Note is the tab's note, recorded on this item's exchange exactly as a single send records it.
+	Note string `json:"note,omitempty"`
+	// SNI is the tab's Override SNI (k011), with the single send's meaning and checks.
+	SNI string `json:"sni,omitempty"`
 }
 
 // repeaterGroupSendResp is the group's outcome: one result per item, in the order they were sent.
@@ -152,7 +156,7 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req repeaterGroupSendReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -191,6 +195,10 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		seen[item.TabID] = struct{}{}
+		if err := validRepeaterNote("note", item.Note); err != nil {
+			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), http.StatusBadRequest)
+			return
+		}
 		spec, code, err := s.prepareRepeaterSend(item.Target, item.Protocol, item.Request, item.Options, item.FromExchange)
 		if err != nil {
 			// Named by tab, not by index: the operator is looking at a tab strip, and "item 2" is not
@@ -198,6 +206,13 @@ func (s *Server) handleRepeaterSendGroup(w http.ResponseWriter, r *http.Request)
 			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), code)
 			return
 		}
+		spec.Note = item.Note
+		if err := validRepeaterSNI("sni", item.SNI, spec.TLS); err != nil {
+			http.Error(w, fmt.Sprintf("%s (tab %s)", err.Error(), item.TabID), http.StatusBadRequest)
+			return
+		}
+		spec.SNI = item.SNI
+		spec.TabID = item.TabID
 		specs[i] = spec
 	}
 
@@ -345,7 +360,7 @@ func (s *Server) sendGroupItemSynchronized(
 	ctx context.Context, tabID string, spec repeaterSendSpec, sync sender.SyncPoints,
 ) repeaterGroupItemResult {
 	sendStarted := time.Now()
-	rawResp, outcome, err := s.sender.SendSynchronized(ctx, spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
+	rawResp, outcome, err := s.sender.SendSynchronized(spec.sendContext(ctx), spec.Host, spec.Port, spec.TLS, spec.Raw, sync)
 	elapsed := time.Since(sendStarted)
 	if err != nil {
 		s.toolLog.Record(toollog.ToolRepeater, spec.Host, spec.Port, spec.TLS, "SEND", "", 0, nil, 0, err.Error(), nil)
@@ -410,6 +425,15 @@ func (s *Server) sendGroupOnOneConnection(
 ) ([]repeaterGroupItemResult, string, error) {
 	first := specs[0]
 	for i, spec := range specs {
+		// One socket has one handshake, so one ClientHello: tabs that disagree about the Override SNI
+		// (k011) cannot share it, and picking the first tab's would send the others under a name
+		// their operator did not set.
+		if spec.SNI != first.SNI {
+			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
+				"refused: one connection has one TLS handshake, and tab %s overrides the SNI with %q while tab %s uses %q. "+
+					"Give the tabs the same SNI, or send on separate connections",
+				sent[0].TabID, first.SNI, sent[i].TabID, spec.SNI)}
+		}
 		if spec.Host != first.Host || spec.Port != first.Port || spec.TLS != first.TLS {
 			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
 				"refused: one connection addresses one target, and this group names two — tab %s is %s and tab %s is %s. "+
@@ -430,7 +454,19 @@ func (s *Server) sendGroupOnOneConnection(
 		raws[i] = spec.Raw
 	}
 
-	exchanges, err := s.sender.SendKeepAlive(ctx, first.Host, first.Port, first.TLS, raws)
+	// One socket, one context: SendKeepAlive bounds every exchange with the same per-send deadline, so
+	// a per-tab response timeout (mmca) can apply here only when every tab in the group agrees on it.
+	// Tabs that disagree are refused by name rather than having all but one tab's setting dropped.
+	for i, spec := range specs {
+		if !sameResponseTimeout(spec.Options.ResponseTimeoutMS, first.Options.ResponseTimeoutMS) {
+			return nil, "", repeaterGroupRefusal{code: http.StatusBadRequest, err: fmt.Errorf(
+				"refused: on one connection every request shares one response timeout, and tab %s says %s while tab %s says %s. "+
+					"Give the tabs the same response timeout, or send on separate connections",
+				sent[0].TabID, describeResponseTimeout(first.Options.ResponseTimeoutMS),
+				sent[i].TabID, describeResponseTimeout(spec.Options.ResponseTimeoutMS))}
+		}
+	}
+	exchanges, err := s.sender.SendKeepAlive(first.sendContext(ctx), first.Host, first.Port, first.TLS, raws)
 	if err != nil {
 		// SendKeepAlive's error return is reserved for a failure before any exchange could be attempted
 		// — the dial. Nothing went out, so this is the group's failure, not an item's.
@@ -477,4 +513,20 @@ func repeaterAuthority(spec repeaterSendSpec) string {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s:%d", scheme, spec.Host, spec.Port)
+}
+
+// sameResponseTimeout reports whether two tabs' response-timeout overrides are the same setting.
+func sameResponseTimeout(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// describeResponseTimeout names a tab's response-timeout setting for a refusal.
+func describeResponseTimeout(ms *int64) string {
+	if ms == nil {
+		return "the standing read timeout"
+	}
+	return fmt.Sprintf("%d ms", *ms)
 }

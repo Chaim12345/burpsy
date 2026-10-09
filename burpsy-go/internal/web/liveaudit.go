@@ -1359,6 +1359,12 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	// the moment the traffic is captured. Counted separately (passiveFindings); the
 	// active session's own passive rows then merge into the same stored findings by
 	// identity — confirmed, not duplicated.
+	//
+	// The configuration is read ONCE, here, and both halves run under it (burpsy-react-ui-saq3.3.2).
+	// It used to be read after the passive loop and handed to the active half only, so a deselected
+	// passive issue type — or scan_type_passive false — stopped in the session and kept firing on
+	// every captured exchange one loop earlier.
+	cfg := s.scanner.AuditConfig()
 	passiveFindings := 0
 	if s.scanner != nil {
 		for _, id := range ids {
@@ -1366,7 +1372,7 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 			if err != nil || ex == nil {
 				continue
 			}
-			for _, f := range s.scanner.RunPassiveChecks(ctx, ex) {
+			for _, f := range s.scanner.RunPassiveChecks(ctx, ex, cfg) {
 				if f == nil {
 					continue
 				}
@@ -1398,7 +1404,6 @@ func (s *Server) liveAuditTick(ctx context.Context, run *liveAuditRun) {
 	s.liveAudit.recordPassive(uint64(passiveFindings))
 
 	// The ledger is the one part of the config that outlives this tick — see liveAuditRun.
-	cfg := s.scanner.AuditConfig()
 	cfg.Ledger = run.auditLedger(s.liveAudit, s.events, s.logger)
 	// The sweep is the highest-volume producer of audit items, so it is the one that makes the queue
 	// worth having: this is where "swept 400" becomes 400 rows an operator can ask which of them the

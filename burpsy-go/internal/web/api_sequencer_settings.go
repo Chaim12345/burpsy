@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 
@@ -69,7 +68,7 @@ func (s *Server) handleSequencerSettings(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, sequencerSettingsView{Settings: s.sequencerSettings(), Keys: sequencer.SettingsKeys()})
 	case http.MethodPut:
 		var edit sequencer.SettingsEdit
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&edit); err != nil {
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&edit); err != nil {
 			http.Error(w, `the body must be a JSON object like {"token_analysis":{"fips_poker":false}}`, http.StatusBadRequest)
 			return
 		}

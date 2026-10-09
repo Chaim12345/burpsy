@@ -2305,6 +2305,33 @@ func (s *Store) getSetting(key string) (string, error) {
 	return v, err
 }
 
+// SaveCustomScanChecks persists the custom scan checks imported or written in the console
+// (burpsy-react-ui-kbu1), as their BCheck sources in order. Checks loaded from the --bchecks
+// directory are not stored: the directory is their home.
+func (s *Store) SaveCustomScanChecks(sources []string) error {
+	if sources == nil {
+		sources = []string{}
+	}
+	raw, err := json.Marshal(sources)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("scanner.custom_checks", string(raw))
+}
+
+// LoadCustomScanChecks returns the stored sources; nil when none were saved.
+func (s *Store) LoadCustomScanChecks() ([]string, error) {
+	v, err := s.getSetting("scanner.custom_checks")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SaveLiveSeenLedger persists the live sweep's cross-run seen ledger (apfh) as one
 // settings blob: a set of "host#fingerprint" keys, one per line. The sweep that owns the
 // ledger serialises it; a restart restores it so a re-seen exchange is still counted as
@@ -2522,6 +2549,28 @@ func (s *Store) SaveNetworkSettings(n sender.NetworkSettings) error {
 		return err
 	}
 	return s.setSetting("network.settings", string(encoded))
+}
+
+// SaveDisabledSkills persists the project's disabled-skill names (burpsy-react-ui-ulsy).
+func (s *Store) SaveDisabledSkills(names []string) error {
+	b, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	return s.setSetting("skills.disabled", string(b))
+}
+
+// LoadDisabledSkills returns the project's disabled-skill names; none saved is an empty list.
+func (s *Store) LoadDisabledSkills() ([]string, error) {
+	v, err := s.getSetting("skills.disabled")
+	if err != nil || v == "" {
+		return []string{}, err
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(v), &names); err != nil {
+		return []string{}, fmt.Errorf("stored disabled-skill list is unreadable: %w", err)
+	}
+	return names, nil
 }
 
 // SaveBrowserSettings persists the operator browser's settings (burpsy-react-ui-bufa) with the

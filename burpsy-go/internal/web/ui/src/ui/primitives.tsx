@@ -372,6 +372,8 @@ export function Modal({
   description,
   children,
   wide,
+  onCloseAutoFocus,
+  onOpenAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -379,12 +381,25 @@ export function Modal({
   description?: string;
   children: ReactNode;
   wide?: boolean;
+  /**
+   * Where focus goes when the dialog closes. Radix's default is the element that was focused when
+   * it opened, which is right for a button-opened dialog and wrong for one opened from a context
+   * menu: by then that element is a menu item that no longer exists (ui/dialog-host.tsx).
+   */
+  onCloseAutoFocus?: (event: Event) => void;
+  /**
+   * Where focus goes when the dialog opens. Radix's default is the first tabbable element, which in
+   * this layout is the header's Close button. Use this — not `autoFocus` on a field — to start
+   * somewhere else: an `autoFocus` field is focused before Radix's focus trap starts listening, so
+   * the trap never learns it and cannot pull focus back if something outside steals it.
+   */
+  onOpenAutoFocus?: (event: Event) => void;
 }): JSX.Element {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className={cn("dialog-content", wide && "dialog-wide")}>
+        <Dialog.Content className={cn("dialog-content", wide && "dialog-wide")} onCloseAutoFocus={onCloseAutoFocus} onOpenAutoFocus={onOpenAutoFocus}>
           <div className="dialog-head">
             <div>
               <Dialog.Title className="dialog-title">{title}</Dialog.Title>

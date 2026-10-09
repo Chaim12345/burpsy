@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -144,6 +143,16 @@ type projectSwitchRefuse struct {
 	Remedy string `json:"remedy,omitempty"`
 }
 
+// projectOpenReq is the request body handleProjectOpen decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type projectOpenReq struct {
+	// Path is the database file to switch to. A relative path is resolved against the
+	// directory of the CURRENT project, so "client-b.db" means "next to this one" — the
+	// same convenience a -db flag on a command line gets from the operator's cwd, and
+	// resolved here rather than guessed so the answer never depends on what the
+	// console's working directory happens to be.
+	Path string `json:"path"`
+}
+
 // handleProjectOpen is POST /api/project/open — switch the running process to another project's
 // database file.
 //
@@ -158,15 +167,8 @@ func (s *Server) handleProjectOpen(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		// Path is the database file to switch to. A relative path is resolved against the
-		// directory of the CURRENT project, so "client-b.db" means "next to this one" — the
-		// same convenience a -db flag on a command line gets from the operator's cwd, and
-		// resolved here rather than guessed so the answer never depends on what the
-		// console's working directory happens to be.
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req projectOpenReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

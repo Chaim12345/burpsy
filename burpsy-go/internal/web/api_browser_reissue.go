@@ -33,7 +33,6 @@ package web
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"html"
 	"net/http"
@@ -67,6 +66,11 @@ type browserReissueTokens struct {
 	m  map[string]browserReissue
 }
 
+// repeaterBrowserReissueReq is the request body handleRepeaterBrowserReissue decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type repeaterBrowserReissueReq struct {
+	Exchange *uint64 `json:"exchange"`
+}
+
 // handleRepeaterBrowserReissue serves POST /api/repeater/browser-reissue: the operator's right
 // click on a stored exchange. The reply carries both variants' URLs — the dialog shows both,
 // because the comparison is the deliverable, and an operator who must mint twice would see
@@ -79,10 +83,8 @@ func (s *Server) handleRepeaterBrowserReissue(w http.ResponseWriter, r *http.Req
 	// A pointer, not a plain uint64: exchange ids are 0-based (position-is-the-id), so 0 is
 	// the FIRST exchange and a plain field cannot tell "named the first exchange" from "named
 	// nothing". Nil is the absence; 0 is an id like any other.
-	var req struct {
-		Exchange *uint64 `json:"exchange"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req repeaterBrowserReissueReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
 		return
 	}

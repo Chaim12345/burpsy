@@ -9,16 +9,22 @@
 // about the same bytes on screen at once, which is the exact defect a "same data, another tab"
 // view must not introduce. What this file adds is presentation, not parsing.
 //
-// # Read-only, and why that is the honest shape for a first cut
+// # Readings, plus Add in an editable context
 //
-// Burp's extra tabs are also inspection surfaces — the editable half of the same facts lives in
-// Burp's own Inspector-equivalent, and burpsy's Inspector already offers edit-in-place for every
-// row here. These tabs exist so the facts are reachable in the tab strip an operator expects;
-// a value that needs changing is one "Inspect" click away, and duplicating the Inspector's whole
-// write-back plumbing here would be a second implementation of the same writer, not a tab.
-import { useMemo } from "react";
+// The rows are readings: a value that needs changing is one "Inspect" click away, and the
+// Inspector owns edit, remove and reorder. What a tab DOES write is an added item, and only when
+// the editor is editable (burpsy-react-ui-11r8): Burp shows every view in an editable context "so
+// you can add items even if none were included", and a Cookies tab that cannot add a cookie to a
+// request with none would still be the bug. The add goes through lib/message's own writers
+// (addHeader, addQueryParam, addBodyParam, addCookie) — the same functions the Inspector's Add
+// calls — so there is still exactly one writer per kind of item.
+import { useMemo, useState } from "react";
 import {
+  addCookie,
+  addHeader,
+  addQueryParam,
   bodyParamSpans,
+  bodyParamsEditable,
   cookiesOf,
   cookieSpans,
   headerSpans,
@@ -30,6 +36,51 @@ import {
   querySpans,
 } from "../lib/message";
 import { formatBytes } from "../lib/api";
+import { addBodyParamToRequest } from "../lib/editor-extra-tabs";
+import { Button, Input } from "./primitives";
+
+/** Where an added item is written: the editor's own onChange. Absent = read-only, no Add. */
+type AddSink = ((next: string) => void) | undefined;
+
+/** The Add form under a tab's table: a name, a value, and one button that writes them in. */
+function AddItem({
+  what,
+  raw,
+  onAdd,
+  write,
+}: {
+  what: string;
+  raw: string;
+  onAdd: (next: string) => void;
+  write: (raw: string, name: string, value: string) => string;
+}): JSX.Element {
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const commit = () => {
+    // An empty name is not an item: a header ": x", a query "=x" and a cookie "=x" are all
+    // malformed, so the button stays disabled rather than writing one.
+    if (name.trim() === "") return;
+    onAdd(write(raw, name, value));
+    setName("");
+    setValue("");
+  };
+  return (
+    <form
+      className="typed-add"
+      aria-label={`Add a ${what}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        commit();
+      }}
+    >
+      <Input aria-label={`New ${what} name`} placeholder="name" value={name} onChange={(event) => setName(event.target.value)} />
+      <Input aria-label={`New ${what} value`} placeholder="value" value={value} onChange={(event) => setValue(event.target.value)} />
+      <Button type="submit" size="small" variant="outline" disabled={name.trim() === ""}>
+        Add
+      </Button>
+    </form>
+  );
+}
 
 /** One row of an extra tab: a name, its value, and nothing else — the tab is a reading. */
 export interface SectionRow {
@@ -66,7 +117,7 @@ function SectionTable({ rows, emptyNote }: { rows: SectionRow[]; emptyNote: stri
 }
 
 /** The request/response headers, one row each, in wire order. */
-export function HeadersTab({ raw }: { raw: string }): JSX.Element {
+export function HeadersTab({ raw, onAdd }: { raw: string; onAdd?: AddSink }): JSX.Element {
   const rows = useMemo<SectionRow[]>(
     () => headerSpans(raw).map((header) => ({ name: header.name, value: header.value })),
     [raw],
@@ -76,12 +127,13 @@ export function HeadersTab({ raw }: { raw: string }): JSX.Element {
     <div className="typed-view">
       <p className="typed-source">{response ? "The response's headers, in wire order." : "The request's headers, in wire order."}</p>
       <SectionTable rows={rows} emptyNote="No headers — a bare start line and body." />
+      {onAdd ? <AddItem what="header" raw={raw} onAdd={onAdd} write={addHeader} /> : null}
     </div>
   );
 }
 
 /** Query parameters. A response has none; the tab says so rather than hiding. */
-export function QueryParamsTab({ raw }: { raw: string }): JSX.Element {
+export function QueryParamsTab({ raw, onAdd }: { raw: string; onAdd?: AddSink }): JSX.Element {
   const rows = useMemo<SectionRow[]>(
     () => querySpans(raw).map((pair) => ({ name: pair.name, value: pair.value })),
     [raw],
@@ -97,12 +149,13 @@ export function QueryParamsTab({ raw }: { raw: string }): JSX.Element {
   return (
     <div className="typed-view">
       <SectionTable rows={rows} emptyNote="No query parameters — the path has no ?part." />
+      {onAdd ? <AddItem what="query parameter" raw={raw} onAdd={onAdd} write={addQueryParam} /> : null}
     </div>
   );
 }
 
 /** Body parameters — urlencoded and JSON bodies only, the same rule the Inspector's section holds. */
-export function BodyParamsTab({ raw }: { raw: string }): JSX.Element {
+export function BodyParamsTab({ raw, onAdd }: { raw: string; onAdd?: AddSink }): JSX.Element {
   const parsed = useMemo(() => parseMessage(raw), [raw]);
   const response = useMemo(() => isResponse(raw), [raw]);
   const rows = useMemo<SectionRow[]>(
@@ -117,23 +170,30 @@ export function BodyParamsTab({ raw }: { raw: string }): JSX.Element {
     );
   }
   const contentType = headerValue(parsed.headers, "content-type");
+  // An add is offered when the body can take one: no declared type yet (it becomes a form), or a
+  // urlencoded/JSON type. A multipart or binary body is refused in words rather than with an Add
+  // that would splice `a=1` into bytes that are not a list of pairs.
+  const writable = contentType === undefined || bodyParamsEditable(raw);
   return (
     <div className="typed-view">
       {rows.length === 0 ? (
         <p className="typed-empty">
           {contentType
             ? `This ${contentType} body breaks into no parameters — only urlencoded and JSON bodies do.`
-            : "Only urlencoded and JSON bodies break into parameters."}
+            : onAdd
+              ? "No body parameters yet. Adding one makes the body a urlencoded form."
+              : "Only urlencoded and JSON bodies break into parameters."}
         </p>
       ) : (
         <SectionTable rows={rows} emptyNote="" />
       )}
+      {onAdd && writable ? <AddItem what="body parameter" raw={raw} onAdd={onAdd} write={addBodyParamToRequest} /> : null}
     </div>
   );
 }
 
 /** Cookies: the request's Cookie jar on a request, Set-Cookie lines on a response. */
-export function CookiesTab({ raw }: { raw: string }): JSX.Element {
+export function CookiesTab({ raw, onAdd }: { raw: string; onAdd?: AddSink }): JSX.Element {
   const parsed = useMemo(() => parseMessage(raw), [raw]);
   const response = useMemo(() => isResponse(raw), [raw]);
   const rows = useMemo<SectionRow[]>(() => {
@@ -155,6 +215,9 @@ export function CookiesTab({ raw }: { raw: string }): JSX.Element {
         rows={rows}
         emptyNote={response ? "No Set-Cookie headers — the response set nothing." : "No Cookie header — the request carries no cookies."}
       />
+      {/* A request's jar only: a response's cookies are whole Set-Cookie lines with attributes,
+          which the Headers tab adds as a header. */}
+      {onAdd && !response ? <AddItem what="cookie" raw={raw} onAdd={onAdd} write={addCookie} /> : null}
     </div>
   );
 }

@@ -434,6 +434,9 @@ type Message struct {
 	// on that assumption goes on the wire as a valid frame with a corrupted body.
 	// Burp labels the frame type for the same reason.
 	Opcode string
+	// ClientIP is the address of the client that sent this message to the listener, Burp's
+	// InterceptedHttpMessage.sourceIpAddress() (burpsy-react-ui-3bkn). Empty when not known.
+	ClientIP string
 }
 
 // DirectionHasField reports whether a message in direction d can supply field f at all.
@@ -787,6 +790,8 @@ type Held struct {
 	HeldAt    time.Time
 	// Opcode mirrors Message.Opcode: the WebSocket frame type, empty for HTTP.
 	Opcode string
+	// ClientIP mirrors Message.ClientIP (3bkn).
+	ClientIP string
 
 	// Comment and Highlight are the operator's annotation on the held message
 	// (burpsy-react-ui-5q8u). They live on the hold, not on any exchange — a held
@@ -1268,6 +1273,7 @@ func (e *Engine) Hold(m *Message) *Held {
 		Path:      m.Path,
 		Status:    m.Status,
 		Opcode:    m.Opcode,
+		ClientIP:  m.ClientIP,
 		Raw:       append([]byte{}, m.Raw...),
 		HeldAt:    time.Now(),
 		done:      make(chan struct{}),

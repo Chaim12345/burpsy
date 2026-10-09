@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -472,7 +471,7 @@ func (s *Server) handleCrawlGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 	var req crawlStartReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -504,6 +503,9 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 		// operator importing one had no way to know a third of it had not arrived.
 		"config_name":           req.Config,
 		"config_unapplied_keys": unapplied,
+		// Seeds the engagement scope refuses (us6r.3): the crawl starts from the others, and these are
+		// named so the console can say so rather than report them as nothing.
+		"out_of_scope_seeds": s.outOfScopeSeeds(seeds),
 	})
 }
 
@@ -511,6 +513,9 @@ func (s *Server) handleCrawlStart(w http.ResponseWriter, r *http.Request) {
 // and that is not saved is 404 — the request is well formed and the world is not what they thought —
 // while a malformed configuration is 400. Told apart because the fix differs: reload versus retype.
 func crawlStartStatus(err error) int {
+	if errors.Is(err, errSeedsOutOfScope) {
+		return http.StatusForbidden
+	}
 	if errors.Is(err, pool.ErrNoSuchPool) {
 		return http.StatusNotFound
 	}
@@ -632,6 +637,14 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		live, n := s.liveAudit.TakeLiveSeenURLs()
 		liveTaken = n
 		seeds = append(seeds, live...)
+	}
+	// Seeds outside the engagement scope (us6r.3): when every seed is, the crawl could send nothing,
+	// and starting it would report a finished run with "nothing skipped, errored or gated" — refused
+	// here with the scope's own reason instead. Some out of scope is allowed and reported in the reply.
+	if len(seeds) > 0 {
+		if out := s.outOfScopeSeeds(seeds); len(out) == len(seeds) {
+			return 0, nil, 0, nil, fmt.Errorf("%w: %s", errSeedsOutOfScope, out[0].Reason)
+		}
 	}
 	if len(seeds) == 0 {
 		if req.IncludeLiveSeen {
@@ -1195,7 +1208,7 @@ func (f *crawlAuditFeed) finish(ctx context.Context) {
 	// task must not be cancellable and Handle.finish clears the cancel the re-fetch pass needs.
 	active := f.s.activeScanner()
 	if active.PendingCount() > 0 {
-		deferred, completion := active.FinishScan(ctx)
+		deferred, completion := active.FinishScan(ctx, f.cfg)
 		f.s.events.RecordFor(f.task.ID(), dash.EventAuditBounded, dash.SeverityInfo, fmt.Sprintf(
 			"deferred phase of %s: %s (outstanding: %d)", f.target, completion.Pending, len(completion.Outstanding)))
 		for _, finding := range deferred {
@@ -1466,4 +1479,44 @@ func (s *Server) crawlSessionCoordinator() crawler.SessionCoordinator {
 		return nil
 	}
 	return s.sessionCoordinator
+}
+
+// errSeedsOutOfScope is a crawl whose every seed the engagement scope refuses (us6r.3).
+var errSeedsOutOfScope = errors.New("every seed is outside the engagement scope, so the crawl could send nothing")
+
+type outOfScopeSeed struct {
+	URL    string `json:"url"`
+	Reason string `json:"reason"`
+}
+
+// outOfScopeSeeds lists the seeds the engagement scope refuses, with its reason. Never nil.
+func (s *Server) outOfScopeSeeds(seeds []string) []outOfScopeSeed {
+	out := []outOfScopeSeed{}
+	if s.scope == nil {
+		return out
+	}
+	for _, seed := range seeds {
+		u, err := url.Parse(seed)
+		if err != nil || u.Hostname() == "" {
+			continue // the crawler refuses a malformed seed with its own reason
+		}
+		tls := strings.EqualFold(u.Scheme, "https")
+		port := uint16(80)
+		if tls {
+			port = 443
+		}
+		if p := u.Port(); p != "" {
+			if n, perr := strconv.Atoi(p); perr == nil {
+				port = uint16(n)
+			}
+		}
+		path := u.EscapedPath()
+		if path == "" {
+			path = "/"
+		}
+		if !s.scope.Contains(u.Hostname(), port, path, tls) {
+			out = append(out, outOfScopeSeed{URL: seed, Reason: s.scope.Explain(u.Hostname(), port, path, tls)})
+		}
+	}
+	return out
 }

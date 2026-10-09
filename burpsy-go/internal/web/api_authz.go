@@ -88,6 +88,11 @@ func (s *Server) authzIdentities() []authzIdentity {
 	return append([]authzIdentity(nil), s.authz.identities...)
 }
 
+// authzIdentitiesReq is the request body handleAuthzIdentities decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type authzIdentitiesReq struct {
+	Identities []authzIdentity `json:"identities"`
+}
+
 // handleAuthzIdentities serves GET/PUT /api/authz/identities. riskLocal: it reads and writes
 // burpsy's own saved role bundles and sends nothing.
 func (s *Server) handleAuthzIdentities(w http.ResponseWriter, r *http.Request) {
@@ -99,10 +104,8 @@ func (s *Server) handleAuthzIdentities(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"identities": ids})
 	case http.MethodPut:
-		var body struct {
-			Identities []authzIdentity `json:"identities"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		var body authzIdentitiesReq
+		if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
 			http.Error(w, `the body must be {"identities":[...]}`, http.StatusBadRequest)
 			return
 		}
@@ -221,6 +224,12 @@ func (a *authzRawSender) Send(ctx context.Context, auth scanner.AuthContext) (in
 	return status, body, elapsed, nil
 }
 
+// authzTestReq is the request body handleAuthzTest decodes (hoisted for its published schema, burpsy-react-ui-3zw0).
+type authzTestReq struct {
+	ExchangeID core.ExchangeID `json:"exchange_id"`
+	Samples    int             `json:"samples"`
+}
+
 // handleAuthzTest serves POST /api/authz/test. riskAttack: it re-sends a captured request to its
 // target several times under different credentials — traffic to the target, and the whole point.
 func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
@@ -232,11 +241,8 @@ func (s *Server) handleAuthzTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no sender is configured, so a request cannot be re-sent", http.StatusServiceUnavailable)
 		return
 	}
-	var body struct {
-		ExchangeID core.ExchangeID `json:"exchange_id"`
-		Samples    int             `json:"samples"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+	var body authzTestReq
+	if err := requestJSON(w, r, io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
 		http.Error(w, `the body must be {"exchange_id":N,"samples"?:M}`, http.StatusBadRequest)
 		return
 	}
