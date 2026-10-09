@@ -454,9 +454,34 @@ target, the corpus switch, duplicate-capture collapse), the web fallback test
 in `internal/web/corpus_audit_fallback_test.go`, and the CLI wiring test in
 `cmd/burpsy/cli_scan_test.go`.
 
-**Decline path:** checks that need a Collaborator interaction server (26 of the
-loaded corpus) still count as *skipped* at load time — they need an interaction
-service this engine does not have. Everything else now dispatches.
+**Collaborator checks (burpsy-react-ui-ar8v, 2026-10-09):** the checks that call
+`generate_collaborator_address()` or test `dns|http|smtp|any interactions` (27 of
+the 264-file corpus per `docs/BCHECK-RESEARCH.md` §6 — a count from the research
+pass, not re-measured: no corpus copy is in this tree) now dispatch too, on the
+scan's out-of-band channel (`scanner/oob_channel.go`). Each call mints a unique
+`<marker>.<domain>` address; an interactions condition with no callback yet is
+*unknown* (Kleene logic), the run is recorded and handed to the pending registry,
+and `FinishScan` replays it — from the recording, never sending — until the
+callback arrives or the deadline makes it outstanding. With no channel
+("Don't use Collaborator") each is refused per item with the reason (Skipped),
+never run with an empty address.
+
+Correction to the earlier record here: these checks were never actually counted
+as skipped. `NeedsCollaborator` matched a condition shape the parser never emits,
+so every parsed collaborator check was bucketed active/insertion-point, sent an
+empty address and read its conditions as false — counted runnable and silently
+clean. `LoadReport.Collaborator` was therefore 0 against the real corpus; it now
+counts them, and they are no longer in the active/needs-insertion-point counts.
+
+Known limits, each a miss and never a false positive: a condition that needs the
+*absence* of a callback (`not(dns interactions)`) never fires — waiting never
+turns "no callback yet" into "no callback" — and ends outstanding; a branch taken
+only once a callback arrives that would send a new probe stops the replay
+(`ActiveReplayDiverged`), outstanding too; a console "Run test" does not wait, so
+an unanswered run there reports "awaiting interactions"; a `given response` check
+with an interactions condition is counted but has no dispatch scope. Burp's own
+behaviour with Collaborator disabled is to substitute a random string and skip
+polling (`docs/BCHECK-M2-SEMANTICS.md`); burpsy refuses instead, by decision.
 
 ### 4. JS vulnerability checks — COMPLETE (landed 2026-08-04)
 

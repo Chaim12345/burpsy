@@ -792,7 +792,11 @@ type PassiveScanner struct {
 	// tools holds the checks that invoke an external tool via `run tool`. Never
 	// passive; dispatchable only when the ActiveScanner has a runner — see
 	// ActiveChecks and scanner's corpusActiveChecks.
-	tools    []*bcheck.Check
+	tools []*bcheck.Check
+	// collab holds the checks that need a collaborator (generate_collaborator_address() or an
+	// interactions condition). Dispatched by the active engine, which runs them on the scan's
+	// out-of-band channel or refuses them with the reason when there is none (ar8v).
+	collab   []*bcheck.Check
 	report   LoadReport
 	coverage *CoverageTracker
 

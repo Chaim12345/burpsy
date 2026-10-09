@@ -71,13 +71,20 @@ run and fire against traffic:
 2. **`run tool` checks** — a check that shells out to an external binary is never
    passive and never runs unless you opt in with `-tools name=/abs/path`. Without
    an allowlisted runner it is **counted but not dispatched** (bucket "N need
-   tools"); run directly without a runner it is refused as `ActiveUnsupported` —
-   the same bucket as a check needing a Collaborator server.
+   tools"); run directly without a runner it is refused as `ActiveUnsupported`.
 
-3. **`given insertion point` / active checks** — these need the active-audit
+3. **Collaborator checks** — a check that calls `generate_collaborator_address()`
+   or tests `dns`/`http`/`smtp`/`any interactions` (bucket "N collaborator") runs
+   only when the scan has an out-of-band channel (`-collaborator-server`). Without
+   one it is refused per audit item with the reason (counted Skipped), never run
+   with an empty address. With one, an interactions condition that has no answer
+   yet is settled after the audit by the scan's deferred phase, or reported
+   outstanding at the deadline — never clean (burpsy-react-ui-ar8v).
+
+4. **`given insertion point` / active checks** — these need the active-audit
    path, not passive proxying.
 
-4. **The HPACK Huffman seam** — a documented, deliberate seam
+5. **The HPACK Huffman seam** — a documented, deliberate seam
    (`HpackHuffmanNotImplemented`) that is **identical in the Rust reference**
    (`slice 2b's seam`), so it is parity, not a Go shortfall.
 

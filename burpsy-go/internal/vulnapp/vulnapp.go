@@ -347,6 +347,8 @@ func Handler() http.Handler {
 	registerRunConfigFixtures(mux)
 	// Hidden-input guesser fixtures: served, deliberately not in the manifest (vulnapp_hidden_inputs.go).
 	registerHiddenInputFixtures(mux)
+	// Out-of-band fixtures: served, deliberately not in the manifest (vulnapp_oob.go).
+	registerOOBFixtures(mux)
 
 	for _, r := range familyRegistrars {
 		r(mux)

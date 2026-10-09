@@ -23,6 +23,7 @@ the base request, never from the previous send.
 | `bcheck.go` | Package root. AST types (`Check`, `Statement` and its variants, `Value`, `BoolExpr`), `Context`, the passive evaluator and shared statement machinery (`runCheckBody`, `executeBlock`, `evalBoolExpr`, `interpolate`), and the milestone-classification methods (`IsPassive`, `NeedsCollaborator`, `NeedsTool`, `M2Runnable`) |
 | `parser.go` | Lexer (`lex`) and recursive-descent parser (`Parse`). Whitespace and newlines are insignificant; the token stream is flat and `end if` is the only block terminator |
 | `active.go` | The active evaluator: `send request` (M2) and `given insertion point` / `send payload` (M3). Defines the `Sink` and `ToolRunner` interfaces, `Target`, `RequestModifier`, and `RunActive` |
+| `collaborator.go` | `generate_collaborator_address()` and the `<type> interactions` conditions: the `Collaborator` seam, three-valued (Kleene) condition logic, and `Deferred` — a run whose interactions were still unknown, replayed later from its own recording without sending (ar8v) |
 | `insertion.go` | Insertion points — `Enumerate`, `InsertionPoint`, `IpKind`. Each point is a byte range into one component of the base request, not a copy |
 | `bcheck_test.go`, `active_test.go`, `insertion_test.go`, `run_tool_test.go` | Unit tests, including `mockToolRunner` and other doubles that prove traffic/tool runs did or did not happen |
 
@@ -59,8 +60,10 @@ socket or spawned a process — keep them open.
 ### Honest counting is enforced at classification time
 
 `IsPassive` requires `given response` and no send and no `run tool`; `NeedsCollaborator`,
-`NeedsTool`, and `M2Runnable` bucket everything else. A `run tool` statement counts as outbound
-activity, so a check carrying one is never passive and is refused without a configured runner rather
+`NeedsTool`, and `M2Runnable` bucket everything else. `NeedsCollaborator` is true for an
+interactions condition (parsed as `Operator == "interactions"`) *or* any
+`generate_collaborator_address()` call; such a check runs only with a `Collaborator` attached.
+A `run tool` statement counts as outbound activity, so a check carrying one is never passive and is refused without a configured runner rather
 than run against nothing. Do not widen these predicates to make an unrunnable check look runnable.
 
 ### Insertion points are offsets into the base request
