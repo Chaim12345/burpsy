@@ -43,20 +43,20 @@ if [ -z "$chrome" ]; then
 fi
 echo "found $chrome: $("$chrome" --version 2>&1 | head -1)"
 
-# Start it once, here, so a shard's first test does not pay for a cold start. With the suite split
-# across fresh runners, the first Chrome launch on each one happens inside a test; twice in a row a
-# shard's first launch took longer than the 20-30s startup bound (fontconfig and disk caches are
-# cold on a new VM), and every DOM row in it then reported nothing. The time it takes is printed so
-# a slow runner is visible; a warm-up failure is a warning, the tests decide.
-warm_flags=(--headless --disable-gpu --no-first-run --dump-dom)
-# Chrome refuses to run as root with its sandbox on (the Buildkite image runs as root).
-if [ "$(id -u)" = 0 ]; then warm_flags+=(--no-sandbox); fi
+# Start it once, here, the way internal/domexec starts it (headless, no sandbox: the tests run it
+# as root in containers and as the runner user here), so a shard's first test does not pay for a
+# cold start, and so a Chrome that cannot start at all is visible here with its own error output
+# instead of only as "websocket url timeout reached" deep in a test. The time is printed; a failed
+# warm-up warns (the tests decide) and shows the tail of what Chrome said.
+warm_log=$(mktemp)
 warm_start=$(date +%s)
-if timeout 120 "$chrome" "${warm_flags[@]}" about:blank >/dev/null 2>&1; then
+if timeout 120 "$chrome" --headless --no-sandbox --disable-gpu --no-first-run --dump-dom about:blank >/dev/null 2>"$warm_log"; then
   echo "$chrome warm-up: $(( $(date +%s) - warm_start ))s"
 else
-  echo "ci-install-tools: warning: $chrome warm-up failed after $(( $(date +%s) - warm_start ))s" >&2
+  echo "ci-install-tools: warning: $chrome warm-up failed after $(( $(date +%s) - warm_start ))s; its last output:" >&2
+  tail -n 25 "$warm_log" >&2
 fi
+rm -f "$warm_log"
 
 # xmllint validates the Burp-XML export against the DTD in internal/report/burpxml.go. Without it
 # those tests skip with a reason; installing it keeps CI from reporting "the export validates" over
