@@ -35,15 +35,28 @@ nothing outside the module can import it — the engine surface is deliberately 
 
 ## The gate
 
+Tiers, who runs them and when: `../docs/DEVELOPMENT-PROCESS.md` section 4. In short, and honestly:
+
 ```bash
-go build ./...        # clean
-go vet ./...          # clean
+# T1 — you, before reporting: the affected packages (changed + every package whose tests import one)
+pkgs=$(../scripts/affected-go-tests.sh origin/master)
 gofmt -l .            # prints nothing
-go test ./...         # unit tests across every package
+go vet ./...          # clean
+[ -n "$pkgs" ] && go test -count=1 -timeout 30m $pkgs
+
+# T3 — CI on every PR into master and every master push (../.github/workflows/go.yml, job `gate`)
+go build ./... && go vet ./... && gofmt -l .
+go test ./... -count=1 -timeout 30m      # internal/scanner alone is ~8 minutes
+go test -race -count=1 ./internal/web/
+
+# Nightly only (../.github/workflows/nightly.yml), NOT per merge
 ../e2e-go.sh          # end-to-end against the built binary
 ```
 
-Anything under `internal/web/ui/` adds the live browser pass, which is the UI gate:
+Anything under `internal/web/ui/`: CI's `ui` job runs `bun run check` and `bun run build` and fails
+when the committed bundle is not what a fresh build produces; run `bun run check` yourself first.
+Do not commit `dist/app.js` or `style.css` — the lead rebuilds once per round. The live browser
+pass, which is the UI gate, is manual; no CI runs it:
 
 ```bash
 ../ui-live.sh         # boots the real console, seeded, and prints the pass to drive
@@ -53,8 +66,8 @@ Anything under `internal/web/ui/` adds the live browser pass, which is the UI ga
 The playwright suite (`../e2e-ui.sh`) is still in the tree and still runs, but it is no longer the
 gate — see `docs/UI-VERIFICATION.md` for why.
 
-Do not declare work done without the gate for whatever you touched. `gofmt -l .` printing a path is
-a failure, not a suggestion.
+Do not declare work done without the tier you owe for whatever you touched, and say which ran.
+`gofmt -l .` printing a path is a failure, not a suggestion.
 
 ## For AI Agents
 

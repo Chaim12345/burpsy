@@ -41,10 +41,12 @@ is Rust, `burpsy-go/internal/scanner` is Go, and they are different code with th
 | `crates/` | The Rust reference implementation, frozen (see `crates/AGENTS.md`) |
 | `Cargo.toml` | Rust workspace manifest. Edition 2024, resolver 3, thirteen member crates |
 | `verify.sh` | The Rust gate: build with zero warnings, clippy, unit tests, BCheck corpus conformance, e2e suites. `QUICK=1` skips e2e |
-| `e2e-go.sh` | End-to-end smoke test that runs the **Go** binary — the Go analogue of `e2e.sh`, ports offset by 100 so the two suites cannot collide |
-| `ui-live.sh` | **The UI gate.** Boots the real console, seeded, and prints the live browser pass an agent drives with `agent-browser` (see `burpsy-go/docs/UI-VERIFICATION.md`) |
+| `e2e-go.sh` | End-to-end smoke test that runs the **Go** binary — the Go analogue of `e2e.sh`, ports offset by 100 so the two suites cannot collide. CI runs it nightly (`.github/workflows/nightly.yml`), not per merge |
+| `ui-live.sh` | **The UI gate — manual; no CI runs it.** Boots the real console, seeded, and prints the live browser pass an agent drives with `agent-browser` (see `burpsy-go/docs/UI-VERIFICATION.md`) |
 | `e2e-ui.sh` | Playwright suite for the React web UI. Still runnable, no longer the gate — see `burpsy-go/docs/UI-VERIFICATION.md` for why |
 | `ROADMAP.md` | Top-level feature roadmap / Burp teardown reference (the working plan lives in `.planning/`) |
+| `docs/DEVELOPMENT-PROCESS.md` | How work lands: rounds, test tiers (what CI runs, what is nightly, what is manual), review, beads closure. Wins over older instructions |
+| `scripts/` | Process tooling: `affected-go-tests.sh` (T1/T2 test set), `beads-lint.py` and `review-gate.sh` (CI checks), `beads-close-merged.py` (round closures), `dev-setup.sh` (once per clone) |
 | `DESIGN.md` | The design-system contract between the Figma source and the React UI in `burpsy-go/internal/web/ui/` |
 | `serve.sh`, `integrate.sh` | Launch / integration harness for the Rust tree |
 | `e2e.sh`, `e2e-audit.sh`, `e2e-intercept.sh`, `e2e-scan.sh`, `e2e-tls.sh` | Rust end-to-end suites, driven by `verify.sh` unless `QUICK=1` |
@@ -81,11 +83,17 @@ There are two hierarchies, one per tree:
 - **Default to the Go tree.** Unless a task is explicitly about the Rust reference, new work goes in
   `burpsy-go/`. Check `burpsy-go/gaps.md` before assuming a capability is missing — it may already be
   ported.
-- **The Go gate is `go build ./... && go vet ./... && gofmt -l . && go test ./...`, all clean, plus
-  `e2e-go.sh`.** A change that touches the React console additionally takes the live browser pass
-  (`./ui-live.sh`, then `burpsy-go/docs/UI-VERIFICATION.md`) — Playwright is no longer the UI gate.
-  The Rust gate is `verify.sh`. Run the gate for the tree you touched; do not declare work complete
-  without it.
+- **How work lands — rounds, test tiers, review, beads closure — is `docs/DEVELOPMENT-PROCESS.md`.**
+  Where an instruction here disagrees with it, it wins.
+- **The Go gate, honestly stated.** What CI runs on every PR into master and every master push
+  (T3, `.github/workflows/go.yml`): `gofmt -l .`, `go build ./...`, `go vet ./...`,
+  `go test ./... -count=1`, `go test -race ./internal/web/`, and for the console `bun run check`,
+  `bun run build` and a bundle-freshness check. What runs only nightly
+  (`.github/workflows/nightly.yml`): `e2e-go.sh`, and `-race` on the other packages. What no CI runs:
+  the live browser pass for a console change (`./ui-live.sh`, then
+  `burpsy-go/docs/UI-VERIFICATION.md`) — that one is yours to do and report; Playwright is no longer
+  the UI gate. Before reporting, run the affected-package tier (T1 in the process doc). The Rust
+  gate is `verify.sh`. Do not declare work complete without the tier you owe, and say which ran.
 - **Commit messages here are unusually substantive** — they explain why a change is right and what
   the obvious alternative gets wrong. Match that; a one-line summary will look out of place.
 - Never commit CA material or keys, and never commit compiled binaries (a 13 MB `crawl-scan-demo`
@@ -99,18 +107,28 @@ There are two hierarchies, one per tree:
 
 ### Testing Requirements
 
-Go (the active tree):
+Go (the active tree). Tiers are defined in `docs/DEVELOPMENT-PROCESS.md` section 4:
 
 ```bash
+# T1, before reporting (you): the changed packages and everything whose tests import them
+pkgs=$(scripts/affected-go-tests.sh origin/master)
 cd burpsy-go
-go build ./...                 # must be clean
-go vet ./...                   # must be clean
 gofmt -l .                     # must print nothing
-go test ./...                  # unit tests across every package
+go vet ./...                   # must be clean
+[ -n "$pkgs" ] && go test -count=1 -timeout 30m $pkgs
+
+# T3, CI on every PR into master and every master push (.github/workflows/go.yml, job `gate`)
+go build ./... && go vet ./... && gofmt -l .
+go test ./... -count=1 -timeout 30m            # internal/scanner alone is ~8 minutes
+go test -race -count=1 ./internal/web/
+
+# Nightly only (.github/workflows/nightly.yml) — not run per merge
 ../e2e-go.sh                   # end-to-end against the Go binary
 ```
 
-UI changes (anything under `burpsy-go/internal/web/ui/`) add a live browser pass:
+UI changes (anything under `burpsy-go/internal/web/ui/`): CI's `ui` job runs `bun run check`,
+`bun run build` and fails when the committed bundle differs from a fresh build; run `bun run check`
+yourself first (T1). The live browser pass is manual — no CI runs it:
 
 ```bash
 ./ui-live.sh                   # boot the real console, seeded, and print the pass
@@ -184,32 +202,6 @@ external dependencies: `golang.org/x/net/http2`, `chromedp`/`cdproto` (headless 
 
 <!-- MANUAL: Any manually added notes below this line are preserved on regeneration -->
 
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker
 
@@ -266,6 +258,12 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+**Active profile for this repository: Conservative.** No agent commits, pushes or runs a Dolt
+remote sync unless the current request says to; the lead's round workflow is
+`docs/DEVELOPMENT-PROCESS.md`. Two statements in the managed blocks are wrong here and are
+overridden: `.beads/issues.jsonl` on master is the source of truth, not a passive export, and
+`refs/dolt/data` has been dead since 2026-09-17 — never `bd dolt push`.
+
 <!-- BEGIN BEADS CODEX SETUP: generated by bd setup codex -->
 ## Beads Issue Tracker
 
@@ -292,12 +290,16 @@ bd prime                # Refresh Beads context
 
 ## Beads issue tracker (bd)
 
-Issues live in Beads (`bd`), Dolt-backed, remote-synced via `sync.remote` in `.beads/config.yaml`.
-The Dolt DB is the source of truth; `.beads/issues.jsonl` is a possibly-stale export (2026-08-27:
-146 open there vs 182 open in the DB — trust `bd`, not the JSONL).
+Issues live in Beads (`bd`). **Master's `.beads/issues.jsonl` is the source of truth; a local Dolt
+DB is scratch, rebuilt from it.** `refs/dolt/data` (the `sync.remote` in `.beads/config.yaml`) has
+been dead since 2026-09-17: nothing pushes it, so a DB bootstrapped from it is weeks stale. (The
+older advice here — "trust `bd`, not the JSONL", from 2026-08-27 — is now backwards.) Closures
+follow `docs/DEVELOPMENT-PROCESS.md` section 9: they cite the PR and merge sha, CI's `beads` job
+checks that, and the lead applies them with `scripts/beads-close-merged.py`.
 
 - `bd` CLI (npm `@beads/bd`) — not preinstalled; sandbox install: `npm config set prefix ~/.npm-global && npm i -g @beads/bd` (global prefix `/usr/local` is root-owned).
-- First-time DB setup in a fresh clone: `bd bootstrap --yes` (needs non-interactive git creds for the dolt refs fetch, and `chmod 700 .beads`). If `dolt clone` fails with `Error 1007: database exists`, rename `dolt_database` in `.beads/metadata.json` to a fresh name, `rm -rf .beads/embeddeddolt`, re-run bootstrap (bd v1.2.2 pre-creates the DB dir then collides with itself).
+- First-time DB setup in a fresh clone: `bd bootstrap --yes` — but see above: it pulls the dead
+  `refs/dolt/data`, so treat the result as stale until master's JSONL is imported over it (needs non-interactive git creds for the dolt refs fetch, and `chmod 700 .beads`). If `dolt clone` fails with `Error 1007: database exists`, rename `dolt_database` in `.beads/metadata.json` to a fresh name, `rm -rf .beads/embeddeddolt`, re-run bootstrap (bd v1.2.2 pre-creates the DB dir then collides with itself).
 - `bd bootstrap`/`bd init` prompt `[Y/n]` on stdin — in non-interactive shells pass `--yes` or they hang forever with no output.
 - Triage snapshot 2026-09-04: 258 total, 182 open (0 blocked, 100 ready; 13 open P1 = 5 epics + 8 tasks), 15 issues carry `decision-needed`. No duplicate titles detected. P1 claims spot-verified against code (intruder §-markers, proxy listener editor, logger bytes, intruder payload column all genuinely missing). Next up per `bd ready`: P1 intruder trio (33t, fvx, mun) under epic i4fa.
 - Closed so far, one per commit: 33t (intruder payload positions via bcheck single-parser), fvx (intruder payload column), mun (manual § markers), 5bl (logger exchange links + detail viewer). Remaining P1 tasks per `bd ready`: 77m (proxy listener editor), 6rb (WS extensions toggle), vlf (history search checkboxes), t2s (scanner config keys) — each under its P1 epic.

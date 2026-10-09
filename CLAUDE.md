@@ -57,16 +57,38 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+**Active profile for this repository: Conservative.** No agent commits, pushes or runs a Dolt
+remote sync unless the current request says to; the lead's round workflow is
+`docs/DEVELOPMENT-PROCESS.md`, which wins over older instructions. Two statements in the managed
+block above are wrong here and are overridden: `.beads/issues.jsonl` on master is the source of
+truth, not a passive export, and `refs/dolt/data` has been dead since 2026-09-17 — never
+`bd dolt push`.
+
 
 ## Build & Test
 
-_Add your build and test commands here_
+The active tree is `burpsy-go/` (Go module + React console under `internal/web/ui/`); `crates/` is
+the frozen Rust reference (`verify.sh`). Full rules: `docs/DEVELOPMENT-PROCESS.md` section 4 and
+`AGENTS.md`. Run `scripts/dev-setup.sh` once per clone.
+
+| Tier | Who / when | What runs | Where it is defined |
+|---|---|---|---|
+| T1 | implementing agent, before reporting | `gofmt -l .`, `go vet ./...`, `go test -count=1 -timeout 30m` on `scripts/affected-go-tests.sh origin/master`; `bun run check` if the UI changed; a negative control per new test | local |
+| T2 | lead, per item merge into the round branch | T1 on the merge result, plus `go build ./...` | local |
+| T3 | CI, every PR into master and every master push | `gate`: gofmt, build, vet, full `go test ./... -count=1`, `go test -race ./internal/web/`; `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`; `review-gate` | `.github/workflows/go.yml`, `review-gate.yml` |
+| Nightly | CI, 03:17 UTC | `e2e-go.sh`; `-race` on all packages but `internal/web`, `internal/scanner`, `internal/extscan` | `.github/workflows/nightly.yml` |
+| Manual | whoever changed the console | live browser pass: `./ui-live.sh` + `burpsy-go/docs/UI-VERIFICATION.md` | not in CI |
 
 ```bash
-# Example:
-# npm install
-# npm test
+pkgs=$(scripts/affected-go-tests.sh origin/master)                  # T1 test set
+(cd burpsy-go && [ -n "$pkgs" ] && go test -count=1 -timeout 30m $pkgs)
+(cd burpsy-go && go test ./... -count=1 -timeout 30m)               # whole suite: a diagnostic, hold flock /tmp/burpsy-heavy.lock
+(cd burpsy-go/internal/web/ui && bun run check && bun run build)    # tsc + guards; build does NOT type-check
 ```
+
+Gotchas: `go test ./...` needs `-timeout 30m` (`internal/scanner` alone is ~8 minutes); `bun run
+build` strips types without checking them; agents never commit `dist/app.js` / `style.css` — the
+lead rebuilds once per round with bun 1.4.2.
 
 ## Architecture Overview
 

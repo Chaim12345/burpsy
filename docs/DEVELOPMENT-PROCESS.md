@@ -1,0 +1,212 @@
+# Development process
+
+How work goes from a bead to master. It exists because a green build that was never run against
+the tree that landed is a claim, not evidence — the rule `docs/adr/0001-burp-parity-measurement.md`
+applies to parity trackers, applied to our own merges. Where this disagrees with an older
+instruction in an `AGENTS.md`, a handoff note or a managed Beads block, this wins.
+
+## 1. Sources of truth
+
+| Question | Answer lives in | Not in |
+|---|---|---|
+| What is open / closed | `.beads/issues.jsonl` on `master` | a local Dolt DB, `refs/dolt/data` (dead since 2026-09-17), another branch |
+| Did it land | `git merge-base --is-ancestor <sha> origin/master` | a bead's status, a PR body, an agent report |
+| Does master pass | the `Go` workflow run for master's tip (every master push gets its own run; none is cancelled) | a local run, a PR run against an older base |
+
+A local `bd` database is a scratch copy: rebuild it from master's JSONL before use, and never
+`bd dolt push`. The managed Beads blocks in `AGENTS.md` and `CLAUDE.md` still describe the Dolt
+sync model; for this repository they are wrong on that point, and this section is the rule.
+
+## 2. Picking a round
+
+A **round** is at most six work items landed together by one round PR.
+
+1. `bd ready`, then order: priority (P0–P2 before P3/P4); within a priority, regressions and
+   "reports what it did not do" defects first, then the bead with the most dependents, then the
+   oldest.
+2. Group beads that share a package or feature into one **item** (one branch, one PR, ≤ ~800 lines).
+3. Predict each item's file footprint (two minutes of `git grep`). Two items may not share a file,
+   except:
+   - `burpsy-go/internal/web/route_schemas.go` / `route_manifest.go`: at most two route-adding items
+     per round;
+   - `burpsy-go/gaps.md`: rows appended only; the lead resolves conflicts;
+   - `dist/app.js`, `style.css`: agents never commit them (§5).
+4. At most one item that drives Chrome or the scanner corpus.
+5. A bead labelled `decision-needed`, or one whose recorded design the work would contradict, is
+   not picked — see §8.
+6. `in_progress` beads older than one round go back to `open` when the round closes (§9).
+
+## 3. Branches and worktrees
+
+    round/<YYYY-MM-DD>-<n>               from origin/master, created by the lead
+    beads/<round>-<letter>-<slug>        from the round's base, one per item
+    /root/wt/<round>/<letter>            its worktree
+
+Only the lead creates or removes worktrees and branches. Agents never run `git worktree
+remove|prune`, `git branch -D`, `git push`, or check out a branch other than their own. No branch
+outlives its round: the lead deletes item branches once the round PR has merged.
+
+Each clone runs `scripts/dev-setup.sh` once: it registers the merge driver `.gitattributes` names
+for the UI bundle and warns when bun or Go differ from what CI uses.
+
+## 4. Test tiers
+
+| Tier | Who | When | What | Where |
+|---|---|---|---|---|
+| T1 | implementing agent | before reporting | `gofmt -l`, `go vet`, and `go test -count=1 -timeout 30m` on the packages `scripts/affected-go-tests.sh origin/master` prints (changed packages + every package whose tests import one); `bun run check` if `burpsy-go/internal/web/ui/` changed; a negative control for each new test (revert the fix, watch it fail) | local |
+| T2 | lead | merging an item into the round branch | the same on the merge result, plus `go build ./...` | local |
+| T3 | CI | every PR into master (in practice the round PR) and every push to master | `gate`: gofmt, `go build`, `go vet`, full `go test ./... -count=1`, `go test -race ./internal/web/`; `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`: `scripts/beads-lint.py`; `review-gate`: `scripts/review-gate.sh` | `.github/workflows/go.yml`, `review-gate.yml` |
+| Nightly | CI | 03:17 UTC, and on demand | `e2e-go.sh`; `go test -race` on every package except `internal/web` (T3 covers it), `internal/scanner` and `internal/extscan` (not yet shown race-clean) | `.github/workflows/nightly.yml` |
+| Manual | whoever changed the console | before reporting a UI change | the live browser pass: `./ui-live.sh`, driven per `burpsy-go/docs/UI-VERIFICATION.md` | local |
+
+Running the affected set:
+
+    pkgs=$(scripts/affected-go-tests.sh origin/master) || exit 1
+    [ -n "$pkgs" ] && (cd burpsy-go && go test -count=1 -timeout 30m $pkgs)
+
+The script reads the import graph of the checked-out tree. It cannot see a test that reads another
+directory's file without importing it, except through the explicit rules in its header, and it
+cannot see merge skew (two branches that pass alone and fail together). T3 runs the whole suite on
+the exact tree that lands for exactly that reason; the affected set narrows the inner loop and is
+never the gate.
+
+Whole-module and Chrome-heavy runs take `flock /tmp/burpsy-heavy.lock` — one per machine. A local
+full suite is a diagnostic for a red T3, not a gate. `go test ./...` without `-timeout 30m` is not
+a run (`internal/scanner` alone takes ~8 minutes); `bun run build` is not a type check
+(`tsc --noEmit` is, via `bun run check`).
+
+An agent report states what ran, what was skipped and why (a missing binary is a skip with a
+reason, never a pass). PR bodies link the CI run instead of saying "full suite passes".
+
+## 5. The UI bundle
+
+`burpsy-go/internal/web/ui/dist/app.js` and `style.css` are committed because `go:embed` needs them
+and because "shipped" means "in the embedded bundle". They are generated: agents do not commit them;
+the lead runs `bun run build` (bun 1.4.2) once on the round branch after the last item merge. CI's
+`ui` job rebuilds with the same pinned bun and fails on any difference, so a source change that never
+reached the bundle cannot land.
+
+`.gitattributes` marks both files `merge=ours`: a merge keeps the round branch's side instead of
+stopping on a conflict in a 2.5 MB minified line, and the rebuild — not the merge — produces the
+file. In a clone where `scripts/dev-setup.sh` has not run, git falls back to an ordinary text merge
+and stops on conflict markers.
+
+## 6. PRs and merging
+
+1. The agent commits on its branch with substantive messages and a `Bead: <id>` trailer for each
+   bead the branch completes (`Bead: ar8v` or the full id; several ids may share a trailer). A bead
+   the branch only advances gets no trailer.
+2. The lead opens the item's PR **against the round branch** with the agent's report as the body
+   (what changed, what was verified, what was not). Risk-class items (§7) get their reviewer now.
+   CI does not run on these PRs (workflows run only for PRs into master); T1 and T2 cover them.
+3. After T2 the lead merges the item into the round branch:
+
+       git merge --no-ff -m "Merge PR #<N>: <PR title>" <item branch>
+
+   and pushes; GitHub marks the PR merged once its head is in the round branch. The `Merge PR #N:`
+   subject is what `scripts/beads-close-merged.py` reads the PR number from (a merge made with
+   GitHub's merge button is also understood).
+4. The lead rebuilds the bundle, runs the close script (§9), commits both, opens the **round PR to
+   master** listing the item PRs and beads, and sets `gh pr merge --auto --merge` (needs "Allow
+   auto-merge" in the repository settings).
+5. Red T3: fix forward on the round branch, or `git revert -m 1` the offending item merge, take its
+   beads out of the closure commit, and say so in the round PR.
+
+Hotfixes: a single PR to master, same required checks, same closure rule.
+Merge commits only — no squash, no rebase — so every closure sha stays in master's history.
+
+## 7. Review
+
+The `review-gate` check (`.github/workflows/review-gate.yml`, logic in `scripts/review-gate.sh`)
+fails while a PR into master touches a risk-class path and lacks the label `agent-reviewed`:
+
+- `internal/sender/` and the HTTP/2 authorisation it shares;
+- scope and authorisation (`internal/core/scope*.go`, the scope check, authz and same-origin
+  handlers, crawler prefix scope, `cli_scope.go`);
+- gated/destructive routes (`route_manifest.go`, `confirm_gate.go`, `gen-gated-routes.ts` and the
+  UI's gated-route and route-risk lists);
+- MCP risk-class placement (`internal/mcp/groups.go`, `route_manifest.go`);
+- credential / client-cert / CA / TLS material (`internal/netauth/`, `internal/servercerts/`, the
+  proxy's CA, listener-cert and TLS files, the CA, server-cert, TLS-policy and netauth handlers);
+- `.github/` (workflows and their pinned SHA-256s), the gate scripts themselves, `.beads/hooks/`,
+  `.gitattributes`.
+
+The exact globs are the list in `scripts/review-gate.sh`; the list names files, not semantics, so
+a risk-class change in an unlisted file is added to the list in the same PR. The reviewer is a fresh
+agent given the diff and this list — never the author — and posts its verdict on the PR before the
+label is applied. A push to a labelled PR that changes a risk path again fails the check until the
+label is removed and re-applied after re-review. A change to `crates/` (the frozen parity oracle)
+fails the check regardless of the label: it is refused, not reviewed.
+
+## 8. Design decisions
+
+The lead decides implementation choices that keep every recorded decision (ADRs, bead
+descriptions, `burpsy-go/gaps.md`) and match Burp. Everything else goes to the user:
+
+- the work would reverse or bypass a recorded decision;
+- it changes product scope, security posture, or what is exposed to an MCP client;
+- Burp's behaviour and the recorded design disagree.
+
+Stop, park the branch as a draft PR, label the bead `decision-needed`, and send the user one
+paragraph: the conflict, the options, what each costs, a recommendation. Build nothing until it is
+answered, and do not build both.
+
+## 9. Beads lifecycle
+
+| Event | Action | Who |
+|---|---|---|
+| Picked | `in_progress`, owner = round | lead |
+| Agent finds new work | listed in its report — not filed by the agent | agent |
+| Round PR ready | close each landed bead with `Fixed by PR #N (<merge sha on the round branch>): <title>`; file follow-ups; reopen anything whose code did not land; reset `in_progress` items not in this round | lead, `scripts/beads-close-merged.py` |
+| CI | `beads` job: JSONL parses, ids unique, no bead deleted, every bead closed by the PR cites a sha in the PR's history | CI, `scripts/beads-lint.py` |
+
+Only the lead (or a dedicated beads agent) edits the JSONL.
+
+    python3 -I scripts/beads-close-merged.py origin/master..round/<date>-<n>          # dry run
+    python3 -I scripts/beads-close-merged.py origin/master..round/<date>-<n> --apply
+
+The close script reads `Bead:` trailers from the commits each first-parent merge brought in, and
+needs no `bd` and no Dolt. It rewrites only the closed beads' lines, in place, byte-for-byte in the
+format bd exports; every other line is untouched, so the diff shows exactly the closures. The
+`(id)` suffix on commit subjects is listed for the lead but never closes anything: epics and
+partly-done beads are named that way too.
+
+A closure without a landed commit is invalid. The lint accepts three closures that cite none,
+because they land no code: `Duplicate of <id>` / `Superseded by <id>` naming a bead in the file,
+a reason starting `WONTFIX`, `Won't fix`, `INVALID` or `Not a defect`, and an epic whose children
+are all closed. Closures already on master are grandfathered; editing one makes it new again.
+
+A conflicted JSONL is reconciled per issue by newest `updated_at` — never by a merge driver (see
+`.gitattributes` for what one did to the tracker).
+
+## 10. Hand-off
+
+Every round ends with: the round PR, its CI run, beads closed / filed / reopened, what was not done
+and why, and anything waiting on the user.
+
+## 11. Lead actions outside the repository
+
+The PR that introduced this document could not do these; they are the lead's, in this order.
+
+1. **Create the `agent-reviewed` label** (the review gate checks for it by name):
+   `gh label create agent-reviewed --repo Chaim12345/burpsy --description "Risk-class change reviewed by an independent agent"`.
+2. **Branch protection on `master`**, once the four checks have each run on master at least once
+   (GitHub only offers a check it has seen). Required: `gate`, `ui`, `beads`, `review-gate`; strict
+   (branch up to date before merging); enforced for admins; no force-push, no deletion:
+
+       gh api -X PUT repos/Chaim12345/burpsy/branches/master/protection --input - <<'JSON'
+       {"required_status_checks": {"strict": true, "contexts": ["gate", "ui", "beads", "review-gate"]},
+        "enforce_admins": true, "required_pull_request_reviews": null, "restrictions": null,
+        "allow_force_pushes": false, "allow_deletions": false}
+       JSON
+
+   Check first that the plan allows it (branch protection on a private repository needs a paid
+   plan), and that GitHub's merge queue is not available here before relying on it — on a
+   user-owned repository it usually is not, which is why rounds use strict up-to-date checks.
+   Enable "Allow auto-merge" for step 6.4.
+3. **Beads recovery** (separate work; needs the other machine): there, `bd export` into a branch
+   `bd/recover-<host>`; merge per issue by newest `updated_at`; accept a closure from it only if its
+   sha is in master (`git merge-base --is-ancestor`), otherwise reopen it with a note. Record in the
+   PR that `refs/dolt/data` has been dead since 2026-09-17 and is not a source.
+4. **Branch cleanup**, after this lands: delete merged feature branches on the remote. The
+   `jules-*` and `palette-*` branches need the user's confirmation first.
