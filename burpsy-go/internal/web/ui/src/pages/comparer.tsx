@@ -11,7 +11,7 @@ import { useApp , newComparerItem } from "../lib/store";
 import type { CompareOp } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Metric, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Empty, ErrorNotice, IconButton, Input, Metric, NeedsValueButton, Select, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 
 /** Ops carry byte offsets, so slicing has to go through the same byte view the server used. */
@@ -441,7 +441,7 @@ export function ComparerPage(): JSX.Element {
     const id = Number(raw);
     // Message ids count from zero too, so message 0 — the first request body ever stored — is real
     // and loadable. `<= 0` refused it.
-    if (!Number.isInteger(id) || id < 0) {
+    if (!raw.trim() || !Number.isInteger(id) || id < 0) {
       toast.error("Give a stored message id — a whole number, counting from 0");
       return;
     }
@@ -544,10 +544,17 @@ export function ComparerPage(): JSX.Element {
             placeholder="message id"
             style={{ maxWidth: "var(--w-xs)" }}
           />
-          <Button variant="outline" size="small" disabled={loadMessage.isPending} onClick={() => loadSlot(slot)}>
+          {/* An empty box read as Number("") === 0 and loaded message 0 (z2l5). */}
+          <NeedsValueButton
+            variant="outline"
+            size="small"
+            disabled={loadMessage.isPending}
+            missing={msg.trim() ? null : "needs a message id"}
+            onClick={() => loadSlot(slot)}
+          >
             <Download size={13} />
             Load
-          </Button>
+          </NeedsValueButton>
           <input
             ref={slot === "a" ? fileInputA : fileInputB}
             type="file"
