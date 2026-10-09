@@ -376,10 +376,18 @@ func (s *Server) sitemapGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // observedIndex answers whether the observed tree already holds a path under its host, for the
-// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its clean form
-// is a stored path key, or when it names a folder that anything observed sits beneath: the fold
-// synthesises ancestor folders, so an insert naming /api/ would otherwise produce a second /api/ node
-// beside the synthesised one. "/" is observed under any host that has a path at all.
+// inserted and unrequested items merged into GET /api/sitemap. A path is observed when its node
+// (sitemap.NodePath: query removed, normalised) is the node of any stored path key, or when it names
+// a folder that anything observed sits beneath: the fold synthesises ancestor folders, so an insert
+// naming /api/ would otherwise produce a second /api/ node beside the synthesised one. "/" is
+// observed under any host that has a path at all.
+//
+// Node against node, never node against raw key (burpsy-react-ui-u6f8): the stored keys keep the
+// query ("/search?q=1") and comparing the item's stripped path to them left a linked /search?q=1
+// grey after /search?q=1 was requested. A request for /search?q=1 also clears a linked
+// /search?q=2: the fold draws both as the one requested /search node with q in its parameter list,
+// so a grey /search?q=2 beside it would be a second row for a node the map already shows as
+// requested — the per-query sibling leaf the fold was written to remove.
 type observedIndex map[observedHostKey]*observedHost
 
 type observedHostKey struct {
@@ -389,7 +397,8 @@ type observedHostKey struct {
 }
 
 type observedHost struct {
-	// keys are the stored path keys, exactly as the site map holds them.
+	// keys are the nodes of the stored path keys: sitemap.NodePath of each, so "/search?q=1" is held
+	// as "/search".
 	keys map[string]struct{}
 	// folders holds every clean observed path's prefixes that end in "/" ("/", "/a/", "/a/b/" for
 	// /a/b/c), which is the set a folder query X matches as HasPrefix(path, X+"/").
@@ -406,10 +415,10 @@ func newObservedIndex(hosts []*sitemap.HostNode) observedIndex {
 			oh = &observedHost{keys: map[string]struct{}{}, folders: map[string]struct{}{}}
 			idx[k] = oh
 		}
-		for key, pn := range h.Paths {
-			oh.keys[key] = struct{}{}
+		for key := range h.Paths {
+			cleanPath := sitemap.NodePath(key)
+			oh.keys[cleanPath] = struct{}{}
 			oh.any = true
-			cleanPath, _ := splitPathQuery(pn.Path)
 			for i := 0; i < len(cleanPath); i++ {
 				if cleanPath[i] == '/' {
 					oh.folders[cleanPath[:i+1]] = struct{}{}
@@ -425,7 +434,7 @@ func (idx observedIndex) has(in *sitemap.InsertedNode) bool {
 	if oh == nil {
 		return false
 	}
-	clean, _ := splitPathQuery(in.Path)
+	clean := sitemap.NodePath(in.Path)
 	if _, ok := oh.keys[clean]; ok {
 		return true
 	}
@@ -803,27 +812,15 @@ func (s *Server) foldPaths(host *sitemap.HostNode, pathFilter string, nodeCount 
 }
 
 // splitPathQuery separates the path component from the query string and normalises the path, so the
-// tree is built from path structure alone.
+// tree is built from path structure alone. The path half is sitemap.NodePath — a leading slash and no
+// trailing one, so `/a`, `/a/` and a stored `a` are the one node an operator reads them as — and is
+// the same identity the site map's own "already observed?" checks use (burpsy-react-ui-u6f8).
 func splitPathQuery(p string) (string, string) {
+	query := ""
 	if i := strings.IndexByte(p, '?'); i >= 0 {
-		return normalisePath(p[:i]), p[i+1:]
+		query = p[i+1:]
 	}
-	return normalisePath(p), ""
-}
-
-// normalisePath gives every path a leading slash and no trailing one, so `/a`, `/a/` and a stored
-// `a` are the one node an operator reads them as.
-func normalisePath(p string) string {
-	if p == "" {
-		return "/"
-	}
-	if p[0] != '/' {
-		p = "/" + p
-	}
-	for len(p) > 1 && p[len(p)-1] == '/' {
-		p = p[:len(p)-1]
-	}
-	return p
+	return sitemap.NodePath(p), query
 }
 
 // parentOfPath returns the folder one segment up, or "" for a top-level path.
