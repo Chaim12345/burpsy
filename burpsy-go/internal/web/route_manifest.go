@@ -177,6 +177,14 @@ var manifest = map[string]route{
 		summary: "mint one blind-XSS correlation payload to plant: the token, the script URL and the " +
 			"script tag carrying it",
 	},
+	"/api/collaborator/health": {
+		// riskEgress, like /payload and for a stronger reason: it may register the channel, then sends
+		// DNS, HTTP, HTTPS and SMTP traffic to the interaction server, a third party, to see whether the
+		// interactions come back (Burp's "Run health check", 8e3n).
+		methods: []string{"POST"}, risk: riskEgress,
+		summary: "Burp's Collaborator health check: eight connection items against a fresh address on " +
+			"the registered domain, then whether each protocol's interaction came back through polling",
+	},
 	"/api/collaborator/interaction/": {
 		methods: []string{"GET"}, risk: riskRead, subPath: "0",
 		summary: "one out-of-band interaction's raw request and response, plus what its client IP means",
@@ -217,9 +225,14 @@ var manifest = map[string]route{
 		//
 		// Refuses with 409 once a channel has registered, so it cannot orphan payloads already handed
 		// out; that is a correctness guard, not a reason to soften the class.
-		methods: []string{"POST"}, risk: riskScope,
+		//
+		// DELETE is Burp's "Don't use Burp Collaborator" (8e3n). It shares the class: it decides that no
+		// third party learns of the engagement from now on, and with an open channel it 409s unless the
+		// caller explicitly discards the payloads minted from it.
+		methods: []string{"POST", "DELETE"}, risk: riskScope,
 		summary: "point this installation at an interaction server without restarting: a URL, or " +
-			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered",
+			"\"public\" for interactsh's shared pool; refuses with 409 once a channel is registered. " +
+			"DELETE stops using one (409 with an open channel unless discard_open_channel is set)",
 	},
 	"/api/collaborator/status": {
 		methods: []string{"GET"}, risk: riskRead,

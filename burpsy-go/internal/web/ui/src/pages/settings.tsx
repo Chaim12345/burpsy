@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { scopeBadge } from "../lib/scope-state";
 import { Download, KeyRound, Plus, Radar, RotateCcw, Save, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatBytes, formatCount, formatDuration } from "../lib/api";
@@ -141,7 +142,7 @@ export function ScopeSection(): JSX.Element {
     detail="What the proxy is allowed to touch. Every change here is persisted immediately."
     actions={
      <>
-      {data ? <Badge tone={data.allow_all ? "warn" : "good"}>{data.allow_all ? "everything in scope" : "restricted"}</Badge> : null}
+      {data ? <Badge tone={scopeBadge(data).tone}>{scopeBadge(data).label}</Badge> : null}
       <Button variant="outline" size="small" onClick={() => setConfirmClear(true)} disabled={!data || data.empty}>
        <Trash2 size={13} />
        Clear scope
@@ -3399,7 +3400,14 @@ export function SettingsPage(): JSX.Element {
    // Smooth scrolling is motion, and this one crosses most of the page. An operator who has
    // asked the system for reduced motion gets the jump instantly instead.
    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-   target.scrollIntoView({ block: centred ? "center" : "start", behavior: reduced ? "auto" : "smooth" });
+   // The settings pane is scrolled, and only it: scrollIntoView scrolls EVERY scrollable ancestor,
+   // which pulled the document root up and took the menubar and tool tabs off screen (us6r.2).
+   {
+    const rect = target.getBoundingClientRect();
+    const box = container.getBoundingClientRect();
+    const want = centred ? box.top + Math.max(0, (container.clientHeight - rect.height) / 2) : box.top;
+    container.scrollBy({ top: rect.top - want, behavior: reduced ? "auto" : "smooth" });
+   }
    setActive(id);
 
    // How far the target is from where it should be: the top of the page for a whole card,

@@ -1,4 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
+import { scopeAllowsEverything } from "./lib/scope-state";
 import { appliedSectionLabels, readBundleCoverage } from "./lib/config-coverage";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -1412,7 +1413,7 @@ function App(): JSX.Element {
       {formatCount(stats.data?.exchanges)} exchanges
      </span>
      <span>{formatCount(stats.data?.messages)} messages</span>
-     <span>{scope.data?.allow_all ? "scope: everything" : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
+     <span>{scopeAllowsEverything(scope.data) ? `scope: everything${scope.data?.rules.length ? " not excluded" : ""}` : `scope: ${scope.data?.rules.length ?? 0} rules`}</span>
      {caAvailable ? (
       <a className="status-link" href="/ca.crt" download>
        <ShieldCheck size={11} />

@@ -21,6 +21,7 @@ export const ROUTE_GATED: Readonly<Record<string, boolean>> = {
  "/api/browser/clear": true,
  "/api/browser/launch": false,
  "/api/browser/settings": false,
+ "/api/collaborator/health": false,
  "/api/collaborator/interaction/": false,
  "/api/collaborator/interactions": false,
  "/api/collaborator/payload": false,

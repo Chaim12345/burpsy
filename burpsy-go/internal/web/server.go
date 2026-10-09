@@ -224,7 +224,10 @@ type Server struct {
 	// The channel itself lives on the ActiveScanner and is deliberately NOT duplicated here — see
 	// api_collaborator.go on why a second registration would show interactions no finding correlates
 	// with. Lazy for the same reasons as captures above.
-	collaborator     *collaboratorHub
+	collaborator *collaboratorHub
+	// collabStateBase is -collaborator-state-dir: where a channel installed from the console keeps its
+	// identity, one directory per server (d657). Empty keeps a fresh identity per process.
+	collabStateBase  string
 	collaboratorOnce sync.Once
 	// extensions is the plugin host: the operator's -plugins allowlist and the child processes it
 	// admits. Lazily replaced by an empty host on first use (extensionOnce), so a Server built without
@@ -425,6 +428,13 @@ func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 		scan = scan.WithPace(pool.ContextPacer{}).WithSuiteGate(s.tasks.GateCheck)
 	}
 	s.scanner = scan
+	return s
+}
+
+// WithCollaboratorStateDir sets where a Collaborator channel installed from the console keeps its
+// identity across restarts (-collaborator-state-dir, burpsy-react-ui-d657).
+func (s *Server) WithCollaboratorStateDir(dir string) *Server {
+	s.collabStateBase = dir
 	return s
 }
 
@@ -1091,6 +1101,8 @@ func (s *Server) setupRoutes() {
 	// The wordlist manager (kal): the one inventory of payload corpora — bundled and
 	// uploaded — so Intruder's file source and content discovery both point once.
 	s.mux.HandleFunc("/api/wordlists", s.handleWordlists)
+	// Burp's "Run health check" (8e3n). Like /payload it may register the channel: an explicit click.
+	s.mux.HandleFunc("/api/collaborator/health", s.handleCollaboratorHealth)
 	s.mux.HandleFunc("/api/collaborator/interactions", s.handleCollaboratorInteractions)
 	s.mux.HandleFunc("/api/collaborator/payload", s.handleCollaboratorPayload)
 	s.mux.HandleFunc("/api/collaborator/poll", s.handleCollaboratorPoll)

@@ -20,6 +20,7 @@ export const ROUTE_RISK: Readonly<Record<string, string>> = {
  "/api/browser/clear": "riskDestructive",
  "/api/browser/launch": "riskEgress",
  "/api/browser/settings": "riskLocal",
+ "/api/collaborator/health": "riskEgress",
  "/api/collaborator/interaction/": "riskRead",
  "/api/collaborator/interactions": "riskRead",
  "/api/collaborator/payload": "riskEgress",
