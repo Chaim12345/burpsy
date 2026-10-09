@@ -80,6 +80,16 @@
   --skeleton-4: #f0f0f0;
   --overlay: rgb(43 43 43 / 45%);
 
+  /* Interactive-state fills and the placeholder role (burpsy-react-ui-us6r.7, us6r.9). Composites
+     and aliases of semantic tokens, so they live here beside the other hand-authored theme values
+     rather than in Penpot. Light keeps the formulas it always had: every one of them already clears
+     4.5:1 against light theme's near-black text. The dark block below is where they had to change. */
+  --row-hover: color-mix(in srgb, var(--info) 7%, var(--paper-raised));
+  --row-selected: color-mix(in srgb, var(--accent) 13%, var(--paper-raised));
+  --tree-active: color-mix(in srgb, var(--accent) 12%, var(--paper-raised));
+  --hover-fill: var(--chrome-hover);
+  --placeholder: var(--muted);
+
   --editor-line: var(--line);
   /* Was 7%. Composited over --editor-bg (white) this pushes .cm-placeholder's fixed grey (#949494,
      see the rule below) down to 2.81:1, and normal editor text isn't much better — the tint alone was
@@ -136,6 +146,32 @@
   --skeleton-3: #434749;
   --skeleton-4: #404446;
   --overlay: rgb(0 0 0 / 60%);
+
+  /* Interactive-state fills (burpsy-react-ui-us6r.7). Dark text is light grey, so a state fill can
+     only gain contrast by getting DARKER than the row it sits on — and the old formulas all mixed a
+     light colour into --paper-raised (#414547), making the fill lighter. Measured with axe on a
+     selected row: #bbbbbb on the 13% accent mix was 4.42:1, the dimmed cell's #b2b2b2 4.0:1; the
+     12% tree mix 4.45:1; the 7% info hover 4.46/4.04. Even plain --paper-raised only gives #b2b2b2
+     4.57:1, so no percentage of a lighter mix can fix it. Each fill now mixes into --paper-deep
+     (#323232) instead, keeping the hue that says what the state is:
+       --row-selected  #533a32  text 5.42, cell-dim 4.91, good 5.25, bad 5.15, warn 5.62, info 5.25
+       --row-hover     #3a3d40  text 5.69, cell-dim 5.15, bad 5.41
+       --tree-active   #533a32  (one selection colour for rows and tree nodes)
+     --hover-fill replaces --chrome-hover as the fill behind hovered chrome text (tool tabs, editor
+     view tabs, the inspector heads, settings nav, reference links): --chrome-hover is #4b5052, on
+     which --text measures 4.25:1 in every one of those five places. --paper-raised measures 5.05:1
+     and still reads as a lift off --chrome. The --chrome-hover token itself is recorded as a pending
+     Penpot edit in src/tokens/PENDING-TOKEN-CHANGES.md rather than overridden here. */
+  --row-hover: color-mix(in srgb, var(--info) 8%, var(--paper-deep));
+  --row-selected: color-mix(in srgb, var(--accent) 16%, var(--paper-deep));
+  --tree-active: var(--row-selected);
+  --hover-fill: var(--paper-raised);
+  /* burpsy-react-ui-us6r.9: dark --muted (#b2b2b2) is 1.07:1 from --text (#bbbbbb), so a
+     placeholder in --muted read as a typed value. grey.300 (#9ba0a3) is the next grey down the ramp
+     that still clears AA where inputs sit: 5.36:1 on --field-bg (#2b2b2b), 4.85:1 on --paper-deep
+     (#323232, read-only fields). The colour step alone is small (1.38:1 against --text), which is
+     why .input::placeholder also sets italic: the two cues together read as "example", not "value". */
+  --placeholder: var(--grey-300);
 
   --editor-line: var(--line);
   /* Was 10%. Composited over --editor-bg (#2b2b2b) this produces #40312c, on which
@@ -394,7 +430,7 @@ code {
 }
 
 .tool-tab:hover {
-  background: var(--chrome-hover);
+  background: var(--hover-fill);
   color: var(--text);
 }
 
@@ -798,8 +834,10 @@ main {
   font-size: var(--fs-md);
 }
 
-.input::placeholder {
-  color: var(--muted);
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--placeholder);
+  font-style: italic;
 }
 
 .select {
@@ -1017,11 +1055,19 @@ main {
   cursor: pointer;
 }
 
+/* The off state has to be visible as a control AND as "off" (WCAG 1.4.11, 3:1 against what is
+   next to it), and axe does not test that, so it went unnoticed (burpsy-react-ui-us6r.8). The track
+   border was --line-strong — #a6a6a6 on a white card is 2.43:1 in light, #646464 on #414547 is 1.6:1
+   in dark — and the off thumb was --paper-raised, the card colour itself, so in dark the switch
+   read as an empty slot. Both the off border and the off thumb now take --muted, the secondary
+   foreground role: border 5.9:1 (light, on white) and 4.57:1 (dark, on --paper-raised); thumb on
+   the sunken track 4.3:1 (light) and 6.7:1 (dark). The checked state keeps its accent track and
+   paper thumb. */
 .switch {
   width: 34px;
   height: 18px;
   flex: none;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--muted);
   background: var(--paper-sunken);
   padding:0;
   cursor: pointer;
@@ -1038,12 +1084,13 @@ main {
   display: block;
   width: 12px;
   height: 12px;
-  background: var(--paper-raised);
+  background: var(--muted);
   transform: translateX(var(--s1));
   transition: transform 140ms ease;
 }
 
 .switch[data-state="checked"] .switch-thumb {
+  background: var(--paper-raised);
   transform: translateX(19px); /* token-exempt: the knob travel is the track width minus the knob width, a geometric consequence of two other sizes rather than a value the scale has an opinion about */
 }
 
@@ -1283,29 +1330,16 @@ tbody td {
   background: color-mix(in srgb, var(--ink) calc(var(--stripe-alpha) * 100%), var(--paper-raised));
 }
 
-/* Hover mixes into the same per-theme base as selection (--row-selected-base, below). Over dark's
-   --paper-raised the 7% info tint measured 4.47:1 for body text and ~4.0:1 for muted cells
-   (pre-existing; it failed axe whenever the pointer rested on a row, found in the 69p0 drive);
-   over --paper-sunken it is 6.4:1 and 5.8:1. */
+/* Hover and selection take the per-theme state fills (--row-hover, --row-selected; us6r.7, defined
+   with the theme tokens). Over dark's --paper-raised the old 7% info tint measured 4.47:1 for body
+   text and ~4.0:1 for muted cells (it failed axe whenever the pointer rested on a row, found in the
+   69p0 drive); the dark fills now mix into --paper-deep, where every cell colour clears 4.5:1. */
 .data-row:hover td {
-  background: color-mix(in srgb, var(--info) 7%, var(--row-selected-base));
-}
-
-/* The surface a selected row's accent is mixed into (fe16). Dark mixes into --paper-sunken, not
-   --paper-raised: 13% accent over #414547 lifted the row to #5A4944, where body text (#BBBBBB)
-   measured 4.42:1 and muted cells (#B2B2B2) 4.0:1 — below 4.5:1, and multi-row selection made that
-   the common case rather than one row at a time. Over #2B2B2B the row is #473329: body text
-   6.2:1, muted 5.6:1. Light keeps --paper-raised, where body text clears 12:1. */
-:root {
-  --row-selected-base: var(--paper-sunken);
-}
-
-[data-theme="light"] {
-  --row-selected-base: var(--paper-raised);
+  background: var(--row-hover);
 }
 
 .data-row.selected-row td {
-  background: color-mix(in srgb, var(--accent) 13%, var(--row-selected-base));
+  background: var(--row-selected);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
@@ -3029,7 +3063,7 @@ tbody td {
 }
 
 .tree-row.active {
-  background: color-mix(in srgb, var(--accent) 12%, var(--paper-raised));
+  background: var(--tree-active);
   border-left-color: var(--accent);
 }
 
@@ -3544,7 +3578,11 @@ tbody td {
 }
 
 /* Insert, delete and replace each get their own hue AND a leading mark, so the
-   diff is still readable without colour vision. */
+   diff is still readable without colour vision.
+
+   The tints were 22/22/24%, which put the dark editor text (#a9b7c6) at 4.33/4.39/4.29:1 on the
+   three fills (burpsy-react-ui-us6r.7, measured by axe on a compared pair). 16% gives 4.99/5.02/4.92
+   in dark and only raises light theme's margin, and the coloured underline still carries the kind. */
 .diff-insert,
 .diff-delete,
 .diff-replace {
@@ -3553,17 +3591,17 @@ tbody td {
 }
 
 .diff-insert {
-  background: color-mix(in srgb, var(--good) 22%, var(--editor-bg));
+  background: color-mix(in srgb, var(--good) 16%, var(--editor-bg));
   border-bottom-color: var(--good);
 }
 
 .diff-delete {
-  background: color-mix(in srgb, var(--bad) 22%, var(--editor-bg));
+  background: color-mix(in srgb, var(--bad) 16%, var(--editor-bg));
   border-bottom-color: var(--bad);
 }
 
 .diff-replace {
-  background: color-mix(in srgb, var(--warn) 24%, var(--editor-bg));
+  background: color-mix(in srgb, var(--warn) 16%, var(--editor-bg));
   border-bottom-color: var(--warn);
 }
 
@@ -3668,7 +3706,7 @@ tbody td {
 
 .reference-jump-link:hover {
   border-color: var(--line-strong);
-  background: var(--chrome-hover);
+  background: var(--hover-fill);
   color: var(--text);
 }
 
@@ -3798,7 +3836,7 @@ tbody td {
 
 .editor-view:hover {
   color: var(--text);
-  background: var(--chrome-hover);
+  background: var(--hover-fill);
 }
 
 .editor-view-active {
@@ -3974,7 +4012,7 @@ tbody td {
 }
 
 .inspector-head:hover {
-  background: var(--chrome-hover);
+  background: var(--hover-fill);
 }
 
 .inspector-rows {
@@ -4983,7 +5021,7 @@ tbody td {
 }
 
 .settings-nav-link:hover {
-  background: var(--chrome-hover);
+  background: var(--hover-fill);
   color: var(--text);
 }
 
