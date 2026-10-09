@@ -482,21 +482,60 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 	if c.Scanner == nil || c.Findings == nil {
 		return
 	}
-	findings := c.Scanner.Scan(ex)
+	// The engagement's run configuration, read once per exchange (saq3.3.3). Capture used to read none,
+	// so a configuration that set scan_type_passive false, deselected an issue type, disabled a
+	// detection method or switched static JavaScript analysis off stopped all of it in the audit and
+	// left it running on every captured exchange. Without a source (a bare test harness), everything
+	// runs as before.
+	cfg, scanWide, configured := c.Scanner.captureRunConfig()
+	admit := func(name, method string) bool {
+		if !configured {
+			return true
+		}
+		def, ok := ByName(name)
+		if !ok {
+			// Outside the catalogue: a corpus BCheck's own issue. The audit's selection does not filter
+			// those either (filterBySelection skips typeIndex 0), so the two paths agree.
+			return true
+		}
+		return cfg.admitsIssue(def.TypeIndex, scanWide) && !cfg.disabledMethodsFor(def.TypeIndex)[method]
+	}
+
+	var findings []*Finding
+	if !configured || !cfg.PassiveChecks.Set || cfg.PassiveChecks.Value != 0 {
+		for _, f := range c.Scanner.Scan(ex) {
+			if f != nil && admit(f.Name, MethodPassiveChecks) {
+				findings = append(findings, f)
+			}
+		}
+	}
 
 	// Static DOM analysis reads the same captured response as the passive check set, so it belongs
 	// at the same call site rather than behind a second dispatch. Its caveat is logged rather than
 	// discarded: a DOM pass that hit its per-item budget analysed only part of the item, and
 	// letting that land in the finding store as an ordinary "nothing more here" is exactly what
-	// DOM-03 forbids.
-	dom := c.Scanner.ScanDOM(ex)
-	if caveat := dom.Caveat(); caveat != "" && dom.Skip == nil && c.Logger != nil {
-		c.Logger.Warn("static DOM analysis did not cover the whole response",
-			zap.String("host", ex.Host),
-			zap.String("path", ex.Path),
-			zap.String("caveat", caveat))
+	// DOM-03 forbids. Under a run configuration it obeys use_static_analysis, the per-item time
+	// limit, and the selection with the "Javascript static analysis" method, as the audit does.
+	if !configured || cfg.staticJavaScriptOn() {
+		var budget DOMBudget
+		if configured {
+			if limit := secondsLimit(cfg.MaxStaticTimePerItem); limit > 0 {
+				budget.Deadline = domNow().Add(limit)
+			}
+		}
+		dom := c.Scanner.ScanDOMWithin(ex, budget)
+		if caveat := dom.Caveat(); caveat != "" && dom.Skip == nil && c.Logger != nil {
+			c.Logger.Warn("static DOM analysis did not cover the whole response",
+				zap.String("host", ex.Host),
+				zap.String("path", ex.Path),
+				zap.String("caveat", caveat))
+		}
+		for _, f := range dom.Findings() {
+			if f != nil && admit(f.Name, MethodJavaScriptStatic) {
+				findings = append(findings, f)
+			}
+		}
 	}
-	findings = append(findings, dom.Findings()...)
 
 	// The response modules, over the same captured bytes as the two passes above and at this same
 	// call site, so a module's findings are indexed and stored by exactly the path every other

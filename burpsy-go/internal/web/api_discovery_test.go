@@ -86,6 +86,16 @@ type discoveryRunResp struct {
 		} `json:"by_status"`
 	} `json:"counts"`
 	Summary string `json:"summary"`
+	// The session fields (burpsy-react-ui-dgbi): one entry per recursion depth
+	// that ran, and the echo of what was asked for.
+	Levels []struct {
+		Level      int `json:"level"`
+		Discovered int `json:"discovered"`
+		OutOfScope int `json:"out_of_scope"`
+		Skipped    int `json:"skipped"`
+		Runs       int `json:"runs"`
+	} `json:"levels"`
+	RecurseDepth int `json:"recurse_depth"`
 }
 
 func discoveryList(t *testing.T, s *Server) discoveryListResp {

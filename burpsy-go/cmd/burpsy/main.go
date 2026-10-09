@@ -100,6 +100,12 @@ func main() {
 		`Interactsh server for out-of-band interactions, or "public" for interactsh's own pool. Unset disables the Collaborator tool`)
 	collaboratorClient := flag.String("collaborator-client", "",
 		"path to the interactsh-client binary (default: look it up on PATH)")
+	// Burp's restoreClient(SecretKey) (burpsy-react-ui-d657): the channel's identity is kept here, one
+	// directory per interaction server, so a payload minted before a restart is still polled after it.
+	// Empty keeps a fresh identity per process.
+	collaboratorStateDir := flag.String("collaborator-state-dir",
+		filepath.Join(filepath.Dir(proxy.DefaultCADir()), "collaborator"),
+		`directory keeping the Collaborator client identity across restarts, per server ("" = a fresh identity each run)`)
 
 	// TLS passthrough flags
 	passthrough := flag.String("tls-passthrough", "", "host pattern to passthrough without interception (repeatable)")
@@ -382,6 +388,7 @@ func main() {
 		oobProvider = scanner.NewLazyOOBProvider(oob.Options{
 			ServerURL:  serverURL,
 			BinaryPath: *collaboratorClient,
+			StateDir:   oob.StateDirFor(*collaboratorStateDir, serverURL),
 		})
 	}
 
@@ -643,6 +650,10 @@ func main() {
 	if domOpts != nil {
 		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
 	}
+	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
+	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
+	// API-scan capture.
+	passiveScanner.WithRunConfigSource(activeScanner)
 
 	// Persisted scan-config overrides still apply last, after the flag chain — but through
 	// webServer.WithPersist below (restoreProjectScanState), not here: the overrides are project-level
@@ -683,6 +694,7 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		WithCollaboratorStateDir(*collaboratorStateDir).
 		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
 		// because it is the scanner the web server audits with — so the channel the Collaborator tab
 		// displays and the channel a check plants in a payload are the same registration. Nil (no flag)
@@ -830,10 +842,12 @@ func main() {
 	// run that opened a channel leaves an interactsh-client behind, holding a registration and a temp
 	// file. Closed here rather than through CloseCapabilities because this is the provider this process
 	// built, and it is the one thing on this path with a subprocess to collect.
-	if oobProvider != nil {
-		if err := oobProvider.Close(); err != nil {
-			logger.Error("Failed to close the out-of-band channel", zap.Error(err))
-		}
+	//
+	// The scanner's current provider, not the start-up one: the console can install a different one
+	// (POST /api/collaborator/server), and a channel that keeps its identity has to be stopped
+	// gracefully for the next run to resume it (d657).
+	if err := activeScanner.CloseOOBChannel(); err != nil {
+		logger.Error("Failed to close the out-of-band channel", zap.Error(err))
 	}
 	// Seal the capture's tail. Sync rather than Close: handlers may still be
 	// unwinding, and Close would unmap segments they are reading spans out of.

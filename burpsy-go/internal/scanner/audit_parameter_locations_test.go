@@ -175,7 +175,9 @@ func Test_a_parsed_unapplied_key_reaches_the_report(t *testing.T) {
 	// Under javascript_analysis, which is the section that key actually lives in: a fixture that
 	// puts it in issues_reported parses to a document that names no known key at all, and the test
 	// would then be asserting on a file that was never a Burp configuration.
-	data := []byte(`{"scanner": {"javascript_analysis": {"use_static_analysis": true}}}`)
+	// request_missing_dependencies, not use_static_analysis: the latter is applied since
+	// burpsy-react-ui-9mti, and a test of the unapplied path needs a key the engine still cannot express.
+	data := []byte(`{"scanner": {"javascript_analysis": {"request_missing_dependencies": true}}}`)
 	cfg, err := ParseBurpConfig(data)
 	if err != nil {
 		t.Fatalf("ParseBurpConfig: %v", err)
@@ -191,12 +193,12 @@ func Test_a_parsed_unapplied_key_reaches_the_report(t *testing.T) {
 	// and a key MOVING sections cannot make it pass for the wrong reason.
 	reported := false
 	for _, name := range unapplied {
-		if strings.HasSuffix(name, "javascript_use_static_analysis") {
+		if strings.HasSuffix(name, "javascript_request_missing_dependencies") {
 			reported = true
 		}
 	}
 	if !reported {
-		t.Errorf("unapplied = %v, want javascript_use_static_analysis under its bare or section-qualified "+
+		t.Errorf("unapplied = %v, want javascript_request_missing_dependencies under its bare or section-qualified "+
 			"name; the operator has to be told which of their file's keys did nothing, and a key the engine "+
 			"does not express is exactly such a key", unapplied)
 	}

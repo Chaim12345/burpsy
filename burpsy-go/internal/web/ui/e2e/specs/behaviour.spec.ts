@@ -31,10 +31,17 @@ test.describe("shell behaviour", () => {
   expect(light, "data-theme flipped but nothing on screen changed colour").not.toBe(dark);
   await expect(page.getByRole("button", { name: "Use dark theme" })).toBeVisible();
 
-  // And the keyboard binding reaches the same code path.
-  await page.keyboard.press("ControlOrMeta+Shift+l");
+  // And the command palette reaches the same code path. The theme has no default chord any more:
+  // Ctrl+Shift+L is Burp's Switch to Logger (2czi), which the next lines hold it to.
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByLabel("Search commands").fill("Switch to dark theme");
+  await page.keyboard.press("Enter");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   expect(await shellBackground()).toBe(dark);
+
+  await page.keyboard.press("ControlOrMeta+Shift+l");
+  await expect(page.getByRole("heading", { level: 1, name: "Tool log" })).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   expect(consoleErrors).toEqual([]);
  });

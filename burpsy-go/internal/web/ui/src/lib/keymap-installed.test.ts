@@ -44,7 +44,9 @@ const CORPUS = sourceFiles(SRC)
 
 /** Every id passed to `useChord("…")` anywhere in the app. */
 const INSTALLED = new Set(
-  [...CORPUS.matchAll(/useChord\(\s*"([^"]+)"\s*\)/g)].map((match) => match[1] as string),
+  // useCommandChord("id") (lib/keymap.ts) binds the chord to the command bridge; it reads the
+  // registry through useChord itself, so it is the same wire in a second spelling.
+  [...CORPUS.matchAll(/(?:useChord|useCommandChord)\(\s*"([^"]+)"\s*\)/g)].map((match) => match[1] as string),
 );
 
 describe("the rebindable registry and the installed bindings agree", () => {

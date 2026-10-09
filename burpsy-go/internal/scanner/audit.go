@@ -735,6 +735,15 @@ type AuditConfig struct {
 	ConnectTimeout OptUint32
 	NormalTimeout  OptUint32
 
+	// The javascript_analysis keys (burpsy-react-ui-9mti, Zxc3.java:27-31). The two analysis switches
+	// are booleans, unset meaning on (both techniques, which is what every audit did before they were
+	// read); the two limits are SECONDS per item, unset or zero meaning no limit. js_analysis.go says
+	// what "static" and "dynamic" are in this engine.
+	JavaScriptStaticAnalysis  OptUint32
+	JavaScriptDynamicAnalysis OptUint32
+	MaxStaticTimePerItem      OptUint32
+	MaxDynamicTimePerItem     OptUint32
+
 	// The eight `scanner/frequently_occurring_insertion_points/quick_scan_*` keys, carried on the RUN
 	// as well as on the preset: they are applied per run, and the set they resolve to is what the
 	// light tier's gate reads.
@@ -1107,6 +1116,11 @@ type BuiltInConfig struct {
 	FollowRedirections  OptUint32
 	AuditConnectTimeout OptUint32
 	AuditNormalTimeout  OptUint32
+	// The javascript_analysis keys (burpsy-react-ui-9mti). The two times are seconds.
+	JSUseStaticAnalysis        OptUint32
+	JSUseDynamicAnalysis       OptUint32
+	JSMaxStaticSecondsPerItem  OptUint32
+	JSMaxDynamicSecondsPerItem OptUint32
 	// InheritedOverrides names the override rows a file set to -1, Burp's "not overridden"
 	// (Zbuj.java:27-28). They ask for nothing and are honoured as asked, so they are reported applied —
 	// never in neither list.
@@ -1673,7 +1687,7 @@ var builtInConfigKeys = []struct {
 		name:    "skip_all_tests_for_parameters",
 		burpKey: "scanner/ignored_insertion_points/skip_all_tests_for_parameters",
 		// PARTLY applied, and saying "not applied" was a false statement in an operator-facing table
-		// (burpsy-react-ui-86le). The control IS honoured: /api/scanner/config accepts
+		// (burpsy-react-ui-86le). The control IS honoured: /api/scanner/configs accepts
 		// skip_all_tests_for_parameters as a list of parameter names, AuditConfig carries it, and
 		// the enumerator drops a matching point from every kind as a bcheck.Declined. What is not
 		// ported is Burp's VALUE SHAPE — a list of match rules ({enabled, parameter, item,
@@ -1700,16 +1714,23 @@ var builtInConfigKeys = []struct {
 		applies:    true,
 	},
 	{
+		// Burp's two analysis switches (Zxc3.java:27-28; burpsy-react-ui-9mti). Static is the audit's
+		// lexical source-to-sink pass (AnalyzeDOMDocument); dynamic is everything that drives the
+		// browser. See js_analysis.go.
 		name:    "javascript_use_static_analysis",
 		burpKey: "scanner/javascript_analysis/use_static_analysis",
-		what:    "not applied: DOM analysis is selected as a family (scanner/issues_reported/scan_type_javascript_analysis); this engine has no static-only mode to choose",
-		applies: false,
+		what:    "false stops the audit's static DOM pass — the lexical source-to-sink analysis of each item's own scripts — and the browser confirmation it seeds, which has nothing to confirm without it; the browser-driven DOM checks still run while dynamic analysis is on. True or unset runs it. The proxy-capture static pass is not an audit run and does not read this key",
+		read:    func(c BuiltInConfig) OptUint32 { return c.JSUseStaticAnalysis },
+		apply:   func(a *AuditConfig, v uint32) { a.JavaScriptStaticAnalysis = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "javascript_use_dynamic_analysis",
 		burpKey: "scanner/javascript_analysis/use_dynamic_analysis",
-		what:    "not applied: this engine runs one DOM pass per item and has no separate dynamic-only mode to choose",
-		applies: false,
+		what:    "false takes every browser-driven DOM check out of the run's check set and skips the browser confirmation of static candidates, so the run starts no browser; the static pass's candidates are then reported as tentative findings saying dynamic analysis was off. The crawl's rendered-location pass reads the scanner's configuration and declines with the reason. The deferred stored-DOM render (FinishScan) is scan-level and does not read it. True or unset runs both",
+		read:    func(c BuiltInConfig) OptUint32 { return c.JSUseDynamicAnalysis },
+		apply:   func(a *AuditConfig, v uint32) { a.JavaScriptDynamicAnalysis = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "javascript_fetch_out_of_scope_resources",
@@ -1726,14 +1747,18 @@ var builtInConfigKeys = []struct {
 	{
 		name:    "javascript_max_static_time_per_item",
 		burpKey: "scanner/javascript_analysis/max_static_time_per_item",
-		what:    "not applied: DOM analysis is time-bounded by its own engine, not by the audit configuration",
-		applies: false,
+		what:    "seconds the static DOM pass may spend on one item (Burp labels the field in seconds, Zrde.java:204,230); when it runs out the pass stops, keeps what it found, marks the analysis incomplete, and the item's javascript_analysis_skips names the static pass and the limit. 0 is no limit, as Burp's documentation says of zero or blank",
+		read:    func(c BuiltInConfig) OptUint32 { return c.JSMaxStaticSecondsPerItem },
+		apply:   func(a *AuditConfig, v uint32) { a.MaxStaticTimePerItem = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "javascript_max_dynamic_time_per_item",
 		burpKey: "scanner/javascript_analysis/max_dynamic_time_per_item",
-		what:    "not applied: DOM analysis is time-bounded by its own engine, not by the audit configuration",
-		applies: false,
+		what:    "seconds the browser-driven DOM work may spend on one item, on one clock started by the item's first browser use and shared by its DOM checks and the confirmation tier; a DOM check stopped by it, or not started because it was spent, is counted skipped (never clean, and never a send failure that trips the breaker) and named in the item's javascript_analysis_skips. 0 is no limit",
+		read:    func(c BuiltInConfig) OptUint32 { return c.JSMaxDynamicSecondsPerItem },
+		apply:   func(a *AuditConfig, v uint32) { a.MaxDynamicTimePerItem = SomeUint32(v) },
+		applies: true,
 	},
 	{
 		name:    "max_insertion_points_per_base_request",

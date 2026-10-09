@@ -105,6 +105,10 @@ type DOMBudget struct {
 	MaxFlows      int
 	MaxSuppressed int
 	MaxUnresolved int
+	// Deadline is the wall-clock point the pass stops at, from the run's max_static_time_per_item
+	// (burpsy-react-ui-9mti). Zero means no time bound — the counted bounds above still apply. Not
+	// part of the reported budget: it is a moment, not a size, and means nothing once the pass is over.
+	Deadline time.Time `json:"-"`
 }
 
 // DefaultDOMBudget is the bound used when a caller does not supply one.
@@ -171,10 +175,13 @@ const (
 	DOMStopSuppressed
 	// DOMStopUnresolved means more unresolved sinks were found than that cap allows.
 	DOMStopUnresolved
+	// DOMStopTime means the run's per-item static analysis time limit ran out
+	// (max_static_time_per_item); what was scanned before it stands, the rest was not reached.
+	DOMStopTime
 )
 
 // DOMBudgetStopAll is every stop, so a caller can render a legend without hard-coding the set.
-var DOMBudgetStopAll = [7]DOMBudgetStop{
+var DOMBudgetStopAll = [8]DOMBudgetStop{
 	DOMStopScriptBytes,
 	DOMStopScripts,
 	DOMStopStatements,
@@ -182,6 +189,7 @@ var DOMBudgetStopAll = [7]DOMBudgetStop{
 	DOMStopFlows,
 	DOMStopSuppressed,
 	DOMStopUnresolved,
+	DOMStopTime,
 }
 
 // Explanation is one line an operator can act on.
@@ -201,6 +209,8 @@ func (s DOMBudgetStop) Explanation() string {
 		return "more sanitized or safe-sink flows were found than the budget reports; the excess was dropped"
 	case DOMStopUnresolved:
 		return "more untraceable sinks were found than the budget reports; the excess was dropped"
+	case DOMStopTime:
+		return "the per-item static analysis time limit (max_static_time_per_item) ran out; the remainder was not analysed"
 	}
 	return "unknown budget stop"
 }
@@ -221,6 +231,8 @@ func (s DOMBudgetStop) String() string {
 		return "suppressed"
 	case DOMStopUnresolved:
 		return "unresolved"
+	case DOMStopTime:
+		return "time"
 	}
 	return "unknown"
 }
@@ -647,6 +659,12 @@ func (f DOMFlow) evidence(known bool) string {
 // a different check's outcome into it would corrupt the identities coverage.go exists to preserve.
 // DOMAnalysis carries its own skip vocabulary instead.
 func (s *PassiveScanner) ScanDOM(exchange *core.Exchange) DOMAnalysis {
+	return s.ScanDOMWithin(exchange, DOMBudget{})
+}
+
+// ScanDOMWithin is ScanDOM under a budget: capture passes the run's max_static_time_per_item
+// (saq3.3.3), so the proxy-time pass is bounded exactly as the audit's is.
+func (s *PassiveScanner) ScanDOMWithin(exchange *core.Exchange, budget DOMBudget) DOMAnalysis {
 	if exchange == nil {
 		return domSkipped(DOMSkipExchangeNotFound)
 	}
@@ -663,7 +681,7 @@ func (s *PassiveScanner) ScanDOM(exchange *core.Exchange) DOMAnalysis {
 	if err != nil {
 		return domSkipped(DOMSkipResponseNotFound)
 	}
-	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), DOMBudget{})
+	a := AnalyzeDOMDocument(readableBody(msg), string(msg.Header("Content-Type")), budget)
 	a.ExchangeID = exchange.ID
 	a.Method = exchange.Method
 	a.URL = domURL(exchange)
@@ -754,6 +772,13 @@ type domTaint struct {
 // admit charges a script against the byte and script budgets, recording a skip and a stop when
 // either is exhausted. Returns false when the script must not be analysed.
 func (e *domEngine) admit(sc domScriptSrc) bool {
+	if e.outOfTime() {
+		e.res.SkippedScripts = append(e.res.SkippedScripts, DOMScriptSkip{
+			Script: sc.ref, Reason: DOMScriptSkipOverBudget,
+			Detail: "the per-item static analysis time limit had already run out",
+		})
+		return false
+	}
 	if len(e.res.Scripts) >= e.budget.MaxScripts {
 		e.res.Budget.record(DOMStopScripts)
 		e.res.SkippedScripts = append(e.res.SkippedScripts, DOMScriptSkip{
@@ -777,11 +802,26 @@ func (e *domEngine) admit(sc domScriptSrc) bool {
 
 // spend charges n statements against the statement budget, returning false once it is exhausted.
 func (e *domEngine) spend(n int) bool {
+	if e.outOfTime() {
+		return false
+	}
 	if e.res.Budget.Statements+n > e.budget.MaxStatements {
 		e.res.Budget.record(DOMStopStatements)
 		return false
 	}
 	e.res.Budget.Statements += n
+	return true
+}
+
+// outOfTime reports whether the item's static time limit has run out, recording the stop the first
+// time it is seen. One clock read per statement: tens of nanoseconds against a pass that costs
+// milliseconds, and the price of a limit that is honoured between statements rather than only between
+// scripts.
+func (e *domEngine) outOfTime() bool {
+	if e.budget.Deadline.IsZero() || domNow().Before(e.budget.Deadline) {
+		return false
+	}
+	e.res.Budget.record(DOMStopTime)
 	return true
 }
 

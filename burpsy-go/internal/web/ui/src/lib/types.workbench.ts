@@ -4,6 +4,8 @@
  * internal/web/api_tools.go and internal/sequencer/{report,fips}.go.
  */
 
+import type { FipsPositionReport } from "./sequencer-fips-positions";
+
 /** The server's rendering of a byte string. `text` is lossy when `utf8` is false. */
 export interface BytesView {
  text: string;
@@ -35,7 +37,7 @@ export interface EncodeResponse {
  output: BytesView;
 }
 
-/** Digest is hex, so `output.len` is twice the digest size in bytes. */
+/** Digest text in the requested output encoding (hex by default). */
 export interface HashResponse {
  algorithm: string;
  output: BytesView;
@@ -53,6 +55,12 @@ export interface TransformStep {
  value: string;
  /** Only meaningful for a smart decode; sent as `guess_alphabets`. */
  guess: boolean;
+ /** HMAC key, sent only for an hmac-* algorithm. */
+ key?: string;
+ /** How `key` is written: utf8 (default), hex or base64. */
+ keyEncoding?: string;
+ /** How a hash step writes its digest: hex (default), base64 or base64url. */
+ output?: string;
 }
 
 export interface TransformResult {
@@ -290,6 +298,8 @@ export interface SequencerAnalysis {
  fips: FipsReport;
  /** The four further randomness tests, additive to the grade (burpsy-react-ui-d2g). */
  advanced: AdvancedReport;
+ /** The FIPS battery at each bit position, additive to the grade (burpsy-react-ui-c0k3). */
+ fips_positions: FipsPositionReport;
  grade: "insufficient" | "pass" | "fail";
  verdict: string;
  warnings: string[] | null;
@@ -391,6 +401,11 @@ export interface ToolLogRow {
  comment: string;
  /** The operator's colour tag, "" when unset. Same vocabulary as Organizer's and history's. */
  highlight: string;
+ /**
+  * The response media type the row was recorded with. null when no type was measured (a transport
+  * failure, a whole-run row); "" when a response declared none — different facts (uvpb).
+  */
+ mime: string | null;
 }
 
 export interface ToolLogView {

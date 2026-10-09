@@ -66,6 +66,25 @@ type StoredDOMRenderOutcome struct {
 	// Declined explains a pass that did not run for a reason that is not an error - DOM checks
 	// switched off, or nothing planted to look for.
 	Declined string
+	// DeclinedByRun is how many pages would have been rendered but were not, because the run's
+	// configuration set use_dynamic_analysis false (saq3.3.4).
+	DeclinedByRun int
+}
+
+// renderDeclinedByRun is the render pass's outcome in a run whose configuration set
+// use_dynamic_analysis false (saq3.3.4). No browser is started. The pages the pass would have rendered
+// are counted as declined, so the stored DOM claims read "not looked at, by the run's choice" rather
+// than "looked at and clean".
+func (s *ActiveScanner) renderDeclinedByRun() StoredDOMRenderOutcome {
+	var out StoredDOMRenderOutcome
+	if s != nil && s.stored != nil && len(s.stored.Tokens()) > 0 {
+		targets, noScript := s.storedRenderTargets()
+		out.Candidates = len(targets) + noScript
+		out.NoScript = noScript
+		out.DeclinedByRun = len(targets)
+	}
+	out.Declined = "use_dynamic_analysis is false in this run's configuration, so no page was rendered"
+	return out
 }
 
 // Summary renders the outcome in the vocabulary a report can print.

@@ -319,7 +319,7 @@ func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string, dom bool
 
 	byRow := map[string]*Finding{}
 	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
-	deferred, completion := scan.FinishScan(ctx)
+	deferred, completion := scan.FinishScan(ctx, DefaultAuditConfig())
 	if completion.RefetchError != "" {
 		t.Fatalf("the deferred phase could not re-fetch: %s", completion.RefetchError)
 	}
@@ -388,7 +388,7 @@ func (rt *runtimeTarget) storedDomBatch(t *testing.T) {
 			return
 		}
 
-		deferred, completion := scan.FinishScan(ctx)
+		deferred, completion := scan.FinishScan(ctx, DefaultAuditConfig())
 		if completion.RefetchError != "" {
 			t.Errorf("the stored-DOM deferred phase could not re-fetch: %s", completion.RefetchError)
 			return
