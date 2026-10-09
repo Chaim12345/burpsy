@@ -12,6 +12,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/dash"
+	"github.com/burpsy-go/burpsy/internal/scanner"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
 )
 
 const reviewDoc = `{
@@ -98,10 +104,23 @@ func TestTheReviewStepShapesWhatAnAPIScanSends(t *testing.T) {
 	}
 }
 
+// The audit runs one corpus check per query insertion point that appends a marker, with a real
+// sender, so the test sees the attack on the wire: q (Dynamic) must be attacked, limit (Fixed) never.
+// Without an attacking check the assertion would hold vacuously, which is why q's attack is required.
 func TestAFixedParameterIsNotAttackedByTheAudit(t *testing.T) {
 	target, hits := reviewTarget(t)
 	s := newTestServer()
 	s.scope.AddInclude("127.0.0.1")
+	check, err := bcheck.Parse("metadata:\n  language: v2-beta\n  name: \"append marker\"\n" +
+		"given query insertion point then\n  send payload:\n    appending: \"VULN\"\n" +
+		"  if \"VULN\" in {latest.response.body} then\n    report issue:\n      severity: high\n      confidence: certain\n  end if\n")
+	if err != nil {
+		t.Fatalf("check did not parse: %v", err)
+	}
+	s = s.WithScanner(scanner.NewActiveScanner(s.store, zap.NewNop()).
+		WithScope(s.scope).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithCorpusChecks([]*bcheck.Check{check}))
 	doc := fmt.Sprintf(reviewDoc, target.URL)
 	apiScan(t, s, map[string]any{
 		"definition":        doc,
@@ -109,20 +128,29 @@ func TestAFixedParameterIsNotAttackedByTheAudit(t *testing.T) {
 		"parameters":        []map[string]any{{"in": "query", "name": "limit", "value": "5", "mode": "fixed"}},
 	})
 	waitForTaskKind(t, s, "api-scan")
-	waitForTaskKind(t, s, "audit")
-	limitAttacked, qAttacked := false, false
+	waitForTaskKind(t, s, string(dash.KindAuditSession))
+	// Only requests to the reviewed endpoint carry its parameters; the built-in per-host checks probe
+	// other paths (/openapi.json and the like) and say nothing about limit or q.
+	var onPets []reviewHit
 	for _, h := range hits() {
-		if !strings.Contains(h.uri, "limit=5") {
-			limitAttacked = true
+		if strings.HasPrefix(h.uri, "/pets?") || h.uri == "/pets" {
+			onPets = append(onPets, h)
 		}
-		if strings.Contains(h.uri, "q=") && !strings.Contains(h.uri, "q=cat&") && !strings.HasSuffix(h.uri, "q=cat") {
+	}
+	var limitAttacked []reviewHit
+	qAttacked := false
+	for _, h := range onPets {
+		if !strings.HasPrefix(h.uri, "/pets?limit=5&") {
+			limitAttacked = append(limitAttacked, h)
+		}
+		if strings.Contains(h.uri, "VULN") && strings.Contains(h.uri, "q=cat") {
 			qAttacked = true
 		}
 	}
-	if limitAttacked {
-		t.Error("the audit sent a request with limit changed although the review fixed it")
+	if len(limitAttacked) > 0 {
+		t.Errorf("the audit sent %d request(s) with limit changed although the review fixed it: %+v", len(limitAttacked), limitAttacked)
 	}
 	if !qAttacked {
-		t.Skip("the audit attacked neither parameter, so the fixed-parameter assertion proves nothing here")
+		t.Errorf("the audit never attacked q, so the fixed-parameter assertion proves nothing: %+v", onPets)
 	}
 }
