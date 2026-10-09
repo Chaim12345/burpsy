@@ -37,6 +37,7 @@ import { kettleHeaderEdit, type H2Field } from "../lib/kettle";
 import { useApp } from "../lib/store";
 import { cn } from "../lib/cn";
 import { Badge, Button, IconButton, Input } from "./primitives";
+import { confirmDialog } from "../lib/dialogs";
 
 /* ==== the model ============================================================
  *
@@ -1297,9 +1298,16 @@ export function Inspector({
     });
 
     if (!response && kettled && kettle) {
-      return kettledSections(list, kettled, kettle, editable, formatBytes(bodyBytes), setAnnouncement, () => {
+      return kettledSections(list, kettled, kettle, editable, formatBytes(bodyBytes), setAnnouncement, async () => {
         // Burp's downgrade warning: the HTTP/2-only edits are lost, and the request is normalised.
-        if (!window.confirm("Downgrade this kettled request to HTTP/1? Burp calls this normalising: every change HTTP/1 cannot carry — CR/LF in a header, an uppercase name, extra pseudo-headers — is discarded.")) return;
+        const ok = await confirmDialog({
+          title: "Downgrade this kettled request to HTTP/1?",
+          description:
+            "Burp calls this normalising: every change HTTP/1 cannot carry — CR/LF in a header, an uppercase name, extra pseudo-headers — is discarded.",
+          confirmLabel: "Downgrade",
+          danger: true,
+        });
+        if (!ok) return;
         kettle.onFields(null);
         commit((current) => setStartLineToken(current, 2, "HTTP/1.1"), "Downgraded to HTTP/1.1; the kettled edits were discarded");
       });
