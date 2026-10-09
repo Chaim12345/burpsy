@@ -1678,3 +1678,53 @@ backend, no licence, no PortSwigger account and no credit meter, so a capability
   a different and much larger design.
 - **Near-term substitute:** export a collection to a file and import it elsewhere —
   **burpsy-react-ui-0ghj**. Today `pages/organizer.tsx` exports CSV only, which loses the message bytes.
+
+## Decoder digests: 23 of Burp's 62 DigestAlgorithm values (2026-10, burpsy-react-ui-7tgt)
+
+Burp's `CryptoUtils.generateDigest` takes the 62-constant `DigestAlgorithm` enum
+(`/root/burp-re/out/burp/api/montoya/utilities/DigestAlgorithm.java`, Montoya 2026.7). burpsy's hash
+step (`internal/tools/digest.go`, one table; the UI list is test-pinned to it) computes the 23 that the
+Go standard library and `golang.org/x/crypto` provide: MD4, MD5, SHA-1, RIPEMD-160, SHA-224/256/384/512,
+SHA-512/224, SHA-512/256, SHA3-224/256/384/512, Keccak-256/512, SHAKE128-256, SHAKE256-512,
+BLAKE2b-160/256/384/512 and BLAKE2s-256 — plus eight HMACs (MD5, SHA-1, SHA-224/256/384/512,
+SHA3-256/512), which Burp exposes through its Decoder rather than this enum.
+
+**Not offered (39), by name:** BLAKE2S_128, BLAKE2S_160, BLAKE2S_224, BLAKE3_256, DSTU7564_256/384/512,
+GOST3411, GOST3411_2012_256/512, HARAKA_256/512, KECCAK_224/288/384, MD2, PARALLEL_HASH_128_256,
+PARALLEL_HASH_256_512, RIPEMD_128/256/320, SKEIN (all 13 variants), SM3, TIGER, TUPLEHASH_128_256,
+TUPLEHASH_256_512, WHIRLPOOL.
+
+**Why:** Burp gets these from BouncyCastle. None is in Go's standard library or `x/crypto` (BLAKE2s
+there exposes only the 256-bit and the keyed 128-bit form; legacy Keccak only 256/512), so each would be a
+new third-party dependency in a security tool, for algorithms that rarely appear in a web engagement.
+The route refuses every one by name (400 listing the supported set), never by falling back to SHA-256.
+**Re-open:** a concrete engagement need for a specific algorithm, and a vetted pure-Go implementation.
+
+## Sequencer per-position FIPS: Burp's pass rules, computed significance (2026-10, burpsy-react-ui-c0k3)
+
+The FIPS battery now also runs at each bit position across tokens, as Burp's bit-level analysis does
+(`internal/sequencer/fips_position.go`, report field `fips_positions`). The pass rules are Burp
+2026.7.1's `Zpu3`, copied exactly:
+- At N = 20,000 the FIPS 140-2 intervals apply.
+- At other N a position passes when its significance exceeds 1e-4 (monobit, poker), 1.8e-5 (runs) or
+  2.98e-4 (long run).
+- A longest run under 12 always passes.
+- The sample size is limited to Burp's range, 100 to 20,000 tokens.
+
+The significance is **computed exactly at N**, not read from Burp's tables (`Zw_0`, `Zcmb` →
+`Zx79`/`Zb74`/`Zgrh`/`Zxh7`/`Zi0_`, `Zphy`) and interpolated across their 28 sample sizes as
+`Zc6a.ZH` does. Where the two differ, it is deliberate:
+
+- **Monobit.** The tables equal the exact two-sided binomial tail to 8 digits, but they shift by one
+  key at and above the centre. burpsy uses the symmetric exact value.
+- **Runs counting.** Burp's counter pools zero-runs and one-runs in one histogram. It restarts the run
+  length at 0 instead of 1 on a change, never counts the final run, and scores the "6 or more" bucket
+  with its exactly-5 table. burpsy counts each symbol separately, as FIPS specifies, and scores each
+  of the twelve cells against its exact distribution, with a dynamic programme checked against brute
+  enumeration. Burp's run tables do match that distribution, verified on `Zxh7` and `Zi0_` at N = 100.
+  A position's runs significance is its least likely cell.
+- **Long run.** burpsy scores the exact upper tail P(longest ≥ l). Burp's `Zphy` rows do not match the
+  exact distribution; they sit roughly one sample-size row off. They are also two-sided, which is why
+  Burp needs the "under 12 always passes" rule. That rule is kept, but it never binds under a
+  one-sided tail at N ≥ 100.
+- **Poker.** Identical. Both use the two-sided chi-square with 15 df, floored at 1e-6 (`Zp2s.ZK`).

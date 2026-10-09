@@ -6,6 +6,9 @@ import { copyToClipboard, downloadText, formatBytes, formatDuration, relativeTim
 import { useClearToolLog, useDebounced, useMessage } from "../lib/data";
 import { useExchange } from "../lib/data.observe";
 import { useSetToolLogCapture, useSetToolLogComment, useToolLogView } from "../lib/data.workbench";
+import { useHistoryExtractors, useHistoryExtractValues, type ExtractValues } from "../lib/data.extractors";
+import { extractorColumnId, extractorSignature } from "../lib/extractors";
+import { ExtractorCell } from "../ui/extractor-manager";
 import { useApp } from "../lib/store";
 import { HIGHLIGHTS, HIGHLIGHT_TONE } from "../lib/types";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
@@ -154,8 +157,23 @@ export function LoggerPage(): JSX.Element {
  const [capCapacity, setCapCapacity] = useState("");
  const [columnVisibility, setColumnVisibility] = useStoredColumnVisibility("logger.columns");
 
+ // Burp Logger's view filter (filter/view.html), judged by the server over rows already recorded and
+ // reversible — unlike the Capture row below, which decides what is recorded at all (uvpb).
+ const [viewScopeOnly, setViewScopeOnly] = useState(false);
+ const [viewHasResponse, setViewHasResponse] = useState(false);
+ const [viewParameterized, setViewParameterized] = useState(false);
+ const [viewMime, setViewMime] = useState("");
+ const [viewExt, setViewExt] = useState("");
  const debouncedTerm = useDebounced(term, 260);
- const { data, error, isFetching, refetch } = useToolLogView(tool, debouncedTerm);
+ const debouncedMime = useDebounced(viewMime, 260);
+ const debouncedExt = useDebounced(viewExt, 260);
+ const { data, error, isFetching, refetch } = useToolLogView(tool, debouncedTerm, 1_000, {
+  scopeOnly: viewScopeOnly,
+  hasResponse: viewHasResponse,
+  parameterized: viewParameterized,
+  mime: debouncedMime,
+  ext: debouncedExt,
+ });
  const clearLog = useClearToolLog();
  const setCapture = useSetToolLogCapture();
  const setAnnotation = useSetToolLogComment();
@@ -271,6 +289,30 @@ export function LoggerPage(): JSX.Element {
    },
   );
 
+ // Custom extractor columns (n3sy): the SAME saved definitions HTTP history and Intruder use, run
+ // against each row's linked exchange — no second extractor model. A row with no linked exchange (a
+ // transport failure, a whole-run row) has no response to read and shows a dash.
+ const extractorsQuery = useHistoryExtractors();
+ const savedExtractors = useMemo(() => extractorsQuery.data?.extractors ?? [], [extractorsQuery.data]);
+ const extractorSig = useMemo(() => extractorSignature(savedExtractors), [savedExtractors]);
+ const extractIdsKey = useMemo(
+  () =>
+   [...new Set(filteredRows.filter((row) => row.exchange !== null && row.response_len !== null).map((row) => row.exchange as number))]
+    .sort((a, b) => a - b)
+    .join(","),
+  [filteredRows],
+ );
+ const debouncedExtractIdsKey = useDebounced(extractIdsKey, 300);
+ const extractIds = useMemo(
+  () => (debouncedExtractIdsKey === "" ? [] : debouncedExtractIdsKey.split(",").map(Number)),
+  [debouncedExtractIdsKey],
+ );
+ const extractValues = useHistoryExtractValues(extractIds, extractorSig, savedExtractors.length > 0);
+ const extractValuesMap: ExtractValues | undefined = extractValues.data;
+ const extractLoading =
+  savedExtractors.length > 0 && extractIds.length > 0 && (extractValues.isPending || extractValues.isPlaceholderData);
+ const extractFailed = extractValues.isError;
+
  const columns = useMemo<Column<ToolLogRow>[]>(
   () => [
    {
@@ -361,8 +403,32 @@ export function LoggerPage(): JSX.Element {
      return value ? <span title={value}>{value}</span> : <span className="cell-dim">—</span>;
     },
    },
+   ...savedExtractors.map(
+    (extractor): Column<ToolLogRow> => ({
+     id: extractorColumnId(extractor.name),
+     header: extractor.name,
+     size: 150,
+     sortUndefined: "last",
+     accessorFn: (row: ToolLogRow) => {
+      const value = row.exchange === null ? undefined : extractValuesMap?.[String(row.exchange)]?.[extractor.name];
+      return value == null ? undefined : value;
+     },
+     cell: (info) => {
+      const row = info.row.original;
+      return (
+       <ExtractorCell
+        value={row.exchange === null ? undefined : extractValuesMap?.[String(row.exchange)]?.[extractor.name]}
+        hasResponse={row.exchange !== null && row.response_len !== null}
+        loading={extractLoading}
+        failed={extractFailed}
+        noResponseTitle="This log row has no stored exchange to read"
+       />
+      );
+     },
+    }),
+   ),
   ],
-  [],
+  [savedExtractors, extractValuesMap, extractLoading, extractFailed],
  );
 
  const detail = selected ? (
@@ -527,6 +593,27 @@ export function LoggerPage(): JSX.Element {
               only items that have been annotated, either by a comment or highlight"). Here that
               is one toggle over both fields, since the two are one act of attention. */}
      <Checkbox checked={annotatedOnly} onCheckedChange={setAnnotatedOnly} label="Annotated only" />
+     {/* Burp Logger's view filter axes (uvpb) — reversible, judged by the server against the scope as
+         it is now. Not to be confused with the Capture row below, which decides what is recorded. */}
+     <Checkbox checked={viewScopeOnly} onCheckedChange={setViewScopeOnly} label="In-scope only" />
+     <Checkbox checked={viewHasResponse} onCheckedChange={setViewHasResponse} label="Hide items without responses" />
+     <Checkbox checked={viewParameterized} onCheckedChange={setViewParameterized} label="Parameterized only" />
+     <Input
+      aria-label="Show only these MIME types"
+      title="Show only these response MIME types, comma-separated (e.g. text/html,application/json)"
+      value={viewMime}
+      onChange={(event) => setViewMime(event.target.value)}
+      placeholder="MIME types"
+      style={{ maxWidth: "var(--w-sm)" }}
+     />
+     <Input
+      aria-label="Show only these file extensions"
+      title="Show only these file extensions, comma-separated (e.g. js,json)"
+      value={viewExt}
+      onChange={(event) => setViewExt(event.target.value)}
+      placeholder="extensions"
+      style={{ maxWidth: "var(--w-xs)" }}
+     />
     </Toolbar>
     {/* Capture axis — the second, destructive axis Burp Logger keeps separate
             from display. Each checkbox controls whether that tool's requests are

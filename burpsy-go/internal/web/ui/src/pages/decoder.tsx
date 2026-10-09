@@ -8,6 +8,9 @@ import {
   DECODE_LAYERS,
   ENCODE_ENCODINGS,
   HASH_ALGORITHMS,
+  HASH_KEY_ENCODINGS,
+  HASH_OUTPUTS,
+  hashNeedsKey,
   newTransformStep,
   useTransformPipeline,
 } from "../lib/data.workbench";
@@ -16,7 +19,7 @@ import { resolveSelection, splitInput } from "../lib/decoder-span";
 import type { TransformKind, TransformResult, TransformStep } from "../lib/types.workbench";
 import { HttpEditor } from "../ui/editor";
 import { PageHeader, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Select, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, IconButton, Input, Select, Toolbar } from "../ui/primitives";
 
 const KIND_LABEL: Record<TransformKind, string> = { decode: "Decode", encode: "Encode", hash: "Hash" };
 
@@ -104,6 +107,46 @@ function StepRow({
           </option>
         ))}
       </Select>
+      {step.kind === "hash" && hashNeedsKey(step.value) ? (
+        <>
+          <Input
+            aria-label={`Step ${index + 1} HMAC key`}
+            title="HMAC key — required by the hmac-* algorithms"
+            placeholder="HMAC key"
+            value={step.key ?? ""}
+            onChange={(event) => onChange({ key: event.target.value })}
+            style={{ maxWidth: "var(--w-sm)" }}
+          />
+          <Select
+            aria-label={`Step ${index + 1} key encoding`}
+            title="How the key is written"
+            value={step.keyEncoding ?? "utf8"}
+            onChange={(event) => onChange({ keyEncoding: event.target.value })}
+            style={{ maxWidth: "var(--w-xs)" }}
+          >
+            {HASH_KEY_ENCODINGS.map((value) => (
+              <option key={value} value={value}>
+                key: {value}
+              </option>
+            ))}
+          </Select>
+        </>
+      ) : null}
+      {step.kind === "hash" ? (
+        <Select
+          aria-label={`Step ${index + 1} digest output`}
+          title="How the digest is written — base64url is unpadded, the JWS signature form"
+          value={step.output ?? "hex"}
+          onChange={(event) => onChange({ output: event.target.value })}
+          style={{ maxWidth: "var(--w-xs)" }}
+        >
+          {HASH_OUTPUTS.map((value) => (
+            <option key={value} value={value}>
+              out: {value}
+            </option>
+          ))}
+        </Select>
+      ) : null}
       {step.kind === "decode" && step.value === "auto" ? (
         <Checkbox
           checked={step.guess}
