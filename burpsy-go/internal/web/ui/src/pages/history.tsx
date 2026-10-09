@@ -13,6 +13,7 @@ import { useApp } from "../lib/store";
 import { HIGHLIGHTS, type Exchange } from "../lib/types";
 import type { ScopeRuleView, ScopeView } from "../lib/types.policy";
 import { HttpEditor } from "../ui/editor";
+import { decodedMarker, messageReading, type MessageReading } from "../lib/message-decoded";
 import { availableVariants, VariantPicker, variantMessageId, type MessageVariant } from "../ui/variant-picker";
 import { Inspector } from "../ui/inspector";
 import { useCommandHandler } from "../lib/commands";
@@ -1033,6 +1034,15 @@ export function HistoryPage(): JSX.Element {
  const request = useMessage(requestId);
  const response = useMessage(responseId);
 
+ // A gzip/deflate message reads decoded by default (burpsy-react-ui-qpfy) — the captured bytes of a
+ // compressed body are unreadable — with a per-pane switch back to the bytes as captured. The
+ // decoded text is for reading only: the row's send actions fetch the stored message by id, and
+ // the request pane withholds its byte-offset affordance (audit selection) while decoded.
+ const [requestRaw, setRequestRaw] = useState(false);
+ const [responseRaw, setResponseRaw] = useState(false);
+ const requestReading = request.data ? messageReading(request.data, requestRaw) : undefined;
+ const responseReading = response.data ? messageReading(response.data, responseRaw) : undefined;
+
  // The two panes, built once and placed by whichever layout is active, so the readings and the
  // file names cannot drift between the combined and split arrangements.
  //
@@ -1046,15 +1056,53 @@ export function HistoryPage(): JSX.Element {
   value: MessageVariant,
   onChange: (next: MessageVariant) => void,
   editor: JSX.Element,
+  decode?: JSX.Element | null,
  ): JSX.Element =>
-  options.length < 2 ? (
+  options.length < 2 && !decode ? (
    editor
   ) : (
    <div className="reading-pane">
-    <VariantPicker label={label} options={options} value={value} onChange={onChange} />
+    {options.length < 2 ? null : <VariantPicker label={label} options={options} value={value} onChange={onChange} />}
+    {decode}
     {editor}
    </div>
   );
+
+ // The strip over a pane whose message declared a Content-Encoding (burpsy-react-ui-qpfy). Nothing
+ // for a message with no encoding, so the common case keeps the editor grid's DOM as it was. A
+ // decoded pane says so in words — the head above the body still reads Content-Encoding: gzip and
+ // a compressed Content-Length, and without the marker the pane would look like the wire.
+ const decodeStrip = (label: string, reading: MessageReading | undefined, preferRaw: boolean, setPreferRaw: (next: boolean) => void): JSX.Element | null => {
+  if (!reading || (!reading.encoding && !reading.decodeError && !reading.canDecode)) return null;
+  if (reading.decodeError) {
+   return (
+    <div className="decode-strip" role="status">
+     <Badge tone="warn">not decoded</Badge>
+     <span className="cell-dim">
+      {/* The encoding is named unless the server's reason already names it ("no decoder for
+          Content-Encoding \"br\""), so the sentence does not say it twice. */}
+      {label} body{reading.encoding && !reading.decodeError.includes(reading.encoding) ? ` (Content-Encoding: ${reading.encoding})` : ""} could not be
+      decoded: {reading.decodeError}. Showing the bytes as captured.
+     </span>
+    </div>
+   );
+  }
+  if (!reading.canDecode) return null;
+  return (
+   <div className="decode-strip" role="status">
+    {reading.decoded ? (
+     <Badge tone="info" title="The body is shown decompressed; the headers are as captured. Sends and resends always use the captured bytes.">
+      {decodedMarker(reading.encoding)}
+     </Badge>
+    ) : (
+     <Badge tone="neutral">raw bytes as captured (Content-Encoding: {reading.encoding ?? "unknown"})</Badge>
+    )}
+    <Button variant="outline" size="small" onClick={() => setPreferRaw(!preferRaw)}>
+     {reading.decoded ? "Show captured bytes" : "Show decoded body"}
+    </Button>
+   </div>
+  );
+ };
 
  // Gated on a selection because the panes are built on every render while the detail block renders
  // only when something is selected, and actions.menu wants a row.
@@ -1075,21 +1123,24 @@ export function HistoryPage(): JSX.Element {
     value={
      selected.request === null
       ? "No request was captured for this exchange — it is a blind tunnel, relayed without being read."
-      : (request.data?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
+      : (requestReading?.text ?? (request.isFetching ? "Loading request bytes…" : "No request bytes captured."))
     }
-    filename={`exchange-${selected.id}-request-${requestVariant}.txt`}
+    filename={`exchange-${selected.id}-request-${requestVariant}${requestReading?.decoded ? "-decoded" : ""}.txt`}
     // The body's real bytes, so a binary request (a gRPC/protobuf call) decodes in the Protobuf view
     // rather than from `text`, which replaces non-UTF-8 bytes (burpsy-react-ui-3x2g).
     bodyBase64={request.data?.body_base64}
     menuGroups={actions.menu(selected)}
     // Actively audit a selected byte range (burpsy-react-ui-c6oq): only on a request that
     // exists (not a blind tunnel's null) — auditing a response is not a thing the
-    // scanner's insertion-point model can even express.
-    auditSelection={request.data ? (span) => void actions.auditSelection(selected, [span]) : undefined}
+    // scanner's insertion-point model can even express. Withheld while the pane shows the decoded
+    // body (qpfy): the span would be an offset into the decompressed bytes, and the scanner would
+    // inject at that offset into the compressed request that is actually sent.
+    auditSelection={request.data && !requestReading?.decoded ? (span) => void actions.auditSelection(selected, [span]) : undefined}
     // The stored-message id behind this reading, so a loaded plugin's editor tab can render
     // from the bytes the operator is looking at (burpsy-react-ui-ww5).
     messageId={requestId ?? undefined}
    />,
+   decodeStrip("Request", requestReading, requestRaw, setRequestRaw),
   )
  ) : null;
  const responsePane = selected ? (
@@ -1104,16 +1155,17 @@ export function HistoryPage(): JSX.Element {
     value={
      selected.response === null
       ? "No response was captured for this exchange."
-      : (response.data?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
+      : (responseReading?.text ?? (response.isFetching ? "Loading response bytes…" : "No response bytes captured."))
     }
     bodyBase64={response.data?.body_base64}
     requestPath={selected.path}
-    filename={`exchange-${selected.id}-response-${responseVariant}.txt`}
+    filename={`exchange-${selected.id}-response-${responseVariant}${responseReading?.decoded ? "-decoded" : ""}.txt`}
     menuGroups={actions.menu(selected)}
     // Same rule as the request pane: the response message id, undefined when this exchange
     // has no response to derive from.
     messageId={selected.response === null ? undefined : (responseId ?? undefined)}
    />,
+   decodeStrip("Response", responseReading, responseRaw, setResponseRaw),
   )
  ) : null;
 
@@ -1567,6 +1619,8 @@ export function HistoryPage(): JSX.Element {
     )}
     {inspector ? (
      <Inspector
+      // The captured bytes, never the decoded rendering (qpfy): the Inspector's selection and
+      // attribute views address positions in the message as it goes on the wire.
       raw={request.data?.text ?? ""}
       label="Inspector · request"
       readOnlyNote="This request has already been sent, so it is read-only here. Send it to Repeater to change it and try again."

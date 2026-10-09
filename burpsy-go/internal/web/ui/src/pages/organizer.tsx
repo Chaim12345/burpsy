@@ -19,10 +19,11 @@ import {
  type WorkflowStatus,
 } from "../lib/types";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, NeedsValueButton, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea, Toolbar } from "../ui/primitives";
 import { HttpEditor } from "../ui/editor";
 import { MenuRow, SimpleTable } from "../ui/table";
 import { HIGHLIGHT_ICONS } from "../ui/highlight-icons";
+import { ORGANIZER_HEADERS, organizerRowCells, type OrganizerColumnKey } from "../lib/organizer-columns";
 import type { MenuGroup } from "../ui/menu";
 interface Draft {
  title: string;
@@ -392,7 +393,8 @@ export function OrganizerPage(): JSX.Element {
   const exchange = Number(exchangeId.trim());
   // `< 0`, not `<= 0`. Exchange ids count from zero, so exchange 0 is the first request captured in
   // a session — the one most likely to be reached for first, and the one this guard used to refuse.
-  if (!Number.isInteger(exchange) || exchange < 0) {
+  // An empty box is Number("") === 0, so Enter in it used to save exchange 0 (z2l5).
+  if (!exchangeId.trim() || !Number.isInteger(exchange) || exchange < 0) {
    toast.error("Enter an exchange id — a whole number, counting from 0");
    return;
   }
@@ -746,10 +748,16 @@ export function OrganizerPage(): JSX.Element {
        }}
        style={{ maxWidth: "var(--w-sm)" }}
       />
-      <Button variant="outline" size="small" onClick={add} disabled={!exchangeId.trim() || mutations.add.isPending}>
+      <NeedsValueButton
+       variant="outline"
+       size="small"
+       onClick={add}
+       disabled={mutations.add.isPending}
+       missing={exchangeId.trim() ? null : "needs an exchange id"}
+      >
        <Plus size={13} />
        Save exchange
-      </Button>
+      </NeedsValueButton>
      </div>
     </Toolbar>
 
@@ -1015,120 +1023,128 @@ export function OrganizerPage(): JSX.Element {
       detail={`All ${items.length} are still here. Widen or clear the filters to see them.`}
      />
     ) : (
-     <SimpleTable headers={["#", "Exchange", "Tool", "Request", "Status", "Workflow", "Type", "Title", "Highlight", "Note", ""]}>
-      {visible.map((item) => (
-       <MenuRow
-        docTopic="organizer"
-        key={item.id}
-        groups={menuFor(item)}
-        className={item.id === selectedId ? "data-row clickable selected-row" : "data-row clickable"}
-        onClick={() => select(item)}
-        // Right-clicking a row should act on that row, matching VirtualTable and every desktop tool.
-        onContextMenu={() => select(item)}
-       >
-        <td>
-         <span className="cell-num">{item.id}</span>
-        </td>
-        <td>
-         <span className="cell-num">#{item.exchange}</span>
-        </td>
-        {/* Burp's Organizer "Tool" column (burpsy-react-ui-ldfk): "The Burp tool that originally
-            generated the request. This always reflects the request's origin, even if the message
-            is later sent from Burp Logger or from within Organizer." A standalone cell rather than
-            folded into the three-column resolved/unresolved block below: it comes from
-            core.Exchange.Source the same way workflow_status comes from the item itself, not from
-            re-deriving anything the block below already handles. */}
-        <td>
-         {item.tool ? (
-          <Badge tone="neutral">{item.tool.charAt(0).toUpperCase() + item.tool.slice(1)}</Badge>
-         ) : (
-          <span className="cell-dim">—</span>
-         )}
-        </td>
-        {/* The three resolved columns. An unresolved row says so once, spanning them, rather
-                    than showing three em-dashes that would read as "no status, no type, no host" —
-                    which is a claim about the exchange instead of an admission about the store. */}
-        {item.resolved ? (
-         <>
-          <td>
-           <span className="cell-dim" title={`${item.method ?? ""} ${item.host ?? ""}${item.path ?? ""}`}>
-            {item.method ? `${item.method} ` : ""}
-            {item.path || "/"}
-           </span>
-           {item.in_scope === false ? (
-            <Badge tone="neutral" title="Outside the current engagement scope">
-             out of scope
-            </Badge>
-           ) : null}
-          </td>
-          <td>
-           {item.status !== undefined ? (
-            <Badge tone={statusTone(item.status)}>{item.status}</Badge>
-           ) : (
-            <span className="cell-dim" title="No response was recorded for this exchange">
-             no response
+     <SimpleTable headers={ORGANIZER_HEADERS}>
+      {visible.map((item) => {
+       // One cell per column of ORGANIZER_COLUMNS, in header order (burpsy-react-ui-tni8). The
+       // layout lives in lib/organizer-columns.ts and is unit-tested there, so this switch only
+       // says what each column shows and can no longer put a cell under the wrong header.
+       const cell = (key: OrganizerColumnKey): JSX.Element => {
+        switch (key) {
+         case "id":
+          return <span className="cell-num">{item.id}</span>;
+         case "exchange":
+          return <span className="cell-num">#{item.exchange}</span>;
+         // Burp's Organizer "Tool" column (burpsy-react-ui-ldfk): "The Burp tool that originally
+         // generated the request. This always reflects the request's origin, even if the message
+         // is later sent from Burp Logger or from within Organizer." It comes from
+         // core.Exchange.Source the same way workflow_status comes from the item itself.
+         case "tool":
+          return item.tool ? (
+           <Badge tone="neutral">{item.tool.charAt(0).toUpperCase() + item.tool.slice(1)}</Badge>
+          ) : (
+           <span className="cell-dim">—</span>
+          );
+         case "request":
+          return (
+           <>
+            <span className="cell-dim" title={`${item.method ?? ""} ${item.host ?? ""}${item.path ?? ""}`}>
+             {item.method ? `${item.method} ` : ""}
+             {item.path || "/"}
             </span>
-           )}
-          </td>
-          <td>
-           <span className="cell-dim">
-            {!item.has_response ? "—" : item.mime && item.mime !== "" ? item.mime : "none declared"}
+            {item.in_scope === false ? (
+             <Badge tone="neutral" title="Outside the current engagement scope">
+              out of scope
+             </Badge>
+            ) : null}
+           </>
+          );
+         case "status":
+          return item.status !== undefined ? (
+           <Badge tone={statusTone(item.status)}>{item.status}</Badge>
+          ) : (
+           <span className="cell-dim" title="No response was recorded for this exchange">
+            no response
            </span>
-          </td>
-         </>
-        ) : (
-         <td colSpan={4}>
-          <Badge tone="warn" title="The exchange is no longer in the traffic store; the note survives it">
-           exchange no longer retained
-          </Badge>
-         </td>
-        )}
-        {/* The operator's decision, not the server's — the Status column above is the HTTP code.
-            Both are shown because both are answered per row, and merging them is exactly the
-            collision the wire avoids by naming this field workflow_status. */}
-        <td>
-         {(() => {
+          );
+         // The operator's decision, not the server's — the Status column is the HTTP code. Both
+         // are shown because both are answered per row, and merging them is exactly the collision
+         // the wire avoids by naming this field workflow_status. It is stored on the organizer
+         // item, so it is shown even when the exchange itself is no longer retained.
+         case "workflow": {
           const status = item.workflow_status ?? "new";
           return <Badge tone={WORKFLOW_STATUS_TONE[status]}>{WORKFLOW_STATUS_LABEL[status]}</Badge>;
-         })()}
-        </td>
-        <td>{item.title || <span className="cell-dim">untitled</span>}</td>
-        <td>
-         {item.highlight ? (
-          <Badge tone={HIGHLIGHT_TONE[item.highlight] ?? "neutral"}>{item.highlight}</Badge>
-         ) : (
-          <span className="cell-dim">—</span>
+         }
+         case "type":
+          // An unresolved row's MIME type is unknown, not "none declared": say nothing about it.
+          return (
+           <span className="cell-dim" title={item.resolved ? undefined : "Unknown: the exchange is no longer retained"}>
+            {!item.resolved || !item.has_response ? "—" : item.mime && item.mime !== "" ? item.mime : "none declared"}
+           </span>
+          );
+         case "title":
+          return item.title ? <>{item.title}</> : <span className="cell-dim">untitled</span>;
+         case "highlight":
+          return item.highlight ? (
+           <Badge tone={HIGHLIGHT_TONE[item.highlight] ?? "neutral"}>{item.highlight}</Badge>
+          ) : (
+           <span className="cell-dim">—</span>
+          );
+         case "note":
+          return <span className="cell-dim">{item.note ? item.note.split("\n")[0] : "no note"}</span>;
+         case "actions":
+          return (
+           <div className="chip-row">
+            <IconButton
+             label={`Open exchange #${item.exchange} in HTTP history`}
+             size="small"
+             onClick={(event) => {
+              event.stopPropagation();
+              openInHistory(item.exchange);
+             }}
+            >
+             <ExternalLink size={13} />
+            </IconButton>
+            <IconButton
+             label={`Remove item ${item.id}`}
+             size="small"
+             onClick={(event) => {
+              event.stopPropagation();
+              setConfirmDelete(item.id);
+             }}
+            >
+             <Trash2 size={13} />
+            </IconButton>
+           </div>
+          );
+        }
+       };
+       return (
+        <MenuRow
+         docTopic="organizer"
+         key={item.id}
+         groups={menuFor(item)}
+         className={item.id === selectedId ? "data-row clickable selected-row" : "data-row clickable"}
+         onClick={() => select(item)}
+         // Right-clicking a row should act on that row, matching VirtualTable and every desktop tool.
+         onContextMenu={() => select(item)}
+        >
+         {organizerRowCells(item.resolved).map((c) =>
+          c.key === "unresolved" ? (
+           // The request and status come from the stored exchange. An unresolved row says so
+           // once, spanning them, rather than showing em-dashes that would read as "no status,
+           // no host" — a claim about the exchange instead of an admission about the store.
+           <td key={c.key} colSpan={c.span}>
+            <Badge tone="warn" title="The exchange is no longer in the traffic store; the note survives it">
+             exchange no longer retained
+            </Badge>
+           </td>
+          ) : (
+           <td key={c.key}>{cell(c.key)}</td>
+          ),
          )}
-        </td>
-        <td>
-         <span className="cell-dim">{item.note ? item.note.split("\n")[0] : "no note"}</span>
-        </td>
-        <td>
-         <div className="chip-row">
-          <IconButton
-           label={`Open exchange #${item.exchange} in HTTP history`}
-           size="small"
-           onClick={(event) => {
-            event.stopPropagation();
-            openInHistory(item.exchange);
-           }}
-          >
-           <ExternalLink size={13} />
-          </IconButton>
-          <IconButton
-           label={`Remove item ${item.id}`}
-           size="small"
-           onClick={(event) => {
-            event.stopPropagation();
-            setConfirmDelete(item.id);
-           }}
-          >
-           <Trash2 size={13} />
-          </IconButton>
-         </div>
-        </td>
-       </MenuRow>
-      ))}
+        </MenuRow>
+       );
+      })}
      </SimpleTable>
     )}
    </Card>

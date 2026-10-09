@@ -1848,18 +1848,25 @@ export function IntruderPage(): JSX.Element {
   /** A hand-marked position (Burp's Add §): wrap the editor's selection in a marker pair. */
   const onAddManualSpan = useCallback(
     (span: { start: number; end: number; text: string }) => {
-      // The editor shows the request with the existing "§" pairs folded in, so its offsets are
-      // display offsets; map them back to raw request bytes before storing.
+      // The editor reports positions in the text it shows — the request with the existing "§"
+      // pairs folded in, CRLF counted as two (it maps CodeMirror's normalised document back
+      // itself). Map them to the wire bytes the server splices before storing (ngao).
+      const raw = baseMessage.data?.text;
+      if (raw == null) return;
       const current = useApp.getState().intruder.manualSpans;
-      const { start, end } = selectionToRawSpan(current, span.start, span.end);
-      const result = addManualSpan(current, start, end, span.text);
+      const mapped = selectionToRawSpan(raw, current, span.start, span.end, baseMessage.data?.len);
+      if (!mapped.ok) {
+        toast.error(mapped.reason);
+        return;
+      }
+      const result = addManualSpan(current, mapped.start, mapped.end, mapped.text);
       if (!result.ok) {
         toast.error(result.reason);
         return;
       }
       setManualSpans(result.spans);
     },
-    [setManualSpans],
+    [setManualSpans, baseMessage.data],
   );
 
   // Burp's Auto §: replace the hand marks with the scanner's default set — here, the standard

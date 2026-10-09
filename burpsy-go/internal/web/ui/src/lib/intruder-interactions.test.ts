@@ -28,14 +28,24 @@ describe("interactionsByAttempt", () => {
 
   test("a repeat of one callback counts once per attempt, and the same client counts for each attempt", () => {
     // Rows 0 and 1: one resolver reporting the same lookup twice for attempt 1. Row 2: that same
-    // resolver for attempt 2 — the server flags it collapsed (its key ignores the payload), but it
-    // is a distinct event for a distinct payload.
+    // resolver for attempt 2, marked collapsed here to show the log's flag is not consulted — it is
+    // a distinct event for a distinct payload.
     const got = interactionsByAttempt(
       [attempt(1, ["bsyaa.oast.test"]), attempt(2, ["bsybb.oast.test"])],
       [row(0, "bsyaa.oast.test"), row(1, "bsyaa.oast.test", true), row(2, "bsybb.oast.test", true)],
     );
     expect(got.get(1)?.length).toBe(1);
     expect(got.get(2)?.length).toBe(1);
+  });
+
+  test("one attempt carrying two addresses counts the same resolver once per address (vfqy)", () => {
+    // Rows 0 and 2: the same resolver, protocol and query type, for the attempt's two different
+    // addresses — two events. Rows 1 and 3: repeats of each, which collapse into their own address's.
+    const got = interactionsByAttempt(
+      [attempt(1, ["bsyaa.oast.test", "bsybb.oast.test"])],
+      [row(0, "bsyaa.oast.test"), row(1, "BSYAA.oast.test"), row(2, "bsybb.oast.test"), row(3, "bsybb.oast.test")],
+    );
+    expect(got.get(1)?.map((r) => r.id)).toEqual([0, 2]);
   });
 
   test("an attempt carrying one address in two positions counts each interaction once", () => {

@@ -260,6 +260,15 @@ export interface MessageView {
  /** The message's Content-Encoding, when it has one. body_base64 is the body with it undone, so a
   *  surface that resends head + body_base64 must not do so under an encoding head (3pco). */
  content_encoding?: string;
+ /** The message with its body's Content-Encoding (gzip, deflate) undone and the head left as it
+  *  was — a READ-ONLY rendering beside `text`, never instead of it (internal/web/api_types.go
+  *  MessageView.Decoded). `text` stays the exact capture; anything that resends, or computes byte
+  *  offsets into the message for a send path, must keep reading `text`. Absent when there was
+  *  nothing to decode or the decode failed — decode_error says which. */
+ decoded?: string;
+ /** Why a compressed message could not be decoded: no decoder for its Content-Encoding in this
+  *  build (br, zstd), a corrupt stream, a body over the cap, or chunk framing that did not parse. */
+ decode_error?: string;
 }
 
 export interface CoverageBreakdown {
@@ -313,9 +322,16 @@ export interface ActivityRow {
 }
 
 export interface ToolEvent {
+ /** The log's own dense id (dash.Event.ID). */
+ id?: number;
  kind: string;
+ /** "info" | "warn" | "error" — the three levels dash.Severity has; an unrecognised name the
+  *  server read back is already mapped to "warn" there. */
  severity: string;
  detail: string;
+ /** The registry task the event is about; absent (Go omitempty on 0) when it is about none, e.g.
+  *  a scope edit or live audit being switched on (internal/dash/events.go Event.TaskID). */
+ task_id?: number;
  at_ms: number;
 }
 

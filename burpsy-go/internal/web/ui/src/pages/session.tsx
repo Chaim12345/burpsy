@@ -19,7 +19,7 @@ import type {
 import { HttpEditor } from "../ui/editor";
 import { LoadingPanel, PageHeader, RefreshButton, SectionHeading } from "../ui/layout";
 import { DetailList } from "../ui/json";
-import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
+import { Badge, Button, Card, Checkbox, Empty, ErrorNotice, Field, IconButton, Input, Modal, NeedsValueButton, Select, Switch, Textarea, Toolbar } from "../ui/primitives";
 import { SimpleTable } from "../ui/table";
 import { actionPath, refusedActionPath, SCRIPT_LIMITS, SCRIPT_REFERENCE } from "../lib/session-script";
 
@@ -1631,10 +1631,15 @@ export function SessionPage(): JSX.Element {
          <RotateCcw size={13} />
          Revert
         </Button>
-        <Button size="small" onClick={onSave} disabled={!wired || saveRule.isPending}>
+        <NeedsValueButton
+         size="small"
+         onClick={onSave}
+         disabled={!wired || saveRule.isPending}
+         missing={!editing.name.trim() ? "needs a name" : editing.steps.length === 0 ? "needs a macro step" : null}
+        >
          <Save size={13} />
          {saveRule.isPending ? "Saving…" : "Save rule"}
-        </Button>
+        </NeedsValueButton>
         <Button
          variant="outline"
          size="small"

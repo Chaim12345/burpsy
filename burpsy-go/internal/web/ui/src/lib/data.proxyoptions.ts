@@ -14,7 +14,15 @@ export interface ProxyOptionsState {
     responses_considered: number;
     responses_modified: number;
     responses_unchanged: number;
+    /** Compressed responses no rule reached: unpacking was off, or it could not decode them. */
     skipped_compressed: number;
+    /** The subset of skipped_compressed where unpacking was ON and could not help: br, zstd, a chain
+     *  of encodings, or a body that failed to decompress (proxy.Counters.SkippedUnsupportedEncoding). */
+    skipped_unsupported_encoding: number;
+    /** Messages actually decompressed by unpack_compressed_requests / _responses — not messages seen
+     *  while the switch was on. */
+    unpacked_requests: number;
+    unpacked_responses: number;
     skipped_not_html: number;
     skipped_unframed: number;
     relayed_http2: number;

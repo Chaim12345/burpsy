@@ -65,12 +65,14 @@ var groupedTools = []groupSpec{
 		},
 	},
 	{
-		// Its own tool, not an op of `history`, although the manifest classes it riskRead with the
-		// other history reads: a DELETE is not a read, and folding it into a tool whose annotations
-		// say readOnlyHint would publish "clears the capture" as read-only (burpsy-react-ui-gf68).
+		// Its own tool, not an op of `history`: the manifest classes /api/history/rows riskDestructive
+		// and /api/history riskRead, and one tool never spans two classes. Before
+		// burpsy-react-ui-gf68 the removal was DELETE /api/history under the read's class, and this
+		// tool was split out only so readOnlyHint would not call "clears the capture" a read; it now
+		// also carries requiresConfirmation, because the gate behind it does.
 		name: "history_delete", group: groupRequests,
 		short: "Removes rows from proxy history (named ids, or every row). A view-level tombstone: ids stay stable and the bytes are not erased.",
-		ops:   []string{"DELETE /api/history"},
+		ops:   []string{"DELETE /api/history/rows"},
 	},
 	{
 		name: "history_annotate", group: groupRequests,

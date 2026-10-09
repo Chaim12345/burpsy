@@ -9,10 +9,13 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/netauth"
+	"github.com/burpsy-go/burpsy/internal/persist"
+	"go.uber.org/zap"
 )
 
 // Settings → Network: platform authentication and client TLS certificates.
@@ -306,7 +309,7 @@ func (s *Server) getNetworkClientCerts(w http.ResponseWriter, _ *http.Request) {
 	bindings := s.clientCertStore().View()
 	// A nil slice would marshal as `null`, which the browser then has to special-case
 	// before it can count it. Every list this API serves is an array.
-	failures := s.netAuthRestoreNotes
+	failures := s.netAuthNotes()
 	if failures == nil {
 		failures = []string{}
 	}
@@ -372,4 +375,116 @@ func (s *Server) clientCertViewFor(host string) netauth.ClientCertView {
 		}
 	}
 	return netauth.ClientCertView{Host: host}
+}
+
+// ---- project restore ----------------------------------------------------------------
+
+// RestoreNetworkAuth rebuilds the Settings → Network stores from the durable mirror,
+// returning them plus one note per row it could not rebuild.
+//
+// # Why a partial restore is the right answer, and why it must be reported
+//
+// Nothing here is fatal. A platform-authentication row written by a build that had a
+// scheme this one does not is dropped rather than coerced — coercing it to Basic would
+// send the operator's password to a host under a scheme they never chose — and a
+// client-certificate binding whose PKCS#12 file was deleted between sessions cannot be
+// rebuilt at all. Refusing to start over either would take the whole engagement down for
+// one stale row.
+//
+// But dropping them silently is the failure this codebase treats as a bug: the binding
+// was on the operator's panel yesterday, and a panel that lists it while no handshake
+// carries it is a partial result looking complete. So each failure comes back as a line
+// the panel shows, *and* goes to the log. Two sinks because the two readers are different
+// people at different times: the log is for afterwards, the panel is for the person who
+// can still fix it.
+//
+// A nil store — no -db — restores nothing and reports nothing, which is not a failure but
+// an empty first run.
+//
+// Exported, and in this package rather than cmd/burpsy where it started, because it has two
+// callers: startup, which builds the stores before the sender exists so the sender can be
+// constructed carrying them, and an in-console project switch (restoreNetAuth), which rebuilds
+// them from the incoming project's file. One function, so the two cannot disagree about what a
+// project's network authentication is (burpsy-react-ui-oava).
+func RestoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Credentials, *netauth.ClientCerts, []string) {
+	credentials := netauth.NewCredentials()
+	certs := netauth.NewClientCerts()
+	if store == nil {
+		return credentials, certs, nil
+	}
+
+	var notes []string
+	record := func(err error) {
+		notes = append(notes, err.Error())
+		logger.Warn("network authentication row could not be restored", zap.Error(err))
+	}
+
+	if rows, err := store.LoadPlatformAuth(); err != nil {
+		// A failed read of the whole table is one note, not none: the alternative is a panel
+		// that shows an empty rule list for a database that has rules in it.
+		record(fmt.Errorf("reading stored platform-authentication rules: %w", err))
+	} else {
+		restored, failures := netauth.RestoreCredentials(rows)
+		credentials = restored
+		for _, failure := range failures {
+			record(failure)
+		}
+	}
+
+	// Burp's "Prompt for credentials on platform authentication failure" (3xnt) survives a restart
+	// whether or not the rules themselves could be read.
+	credentials.SetPromptOnFailure(store.LoadPlatformAuthPrompt())
+
+	if rows, err := store.LoadClientCerts(); err != nil {
+		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))
+	} else {
+		restored, failures := netauth.RestoreClientCerts(rows)
+		certs = restored
+		for _, failure := range failures {
+			record(failure)
+		}
+	}
+	return credentials, certs, notes
+}
+
+// restoreNetAuth REPLACES the platform-authentication rules and client-certificate bindings with
+// the project's own, on an in-console project switch (burpsy-react-ui-oava).
+//
+// The recorded-login library has been replaced on a switch since xhtk; these two stores were not,
+// so project A's passwords and client identity stayed on the panel, stayed on the wire — the sender
+// and the proxy present them from the same pointers — and were written into project B's file by the
+// next save, since persistPlatformAuth and persistClientCerts mirror the whole list. Replace, not
+// merge, for the reason restoreRecordedLogins gives.
+//
+// Three things are reset, and each is a place the outgoing identity would otherwise survive:
+//   - the stores' contents, in place (netauth's ReplaceWith), because the sender and the proxy hold
+//     the pointers and a swapped-in store would reach the panel and nothing else;
+//   - what the platform-auth store learned under the old rules — Digest nonces, NTLM handshake
+//     state, recorded failures — which ReplaceWith drops with the rules;
+//   - the connections kept open for reuse, which completed their TLS handshake presenting the old
+//     client certificate and would carry the next send under it (Sender.DropKeptConnections, and
+//     Repeater's HTTP/2 session pool).
+//
+// What is NOT reset: a connection already in flight, and a browser tunnel the proxy is relaying
+// right now. Both finish on the handshake they made; the next dial presents the new bindings.
+//
+// Startup does not come through here: cmd/burpsy calls RestoreNetworkAuth before the sender is
+// built, so the sender can be constructed carrying the stores, and WithNetAuth attaches them.
+func (s *Server) restoreNetAuth(p *persist.Store) {
+	credentials, certs, notes := RestoreNetworkAuth(p, s.logger)
+	s.platformAuthStore().ReplaceWith(credentials)
+	s.clientCertStore().ReplaceWith(certs)
+	s.netAuthNotesMu.Lock()
+	s.netAuthRestoreNotes = notes
+	s.netAuthNotesMu.Unlock()
+	s.sender.DropKeptConnections()
+	s.repeaterH2Sessions().Close()
+}
+
+// netAuthNotes is the restore-failure list the client-certificate GET reports. Read under a lock
+// because a project switch rewrites it while the panel may be reading it.
+func (s *Server) netAuthNotes() []string {
+	s.netAuthNotesMu.Lock()
+	defer s.netAuthNotesMu.Unlock()
+	return s.netAuthRestoreNotes
 }

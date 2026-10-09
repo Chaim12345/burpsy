@@ -717,6 +717,10 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	var eh crawler.ErrorHandling
 	var configSpeculative bool
 	var configSpeculativeLinks int
+	// The form-submission optimization threshold (burpsy-react-ui-ddln) comes only from a named
+	// configuration — Burp exposes it nowhere else, so there is no request field to overlay it with —
+	// and a request naming none gets the engine's 0, which is off.
+	var configFormOptThreshold int
 	// A named configuration's crawler half is overlaid UNDER the explicit per-request limits, so a
 	// field the operator typed on this request still wins over the file they also named. The other
 	// order would make a configuration silently override the request that named it.
@@ -730,6 +734,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		eh = whole.ErrorHandling
 		configSpeculative = whole.RequestSpeculative
 		configSpeculativeLinks = whole.Limits.MaxSpeculativeLinks
+		configFormOptThreshold = whole.FormSubmissionOptimizationThreshold
 	}
 	// The error-handling keys overlay the named configuration the same way the limits do: a field the
 	// operator typed on this request wins over the file they also named (o0c5).
@@ -835,7 +840,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 		}
 		loginSess, loginRunner = sess, newBrowserLoginRunner(login, sess)
 	}
-	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh)
+	cfg := s.crawlConfig(req, seeds, limits, poolLimit, onFetch, configSpeculative, eh, configFormOptThreshold)
 	cfg.OnSend = live.onSend
 	if cfg.RenderWithOutcome != nil {
 		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
@@ -1424,7 +1429,7 @@ func availablePools(reg *pool.Registry) string {
 // that the session had been lost, and reported whatever the public pages yielded. A field missing
 // from a struct literal nobody inspects is invisible, and that is the same shape as the Params
 // field's own note about the wire dropping what the store kept.
-func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling) crawler.Config {
+func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.Limits, poolLimit *intruder.RateLimit, onFetch func(crawler.Fetch), speculative bool, eh crawler.ErrorHandling, formOptThreshold int) crawler.Config {
 	// The fetch hook for the crawl→audit bridge, built before the task is registered so a
 	// configuration mistake is a 400 the operator can fix, not a task that appears in the dashboard
 	// only to fail immediately. Declared here rather than at the call site so this method is the
@@ -1445,15 +1450,21 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		RetentionQuery:     req.RetentionQuery,
 		SubmitForms:        req.SubmitForms,
 		RequestSpeculative: speculative,
-		Limits:             limits,
-		ErrorHandling:      eh,
-		RequestWellKnown:   req.RequestWellKnown,
-		RequestsPerSecond:  req.RequestsPerSecond,
-		Pool:               poolLimit,
-		UserAgent:          req.UserAgent,
-		Headers:            req.Headers,
-		OnFetch:            onFetch,
-		Render:             nil,
+		// burpsy-react-ui-ddln. The parser has filled this since u0k3 and the crawler has enforced it
+		// since #328, but this literal never set it, so every operator-launched crawl ran with the
+		// bound off while the start reply — which lists only the keys that did NOT apply — implied a
+		// named configuration's threshold was in force. A parameter rather than a read of req so the
+		// one overlay in startCrawl stays the place every configuration-carried field is decided.
+		FormSubmissionOptimizationThreshold: formOptThreshold,
+		Limits:                              limits,
+		ErrorHandling:                       eh,
+		RequestWellKnown:                    req.RequestWellKnown,
+		RequestsPerSecond:                   req.RequestsPerSecond,
+		Pool:                                poolLimit,
+		UserAgent:                           req.UserAgent,
+		Headers:                             req.Headers,
+		OnFetch:                             onFetch,
+		Render:                              nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
 		Logger:            s.logger,

@@ -372,7 +372,7 @@ func main() {
 	// folded into one error. Restore has no shape for that, and widening its seven
 	// positional parameters to nine to add one that cannot use them would be worse than
 	// two explicit calls.
-	platformAuth, clientCerts, netAuthNotes := restoreNetworkAuth(persistStore, logger)
+	platformAuth, clientCerts, netAuthNotes := web.RestoreNetworkAuth(persistStore, logger)
 
 	// Passive scanning is opt-in via --bchecks, mirroring the Rust CLI. Without
 	// it the built-in header/cookie checks still run so existing tests keep their
@@ -1164,68 +1164,6 @@ func egressSenderConfig(policy *upstream.Policy, auth *netauth.Credentials, cert
 	config.PlatformAuth = auth
 	config.ClientCerts = certs
 	return config
-}
-
-// restoreNetworkAuth rebuilds the Settings → Network stores from the durable mirror,
-// returning them plus one note per row it could not rebuild.
-//
-// # Why a partial restore is the right answer, and why it must be reported
-//
-// Nothing here is fatal. A platform-authentication row written by a build that had a
-// scheme this one does not is dropped rather than coerced — coercing it to Basic would
-// send the operator's password to a host under a scheme they never chose — and a
-// client-certificate binding whose PKCS#12 file was deleted between sessions cannot be
-// rebuilt at all. Refusing to start over either would take the whole engagement down for
-// one stale row.
-//
-// But dropping them silently is the failure this codebase treats as a bug: the binding
-// was on the operator's panel yesterday, and a panel that lists it while no handshake
-// carries it is a partial result looking complete. So each failure comes back as a line
-// the panel shows, *and* goes to the log. Two sinks because the two readers are different
-// people at different times: the log is for afterwards, the panel is for the person who
-// can still fix it.
-//
-// A nil store — no -db — restores nothing and reports nothing, which is not a failure but
-// an empty first run.
-func restoreNetworkAuth(store *persist.Store, logger *zap.Logger) (*netauth.Credentials, *netauth.ClientCerts, []string) {
-	credentials := netauth.NewCredentials()
-	certs := netauth.NewClientCerts()
-	if store == nil {
-		return credentials, certs, nil
-	}
-
-	var notes []string
-	record := func(err error) {
-		notes = append(notes, err.Error())
-		logger.Warn("network authentication row could not be restored", zap.Error(err))
-	}
-
-	if rows, err := store.LoadPlatformAuth(); err != nil {
-		// A failed read of the whole table is one note, not none: the alternative is a panel
-		// that shows an empty rule list for a database that has rules in it.
-		record(fmt.Errorf("reading stored platform-authentication rules: %w", err))
-	} else {
-		restored, failures := netauth.RestoreCredentials(rows)
-		credentials = restored
-		for _, failure := range failures {
-			record(failure)
-		}
-	}
-
-	// Burp's "Prompt for credentials on platform authentication failure" (3xnt) survives a restart
-	// whether or not the rules themselves could be read.
-	credentials.SetPromptOnFailure(store.LoadPlatformAuthPrompt())
-
-	if rows, err := store.LoadClientCerts(); err != nil {
-		record(fmt.Errorf("reading stored client-certificate bindings: %w", err))
-	} else {
-		restored, failures := netauth.RestoreClientCerts(rows)
-		certs = restored
-		for _, failure := range failures {
-			record(failure)
-		}
-	}
-	return credentials, certs, notes
 }
 
 // readCACert reads the CA certificate the proxy signs with, for the web server to serve at /ca.crt.

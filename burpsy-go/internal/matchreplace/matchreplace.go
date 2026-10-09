@@ -6,8 +6,11 @@ package matchreplace
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -59,8 +62,67 @@ type Rule struct {
 	re            *regexp.Regexp
 }
 
-// NewRule compiles a rule. For CategoryRegex the pattern is compiled.
+// ErrEmptyMatch is what NewRule wraps when it refuses a rule whose Match is empty. Callers that
+// restore saved rules test for it with errors.Is to tell "this rule is no longer accepted" from
+// "this rule's regex does not compile".
+var ErrEmptyMatch = errors.New("empty match")
+
+// checkEmptyMatch decides whether a rule with an empty Match means anything, and says why not
+// when it does not. NewRule refuses on its answer; applyOne consults it again so a Rule built or
+// edited without NewRule still cannot reach the bytes (burpsy-react-ui-wtm2).
+//
+// # What an empty Match means
+//
+// Burp: "If you leave this blank for an HTTP rule with the Request header or Response header
+// type, the replacement string is added as a new header." That is the only target for which
+// Burp gives blank a meaning, and it does so for both literal and regex rules — blank is "no
+// match", not "the empty pattern".
+//
+// Every other target is refused. Left to the byte primitives, an empty literal matches between
+// every pair of bytes: bytes.Contains(x, "") is always true and bytes.ReplaceAll(x, "", y) puts y
+// between every byte, so a body, first-line or parameter-value rule rewrote the whole section
+// into interleaved garbage; an empty regex does the same through ReplaceAll. The header rule did
+// it to every header line — `Host: example.com` became `X-A: 1HX-A: 1oX-A: 1s…` on every proxied
+// request — which is the defect this exists for. A parameter-name rule renamed only nameless
+// pairs, and a WebSocket literal silently did nothing; neither is a behaviour anyone asked for,
+// and a rule that is accepted and then does something other than what the panel says is worse
+// than one that is refused at save time with the reason.
+//
+// # What an added header line may contain
+//
+// The replacement becomes a header line verbatim, so it is refused when it could not be one:
+//   - empty, because an empty line is the end of the header block — every real header after it
+//     would be read as body;
+//   - containing CR or LF, because that is more than one line: a second header the panel never
+//     shows, or a blank line ending the block early;
+//   - starting with a space or tab, because that is not a new header at all but an obs-fold
+//     continuation (RFC 9112 §5.2) that silently appends to the value of the header before it.
+func checkEmptyMatch(target Target, replace string) error {
+	switch target {
+	case TargetRequestHeader, TargetResponseHeader:
+	default:
+		return fmt.Errorf("%w: a blank match is only meaningful for a request or response header rule, where it adds the replacement as a new header; give this rule something to match", ErrEmptyMatch)
+	}
+	switch {
+	case replace == "":
+		return fmt.Errorf("%w: a header rule with a blank match adds its replacement as a new header line, and an empty replacement would end the header block early", ErrEmptyMatch)
+	case strings.ContainsAny(replace, "\r\n"):
+		return fmt.Errorf("%w: a header rule with a blank match adds its replacement as one new header line, and this replacement contains a CR or LF, which would add more than one line", ErrEmptyMatch)
+	case replace[0] == ' ' || replace[0] == '\t':
+		return fmt.Errorf("%w: a header rule with a blank match adds its replacement as a new header line, and a line starting with whitespace is a continuation of the previous header, not a new one", ErrEmptyMatch)
+	}
+	return nil
+}
+
+// NewRule compiles a rule. For CategoryRegex the pattern is compiled. A blank match is refused
+// unless it has a defined meaning for the target — see checkEmptyMatch; the error wraps
+// ErrEmptyMatch.
 func NewRule(target Target, cat Category, match, replace, comment string) (*Rule, error) {
+	if match == "" {
+		if err := checkEmptyMatch(target, replace); err != nil {
+			return nil, err
+		}
+	}
 	r := &Rule{
 		Enabled:       true,
 		Target:        target,
@@ -69,7 +131,7 @@ func NewRule(target Target, cat Category, match, replace, comment string) (*Rule
 		StringReplace: replace,
 		Comment:       comment,
 	}
-	if cat == CategoryRegex {
+	if cat == CategoryRegex && match != "" {
 		re, err := regexp.Compile(match)
 		if err != nil {
 			return nil, err
@@ -287,7 +349,7 @@ func applyWholePayload(r *Rule, raw []byte) []byte {
 		if r.re == nil || !r.re.Match(raw) {
 			return nil
 		}
-		return r.re.ReplaceAll(raw, []byte(r.StringReplace))
+		return regexReplaceAll(r.re, raw, []byte(r.StringReplace))
 	}
 	if r.StringMatch == "" || !bytes.Contains(raw, []byte(r.StringMatch)) {
 		return nil
@@ -385,6 +447,15 @@ func targetsDir(t Target, dir Direction) bool {
 }
 
 func applyOne(r *Rule, raw []byte) []byte {
+	if r.StringMatch == "" {
+		// Blank match: either Burp's add-a-header, or nothing. Checked here as well as in
+		// NewRule because Rule's fields are exported and a rule that never went through
+		// NewRule must not reach the byte primitives, where blank matches everywhere.
+		if checkEmptyMatch(r.Target, r.StringReplace) != nil {
+			return nil
+		}
+		return addHeaderLine(raw, r.StringReplace)
+	}
 	switch r.Target {
 	case TargetRequestBody, TargetResponseBody:
 		return applyBody(r, raw)
@@ -436,7 +507,48 @@ func applyBody(r *Rule, raw []byte) []byte {
 	if !r.re.Match(raw) {
 		return nil
 	}
-	return r.re.ReplaceAll(raw, []byte(r.StringReplace))
+	return regexReplaceAll(r.re, raw, []byte(r.StringReplace))
+}
+
+// addHeaderLine appends line as the last header of raw, which is what a header rule with a blank
+// match does in Burp. The caller has already established line is a single, non-continuation
+// header line (checkEmptyMatch).
+//
+// The header block ends at the first CRLFCRLF; a message that has none but has LFLF is a bare-LF
+// message and gets an LF-terminated line, matching what fixContentLength accepts. A message with
+// neither separator is all header block — a request cut off before its blank line, or a hand-typed
+// one in the rule test box — and the line goes on the end, after a line break if the last line
+// lacks one. Nothing is returned for empty input: there is no message to add a header to.
+func addHeaderLine(raw []byte, line string) []byte {
+	if len(raw) == 0 {
+		return nil
+	}
+	insert := func(at int, eol string) []byte {
+		out := make([]byte, 0, len(raw)+len(eol)+len(line))
+		out = append(out, raw[:at]...)
+		out = append(out, eol...)
+		out = append(out, line...)
+		return append(out, raw[at:]...)
+	}
+	if idx := bytes.Index(raw, []byte("\r\n\r\n")); idx >= 0 {
+		return insert(idx, "\r\n")
+	}
+	if idx := bytes.Index(raw, []byte("\n\n")); idx >= 0 {
+		return insert(idx, "\n")
+	}
+	out := make([]byte, 0, len(raw)+len(line)+2)
+	out = append(out, raw...)
+	switch {
+	case bytes.HasSuffix(raw, []byte("\r\n")):
+		out = append(out, line...)
+		return append(out, "\r\n"...)
+	case raw[len(raw)-1] == '\n':
+		out = append(out, line...)
+		return append(out, '\n')
+	default:
+		out = append(out, "\r\n"...)
+		return append(out, line...)
+	}
 }
 
 func applyHeaders(r *Rule, raw []byte) []byte {
@@ -461,7 +573,7 @@ func applyHeaders(r *Rule, raw []byte) []byte {
 				rewritten = bytes.ReplaceAll(line, []byte(r.StringMatch), []byte(r.StringReplace))
 			}
 		} else if r.re != nil && r.re.Match(line) {
-			rewritten = r.re.ReplaceAll(line, []byte(r.StringReplace))
+			rewritten = regexReplaceAll(r.re, line, []byte(r.StringReplace))
 		}
 		if rewritten != nil {
 			if len(rewritten) == 0 {
@@ -617,10 +729,27 @@ func applyFirstLine(r *Rule, raw []byte) []byte {
 		if !r.re.Match(firstLine) {
 			return nil
 		}
-		rewritten = r.re.ReplaceAll(firstLine, []byte(r.StringReplace))
+		rewritten = regexReplaceAll(r.re, firstLine, []byte(r.StringReplace))
 	}
 	if rewritten == nil {
 		return nil
 	}
 	return append(rewritten, rest...)
+}
+
+// regexReplaceAll is r.re.ReplaceAll, except that a match rewritten to nothing comes back as a
+// non-nil empty slice.
+//
+// regexp's ReplaceAll builds its result by appending to a nil slice, so when the whole input
+// matched and the replacement is empty it returns nil — and nil is how every applier here says
+// "the rule did not fire". The commonest regex header rule in Burp, `^Server:.*$` replaced with
+// nothing to remove a header, therefore never removed anything: applyHeaders saw nil, recorded
+// no change, and left the line in. The same collapse turned a WebSocket rule that blanks a whole
+// message, and a body or first-line rule that empties its section, into no-ops. Found while
+// pinning the unchanged behaviour of non-blank header rules for burpsy-react-ui-wtm2.
+func regexReplaceAll(re *regexp.Regexp, src []byte, repl []byte) []byte {
+	if out := re.ReplaceAll(src, repl); out != nil {
+		return out
+	}
+	return []byte{}
 }

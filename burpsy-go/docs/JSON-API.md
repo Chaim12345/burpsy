@@ -82,6 +82,7 @@ higher classes are the ones a future confirmation gate (MCP-02, see
 | Method | Path | Risk | Summary |
 |---|---|---|---|
 | GET | `/api/history` | read | Proxy history, filtered by the typed query DSL. |
+| DELETE | `/api/history/rows` | **destructive** | Burp's "Delete items" / "Clear (tool)": `{"ids":[..]}` removes those rows, no body clears every row; answers `{removed, requested}`. A view-level tombstone (ids stay stable, bytes are not erased). Needs a confirmation (`POST /api/history/rows/confirm`, then the `X-Burpsy-Confirm` header). Was `DELETE /api/history` before gf68, which now answers 405. |
 | GET | `/api/message/{id}` | read | Raw bytes of one stored message, with pretty and hex views. With any of `byte_offset`, `max_bytes` (1–65536, default 2048), `pattern` (RE2; anchors the window at the first match, `byte_offset` then relative to it), `case_insensitive`, `decoded`: a **window** of the body instead — `head` in full, `window_base64` (exact) and `window_text` (+ `window_utf8`), `next_offset` (null at the end), `anchor`, `matches` (≤100, always an array). Reads a body of any size to its last byte. |
 | GET | `/api/skills` | read | The skill library loaded with `-skills DIR`: each skill (tools it calls, arguments, available, disabled for this project) and every refused manifest with why. |
 | GET | `/api/skills/{name}` | read | One skill with its prompt rendered from `?argument=value`; 409 when disabled or unavailable, 400 for a missing required argument. |
