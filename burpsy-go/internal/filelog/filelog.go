@@ -66,14 +66,16 @@ func (s Settings) Validate() error {
 	return nil
 }
 
-// toolOf maps an exchange's producer to Burp's tool key. The crawler is part of Burp's Scanner.
+// toolOf maps an exchange's producer to Burp's tool key. The crawler is part of Burp's Scanner, and so
+// is an isolated scan (13uw): its results stay out of the site map and All issues, but its requests
+// went on the wire like any scan's, and a traffic log that dropped them would under-report what was sent.
 // An import, or traffic nothing attributed, belongs to no tool and is logged only by all_tools
 // when it came from a tool at all — which it did not, so it is not logged.
 func toolOf(source core.Source) string {
 	switch source {
 	case core.SourceProxy:
 		return "proxy"
-	case core.SourceScanner, core.SourceCrawl:
+	case core.SourceScanner, core.SourceCrawl, core.SourceIsolatedScan:
 		return "scanner"
 	case core.SourceRepeater:
 		return "repeater"

@@ -319,7 +319,7 @@ func (s *Server) captureSummary() dash.Summary {
 func (s *Server) sourceCounts() map[string]int {
 	out := map[string]int{}
 	for _, src := range []core.Source{
-		core.SourceUnattributed, core.SourceProxy, core.SourceCrawl,
+		core.SourceUnattributed, core.SourceProxy, core.SourceCrawl, core.SourceIsolatedScan,
 		core.SourceRepeater, core.SourceIntruder, core.SourceScanner,
 	} {
 		out[src.String()] = 0
