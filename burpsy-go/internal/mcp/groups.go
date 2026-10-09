@@ -176,6 +176,13 @@ var groupedTools = []groupSpec{
 		},
 	},
 	{
+		// Its own tool, not an op of "scan": the fetch is one or two bounded requests (egress), and a
+		// grouped tool spans exactly one risk class (burpsy-react-ui-fu4l).
+		name: "scan_definition_fetch", group: groupScanning,
+		short: "Fetches an API definition from a URL for an API-only scan (Upload from URL), with optional Basic, Bearer or OAuth2 client-credentials auth; one scope-checked GET, not recorded in history.",
+		ops:   []string{"POST /api/apiscan/fetch"},
+	},
+	{
 		name: "scan_schedules", group: groupScanning,
 		short: "Reads, arms, edits or removes scheduled crawls and audits that run unattended.",
 		ops:   []string{"GET /api/schedules", "POST /api/schedules", "PUT /api/schedules/", "DELETE /api/schedules/"},

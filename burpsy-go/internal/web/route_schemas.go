@@ -170,6 +170,7 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/scanner/audit":  {body: typeOf[scannerAuditReq]()},
 	"POST /api/crawl":          {body: typeOf[crawlStartReq]()},
 	"POST /api/apiscan":        {body: typeOf[apiScanReq]()},
+	"POST /api/apiscan/fetch":  {body: typeOf[apiScanFetchReq]()},
 	"POST /api/discovery":      {body: typeOf[discoveryStartReq]()},
 	"POST /api/hidden-inputs":  {body: typeOf[hiddenInputStartReq]()},
 	"POST /api/scanner/live":   {body: typeOf[liveAuditEnableReq]()},
