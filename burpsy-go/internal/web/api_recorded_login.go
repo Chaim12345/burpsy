@@ -171,13 +171,34 @@ type recordedLoginsResponse struct {
 
 type recordedLoginSaveReq struct {
 	// ID names an existing sequence to replace; empty creates one.
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID    string `json:"id" desc:"an existing sequence to replace; empty creates one"`
+	Label string `json:"label" desc:"the sequence's name"`
 	// Script is a pasted recorder script (Burp's Login Recorder, Chrome's Recorder, or burpsy's own
 	// JSON). When set, Steps is ignored and the reply carries the import notes.
-	Script      string                 `json:"script"`
-	Steps       []session.IncomingStep `json:"steps"`
-	StatusCheck *session.StatusCheck   `json:"status_check"`
+	Script      string                 `json:"script" desc:"a Burp Login Recorder, Chrome Recorder or burpsy JSON script to import; when set, steps is ignored"`
+	Steps       []session.IncomingStep `json:"steps" desc:"the step list, in order; a stored secret is kept when its position and kind match"`
+	StatusCheck *session.StatusCheck   `json:"status_check" desc:"how a replay decides the login succeeded"`
+}
+
+// session.IncomingStep decodes itself (it reads totp.has_secret beside the LoginStep fields), so its
+// published schema is LoginStep's own plus the two presence flags an editor round-trips instead of a
+// stored secret.
+func init() {
+	schema, _ := jsonSchemaOf(typeOf[session.LoginStep]())
+	if props, ok := schema["properties"].(map[string]any); ok {
+		props["has_value"] = map[string]any{"type": "boolean", "description": "keep the stored typed value for this step instead of sending one"}
+		if totp, ok := props["totp"].(map[string]any); ok {
+			if tp, ok := totp["properties"].(map[string]any); ok {
+				tp["has_secret"] = map[string]any{"type": "boolean", "description": "keep the stored TOTP secret instead of sending one"}
+			}
+		}
+	}
+	schemaOverrides[typeOf[session.IncomingStep]()] = schema
+}
+
+// recordedLoginReplayReq is POST /api/crawl/logins/replay's body.
+type recordedLoginReplayReq struct {
+	ID string `json:"id" desc:"the recorded login to replay"`
 }
 
 type recordedLoginSaveResponse struct {
@@ -223,7 +244,7 @@ func (s *Server) handleRecordedLogins(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) saveRecordedLogin(w http.ResponseWriter, r *http.Request) {
 	var req recordedLoginSaveReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -492,10 +513,8 @@ func (s *Server) handleRecordedLoginReplay(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
+	var req recordedLoginReplayReq
+	if err := requestJSON(w, r, http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}

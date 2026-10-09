@@ -180,8 +180,8 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "scan_queue", group: groupScanning,
-		short: "Reads the audit queue: which items each audit is working on and their state.",
-		ops:   []string{"GET /api/scanner/audit-items"},
+		short: "Reads the audit queue (which items each audit is working on and their state) and a running crawl's live view.",
+		ops:   []string{"GET /api/scanner/audit-items", "GET /api/crawl/live"},
 	},
 	{
 		name: "tasks", group: groupScanning,
@@ -287,11 +287,12 @@ var groupedTools = []groupSpec{
 	},
 	{
 		name: "session", group: groupConfig,
-		short: "Reads the cookie jar, session rules and login, replays a login, and resolves a recovery prompt.",
+		short: "Reads the cookie jar, session rules and login, replays a login, resolves a recovery prompt, and reads, saves, removes or replays recorded login sequences.",
 		ops: []string{
 			"GET /api/session/cookies", "POST /api/session/cookies", "POST /api/session/login",
 			"POST /api/session/prompts/", "GET /api/session/rules", "POST /api/session/rules",
 			"PUT /api/session/rules/", "DELETE /api/session/rules/", "POST /api/session/rules/",
+			"GET /api/crawl/logins", "POST /api/crawl/logins", "DELETE /api/crawl/logins", "POST /api/crawl/logins/replay",
 		},
 	},
 	{

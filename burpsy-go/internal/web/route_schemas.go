@@ -43,7 +43,8 @@ var routeSchemas = map[string]opSchema{
 		{name: "wait_seconds", kind: "integer", desc: "long-poll up to this many seconds (0-60) for min_rows matched rows at or beyond offset"},
 		{name: "min_rows", kind: "integer", desc: "rows to wait for with wait_seconds (default 1)"},
 	}},
-	"GET /api/discovery": {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
+	"GET /api/crawl/live": {query: []queryParam{{name: "task", kind: "integer", desc: "the crawl task to watch"}}},
+	"GET /api/discovery":  {query: []queryParam{{name: "task", kind: "integer", desc: "one discovery run by task id"}}},
 	"GET /api/engagement/": {query: []queryParam{
 		{name: "host", kind: "string", desc: "limit the search to one host"},
 		{name: "q", kind: "string", desc: "the search term"},
@@ -268,6 +269,9 @@ var routeSchemas = map[string]opSchema{
 	// ---- Fuzzing ------------------------------------------------------------------------------
 	"POST /api/intruder/run":           {body: typeOf[intruderRunReq]()},
 	"POST /api/intruder/again":         {body: typeOf[intruderAgainReq]()},
+	"POST /api/crawl/logins":           {body: typeOf[recordedLoginSaveReq]()},
+	"POST /api/crawl/logins/replay":    {body: typeOf[recordedLoginReplayReq]()},
+	"DELETE /api/crawl/logins":         {query: []queryParam{{name: "id", kind: "string", desc: "the recorded login to remove"}}},
 	"POST /api/intruder/points":        {body: typeOf[intruderPointsReq]()},
 	"POST /api/intruder/attacks/":      noBody,
 	"POST /api/intruder/payload-files": {raw: "the wordlist file's bytes, one payload per line (not JSON)"},
