@@ -32,9 +32,10 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     # The scanner package alone runs ~200-480s: it drives a real headless Chrome over the DOM rows
-    # and a deferred render pass over the stored-DOM ones. 45 minutes is headroom for a cold cache
-    # on a slower runner, not an expectation.
-    timeout-minutes: 45
+    # and a deferred render pass over the stored-DOM ones. The limit is headroom for a cold cache
+    # on a slower runner, not an expectation. The internal/web race step below adds ~4-6 minutes,
+    # which is why this is 55 rather than the 45 it was before that step existed.
+    timeout-minutes: 55
 
     steps:
       - uses: actions/checkout@v4
@@ -212,3 +213,17 @@ jobs:
       # reports but which has no place in CI at all.
       - name: go test
         run: go test ./... -count=1 -timeout 1700s
+
+      # The race detector, scoped to the one package where request handlers share server state
+      # across goroutines. Until burpsy-react-ui-h68z, `go test -race ./internal/web/` could not
+      # pass: the lazily built active scanner was a plain field written by audit handlers and read
+      # by a dozen others, and two run registries answered their 202 with a field the worker was
+      # already rewriting. Nothing ran -race, so each of those shipped green. This step is what
+      # keeps the package race-clean; it costs ~4 minutes on a 4-core machine.
+      #
+      # Not the whole module: internal/scanner alone takes ~8 minutes without -race and drives a
+      # real Chrome, and the race detector typically slows code several-fold, so a full-module race
+      # run would roughly double this job at best. Widen the step package by package, as each one
+      # is shown race-clean, rather than all at once and red.
+      - name: go test -race (internal/web)
+        run: go test -race -count=1 -timeout 900s ./internal/web/
