@@ -78,6 +78,9 @@ type platformAuthResponse struct {
 	// attached, so browser traffic through the listener presents these rules. See
 	// proxy.ProxyConfig.CarriesPlatformAuth.
 	PresentedOnProxy bool `json:"presented_on_proxy"`
+	// PromptOnFailure is Burp's "Prompt for credentials on platform authentication failure"
+	// (burpsy-react-ui-3xnt), under Burp's key name. Off by default, as in Burp.
+	PromptOnFailure bool `json:"prompt_on_authentication_failure"`
 }
 
 // clientCertsResponse is GET /api/network/client-certs.
@@ -116,6 +119,8 @@ func (s *Server) handleNetworkAuth(w http.ResponseWriter, r *http.Request) {
 		s.getNetworkAuth(w, r)
 	case http.MethodPost:
 		s.postNetworkAuth(w, r)
+	case http.MethodPut:
+		s.putNetworkAuthPrompt(w, r)
 	case http.MethodDelete:
 		s.deleteNetworkAuth(w, r)
 	default:
@@ -139,7 +144,59 @@ func (s *Server) getNetworkAuth(w http.ResponseWriter, _ *http.Request) {
 		// only wants the web surface — and that is not a failure, so it reads false rather than
 		// being reported as a misconfiguration.
 		PresentedOnProxy: s.proxyServer != nil && s.proxyServer.CarriesPlatformAuth(),
+		PromptOnFailure:  s.platformAuthStore().PromptOnFailure(),
 	})
+}
+
+// putNetworkAuthPromptReq is the request body putNetworkAuthPrompt decodes (named for its published schema).
+type putNetworkAuthPromptReq struct {
+	PromptOnFailure *bool `json:"prompt_on_authentication_failure"`
+}
+
+// putNetworkAuthPrompt sets Burp's "Prompt for credentials on platform authentication failure".
+// The body is that one key; anything else is refused by name.
+func (s *Server) putNetworkAuthPrompt(w http.ResponseWriter, r *http.Request) {
+	var req putNetworkAuthPromptReq
+	// Strict for every caller, not only an agent: the body is one key, and a misspelled one would
+	// otherwise decode to "no value" and be refused for the wrong reason.
+	dec := requestJSON(w, r, nil)
+	dec.dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || req.PromptOnFailure == nil {
+		http.Error(w, "PUT takes {\"prompt_on_authentication_failure\": true|false}; rules are added with POST", http.StatusBadRequest)
+		return
+	}
+	s.platformAuthStore().SetPromptOnFailure(*req.PromptOnFailure)
+	if s.persist != nil {
+		s.persist.SavePlatformAuthPrompt(*req.PromptOnFailure)
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"prompt_on_authentication_failure": *req.PromptOnFailure})
+}
+
+// handleNetworkAuthFailures serves GET/DELETE /api/network/auth/failures: the platform-authentication
+// failures recorded while the prompt is on, most recent first, and the dismissal of one by host.
+func (s *Server) handleNetworkAuthFailures(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		store := s.platformAuthStore()
+		writeJSON(w, http.StatusOK, struct {
+			PromptOnFailure bool                  `json:"prompt_on_authentication_failure"`
+			Failures        []netauth.AuthFailure `json:"failures"`
+		}{PromptOnFailure: store.PromptOnFailure(), Failures: store.Failures()})
+	case http.MethodDelete:
+		host := strings.TrimSpace(r.URL.Query().Get("host"))
+		if host == "" {
+			http.Error(w, "A host is required", http.StatusBadRequest)
+			return
+		}
+		if !s.platformAuthStore().DismissFailure(host) {
+			http.Error(w, "No platform-authentication failure is recorded for that host", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	default:
+		w.Header().Set("Allow", "GET, DELETE")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // postNetworkAuthReq is the request body postNetworkAuth decodes (hoisted for its published schema, burpsy-react-ui-3zw0).

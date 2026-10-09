@@ -168,8 +168,11 @@ func TestAFollowUpPassRecoversARequestThatFailedOnce(t *testing.T) {
 	cfg.ErrorHandling = ErrorHandling{FollowUpPasses: intp(1)}
 	rep := run(t, cfg)
 
-	if asked != 2 {
-		t.Fatalf("/flaky was asked for %d times, want 2: the failure and the follow-up", asked)
+	mu.Lock()
+	got := asked
+	mu.Unlock()
+	if got != 2 {
+		t.Fatalf("/flaky was asked for %d times, want 2: the failure and the follow-up", got)
 	}
 	if rep.FollowUpRecovered != 1 {
 		t.Errorf("follow_up_recovered = %d, want 1", rep.FollowUpRecovered)
@@ -211,8 +214,11 @@ func TestZeroFollowUpPassesDoesNotRetry(t *testing.T) {
 	cfg := h.config(srv.URL + "/")
 	cfg.ErrorHandling = ErrorHandling{FollowUpPasses: intp(0)}
 	rep := run(t, cfg)
-	if asked != 1 {
-		t.Errorf("/flaky asked for %d times with follow-up passes at 0, want 1", asked)
+	mu.Lock()
+	got := asked
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("/flaky asked for %d times with follow-up passes at 0, want 1", got)
 	}
 	if rep.Failed != 1 {
 		t.Errorf("failed = %d, want 1", rep.Failed)

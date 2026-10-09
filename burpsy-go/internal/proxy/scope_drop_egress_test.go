@@ -247,3 +247,34 @@ func TestDropOutOfScopeStopsTheTLSPathFromReachingAnExcludedOrigin(t *testing.T)
 		t.Errorf("the TLS refusal does not say why it happened: %q", body)
 	}
 }
+
+// Burp's "Use custom scope" arm (burpsy-react-ui-47ed): the drop gate asks the custom scope, not the
+// suite scope. An origin the suite scope includes is still dropped when the custom scope leaves it
+// out, and one the suite scope leaves out is forwarded when the custom scope names it.
+func TestACustomDropScopeDecidesWhatTheProxyDrops(t *testing.T) {
+	host, port, hits := countingOrigin(t)
+
+	suiteIncludes := core.NewScope()
+	suiteIncludes.AddInclude(host)
+	suiteIncludes.SetDropOutOfScope(true)
+	custom := core.NewScope()
+	custom.AddInclude("elsewhere.test")
+	suiteIncludes.SetDropScope(custom, true)
+	srv := NewServer(NewProxyConfig(core.NewTrafficStore()).WithScope(suiteIncludes).WithLogger(zap.NewNop()))
+	if status, _ := driveThroughProxyResponse(t, srv, host, port); status != http.StatusForbidden || hits.Load() != 0 {
+		t.Errorf("suite scope includes the origin, custom scope does not: status %d, %d hit(s); want 403 and none",
+			status, hits.Load())
+	}
+
+	suiteExcludes := core.NewScope()
+	suiteExcludes.AddInclude("elsewhere.test")
+	suiteExcludes.SetDropOutOfScope(true)
+	named := core.NewScope()
+	named.AddInclude(host)
+	suiteExcludes.SetDropScope(named, true)
+	srv = NewServer(NewProxyConfig(core.NewTrafficStore()).WithScope(suiteExcludes).WithLogger(zap.NewNop()))
+	if status, _ := driveThroughProxyResponse(t, srv, host, port); status != http.StatusOK || hits.Load() != 1 {
+		t.Errorf("custom scope names the origin, suite scope does not: status %d, %d hit(s); want 200 and one",
+			status, hits.Load())
+	}
+}

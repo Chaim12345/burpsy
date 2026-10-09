@@ -497,8 +497,18 @@ func (c *Credentials) Learn(host, wwwAuthenticate string) (bool, error) {
 		}
 	}
 	if !found {
+		c.recordFailureLocked(host, wwwAuthenticate, FailureNoCredential)
 		return false, nil
 	}
+	usable, err := c.learnLocked(host, wwwAuthenticate, rule)
+	if !usable {
+		c.recordFailureLocked(host, wwwAuthenticate, FailureRejected)
+	}
+	return usable, err
+}
+
+// learnLocked is Learn's per-scheme half, for a host a rule covers. Called with c.mu held.
+func (c *Credentials) learnLocked(host, wwwAuthenticate string, rule Credential) (bool, error) {
 	if rule.Scheme == SchemeNTLMv2 {
 		// The NTLM leg learns raw bytes, not a Digest header. The blob is decoded and
 		// validated here, against the store's lock, so a hostile payload is refused

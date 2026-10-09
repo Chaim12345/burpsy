@@ -586,7 +586,7 @@ func TestALocationThatCannotBeDialledStopsTheChainWithAReason(t *testing.T) {
 	}
 
 	for _, status := range []int{300, 304, 200} {
-		if _, isRedirect := redirectLocation(&Response{StatusCode: status}); isRedirect {
+		if _, isRedirect := redirectLocation(&Response{StatusCode: status}, DefaultRedirectTypes()); isRedirect {
 			t.Errorf("status %d reads as a redirect; a 300 nominates no resource and a 304 is not a "+
 				"redirect at all", status)
 		}

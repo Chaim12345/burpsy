@@ -105,6 +105,8 @@ type burpCrawlConfigKey struct {
 	// applyCrawlKey has to be able to see that this row is neither a switch nor a crawl-wide bound,
 	// because folding it into either would put it on the wrong half of the Config.
 	configCountField string
+	// strategy marks crawl_optimization/crawl_strategy (8bp2), a named level rather than a value.
+	strategy bool
 }
 
 // burpCrawlConfigKeys is the whole of Burp's shipped crawl-key vocabulary, as read today.
@@ -135,6 +137,8 @@ var burpCrawlConfigKeys = []burpCrawlConfigKey{
 	// wrong reason: not "burpsy has no field" but "the loader never recognised the section it is in".
 	{burpKey: "crawler/crawl_optimization/max_submissions_per_form", field: "MaxSubmissionsPerForm"},
 	{burpKey: "crawler/crawl_optimization/form_submission_optimization_threshold", configCountField: "FormSubmissionOptimizationThreshold"},
+	// Burp's five-level crawl strategy (burpsy-react-ui-8bp2). See strategy.go for what it sets.
+	{burpKey: "crawler/crawl_optimization/crawl_strategy", strategy: true},
 }
 
 // registerBurpCrawlKey adds a row to the crawl-key table from outside this file.
@@ -170,6 +174,8 @@ type CrawlConfig struct {
 	// 0 means off, and is left as written by normalise: an operator who never wrote the key gets the
 	// zero value, and "off" is the honest reading of a phase they did not configure.
 	FormSubmissionOptimizationThreshold int
+	// CrawlStrategy is the crawl_strategy the file named (8bp2), or "" when it named none.
+	CrawlStrategy CrawlStrategy
 	// RequestSpeculative is the crawler/customization/request_speculative flag
 	// (burpsy-react-ui-t5m0): whether the crawl mines comments and script bodies for
 	// hidden links. A bool rather than a Limits field because it is a switch, not a
@@ -262,6 +268,12 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 	}
 	// Sorted because Go's map iteration is random and a report that reorders itself between two
 	// reads of the same file cannot be diffed or eyeballed.
+	// The strategy's form-input count is the per-form cap unless the file also named
+	// max_submissions_per_form, which is more specific and wins. Resolved after the loop because
+	// the file's keys arrive in map order.
+	if out.CrawlStrategy != "" && out.Limits.MaxSubmissionsPerForm == 0 {
+		out.Limits.MaxSubmissionsPerForm = crawlStrategies[out.CrawlStrategy].formInputs
+	}
 	sortStrings(out.UnknownSections)
 	sortStrings(out.UnrepresentableKeys)
 	sortStrings(out.AppliedKeys)
@@ -272,6 +284,20 @@ func ParseBurpCrawlConfig(data []byte) (CrawlConfig, error) {
 // `crawler/error_handling/*` keys — onto the ErrorHandling block, which is a different shape and
 // lives in errorhandling.go.
 func (c *CrawlConfig) applyCrawlKey(row burpCrawlConfigKey, raw json.RawMessage) error {
+	if row.strategy {
+		var name string
+		if err := json.Unmarshal(raw, &name); err != nil {
+			return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+		}
+		s, err := ParseCrawlStrategy(name)
+		if err != nil {
+			return fmt.Errorf("burp crawl configuration: %s: %w", row.burpKey, err)
+		}
+		c.CrawlStrategy = s
+		band := crawlStrategies[s].toleranceBand
+		c.Limits.LocationToleranceBand = &band
+		return nil
+	}
 	if row.configField != "" {
 		// A bool switch, not a bound: true/false land on the named Config field
 		// verbatim. Anything else in the file is a mistyped configuration, reported
