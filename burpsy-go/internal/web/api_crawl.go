@@ -611,7 +611,7 @@ func (s *Server) crawlRenderer() func(ctx context.Context, url string) (string, 
 // live, when set, is the crawl's live view (burpsy-react-ui-1l3x): the render marks its page as the one
 // being looked at and, at most once a second, brings back a viewport frame from the same tab.
 func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ctx context.Context, url string) (string, crawler.RenderOutcome, error) {
-	if s.scanner == nil || !s.scanner.DOMCapabilityConfigured() {
+	if s.wiredScanner() == nil || !s.wiredScanner().DOMCapabilityConfigured() {
 		// NIL, not a zero-valued render. A no-DOM server is a crawl that never renders, and a
 		// function that returns "" would be a render that always produced nothing -- which the engine
 		// cannot tell from a page that genuinely had none, and would report as SkipRenderUnavailable
@@ -633,7 +633,7 @@ func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ct
 		if sess != nil {
 			html, outcome, err = sess.RenderedDOMWithOptions(ctx, targetURL, opts)
 		} else {
-			browser, berr := s.scanner.BrowserForRender(ctx)
+			browser, berr := s.wiredScanner().BrowserForRender(ctx)
 			if berr != nil {
 				return "", crawler.RenderOutcome{}, berr
 			}
@@ -820,7 +820,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// progress.bind below); it fires only during Run, which starts after the bind.
 	progress := &crawlProgress{}
 	// The live crawl view (burpsy-react-ui-1l3x) sits first on the fetch hook and on its own send hook.
-	live := newCrawlLive(s.scanner != nil && s.scanner.DOMCapabilityConfigured())
+	live := newCrawlLive(s.wiredScanner() != nil && s.wiredScanner().DOMCapabilityConfigured())
 	onFetch := live.hook(progress.hook(auditOffer))
 
 	// Built before the task is registered so a configuration mistake is a 400 the operator can fix,

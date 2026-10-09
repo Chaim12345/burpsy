@@ -119,7 +119,7 @@ func TestConfigPutSurvivesARestartThroughPersistedOverrides(t *testing.T) {
 		t.Fatal("LoadScanConfig returned nil after a PUT saved it; absence and presence got confused")
 	}
 	s2 := newScannerServer()
-	s2.scanner.UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *loaded })
+	s2.wiredScanner().UpdateScanConfig(func(c *scanner.ScanConfig) { *c = *loaded })
 	if got := getScannerConfig(t, s2)["check_stored"]; got != true {
 		t.Fatalf("check_stored after restart = %v; a policy the operator set that dies with the process was never really set", got)
 	}

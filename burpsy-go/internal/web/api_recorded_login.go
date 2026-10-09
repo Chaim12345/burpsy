@@ -359,8 +359,8 @@ var errLoginNeedsScope = errors.New("a recorded login replays in a browser that 
 // configured (one process, one browser), otherwise a headless Chrome this server launches on first
 // use and keeps.
 func (s *Server) loginBrowserFor(ctx context.Context) (*domexec.Browser, error) {
-	if s.scanner != nil && s.scanner.DOMCapabilityConfigured() {
-		return s.scanner.BrowserForRender(ctx)
+	if s.wiredScanner() != nil && s.wiredScanner().DOMCapabilityConfigured() {
+		return s.wiredScanner().BrowserForRender(ctx)
 	}
 	s.loginBrowserMu.Lock()
 	if s.loginBrowser == nil {

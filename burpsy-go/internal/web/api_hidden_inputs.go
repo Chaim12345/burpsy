@@ -241,6 +241,11 @@ func (s *Server) handleHiddenInputsStart(w http.ResponseWriter, r *http.Request)
 	run := &hiddenInputRun{TaskID: task.ID(), ExchangeID: id, Target: target, Kinds: kinds, State: "running",
 		Started: time.Now(), FindingIDs: []uint64{},
 		Summary: "running: no name has been settled yet, so nothing about this exchange's hidden inputs is known"}
+	// Read for the reply before the run is shared: once start publishes it and the goroutine below
+	// exists, finish rewrites State under the registry's lock, and reading run.State here after that
+	// was a data race (burpsy-react-ui-h68z). "running" is also the true answer for a 202 — the
+	// reply reports the run as accepted, not however far it got before the response was written.
+	acceptedState := run.State
 	s.hiddenInputs.start(run)
 
 	// Detached from the request, with the task's own cancel, as every long-running launch here is.
@@ -268,7 +273,7 @@ func (s *Server) handleHiddenInputsStart(w http.ResponseWriter, r *http.Request)
 		"target":      target,
 		"kinds":       kinds,
 		"budget":      budget,
-		"state":       run.State,
+		"state":       acceptedState,
 	})
 }
 

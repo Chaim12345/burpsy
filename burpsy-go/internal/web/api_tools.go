@@ -1287,7 +1287,7 @@ func (s *Server) handleIntruderRun(w http.ResponseWriter, r *http.Request) {
 					i, count, maxCollaboratorBatch), http.StatusBadRequest)
 				return
 			}
-			channel, err := s.scanner.OOBChannel(r.Context())
+			channel, err := s.wiredScanner().OOBChannel(r.Context())
 			if err != nil {
 				http.Error(w, fmt.Sprintf("payload set %d (collaborator): no out-of-band interaction channel is configured, so no payload can be minted — an address for a channel nothing polls would report every OOB check as clean when none of them ran: %v",
 					i, err), http.StatusConflict)

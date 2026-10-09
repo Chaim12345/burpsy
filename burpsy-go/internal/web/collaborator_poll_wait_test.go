@@ -72,7 +72,7 @@ func mintTwo(t *testing.T) (*Server, *growingOOB, [2]string, [2]string) {
 	t.Helper()
 	s := newTestServerWithScanner(t)
 	f := &growingOOB{domain: "oobtest.oast.example"}
-	s.scanner.WithOOBProvider(f)
+	s.wiredScanner().WithOOBProvider(f)
 	if rec := postJSONRaw(t, s, "/api/collaborator/payload", `{"count":2}`); rec.Code != http.StatusOK {
 		t.Fatalf("mint = %d: %s", rec.Code, rec.Body.String())
 	}

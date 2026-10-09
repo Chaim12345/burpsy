@@ -40,7 +40,7 @@ func (f *mintableOOB) InteractionsFor(string) ([]oob.Interaction, error) { retur
 
 func Test_collaborator_payload_type_mints_distinct_addresses_into_the_attack(t *testing.T) {
 	s := newTestServerWithScanner(t)
-	s.scanner.WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
+	s.wiredScanner().WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("seen"))
@@ -105,7 +105,7 @@ func Test_collaborator_payload_type_mints_distinct_addresses_into_the_attack(t *
 // server location" (Zcc_ passes the flag straight to the address builder).
 func Test_collaborator_payload_type_omits_the_server_location_when_asked(t *testing.T) {
 	s := newTestServerWithScanner(t)
-	s.scanner.WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
+	s.wiredScanner().WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("seen"))
@@ -166,7 +166,7 @@ func Test_collaborator_payload_type_refuses_without_a_channel(t *testing.T) {
 // The batch ceiling applies to the payload type as it does to the Collaborator page's mint.
 func Test_collaborator_payload_type_honours_the_batch_ceiling(t *testing.T) {
 	s := newTestServerWithScanner(t)
-	s.scanner.WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
+	s.wiredScanner().WithOOBProvider(&mintableOOB{domain: "oobtest.oast.example"})
 
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("a refused attack must not reach the wire")

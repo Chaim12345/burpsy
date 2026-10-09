@@ -98,7 +98,7 @@ func TestSettingTheCollaboratorServerConfiguresWithoutRegistering(t *testing.T) 
 
 	// And the scanner really holds it, rather than the endpoint having reported a value it stored
 	// nowhere. This is the check that would have caught a decorative implementation.
-	reg, configured := ts.scanner.OOBRegistration()
+	reg, configured := ts.wiredScanner().OOBRegistration()
 	if !configured {
 		t.Fatal("the scanner reports no provider, so the endpoint changed nothing")
 	}
@@ -155,7 +155,7 @@ func TestAnEmptyServerIsRefusedRatherThanMeaningPublic(t *testing.T) {
 	}
 
 	// And nothing was configured by a refused request.
-	if _, configured := ts.scanner.OOBRegistration(); configured {
+	if _, configured := ts.wiredScanner().OOBRegistration(); configured {
 		t.Error("a refused request installed a provider anyway")
 	}
 }
@@ -164,7 +164,7 @@ func TestAnEmptyServerIsRefusedRatherThanMeaningPublic(t *testing.T) {
 // domain named, so the operator understands what they would have been detached from.
 func TestChangingTheServerIsRefusedOnceAChannelIsRegistered(t *testing.T) {
 	ts := newTestServerWithScanner(t)
-	ts.scanner.WithOOBProvider(&fakeOpenOOB{domain: "abc123.oast.example", server: "https://old.example"})
+	ts.wiredScanner().WithOOBProvider(&fakeOpenOOB{domain: "abc123.oast.example", server: "https://old.example"})
 
 	rec := postCollaboratorServer(t, ts, `{"server":"https://new.example"}`)
 	if rec.Code != http.StatusConflict {
@@ -177,7 +177,7 @@ func TestChangingTheServerIsRefusedOnceAChannelIsRegistered(t *testing.T) {
 
 	// The old provider must still be installed. A refusal that had already swapped it would be the
 	// worst of both: the operator told "no" while their channel was replaced.
-	reg, configured := ts.scanner.OOBRegistration()
+	reg, configured := ts.wiredScanner().OOBRegistration()
 	if !configured {
 		t.Fatal("no provider after a refused change")
 	}
@@ -193,16 +193,16 @@ func TestAFailedChannelCanStillBeReconfigured(t *testing.T) {
 	ts := newTestServerWithScanner(t)
 	// A server URL that cannot resolve, with a binary path that does not exist, so the first
 	// registration attempt fails locally and quickly.
-	ts.scanner.WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
+	ts.wiredScanner().WithOOBProvider(scanner.NewLazyOOBProvider(oob.Options{
 		ServerURL:  "https://this-host-does-not-exist.invalid",
 		BinaryPath: "/nonexistent/interactsh-client",
 	}))
 	// Force the attempt so the provider records its failure.
-	if _, err := ts.scanner.OOBChannel(t.Context()); err == nil {
+	if _, err := ts.wiredScanner().OOBChannel(t.Context()); err == nil {
 		t.Skip("the bogus provider unexpectedly opened a channel; nothing to assert about failure")
 	}
 
-	reg, _ := ts.scanner.OOBRegistration()
+	reg, _ := ts.wiredScanner().OOBRegistration()
 	if !reg.Attempted || reg.Open {
 		t.Fatalf("precondition: want attempted-and-not-open, got attempted=%v open=%v",
 			reg.Attempted, reg.Open)
@@ -213,7 +213,7 @@ func TestAFailedChannelCanStillBeReconfigured(t *testing.T) {
 		t.Fatalf("POST = %d, want 200 — a failed channel has nothing to orphan: %s",
 			rec.Code, rec.Body.String())
 	}
-	newReg, _ := ts.scanner.OOBRegistration()
+	newReg, _ := ts.wiredScanner().OOBRegistration()
 	if newReg.Server != "https://good.example" {
 		t.Errorf("server = %q, want the replacement", newReg.Server)
 	}

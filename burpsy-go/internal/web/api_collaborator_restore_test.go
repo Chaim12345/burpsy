@@ -73,7 +73,7 @@ func Test_minted_payloads_survive_a_restart_and_keep_their_late_callbacks(t *tes
 
 	first := bootCollaborator(t, base, client)
 	before := mint(t, first, 2)
-	if err := first.scanner.CloseOOBChannel(); err != nil { // the process shuts down
+	if err := first.wiredScanner().CloseOOBChannel(); err != nil { // the process shuts down
 		t.Fatal(err)
 	}
 
@@ -88,7 +88,7 @@ func Test_minted_payloads_survive_a_restart_and_keep_their_late_callbacks(t *tes
 
 	second := bootCollaborator(t, base, client)
 	after := mint(t, second, 1) // the first mint opens the resumed channel
-	defer second.scanner.CloseOOBChannel()
+	defer second.wiredScanner().CloseOOBChannel()
 
 	rec := httptest.NewRecorder()
 	second.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/collaborator/poll", nil))

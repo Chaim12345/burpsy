@@ -499,6 +499,10 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	// total as "N done, total not yet known", which is the true statement.
 	task := s.tasks.Start(dash.KindDiscovery, authorised.URL, 0)
 	run := s.discoveries.start(task.ID(), req, authorised.URL)
+	// Read for the reply now, before the goroutine below exists: discoveryRuns.finish rewrites State
+	// under the registry's lock, so reading run.State after launching it raced whenever ffuf ended
+	// before this handler wrote its 202 (burpsy-react-ui-h68z).
+	acceptedState := run.State
 	wordlistName := req.Wordlist
 	if wordlistName == "" {
 		wordlistName = fmt.Sprintf("%d merged built-in/observed word(s)", mergedWords)
@@ -531,7 +535,7 @@ func (s *Server) handleDiscoveryStart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"task_id": task.ID(),
 		"target":  authorised.URL,
-		"state":   run.State,
+		"state":   acceptedState,
 	})
 }
 

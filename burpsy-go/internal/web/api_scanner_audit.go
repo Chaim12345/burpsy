@@ -155,8 +155,8 @@ func (s *Server) startAuditAsync(w http.ResponseWriter, id core.ExchangeID, cfg 
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	s.scanner = s.activeScanner()
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
+	active := s.activeScanner()
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(active.ActiveCheckCountUnder(cfg)))
 	taskCtx, cancel := task.WithCancel(context.Background())
 	ctx, err := s.auditContext(taskCtx, poolName)
 	if err != nil {
@@ -195,8 +195,17 @@ func (s *Server) startAuditAsync(w http.ResponseWriter, id core.ExchangeID, cfg 
 // The construction is memoised on s.scanner, which is what makes the corpus checks a property of the
 // process rather than of whichever route ran first: a server that has never served an audit and one
 // that has just served a hundred build the same scanner.
+//
+// Safe to call from concurrent handlers (burpsy-react-ui-h68z): the fast path is one atomic load, and
+// the first construction happens under scannerBuild with a re-check, so exactly one scanner is ever
+// built and every caller gets that one.
 func (s *Server) activeScanner() *scanner.ActiveScanner {
-	if s.scanner == nil {
+	if active := s.scanner.Load(); active != nil {
+		return active
+	}
+	s.scannerBuild.Lock()
+	defer s.scannerBuild.Unlock()
+	if s.scanner.Load() == nil {
 		active := scanner.NewActiveScanner(s.store, s.logger).
 			WithScope(s.scope).
 			WithPace(pool.ContextPacer{}).
@@ -208,9 +217,21 @@ func (s *Server) activeScanner() *scanner.ActiveScanner {
 		if s.toolRunner != nil {
 			active = active.WithToolRunner(s.toolRunner)
 		}
-		s.scanner = active
+		s.scanner.Store(active)
 	}
-	return s.scanner
+	return s.scanner.Load()
+}
+
+// wiredScanner returns the active scanner if one exists yet — wired by WithScanner or built by an
+// earlier activeScanner call — and nil otherwise, without building one. It is the read every route
+// that treats "no scanner" as its own state goes through.
+//
+// The pointer only moves from nil to a scanner, never back and never to a different scanner while
+// requests are being served (WithScanner is a construction-time builder; activeScanner builds at most
+// once). That is what makes a route's `if s.wiredScanner() == nil { ... }` followed by a later
+// s.wiredScanner().Method() sound: the second load cannot see nil once the first did not.
+func (s *Server) wiredScanner() *scanner.ActiveScanner {
+	return s.scanner.Load()
 }
 
 // auditTarget names one audited exchange for the task list, falling back to the id when the exchange
@@ -239,24 +260,24 @@ func auditTarget(store *core.TrafficStore, id core.ExchangeID) string {
 // scanner.ts renders this by pretty-printing the JSON it gets back, so the richer body needs no
 // change on the TypeScript side — there is no typed audit response to keep in sync.
 func (s *Server) runAudit(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string) map[string]interface{} {
-	s.scanner = s.activeScanner()
+	active := s.activeScanner()
 	// On the dashboard while it runs, not only once it answers (DASH-01). Total is the check set,
 	// which is known up front for a single item.
-	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(s.scanner.ActiveCheckCountUnder(cfg)))
+	task := s.tasks.Start(dash.KindAudit, auditTarget(s.store, id), uint64(active.ActiveCheckCountUnder(cfg)))
 	return s.runAuditOn(ctx, id, cfg, named, unapplied, task)
 }
 
 // runAuditOn is runAudit against a task row the caller already started — the synchronous routes
 // start it here in runAudit, the async one before it answers 202 (burpsy-react-ui-wdza).
 func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner.AuditConfig, named string, unapplied []string, task *dash.Handle) map[string]interface{} {
-	s.scanner = s.activeScanner()
+	active := s.activeScanner()
 	body := map[string]interface{}{
 		"started":     true,
 		"exchange_id": id,
 		// The check set THIS run dispatches, so it equals outcome.considered for a dispatched item. The
 		// configuration-free count overstated it whenever the run's configuration removed checks.
-		"active_checks": s.scanner.ActiveCheckCountUnder(cfg),
-		"unimplemented": s.scanner.UnimplementedCheckCount(),
+		"active_checks": active.ActiveCheckCountUnder(cfg),
+		"unimplemented": active.UnimplementedCheckCount(),
 		// The configuration this run actually used. Reported for SCAN-03: a reply that looked the same
 		// whether or not a named preset was honoured could not be told apart from one that accepted the
 		// name and ignored it. Empty config_name means the server default was used, which is a
@@ -268,7 +289,7 @@ func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner
 	// entry point can run an audit that never appears in the queue. The reply's `config` block above
 	// is deliberately rendered from the caller's cfg rather than this one: the queue is observation,
 	// not configuration, and echoing it back would suggest the operator had asked for it.
-	outcome, findings := s.scanner.AuditWithin(ctx, id, s.withAuditItems(cfg))
+	outcome, findings := active.AuditWithin(ctx, id, s.withAuditItems(cfg))
 	task.Advance(uint64(outcome.Considered()))
 	if ctx.Err() != nil {
 		// Cancelled (POST /api/tasks/{id}/cancel, or the caller went away): the row says stopped, with
@@ -304,8 +325,8 @@ func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner
 	// registered claim once more. Guarded by PendingCount so an audit that planted nothing sends no
 	// second-pass traffic at all: a stored re-fetch is real traffic to the target, and paying it when
 	// no claim could settle would be a request the operator never got value from.
-	if s.scanner.PendingCount() > 0 {
-		deferred, completion := s.scanner.FinishScan(ctx, cfg)
+	if active.PendingCount() > 0 {
+		deferred, completion := active.FinishScan(ctx, cfg)
 		body["deferred"] = completion
 		for _, f := range deferred {
 			s.findings.Add(s.activeFinding(f, task.ID()))

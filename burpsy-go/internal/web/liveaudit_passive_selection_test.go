@@ -47,7 +47,7 @@ func TestTheSweepPassivePassDoesNotRaiseAnIssueTypeTheRunConfigurationDeselected
 	if len(cfg.DisabledIssueTypes) != 1 || cfg.DisabledIssueTypes[0] != 0x00300100 {
 		t.Fatalf("the import did not deny the cleartext-password type: disabled = %#v", cfg.DisabledIssueTypes)
 	}
-	s.scanner.WithAuditConfig(cfg)
+	s.wiredScanner().WithAuditConfig(cfg)
 
 	// A completed in-scope proxied capture whose response carries BOTH passive issues.
 	reqID, _ := s.store.Put([]byte("GET /login HTTP/1.1\r\nHost: "+host+"\r\n\r\n"), core.DirectionRequest)

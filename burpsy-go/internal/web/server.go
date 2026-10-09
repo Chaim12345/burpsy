@@ -80,9 +80,16 @@ type Server struct {
 	confirms *confirmStore
 	// confirmMux serves the mint endpoints, kept OFF s.mux so a gated route cannot shadow its own
 	// /confirm suffix and so the patterns do not enter the route manifest's remit.
-	confirmMux     http.Handler
-	sender         *sender.Sender
-	scanner        *scanner.ActiveScanner
+	confirmMux http.Handler
+	sender     *sender.Sender
+	// scanner is the active scanner, read only through wiredScanner and activeScanner
+	// (burpsy-react-ui-h68z). It is an atomic pointer, not a plain field, because activeScanner
+	// builds it lazily from inside request handlers while other handlers read it concurrently; a
+	// plain field made `go test -race` fail on the first audit that overlapped another route.
+	// scannerBuild serialises that lazy construction so two first audits cannot build two scanners
+	// and leave each holding a different one.
+	scanner        atomic.Pointer[scanner.ActiveScanner]
+	scannerBuild   sync.Mutex
 	passiveScanner *scanner.PassiveScanner
 	// toolRunner is the allowlist runner `run tool` statements dispatch through
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
@@ -457,7 +464,7 @@ func (s *Server) WithScanner(scan *scanner.ActiveScanner) *Server {
 		// with no task registry attaches a gate that never holds.
 		scan = scan.WithPace(pool.ContextPacer{}).WithSuiteGate(s.tasks.GateCheck)
 	}
-	s.scanner = scan
+	s.scanner.Store(scan)
 	return s
 }
 

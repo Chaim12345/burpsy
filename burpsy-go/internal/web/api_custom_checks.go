@@ -126,9 +126,14 @@ func originLabel(origin string) string {
 // syncCorpus pushes the passive scanner's active set into the audit engine and persists the console
 // checks. Called after every change.
 func (s *Server) syncCorpus() error {
-	if s.scanner != nil {
-		s.scanner.WithCorpusChecks(s.passiveScanner.ActiveChecks())
+	// Under scannerBuild so a lazy activeScanner build cannot interleave with this push: otherwise a
+	// build that read the old corpus could be stored just after this saw no scanner, and the new
+	// check set would never reach the audit engine (burpsy-react-ui-h68z).
+	s.scannerBuild.Lock()
+	if active := s.wiredScanner(); active != nil {
+		active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
 	}
+	s.scannerBuild.Unlock()
 	if s.persist != nil {
 		return s.persist.SaveCustomScanChecks(s.passiveScanner.ConsoleSources())
 	}
@@ -293,7 +298,7 @@ func (s *Server) handleCheckTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := checkKind(c)
-	if kind != "passive" && s.scanner == nil {
+	if kind != "passive" && s.wiredScanner() == nil {
 		http.Error(w, "an active check needs the audit engine, and this server has none", http.StatusServiceUnavailable)
 		return
 	}
@@ -315,7 +320,7 @@ func (s *Server) handleCheckTest(w http.ResponseWriter, r *http.Request) {
 		if kind == "passive" {
 			trial = s.passiveScanner.TrialPassiveCheck(ex, c)
 		} else {
-			trial = s.scanner.TrialCorpusCheck(r.Context(), ex, c)
+			trial = s.wiredScanner().TrialCorpusCheck(r.Context(), ex, c)
 		}
 		res.Sent, res.Refused, res.Unsupported = trial.Sent, trial.Refused, trial.Unsupported
 		if trial.Unresolved != nil {
