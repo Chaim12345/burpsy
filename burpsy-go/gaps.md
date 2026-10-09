@@ -2709,3 +2709,21 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
 - **Not supported elsewhere:** Proxy intercept, Logger and Scanner do not carry kettled requests (Burp's do); a group
   send refuses a kettled member by name; To Intruder refuses an unsent kettled tab and otherwise hands Intruder the
   stored rendering, saying so — Burp normalises.
+
+## Platform authentication: NTLM is connection-bound on the sender only; NTLMv1 and Negotiate absent (2026-10-09, burpsy-react-ui-sel6)
+- **Burp:** Settings → Network → Platform authentication offers Basic, NTLMv1, NTLMv2, Negotiate and Digest, and
+  applies them to every tool's traffic, the proxy's included.
+- **burpsy:** the typed sender (every `Sender.Send` caller; the raw-bytes paths are untouched) runs NTLMv2 as a
+  connection-bound handshake: NEGOTIATE, CHALLENGE and AUTHENTICATE on one dedicated HTTP/1.1 connection, verified
+  through `httptrace`, never re-dialled mid-handshake, and closed when the exchange returns so the authenticated
+  connection carries no other request. A `DOMAIN\user` username authenticates in that domain. A refused
+  AUTHENTICATE, a bare `NTLM` offer and a connection closed after the challenge are each recorded as a
+  platform-authentication failure; the credential is presented once.
+- **Divergence:** one handshake per send — authenticated connections are not cached per rule, so each NTLM send
+  costs two round trips on a fresh connection. The proxy leg still uses the host-keyed NEGOTIATE/learned-challenge
+  flow, which authenticates only against a server that does not bind its challenge to the connection (an SSPI/IIS
+  server does). The raw-bytes paths (and the ry5n keep-alive pool) present no platform credential, as before. The
+  AUTHENTICATE carries no MIC: `micBitSet` reads AV-flag bit 0x4 rather than deciding from MsvAvTimestamp, and the
+  MIC-present flag is never placed in the response's AV pairs, so a server that requires a MIC refuses it.
+  NTLMv1 and Negotiate remain refused by `ParseScheme` — the recorded design refuses NTLMv1 as a downgrade
+  (`ntlm.go`), and Negotiate needs a Kerberos credential (or an NTLM-inside-Negotiate fallback nobody has decided on).

@@ -582,14 +582,22 @@ func ntlmAnswer(rule Credential, negotiate, challengeMsg []byte) (string, error)
 	// pair's bytes re-encoded as UTF-16 would hash the double-encoded name the server
 	// never sent. A challenge with no domain pair hashes the empty one — the same input
 	// a domain-less account would produce.
-	domain := ""
-	if pairs := avPairs(challenge.TargetInfo); pairs != nil {
-		if nb, ok := pairs[avIDNbDomain]; ok {
-			domain = utf16Text(nb)
+	//
+	// A "DOMAIN\user" username names its own domain, and that one is used: the account is in the
+	// domain the operator typed, which need not be the server's own (a member server of a
+	// trusting domain names itself, not the account's domain). Without the split the whole
+	// "DOMAIN\user" string was hashed as the user name, and the console's own hint for the field
+	// produced a credential that could never verify.
+	domain, user, ownDomain := splitNTLMUser(rule.Username)
+	if !ownDomain {
+		if pairs := avPairs(challenge.TargetInfo); pairs != nil {
+			if nb, ok := pairs[avIDNbDomain]; ok {
+				domain = utf16Text(nb)
+			}
 		}
 	}
 
-	key := ntowfv2(rule.Username, domain, rule.password)
+	key := ntowfv2(user, domain, rule.password)
 
 	// A MIC is asked for by setting MsvAvFlags' MIC bit in the challenge's own target
 	// info (MS-NLMP 3.2.5.1.1). The v2 response is computed ONCE, over the target info
@@ -605,7 +613,7 @@ func ntlmAnswer(rule Credential, negotiate, challengeMsg []byte) (string, error)
 
 	msg := buildAuthenticate(authenticateInput{
 		domain:       domain,
-		user:         rule.Username,
+		user:         user,
 		workstation:  "",
 		lmResponse:   lmv2Response(key, challenge.ServerChallenge, clientChallenge),
 		ntResponse:   ntResponse,

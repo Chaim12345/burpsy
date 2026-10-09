@@ -65,31 +65,25 @@ func matchHost(pattern, host string) bool {
 
 // Scheme is an HTTP authentication scheme burpsy can present a credential under.
 //
-// # What is deliberately not here
+// # What is here, and what is not
 //
-// Burp offers five schemes: Basic, Digest, NTLMv1, NTLMv2 and Negotiate. This type
-// has two. NTLM and Negotiate are **not supported**, and the reason they are absent
-// from the type rather than present-and-erroring is that a scheme selector
-// containing an option that does nothing is worse than a selector without it: the
-// operator configures the credential, the tool reports success, and the requests go
-// out unauthenticated with nothing anywhere saying so.
+// Burp offers five schemes: Basic, Digest, NTLMv1, NTLMv2 and Negotiate. This type has three:
+// Basic, Digest and NTLMv2. NTLMv1 and Negotiate are **not supported**, and the reason they are
+// absent from the type rather than present-and-erroring is that a scheme selector containing an
+// option that does nothing is worse than a selector without it: the operator configures the
+// credential, the tool reports success, and the requests go out unauthenticated with nothing
+// anywhere saying so. ParseScheme refuses both by name; ntlm.go's package comment gives the reasons
+// (NTLMv1 is DES under the NT hash with no client entropy; Negotiate needs a Kerberos credential).
 //
-// The technical reason for the omission, so that a later reader can weigh it rather
-// than rediscover it:
+// # NTLM is connection-bound
 //
-//   - NTLM is a three-leg handshake (Negotiate → Challenge → Authenticate) whose
-//     state is bound to one TCP connection. Every dial path in internal/sender
-//     either pools connections through net/http (which chooses the connection, and
-//     may not reuse it across a 401 retry) or opens a fresh socket per send. Neither
-//     gives the connection affinity NTLM needs, so an NTLM implementation layered on
-//     top of them would authenticate intermittently — the worst possible failure for
-//     a credential, because it looks like a flaky target.
-//   - Negotiate/SPNEGO needs a Kerberos credential — a KDC, a keytab or a ccache —
-//     which is not a username and password typed into a panel, so the panel could
-//     not even collect the input it would need.
-//
-// Closing either gap is a connection-affinity change in internal/sender first, not
-// a scheme added here.
+// NTLM is a three-leg handshake (Negotiate → Challenge → Authenticate) whose state is bound to one
+// TCP connection, and a verified connection stays authenticated for the requests that follow on it.
+// The typed sender drives it as such (burpsy-react-ui-sel6): BeginConnectionAuth hands it an
+// NTLMExchange, and internal/sender runs the legs on one dedicated HTTP/1.1 connection that it
+// verifies and then discards (internal/sender/connauth.go). The host-keyed Authorization/Learn
+// branch for NTLM below remains for the proxy leg only, which relays a browser's own connection and
+// is not connection-bound — gaps.md records that.
 type Scheme string
 
 const (
@@ -99,15 +93,12 @@ const (
 	SchemeDigest Scheme = "digest"
 	// SchemeNTLMv2 answers an NTLMSSP CHALLENGE_MESSAGE with the MS-NLMP response
 	// algorithm (burpsy-react-ui-noz5). The codec is ntlm.go (buildNegotiate /
-	// parseChallenge / buildAuthenticate, full MIC); the three legs are driven by
-	// Credentials: NEGOTIATE goes out preemptively like Basic, the CHALLENGE_MESSAGE is
-	// learned by Learn like the Digest nonce, and the AUTHENTICATE leg rides the same
-	// bounded one-retry flow the Digest branch uses.
+	// parseChallenge / buildAuthenticate).
 	//
-	// Handshake state lives in the credential store keyed by host, not in a socket: the
-	// AUTHENTICATE message is computed against the CHALLENGE the server sent, so the
-	// learned bytes have to survive whatever connection carries the next request — the
-	// same property the Digest cache's doc states and for the same reason.
+	// On the sender the three legs are one NTLMExchange on one connection (BeginConnectionAuth,
+	// burpsy-react-ui-sel6). The proxy leg still uses the host-keyed Authorization/Learn
+	// branch — NEGOTIATE preemptively, the CHALLENGE learned per host — which is only correct
+	// for a server that does not bind its challenge to the connection; see gaps.md.
 	SchemeNTLMv2 Scheme = "ntlmv2"
 )
 
