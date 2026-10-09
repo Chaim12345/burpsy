@@ -42,7 +42,11 @@ list_tests() {
 }
 
 require_test() {
-  if ! list_tests "$scanner" | grep -qx "$1"; then
+  # The list is captured first: `grep -q` stops reading at its match, and under pipefail the
+  # writer's SIGPIPE would read as "the test is gone".
+  local names
+  names=$(list_tests "$scanner")
+  if ! grep -qx "$1" <<<"$names"; then
     echo "ci-shard: $1 no longer exists in $scanner; update scripts/ci-shard.sh so no shard runs nothing" >&2
     exit 1
   fi

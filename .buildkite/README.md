@@ -31,3 +31,10 @@ compared before anything else is decided. It is **not** a required check.
 
 The `beads` and `review-gate` checks stay on GitHub only: they depend on GitHub's merge commit,
 PR API and commit statuses.
+
+## Known gaps
+
+The agent image's own inputs are not pinned by digest: the `golang:1.26.2-bookworm` base image (a
+tag), the `bun.sh` install script (it installs exactly bun 1.4.2, but the script itself is fetched
+live), and Debian's `chromium` package. The test tools are pinned and hash-checked by
+`scripts/ci-install-tools.sh`. Pin these too before relying on Buildkite for more than comparison.

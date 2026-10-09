@@ -54,7 +54,9 @@ if ! command -v xmllint >/dev/null 2>&1; then
     exit 1
   fi
 fi
-xmllint --version 2>&1 | head -1
+# Bare, not piped into head: head exits after one line, xmllint takes SIGPIPE on the rest, and
+# under pipefail that aborted this step about one run in ten.
+xmllint --version
 
 stamps="$bin/.burpsy-ci-stamps"
 mkdir -p "$stamps"
@@ -66,8 +68,12 @@ current() {
   local name=$1 sha=$2 f; shift 2
   [ "$(head -n1 "$stamps/$name" 2>/dev/null)" = "$sha" ] || return 1
   for f in "$@"; do [ -e "$f" ] || return 1; done
+  # A stamp with no binary hashes is stale whenever binaries are named: it predates those hashes,
+  # so nothing says the binary is still the one that was installed.
   if [ "$(wc -l < "$stamps/$name")" -gt 1 ]; then
     tail -n +2 "$stamps/$name" | sha256sum -c --status - || return 1
+  else
+    for f in "$@"; do [ -f "$f" ] && return 1; done
   fi
   echo "$name already at its pin"
 }
