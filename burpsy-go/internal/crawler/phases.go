@@ -140,7 +140,7 @@ func EdgeKindOfTag(tag string) string {
 	switch tag {
 	case "a":
 		return "anchor"
-	case "area", "frame", "iframe", "redirect", "form", "speculative", "script":
+	case "area", "frame", "iframe", "redirect", "form", "speculative", "script", "clickable":
 		return tag
 	case tagMetaRefresh, tagRefreshHeader:
 		return "delayed_redirect"

@@ -475,6 +475,30 @@ type Config struct {
 	// confident wrong answer this field exists to prevent, and it is why RenderWithOutcome is
 	// preferred at every call site in this repository.
 	RenderWithOutcome func(ctx context.Context, url string) (string, RenderOutcome, error)
+	// Interact, when set, drives the rendered page in a browser — clicking its navigational controls
+	// and, when the options say so, filling and submitting its forms — so the routes a single-page
+	// application reaches only through interaction are discoverable at all (burpsy-react-ui-spa1).
+	//
+	// A ONE-SHOT render reads a page; it does not press anything. A SPA whose `/orders` route is a
+	// button click renders only the seed view, and a crawl that never clicks reports the application
+	// as having one page. This hook is the press: the caller returns the views, the run-time requests
+	// and the honest caps, and the crawler admits whatever links and requests they contain through
+	// the same gates a rendered link passes.
+	//
+	// A hook rather than a *domexec.Browser for the same two reasons Render is one: this package must
+	// not depend on chromedp at the point of use, and the caller owns the browser's lifetime — and,
+	// crucially, the SCOPE GATE. A browser interaction navigates, so the crawler's must run inside a
+	// gate Session (domexec.Session.Interact); this package cannot enforce that, which is why the
+	// caller wires it and why the interaction function is documented as needing a gate.
+	//
+	// Honesty rules the caller must know. A nil Interact is the previous crawl to the byte. A
+	// non-nil one that fails is SkipInteractionUnavailable, counted and sampled like any other
+	// refusal, so a crawl whose browser died says so instead of quietly claiming the one-shot render
+	// was the whole story. A pass that hit its own bounds is reported as capped on the crawl's
+	// report, never as an exploration that finished.
+	Interact func(ctx context.Context, url string, opts InteractionOptions) (Interaction, error)
+	// InteractOptions tunes the pass. Zero takes the package defaults, which are non-zero.
+	InteractOptions InteractionOptions
 	// RenderOptions tunes the wait. Zero-valued takes the package defaults, which are NON-ZERO: the
 	// floor of this feature is the fixed sleep the previous implementation used, so a crawl
 	// configured with nothing waits at least as long as it always did and no crawl gets slower.
@@ -557,6 +581,68 @@ type RenderOutcome struct {
 type RenderedRequest struct {
 	URL    string
 	Method string
+}
+
+// InteractionOptions tunes the browser-interaction pass (burpsy-react-ui-spa1). Zero-valued takes the
+// package defaults, which are NON-ZERO, so a crawl that sets nothing is bounded exactly as the
+// documented defaults say.
+type InteractionOptions struct {
+	// MaxClicks is how many navigational controls one page may be driven through. Zero takes
+	// DefaultMaxInteractionClicks.
+	MaxClicks int
+	// MaxForms is how many forms one page's pass may fill and submit. Zero takes
+	// DefaultMaxInteractionForms.
+	MaxForms int
+	// MaxWait caps the whole pass. Zero takes DefaultMaxInteractionWait.
+	MaxWait time.Duration
+	// FillForms types defaults into each visible field and submits the form. STATE-CHANGING: it
+	// writes to the application, so a crawl turnes it on deliberately.
+	FillForms bool
+}
+
+// The interaction bounds, mirrored here so the crawler's own report can cite them without importing
+// the browser package's constants into a JSON schema.
+const (
+	DefaultMaxInteractionClicks = 25
+	DefaultMaxInteractionForms  = 5
+	DefaultMaxInteractionWait   = 30 * time.Second
+)
+
+func (o InteractionOptions) withDefaults() InteractionOptions {
+	if o.MaxClicks <= 0 {
+		o.MaxClicks = DefaultMaxInteractionClicks
+	}
+	if o.MaxForms <= 0 {
+		o.MaxForms = DefaultMaxInteractionForms
+	}
+	if o.MaxWait <= 0 {
+		o.MaxWait = DefaultMaxInteractionWait
+	}
+	return o
+}
+
+// InteractionView is one browser action the pass performed, and what it produced. It is the
+// crawler-facing shape: the browser's own InteractionView carries the DOM, which the crawler turns
+// into links and requests rather than holding.
+type InteractionView struct {
+	Action   string
+	Selector string
+	Label    string
+	URL      string
+	DOM      string
+	Changed  bool
+	Error    string
+}
+
+// Interaction is one interaction pass's outcome, as the crawler consumes it.
+type Interaction struct {
+	Views           []InteractionView
+	Requests        []RenderedRequest
+	FormsFound      int
+	FormsSubmitted  int
+	ClicksAttempted int
+	ClicksAvailable int
+	Capped          bool
 }
 
 // SeedRequest is one concrete request a seeds-only run sends: what one operation of an API
@@ -735,6 +821,16 @@ type Report struct {
 	RenderedRequestsAdmitted    int `json:"rendered_requests_admitted,omitempty"`
 	RenderedRequestsNotGET      int `json:"rendered_requests_not_get,omitempty"`
 	RenderedRequestsOtherOrigin int `json:"rendered_requests_other_origin,omitempty"`
+	// The interaction pass (burpsy-react-ui-spa1). InteractionsRun counts pages the crawl drove in a
+	// browser; InteractionClicks the controls it dispatched against; the form pair the forms it found and
+	// the forms it submitted; InteractionsCapped the pages whose pass hit a bound before the page was
+	// exhausted. Capped is reported separately because a truncated exploration that reads as a complete
+	// one is exactly the confident wrong answer the bound exists to prevent.
+	InteractionsRun           int `json:"interactions_run,omitempty"`
+	InteractionClicks         int `json:"interaction_clicks,omitempty"`
+	InteractionFormsFound     int `json:"interaction_forms_found,omitempty"`
+	InteractionFormsSubmitted int `json:"interaction_forms_submitted,omitempty"`
+	InteractionsCapped        int `json:"interactions_capped,omitempty"`
 	// APIDocumentsRead counts API definitions (OpenAPI, Swagger, WSDL) the crawl read, and
 	// APIEndpointsFound the operations they declared (burpsy-react-ui-bwwg). Reported as a pair for
 	// the same reason the JSON pair is: a definition read is not a definition understood, and a
@@ -2352,7 +2448,67 @@ func (c *Crawler) perform(ctx context.Context, item frontierItem, raw []byte, re
 			}
 		}
 	}
+	// The interaction pass (burpsy-react-ui-spa1): drive the page in a browser — click its navigational
+	// controls and, when the options say so, fill and submit its forms — so the routes a single-page
+	// application reaches only through a click are discoverable at all. It runs AFTER the one-shot render,
+	// so the controls it clicks are the ones a browser actually built rather than whatever the wire bytes
+	// happened to carry.
+	//
+	// A failed pass is SkipInteractionUnavailable, its own reason and not SkipRenderUnavailable, because
+	// the two narrow the coverage claim for different content: a failed render loses the script-built
+	// routes, a failed interaction loses the routes behind a click.
+	if c.cfg.Interact != nil {
+		interaction, ierr := c.cfg.Interact(ctx, item.url.String(), c.cfg.InteractOptions)
+		if ierr != nil {
+			c.skips.record(SkipRecord{
+				Reason: SkipInteractionUnavailable, URL: item.url.String(), Method: item.method,
+				FoundAt: item.foundAt,
+				Detail:  "the browser-interaction pass failed: " + ierr.Error(),
+			})
+		} else {
+			c.admitInteraction(interaction, item, rep, lim)
+		}
+	}
 	rep.Fetches = append(rep.Fetches, fetch)
+}
+
+// admitInteraction folds one browser-interaction pass into the crawl: each view's resulting page is
+// parsed for links (discovered from a click, so the edge is tagged "clickable") and each same-origin
+// GET the pass observed is admitted as an API location. It mirrors the rendered pass's honesty rules:
+// a capped pass is recorded as capped, and an action that changed nothing is not a discovery.
+func (c *Crawler) admitInteraction(inter Interaction, item frontierItem, rep *Report, lim *LimitReport) {
+	rep.InteractionsRun++
+	rep.InteractionClicks += inter.ClicksAttempted
+	rep.InteractionFormsFound += inter.FormsFound
+	rep.InteractionFormsSubmitted += inter.FormsSubmitted
+	if inter.Capped {
+		rep.InteractionsCapped++
+		c.skips.record(SkipRecord{
+			Reason: SkipInteractionUnavailable, URL: item.url.String(), Method: item.method,
+			FoundAt: item.foundAt,
+			Detail: "the interaction pass reached a bound (clicks, forms or time) while the page was " +
+				"still yielding controls, so its discoveries are incomplete",
+		})
+	}
+	for _, v := range inter.Views {
+		if v.Error != "" || !v.Changed || v.DOM == "" {
+			// Nothing was discovered: either the action could not be dispatched (Error), or it changed
+			// nothing. Not a skip — an honest "this control led nowhere".
+			continue
+		}
+		page := parsePage([]byte(v.DOM), item.url, c.limits, c.cfg.RequestSpeculative)
+		for _, l := range page.links {
+			// Tagged "clickable" rather than the element's own tag, so the edge kind says HOW the
+			// location was found — behind a click — which is the fact a browser-less crawl would not
+			// have at all. The element may be an anchor, but the anchor existed only in the DOM the
+			// click produced.
+			l.tag = "clickable"
+			l.foundAtRendered = true
+			rep.LinksFound++
+			c.admit(l, item.url, item.depth+1, rep, lim)
+		}
+	}
+	c.admitRenderedRequests(inter.Requests, item, rep, lim)
 }
 
 // admitRenderedRequests admits the requests a rendered page issued at run time (burpsy-react-ui-hzzl)

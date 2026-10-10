@@ -296,11 +296,18 @@ const (
 	// SEED_URL_REDIRECTED_OUT_OF_SCOPE: the crawl's starting point contributed nothing, and this says
 	// why instead of an ordinary out-of-scope link.
 	SkipSeedRedirectedOutOfScope
+	// SkipInteractionUnavailable means the response was HTML and the crawl was configured to drive it
+	// in a browser (Config.Interact) but the pass could not run for this URL — no browser, a dead
+	// browser, a navigation error. Its own reason, and not SkipRenderUnavailable, because the two
+	// narrow the coverage claim for DIFFERENT content: a failed render loses the script-built ROUTES,
+	// a failed interaction loses the routes behind a CLICK, and an operator deciding whether to re-run
+	// needs to know which. See Config.Interact (burpsy-react-ui-spa1).
+	SkipInteractionUnavailable
 )
 
 // SkipAll is every reason, in declaration order — which is also the order per-reason counts are
 // reported in, so a caller can render a table without hard-coding the set.
-var SkipAll = [45]Skip{
+var SkipAll = [46]Skip{
 	SkipDestructiveLogout,
 	SkipDestructiveDelete,
 	SkipDestructivePurge,
@@ -346,6 +353,7 @@ var SkipAll = [45]Skip{
 	SkipWSDLInvalid,
 	SkipWSDLNoOperations,
 	SkipSeedRedirectedOutOfScope,
+	SkipInteractionUnavailable,
 }
 
 // slot is the position in SkipAll and the matching counter slot. A switch rather than a search:
@@ -443,6 +451,8 @@ func (s Skip) slot() int {
 		return 43
 	case SkipSeedRedirectedOutOfScope:
 		return 44
+	case SkipInteractionUnavailable:
+		return 45
 	}
 	panic("unknown Skip")
 }
@@ -540,6 +550,8 @@ func (s Skip) String() string {
 		return "wsdl-no-operations"
 	case SkipSeedRedirectedOutOfScope:
 		return "seed-redirected-out-of-scope"
+	case SkipInteractionUnavailable:
+		return "interaction-unavailable"
 	}
 	return "unknown"
 }
@@ -640,6 +652,8 @@ func (s Skip) Explanation() string {
 		return "the WSDL parsed but declares no operation, so the published service named nothing to call"
 	case SkipSeedRedirectedOutOfScope:
 		return "a seed URL redirected outside the engagement scope, so the crawl's starting point contributed nothing"
+	case SkipInteractionUnavailable:
+		return "the page was to be driven in a browser (clicks, form fills) and the interaction pass could not run for it, so any route reachable only by a click is missing rather than absent"
 	}
 	return "unknown skip"
 }
@@ -721,7 +735,7 @@ func (s Skip) Category() SkipCategory {
 	case SkipNotHTML, SkipSitemapUnparsed, SkipJSONUnparsed, SkipAPIUnparsed, SkipWSDLInvalid, SkipWSDLNoOperations,
 		SkipGraphQLUnparsed, SkipContentEncoded, SkipSendFailed, SkipResponseUnreadable,
 		SkipResponseTooLarge, SkipRetentionExcluded, SkipSessionExpired, SkipReloginFailed,
-		SkipRenderUnavailable:
+		SkipRenderUnavailable, SkipInteractionUnavailable:
 		return CategoryResponse
 	}
 	panic("unknown Skip")
