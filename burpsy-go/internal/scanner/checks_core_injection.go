@@ -63,7 +63,7 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	}
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-			probes := h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			probes := h.ProbeErrorClassifier(ctx, p, sqlErrorProbePayloads(), ClassifySQLError)
 			return append(probes, blindInjectionPointProbes(ctx, h, p)...)
 		})
 	if err != nil {

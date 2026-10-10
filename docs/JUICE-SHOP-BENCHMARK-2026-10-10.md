@@ -110,6 +110,12 @@ MIT) found four gaps beyond F1:
 | No way to see a query whose baseline matched nothing (logins, unknown ids) | widening `or` pairs with the inverted differential, a 5xx guard and the same twice-repeated confirmation; sent only when the run admits the intrusive tier, because `or 1=1` on an UPDATE or DELETE writes every row | `TestSQLiFindsTheJuiceShopLoginInjectionWithAWideningPair`, `TestSQLiSendsNoWideningPairWhenTheIntrusiveTierIsOff` |
 | MySQL and Oracle timing declined outright | MySQL `XOR(if(now()=sysdate(),sleep(N),0))` (bare and quoted forms; all three verified to sleep against a live MySQL 8.4) and Oracle `dbms_pipe.receive_message` (not verified live); "MySQL specific" and "Oracle specific" no longer declined | `TestTheMySQLAndOracleTimingPayloadsAreRenderedAndGated` |
 
+sqlmap's `errors.xml` (187 regexes, 31 engines) is now embedded verbatim
+(`burpsy-go/internal/scanner/sqlmapdata/`, matched by `sqlmap_errors.go` under the same
+baseline-absence rule). That makes a build a derived work of sqlmap (GPLv2-or-later): it was added
+for private, non-commercial research, and the licence must be settled before any distribution
+(`sqlmapdata/README.md`).
+
 One ranking fix rode along: `BestEvidence` ranked a boolean differential above an error signature
 while the finding rated them tentative and firm, so a point that produced both was reported at the
 weaker confidence. After the boolean pairs started firing on Juice Shop's search, it dropped from

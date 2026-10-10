@@ -475,6 +475,15 @@ func withheldProbe(point bcheck.InsertionPoint, payload, method string) Injectio
 // yet. A place with no history gets the list exactly as written.
 func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
+	return h.ProbeErrorClassifier(ctx, point, payloads, func(baseline, injected string) ErrorEvidence {
+		return ClassifyErrorEvidence(baseline, injected, signatures)
+	})
+}
+
+// ProbeErrorClassifier is ProbeErrorSignatures with the comparison supplied, for a bank that is
+// more than a substring list (ClassifySQLError adds sqlmap's regexes).
+func (h *ProbeHarness) ProbeErrorClassifier(ctx context.Context, point bcheck.InsertionPoint,
+	payloads []string, classify func(baseline, injected string) ErrorEvidence) []InjectionProbe {
 
 	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
@@ -488,7 +497,7 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 	for _, payload := range payloads {
 		out = append(out, h.probe(ctx, point, payload,
 			func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
-				ev := ClassifyErrorEvidence(baseline.Body, injected.Body, signatures)
+				ev := classify(baseline.Body, injected.Body)
 				switch ev.Evidence {
 				case InjectionEvidenceErrorSignature:
 					return ev.Evidence, "introduced " + ev.Matched[0]

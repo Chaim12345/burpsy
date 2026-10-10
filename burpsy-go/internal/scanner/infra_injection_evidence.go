@@ -162,8 +162,21 @@ func containsAny(forms []string, needle string) bool {
 }
 
 // ClassifySQLError and ClassifyXPathError bind the recovered banks to the comparison.
+//
+// The SQL bank is the substring list plus sqlmap's per-DBMS regexes (sqlmap_errors.go), under the
+// same rule: a match counts only when the baseline did not already carry it.
 func ClassifySQLError(baselineBody, injectedBody string) ErrorEvidence {
-	return ClassifyErrorEvidence(baselineBody, injectedBody, SQLErrorSignatures)
+	ev := ClassifyErrorEvidence(baselineBody, injectedBody, SQLErrorSignatures)
+	matched, pre := classifySqlmapErrors(baselineBody, injectedBody)
+	ev.Matched = append(ev.Matched, matched...)
+	ev.Preexisting = append(ev.Preexisting, pre...)
+	switch {
+	case len(ev.Matched) > 0:
+		ev.Evidence = InjectionEvidenceErrorSignature
+	case len(ev.Preexisting) > 0:
+		ev.Evidence = InjectionEvidenceInconclusive
+	}
+	return ev
 }
 
 func ClassifyXPathError(baselineBody, injectedBody string) ErrorEvidence {
