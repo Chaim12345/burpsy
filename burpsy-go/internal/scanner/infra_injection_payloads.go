@@ -119,6 +119,19 @@ var SQLErrorSignatures = []string{
 	"Column name or number of supplied values does not match table definition",
 	"Column count doesn't match value count at row",
 	"MDB2 Error: syntax error",
+
+	// SQLite. Not in Ze2s, and its absence was a false clean: OWASP Juice Shop's product search
+	// answers a single quote with "SQLITE_ERROR: near ...: syntax error" and this bank matched
+	// nothing in it. The first entry is the result-code name node-sqlite3 puts in the message;
+	// the second is sqlite3_errstr(SQLITE_ERROR), which bindings that use the C API's text
+	// (modernc.org/sqlite among them) print instead; the rest are how the common bindings wrap
+	// it, plus the tokenizer's own message, which is SQLite-specific wording.
+	"SQLITE_ERROR",
+	"SQL logic error",
+	"SQLiteException",
+	"sqlite3.OperationalError",
+	"SQLite3::SQLException",
+	"unrecognized token:",
 }
 
 // XPathErrorSignatures is recovered from burp.Ze2s, which banks XPath errors alongside SQL
