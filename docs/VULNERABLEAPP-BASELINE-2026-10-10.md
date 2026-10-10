@@ -44,6 +44,17 @@ Score (TPR − FPR): **12.9%** strict, 16.3% lenient. Default server config: 4.8
 The 0 FP is misleading: CWE matching hides off-target findings. "OS command injection" fired on
 35 cases, 30 of them not command injection; code-injection and SSTI checks did the same.
 
+## Rerun after the encoder fix (`c465f213`)
+
+Same 168 cases, uncapped, 8 workers: **19 TP / 128 FN / 0 FP, 12.9% — unchanged.** The wire log
+confirms the fix works (`?value=%22%3E%3Csvg…` instead of a raw `"><svg`, no more 400s), but every
+VulnerableApp XSS endpoint answers `Content-Type: text/plain`: the app's own JavaScript fetches it
+and writes it into the page with `innerHTML`. That is DOM XSS through a single-page app, which a
+server-side reflected-XSS check rightly does not report on a text/plain response. Scoring those 14
+cases needs the DOM engine (`check_dom`, Chrome) driving the app's HTML pages, not an audit of the
+API exchange — a harness change, tracked in j1mk.38. The encoder fix still matters for any target
+that reflects into HTML on Tomcat or Spring.
+
 ## Findings and beads
 
 | Bead | |
