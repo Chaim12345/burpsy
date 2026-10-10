@@ -25,10 +25,11 @@ second-order SQLi exists (`checks_stored.go`). No OOB, UNION, stacked, NoSQL or 
 | v0ei.7 | sqlmap hand-off from Repeater/issues as an extscan tool (`-r` request file, `--batch`, pre-filled param/DBMS/technique, scope enforced, traffic through the proxy; optional sqlmapapi) | 2 |
 | v0ei.8 | Opt-in WAF-evasion variants (comments, case, encodings, JSON-SQL syntax) | 3 |
 
-**Licence decision needed.** sqlmap is GPLv2 and its licence text treats a tool that reads its data
-files (`xml/*.xml`) — and arguably one that parses its output — as a derived work. burpsy therefore
-writes its own payloads and signatures and runs sqlmap only as an external tool showing raw output.
-burpsy has **no LICENSE file**; choosing one settles how far the sqlmap integration can go.
+**Licence: decided 2026-10-10 — burpsy is GPL-3.0-or-later** (`LICENSE`). sqlmap is GPL-2.0-or-later
+("version 2 (or later)" with clarifications), so burpsy may read and embed sqlmap's data files
+(`xml/errors.xml`, `xml/payloads/*.xml`, `xml/boundaries.xml`, `xml/queries.xml`) and execute sqlmap
+and parse its results. Keep sqlmap's copyright notices with any embedded data, and record what was
+taken and from which sqlmap version. The Go dependencies (MIT/BSD/Apache-2.0) are GPL-3 compatible.
 
 ## Other classes (epic 0vzb)
 
