@@ -385,7 +385,13 @@ func (h *ProbeHarness) SendAppending(ctx context.Context, point bcheck.Insertion
 // ledger — the one place a probe's response is recorded, so no probe path (direct Send,
 // probe, or the baseline) can skip it.
 func (h *ProbeHarness) guidedSend(point *bcheck.InsertionPoint, payload string, ctx context.Context) (ProbeResponse, error) {
-	mutated, err := point.Apply(h.reqBytes, payload, false)
+	return h.guidedSendOpts(point, payload, bcheck.ApplyOptions{}, ctx)
+}
+
+// guidedSendOpts is guidedSend with an escape policy. The coverage ledger records the payload as
+// written, not as escaped, so the guide orders by what the check asked for.
+func (h *ProbeHarness) guidedSendOpts(point *bcheck.InsertionPoint, payload string, opts bcheck.ApplyOptions, ctx context.Context) (ProbeResponse, error) {
+	mutated, err := point.ApplyOpts(h.reqBytes, payload, false, opts)
 	if err != nil {
 		return ProbeResponse{}, fmt.Errorf("applying payload to %s %q: %w", point.Kind, point.Name, err)
 	}
@@ -441,9 +447,17 @@ func (h *ProbeHarness) orderPayloads(point bcheck.InsertionPoint, payloads []str
 // becomes an inconclusive probe rather than a clean one.
 func (h *ProbeHarness) probe(ctx context.Context, point bcheck.InsertionPoint, payload string,
 	classify func(baseline, injected ProbeResponse) (InjectionEvidence, string)) InjectionProbe {
+	return h.probeOpts(ctx, point, payload, bcheck.ApplyOptions{}, classify)
+}
+
+// probeOpts is probe with an escape policy: the apply options decide how the payload is spelled for
+// its container, so a probe whose payload IS the escape (a traversal `..%2f`) can send it raw.
+func (h *ProbeHarness) probeOpts(ctx context.Context, point bcheck.InsertionPoint, payload string,
+	opts bcheck.ApplyOptions,
+	classify func(baseline, injected ProbeResponse) (InjectionEvidence, string)) InjectionProbe {
 
 	out := InjectionProbe{Payload: payload}
-	injected, err := h.guidedSend(&point, payload, ctx)
+	injected, err := h.guidedSendOpts(&point, payload, opts, ctx)
 	if err != nil {
 		out.Evidence = InjectionEvidenceInconclusive
 		out.Detail = fmt.Sprintf("%s %q: probe not sent: %v", point.Kind, point.Name, err)
@@ -484,8 +498,28 @@ func withheldProbe(point bcheck.InsertionPoint, payload, method string) Injectio
 // response cells at this place on earlier exchanges are sent first — gofuzz's
 // "mutate what discovered new blocks", restated for a place that has not answered
 // yet. A place with no history gets the list exactly as written.
+//
+// The escape-then-probe form: the payload is escaped for its container (percent-escape for a `k=v`
+// pair), so a payload carrying a literal `../` arrives decoded by the target's own parameter parser.
 func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
+	return h.probeErrorSignatures(ctx, point, payloads, signatures, false)
+}
+
+// ProbeErrorSignaturesRaw is ProbeErrorSignatures with the Raw escape policy (burpsy-react-ui-79ld;
+// j1mk.35): the payload's own bytes reach the wire verbatim. A traversal payload is the probe — a
+// `..%2f` separator spelled for a filter that does a literal `..` contains-check, or a `%00`
+// terminator the filesystem API honours and a string filter does not — and percent-escaping the `%`
+// turns `..%2f` into `..%252f`, which the target decodes once to the literal two characters the
+// application never decodes again. The default policy's own escape is what a traversal probe exists
+// to get past, so this bank is sent raw.
+func (h *ProbeHarness) ProbeErrorSignaturesRaw(ctx context.Context, point bcheck.InsertionPoint,
+	payloads []string, signatures []string) []InjectionProbe {
+	return h.probeErrorSignatures(ctx, point, payloads, signatures, true)
+}
+
+func (h *ProbeHarness) probeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
+	payloads []string, signatures []string, raw bool) []InjectionProbe {
 
 	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
@@ -497,7 +531,7 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 	}
 	payloads = h.orderPayloads(point, payloads)
 	for _, payload := range payloads {
-		out = append(out, h.probe(ctx, point, payload,
+		out = append(out, h.probeOpts(ctx, point, payload, bcheck.ApplyOptions{Raw: raw},
 			func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 				ev := ClassifyErrorEvidence(baseline.Body, injected.Body, signatures)
 				switch ev.Evidence {

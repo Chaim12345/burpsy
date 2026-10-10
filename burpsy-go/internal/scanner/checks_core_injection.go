@@ -404,7 +404,12 @@ func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Findi
 	}
 	res, err := runInjection(ctx, cc, "FilePathTraversalCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-			return h.ProbeErrorSignatures(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
+			// Raw, because a traversal payload IS its own escaping (j1mk.35): `..%2f` is spelled
+			// for a filter that contains-checks a literal `..`, and `%00` for one that truncates
+			// on the string but not on the path. The default percent-escape would turn `..%2f`
+			// into `..%252f`, which the target decodes once to a literal `%2f` the application
+			// never decodes again — the probe would test the wrong string.
+			return h.ProbeErrorSignaturesRaw(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
 		})
 	if err != nil {
 		return nil, fmt.Errorf("File path traversal: %w", err)

@@ -54,19 +54,39 @@ def http_json(method, url, body=None, headers=None, timeout=60):
     return json.loads(raw) if raw else None
 
 
-def configure_probe_timeout(web, ms):
-    """Cap each audit probe so a target that accepts a request and never answers (the app's
-    command-injection endpoints leave a shell waiting on a stdout that never closes) is bounded by
-    THIS clock, not the whole audit budget. PUT /api/scanner/config is gated, so the token is minted
-    at its own /confirm route. Best-effort: if the process refuses, the run still works, just with
-    the slower whole-budget behaviour the --audit-timeout then absorbs."""
-    body = json.dumps({"probe_timeout_ms": ms})
+# FULL_PROFILE turns on every check family the scanner offers. The default server config leaves
+# several off (check_active_injection, check_reflection_probes, check_extended_active,
+# check_extended_coverage, check_xxe, check_stored, check_corpus), which is j1mk.37: a default scan
+# scores far below the full profile on VulnerableApp. A benchmark of what the scanner CAN detect
+# must run the full profile, so a miss is a detection gap and not a configuration choice.
+FULL_PROFILE = {
+    "check_sqli": True, "check_xss": True, "check_path_traversal": True, "check_ssrf": True,
+    "check_xxe": True, "check_jwt_weak": True, "check_js_vulns": True, "check_headers": True,
+    "check_cache_poisoning": True, "check_extended_coverage": True, "check_reflection_probes": True,
+    "check_host_discovery": True, "check_response_dependence": True, "check_passive_posture": True,
+    "check_passive_analysis": True, "check_active_injection": True, "check_extended_active": True,
+    "check_out_of_band": True, "check_stored": True,
+    # DOM stays off: it needs Chrome and its own budget, and the DOM family is scored separately.
+    "check_dom": False, "check_corpus": False,
+}
+
+
+def configure_scanner(web, ms, profile):
+    """Set the per-probe clock and (by default) the full check profile through one PUT.
+
+    A target that accepts a request and never answers — the app's command-injection endpoints leave
+    a shell waiting on a stdout that never closes — is then bounded by the per-probe clock rather
+    than a case's whole audit budget. PUT /api/scanner/config is gated, so the token is minted at
+    its own /confirm route. Best-effort: if the process refuses, the run still works, just slower."""
+    body = json.dumps({**profile, "probe_timeout_ms": ms})
     try:
         tok = json.loads(http("POST", f"{web}/api/scanner/config/confirm",
                               {"method": "PUT", "url": "/api/scanner/config", "body": body}))["token"]
-        http("PUT", f"{web}/api/scanner/config", body, {CONFIRM_HEADER: tok})
+        confirmed = http_json("PUT", f"{web}/api/scanner/config", body, {CONFIRM_HEADER: tok})
+        on = [k for k, v in confirmed.items() if k.startswith("check_") and v]
+        sys.stderr.write(f"scanner profile: {len(on)} families on\n")
     except Exception as e:
-        sys.stderr.write(f"warning: could not set probe_timeout_ms={ms}: {e}\n")
+        sys.stderr.write(f"warning: could not set the scanner profile: {e}\n")
 
 
 def confirm(web, method, path, body):
@@ -258,6 +278,10 @@ def main():
     ap.add_argument("--web", default="http://127.0.0.1:18081", help="burpsy web API")
     ap.add_argument("--example", default="1", help="example value for the case parameter")
     ap.add_argument("--limit", type=int, default=0, help="scan at most N cases (0 = all)")
+    ap.add_argument("--family", default="", help="only cases in this family (e.g. PathTraversal) or "
+                                                 "carrying this VulnerabilityType (e.g. PATH_TRAVERSAL)")
+    ap.add_argument("--full-profile", action="store_true",
+                    help="turn on every check family (the default server config leaves several off)")
     ap.add_argument("--probe-timeout-ms", type=int, default=8000,
                     help="per-probe cap set via /api/scanner/config, so one wedged probe cannot "
                          "consume the whole audit budget")
@@ -268,7 +292,7 @@ def main():
                     help="exit non-zero when the strict score percent is under this")
     args = ap.parse_args()
 
-    configure_probe_timeout(args.web, args.probe_timeout_ms)
+    configure_scanner(args.web, args.probe_timeout_ms, FULL_PROFILE if args.full_profile else {})
     cases = fetch_cases(args.app)
     # Hazardous families run LAST: the command-injection and RCE endpoints execute what they are
     # sent, and a probe loop can wedge the target's request thread (seen live: CommandInjection
@@ -277,6 +301,12 @@ def main():
     HAZARD = {"COMMAND_INJECTION", "REMOTE_CODE_EXECUTION", "INSECURE_DESERIALIZATION",
               "DENIAL_OF_SERVICE", "UNCONTROLLED_RESOURCE_CONSUMPTION"}
     cases.sort(key=lambda c: any(t in HAZARD for t in c["vulnerabilityTypes"]))
+    if args.family:
+        want = args.family
+        cases = [c for c in cases
+                 if want in [p for p in c["url"].split("/") if p]
+                 or want in c["vulnerabilityTypes"]]
+        sys.stderr.write(f"family filter {want!r}: {len(cases)} case(s)\n")
     if args.limit:
         cases = cases[: args.limit]
 
@@ -311,6 +341,25 @@ def main():
         denom = tp + fn + fp + tn
         return 100.0 * (tp - fp) / denom if denom else 0.0
 
+    # Per-case detail: a table of categories answers "which class do we miss"; this answers "which
+    # case", which is what a fix needs. A miss names every finding raised on the exchange, so an
+    # off-target hit is visible rather than hidden by the CWE filter.
+    per_case = []
+    for case, res in zip(cases, results):
+        if res is None:
+            continue
+        types = case["vulnerabilityTypes"]
+        rel = [f for f in res
+               if not (strict[4] and f["check_name"] in BLANKET_CHECK_NAMES)
+               and (finding_cwes(f) & family_cwes(types))]
+        per_case.append({
+            "url": case["url"],
+            "variant": case["variant"],
+            "types": types,
+            "hit": bool(rel),
+            "findings": sorted({f["check_name"] for f in res}),
+        })
+
     report = {
         "app": args.app,
         "cases": len(cases),
@@ -320,6 +369,7 @@ def main():
         "by_type": {
             t: dict(c) for t, c in sorted(strict[4].items())
         },
+        "per_case": per_case,
     }
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
