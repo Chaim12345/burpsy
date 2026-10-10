@@ -213,10 +213,25 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 // response — a redirect follower needs the bytes as they arrived and the same gate the probe left
 // through, so its hops are refused and counted on the counters the probe's own refusal would be.
 func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSender, raw []byte) (ProbeResponse, []byte, error) {
+	// The per-probe clock, the same rule bcheck_runner.go applies through sendProbe. Without it a
+	// native probe that never gets an answer rides the audit item's deadline — the WHOLE budget —
+	// because gate.Send takes the dispatch context straight through. A target that accepts the
+	// request and then blocks (an `&echo …` command-injection payload whose shell is left waiting
+	// on a stdout that never closes is the live example) hung every audit of that exchange for the
+	// full 120 s with no way to observe progress, which is the "a probe has no clock of its own"
+	// gap ProbeTimeout documents itself as closing. Cancellation still propagates both ways: the
+	// derived context is cancelled when the probe returns (defer), and a cancelled parent cancels
+	// the probe.
+	sendCtx := ctx
+	if budget := probeBudgetFor(h.scanner); budget > 0 {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(ctx, budget)
+		defer cancel()
+	}
 	meter := meterFrom(ctx)
 	meter.attempt()
 	refusedBefore := gate.Refused()
-	res, err := gate.Send(ctx, raw)
+	res, err := gate.Send(sendCtx, raw)
 	if gate.Refused() > refusedBefore {
 		meter.refusal()
 		return ProbeResponse{}, nil, fmt.Errorf("refused: outside the engagement scope: %w", err)
