@@ -2156,7 +2156,8 @@ func jsonStringValues(s string) []jsonValue {
 // and other strict servers answer them with 400 before the application runs, so
 // sending them raw silently killed every XSS probe on those targets (j1mk.32).
 // The container decodes them back, so the application still receives the payload
-// as written. Everything else is passed through.
+// as written. Everything else is passed through. This is the default policy; the
+// Raw policy is percentEscapeOpts.
 func percentEscape(s string) string {
 	return percentEscapeOpts(s, false)
 }
@@ -2180,9 +2181,15 @@ func percentEscapeOpts(s string, raw bool) string {
 		var escaped bool
 		switch {
 		case raw:
-			// Structural and request-line safety only: `%` and the high bytes pass through.
-			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20 ||
-				requestLineIllegal(c)
+			// Structural and request-line safety only: `%` and the high bytes pass through, and so
+			// do the RFC-3986 illegal bytes — this policy's whole point is that the payload's own
+			// bytes reach the application (the invalid-UTF-8 variant needs a raw `|`, the
+			// backslash variant a raw `\`). Escaping them here is exactly the rewrite Raw exists
+			// to prevent; the reference server 400 that j1mk.32 fixed is the DEFAULT policy's
+			// problem, and it is escaped there. The decoding variants are sent to targets whose
+			// server accepts the bytes, and a target that 400s them yields no reflection, which the
+			// probe already reports as no evidence — a missed variant, never a false positive.
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20
 		default:
 			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
 				c <= 0x20 || c >= 0x7f || requestLineIllegal(c)
@@ -2198,7 +2205,8 @@ func percentEscapeOpts(s string, raw bool) string {
 
 // requestLineIllegal reports the printable ASCII bytes RFC 3986 does not allow in a query, which
 // strict servers reject with 400. Escaping them is transport, not rewriting: the container decodes
-// them before the application reads the value, so Raw escapes them too.
+// them before the application reads the value. This is the DEFAULT policy's rule only — Raw
+// deliberately leaves them byte-exact (see percentEscapeOpts).
 func requestLineIllegal(c byte) bool {
 	switch c {
 	case '"', '<', '>', '\\', '^', '`', '{', '|', '}', '[', ']':

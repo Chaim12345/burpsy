@@ -1585,16 +1585,38 @@ func TestEnumerateAppliesTheDefaultCap(t *testing.T) {
 }
 
 // j1mk.32: strict servers (Tomcat, Spring Boot) answer a raw `"`, `<` or `>` in the query with 400,
-// so XSS payloads must reach the wire escaped — in both the default and the Raw policy.
+// so the DEFAULT policy escapes request-line-illegal bytes and the container decodes them back.
 func TestPercentEscapeRequestLineIllegal(t *testing.T) {
 	const payload = `"><svg/onload=alert(1)>`
-	for _, raw := range []bool{false, true} {
-		got := percentEscapeOpts(payload, raw)
-		if strings.ContainsAny(got, `"<>`) {
-			t.Fatalf("raw=%v: %q still carries request-line-illegal bytes", raw, got)
-		}
-		if dec := percentDecode(got); dec != payload {
-			t.Fatalf("raw=%v: %q decodes to %q, want %q", raw, got, dec, payload)
-		}
+	got := percentEscapeOpts(payload, false)
+	if strings.ContainsAny(got, `"<>`) {
+		t.Fatalf("the default policy left request-line-illegal bytes in %q", got)
+	}
+	if dec := percentDecode(got); dec != payload {
+		t.Fatalf("the default policy's %q decodes to %q, want %q: escaping is transport, the "+
+			"application must still see the payload as written (j1mk.32)", got, dec, payload)
+	}
+}
+
+// The Raw policy is the OPPOSITE of the default for these bytes, and that asymmetry is
+// deliberate (burpsy-react-ui-79ld): Raw exists so a decoding-variant payload reaches the wire
+// byte-exact — the invalid-UTF-8 variant carries a raw `|`, the backslash variant a raw `\`,
+// and percent-encoding either is the rewrite Raw is named for. j1mk.32 applied the default's
+// escape to Raw as well, which is a regression against this contract and against
+// TestRawApplyLeavesTheVariantBytesUntouched in internal/scanner.
+func TestRawPolicyLeavesRequestLineIllegalBytesByteExact(t *testing.T) {
+	// The bytes the invalid-UTF-8 and backslash variants need raw: `"` `<` `>` `|` `\`. No `=`,
+	// which is a container separator and stays escaped in both policies.
+	const payload = `"><svg|x\y`
+	got := percentEscapeOpts(payload, true)
+	if !strings.Contains(got, payload) {
+		t.Fatalf("the Raw policy rewrote %q into %q: a decoding variant's own bytes must reach the "+
+			"wire verbatim, or the variant probes something the check never wrote", payload, got)
+	}
+	// What Raw still keeps is the request's own structure: the `k=v` separators and the space.
+	structural := percentEscapeOpts("a&b=c d", true)
+	if !strings.Contains(structural, "a%26b%3Dc%20d") {
+		t.Fatalf("the Raw policy left %q: the container separators and the space must stay "+
+			"escaped, or the payload splices itself a second parameter", structural)
 	}
 }
