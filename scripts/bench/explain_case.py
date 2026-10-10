@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vulnapp_cases import FAMILY_PARAMS, TYPE_CWES  # noqa: E402
-from run_vulnapp import FULL_PROFILE  # noqa: E402
+from run_vulnapp import FULL_PROFILE, configure_scanner  # noqa: E402
 
 CONFIRM = "X-Burpsy-Confirm"
 
@@ -65,12 +65,9 @@ def main():
     target = f"{url}{'&' if '?' in url else '?'}{param}={args.example}" if param else url
     print(f"case     : {url}\nfamily   : {family}\nparam    : {param}\nseed     : {target}\n")
 
-    # Set the per-probe clock so one wedged probe cannot eat the whole audit budget.
-    body = json.dumps({**(FULL_PROFILE if args.full_profile else {}), "probe_timeout_ms": args.probe_timeout_ms})
-    try:
-        http("PUT", f"{args.web}/api/scanner/config", body, {CONFIRM: mint(args.web, "PUT", "/api/scanner/config", body)})
-    except Exception as e:
-        print(f"warning: could not set probe_timeout_ms: {e}")
+    # Set the per-probe clock and (optionally) the full check profile. Reuses the harness's own
+    # configure_scanner so the two tools cannot disagree about which route the token is minted at.
+    configure_scanner(args.web, args.probe_timeout_ms, FULL_PROFILE if args.full_profile else {})
 
     before = {r["id"] for r in http("GET", f"{args.web}/api/history")}
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": args.proxy, "https": args.proxy}))

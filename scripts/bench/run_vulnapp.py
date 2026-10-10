@@ -38,7 +38,18 @@ CONFIRM_HEADER = "X-Burpsy-Confirm"
 
 
 def http(method, url, body=None, headers=None, timeout=60):
-    data = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
+    # A str body is already-serialised JSON and is sent byte-for-byte; a dict is serialised here.
+    # Both cases matter to the confirm gate, which hashes the exact body bytes it was shown: a
+    # str that got re-serialised into a JSON string literal would be a different request than the
+    # one the token was minted for, and the PUT would be refused (428).
+    if body is None:
+        data = None
+    elif isinstance(body, bytes):
+        data = body
+    elif isinstance(body, str):
+        data = body.encode()
+    else:
+        data = json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
@@ -77,8 +88,12 @@ def configure_scanner(web, ms, profile):
     A target that accepts a request and never answers — the app's command-injection endpoints leave
     a shell waiting on a stdout that never closes — is then bounded by the per-probe clock rather
     than a case's whole audit budget. PUT /api/scanner/config is gated, so the token is minted at
-    its own /confirm route. Best-effort: if the process refuses, the run still works, just slower."""
-    body = json.dumps({**profile, "probe_timeout_ms": ms})
+    its own /confirm route. Best-effort: if the process refuses, the run still works, just slower.
+
+    The body is serialised ONCE, to the exact bytes both the mint and the PUT send: the confirm
+    gate hashes the body it was shown, so a mint made from one spelling and a PUT that sends
+    another are two different requests and the PUT is refused (428)."""
+    body = json.dumps({**profile, "probe_timeout_ms": ms}, separators=(",", ":"))
     try:
         tok = json.loads(http("POST", f"{web}/api/scanner/config/confirm",
                               {"method": "PUT", "url": "/api/scanner/config", "body": body}))["token"]
