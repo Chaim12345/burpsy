@@ -233,6 +233,12 @@ func NewSender(config *SenderConfig) *Sender {
 // several tests rely on.
 func networkFromConfig(config *SenderConfig) NetworkSettings {
 	settings := DefaultNetworkSettings()
+	// The TLS verification decision is seeded from the config (j1mk.33). It is the one setting with
+	// no safe zero value: a Sender built from SenderConfig{TLSVerify:false} and never re-configured
+	// must stay off, and one built from DefaultSenderConfig must stay on, until an operator says
+	// otherwise through ApplyNetwork. Without this seed the raw dial paths, which read the setting
+	// and not the config, would see the zero value and stop verifying.
+	settings.TLS.Verify = config.TLSVerify
 	total := int(config.Timeout / time.Millisecond)
 	settings.Timeouts.TotalMS = total
 	if total > 0 && settings.Timeouts.ConnectMS > total {
@@ -304,7 +310,7 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 		ResponseHeaderTimeout: time.Duration(settings.Timeouts.ReadMS) * time.Millisecond,
 		ExpectContinueTimeout: time.Duration(settings.Continue.ExpectTimeoutMS) * time.Millisecond,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: !config.TLSVerify,
+			InsecureSkipVerify: !effectiveTLSVerify(settings),
 		},
 	}
 
@@ -333,7 +339,7 @@ func buildClient(config *SenderConfig, settings NetworkSettings, carrier *upstre
 			// on it. A client-cert dial that quietly stopped honouring either of the other two
 			// would be the half-covered settings defect these units exist to close.
 			dialer := alpn.Dialer{
-				InsecureSkipVerify: !config.TLSVerify,
+				InsecureSkipVerify: !effectiveTLSVerify(settings),
 				Timeout:            time.Duration(settings.Timeouts.ConnectMS) * time.Millisecond,
 				Resolver:           settings.dialer().Resolver,
 				ClientCerts:        config.ClientCerts,
@@ -1435,11 +1441,26 @@ func (s *Sender) WithTimeout(timeout time.Duration) *Sender {
 	return s
 }
 
+// effectiveTLSVerify resolves one dial's verification decision from the live network settings.
+//
+// The settings are the single source of truth: settings.TLS.Verify is the operator-facing knob the
+// console edits and the proxy leg reads (f365, j1mk.33), and NewSender seeds it from
+// SenderConfig.TLSVerify so a sender built without ever opening the Settings panel still answers from
+// the config. That seed is what keeps the raw dial paths — dialTLS and the typed path's
+// DialTLSContext, neither of which used to read the setting at all — from treating an un-applied
+// settings document's zero value as "do not verify".
+func effectiveTLSVerify(settings NetworkSettings) bool {
+	return settings.TLS.Verify
+}
+
 // WithTLSVerify sets TLS verification.
 func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.TLSVerify = verify
+	// Keep the live settings in agreement, or the setting would be outvoted by the OR above exactly
+	// where a caller deliberately switched verification off.
+	s.net.TLS.Verify = verify
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
 	s.client = buildClient(s.config, s.net, s.carrier)
@@ -1458,7 +1479,7 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 // The cache is a mutex-guarded map rather than a sync.Once because the path can change while the sender
 // runs, which is the whole point of the setting being live.
 func (s *Sender) tlsPolicy(settings NetworkSettings) (verify bool, roots *x509.CertPool, minVersion uint16) {
-	verify = s.config.TLSVerify
+	verify = effectiveTLSVerify(settings)
 	minVersion = settings.TLS.MinVersion
 	path := strings.TrimSpace(settings.TLS.RootCAPath)
 	if path == "" {
