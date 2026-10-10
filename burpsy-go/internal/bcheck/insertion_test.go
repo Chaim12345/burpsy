@@ -1583,3 +1583,18 @@ func TestEnumerateAppliesTheDefaultCap(t *testing.T) {
 		t.Error("Enumerate truncated at the default cap without declining the excess")
 	}
 }
+
+// j1mk.32: strict servers (Tomcat, Spring Boot) answer a raw `"`, `<` or `>` in the query with 400,
+// so XSS payloads must reach the wire escaped — in both the default and the Raw policy.
+func TestPercentEscapeRequestLineIllegal(t *testing.T) {
+	const payload = `"><svg/onload=alert(1)>`
+	for _, raw := range []bool{false, true} {
+		got := percentEscapeOpts(payload, raw)
+		if strings.ContainsAny(got, `"<>`) {
+			t.Fatalf("raw=%v: %q still carries request-line-illegal bytes", raw, got)
+		}
+		if dec := percentDecode(got); dec != payload {
+			t.Fatalf("raw=%v: %q decodes to %q, want %q", raw, got, dec, payload)
+		}
+	}
+}

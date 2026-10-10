@@ -2151,8 +2151,12 @@ func jsonStringValues(s string) []jsonValue {
 // `&`, `=` and `;` are the separators; `+` and `%` change how the value itself
 // decodes, so leaving them raw would hand the application a payload other than
 // the one the check wrote; `#` truncates a URL; and anything outside printable
-// ASCII — space included — cannot appear in a request line at all. Everything
-// else is passed through, so an injection payload arrives looking like itself.
+// ASCII — space included — cannot appear in a request line at all. Neither can
+// `"` `<` `>` `\` `^` “ ` “ `{` `|` `}` `[` `]` (RFC 3986): Tomcat, Spring Boot
+// and other strict servers answer them with 400 before the application runs, so
+// sending them raw silently killed every XSS probe on those targets (j1mk.32).
+// The container decodes them back, so the application still receives the payload
+// as written. Everything else is passed through.
 func percentEscape(s string) string {
 	return percentEscapeOpts(s, false)
 }
@@ -2177,10 +2181,11 @@ func percentEscapeOpts(s string, raw bool) string {
 		switch {
 		case raw:
 			// Structural and request-line safety only: `%` and the high bytes pass through.
-			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20
+			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c <= 0x20 ||
+				requestLineIllegal(c)
 		default:
 			escaped = c == '&' || c == '=' || c == '+' || c == ';' || c == '#' || c == '%' ||
-				c <= 0x20 || c >= 0x7f
+				c <= 0x20 || c >= 0x7f || requestLineIllegal(c)
 		}
 		if escaped {
 			fmt.Fprintf(&sb, "%%%02X", c)
@@ -2189,6 +2194,17 @@ func percentEscapeOpts(s string, raw bool) string {
 		}
 	}
 	return sb.String()
+}
+
+// requestLineIllegal reports the printable ASCII bytes RFC 3986 does not allow in a query, which
+// strict servers reject with 400. Escaping them is transport, not rewriting: the container decodes
+// them before the application reads the value, so Raw escapes them too.
+func requestLineIllegal(c byte) bool {
+	switch c {
+	case '"', '<', '>', '\\', '^', '`', '{', '|', '}', '[', ']':
+		return true
+	}
+	return false
 }
 
 // jsonEscape escapes a payload for use inside a JSON string literal.
