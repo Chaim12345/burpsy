@@ -181,22 +181,22 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - External service interaction plants an interactsh domain: Burp's "Burp Collaborator".
 //   - A loaded corpus check is a BCheck's active half: "Active checks".
 var burpsyDetectionMethods = map[uint32][]string{
-	0x00100100:               {MethodStringEcho},                                                                                                  // OS command injection
-	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific}, // SQL injection
-	0x00100300:               {MethodFileRetrieval},                                                                                               // File path traversal
-	0x00100400:               {MethodFileRetrieval},                                                                                               // XML external entity injection
-	0x00100500:               {MethodBooleanConditions},                                                                                           // LDAP injection
-	0x00100600:               {MethodErrorMessages},                                                                                               // XPath injection
-	0x00100700:               {MethodErrorMessages},                                                                                               // XML injection
-	0x00100850:               {MethodResponseDiffing},                                                                                             // Broken access control
-	0x00100c00:               {MethodStringEcho},                                                                                                  // PHP code injection
-	0x00101080:               {MethodStringEcho},                                                                                                  // Server-side template injection
-	0x00101100:               {MethodStringEcho},                                                                                                  // SSI injection
-	0x00200100:               {MethodInBand},                                                                                                      // Cross-site scripting (stored)
-	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                      // HTTP request smuggling
-	0x00200300:               {MethodClientSide},                                                                                                  // Cross-site scripting (reflected)
-	0x00300200:               {MethodCollaborator},                                                                                                // External service interaction (DNS)
-	0x00300210:               {MethodCollaborator},                                                                                                // External service interaction (HTTP)
+	0x00100100:               {MethodStringEcho},                                                                                                                                             // OS command injection
+	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific}, // SQL injection
+	0x00100300:               {MethodFileRetrieval},                                                                                                                                          // File path traversal
+	0x00100400:               {MethodFileRetrieval},                                                                                                                                          // XML external entity injection
+	0x00100500:               {MethodBooleanConditions},                                                                                                                                      // LDAP injection
+	0x00100600:               {MethodErrorMessages},                                                                                                                                          // XPath injection
+	0x00100700:               {MethodErrorMessages},                                                                                                                                          // XML injection
+	0x00100850:               {MethodResponseDiffing},                                                                                                                                        // Broken access control
+	0x00100c00:               {MethodStringEcho},                                                                                                                                             // PHP code injection
+	0x00101080:               {MethodStringEcho},                                                                                                                                             // Server-side template injection
+	0x00101100:               {MethodStringEcho},                                                                                                                                             // SSI injection
+	0x00200100:               {MethodInBand},                                                                                                                                                 // Cross-site scripting (stored)
+	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                                                                 // HTTP request smuggling
+	0x00200300:               {MethodClientSide},                                                                                                                                             // Cross-site scripting (reflected)
+	0x00300200:               {MethodCollaborator},                                                                                                                                           // External service interaction (DNS)
+	0x00300210:               {MethodCollaborator},                                                                                                                                           // External service interaction (HTTP)
 	BCheckGeneratedTypeIndex: {MethodActiveChecks},
 }
 

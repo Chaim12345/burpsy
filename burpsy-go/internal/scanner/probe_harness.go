@@ -83,6 +83,9 @@ type ProbeHarness struct {
 	// place than a minimise_false_negatives run (accuracy=4), which is the whole
 	// point of the trade-off.
 	accuracy int
+	// intrusive is whether the run admits probes that can change data (CheckContext.IntrusiveProbes):
+	// today the SQL-injection `or` pairs, which widen an UPDATE or DELETE as readily as a SELECT.
+	intrusive bool
 
 	// The detection-method selection this check runs under (burpsy-react-ui-2hze): its catalogue
 	// row, the methods the run disabled for that row, and where a withheld probe is counted.
@@ -173,6 +176,7 @@ func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*Pr
 		h.accuracy = CheckAccuracy(cc.ScanAccuracy.Value).Attempts()
 	}
 	h.typeIndex, h.issue, h.disabled, h.declines = cc.CheckTypeIndex, cc.CheckIssue, cc.DisabledMethods, cc.MethodDeclines
+	h.intrusive = cc.IntrusiveProbes
 	h.points, h.declined = bcheck.EnumerateWith(raw, kinds, cc.ProbeEnumerateOptions())
 
 	baseline, err := h.send(ctx, raw)

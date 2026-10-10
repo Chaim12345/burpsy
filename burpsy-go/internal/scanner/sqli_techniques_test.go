@@ -242,8 +242,11 @@ func TestTheBlindTechniquePayloadsAreTheRecoveredForms(t *testing.T) {
 				}
 				t.Errorf("mssql payload %q gated by unexpected method %q", tp.payload, m)
 			}
+		case strings.Contains(tp.payload, "sysdate(),sleep(5)"), strings.Contains(tp.payload, "dbms_pipe.receive_message(('a'),5)"):
+			// MySQL and Oracle are documented standard forms, not recovered ones; their rendering and
+			// gating are pinned by TestTheMySQLAndOracleTimingPayloadsAreRenderedAndGated.
 		default:
-			t.Errorf("payload %q is neither dialect's recovered form", tp.payload)
+			t.Errorf("payload %q is no dialect's known form", tp.payload)
 		}
 	}
 	// 3 PostgreSQL breaks x 2 forms + 5 SQL Server breaks x 2 forms.

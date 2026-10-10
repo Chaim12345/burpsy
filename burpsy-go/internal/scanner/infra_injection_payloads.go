@@ -73,7 +73,8 @@ func (c QuotingContext) Prefix() string {
 // AllQuotingContexts is the full set, in the order the checks report them.
 var AllQuotingContexts = []QuotingContext{ContextUnquoted, ContextSingleQuoted, ContextDoubleQuoted}
 
-// SQLErrorSignatures is recovered from burp.Ze2s.
+// SQLErrorSignatures is recovered from burp.Ze2s, then extended (each block below says from
+// where) because Ze2s alone missed SQLite outright.
 //
 // Some entries are deliberately broad — "PostgreSQL", "SQLException" — and would match a
 // page that merely discusses a database. That is why no caller may treat a match as a
@@ -132,6 +133,43 @@ var SQLErrorSignatures = []string{
 	"sqlite3.OperationalError",
 	"SQLite3::SQLException",
 	"unrecognized token:",
+	"do not have the same number of result columns",
+
+	// From OWASP ZAP's SqlInjectionScanRule RDBMS table (zaproxy/zap-extensions, Apache-2.0),
+	// minus what Ze2s already carries and minus "[Microsoft]", which is too broad to mean a
+	// database. Mostly driver class names: a stack trace names the driver even when the
+	// application swallows the database's own message.
+	"com.mysql.jdbc.exceptions", "org.gjt.mm.mysql",
+	"The used SELECT statements have a different number of columns",
+	"com.microsoft.sqlserver.jdbc", "com.microsoft.jdbc", "com.inet.tds", "com.ashna.jturbo",
+	"weblogic.jdbc.mssqlserver", "[SQLServer]", "net.sourceforge.jtds.jdbc",
+	"80040e14", "800a0bcd", "80040e57",
+	"must have an equal number of expressions in their target lists",
+	"oracle.jdbc", "SQL command not properly ended", "query block has incorrect number of result columns",
+	"com.ibm.db2.jcc", "COM.ibm.db2.jdbc",
+	"org.postgresql.util.PSQLException", "each UNION query must have the same number of columns",
+	"syntax error at or near",
+	"com.sybase.jdbc", "com.informix.jdbc", "org.firebirdsql.jdbc", "interbase.interclient",
+	"org.hsqldb", "Unexpected end of command in statement", "sybase.jdbc.sqlanywhere",
+	"com.pointbase.jdbc", "com.ingres.jdbc",
+	"com.ibatis.common.jdbc", "org.hibernate", "sun.jdbc.odbc", "[ODBC Driver Manager]",
+	"System.Data.OleDb", "java.sql.SQLException",
+
+	// The databases' and drivers' own message texts (vendor documentation, not either tool), for
+	// engines and stacks neither table covers: MySQL/MariaDB as PHP and Node print them,
+	// PostgreSQL's psql and libpq forms, SQL Server's native client, DB2's SQLCODE, the embedded
+	// Java engines, and the ORMs that wrap a database error in their own class name.
+	"check the manual that corresponds to your MySQL server version",
+	"check the manual that corresponds to your MariaDB server version",
+	"Warning: mysql_", "Warning: mysqli_", "mysqli_sql_exception", "ER_PARSE_ERROR",
+	"PG::SyntaxError", "Warning: pg_query()", "pg_query(): Query failed", "psycopg2.errors.SyntaxError",
+	"invalid input syntax for type",
+	"Microsoft SQL Native Client error", "SQL Server Native Client", "System.Data.SqlClient.SqlException",
+	"Microsoft.Data.SqlClient.SqlException",
+	"DB2 SQL error", "SQLCODE=-",
+	"org.h2.jdbc", "org.apache.derby", "SQLSTATE[42000]", "SQLSTATE[42601]", "SQLSTATE[HY000]",
+	"PDOException", "SequelizeDatabaseError", "SQLAlchemy", "ActiveRecord::StatementInvalid",
+	"Npgsql.PostgresException", "DB::Exception: Syntax error",
 }
 
 // XPathErrorSignatures is recovered from burp.Ze2s, which banks XPath errors alongside SQL

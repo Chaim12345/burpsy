@@ -329,6 +329,11 @@ type CheckContext struct {
 	// as "the tier is off" — a unit test or a direct check call must not skip points on the
 	// strength of a run it never joined. Set by the dispatcher to the run's own state.
 	LightAudit *RunLightAudit
+	// IntrusiveProbes is whether the run admits probes that can change the target's data, inside a
+	// check that is otherwise read-only (the SQL-injection `or` pairs). False outside a dispatched
+	// audit; inside one, true unless the run's tier selection leaves the intrusive tier off — the
+	// same rule enabledChecksInTiers applies to whole intrusive checks.
+	IntrusiveProbes bool
 	// CheckTypeIndex and CheckIssue name the catalogue row of the check this context was built for
 	// (burpsy-react-ui-2hze). Zero and empty outside a dispatched native check, which is how a probe
 	// knows it has no detection-method selection to honour.
@@ -508,6 +513,8 @@ func newCheckContextForRun(ctx context.Context, scanner *ActiveScanner, exchange
 		// run launched under a named configuration must probe to THAT configuration's accuracy, not
 		// the server-wide default's. Without this the preset would reach the queue row and not the wire.
 		cc.ScanAccuracy = cfg.ScanAccuracy
+		tiers := activeTiers(cfg)
+		cc.IntrusiveProbes = tiers == nil || tiers[TierIntrusive]
 	}
 	// The light-audit tier rides the same context (7bkj): the dispatcher puts the run's
 	// state on, so every check the run dispatches sees one prior. Absent (a context built

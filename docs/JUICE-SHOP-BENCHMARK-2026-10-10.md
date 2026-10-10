@@ -15,10 +15,10 @@ ZAP 2.17.0 (`ghcr.io/zaproxy/zaproxy:stable`).
 
 ## Results
 
-| Vulnerability | ZAP | burpsy crawl and audit | burpsy seeded (master) | burpsy seeded (this fix) |
+| Vulnerability | ZAP | burpsy crawl and audit | burpsy seeded (master) | burpsy seeded (this branch) |
 |---|---|---|---|---|
 | SQL injection, `GET /rest/products/search?q=` | **High** | not reached | **missed** | **High, Firm** — "introduced SQLITE_ERROR" |
-| SQL injection, `POST /rest/user/login` (JSON `email`) | missed | not reached | missed | missed |
+| SQL injection, `POST /rest/user/login` (JSON `email`) | missed | not reached | missed | **High, Tentative** — widening `or` pair |
 | Open redirect, `GET /redirect?to=` | **High** | not reached | missed | missed |
 | Application error / debug message disclosure | Medium / Low | partial | – | – |
 | Sensitive data in responses (emails, password hashes, card numbers) | partial | **better than ZAP** | – | – |
@@ -52,6 +52,9 @@ the fix.
 
 ### F2 — Failed probes still label an item "Audited" (open, `burpsy-react-ui-8dnu`)
 
+A second crawl and audit, with no ZAP running, still left 3 of 140 items with send failures, so the
+timeouts are not only an artefact of concurrent load.
+
 During the crawl and audit, SQL injection and reflected XSS probes on `/api/Hints`,
 `/rest/memories` and one more item failed with `no baseline response: … i/o timeout`. The audit
 items recorded `send_failures: 2` and `unit_abandoned: 4`, yet each showed
@@ -67,13 +70,17 @@ audit therefore never reached `search?q=` or the login body. The crawl did find 
 definition (`/api-docs/swagger-ui-init.js`, reported as Informational); using it to seed
 parameterized requests is the obvious lever.
 
-### F4 — Login SQL injection in a JSON body is missed (open, `burpsy-react-ui-g6nt`)
+### F4 — Login SQL injection in a JSON body is missed (fixed in this branch, `burpsy-react-ui-g6nt`)
 
 Juice Shop's login answers `email: "x'"` with a bare `<title>Error</title>` (no database text), so
 only a blind technique can see it, and `' OR 1=1--` flips 401 to 200. The audit item reports
 `points_judged_ineffective: 10` and no finding. Either the JSON-body points were judged out before
 the boolean technique ran, or the boolean technique does not treat a 401→200 flip as a
-differential. Needs investigation; ZAP misses this one too.
+differential. ZAP misses this one too.
+
+Root cause: the boolean technique only accepted "true keeps the baseline, false changes it". A
+login's baseline matched no row, so an `and` pair leaves it unchanged in both halves; only an `or`
+pair can widen it, and that differential runs the other way. Fixed in F7.
 
 ### F5 — Open redirect not detected (open, `burpsy-react-ui-bo04`)
 
@@ -89,6 +96,28 @@ or query would catch this whole class of substring allow-list.
 
 The field is documented as "the human title" (`internal/web/api_capture.go`, `issueFindingView`),
 but all 375 findings in the crawl run carried `null`; consumers have to fall back to `check_name`.
+
+### F7 — SQL-injection detection depth (fixed in this branch)
+
+Research against OWASP ZAP's `SqlInjectionScanRule` (Apache-2.0) and sqlmap's `errors.xml` /
+`boundaries.xml` (GPLv2: used as a reference for technique only, no bytes copied, because burpsy is
+MIT) found four gaps beyond F1:
+
+| Gap | Change | Test (fails on master) |
+|---|---|---|
+| Error bank covered 7 engines' messages | 66 more signatures (72 with F1): ZAP's driver class names and per-engine messages (attributed), plus the engines' own documented texts for MySQL/MariaDB, PostgreSQL, SQL Server, Oracle, DB2, H2, Derby, ClickHouse and the common ORMs (Sequelize, SQLAlchemy, ActiveRecord, PDO) | `TestTheExtendedErrorBankRecognisesEachEngine` |
+| Boolean pairs could not survive a `LIKE '%…%'` pattern or nested parens | LIKE pairs (`%' and '1%'='1`) and `')`/`'))` closers | `TestSQLiFindsALikeClauseInjectionByBooleanWhenErrorsAreHidden` |
+| No way to see a query whose baseline matched nothing (logins, unknown ids) | widening `or` pairs with the inverted differential, a 5xx guard and the same twice-repeated confirmation; sent only when the run admits the intrusive tier, because `or 1=1` on an UPDATE or DELETE writes every row | `TestSQLiFindsTheJuiceShopLoginInjectionWithAWideningPair`, `TestSQLiSendsNoWideningPairWhenTheIntrusiveTierIsOff` |
+| MySQL and Oracle timing declined outright | MySQL `XOR(if(now()=sysdate(),sleep(N),0))` (bare and quoted forms; all three verified to sleep against a live MySQL 8.4) and Oracle `dbms_pipe.receive_message` (not verified live); "MySQL specific" and "Oracle specific" no longer declined | `TestTheMySQLAndOracleTimingPayloadsAreRenderedAndGated` |
+
+One ranking fix rode along: `BestEvidence` ranked a boolean differential above an error signature
+while the finding rated them tentative and firm, so a point that produced both was reported at the
+weaker confidence. After the boolean pairs started firing on Juice Shop's search, it dropped from
+Firm to Tentative; error signatures now rank higher.
+
+Still out of scope: union-based and stacked-query techniques, second-order SQLi, and a SQLite
+timing probe (SQLite has no sleep; sqlmap's `RANDOMBLOB` heavy query is load-dependent and was left
+out).
 
 ## Test-environment notes
 

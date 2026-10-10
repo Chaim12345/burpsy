@@ -351,10 +351,13 @@ type InjectionProbe struct {
 // unmeasurable does not report as clean.
 func BestEvidence(probes []InjectionProbe) (InjectionProbe, bool) {
 	rank := map[InjectionEvidence]int{
-		InjectionEvidenceNone:                0,
-		InjectionEvidenceInconclusive:        1,
-		InjectionEvidenceErrorSignature:      2,
-		InjectionEvidenceBooleanDifferential: 3,
+		InjectionEvidenceNone:         0,
+		InjectionEvidenceInconclusive: 1,
+		// A boolean differential ranks below an error signature, in the order buildInjectionFinding
+		// already rates them (tentative vs firm): the database naming itself in the response is
+		// the stronger proof, and a point that produced both was being reported at the weaker one.
+		InjectionEvidenceBooleanDifferential: 2,
+		InjectionEvidenceErrorSignature:      3,
 		InjectionEvidenceTiming:              4,
 		InjectionEvidenceEvaluated:           5,
 		InjectionEvidenceOutOfBand:           6,
