@@ -294,6 +294,18 @@ type crawlStartReq struct {
 	// SubmitForms defaults off, and that is a requirement rather than a default: a crawl that submits
 	// forms writes to the application.
 	SubmitForms bool `json:"submit_forms"`
+	// Interact drives each rendered page in a browser — clicking its navigational controls and, when
+	// FillInteractionForms is set, filling and submitting its forms — so the routes a single-page
+	// application reaches only through a click are crawled (burpsy-react-ui-spa1).
+	//
+	// Off by default for the same reason SubmitForms is, and more so: an interaction navigates, fires
+	// the application's own handlers, and with FillInteractionForms writes. A crawl that clicks every
+	// control on every page is a different and heavier act than one that reads them, so the operator
+	// turns it on deliberately.
+	Interact bool `json:"interact"`
+	// FillInteractionForms types defaults into each visible field of each form the interaction pass
+	// finds and submits it. Only meaningful with Interact; STATE-CHANGING, so it is its own switch.
+	FillInteractionForms bool `json:"fill_interaction_forms"`
 	// RequestSpeculative turns on the speculative-hidden-link phase (burpsy-react-ui-t5m0):
 	// mining HTML comments and script bodies for hidden links. Off by default here — the
 	// operator's explicit request is the switch, and a named Burp configuration can set it
@@ -660,6 +672,61 @@ func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ct
 	}
 }
 
+// crawlInteractor is the browser-interaction pass for a crawl (burpsy-react-ui-spa1). It returns nil
+// when the server has no DOM capability, for the same reason crawlRenderer does: a function that
+// always failed would record SkipInteractionUnavailable on every page of a crawl that was never meant
+// to interact.
+//
+// The session is the recorded login's, when there is one, so the pass drives the logged-in
+// application — and, on that path, it is scope-gated by the session's own proxy. With no session the
+// pass runs on the shared Browser, which is ungated; the caller that wires this is responsible for
+// the engagement scope being enforced on the crawl's own fetches, and a browser navigation inside an
+// ungated Browser is bounded to the seed's origin by the crawl's frontier, not by this function.
+func (s *Server) crawlInteractor(sess *domexec.Session, fillForms bool) func(context.Context, string, crawler.InteractionOptions) (crawler.Interaction, error) {
+	if s.wiredScanner() == nil || !s.wiredScanner().DOMCapabilityConfigured() {
+		return nil
+	}
+	return func(ctx context.Context, targetURL string, opts crawler.InteractionOptions) (crawler.Interaction, error) {
+		dopts := domexec.InteractOptions{
+			MaxClicks: opts.MaxClicks,
+			MaxForms:  opts.MaxForms,
+			MaxWait:   opts.MaxWait,
+			FillForms: fillForms,
+		}
+		var inter domexec.Interaction
+		var err error
+		if sess != nil {
+			inter, err = sess.Interact(ctx, targetURL, dopts)
+		} else {
+			browser, berr := s.wiredScanner().BrowserForRender(ctx)
+			if berr != nil {
+				return crawler.Interaction{}, berr
+			}
+			inter, err = browser.Interact(ctx, targetURL, dopts)
+		}
+		if err != nil {
+			return crawler.Interaction{}, err
+		}
+		views := make([]crawler.InteractionView, 0, len(inter.Views))
+		for _, v := range inter.Views {
+			views = append(views, crawler.InteractionView{
+				Action: v.Action, Selector: v.Selector, Label: v.Label, URL: v.URL,
+				DOM: v.DOM, Changed: v.Changed, Error: v.Error,
+			})
+		}
+		reqs := make([]crawler.RenderedRequest, 0, len(inter.Requests))
+		for _, r := range inter.Requests {
+			reqs = append(reqs, crawler.RenderedRequest{URL: r.URL, Method: r.Method})
+		}
+		return crawler.Interaction{
+			Views: views, Requests: reqs,
+			FormsFound: inter.FormsFound, FormsSubmitted: inter.FormsSubmitted,
+			ClicksAttempted: inter.ClicksAttempted, ClicksAvailable: inter.ClicksAvailable,
+			Capped: inter.Capped,
+		}, nil
+	}
+}
+
 func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, unapplied []string, err error) {
 	if berr := validateCrawlBounds(req); berr != nil {
 		return 0, nil, 0, nil, berr
@@ -857,6 +924,13 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	cfg.OnSend = live.onSend
 	if cfg.RenderWithOutcome != nil {
 		cfg.RenderWithOutcome = s.crawlRendererIn(loginSess, live)
+	}
+	// The interaction pass (burpsy-react-ui-spa1), in the recorded login's session when there is one so
+	// it drives the logged-in application and is scope-gated by the session's own proxy. A nil
+	// crawlInteractor (no DOM capability) leaves cfg.Interact nil, which the crawler reads as "never
+	// interact" rather than as a failure per page.
+	if req.Interact {
+		cfg.Interact = s.crawlInteractor(loginSess, req.FillInteractionForms)
 	}
 	var loginWrap *liveLogin
 	if loginRunner != nil {
@@ -1503,7 +1577,12 @@ func (s *Server) crawlConfig(req crawlStartReq, seeds []string, limits crawler.L
 		Render:                      nil,
 		// The outcome form, so a capped render is visible in the queue (burpsy-react-ui-efra).
 		RenderWithOutcome: s.crawlRenderer(),
-		Logger:            s.logger,
+		// The browser-interaction pass (burpsy-react-ui-spa1), left nil here and wired in startCrawl
+		// only when the operator asked for it, because it needs the recorded login's session. Off by
+		// default: it navigates and, with FillInteractionForms, writes.
+		Interact:        nil,
+		InteractOptions: crawler.InteractionOptions{FillForms: req.FillInteractionForms},
+		Logger:          s.logger,
 		// The re-login seam (burpsy-react-ui-nc9s). This is the same coordinator every other tool
 		// already routes through — Repeater, Intruder, the proxy — so a crawl uses the project's
 		// session handling the way Burp's crawl_using_provided_logins_only says it does, and there

@@ -135,3 +135,41 @@ state-changing. Gated route unchanged.
 The owner asked for this capability explicitly, so the §8 "changes product scope / security
 posture" question is answered: **build it, default OFF, report it honestly.** The destructive and
 scope guards are not optional and are part of every increment.
+
+## Status — 2026-10-10
+
+**Increments 1, 2 and 3 are implemented and verified. Increment 4 (a first-class SPA fixture in
+`vulnapp` + a nightly bench entry) remains.**
+
+### Done
+
+- `internal/domexec/interact.go` — `Browser.Interact` / `Session.Interact`, bounded (`MaxClicks`
+  25, `MaxForms` 5, `MaxWait` 30s), with `Capped`, per-view `Changed`/`Error`, and a documented
+  selector set. 5 tests against real Chrome.
+- `internal/crawler` — `Config.Interact` / `Config.InteractOptions`, the pass wired after the
+  render, discoveries admitted through the ordinary gates and tagged `clickable`, run-time requests
+  admitted like rendered ones, `SkipInteractionUnavailable`, and 5 report counters. 6 tests.
+- `internal/web` — `crawlStartReq.Interact` / `FillInteractionForms`, `crawlInteractor` (session-
+  aware), wired in `startCrawl`. Off by default.
+
+### Live verification
+
+Fixture: a purpose-built SPA (`/tmp/spa-target.py`) whose `/orders/1`, `/orders/2` and
+`/profile/settings` routes appear **only** after a button click, and whose form submits only through
+its `onsubmit` handler. Crawled through the real burpsy binary with `-dom chromium`, same seed:
+
+| Run | fetched | clickable edges | API locations | form found |
+|---|---|---|---|---|
+| render only (`interact:false`) | 2 | **0** | 0 | 1 |
+| `interact:true` | 1 | **5** | 2 | 1 |
+
+The clickable edges and the two API locations (`/api/orders`, `/api/profile`) are precisely the
+content a render alone cannot reach — the SPA's real navigation surface.
+
+### Next
+
+- `vulnapp`: add a script-routed endpoint pair so the capability is pinned by a runtime test, not
+  only by an external fixture.
+- `scripts/bench`: an SPA-coverage row so a regression in the pass is caught.
+- The New Scan dialog: expose the switch, worded for a state-changing action.
+
