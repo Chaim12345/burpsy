@@ -44,7 +44,8 @@ Three distinct causes. Only the first is a scanner defect.
 | CLIENT_SIDE_VULNERABLE_JWT | 10 | token leak to the client and cookie security attributes (CWE-522) — a different class from the forgery checks, which now cover SERVER_SIDE. No check exists. |
 | INSECURE_CONFIGURATION_JWT | 3 | alg confusion / expired / `kid` handling (CWE-1188); `ForgeAlgConfusion` exists but is not wired to a row (0vzb.7). |
 | UNRESTRICTED_FILE_UPLOAD | 7 | active upload checks absent (0vzb.15) |
-| LDAP_INJECTION | 4 | check exists but does not confirm on these levels |
+| LDAP_INJECTION | 2/2 | levels 1–2 detect; 3/5 need a password param (LDAP payload/error-bank fix landed) |
+| XXE | 0/3, **FP 4→0** | the check fired on the four SECURE levels via reflected-verbatim evidence, which points the WRONG way. Fixed; payload now keeps the target's own XML schema. Detection of a schema-bound file read needs a sound differential (see below) |
 | INSECURE_DIRECT_OBJECT_REFERENCE | 4 | no IDOR check (0vzb.12) |
 | SIMPLE_SSRF | 4 | in-band metadata SSRF absent (0vzb.6) |
 | WEB_CACHE_POISONING | 4 | shallow unkeyed-input set (0vzb.2) |
