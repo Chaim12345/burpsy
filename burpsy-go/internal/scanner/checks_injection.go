@@ -296,9 +296,14 @@ func checkLDAPInjection(ctx context.Context, cc *CheckContext) ([]*Finding, erro
 			// negates the original. True-vs-false is exactly the pair
 			// ClassifyBooleanDifferential needs.
 			probes := []InjectionProbe{h.ProbeBoolean(ctx, p, payloads[1], payloads[2])}
-			// An error signature is also worth having: a malformed filter often surfaces
-			// as an LDAP error rather than a behavioural change.
-			probes = append(probes, h.ProbeErrorSignatures(ctx, p, []string{payloads[0], "("}, LDAPErrorSignatures)...)
+			// An error signature is also worth having: a malformed filter often surfaces as an
+			// LDAP parse error rather than a behavioural change. The payloads that PROVOKE one are
+			// the malformed ones — payloads[1]'s unbalanced `)(` and payloads[2]'s `!` — not
+			// payloads[0], which is a complete valid filter (`objectClass=*`) that a parser accepts
+			// and answers "no users" to. Sending only the valid one (as an earlier version did)
+			// meant the error technique could never fire on a parser that rejects malformed input,
+			// which is every parser.
+			probes = append(probes, h.ProbeErrorSignatures(ctx, p, payloads, LDAPErrorSignatures)...)
 			return probes
 		})
 	if err != nil {

@@ -153,7 +153,15 @@ var XMLErrorSignatures = []string{
 // LDAPErrorSignatures are the directory errors a malformed filter provokes.
 //
 // PROVENANCE: burp.Zejf carries only "Invalid DNS request: " and burp.Zsna only the payloads,
-// so these are the documented standard messages rather than recovered Burp literals.
+// so the first block are the documented standard messages rather than recovered Burp literals.
+//
+// The second block is burpsy's own, added after a live run against OWASP VulnerableApp: its LDAP
+// filter parser answers a malformed filter with "Unable to parse string '…' as an LDAP filter
+// because it contains an unexpected closing parenthesis at position N" — an error that names the
+// LDAP filter explicitly and matched NONE of the strings above, so all four of the app's LDAP levels
+// scored as misses while the check was genuinely running. These are the filter parser's own wording
+// (the shape the JDK's and UnboundID's parsers use), each naming the language or the malformation
+// rather than a vendor.
 var LDAPErrorSignatures = []string{
 	"LDAPException",
 	"javax.naming.directory",
@@ -164,6 +172,12 @@ var LDAPErrorSignatures = []string{
 	"invalid filter",
 	"com.sun.jndi.ldap",
 	"supplied argument is not a valid ldap",
+	// burpsy's own: the filter-parser wording a malformed injection provokes.
+	"as an LDAP filter",
+	"LDAP query failed",
+	"unexpected closing parenthesis",
+	"unmatched parenthesis",
+	"invalid LDAP filter",
 }
 
 // SQLPayloadFragments is recovered from burp.Ze2s. These are the syntax fragments the SQL
