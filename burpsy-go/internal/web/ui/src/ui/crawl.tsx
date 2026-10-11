@@ -25,6 +25,11 @@ export function CrawlLauncher(): JSX.Element {
   const [maxDepth, setMaxDepth] = useState("6");
   const [rps, setRps] = useState("5");
   const [submitForms, setSubmitForms] = useState(false);
+  // Browser-driven interaction (burpsy-react-ui-spa1). Off by default: it navigates and fires the
+  // application's own handlers, and with the form-fill switch below it writes. The two are separate
+  // because reading a SPA's routes is a much smaller act than submitting its forms.
+  const [interact, setInteract] = useState(false);
+  const [fillInteractionForms, setFillInteractionForms] = useState(false);
   // The eight bounds added in burpsy-react-ui-qzzy. Blank means the engine default; 0 is a real
   // answer (zero locations, zero links per page) and is sent as 0.
   //
@@ -67,6 +72,8 @@ export function CrawlLauncher(): JSX.Element {
         max_depth: Number(maxDepth) || undefined,
         requests_per_second: Number(rps) || undefined,
         submit_forms: submitForms,
+        interact,
+        fill_interaction_forms: interact && fillInteractionForms,
         ...crawlBound("max_locations", maxLocations),
         ...crawlBound("max_frontier", maxFrontier),
         ...crawlBound("max_links_per_page", maxLinksPerPage),
@@ -174,6 +181,22 @@ export function CrawlLauncher(): JSX.Element {
           <Field label="Submit forms" hint="Off by default on purpose: a crawl that submits forms writes to the application under test.">
             <Switch checked={submitForms} onCheckedChange={setSubmitForms} label="Submit discovered forms" />
           </Field>
+
+          <Field
+            label="Drive pages in a browser"
+            hint="Clicks each rendered page's navigational controls in a real browser and crawls the routes they reveal — the only way a single-page app's script-built navigation is found at all. Off by default: it navigates and fires the application's own handlers. Needs a browser (start burpsy with -dom)."
+          >
+            <Switch checked={interact} onCheckedChange={setInteract} label="Click controls and follow the routes they reveal" />
+          </Field>
+
+          {interact ? (
+            <Field
+              label="Fill and submit forms while driving"
+              hint="Types a default into each visible field and submits each form the pass finds. State-changing: this writes to the application under test."
+            >
+              <Switch checked={fillInteractionForms} onCheckedChange={setFillInteractionForms} label="Fill and submit discovered forms in the browser" />
+            </Field>
+          ) : null}
 
           {start.error ? <div className="notice notice-warn">{String((start.error as Error).message ?? start.error)}</div> : null}
 

@@ -314,6 +314,15 @@ export function useStartCrawl() {
     max_relogins?: number;
    requests_per_second?: number;
    submit_forms?: boolean;
+   /**
+    * Browser-driven interaction (burpsy-react-ui-spa1). Drives each rendered page in a browser:
+    * clicks its navigational controls and admits the routes they reveal, so a single-page app's
+    * script-built navigation is crawled at all. Off by default because it navigates and fires the
+    * application's own handlers; fill_interaction_forms additionally writes.
+    */
+   interact?: boolean;
+   /** Types defaults into each form the interaction pass finds and submits it. State-changing. */
+   fill_interaction_forms?: boolean;
    /** Burp's "Reuse the site map" (burpsy-react-ui-z8qf): requests the site map already holds for the
     *  seeds' origins are not fetched again. Opt-in; omitted means off. */
    seed_from_site_map?: boolean;

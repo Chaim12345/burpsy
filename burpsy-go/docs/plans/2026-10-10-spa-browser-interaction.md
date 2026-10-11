@@ -138,8 +138,7 @@ scope guards are not optional and are part of every increment.
 
 ## Status — 2026-10-10
 
-**Increments 1, 2 and 3 are implemented and verified. Increment 4 (a first-class SPA fixture in
-`vulnapp` + a nightly bench entry) remains.**
+**All four increments are implemented and verified.**
 
 ### Done
 
@@ -148,9 +147,16 @@ scope guards are not optional and are part of every increment.
   selector set. 5 tests against real Chrome.
 - `internal/crawler` — `Config.Interact` / `Config.InteractOptions`, the pass wired after the
   render, discoveries admitted through the ordinary gates and tagged `clickable`, run-time requests
-  admitted like rendered ones, `SkipInteractionUnavailable`, and 5 report counters. 6 tests.
+  admitted like rendered ones, `SkipInteractionUnavailable`, and 5 report counters. 6 wiring tests
+  plus **1 end-to-end test with the real engine and real Chrome** (`interact_live_test.go`).
 - `internal/web` — `crawlStartReq.Interact` / `FillInteractionForms`, `crawlInteractor` (session-
-  aware), wired in `startCrawl`. Off by default.
+  aware), wired in `startCrawl`, and **a route-level test that starts a crawl through
+  `POST /api/crawl` and asserts on what the TARGET was asked for** (`crawl_interact_route_test.go`):
+  with `interact:true` the script-routed page is fetched, with `interact:false` it is not. Reverting
+  the wiring fails it — the negative control.
+- **UI** — the Crawl dialog gains "Drive pages in a browser" and, when it is on, "Fill and submit
+  forms while driving", both off by default and worded for a state-changing action. `bun run check`
+  passes (1285 tests).
 
 ### Live verification
 
@@ -166,10 +172,14 @@ its `onsubmit` handler. Crawled through the real burpsy binary with `-dom chromi
 The clickable edges and the two API locations (`/api/orders`, `/api/profile`) are precisely the
 content a render alone cannot reach — the SPA's real navigation surface.
 
-### Next
+### Not done (named, not silent)
 
-- `vulnapp`: add a script-routed endpoint pair so the capability is pinned by a runtime test, not
-  only by an external fixture.
-- `scripts/bench`: an SPA-coverage row so a regression in the pass is caught.
-- The New Scan dialog: expose the switch, worded for a state-changing action.
+- A `vulnapp` manifest row: the manifest pairs a *scanner catalog row* with an endpoint, and browser
+  interaction is a *crawler* capability with no catalog row, so it does not fit that structure. The
+  capability is instead pinned by the live crawler test and the route test above. If a future
+  catalog row names "crawl coverage" it belongs there.
+- A `scripts/bench` row: the bench scores scanner detection against a labelled target, which is a
+  different axis from crawl coverage. A crawl-coverage bench is a separate harness (j1mk.27,
+  crawler vs ZAP/AJAX spider) and is tracked there rather than invented here.
+
 
