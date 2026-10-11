@@ -43,6 +43,11 @@ type FormSubmitSpec struct {
 	InputSelector string
 	// SubmitSelector locates the control to click. Empty dispatches a submit event instead.
 	SubmitSelector string
+	// ClickTrigger, when true, activates SubmitSelector with a plain click instead of dispatching a
+	// submit event on its form. Some pages wire a control's own click handler rather than the form's
+	// submit event (OWASP VulnerableApp's XSS levels do), and a submit event never reaches that
+	// handler, while the click does.
+	ClickTrigger bool
 	// Payload is the text typed into the field.
 	Payload string
 	// Settle is how long to wait after submitting. Zero takes the render default.
@@ -118,41 +123,57 @@ func (b *Browser) SubmitAndObserve(ctx context.Context, spec FormSubmitSpec, can
 		return nil, fmt.Errorf("domexec: no input matched %q on %s", spec.InputSelector, spec.PageURL)
 	}
 
-	// Submit. Both branches end by dispatching a `submit` event on the form the input belongs to,
-	// because that is the one activation every framework and every plain form agrees on: an
-	// `onsubmit` handler runs, `event.preventDefault()` is honoured, and a script-driven SPA's own
-	// handler sees it. A `button.click()` is NOT equivalent — measured against a fixture with a
-	// `<button type=submit>` inside a form carrying `onsubmit`, the click fired no request at all,
-	// while the submit event did.
+	// Submit. The default path dispatches a `submit` event on the form the input belongs to, because
+	// that is what every framework and every plain form agrees on. A `button.click()` is NOT
+	// equivalent for a form: measured against a fixture with a `<button type=submit>` inside a form,
+	// the click fired no request while the submit event did.
 	//
-	// The SubmitSelector is still honoured as a way to find the form (a control outside the input's
-	// own form, which some layouts use) and to confirm the control exists, so a caller naming a
-	// selector that is not there gets an error rather than a silent submission of a different form.
-	submitJS := fmt.Sprintf(`(function(){
-		var el = document.querySelector(%s);
-		if (!el) return false;
-		var form = el.form;
-		if (!form && %s) {
-			var ctl = document.querySelector(%s);
-			if (!ctl) return false;
-			form = ctl.form || (ctl.closest ? ctl.closest('form') : null);
+	// ClickTrigger exists for the opposite page: one that wires the CONTROL's own click handler and
+	// never listens for a form submit at all (OWASP VulnerableApp's XSS levels call an AJAX function
+	// from the button's click listener). There the submit event reaches nothing and only the click
+	// works. The caller says which shape its page has; neither is guessed, because guessing wrong
+	// produces zero observations that look identical to a page with no vulnerability.
+	if spec.ClickTrigger {
+		clickJS := fmt.Sprintf(`(function(){
+			var el = document.querySelector(%s);
+			if (!el) return false;
+			el.click();
+			return true;
+		})()`, jsString(spec.SubmitSelector))
+		var clicked bool
+		if err := chromedp.Run(tabCtx, chromedp.Evaluate(clickJS, &clicked)); err != nil {
+			return nil, fmt.Errorf("domexec: click %q: %w", spec.SubmitSelector, err)
 		}
-		if (!form) return false;
-		var ev;
-		try { ev = new SubmitEvent('submit', {bubbles:true, cancelable:true}); }
-		catch(e) { ev = new Event('submit', {bubbles:true, cancelable:true}); }
-		form.dispatchEvent(ev);
-		return true;
-	})()`,
-		jsString(spec.InputSelector),
-		boolJS(spec.SubmitSelector != ""),
-		jsString(spec.SubmitSelector))
-	var submitted bool
-	if err := chromedp.Run(tabCtx, chromedp.Evaluate(submitJS, &submitted)); err != nil {
-		return nil, fmt.Errorf("domexec: submit the form owning %q: %w", spec.InputSelector, err)
-	}
-	if !submitted {
-		return nil, fmt.Errorf("domexec: %q is not inside a form on %s", spec.InputSelector, spec.PageURL)
+		if !clicked {
+			return nil, fmt.Errorf("domexec: no control matched %q on %s", spec.SubmitSelector, spec.PageURL)
+		}
+	} else {
+		submitJS := fmt.Sprintf(`(function(){
+			var el = document.querySelector(%s);
+			if (!el) return false;
+			var form = el.form;
+			if (!form && %s) {
+				var ctl = document.querySelector(%s);
+				if (!ctl) return false;
+				form = ctl.form || (ctl.closest ? ctl.closest('form') : null);
+			}
+			if (!form) return false;
+			var ev;
+			try { ev = new SubmitEvent('submit', {bubbles:true, cancelable:true}); }
+			catch(e) { ev = new Event('submit', {bubbles:true, cancelable:true}); }
+			form.dispatchEvent(ev);
+			return true;
+		})()`,
+			jsString(spec.InputSelector),
+			boolJS(spec.SubmitSelector != ""),
+			jsString(spec.SubmitSelector))
+		var submitted bool
+		if err := chromedp.Run(tabCtx, chromedp.Evaluate(submitJS, &submitted)); err != nil {
+			return nil, fmt.Errorf("domexec: submit the form owning %q: %w", spec.InputSelector, err)
+		}
+		if !submitted {
+			return nil, fmt.Errorf("domexec: %q is not inside a form on %s", spec.InputSelector, spec.PageURL)
+		}
 	}
 
 	// Wait for the page to finish reacting: the submission is asynchronous (an XHR, then a render).
