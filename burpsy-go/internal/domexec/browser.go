@@ -356,6 +356,7 @@ func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFu
 		opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())
 		stop := context.AfterFunc(ctx, func() {
 			opCancel()
+			closeTabTarget(tabCtx, tabCtx)
 			tabCancel()
 			tabAllocCancel()
 		})
@@ -371,6 +372,13 @@ func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFu
 	opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())
 	stop := context.AfterFunc(ctx, func() {
 		opCancel()
+		// Close the tab on the parent's cancellation too, not only on the caller's explicit
+		// cancel(): an audit that times out cancels ctx, and the AfterFunc is then the only
+		// teardown that runs. Cancelling tabCtx alone stops the session and leaves the target
+		// open in Chrome — the leak this function exists to close, reached by the path a long
+		// scan actually takes (the per-case budget expiring), which is why the first
+		// confirmations succeeded and later ones found an exhausted browser.
+		closeTabTarget(b.browserCtx, tabCtx)
 		tabCancel()
 	})
 	cancel := func() {
@@ -408,7 +416,10 @@ func closeTargetByID(browserCtx context.Context, id target.ID) {
 	ctx, cancel := context.WithTimeout(browserCtx, 3*time.Second)
 	defer cancel()
 	c := chromedp.FromContext(browserCtx)
-	if c == nil {
+	if c == nil || c.Browser == nil {
+		// No executor yet: a remote-mode tab cancelled before it ever attached. Nothing to close over
+		// (the target, if one was created, is reaped with its browser context), and reaching a nil
+		// executor would panic inside Do.
 		return
 	}
 	_ = target.CloseTarget(id).Do(cdp.WithExecutor(ctx, c.Browser))

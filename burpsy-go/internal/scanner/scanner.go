@@ -375,7 +375,6 @@ func BuiltinXSSBrowserTargets() []XSSBrowserTarget {
 		Match:          "127.0.0.1",
 		RootURL:        "http://127.0.0.1:9090/VulnerableApp/",
 		MasterText:     "XSSWithHtmlTagInjection",
-		LevelText:      "LEVEL_1",
 		InputSelector:  "#textInput",
 		SubmitSelector: "#submit",
 		ClickTrigger:   true,

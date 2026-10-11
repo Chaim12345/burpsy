@@ -260,7 +260,14 @@ func (s *Session) newTab(ctx context.Context, timeout time.Duration) (context.Co
 	// context itself is disposed by Close.
 	tabCtx, tabCancel := chromedp.NewContext(s.b.browserCtx, chromedp.WithTargetID(tid))
 	opCtx, opCancel := context.WithTimeout(tabCtx, timeout)
-	stop := context.AfterFunc(ctx, func() { opCancel(); tabCancel() })
+	stop := context.AfterFunc(ctx, func() {
+		opCancel()
+		// As in Browser.newTab: the parent's cancellation is a path teardown must survive, so the
+		// target is closed here too. Cancelling tabCancel alone detaches the session and leaves the
+		// tab open in Chrome, which is the leak a long scan reaches when its per-case budget expires.
+		closeTargetByID(s.b.browserCtx, tid)
+		tabCancel()
+	})
 	cancel := func() {
 		stop()
 		opCancel()
