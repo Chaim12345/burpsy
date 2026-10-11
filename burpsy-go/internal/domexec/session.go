@@ -261,7 +261,12 @@ func (s *Session) newTab(ctx context.Context, timeout time.Duration) (context.Co
 	tabCtx, tabCancel := chromedp.NewContext(s.b.browserCtx, chromedp.WithTargetID(tid))
 	opCtx, opCancel := context.WithTimeout(tabCtx, timeout)
 	stop := context.AfterFunc(ctx, func() { opCancel(); tabCancel() })
-	cancel := func() { stop(); opCancel(); tabCancel() }
+	cancel := func() {
+		stop()
+		opCancel()
+		closeTargetByID(s.b.browserCtx, tid)
+		tabCancel()
+	}
 	if err := chromedp.Run(opCtx); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("domexec: could not attach to the session's tab: %w", err)

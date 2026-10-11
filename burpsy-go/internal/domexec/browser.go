@@ -55,6 +55,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
 
@@ -374,7 +376,40 @@ func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFu
 	cancel := func() {
 		stop()
 		opCancel()
+		closeTabTarget(b.browserCtx, tabCtx)
 		tabCancel()
 	}
 	return opCtx, cancel, nil
+}
+
+// closeTabTarget asks the browser to close the target a tab context is attached to. Best-effort: a
+// tab already gone, or a browser already closed, needs no report — the caller is tearing down.
+//
+// This is load-bearing, not tidiness. chromedp.NewContext creates a browser target, and cancelling
+// the context stops the session but does NOT close that target: the tab stays open in Chrome. Every
+// browser confirmation and DOM observation opens one, so a long scan leaks a tab per observation
+// until the browser is exhausted — measured after a full-profile run as 529 chromium processes and
+// the later reflected-XSS confirmations timing out ("the send exceeded its deadline") while the
+// first ones succeeded. Closing the target is what makes a per-page tab actually disposable.
+func closeTabTarget(browserCtx, tabCtx context.Context) {
+	c := chromedp.FromContext(tabCtx)
+	if c == nil || c.Target == nil || c.Target.TargetID == "" {
+		return
+	}
+	closeTargetByID(browserCtx, c.Target.TargetID)
+}
+
+// closeTargetByID closes one browser target by id, best-effort, under its own short deadline so a
+// teardown can never block on a browser that has stopped answering.
+func closeTargetByID(browserCtx context.Context, id target.ID) {
+	if id == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(browserCtx, 3*time.Second)
+	defer cancel()
+	c := chromedp.FromContext(browserCtx)
+	if c == nil {
+		return
+	}
+	_ = target.CloseTarget(id).Do(cdp.WithExecutor(ctx, c.Browser))
 }

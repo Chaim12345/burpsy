@@ -83,6 +83,10 @@ FULL_PROFILE = {
     # can (j1mk.38).
     "check_dom": False, "check_corpus": False,
     "check_xss_browser_confirm": True,
+    # The browser confirmation drives Chrome, which under a full-profile run competes with the
+    # audit and the target for CPU; the 25s per-probe clock is what keeps its baseline send from
+    # timing out and the check from being recorded as a failed probe (measured: with 8s the whole
+    # reflected-XSS family reported "no baseline response: send exceeded its deadline").
     # In-band SSRF: the canary-URL technique, which needs no collaborator (0vzb.6).
     "check_ssrf_in_band": True,
 }
@@ -415,11 +419,13 @@ def main():
     ap.add_argument("--web", default="http://127.0.0.1:18081", help="burpsy web API")
     ap.add_argument("--example", default="1", help="example value for the case parameter")
     ap.add_argument("--limit", type=int, default=0, help="scan at most N cases (0 = all)")
+    ap.add_argument("--chunk", type=int, default=1, help="which interleaved chunk to run (1-based)")
+    ap.add_argument("--of", type=int, default=1, help="split the case list into this many chunks")
     ap.add_argument("--family", default="", help="only cases in this family (e.g. PathTraversal) or "
                                                  "carrying this VulnerabilityType (e.g. PATH_TRAVERSAL)")
     ap.add_argument("--full-profile", action="store_true",
                     help="turn on every check family (the default server config leaves several off)")
-    ap.add_argument("--probe-timeout-ms", type=int, default=8000,
+    ap.add_argument("--probe-timeout-ms", type=int, default=25000,
                     help="per-probe cap set via /api/scanner/config, so one wedged probe cannot "
                          "consume the whole audit budget")
     ap.add_argument("--audit-timeout", type=int, default=120,
@@ -446,6 +452,18 @@ def main():
         sys.stderr.write(f"family filter {want!r}: {len(cases)} case(s)\n")
     if args.limit:
         cases = cases[: args.limit]
+    if args.of > 1:
+        # Split the case list into args.of interleaved chunks and run only chunk args.chunk.
+        #
+        # A full-profile run drives Chrome, the audit and the target at once, and on a small machine
+        # that contention is what makes a browser confirmation's baseline send time out — measured:
+        # the whole reflected-XSS family recorded "no baseline response: send exceeded its deadline"
+        # in a full run and detected cleanly when its family ran alone. Chunking runs the SAME case
+        # list a slice at a time, so the machine is loaded by one slice rather than by the whole suite,
+        # and the per-chunk reports are merged by the caller. Interleaved rather than contiguous so a
+        # chunk is representative of the suite rather than of one family.
+        cases = [c for i, c in enumerate(cases) if i % args.of == args.chunk - 1]
+        sys.stderr.write(f"chunk {args.chunk}/{args.of}: {len(cases)} case(s)\n")
 
     results, notes = [], []
     for i, case in enumerate(cases, 1):

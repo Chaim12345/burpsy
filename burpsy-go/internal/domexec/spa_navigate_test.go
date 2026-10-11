@@ -13,6 +13,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 )
 
 // spaNavPage serves a two-level navigation tree built by script, exactly as a real SPA does: the
@@ -138,5 +142,71 @@ func TestANavigationThatCannotReachItsViewIsAnErrorNamingTheStep(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "NoSuchFamily") {
 		t.Fatalf("the error does not name the step that failed: %v", err)
+	}
+}
+
+// A tab must be disposable. chromedp.NewContext creates a browser target and cancelling the context
+// does NOT close it, so every navigation that only cancelled its context leaked a Chrome tab. On a
+// full scan that accumulated into hundreds of processes and the later browser confirmations began
+// timing out while the first ones succeeded — the reflected-XSS family detected against a fresh
+// browser and reported nothing against one that had served a whole scan.
+//
+// The assertion is on the browser's own target list rather than on a process count, because the
+// leak is a live tab and the target list is what grows. Repeated navigation must leave the list
+// where it started, within a small tolerance for the browser's own bookkeeping.
+func TestRepeatedNavigationsDoNotAccumulateTabs(t *testing.T) {
+	t.Parallel()
+	b := newTestBrowser(t)
+	base := spaNavSite(t, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	tabs := func() int {
+		c := chromedp.FromContext(b.browserCtx)
+		if c == nil {
+			t.Fatalf("no chromedp context on the test browser")
+		}
+		ids, err := target.GetTargets().Do(cdp.WithExecutor(b.browserCtx, c.Browser))
+		if err != nil {
+			t.Fatalf("listing targets: %v", err)
+		}
+		n := 0
+		for _, ti := range ids {
+			if ti.Type == "page" {
+				n++
+			}
+		}
+		return n
+	}
+
+	route := SPARoute{
+		RootURL:        base + "/",
+		MasterSelector: ".master-item",
+		MasterText:     "Beta",
+		LevelSelector:  ".inner-master-item",
+		LevelText:      "LEVEL_2",
+		ReadySelector:  "#textInput",
+	}
+	// One navigation first, so the steady-state count includes whatever the browser keeps open for
+	// itself; the leak shows up as growth from here, not as an absolute number.
+	_, tcancel, err := b.NavigateSPA(ctx, route)
+	if err != nil {
+		t.Fatalf("NavigateSPA: %v", err)
+	}
+	tcancel()
+	time.Sleep(500 * time.Millisecond)
+	baseline := tabs()
+
+	for i := 0; i < 8; i++ {
+		_, tcancel, err := b.NavigateSPA(ctx, route)
+		if err != nil {
+			t.Fatalf("NavigateSPA #%d: %v", i+1, err)
+		}
+		tcancel()
+	}
+	time.Sleep(1 * time.Second)
+	after := tabs()
+	if after > baseline+2 {
+		t.Fatalf("navigating 8 times grew the open page count from %d to %d: a tab is not being closed when its context is cancelled", baseline, after)
 	}
 }
