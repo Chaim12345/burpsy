@@ -13,7 +13,8 @@ Per-category detection status against OWASP VulnerableApp, measured with `script
 | + path traversal fix (`j1mk.35`) | — | — | — | — | path traversal 12/15 |
 | + JWT carrier fix (`j1mk.7`) | 32 | 109 | 21 | 0 | 19.8% |
 | + blanket-row scoring by CWE | 37 | 104 | 21 | 0 | 22.8% |
-| + coarse-CWE credit by name, `fetch` seed | 44 | 97 | 21 | 0 | **27.2%** |
+| + coarse-CWE credit by name, `fetch` seed | 44 | 97 | 21 | 0 | 27.2% |
+| + XXE sound differential, LDAP password seed | 49 | 92 | 21 | 0 | **30.2%** |
 
 `0 FP` is still an artefact of CWE matching hiding off-target findings; precision is not yet measured.
 
@@ -44,8 +45,8 @@ Three distinct causes. Only the first is a scanner defect.
 | CLIENT_SIDE_VULNERABLE_JWT | 10 | token leak to the client and cookie security attributes (CWE-522) — a different class from the forgery checks, which now cover SERVER_SIDE. No check exists. |
 | INSECURE_CONFIGURATION_JWT | 3 | alg confusion / expired / `kid` handling (CWE-1188); `ForgeAlgConfusion` exists but is not wired to a row (0vzb.7). |
 | UNRESTRICTED_FILE_UPLOAD | 7 | active upload checks absent (0vzb.15) |
-| LDAP_INJECTION | 2/2 | levels 1–2 detect; 3/5 need a password param (LDAP payload/error-bank fix landed) |
-| XXE | 0/3, **FP 4→0** | the check fired on the four SECURE levels via reflected-verbatim evidence, which points the WRONG way. Fixed; payload now keeps the target's own XML schema. Detection of a schema-bound file read needs a sound differential (see below) |
+| LDAP_INJECTION | 3/1 | levels 1–3 detect; 5 needs its own probe shape |
+| XXE | 2/1, TN 4/4 | sound differential: internal-entity control + "external answer longer and marker-free" |
 | INSECURE_DIRECT_OBJECT_REFERENCE | 4 | no IDOR check (0vzb.12) |
 | SIMPLE_SSRF | 4 | in-band metadata SSRF absent (0vzb.6) |
 | WEB_CACHE_POISONING | 4 | shallow unkeyed-input set (0vzb.2) |
