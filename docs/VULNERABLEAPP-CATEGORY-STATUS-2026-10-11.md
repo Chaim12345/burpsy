@@ -14,7 +14,8 @@ Per-category detection status against OWASP VulnerableApp, measured with `script
 | + JWT carrier fix (`j1mk.7`) | 32 | 109 | 21 | 0 | 19.8% |
 | + blanket-row scoring by CWE | 37 | 104 | 21 | 0 | 22.8% |
 | + coarse-CWE credit by name, `fetch` seed | 44 | 97 | 21 | 0 | 27.2% |
-| + XXE sound differential, LDAP password seed | 49 | 92 | 21 | 0 | **30.2%** |
+| + XXE sound differential, LDAP password seed | 49 | 92 | 21 | 0 | 30.2% |
+| + in-band SSRF (0vzb.6) | 50 | 96 | 21 | 0 | **29.9%** |
 
 `0 FP` is still an artefact of CWE matching hiding off-target findings; precision is not yet measured.
 
