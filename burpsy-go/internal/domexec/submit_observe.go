@@ -76,19 +76,6 @@ func (b *Browser) SubmitAndObserve(ctx context.Context, spec FormSubmitSpec, can
 	}
 	defer cancel()
 
-	// Record the run-time requests too, so a caller can see the API call the submission made — the
-	// second half of "this page posts the value and renders the reply".
-	var reqs []RenderedRequest
-	chromedp.ListenTarget(tabCtx, func(ev any) {
-		e, ok := ev.(*network.EventRequestWillBeSent)
-		if !ok || e.Request == nil || (e.Type != network.ResourceTypeXHR && e.Type != network.ResourceTypeFetch) {
-			return
-		}
-		if len(reqs) < MaxRenderedRequests {
-			reqs = append(reqs, RenderedRequest{URL: e.Request.URL, Method: e.Request.Method, Type: string(e.Type)})
-		}
-	})
-
 	// The instrumentation must be installed before the page's own script runs, so it is added as a
 	// new-document script — the same mechanism ObserveTaint uses.
 	if err := chromedp.Run(tabCtx,
@@ -102,6 +89,14 @@ func (b *Browser) SubmitAndObserve(ctx context.Context, spec FormSubmitSpec, can
 	); err != nil {
 		return nil, fmt.Errorf("domexec: load %q: %w", spec.PageURL, err)
 	}
+	return submitAndObserveIn(tabCtx, spec, canary)
+}
+
+// submitAndObserveIn is the interaction half, against a tab already parked on the view. Split out so
+// a SPA caller can navigate first (NavigateSPA) and then drive the reached view, and so the two
+// failure modes — "never reached the form" and "the form fed no sink" — stay distinguishable.
+func submitAndObserveIn(tabCtx context.Context, spec FormSubmitSpec, canary string) ([]Observation, error) {
+	opts := spec.Settle.withDefaults()
 
 	// Type the payload the way a user would: set the value and fire the events a framework listens
 	// for. Setting .value alone leaves a React/Vue-controlled input unchanged, because their own
