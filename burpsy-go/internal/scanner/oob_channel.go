@@ -20,7 +20,6 @@ package scanner
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -187,18 +186,29 @@ func (s *ActiveScanner) WithOOBProvider(p OOBProvider) *ActiveScanner {
 }
 
 // OOBChannel returns the scan's collaborator channel, or an error naming what is missing.
+//
+// Every way this can fail is a statement about the scan's own capability — no provider is
+// configured, or the configured provider could not register — and never about the target
+// answering a probe. The error therefore wraps errCheckUnsupported so the audit engine counts
+// the check Skipped rather than SendFailed; a capability absence that tripped the failure
+// breaker abandoned the rest of the dispatch unit and silently starved every check ordered
+// after an out-of-band one.
 func (s *ActiveScanner) OOBChannel(ctx context.Context) (OOBChannel, error) {
 	if s == nil {
-		return nil, errors.New("out-of-band: no scanner")
+		return nil, fmt.Errorf("out-of-band: no scanner: %w", errCheckUnsupported)
 	}
 	s.oobMu.Lock()
 	p := s.oob
 	s.oobMu.Unlock()
 	if p == nil {
-		return nil, errors.New("out-of-band: no collaborator channel is configured for this scan, " +
-			"so a callback cannot be observed and this check cannot report a verdict")
+		return nil, fmt.Errorf("out-of-band: no collaborator channel is configured for this scan, "+
+			"so a callback cannot be observed and this check cannot report a verdict: %w", errCheckUnsupported)
 	}
-	return p.Channel(ctx)
+	ch, err := p.Channel(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("out-of-band: the configured collaborator channel could not be opened: %w: %w", err, errCheckUnsupported)
+	}
+	return ch, nil
 }
 
 // OOBRegistration reports the scan channel's state, and whether one is configured at all, without

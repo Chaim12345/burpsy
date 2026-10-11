@@ -170,10 +170,19 @@ func Test_unimplemented_checks_are_reported_unsupported_rather_than_silently_abs
 	}
 	// With nothing unimplemented the unsupported bucket must be empty — not absent, and not
 	// quietly holding a count nothing explains.
+	// Nothing here is unimplemented, yet this scan has no sender: the enabled checks that need
+	// egress cannot send a probe. That is a capability THIS SCAN lacks, not a failure of the target
+	// to answer, so it must be counted unsupported (Skipped) and never as a send failure. Counting
+	// it as a send failure tripped the consecutive-failure breaker, which abandoned the rest of the
+	// dispatch unit and silently starved every check ordered after a capability-less one — the
+	// false-negative generator this assertion exists to keep closed.
+	if outcome.SendFailures != 0 {
+		t.Errorf("send failures = %d, want 0: a scan with no sender is a missing capability, not a target that failed to answer", outcome.SendFailures)
+	}
+	if outcome.Skipped == 0 {
+		t.Errorf("skipped = 0, want the egress-gated checks counted unsupported rather than silently absent")
+	}
 	for _, d := range outcome.Dispositions() {
-		if d.Disposition == DispositionUnsupported && d.Count != 0 {
-			t.Errorf("unsupported bucket = %d, want 0 when no check is unimplemented", d.Count)
-		}
 		if d.Reason == "" {
 			t.Errorf("bucket %q carries no reason", d.Disposition)
 		}
@@ -935,5 +944,66 @@ func Test_the_session_summary_names_the_checks_it_did_not_admit(t *testing.T) {
 	itemSummary := session.Items[1].Outcome.Summary()
 	if !strings.Contains(itemSummary, "already covered") {
 		t.Errorf("item summary %q does not name the reason", itemSummary)
+	}
+}
+
+// A check that cannot run because the scan has no capability for it — no sender, no browser, no
+// collaborator, no session coordinator, no provenance ledger — must not count as a failure of the
+// target, and must not trip the consecutive-failure breaker that abandons the rest of its dispatch
+// unit.
+//
+// This was the defect: every capability getter returned a bare error, the engine classified it
+// DispositionSendFailed, and two of them abandoned the unit at the default breaker of 2. A unit
+// that dispatched an out-of-band or DOM check before a reflected-XSS check therefore never ran the
+// XSS check at all, and the miss was reported as a clean result for the endpoint. The live
+// VulnerableApp benchmark showed this as gated checks on every audited exchange, starving exactly
+// the rows the benchmark scores.
+//
+// The assertion is deliberately about the WHOLE unit, not one check: the point is that a
+// capability-less check cannot take its neighbours down with it, which is only observable when
+// there are neighbours to spare.
+func Test_a_capability_less_check_does_not_abandon_the_rest_of_its_unit(t *testing.T) {
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, "h.test", 80, "/", "<html></html>")
+	// Everything on, and no sender, no browser, no collaborator, no session coordinator: the
+	// maximal-capability-absence configuration, which is also the offline configuration.
+	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
+		MaxConcurrency:      1,
+		Timeout:             5 * time.Second,
+		CheckSqli:           true,
+		CheckXss:            true,
+		CheckPathTraversal:  true,
+		CheckSSRF:           true,
+		CheckXXE:            true,
+		CheckJwtWeak:        true,
+		CheckJSVulns:        true,
+		CheckExtendedActive: true,
+		CheckOutOfBand:      true,
+	})
+
+	outcome, _ := scan.AuditWithin(context.Background(), id, DefaultAuditConfig())
+
+	if outcome.SendFailures != 0 {
+		t.Errorf("send failures = %d, want 0: a check the scan has no capability to run never reached the "+
+			"target, so counting it a transport failure is a claim about a request that was never sent",
+			outcome.SendFailures)
+	}
+	if outcome.UnitAbandoned != 0 {
+		t.Errorf("unit abandoned = %d, want 0: capability absence must not trip the breaker that stops the "+
+			"rest of the unit from starting", outcome.UnitAbandoned)
+	}
+	if outcome.Skipped == 0 {
+		t.Error("skipped = 0, want the capability-less checks counted as skipped rather than silently absent")
+	}
+	if !outcome.State.CompletedAudit() {
+		t.Errorf("state = %s, want audited: every check reached a disposition, none was abandoned",
+			outcome.State.Label())
+	}
+	sum := 0
+	for _, d := range outcome.Dispositions() {
+		sum += d.Count
+	}
+	if sum != outcome.Considered() {
+		t.Errorf("disposition histogram sums to %d, want %d", sum, outcome.Considered())
 	}
 }

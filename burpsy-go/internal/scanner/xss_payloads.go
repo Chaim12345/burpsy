@@ -108,6 +108,14 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				// which is exactly why no quote-based marker could ever appear.
 				add(xssPayload{build: unquotedAttrPayload, note: "attribute injection into an unquoted value",
 					confirm: confirmEventAttrInjection, bit: XSSEvidenceAttrInjection})
+				// The same injection with the call written in backticks instead of parentheses. A host
+				// that filters `(` and `)` — a common defence against `alert(...)` — passes this form
+				// through, and a backtick is legal in an unquoted attribute value, so the handler still
+				// parses as one attribute. Without it such a host reads as clean even though the
+				// attribute injection it allows is identical (VulnerableApp XSSInImgTagAttribute
+				// LEVEL_4 filters parentheses and reflects the backtick form verbatim).
+				add(xssPayload{build: unquotedAttrBacktickPayload, note: "attribute injection into an unquoted value (backtick call)",
+					confirm: confirmEventAttrInjectionBacktick, bit: XSSEvidenceAttrInjection})
 			default:
 				quote := c.Quote
 				add(xssPayload{
@@ -217,6 +225,16 @@ func quotedAttrBreakoutPayload(quote byte, canary string) string {
 // unquotedAttrPayload injects a new attribute onto the element already being parsed. An unquoted
 // value terminates at whitespace, so no quote is involved anywhere — which is why this case is
 // invisible to a quote-closing payload and to any marker built from one.
+// unquotedAttrBacktickPayload is unquotedAttrPayload with the handler call written in backticks.
+//
+// The exploit is the same attribute injection; only the syntax of the call differs. `alert\`x\“ is a
+// tagged template literal, so it still invokes alert, but it contains no parenthesis — which is
+// what a filter that strips `(` and `)` removes. Reflecting this form back verbatim proves the
+// injection reached an event handler even though the parenthesised form was filtered.
+func unquotedAttrBacktickPayload(canary string) string {
+	return canary + " autofocus onfocus=alert`" + canary + "`"
+}
+
 func unquotedAttrPayload(canary string) string {
 	// The canary goes INSIDE the handler expression, not merely alongside it. Evidence for an
 	// attribute injection is the canary sitting in a parsed event-handler value, so a payload that

@@ -358,3 +358,30 @@ func TestEveryContextSpecificPayloadCarriesItsOwnConfirmation(t *testing.T) {
 		}
 	}
 }
+
+// --- confirmEventAttrInjectionBacktick ---------------------------------------
+
+// A host that strips parentheses still reflects the backtick-call form into a real handler value, so
+// that is the evidence. The rule is the same as the parenthesised confirmation: the handler must be
+// exactly the expression the payload injected.
+func TestConfirmEventAttrInjectionBacktickAcceptsTheExactInjectedHandler(t *testing.T) {
+	c := "bsycanary1"
+	if !confirmEventAttrInjectionBacktick("<img src="+c+" autofocus onfocus=alert`"+c+"` width=400>", c) {
+		t.Error("a handler whose value is exactly the injected backtick call must confirm: that is the exploit")
+	}
+}
+
+// The same refusals as the parenthesised form: a reflection into an existing handler carries the
+// surrounding call, and a parenthesised handler is a different expression.
+func TestConfirmEventAttrInjectionBacktickRefusesAReflectionAndTheOtherCallForm(t *testing.T) {
+	c := "bsycanary1"
+	if confirmEventAttrInjectionBacktick("<a onclick=\"track('alert`"+c+"`')\">x</a>", c) {
+		t.Error("a canary inside an existing handler's argument is a reflection, not an injection")
+	}
+	if confirmEventAttrInjectionBacktick("<img src=x onfocus=alert("+c+")>", c) {
+		t.Error("the parenthesised call is a different expression and must not satisfy the backtick confirmation")
+	}
+	if confirmEventAttrInjectionBacktick("<img src=x onfocusx=alert`"+c+"`>", c) {
+		t.Error("an unknown on* attribute is not known to be executable")
+	}
+}

@@ -209,17 +209,26 @@ func (s *ActiveScanner) CloseCapabilities() error {
 // The error is the point. A check that cannot get a browser must report that it could not
 // look, and this is the only way it learns the difference between "the page had no tainted
 // flow" and "nothing ever loaded the page".
+//
+// A missing capability wraps errCheckUnsupported, so the audit engine counts it Skipped rather
+// than SendFailed. The distinction is not cosmetic: the failure breaker abandons the rest of a
+// dispatch unit after two send failures, and this scan has not sent anything the target could
+// have failed — counting "no browser is configured" as a target failure abandoned every check
+// that happened to be dispatched after a DOM one (burpsy-react-ui-<see gaps>).
 func (cc *CheckContext) Browser(ctx context.Context) (*domexec.Browser, error) {
 	if cc == nil || cc.Scanner == nil || cc.Scanner.browsers == nil {
-		return nil, errors.New("browser: no DOM execution capability is configured for this scan")
+		return nil, fmt.Errorf("browser: no DOM execution capability is configured for this scan: %w", errCheckUnsupported)
 	}
 	return cc.Scanner.browsers.Browser(ctx)
 }
 
 // StoredLedger returns the scan's stored-input ledger, or an error when none is configured.
+//
+// The absence wraps errCheckUnsupported for the same reason Browser's does: no ledger is a
+// capability this scan does not have, not a failure of the target to answer a probe.
 func (cc *CheckContext) StoredLedger() (*StoredLedger, error) {
 	if cc == nil || cc.Scanner == nil || cc.Scanner.stored == nil {
-		return nil, errors.New("stored ledger: no stored-input tracking is configured for this scan")
+		return nil, fmt.Errorf("stored ledger: no stored-input tracking is configured for this scan: %w", errCheckUnsupported)
 	}
 	return cc.Scanner.stored, nil
 }
@@ -234,17 +243,24 @@ func (cc *CheckContext) StoredLedger() (*StoredLedger, error) {
 // what CheckRunner's contract requires: "a nil finding slice is a clean result, not an
 // implicit unsupported result."
 //
+// Every failure here is a precondition — no sender is configured, or the exchange is not
+// authorised — and never a transport outcome. It therefore wraps errCheckUnsupported so the
+// engine counts the check Skipped rather than SendFailed: a scan with no egress is a
+// capability this scan does not have, and counting it as a target failure tripped the
+// consecutive-failure breaker and abandoned the rest of the dispatch unit, silently starving
+// every check ordered after it.
+//
 // Passive checks must NOT call this. They answer from the exchange already captured, so for
 // them a missing sender is irrelevant and an error here would be a false refusal.
 func (cc *CheckContext) RequireEgress() error {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
-		return errors.New("egress: no scanner or exchange on this check context")
+		return fmt.Errorf("egress: no scanner or exchange on this check context: %w", errCheckUnsupported)
 	}
 	if cc.Scanner.sender == nil {
-		return errors.New("egress: no sender is configured for this scan, so an active probe cannot be sent and this check cannot report a verdict")
+		return fmt.Errorf("egress: no sender is configured for this scan, so an active probe cannot be sent and this check cannot report a verdict: %w", errCheckUnsupported)
 	}
 	if cc.Scanner.probeGate(context.Background(), cc.Exchange) == nil {
-		return errors.New("egress: no authorised sender for this exchange, so an active probe cannot be sent")
+		return fmt.Errorf("egress: no authorised sender for this exchange, so an active probe cannot be sent: %w", errCheckUnsupported)
 	}
 	return nil
 }

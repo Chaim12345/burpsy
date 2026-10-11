@@ -24,14 +24,14 @@ type scannerTransport struct {
 func (t *scannerTransport) Do(ctx context.Context, req graphqlmap.Request) (*graphqlmap.Response, error) {
 	s, exchange := t.cc.Scanner, t.cc.Exchange
 	if s == nil || exchange == nil {
-		return nil, fmt.Errorf("graphql transport: no scanner or exchange")
+		return nil, fmt.Errorf("graphql transport: no scanner or exchange: %w", errCheckUnsupported)
 	}
 	if s.sender == nil {
-		return nil, fmt.Errorf("graphql transport: no sender; a GraphQL probe cannot be sent")
+		return nil, fmt.Errorf("graphql transport: no sender; a GraphQL probe cannot be sent: %w", errCheckUnsupported)
 	}
 	gate := s.probeGate(ctx, exchange)
 	if gate == nil {
-		return nil, fmt.Errorf("graphql transport: no authorised sender")
+		return nil, fmt.Errorf("graphql transport: no authorised sender: %w", errCheckUnsupported)
 	}
 
 	path := exchange.Path

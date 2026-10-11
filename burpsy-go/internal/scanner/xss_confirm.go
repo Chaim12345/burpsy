@@ -88,6 +88,19 @@ func confirmEventAttrInjection(body, canary string) bool {
 	})
 }
 
+// confirmEventAttrInjectionBacktick is confirmEventAttrInjection for the backtick-call payload.
+//
+// The same rule applies: the injected handler's value must be exactly the expression the payload
+// put there, so a reflection into an existing handler is refused. The only difference is the call
+// syntax — a tagged template literal instead of a parenthesised call — which is what lets the
+// payload survive a host that strips parentheses.
+func confirmEventAttrInjectionBacktick(body, canary string) bool {
+	want := "alert`" + canary + "`"
+	return anyAttr(body, func(tag, name, value string) bool {
+		return isKnownEventAttr(name) && strings.TrimSpace(value) == want
+	})
+}
+
 // confirmHandlerLiteralBreakout is the evidence for the inline-handler context, where the value is
 // already JavaScript and the payload has to leave the string literal it landed in.
 //
