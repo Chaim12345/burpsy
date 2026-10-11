@@ -259,6 +259,20 @@ def seed_value(app, family, param, example):
     return example
 
 
+def extra_seed_params(family, param):
+    """Additional inert parameters some endpoints require before they reach their injection point.
+
+    A login-shaped handler short-circuits with "provide username and password" unless BOTH are
+    present, so seeding only the injected parameter leaves the endpoint answering a validation error
+    and the scanner with nothing to inject into — OWASP VulnerableApp's LDAP LEVEL_3/5 and
+    Authentication LEVEL_8/9/10 are all shaped this way. Each value here is inert; the scanner
+    replaces the injected parameter's value with its own payloads.
+    """
+    if family == "LDAPInjectionVulnerability":
+        return {"password": "x"}
+    return {}
+
+
 def run_case(app, proxy, web, case, example, audit_timeout):
     """Send one case through the proxy, audit it, return the findings tied to its exchange.
 
@@ -274,6 +288,9 @@ def run_case(app, proxy, web, case, example, audit_timeout):
     else:
         joiner = "&" if "?" in url else "?"
         target = f"{url}{joiner}{param}={seed_value(app, family, param, example)}"
+        for extra, value in extra_seed_params(family, param).items():
+            if extra != param:
+                target += f"&{extra}={value}"
 
     try:
         before = {row["id"] for row in http_json("GET", f"{web}/api/history")}
