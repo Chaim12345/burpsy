@@ -158,18 +158,61 @@ func checkGraphQLContentType(ctx context.Context, cc *CheckContext) ([]*Finding,
 // ---------------------------------------------------------------------------
 
 // jwtFromExchange finds the first parseable JWT in the request.
+//
+// The token is searched for as a TOKEN SHAPE rather than a whitespace-delimited field, because a JWT
+// does not arrive as a field of its own: it is the value in `Authorization: Bearer eyJ…`, in a cookie
+// `session=eyJ…`, in a query parameter `?JWT=eyJ…`, or in a form body `token=eyJ…` — glued to a name
+// by `=`, `:`, a space, a quote or an `&` in every case. The previous version split the raw bytes on
+// whitespace and trimmed a few delimiters, which found a bare token (a body that IS the token) and
+// missed every NAMED one. So an endpoint taking its token as a query parameter had no token found,
+// jwtCheck returned "nothing to do", and all six JWT rows reported clean without a single probe —
+// the silent-skip shape the honest-counting rule forbids, a miss indistinguishable from a pass.
+//
+// Scanned over `[A-Za-z0-9_-]` and `.`, so `=`/`:`/`&`/quote/space/CR/LF/slash ends a run and
+// separates `?JWT=` from its value or `Bearer ` from its token. Each run, and each two-dot window
+// inside a longer run, is offered to ParseJWT — which is refuse-by-default, so a dotted string that
+// is not a token is rejected rather than mistaken for one.
 func jwtFromExchange(cc *CheckContext) (string, JWTToken, bool) {
 	raw := requestRaw(cc.Scanner, cc.Exchange)
-	for _, field := range strings.Fields(strings.ReplaceAll(raw, ";", " ")) {
-		field = strings.Trim(field, `"',`)
-		if strings.Count(field, ".") != 2 || len(field) < 20 {
-			continue
-		}
-		if t := ParseJWT(field); t.ParseError == "" {
-			return field, t, true
+	for _, candidate := range jwtCandidatesIn(string(raw)) {
+		if t := ParseJWT(candidate); t.ParseError == "" {
+			return candidate, t, true
 		}
 	}
 	return "", JWTToken{}, false
+}
+
+// jwtCandidatesIn returns the plausible JWT substrings of a request, in the order they appear.
+//
+// A candidate is a maximal run of token characters (`[A-Za-z0-9_-]` and `.`) with exactly two dots and
+// at least minLen bytes. Every delimiter a request uses to name a token — `=`, `:`, `&`, a quote, a
+// space, CR, LF, `/`, `?` — is outside that set, so `?JWT=eyJ…` yields the bare token as its own run.
+// No window splitting is needed: the delimiters already do it.
+func jwtCandidatesIn(raw string) []string {
+	const minLen = 20
+	isTok := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+			c == '-' || c == '_' || c == '.'
+	}
+	var out []string
+	seen := map[string]bool{}
+	for i := 0; i < len(raw); {
+		if !isTok(raw[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(raw) && isTok(raw[j]) {
+			j++
+		}
+		run := raw[i:j]
+		if len(run) >= minLen && strings.Count(run, ".") == 2 && !seen[run] {
+			seen[run] = true
+			out = append(out, run)
+		}
+		i = j
+	}
+	return out
 }
 
 // jwtForgeryAccepted replaces the original token with a forged one and reports whether the
