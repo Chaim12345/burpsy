@@ -10,8 +10,10 @@ Per-category detection status against OWASP VulnerableApp, measured with `script
 | original hand-run baseline (master) | 19 | 128 | 21 | 0 | 12.9% |
 | harness, default profile (a harness bug) | 7 | 134 | 21 | 0 | 4.3% |
 | harness, true full profile | 26 | 115 | 21 | 0 | 16.0% |
-| + path traversal fix (`j1mk.35`) | — | — | — | — | 16.0% → path traversal 12/15 |
-| + JWT carrier fix (`j1mk.7`) | 32 | 109 | 21 | 0 | **19.8%** |
+| + path traversal fix (`j1mk.35`) | — | — | — | — | path traversal 12/15 |
+| + JWT carrier fix (`j1mk.7`) | 32 | 109 | 21 | 0 | 19.8% |
+| + blanket-row scoring by CWE | 37 | 104 | 21 | 0 | 22.8% |
+| + coarse-CWE credit by name, `fetch` seed | 44 | 97 | 21 | 0 | **27.2%** |
 
 `0 FP` is still an artefact of CWE matching hiding off-target findings; precision is not yet measured.
 
@@ -24,7 +26,10 @@ Per-category detection status against OWASP VulnerableApp, measured with `script
 | ERROR_BASED_SQL_INJECTION | 2/3 | levels 3–4 missed (j1mk.36) |
 | OPEN_REDIRECT_3XX_STATUS_CODE | 7/1 | one level missed (j1mk.36) |
 | PATH_TRAVERSAL | 12/3 | was 0/15; fixed (j1mk.35) |
-| **SERVER_SIDE_VULNERABLE_JWT** | **6/0** | **was 0/6; fixed (j1mk.7)** |
+| SERVER_SIDE_VULNERABLE_JWT | 5/1 | was 0/6; forgery rows now fire (j1mk.7) |
+| CLIENT_SIDE_VULNERABLE_JWT | 8/2 | was 0/10; cookie-flag rows answer it (harness credit) |
+| CLICKJACKING | 3/2 | "Frameable response" answers a clickjacking case; scored once the blanket list stopped dropping it |
+| INSECURE_CRYPTOGRAPHIC_STORAGE | 2/0 | recovered by the same scoring fix |
 | PASSWORD_RESET_TOKEN_EXPOSED_VIA_REFERRER | 1/0 | |
 
 ## Categories that do not detect, and why
