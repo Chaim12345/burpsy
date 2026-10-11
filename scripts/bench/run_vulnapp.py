@@ -171,6 +171,29 @@ def finding_cwes(finding):
     return out
 
 
+def seed_value(app, family, param, example):
+    """The example value for a case's parameter.
+
+    Most parameters take the harness's inert default. A few families cannot be exercised with one:
+    the JWT endpoints issue themselves a signed token only when the parameter is ABSENT, and every
+    JWT check forges from a token it can find in the request — so sending `JWT=1` hands the scanner
+    nothing to forge, the checks return "nothing to do", and the case scores as a miss for a reason
+    that is the harness's, not the scanner's. Fetch the app's own token instead.
+    """
+    if param == "JWT":
+        for _ in range(3):
+            try:
+                got = http_json("GET", f"{app}/VulnerableApp/{family}/LEVEL_1")
+                tok = (got or {}).get("content")
+                if tok and tok.count(".") == 2:
+                    return tok
+            except Exception:
+                pass
+            time.sleep(0.2)
+        return example  # no token available; the case is reported untestable rather than faked
+    return example
+
+
 def run_case(app, proxy, web, case, example, audit_timeout):
     """Send one case through the proxy, audit it, return the findings tied to its exchange.
 
@@ -185,7 +208,7 @@ def run_case(app, proxy, web, case, example, audit_timeout):
         target = url
     else:
         joiner = "&" if "?" in url else "?"
-        target = f"{url}{joiner}{param}={example}"
+        target = f"{url}{joiner}{param}={seed_value(app, family, param, example)}"
 
     try:
         before = {row["id"] for row in http_json("GET", f"{web}/api/history")}
