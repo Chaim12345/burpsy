@@ -73,8 +73,26 @@ state machines. Grouped under `0vzb` and the reference-parity rows.
 
 ```bash
 docker run --rm -p 9090:9090 sasanlabs/owasp-vulnerableapp:latest
-/tmp/burpsy -db /tmp/bsy.db -proxy 127.0.0.1:18080 -web 127.0.0.1:18081 -scope-include 127.0.0.1
+/tmp/burpsy -db /tmp/bsy.db -proxy 127.0.0.1:18080 -web 127.0.0.1:8081 -scope-include 127.0.0.1
 python3 scripts/bench/run_vulnapp.py --full-profile --out /tmp/bench
 python3 scripts/bench/explain_case.py --full-profile PathTraversal/LEVEL_8   # one case, in detail
 ```
+
+## A pre-existing test flake, recorded honestly
+
+`TestTheScannerStaysQuietOnTheSafeCounterparts` fails on this machine under load, across unrelated
+families (DOM, referer-dependent, backup-file, XML), always with the message *"did not fire against
+its vulnerable twin in this run"* — i.e. the check is presumed dead rather than the safe twin being
+wrong. The specific subtests **pass in isolation** (`-run '.../Referer'`) and the same failures
+reproduce at the commit before the JWT work, so this is not that change.
+
+The likely cause is contention, not logic: the test runs its subtests in parallel (`t.Parallel()`)
+while the package's other tests stand up the shared vulnerable-app target and Chrome tabs, and the
+runner here has 4 CPUs and ~16 GB shared with a Docker daemon and a live benchmark. The safe-twin
+guard is *correct* — it refuses to accept silence as evidence when the positive control did not
+fire — so the honest reading is "the harness was starved in this run", not "the check is broken".
+Worth confirming against CI (which shards the package and has a cleaner machine before treating it
+as a defect; if it reproduces there, the fix is to bound the subtests' parallelism rather than to
+weaken the guard.
+
 
