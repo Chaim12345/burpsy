@@ -8,13 +8,13 @@ import (
 
 // TestXXEFilePayloadsReturnsThreeDistinctFileReadPayloads asserts the
 // generator is not stubbed to a no-op: it must return exactly the three
-// documented file-read variants (Unix passwd, Windows win.ini, the
-// php://filter base64 wrapper), each carrying XXEFileRead and a distinct
+// documented file-read variants (Unix passwd, Windows win.ini, Unix hostname,
+// the php://filter base64 wrapper), each carrying XXEFileRead and a distinct
 // Body/Marker, with the caller-supplied marker folded into the entity name.
 func TestXXEFilePayloadsReturnsThreeDistinctFileReadPayloads(t *testing.T) {
 	payloads := XXEFilePayloads("scan42")
-	if len(payloads) != 3 {
-		t.Fatalf("XXEFilePayloads returned %d payloads, want 3 (a caller relying on all three targets would silently lose coverage)", len(payloads))
+	if len(payloads) != 4 {
+		t.Fatalf("XXEFilePayloads returned %d payloads, want 4 (a caller relying on all four targets would silently lose coverage)", len(payloads))
 	}
 
 	seenBodies := map[string]bool{}
@@ -39,6 +39,7 @@ func TestXXEFilePayloadsReturnsThreeDistinctFileReadPayloads(t *testing.T) {
 	wantMarkers := []string{
 		"file:///etc/passwd",
 		"file:///c:/windows/win.ini",
+		"file:///etc/hostname",
 		"php://filter/convert.base64-encode/resource=/etc/passwd",
 	}
 	for _, want := range wantMarkers {
@@ -215,7 +216,7 @@ func TestDetectXXEEvidenceFindsPasswdFileContentSignature(t *testing.T) {
 // response that is (once trimmed) nothing but a plausible base64 encoding
 // of /etc/passwd's content.
 func TestDetectXXEEvidenceFindsPhpFilterBase64Blob(t *testing.T) {
-	payload := XXEFilePayloads("")[2] // php://filter variant
+	payload := XXEFilePayloads("")[3] // php://filter variant
 	encoded := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("root:x:0:0:", 6)))
 	body := "  \n" + encoded + "\n  "
 

@@ -430,6 +430,19 @@ func crossDomainPolicyCheck(row, path string, parse func([]byte) CrossdomainPoli
 	}
 }
 
+// bodyOfRawRequest returns the body of a raw HTTP request: everything after the header/body
+// separator. It exists for a check that needs the request's own shape — XXE keeps the base body's XML
+// element names so an entity reference lands where the target's schema expects one.
+func bodyOfRawRequest(raw string) string {
+	if i := strings.Index(raw, "\r\n\r\n"); i >= 0 {
+		return raw[i+4:]
+	}
+	if i := strings.Index(raw, "\n\n"); i >= 0 {
+		return raw[i+2:]
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // XXE and entity expansion
 // ---------------------------------------------------------------------------
@@ -447,13 +460,28 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if len(points) > MaxInjectionPointsPerCheck {
 		points = points[:MaxInjectionPointsPerCheck]
 	}
+	// The base body, so the payload keeps its XML shape: a JAXB-bound endpoint rejects a synthetic
+	// `<foo>` root before entity resolution, and the payload must land inside an element its schema
+	// already knows. See XXEFilePayloadsFor.
+	baseBody := bodyOfRawRequest(string(h.reqBytes))
 	for _, point := range points {
-		for _, payload := range XXEFilePayloads("bsyxxe") {
+		for _, payload := range XXEFilePayloadsFor(baseBody, "bsyxxe") {
 			res, err := h.Send(ctx, point, payload.Body)
 			if err != nil {
 				continue
 			}
-			if DetectXXEEvidence(res.Body, payload) == XXEEvidenceNone {
+			// Positive(), not `!= XXEEvidenceNone`: the latter fires on
+			// XXEEvidenceReflectedVerbatim, which means the payload came back as INERT TEXT —
+			// evidence the entity was NOT resolved. Testing the negation reported the four SECURE
+			// VulnerableApp levels as "the external entity was resolved".
+			if !DetectXXEEvidence(res.Body, payload).Positive() {
+				// No positive signal: the entity was not resolved into anything recognised. A
+				// real-file/missing-file differential was tried here and REMOVED, because it was
+				// unsound: the two payloads are different documents (they name different URIs), so a
+				// target that reflects the body at all answers them differently for a reason that has
+				// nothing to do with reading a file — it fired on all four SECURE VulnerableApp levels.
+				// A sound differential has to hold the document IDENTICAL but for the entity's
+				// resolution, which this check does not yet do; recorded as the XXE differential bead.
 				continue
 			}
 			return []*Finding{buildHeaderFinding(cc, "XML external entity injection", "high", "firm",

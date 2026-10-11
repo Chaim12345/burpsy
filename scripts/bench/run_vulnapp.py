@@ -115,20 +115,41 @@ def confirm(web, method, path, body):
     return ans["token"]
 
 
-def proxied_through(proxy, url, method="GET"):
+# FAMILY_BODIES seeds a request BODY for families whose vulnerability is carried in one rather than
+# in a query parameter. The app's UI builds these bodies in JavaScript; a benchmark that sent an
+# empty body left the scanner nothing to inject into (the insertion-point enumerator needs a body
+# point to exist before it can rewrite one), so those families scored as misses for a reason that was
+# the harness's, not the scanner's. Each value is the smallest body the app's own handler accepts,
+# verified live against the target; the scanner replaces the leaf values with its payloads.
+FAMILY_BODIES = {
+    # An XML book document: XXE splices a whole DOCTYPE-carrying document into the body.
+    "XXEVulnerability": (
+        "application/xml",
+        '<?xml version="1.0" encoding="UTF-8"?><book><name>burpsy</name><author>burpsy</author>'
+        '<isbn>1</isbn><publisher>burpsy</publisher><others>burpsy</others></book>',
+    ),
+}
+
+
+def proxied_through(proxy, url, method="GET", body=None, content_type=None):
     """Send url through burpsy's own proxy so the exchange is captured.
 
     urllib with an http proxy set sends the absolute-form request the proxy expects; an https
     target would need CONNECT, which is why this benchmark uses http only (VulnerableApp serves
     http). The proxy decides scope, so an out-of-scope host is not captured and the case becomes a
-    missing exchange rather than a silent pass. A POST carries an empty body: every handler here
-    binds @RequestParam Map<String,String>, so the parameter rides the query string, and an empty
-    body is the shape the app's own JSON POST endpoints expect for a missing one."""
+    missing exchange rather than a silent pass. A POST carries an empty body unless the family's
+    vulnerability is IN the body (FAMILY_BODIES), in which case the scanner needs a body point to
+    rewrite and an empty one leaves it nothing to test."""
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({"http": proxy, "https": proxy})
     )
-    data = b"" if method == "POST" else None
+    if method == "POST":
+        data = body.encode() if body else b""
+    else:
+        data = None
     req = urllib.request.Request(url, data=data, method=method)
+    if content_type:
+        req.add_header("Content-Type", content_type)
     try:
         with opener.open(req, timeout=60) as resp:
             resp.read()
@@ -258,8 +279,9 @@ def run_case(app, proxy, web, case, example, audit_timeout):
         before = {row["id"] for row in http_json("GET", f"{web}/api/history")}
     except Exception as e:
         return None, None, f"history read failed: {e}"
+    ctype, cbody = FAMILY_BODIES.get(family, (None, None))
     try:
-        proxied_through(proxy, target, case["method"])
+        proxied_through(proxy, target, case["method"], cbody, ctype)
     except Exception as e:
         # Any transport failure is this case's, not the run's: an open-redirect case legitimately
         # sends the client somewhere that closes the connection, and one broken case must not end
