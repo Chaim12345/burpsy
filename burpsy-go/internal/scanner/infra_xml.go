@@ -284,6 +284,25 @@ func xxeInjectIntoXML(baseBody, entity string) (string, bool) {
 	return "", false
 }
 
+// xxeInternalEntityDocument is the control half of the XXE differential: the same document shape as
+// an external-entity payload, with an INTERNAL entity whose value is a known marker.
+//
+// It is the sound discriminator the real-file/missing-file comparison was not. An internal entity is
+// substitution with no file access, which every XML parser performs and no XXE defence blocks, so its
+// substitution proves the document reaches the parser and that an entity reference in THIS element is
+// expanded. With that established, an external document that came back different from this control
+// has had its external entity resolved; one that came back identical had the entity left as text.
+// The key is that the two documents are the same but for the entity's target, so nothing else can
+// explain a difference.
+func xxeInternalEntityDocument(baseBody, marker string) string {
+	entity := "xxebsyxxe"
+	doctype := `<!DOCTYPE ` + xxeRootOf(baseBody) + ` [<!ENTITY ` + entity + ` "` + marker + `"> ]>`
+	if injected, ok := xxeInjectIntoXML(baseBody, entity); ok {
+		return `<?xml version="1.0" encoding="UTF-8"?>` + doctype + injected
+	}
+	return `<!DOCTYPE foo [<!ENTITY ` + entity + ` "` + marker + `"> ]><foo>&` + entity + `;</foo>`
+}
+
 // ---------------------------------------------------------------------------
 // Out-of-band payloads
 // ---------------------------------------------------------------------------

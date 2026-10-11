@@ -430,6 +430,21 @@ func crossDomainPolicyCheck(row, path string, parse func([]byte) CrossdomainPoli
 	}
 }
 
+// xxeInjectedExternally reports whether the external-entity answer carries content the internal
+// control's document does not — the evidence the file was READ rather than the entity being blanked.
+//
+// It compares by length-and-content rather than by inequality, because "the bodies differ" is true
+// for both a successful read and a refused one: a target that blocks external entities substitutes
+// the empty string, so its answer differs from the control's marker substitution without any file
+// being read. The test is that the external answer is LONGER than the control's and does not carry
+// the control's marker — something was substituted for an entity that held a marker of known length.
+func xxeInjectedExternally(externalBody, controlBody, marker string) bool {
+	if len(externalBody) <= len(controlBody) {
+		return false
+	}
+	return !strings.Contains(externalBody, marker)
+}
+
 // bodyOfRawRequest returns the body of a raw HTTP request: everything after the header/body
 // separator. It exists for a check that needs the request's own shape — XXE keeps the base body's XML
 // element names so an entity reference lands where the target's schema expects one.
@@ -474,18 +489,57 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 			// XXEEvidenceReflectedVerbatim, which means the payload came back as INERT TEXT —
 			// evidence the entity was NOT resolved. Testing the negation reported the four SECURE
 			// VulnerableApp levels as "the external entity was resolved".
-			if !DetectXXEEvidence(res.Body, payload).Positive() {
-				// No positive signal: the entity was not resolved into anything recognised. A
-				// real-file/missing-file differential was tried here and REMOVED, because it was
-				// unsound: the two payloads are different documents (they name different URIs), so a
-				// target that reflects the body at all answers them differently for a reason that has
-				// nothing to do with reading a file — it fired on all four SECURE VulnerableApp levels.
-				// A sound differential has to hold the document IDENTICAL but for the entity's
-				// resolution, which this check does not yet do; recorded as the XXE differential bead.
+			if DetectXXEEvidence(res.Body, payload).Positive() {
+				return []*Finding{buildHeaderFinding(cc, "XML external entity injection", "high", "firm",
+					payload.Name, fmt.Sprintf("%s %q: the external entity was resolved", point.Kind, point.Name))}, nil
+			}
+			// No recognised content signature. That is the normal case for a file whose content has
+			// no fixed marker — /etc/hostname is the container's own id — so fall back to a
+			// differential that is SOUND, in the sense the removed one was not.
+			//
+			// The removed version compared a real file against a missing file and fired on the
+			// difference. It was wrong because the two payloads were different DOCUMENTS (they name
+			// different URIs inside the DTD), so a target that echoes or rejects the body at all
+			// answers them differently for a reason unrelated to reading a file — it fired on all four
+			// SECURE VulnerableApp levels.
+			//
+			// This version holds the document identical and varies only what the entity points at:
+			//   control  — an INTERNAL entity holding a known marker: `<!ENTITY xxe "bsyxxe-int">`
+			//   external — the same document with `SYSTEM "file:///…"` in its place
+			// An internal-entity reference is substitution with no file access, which every XML parser
+			// does and no XXE defence blocks. So the control establishes that this document reaches the
+			// parser and that an entity reference in THIS element is expanded at all. Only then does the
+			// external answer mean anything: if the parser accepts the internal one and the external one
+			// produced DIFFERENT output, the difference is the file's content, and the entity was
+			// resolved. A target that refuses external entities answers the external probe exactly as
+			// it answers the document with no entity at all, so nothing differs and nothing is reported.
+			marker := "bsyxxeint"
+			control, cerr := h.Send(ctx, point, xxeInternalEntityDocument(baseBody, marker))
+			if cerr != nil || !strings.Contains(control.Body, marker) {
+				// The internal-entity control did not come back substituted, so this target does not
+				// expand an entity reference in this element at all — the external probe's silence
+				// proves nothing about file access and must not be read as either a finding or a pass.
 				continue
 			}
-			return []*Finding{buildHeaderFinding(cc, "XML external entity injection", "high", "firm",
-				payload.Name, fmt.Sprintf("%s %q: the external entity was resolved", point.Kind, point.Name))}, nil
+			// The external answer must carry CONTENT the internal control does not — not merely
+			// differ from it. A target that refuses external entities answers the external document
+			// with the entity expanded to the EMPTY string (measured on VulnerableApp's SECURE
+			// levels: the internal control returns "bsyxxeint" where the external one returns ""),
+			// so "the bodies differ" is true both when a file was read and when the reference was
+			// blanked. Only content in the external answer that the control's document does not
+			// produce is evidence the file was read.
+			if strings.Contains(res.Body, payload.Marker) || strings.Contains(res.Body, "xxebsyxxe") {
+				// The application echoed the URI or the entity name back — the target repeating
+				// what it was sent, not reading a file.
+				continue
+			}
+			if !xxeInjectedExternally(res.Body, control.Body, marker) {
+				continue
+			}
+			return []*Finding{buildHeaderFinding(cc, "XML external entity injection", "high", "tentative",
+				payload.Name, fmt.Sprintf("%s %q: the external entity expanded to content the same document's "+
+					"internal-entity control does not produce, so the file was read",
+					point.Kind, point.Name))}, nil
 		}
 	}
 	return nil, nil
