@@ -279,21 +279,31 @@ def app_alive(app):
         return False
 
 
-def score(cases, results, strict):
-    """Turn per-case results into TP/FN/TN/FP and a per-type table."""
+def score(cases, results, blanket_credits=False):
+    """Turn per-case results into TP/FN/TN/FP and a per-type table.
+
+    A finding counts when its CWE set intersects the case's — the same test for every row, blanket
+    posture rows included. That is the strict number, and it is the honest one: "Frameable response
+    (potential Clickjacking)" legitimately answers a clickjacking case (CWE-1021) and is noise on a
+    path-traversal one, and the CWE intersection is exactly what tells those apart. An earlier version
+    dropped the whole BLANKET_CHECK_NAMES list and so scored a real clickjacking detection as a miss.
+
+    lenient adds blanket posture rows as evidence for ANY case (blanket_credits=True). It is kept
+    because it is the number that flatters a scanner reporting only header posture, and showing both
+    makes the gap visible rather than argued about.
+    """
     by_type = defaultdict(lambda: Counter())
     tp = fn = tn = fp = 0
     for case, res in zip(cases, results):
         if res is None:  # untestable case, already reported
             continue
         types = case["vulnerabilityTypes"]
+        case_cwes = family_cwes(types)
         unsecure = case["variant"] != "SECURE"
-        # A finding is "relevant" if its CWE set intersects the case's.
-        rel = [
-            f for f in res
-            if not (strict and f["check_name"] in BLANKET_CHECK_NAMES)
-            and (finding_cwes(f) & family_cwes(types))
-        ]
+
+        rel = [f for f in res if finding_cwes(f) & case_cwes]
+        if blanket_credits:
+            rel = rel or [f for f in res if f["check_name"] in BLANKET_CHECK_NAMES]
         hit = bool(rel)
         for t in types:
             if unsecure:
@@ -371,8 +381,8 @@ def main():
         sys.stderr.write(f"[{i}/{len(cases)}] {mark} {case['variant']:8} {case['url']}\n")
         sys.stderr.flush()
 
-    strict = score(cases, results, strict=True)
-    lenient = score(cases, results, strict=False)
+    strict = score(cases, results, blanket_credits=False)
+    lenient = score(cases, results, blanket_credits=True)
 
     def pct(t):
         tp, fn, tn, fp, _ = t
