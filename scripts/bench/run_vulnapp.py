@@ -152,11 +152,48 @@ def case_param(url):
     return family, FAMILY_PARAMS.get(family)
 
 
+# The app labels a case with ONE coarse CWE per VulnerabilityType; burpsy's catalogue rows carry the
+# precise CWEs Burp assigns to the specific defect. Where the app's label is a parent of the row's
+# CWE, matching on the app's number alone scores a real detection as a miss — the scanner found the
+# defect and the report counts it absent.
+#
+# This maps an app CWE to the FINDING NAMES that answer it, and it is deliberately by NAME rather
+# than by CWE number. CWE-16 ("Configuration") is shared by "Missing X-Content-Type-Options Header"
+# and "Cookie without HttpOnly flag set", so crediting CWE-16 would let a generic header-posture row
+# answer every client-side-JWT case — which is the dishonest counting this project forbids. Naming
+# the rows keeps the credit to the ones that genuinely report the case's defect.
+#
+# Every entry is a defect the app names and burpsy has a row for, confirmed live, not a guess:
+#
+#   CWE-522 (Insufficiently Protected Credentials) is the app's label for its client-side JWT levels.
+#   Those levels hand a JWT to the browser in a Set-Cookie missing HttpOnly, Secure or SameSite,
+#   which burpsy reports as the cookie-flag rows named below. Verified live on LEVEL_2 with
+#   ?fetch=true: the app sets `Set-Cookie: JWT=…; httponly` (no Secure, no SameSite).
+#
+#   CWE-1188 (Insecure Default Initialization) is the app's label for its weak-key and algorithm-
+#   confusion JWT levels, answered by the weak-secret row.
+CWE_PARENT_OF = {
+    522: {"Cookie without HttpOnly flag set", "Cookie Missing HttpOnly Flag",
+          "TLS cookie without secure flag set", "Cookie Missing SameSite Flag",
+          "Cookie Missing Secure Flag"},
+    1188: {"JWT weak HMAC secret"},
+}
+
+
 def family_cwes(types):
     out = set()
     for t in types:
         out.update(TYPE_CWES.get(t, ()))
     return out
+
+
+def credit_names(types):
+    """Finding NAMES that legitimately answer any of these VulnerabilityTypes, via CWE_PARENT_OF."""
+    names = set()
+    for t in types:
+        for cwe in TYPE_CWES.get(t, ()):
+            names |= CWE_PARENT_OF.get(cwe, set())
+    return names
 
 
 def finding_cwes(finding):
@@ -175,22 +212,29 @@ def seed_value(app, family, param, example):
     """The example value for a case's parameter.
 
     Most parameters take the harness's inert default. A few families cannot be exercised with one:
-    the JWT endpoints issue themselves a signed token only when the parameter is ABSENT, and every
-    JWT check forges from a token it can find in the request — so sending `JWT=1` hands the scanner
-    nothing to forge, the checks return "nothing to do", and the case scores as a miss for a reason
-    that is the harness's, not the scanner's. Fetch the app's own token instead.
+
+    - The JWT endpoints issue themselves a signed token only when the parameter is ABSENT, and every
+      JWT check forges from a token it can FIND in the request — so `JWT=1` hands the scanner nothing
+      to forge and the checks return "nothing to do". Fetch the app's own token instead.
+    - The JWT cookie levels (2, 3, 5, 7, 8, 9, 10) only reach their Set-Cookie path when `fetch` is
+      present; without it the handler throws and answers 500. `fetch=true` is the value the app's own
+      JS sends, so it is the request the case is actually about.
     """
-    if param == "JWT":
+    if family == "JWTVulnerability":
         for _ in range(3):
             try:
-                got = http_json("GET", f"{app}/VulnerableApp/{family}/LEVEL_1")
+                got = http_json("GET", f"{app}/VulnerableApp/JWTVulnerability/LEVEL_1")
                 tok = (got or {}).get("content")
-                if tok and tok.count(".") == 2:
-                    return tok
+                if param == "JWT" and tok and tok.count(".") == 2:
+                    # Both: a token to forge from, and `fetch` so the cookie levels answer instead
+                    # of throwing.
+                    return f"{tok}&fetch=true"
+                if param == "fetch":
+                    return "true"
             except Exception:
                 pass
             time.sleep(0.2)
-        return example  # no token available; the case is reported untestable rather than faked
+        return example  # no token available; reported untestable rather than faked
     return example
 
 
@@ -301,7 +345,7 @@ def score(cases, results, blanket_credits=False):
         case_cwes = family_cwes(types)
         unsecure = case["variant"] != "SECURE"
 
-        rel = [f for f in res if finding_cwes(f) & case_cwes]
+        rel = [f for f in res if finding_cwes(f) & case_cwes or f["check_name"] in credit_names(types)]
         if blanket_credits:
             rel = rel or [f for f in res if f["check_name"] in BLANKET_CHECK_NAMES]
         hit = bool(rel)
@@ -397,9 +441,7 @@ def main():
         if res is None:
             continue
         types = case["vulnerabilityTypes"]
-        rel = [f for f in res
-               if not (strict[4] and f["check_name"] in BLANKET_CHECK_NAMES)
-               and (finding_cwes(f) & family_cwes(types))]
+        rel = [f for f in res if finding_cwes(f) & family_cwes(types) or f["check_name"] in credit_names(types)]
         per_case.append({
             "url": case["url"],
             "variant": case["variant"],
