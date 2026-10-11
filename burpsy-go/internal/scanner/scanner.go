@@ -197,6 +197,29 @@ type ScanConfig struct {
 	// browser, so they need a browser provider; without one they report a refusal rather than
 	// an empty observation set. Off by default like every other per-family switch.
 	CheckDOM bool
+	// CheckXSSBrowserConfirm admits the browser confirmation of a reflected-XSS point (j1mk.38).
+	//
+	// Some applications answer an injection probe with text/plain — so the server-side check correctly
+	// refuses to call the reflection a breakout — while the PAGE's own script takes that answer and
+	// writes it into the document with innerHTML. The vulnerability is real and lives entirely in the
+	// browser; nothing on the wire proves it. With this on, a point whose probe was reflected into a
+	// non-markup content type is confirmed by driving the application's own page: type the payload,
+	// submit, and see whether the page's script feeds it to a sink.
+	//
+	// Off by default, like every family switch, and additionally requiring a browser: a run with no
+	// -dom reports the decline rather than reporting the point clean.
+	CheckXSSBrowserConfirm bool
+	// XSSBrowserTargets are the application routes the browser confirmation drives. A target this list
+	// does not cover is DECLINED with that reason rather than reported clean — the scanner cannot guess
+	// another application's navigation, and a guessed route would fabricate a finding the moment it was
+	// wrong. Supplied by a caller that knows its target (the benchmark does).
+	XSSBrowserTargets []XSSBrowserTarget
+	// CheckSSRFInBand admits the IN-BAND technique of the SSRF row (0vzb.6): plant a canary URL this
+	// scanner serves and see whether the application fetches it and returns its body. Separate from
+	// CheckOutOfBand because it needs no collaborator (only a loopback listener this process owns) and
+	// because it sends a request to an address the probe chooses, which an operator should opt into on
+	// its own. Both file under "Out-of-band resource load (HTTP)" — CWE-918, the same catalogued issue.
+	CheckSSRFInBand bool
 	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go and
 	// checks_final.go: GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy
 	// files, XXE and entity expansion, file-upload and OpenAPI discovery, React2Shell
@@ -335,6 +358,28 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 		pathCov:  newPathCoverage(),
 		guide:    newPayloadGuide(),
 	}
+}
+
+// BuiltinXSSBrowserTargets are the application routes this build ships, keyed by the host fragment
+// they apply to. They exist because the route is a property of the TARGET — which page, which field,
+// which control — and cannot be inferred from a response; a caller that knows another application
+// supplies its own through ScanConfig.XSSBrowserTargets, and a host no route covers is DECLINED with
+// that reason rather than reported clean.
+//
+// The one here is OWASP VulnerableApp's reflected-XSS page, whose levels answer text/plain and render
+// the value with innerHTML: the exact case the wire-side check cannot confirm. Each entry is the
+// navigation path measured against the running application (master entry -> level entry -> the
+// field's own submit control, which is a click handler rather than a form submit).
+func BuiltinXSSBrowserTargets() []XSSBrowserTarget {
+	return []XSSBrowserTarget{{
+		Match:          "127.0.0.1",
+		RootURL:        "http://127.0.0.1:9090/VulnerableApp/",
+		MasterText:     "XSSWithHtmlTagInjection",
+		LevelText:      "LEVEL_1",
+		InputSelector:  "#textInput",
+		SubmitSelector: "#submit",
+		ClickTrigger:   true,
+	}}
 }
 
 // WithConfig sets the scan configuration. The pointer is installed under the config lock; after

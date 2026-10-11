@@ -153,6 +153,13 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if cc != nil && cc.Scanner != nil && cc.Scanner.sender == nil {
 		return nil, nil
 	}
+	browserConfirm := cc != nil && cc.Scanner != nil && cc.Scanner.config != nil && cc.Scanner.config.CheckXSSBrowserConfirm
+	if browserConfirm && len(cc.Scanner.config.XSSBrowserTargets) == 0 {
+		// The switch is on and the caller named no routes: fall back to the built-in ones, so flipping
+		// the flag against a target this build knows works without a second step. A host the built-ins
+		// do not cover still declines by name.
+		cc.Scanner.config.XSSBrowserTargets = BuiltinXSSBrowserTargets()
+	}
 	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", xssReflectedIssue, err)
@@ -343,6 +350,18 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 					fmt.Sprintf("a value submitted in %s %q is reflected here after the application decoded it — "+
 						"the breakout did not confirm, but the decoding is itself worth reviewing",
 						point.Kind, point.Name)))
+			}
+		}
+
+		// The browser confirmation (j1mk.38): the point reflected the payload but into a content type
+		// no browser parses as markup, so the server-side check refuses to call it a breakout. That
+		// refusal is right on the wire and wrong about the application when the PAGE's own script takes
+		// the answer and writes it into the document — measured on OWASP VulnerableApp, whose XSS
+		// levels answer text/plain and render it with innerHTML. Only a browser can settle it.
+		if evidence&XSSEvidenceReflected != 0 && !xssBreakoutConfirmed(evidence) && browserConfirm {
+			if f := confirmReflectedXSSInBrowser(ctx, cc, point, bank); f != nil {
+				findings = append(findings, f)
+				break
 			}
 		}
 

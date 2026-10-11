@@ -634,6 +634,40 @@ func checkOpenAPIDefinitionPassive(ctx context.Context, cc *CheckContext) ([]*Fi
 
 // oobCheck builds a runner that plants the collaborator domain in every insertion point and
 // then asks the channel whether the target called back.
+//
+// oobOrInBandSSRF runs the SSRF row's two techniques, each behind its own switch.
+//
+// The row is one catalogued issue (CWE-918) with two ways to prove it: a collaborator callback for a
+// BLIND fetch, and a canary URL this scanner serves for an IN-BAND one. They are admitted separately
+// because they need different capabilities (an interactsh binary versus a local listener) and because
+// an operator may reasonably want one without the other. Both file under the same row so a report
+// reader finds the name Burp uses.
+func oobOrInBandSSRF() CheckRunner {
+	oob := oobCheck("Out-of-band resource load (HTTP)", "http")
+	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
+		if inBandSSRFEnabled(cc) {
+			// The in-band technique first: it is local, fast, and needs no external registration, so
+			// when it confirms there is nothing for the collaborator to add.
+			if f, err := checkSSRFInBand(ctx, cc); err == nil && len(f) > 0 {
+				return f, nil
+			}
+		}
+		if oobChecksEnabled(cc.Scanner.config) {
+			return oob(ctx, cc)
+		}
+		return nil, nil
+	}
+}
+
+// inBandSSRFEnabled reports whether the in-band technique is admitted: the family switch plus its own.
+func inBandSSRFEnabled(cc *CheckContext) bool {
+	if cc == nil || cc.Scanner == nil || cc.Scanner.config == nil {
+		return false
+	}
+	c := cc.Scanner.config
+	return c.CheckExtendedActive && c.CheckSSRFInBand
+}
+
 func oobCheck(row, protocol string) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 		// Cheap local preconditions first, expensive external capability second.
@@ -869,7 +903,7 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("OpenAPI definition found (passive scan check)", DispatchScopePerUrl, remainingChecksEnabled, checkOpenAPIDefinitionPassive),
 
 		descriptorWithTier("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
-			oobCheck("Out-of-band resource load (HTTP)", "http"), TierIntrusive, ""),
+			oobOrInBandSSRF(), TierIntrusive, ""),
 		descriptorWithTier("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (DNS)", "dns"), TierIntrusive, ""),
 		descriptorWithTier("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,

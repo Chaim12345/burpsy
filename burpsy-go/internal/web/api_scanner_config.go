@@ -40,6 +40,8 @@ type scannerConfigView struct {
 	CheckPassiveAnalysis    bool `json:"check_passive_analysis"`
 	CheckActiveInjection    bool `json:"check_active_injection"`
 	CheckDOM                bool `json:"check_dom"`
+	CheckXSSBrowserConfirm  bool `json:"check_xss_browser_confirm"`
+	CheckSSRFInBand         bool `json:"check_ssrf_in_band"`
 	CheckExtendedActive     bool `json:"check_extended_active"`
 	CheckOutOfBand          bool `json:"check_out_of_band"`
 	CheckStored             bool `json:"check_stored"`
@@ -69,6 +71,8 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckPassiveAnalysis:    c.CheckPassiveAnalysis,
 		CheckActiveInjection:    c.CheckActiveInjection,
 		CheckDOM:                c.CheckDOM,
+		CheckXSSBrowserConfirm:  c.CheckXSSBrowserConfirm,
+		CheckSSRFInBand:         c.CheckSSRFInBand,
 		CheckExtendedActive:     c.CheckExtendedActive,
 		CheckOutOfBand:          c.CheckOutOfBand,
 		CheckStored:             c.CheckStored,
@@ -90,6 +94,8 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_cache_poisoning":     func(v *scannerConfigView) *bool { return &v.CheckCachePoisoning },
 	"check_corpus":              func(v *scannerConfigView) *bool { return &v.CheckCorpus },
 	"check_dom":                 func(v *scannerConfigView) *bool { return &v.CheckDOM },
+	"check_xss_browser_confirm": func(v *scannerConfigView) *bool { return &v.CheckXSSBrowserConfirm },
+	"check_ssrf_in_band":        func(v *scannerConfigView) *bool { return &v.CheckSSRFInBand },
 	"check_extended_coverage":   func(v *scannerConfigView) *bool { return &v.CheckExtendedCoverage },
 	"check_reflection_probes":   func(v *scannerConfigView) *bool { return &v.CheckReflectionProbes },
 	"check_host_discovery":      func(v *scannerConfigView) *bool { return &v.CheckHostDiscovery },
@@ -193,6 +199,8 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckPassiveAnalysis = view.CheckPassiveAnalysis
 		c.CheckActiveInjection = view.CheckActiveInjection
 		c.CheckDOM = view.CheckDOM
+		c.CheckXSSBrowserConfirm = view.CheckXSSBrowserConfirm
+		c.CheckSSRFInBand = view.CheckSSRFInBand
 		c.CheckExtendedActive = view.CheckExtendedActive
 		c.CheckOutOfBand = view.CheckOutOfBand
 		c.CheckStored = view.CheckStored

@@ -78,7 +78,13 @@ FULL_PROFILE = {
     "check_passive_analysis": True, "check_active_injection": True, "check_extended_active": True,
     "check_out_of_band": True, "check_stored": True,
     # DOM stays off: it needs Chrome and its own budget, and the DOM family is scored separately.
+    # The browser CONFIRMATION of a reflected-XSS point is on: the XSS levels answer text/plain and
+    # render the value with innerHTML, so the wire-side check cannot confirm them and only a browser
+    # can (j1mk.38).
     "check_dom": False, "check_corpus": False,
+    "check_xss_browser_confirm": True,
+    # In-band SSRF: the canary-URL technique, which needs no collaborator (0vzb.6).
+    "check_ssrf_in_band": True,
 }
 
 
