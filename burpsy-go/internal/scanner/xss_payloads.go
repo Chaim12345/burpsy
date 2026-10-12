@@ -222,9 +222,6 @@ func quotedAttrBreakoutPayload(quote byte, canary string) string {
 	return q + `><svg id=` + canary + ` onload=alert(1)>`
 }
 
-// unquotedAttrPayload injects a new attribute onto the element already being parsed. An unquoted
-// value terminates at whitespace, so no quote is involved anywhere — which is why this case is
-// invisible to a quote-closing payload and to any marker built from one.
 // unquotedAttrBacktickPayload is unquotedAttrPayload with the handler call written in backticks.
 //
 // The exploit is the same attribute injection; only the syntax of the call differs. `alert\`x\“ is a
@@ -235,6 +232,9 @@ func unquotedAttrBacktickPayload(canary string) string {
 	return canary + " autofocus onfocus=alert`" + canary + "`"
 }
 
+// unquotedAttrPayload injects a new attribute onto the element already being parsed. An unquoted
+// value terminates at whitespace, so no quote is involved anywhere — which is why this case is
+// invisible to a quote-closing payload and to any marker built from one.
 func unquotedAttrPayload(canary string) string {
 	// The canary goes INSIDE the handler expression, not merely alongside it. Evidence for an
 	// attribute injection is the canary sitting in a parsed event-handler value, so a payload that
