@@ -48,6 +48,28 @@ func auditSSRFInBandOnly(t *testing.T, host string, port uint16) []*Finding {
 	return findings
 }
 
+// TestInBandSSRFRunsWithoutTheOutOfBandSwitch pins that CheckSSRFInBand admits the row on its own. The
+// row used to be gated on CheckOutOfBand, so turning only the in-band switch on ran nothing and an
+// application that fetches and returns an attacker-chosen URL reported clean.
+func TestInBandSSRFRunsWithoutTheOutOfBandSwitch(t *testing.T) {
+	host, port := ssrfTarget(t, func(u string) string {
+		// Fetch only this host's loopback, which is where the canary lives; nothing else is reached.
+		if !strings.HasPrefix(strings.ToLower(u), "http://127.0.0.1:") {
+			return "nothing fetched"
+		}
+		resp, err := http.Get(u)
+		if err != nil {
+			return "fetch failed"
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "fetched: " + string(b)
+	})
+	if !hasFinding(auditSSRFInBandOnly(t, host, port), ssrfRow) {
+		t.Fatal("a target that fetched the canary and returned its body was not reported with only the in-band switch on")
+	}
+}
+
 // TestInBandSSRFDoesNotFireOnAnEcho is the negative control for the echo false positive: a target that
 // repeats the URL it was given, and fetches nothing, must not be reported. The GCP payload's URL
 // contains "computeMetadata", which used to be accepted as evidence of a metadata read.

@@ -659,28 +659,40 @@ func checkOpenAPIDefinitionPassive(ctx context.Context, cc *CheckContext) ([]*Fi
 func oobOrInBandSSRF() CheckRunner {
 	oob := oobCheck("Out-of-band resource load (HTTP)", "http")
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		if inBandSSRFEnabled(cc) {
+		var cfg *ScanConfig
+		if cc != nil && cc.Scanner != nil {
+			cfg = cc.Scanner.config
+		}
+		var inBandErr error
+		if inBandSSRFOn(cfg) {
 			// The in-band technique first: it is local, fast, and needs no external registration, so
 			// when it confirms there is nothing for the collaborator to add.
-			if f, err := checkSSRFInBand(ctx, cc); err == nil && len(f) > 0 {
+			f, err := checkSSRFInBand(ctx, cc)
+			if err == nil && len(f) > 0 {
 				return f, nil
 			}
+			inBandErr = err
 		}
-		if oobChecksEnabled(cc.Scanner.config) {
+		if oobChecksEnabled(cfg) {
 			return oob(ctx, cc)
 		}
-		return nil, nil
+		// Only the in-band technique was admitted: its own verdict is the row's, including a refusal
+		// (no egress, no listener), which must not read as a clean endpoint.
+		return nil, inBandErr
 	}
 }
 
-// inBandSSRFEnabled reports whether the in-band technique is admitted: the family switch plus its own.
-func inBandSSRFEnabled(cc *CheckContext) bool {
-	if cc == nil || cc.Scanner == nil || cc.Scanner.config == nil {
-		return false
-	}
-	c := cc.Scanner.config
-	return c.CheckExtendedActive && c.CheckSSRFInBand
+// inBandSSRFOn reports whether the in-band technique is admitted: the family switch plus its own. It
+// does NOT require CheckOutOfBand — the in-band technique needs no collaborator, and the row is
+// admitted by ssrfRowEnabled when either technique is on.
+func inBandSSRFOn(c *ScanConfig) bool {
+	return remainingChecksEnabled(c) && c.CheckSSRFInBand
 }
+
+// ssrfRowEnabled admits the "Out-of-band resource load (HTTP)" row when either of its techniques is
+// on: the collaborator (CheckOutOfBand) or the in-band canary (CheckSSRFInBand). The two DNS/HTTP
+// external-interaction rows keep oobChecksEnabled; they have no in-band technique.
+func ssrfRowEnabled(c *ScanConfig) bool { return oobChecksEnabled(c) || inBandSSRFOn(c) }
 
 func oobCheck(row, protocol string) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
@@ -916,7 +928,7 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("File upload functionality", DispatchScopePerHost, remainingChecksEnabled, checkFileUploadFunctionality),
 		nativeDescriptor("OpenAPI definition found (passive scan check)", DispatchScopePerUrl, remainingChecksEnabled, checkOpenAPIDefinitionPassive),
 
-		descriptorWithTier("Out-of-band resource load (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
+		descriptorWithTier("Out-of-band resource load (HTTP)", DispatchScopePerUrl, ssrfRowEnabled,
 			oobOrInBandSSRF(), TierIntrusive, ""),
 		descriptorWithTier("External service interaction (DNS)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (DNS)", "dns"), TierIntrusive, ""),
