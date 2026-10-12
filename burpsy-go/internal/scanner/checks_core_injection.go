@@ -429,7 +429,7 @@ func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Findi
 			// on the string but not on the path. The default percent-escape would turn `..%2f`
 			// into `..%252f`, which the target decodes once to a literal `%2f` the application
 			// never decodes again — the probe would test the wrong string.
-			return h.ProbeErrorSignaturesRaw(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
+			return h.ProbeErrorSignaturesRaw(ctx, p, TraversalPayloadsFor(p.BaseValue), TraversalFileSignatures)
 		})
 	if err != nil {
 		return nil, fmt.Errorf("File path traversal: %w", err)
