@@ -39,6 +39,7 @@ package scanner
 import (
 	"context"
 	"fmt"
+	mathrand "math/rand/v2"
 	"strings"
 	"time"
 
@@ -61,37 +62,111 @@ var sqlBooleanContexts = [][2]string{
 	{",", ""},         // a further argument: the condition becomes a new expression
 }
 
-// sqlQuotedBooleanPairs are the quote-opening pairs for a value that sits inside a string literal
-// (burpsy's own, the standard forms): the payload closes the application's quote, adds the
+// sqlBooleanShape is one place to put a condition: render(l, r) spells the condition `l = r` in
+// that place, so render(a, a) is the always-true half and render(a, b) the always-false one. A
+// shape renders any operands, which is what lets the confirmation ask the same question a second
+// time with operands the first pair never used (sqlBooleanProbe).
+type sqlBooleanShape struct {
+	render func(l, r string) string
+	// widening marks an `or` shape (sqlOrBooleanShapes): its differential runs the other way.
+	widening bool
+}
+
+// pair renders the shape's documented first pair, 1=1 / 1=2.
+func (s sqlBooleanShape) pair() [2]string { return [2]string{s.render("1", "1"), s.render("1", "2")} }
+
+// contextShape places the condition between a recovered prefix and suffix. When the suffix
+// comments the rest of the statement out, a `'` is appended — a `--` inside a still-open quote
+// would turn the probe into a syntax error instead of a condition.
+func contextShape(prefix, suffix string) sqlBooleanShape {
+	return sqlBooleanShape{render: func(l, r string) string {
+		out := prefix + l + "=" + r + suffix
+		if strings.Contains(suffix, "--") {
+			out += "'"
+		}
+		return out
+	}}
+}
+
+// formatShape spells the condition with a format whose %[1]s and %[2]s are the operands.
+func formatShape(format string, widening bool) sqlBooleanShape {
+	return sqlBooleanShape{widening: widening, render: func(l, r string) string { return fmt.Sprintf(format, l, r) }}
+}
+
+// sqlQuotedBooleanFormats are the quote-opening shapes for a value that sits inside a string
+// literal (burpsy's own, the standard forms): the payload closes the application's quote, adds the
 // condition, and leaves the application's own closing quote to finish the last literal. Appended
 // to the original value — `seed' and '1'='1` — so the literal before the condition is still the
 // value the application expected.
-var sqlQuotedBooleanPairs = [][2]string{
-	{"' and '1'='1", "' and '1'='2"},
-	{"' and 1=1-- ", "' and 1=2-- "},
-	{`" and "1"="1`, `" and "1"="2`},
-	{"') and ('1'='1", "') and ('1'='2"},
+var sqlQuotedBooleanFormats = []string{
+	"' and '%[1]s'='%[2]s",
+	"' and %[1]s=%[2]s-- ",
+	`" and "%[1]s"="%[2]s`,
+	"') and ('%[1]s'='%[2]s",
+	// A value inside a LIKE pattern, `LIKE '%seed%'` (reused from the branch's faf10117): the
+	// application's own wildcard and quote follow the payload, so the condition's last literal has
+	// to absorb a `%` too — `'1%'='1%'` is true, where the plain shape above renders `'1'='1%'`,
+	// false in both halves, and reads as a clean answer.
+	"%%' and '%[1]s%%'='%[2]s",
+	`%%" and "%[1]s%%"="%[2]s`,
+	// Deeper nesting than the single `')` above: close the literal and every paren the application
+	// opened, then comment out the rest (the standard spellings of sqlmap's `')` / `'))` boundaries).
+	"') and %[1]s=%[2]s-- ",
+	"')) and %[1]s=%[2]s-- ",
+	"')) and (('%[1]s'='%[2]s",
 }
 
-// sqlBooleanPayloads renders the always-true / always-false pair for each context.
+// sqlOrBooleanFormats widen the WHERE clause instead of narrowing it, for the statement whose
+// baseline matched nothing — a failed login, a lookup of an unknown id. There an `and` pair can
+// only leave "nothing" unchanged in both halves, while `or 1=1` turns it into "everything" and
+// `or 1=2` leaves it as it was. The differential is inverted: the false half keeps the baseline and
+// the true half changes it. So is the risk: on an UPDATE or DELETE, `or 1=1` widens the write to
+// every row. These shapes are therefore sent only under check_sqli_or_boolean (off by default).
+var sqlOrBooleanFormats = []string{
+	"' or %[1]s=%[2]s-- ",
+	`" or %[1]s=%[2]s-- `,
+	"') or %[1]s=%[2]s-- ",
+	" or %[1]s=%[2]s-- ",
+}
+
+// sqlBooleanShapes is every narrowing shape, in the order they are tried: the recovered contexts
+// first, then the quoted ones.
+func sqlBooleanShapes() []sqlBooleanShape {
+	out := make([]sqlBooleanShape, 0, len(sqlBooleanContexts)+len(sqlQuotedBooleanFormats))
+	for _, ctx := range sqlBooleanContexts {
+		out = append(out, contextShape(ctx[0], ctx[1]))
+	}
+	for _, f := range sqlQuotedBooleanFormats {
+		out = append(out, formatShape(f, false))
+	}
+	return out
+}
+
+// sqlOrBooleanShapes is every widening shape.
+func sqlOrBooleanShapes() []sqlBooleanShape {
+	out := make([]sqlBooleanShape, 0, len(sqlOrBooleanFormats))
+	for _, f := range sqlOrBooleanFormats {
+		out = append(out, formatShape(f, true))
+	}
+	return out
+}
+
+// sqlBooleanPayloads renders the always-true / always-false pair for each narrowing shape.
 //
 // The condition cores are the documented standard forms; see the file header for why they are
-// labelled rather than claimed as recovered. Rendering mirrors Zm4e's composition: prefix
-// before the core, suffix after, and a `'` appended when the suffix comments the rest of the
-// statement out — a `--` inside a still-open quote would turn the probe into a syntax error
-// instead of a condition, and the classifier needs the pair to differ only in the condition.
+// labelled rather than claimed as recovered.
 func sqlBooleanPayloads() [][2]string {
-	out := make([][2]string, 0, len(sqlBooleanContexts))
-	for _, ctx := range sqlBooleanContexts {
-		trueCore := ctx[0] + "1=1" + ctx[1]
-		falseCore := ctx[0] + "1=2" + ctx[1]
-		if strings.Contains(ctx[1], "--") {
-			trueCore += "'"
-			falseCore += "'"
-		}
-		out = append(out, [2]string{trueCore, falseCore})
+	shapes := sqlBooleanShapes()
+	out := make([][2]string, 0, len(shapes))
+	for _, s := range shapes {
+		out = append(out, s.pair())
 	}
-	return append(out, sqlQuotedBooleanPairs...)
+	return out
+}
+
+// orBooleanEnabled reports whether the run admits the widening `or` shapes.
+func orBooleanEnabled(h *ProbeHarness) bool {
+	return h != nil && h.scanner != nil && h.scanner.config != nil && h.scanner.config.CheckSqliOrBoolean
 }
 
 // sqlTimingPayload is one dialect's delay probe in one place: the first probe's text, how to spell
@@ -177,16 +252,9 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 // walk — one enumeration, one coverage line, one effectiveness prior per point (any of which
 // would have been tripled by three separate checks of the same type).
 func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-	var probes []InjectionProbe
-	for _, pair := range sqlBooleanPayloads() {
-		if ctx.Err() != nil {
-			return probes
-		}
-		pr := sqlBooleanProbe(ctx, h, p, pair[0], pair[1])
-		probes = append(probes, pr)
-		if pr.Evidence == InjectionEvidenceBooleanDifferential {
-			break // a proven differential; the further break styles ask the same question
-		}
+	probes := booleanPointProbes(ctx, h, p)
+	if ctx.Err() != nil {
+		return probes
 	}
 	// A baseline already slow relative to the delay makes every timing probe undecidable; one
 	// probe says so instead of sixteen requests each waiting to learn it.
@@ -214,70 +282,194 @@ func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.In
 	return probes
 }
 
+// booleanPointProbes runs the boolean technique at one point: the narrowing shapes, then (only
+// under check_sqli_or_boolean) the widening ones, stopping at the first confirmed differential.
+//
+// One extra request per point is spent before any pair: a second fetch of the unmodified request,
+// from which the page's dynamic regions are learned (sqli_boolean_compare.go). A page whose two
+// baselines are not alike even with those regions removed cannot be judged, and is reported
+// undecided in one probe instead of fifteen pairs each failing to learn it.
+func booleanPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
+	shapes := sqlBooleanShapes()
+	if orBooleanEnabled(h) {
+		shapes = append(shapes, sqlOrBooleanShapes()...)
+	}
+	var probes []InjectionProbe
+	var cmp *booleanComparator
+	for _, shape := range shapes {
+		if ctx.Err() != nil {
+			return probes
+		}
+		pair := shape.pair()
+		label := pair[0] + " / " + pair[1]
+		if h.withhold(MethodBooleanConditions, 2) {
+			probes = append(probes, withheldProbe(p, label, MethodBooleanConditions))
+			continue
+		}
+		if cmp == nil {
+			again, err := h.SendAppending(ctx, p, "")
+			if err != nil {
+				return append(probes, InjectionProbe{Payload: label, Evidence: InjectionEvidenceInconclusive,
+					Detail: fmt.Sprintf("%s %q: boolean probe not completed: the baseline re-fetch failed: %v", p.Kind, p.Name, err)})
+			}
+			cmp = newBooleanComparator(h.baseline.Status, h.baseline.Body, again.Status, again.Body)
+			if !cmp.stable() {
+				return append(probes, InjectionProbe{Payload: "boolean conditions", Evidence: InjectionEvidenceInconclusive,
+					Detail: fmt.Sprintf("%s %q: two fetches of the unmodified request are only %.2f alike even with "+
+						"%d dynamic region(s) removed, so a condition's effect cannot be told from the page's own "+
+						"variation; no boolean pair sent", p.Kind, p.Name, cmp.stability, len(cmp.regions))})
+			}
+		}
+		pr := sqlBooleanProbe(ctx, h, p, shape, cmp)
+		probes = append(probes, pr)
+		if pr.Evidence == InjectionEvidenceBooleanDifferential {
+			break // a proven differential; the further shapes ask the same question
+		}
+	}
+	return probes
+}
+
 // sqlBooleanProbe sends one always-true / always-false pair appended to the point's value, and
-// confirms a differential before reporting it (review of saq3.2.1): one pair can differ by chance
-// — a rate limit, a rotating banner, a session that expired between the two requests — so a
-// differential stands only when the baseline re-fetches unchanged and the true / false pair
-// repeats with the same verdict. That costs three requests, and only on a positive.
+// confirms a differential before reporting it (review of saq3.2.1; v0ei.4). One pair can differ by
+// chance — a rate limit, a rotating banner, a session that expired between the two requests — and a
+// page can react to the literal text `1=2` rather than to its truth, so a differential stands only
+// when, against a baseline re-fetched unchanged:
+//
+//   - the same pair repeats with the same verdict, and
+//   - a second pair in the same shape with fresh operands (`4821=4821` / `4821=7302`) gives it too,
+//   - and the three changed halves agree with each other.
+//
+// That costs five requests, and only on a positive. "Same" and "changed" are judged by cmp: the
+// reflected payload and the learned dynamic regions removed, then exact or ratio comparison
+// (sqli_boolean_compare.go).
 //
 // Both halves changing the response is a clean answer for SQL injection, not an undecided one: the
 // payload was rejected or reflected, not interpreted, and a reflecting parameter would otherwise
 // never count as clean for the light-audit tier or the effectiveness prior.
-func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, truePayload, falsePayload string) InjectionProbe {
-	out := InjectionProbe{Payload: truePayload + " / " + falsePayload}
-	if h.withhold(MethodBooleanConditions, 2) {
-		return withheldProbe(p, out.Payload, MethodBooleanConditions)
-	}
-	fingerprint := func(payload string) (ResponseFingerprint, error) {
+//
+// A widening (`or`) shape's differential runs the other way: the always-false half keeps the
+// baseline and the always-true half changes it. Its true half answering 5xx is a broken query, not
+// a wider match, and does not count.
+func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, shape sqlBooleanShape,
+	cmp *booleanComparator) InjectionProbe {
+	pair := shape.pair()
+	out := InjectionProbe{Payload: pair[0] + " / " + pair[1]}
+	fetch := func(payload string) (booleanPage, error) {
 		resp, err := h.SendAppending(ctx, p, payload)
 		if err != nil {
-			return ResponseFingerprint{}, err
+			return booleanPage{}, err
 		}
-		return NewResponseFingerprint(resp.Status, resp.Body), nil
+		return cmp.page(resp.Status, resp.Body, payload), nil
 	}
-	base := NewResponseFingerprint(h.baseline.Status, h.baseline.Body)
-	t1, err := fingerprint(truePayload)
+	// keepChange orders a pair's halves as (the one that must stay the baseline, the one that must
+	// not) for this shape's direction.
+	keepChange := func(t, f booleanPage) (booleanPage, booleanPage) {
+		if shape.widening {
+			return f, t
+		}
+		return t, f
+	}
+	t1, err := fetch(pair[0])
+	var f1 booleanPage
 	if err == nil {
-		var f1 ResponseFingerprint
-		if f1, err = fingerprint(falsePayload); err == nil {
-			switch ClassifyBooleanDifferential(base, t1, f1) {
-			case InjectionEvidenceBooleanDifferential:
-				var base2, t2, f2 ResponseFingerprint
-				if base2, err = fingerprint(""); err == nil {
-					if t2, err = fingerprint(truePayload); err == nil {
-						f2, err = fingerprint(falsePayload)
-					}
+		f1, err = fetch(pair[1])
+	}
+	if err != nil {
+		out.Evidence = InjectionEvidenceInconclusive
+		out.Detail = fmt.Sprintf("%s %q: boolean probe not completed: %v", p.Kind, p.Name, err)
+		return out
+	}
+	keep1, change1 := keepChange(t1, f1)
+	keeps, changes := cmp.sameAsBase(keep1), cmp.sameAsBase(change1)
+	switch {
+	case keeps && !changes && !(shape.widening && change1.status >= 500):
+	case !keeps && !changes:
+		out.Evidence = InjectionEvidenceNone
+		out.Detail = fmt.Sprintf("%s %q: both halves changed the response, so the condition was not interpreted", p.Kind, p.Name)
+		return out
+	default:
+		out.Evidence = InjectionEvidenceNone
+		out.Detail = fmt.Sprintf("%s %q: %s", p.Kind, p.Name, InjectionEvidenceNone)
+		return out
+	}
+
+	// The confirmation: the baseline again, the same pair again, and a fresh-operand pair.
+	l, r := booleanOperands()
+	second := [2]string{shape.render(l, l), shape.render(l, r)}
+	base2, err := fetch("")
+	var t2, f2, t3, f3 booleanPage
+	if err == nil {
+		if t2, err = fetch(pair[0]); err == nil {
+			if f2, err = fetch(pair[1]); err == nil {
+				if t3, err = fetch(second[0]); err == nil {
+					f3, err = fetch(second[1])
 				}
-				if err != nil {
-					break
-				}
-				if confirmBooleanDifferential(base, base2, t1, f1, t2, f2) {
-					out.Evidence = InjectionEvidenceBooleanDifferential
-					out.Detail = fmt.Sprintf("%s %q: always-true kept the response, always-false changed it, twice, against a stable baseline", p.Kind, p.Name)
-				} else {
-					out.Evidence = InjectionEvidenceNone
-					out.Detail = fmt.Sprintf("%s %q: a differential appeared once and did not repeat against a stable baseline", p.Kind, p.Name)
-				}
-				return out
-			case InjectionEvidenceInconclusive:
-				out.Evidence = InjectionEvidenceNone
-				out.Detail = fmt.Sprintf("%s %q: both halves changed the response, so the condition was not interpreted", p.Kind, p.Name)
-				return out
-			default:
-				out.Evidence = InjectionEvidenceNone
-				out.Detail = fmt.Sprintf("%s %q: %s", p.Kind, p.Name, InjectionEvidenceNone)
-				return out
 			}
 		}
 	}
-	out.Evidence = InjectionEvidenceInconclusive
-	out.Detail = fmt.Sprintf("%s %q: boolean probe not completed: %v", p.Kind, p.Name, err)
+	if err != nil {
+		out.Evidence = InjectionEvidenceInconclusive
+		out.Detail = fmt.Sprintf("%s %q: a differential appeared and its confirmation could not be completed: %v", p.Kind, p.Name, err)
+		return out
+	}
+	keep2, change2 := keepChange(t2, f2)
+	keep3, change3 := keepChange(t3, f3)
+	if !confirmBooleanPages(cmp, base2, []booleanPage{keep1, keep2, keep3}, []booleanPage{change1, change2, change3}, shape.widening) {
+		out.Evidence = InjectionEvidenceNone
+		out.Detail = fmt.Sprintf("%s %q: a differential appeared once and did not repeat, with the same and with fresh operands, against a stable baseline", p.Kind, p.Name)
+		return out
+	}
+	out.Payload += " ; " + second[0] + " / " + second[1]
+	out.Evidence = InjectionEvidenceBooleanDifferential
+	verb := "always-true kept the response and always-false changed it"
+	if shape.widening {
+		verb = "an always-false `or` kept the response and an always-true `or` widened it"
+	}
+	out.Detail = fmt.Sprintf("%s %q: %s, twice, and again with fresh operands, against a stable baseline "+
+		"(similarity to the baseline %.2f kept vs %.2f changed; reflected payload and %d dynamic region(s) removed before comparing)",
+		p.Kind, p.Name, verb, similarity(cmp.base, keep1), similarity(cmp.base, change1), len(cmp.regions))
 	return out
 }
 
-// confirmBooleanDifferential is the repeat rule: the baseline is stable, both true probes match it,
-// both false probes differ from it, and the two false probes agree with each other.
-func confirmBooleanDifferential(base, base2, t1, f1, t2, f2 ResponseFingerprint) bool {
-	return base.SameShape(base2) && base.SameShape(t1) && base.SameShape(t2) &&
-		!base.SameShape(f1) && !base.SameShape(f2) && f1.SameShape(f2)
+// confirmBooleanPages is the repeat rule: the re-fetched baseline is the baseline, every half that
+// must keep the page keeps it, every half that must change it changes it, and the changed halves
+// agree with each other — one differential, seen three times, not three different accidents. A
+// widening shape's changed halves must not be server errors.
+func confirmBooleanPages(cmp *booleanComparator, base2 booleanPage, keeps, changes []booleanPage, widening bool) bool {
+	if !cmp.sameAsBase(base2) {
+		return false
+	}
+	for _, k := range keeps {
+		if !cmp.sameAsBase(k) {
+			return false
+		}
+	}
+	for _, c := range changes {
+		if cmp.sameAsBase(c) || (widening && c.status >= 500) {
+			return false
+		}
+		if !cmp.alike(changes[0], c) {
+			return false
+		}
+	}
+	return true
+}
+
+// booleanOperands returns two distinct four-digit operands for a fresh pair. They are drawn from the
+// digits 3-9 only, so neither half of the fresh pair contains any text of the documented 1=1 / 1=2
+// pair (`4831=2...` would spell `1=2` again): a page keyed on the documented spelling cannot react
+// to the fresh pair by coincidence.
+func booleanOperands() (string, string) {
+	draw := func() string {
+		b := make([]byte, 4)
+		for i := range b {
+			b[i] = byte('3' + mathrand.IntN(7))
+		}
+		return string(b)
+	}
+	l, r := draw(), draw()
+	for r == l {
+		r = draw()
+	}
+	return l, r
 }

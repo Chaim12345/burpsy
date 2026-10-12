@@ -767,6 +767,9 @@ func runtimeScanConfig() *ScanConfig {
 		// The heavy-query time-delay families of the SQL row (v0ei.1): the SQLite, DB2, H2, HSQLDB
 		// and filtered-MySQL dialect endpoints are reachable only through them.
 		CheckSqliHeavyQuery: true,
+		// The widening `or` boolean shapes of the SQL row (v0ei.4): the members lookup whose seeded
+		// value matches nobody is reachable only through them.
+		CheckSqliOrBoolean: true,
 		// The password-reset checks. They act only on a reset request for one of vulnapp's own test
 		// identities, and read the tokens from vulnapp's in-memory test inbox.
 		CheckPasswordReset:  true,

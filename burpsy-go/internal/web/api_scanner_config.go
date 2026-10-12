@@ -56,6 +56,7 @@ type scannerConfigView struct {
 	CheckUsernameEnumeration bool `json:"check_username_enumeration"`
 	LoginRateLimitAttempts   int  `json:"login_rate_limit_attempts"`
 	CheckSqliHeavyQuery      bool `json:"check_sqli_heavy_query"`
+	CheckSqliOrBoolean       bool `json:"check_sqli_or_boolean"`
 	CheckPasswordReset       bool `json:"check_password_reset"`
 	// The password-reset checks' operator inputs: the test accounts they may act on, and the test
 	// inbox URL ("{identity}" is replaced by the query-escaped identity).
@@ -113,6 +114,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckGraphQLHardening:    c.CheckGraphQLHardening,
 		LoginRateLimitAttempts:   c.LoginRateLimitAttempts,
 		CheckSqliHeavyQuery:      c.CheckSqliHeavyQuery,
+		CheckSqliOrBoolean:       c.CheckSqliOrBoolean,
 		CheckPasswordReset:       c.CheckPasswordReset,
 		ResetTestIdentities:      append([]string{}, c.ResetTestIdentities...),
 		ResetMailboxURL:          c.ResetMailboxURL,
@@ -159,6 +161,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
 	"check_graphql_hardening":    func(v *scannerConfigView) *bool { return &v.CheckGraphQLHardening },
 	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
+	"check_sqli_or_boolean":      func(v *scannerConfigView) *bool { return &v.CheckSqliOrBoolean },
 	"check_password_reset":       func(v *scannerConfigView) *bool { return &v.CheckPasswordReset },
 	"check_session_management":   func(v *scannerConfigView) *bool { return &v.CheckSessionManagement },
 	"check_request_smuggling":    func(v *scannerConfigView) *bool { return &v.CheckRequestSmuggling },
@@ -315,6 +318,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckGraphQLHardening = view.CheckGraphQLHardening
 		c.LoginRateLimitAttempts = view.LoginRateLimitAttempts
 		c.CheckSqliHeavyQuery = view.CheckSqliHeavyQuery
+		c.CheckSqliOrBoolean = view.CheckSqliOrBoolean
 		c.CheckPasswordReset = view.CheckPasswordReset
 		c.ResetTestIdentities = append([]string(nil), view.ResetTestIdentities...)
 		c.ResetMailboxURL = view.ResetMailboxURL

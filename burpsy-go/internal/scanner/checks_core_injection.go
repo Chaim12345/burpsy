@@ -58,7 +58,7 @@ import (
 // that answer the same question. Each technique still carries its own method gate at the probe:
 // a disabled family is withheld and counted, and the remaining techniques still run.
 func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures, signatureOwnedByShell); isOffline {
+	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures, signatureOwnedByShell, sqlmapOfflineSignature); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
@@ -95,8 +95,11 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 //
 // foreign, when set, names a signature occurrence that another interpreter owns (a shell's own
 // diagnostic for the SQL row); such a signature is skipped exactly as the online path skips it.
+//
+// extra, when set, is a further bank read after the substrings (sqlmap's per-DBMS regexes for the
+// SQL row): it returns the evidence text to report, already filtered for foreign interpreters.
 func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
-	foreign func(body, sig string) bool) ([]*Finding, bool, error) {
+	foreign func(body, sig string) bool, extra func(body string) (string, bool)) ([]*Finding, bool, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil || cc.Scanner.sender != nil {
 		return nil, false, nil
 	}
@@ -106,6 +109,7 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
 	// pre-existing. This is a direct signature read, and its weaker standing is carried by the
 	// confidence rather than hidden by reusing a differential classifier that does not apply.
 	forms := matchableForms(body)
+	candidates := make([]string, 0, len(signatures)+1)
 	for _, sig := range signatures {
 		if !containsAny(forms, strings.ToLower(sig)) {
 			continue
@@ -113,6 +117,14 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
 		if foreign != nil && foreign(body, sig) {
 			continue
 		}
+		candidates = append(candidates, sig)
+	}
+	if extra != nil {
+		if sig, ok := extra(body); ok {
+			candidates = append(candidates, sig)
+		}
+	}
+	for _, sig := range candidates {
 		severity, remediation := "high", ""
 		if definition, ok := ByName(row); ok {
 			severity = definition.TypicalSeverity
@@ -144,6 +156,13 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
 		"%s: no sender is configured, so no probe could be sent, and the captured response carries "+
 			"none of this row's signatures — that is an untested endpoint, not a clean one: %w",
 		row, errCapabilityMissing)
+}
+
+// sqlmapOfflineSignature is the SQL row's second offline bank: the first sqlmap per-DBMS pattern the
+// captured body matches outside a shell diagnostic, reported with the engine it names.
+func sqlmapOfflineSignature(body string) (string, bool) {
+	label, _, ok := sqlmapErrorInBody(body)
+	return label, ok
 }
 
 // sqlErrorProbePayloads are the minimal forms that unbalance a quoted or numeric context. The
@@ -428,7 +447,7 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 // This row is the dot-dot-slash escape. Its sibling "File path manipulation" takes the absolute
 // path forms — see filePathManipulationPayloads for why the two banks are kept apart.
 func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures, nil); isOffline {
+	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures, nil, nil); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "FilePathTraversalCore", cc.ProbeInsertionKinds(),

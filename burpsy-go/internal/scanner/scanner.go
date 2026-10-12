@@ -142,8 +142,14 @@ type ScanConfig struct {
 	// payload and calibrated to seconds of work (sqli_timing_dialects.go). Off by default. The sleep
 	// families (PostgreSQL, SQL Server, MySQL SLEEP, Oracle DBMS_PIPE) run under CheckSqli alone.
 	CheckSqliHeavyQuery bool
-	CheckXss            bool
-	CheckPathTraversal  bool
+	// CheckSqliOrBoolean admits the widening `or` boolean shapes of the SQL-injection row
+	// (burpsy-react-ui-v0ei.4): `' or 1=1-- ` against a statement whose baseline matched nothing (a
+	// failed login, an unknown id). On an UPDATE or DELETE the always-true half widens the write to
+	// every row, so it is an opt-in on top of CheckSqli. Off by default; the narrowing `and` shapes
+	// run under CheckSqli alone.
+	CheckSqliOrBoolean bool
+	CheckXss           bool
+	CheckPathTraversal bool
 	// CheckSSRF is the SSRF family switch. Its single catalog row, "Out-of-band resource
 	// load (HTTP)", now has an evaluator that needs a collaborator binary and outbound DNS,
 	// so it is additionally gated behind CheckExtendedActive: enabling CheckSSRF alone no

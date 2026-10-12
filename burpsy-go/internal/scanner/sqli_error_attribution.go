@@ -49,6 +49,22 @@ var shellDiagnosticHead = regexp.MustCompile(
 	`(?:^|[^a-z0-9_.\-/])(?:/[a-z0-9_.\-]+)*/?(?:sh|bash|dash|ash|zsh|ksh|mksh|busybox)(?:\[\d+\])?` +
 		`(?::\s*(?:\d+|-c|line \d+))*:\s*(?:[a-z][a-z ]{0,30}:\s*)?$`)
 
+// scriptSyntaxErrorHead matches a line head that ends in a script engine's own syntax-error
+// exception name: JavaScript's (SpiderMonkey, as MongoDB's $where relays it inside a
+// MongoServerError: `... caused by :: SyntaxError: unterminated string literal`, V8, Node) and
+// Python's, which share the class name `SyntaxError`, optionally `Uncaught`. Its wording,
+// "unterminated string literal", is also a banked SQL signature, and a quote breaks a JavaScript
+// string exactly as it breaks a SQL literal (burpsy-react-ui-v0ei.2, reported from the NoSQL
+// fixtures). A database driver's own class is namespaced (`PG::SyntaxError`, a Java package), so a
+// `SyntaxError` preceded by `::`, `.` or a word character is not this; such a head stays SQL.
+var scriptSyntaxErrorHead = regexp.MustCompile(`(?:^|[^a-z0-9_:.])(?:uncaught\s+)?syntaxerror:\s*$`)
+
+// foreignDiagnosticHead reports whether the head of a line, up to a signature, makes that line
+// another interpreter's own diagnostic: a command shell's or a script engine's syntax error.
+func foreignDiagnosticHead(head string) bool {
+	return shellDiagnosticHead.MatchString(head) || scriptSyntaxErrorHead.MatchString(head)
+}
+
 // lineHead returns the part of the line that holds the byte at `at`, up to `at`. A line ends at a
 // real line break, at a JSON-escaped one (an application that wraps a command's output in a JSON
 // string relays `\n` as two characters), or at an HTML `<br`.
@@ -63,8 +79,8 @@ func lineHead(text string, at int) string {
 	return head[start:]
 }
 
-// signatureOwnedByShell reports whether every occurrence of sig in body is on a shell's diagnostic
-// line. A signature that does not occur at all is not owned by anything, so it reports false.
+// signatureOwnedByShell reports whether every occurrence of sig in body is on another
+// interpreter's diagnostic line: a shell's, or a script engine's SyntaxError (foreignDiagnosticHead). A signature that does not occur at all is not owned by anything, so it reports false.
 func signatureOwnedByShell(body, sig string) bool {
 	needle := strings.ToLower(sig)
 	seen := false
@@ -77,7 +93,7 @@ func signatureOwnedByShell(body, sig string) bool {
 			}
 			at := from + i
 			seen = true
-			if !shellDiagnosticHead.MatchString(lineHead(form, at)) {
+			if !foreignDiagnosticHead(lineHead(form, at)) {
 				return false
 			}
 			from = at + len(needle)
