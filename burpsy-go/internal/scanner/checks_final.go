@@ -545,7 +545,12 @@ func FinalCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("Form action hijacking (reflected)", DispatchScopePerUrl, finalChecksEnabled,
 			reflectedContextCheck("Form action hijacking (reflected)", "medium", contextInAttribute("action"))),
 
-		nativeDescriptor("Broken access control", DispatchScopePerUrl, finalChecksEnabled, checkBrokenAccessControl),
+		// The IDOR check (checks_idor.go) rides this row behind its own switch: its finding is burpsy's
+		// own "Insecure direct object reference" row (CWE-639, a descendant of this row's CWE-284), and
+		// the registry admits one descriptor per Burp catalogue type.
+		nativeDescriptor("Broken access control", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return finalChecksEnabled(c) || idorEnabled(c) },
+			brokenAccessControlOrIDOR(checkBrokenAccessControl)),
 		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest, finalChecksEnabled, checkCSRF),
 
 		nativeDescriptor("HTTP request smuggling", DispatchScopePerHost, finalChecksEnabled,

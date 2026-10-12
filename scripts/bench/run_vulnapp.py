@@ -94,6 +94,9 @@ FULL_PROFILE = {
     # The active file-upload check (0vzb.15): uploads inert HTML/SVG/server-script files and a "../"
     # filename to every multipart file part, and fetches the stored copies back.
     "check_file_upload": True,
+    # The IDOR check (0vzb.12): swaps object ids in credentialed reads (GET, or a POST naming a read).
+    # VulnerableApp's IDOR levels need a real session first: see vulnapp_idor_seed.py.
+    "check_idor": True,
 }
 
 

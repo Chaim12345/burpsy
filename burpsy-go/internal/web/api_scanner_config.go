@@ -47,6 +47,7 @@ type scannerConfigView struct {
 	CheckStored             bool `json:"check_stored"`
 	CheckFileUpload         bool `json:"check_file_upload"`
 	CheckJwtForgery         bool `json:"check_jwt_forgery"`
+	CheckIDOR               bool `json:"check_idor"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -80,6 +81,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckStored:             c.CheckStored,
 		CheckFileUpload:         c.CheckFileUpload,
 		CheckJwtForgery:         c.CheckJwtForgery,
+		CheckIDOR:               c.CheckIDOR,
 	}
 }
 
@@ -112,6 +114,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_stored":              func(v *scannerConfigView) *bool { return &v.CheckStored },
 	"check_file_upload":         func(v *scannerConfigView) *bool { return &v.CheckFileUpload },
 	"check_jwt_forgery":         func(v *scannerConfigView) *bool { return &v.CheckJwtForgery },
+	"check_idor":                func(v *scannerConfigView) *bool { return &v.CheckIDOR },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -212,6 +215,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckStored = view.CheckStored
 		c.CheckFileUpload = view.CheckFileUpload
 		c.CheckJwtForgery = view.CheckJwtForgery
+		c.CheckIDOR = view.CheckIDOR
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

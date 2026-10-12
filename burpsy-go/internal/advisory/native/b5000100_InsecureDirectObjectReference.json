@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036676352,
+  "name": "Insecure direct object reference",
+  "description": "<p>The application uses an identifier supplied by the client (a numeric or UUID object id in the query string, the path, a cookie or a JSON body) to look up an object, and returns the object without checking that the authenticated user is allowed to see it. Changing the identifier to another valid value returns a different user's object.</p>\n<p>This is broken object-level authorization (OWASP API Security Top 10 2023, API1). Its impact depends on what the objects hold: profiles, orders, invoices and documents commonly carry personal or financial data.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no insecure direct object reference entry. It is classified under CWE-639, a child of the CWE-284 class that Burp's 'Broken access control' row uses.</p>",
+  "remediation": "<p>Authorize every object access on the server against the authenticated identity, not against anything the client sends: look the object up through the current user's own scope (for example <code>WHERE id = ? AND owner_id = ?</code>), or check ownership or an explicit grant before returning it. Never decide authorization from a client-held user id, role or account cookie.</p>\n<p>Unpredictable identifiers (random UUIDs) make enumeration harder but are not an access control; the ownership check is still required.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "OWASP API Security Top 10 2023: API1 Broken Object Level Authorization",
+      "url": "https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/"
+    },
+    {
+      "title": "OWASP Cheat Sheet: Insecure Direct Object Reference Prevention",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-639: Authorization Bypass Through User-Controlled Key",
+      "url": "https://cwe.mitre.org/data/definitions/639.html"
+    }
+  ]
+}

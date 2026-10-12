@@ -34,6 +34,19 @@ import (
 //go:embed definitions/*.json
 var bundled embed.FS
 
+// nativeBundled holds burpsy's OWN issue definitions: rows for classes a burpsy check reports that
+// Burp's catalogue has no entry for (insecure direct object reference is the first). They are
+// written by this project, not extracted from Burp, and they are kept apart from the Burp set on
+// purpose: Len, All and IndexedLen keep answering for Burp's 183 definitions, so no count of "Burp's
+// catalogue" can quietly grow by a row Burp never shipped. Native definitions are reachable by name
+// (so Resolve attaches them to a finding) and by index, and listed by Native.
+//
+// Their type indices live in 0xb5000000-0xb5ffffff, far above every index Burp uses (its highest is
+// 0x09010000), and a native definition that collides with a Burp index or name fails Load.
+//
+//go:embed native/*.json
+var nativeBundled embed.FS
+
 // Severity is the severity a definition says this issue class typically carries.
 //
 // Deliberately distinct from a finding's own severity. The catalogue describes the *class* — "SQL
@@ -81,7 +94,13 @@ type Definition struct {
 	// the index. Unexported and unserialised: it is provenance about where the definition came
 	// from, not part of the advisory the operator reads.
 	fileIndex int
+	// native is true for a burpsy-authored definition (see nativeBundled). Unserialised; read it
+	// through IsNative.
+	native bool
 }
+
+// Native reports whether this definition is burpsy's own rather than one of Burp's.
+func (d Definition) IsNative() bool { return d.native }
 
 // HexIndex is the type index in the hexadecimal form Burp's own UI and filenames use, so an operator
 // comparing burpsy against Burp is reading the same identifier.
@@ -100,6 +119,8 @@ type Catalogue struct {
 	// answers for their declared index. Exposed via ShadowedByIndex so a caller counting the
 	// catalogue can report "183 loaded, 181 indexable" instead of implying those agree.
 	shadowed []*Definition
+	// natives are the burpsy-authored definitions, index-ordered. Not in ordered (see nativeBundled).
+	natives []*Definition
 }
 
 // Load reads the bundled catalogue.
@@ -107,7 +128,78 @@ type Catalogue struct {
 // A malformed file is a build-time mistake, not a runtime condition, so it is returned as an error
 // rather than skipped — a catalogue that silently loaded 182 of 183 definitions would present as
 // "that issue has no advisory", which is indistinguishable from an unmapped check.
-func Load() (*Catalogue, error) { return loadFS(bundled, "definitions") }
+func Load() (*Catalogue, error) {
+	c, err := loadFS(bundled, "definitions")
+	if err != nil {
+		return nil, err
+	}
+	if err := c.addNative(nativeBundled, "native"); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// nativeIndexLow and nativeIndexHigh bound the type indices a burpsy-native definition may use.
+const (
+	nativeIndexLow  = 0xb5000000
+	nativeIndexHigh = 0xb5ffffff
+)
+
+// addNative loads burpsy's own definitions beside the Burp set. A native definition outside the
+// native index range, or one whose index or normalised name is already taken, fails the load: a
+// native row that shadowed a Burp row would attach burpsy's text to a finding Burp names, which is
+// exactly the wrong-advisory outcome Resolve exists to prevent.
+func (c *Catalogue) addNative(fsys fs.FS, dir string) error {
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return fmt.Errorf("read native advisory definitions: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		raw, err := fs.ReadFile(fsys, dir+"/"+e.Name())
+		if err != nil {
+			return fmt.Errorf("read %s: %w", e.Name(), err)
+		}
+		var d Definition
+		if err := json.Unmarshal(raw, &d); err != nil {
+			return fmt.Errorf("parse %s: %w", e.Name(), err)
+		}
+		if d.Name == "" {
+			return fmt.Errorf("%s has no name", e.Name())
+		}
+		if d.TypeIndex < nativeIndexLow || d.TypeIndex > nativeIndexHigh {
+			return fmt.Errorf("%s: native type index %08x is outside %08x-%08x", e.Name(), d.TypeIndex,
+				nativeIndexLow, nativeIndexHigh)
+		}
+		if fileIdx, ok := indexFromFilename(e.Name()); !ok || fileIdx != d.TypeIndex {
+			return fmt.Errorf("%s: a native definition's filename must carry its own index", e.Name())
+		}
+		if _, taken := c.byIndex[d.TypeIndex]; taken {
+			return fmt.Errorf("%s: type index %08x is already taken", e.Name(), d.TypeIndex)
+		}
+		key := NormaliseName(d.Name)
+		if _, taken := c.byName[key]; taken {
+			return fmt.Errorf("%s: name %q is already taken", e.Name(), d.Name)
+		}
+		def := &d
+		def.fileIndex, def.native = d.TypeIndex, true
+		c.byIndex[d.TypeIndex] = def
+		c.byName[key] = def
+		c.natives = append(c.natives, def)
+	}
+	sort.Slice(c.natives, func(i, j int) bool { return c.natives[i].TypeIndex < c.natives[j].TypeIndex })
+	return nil
+}
+
+// Native returns burpsy's own definitions, index-ordered. They are not in All and not counted by Len.
+func (c *Catalogue) Native() []*Definition {
+	if c == nil {
+		return nil
+	}
+	return c.natives
+}
 
 func loadFS(fsys fs.FS, dir string) (*Catalogue, error) {
 	entries, err := fs.ReadDir(fsys, dir)
@@ -253,7 +345,7 @@ func (c *Catalogue) IndexedLen() int {
 	if c == nil {
 		return 0
 	}
-	return len(c.byIndex)
+	return len(c.byIndex) - len(c.natives)
 }
 
 // ShadowedByIndex returns the definitions that lost an index collision, in load order.

@@ -33,6 +33,8 @@ looking".
 | `coverage.go` | `CoverageTracker`/`CoverageReport` — the honest-counting states for the passive set |
 | `js_vulns.go` | SCAN-01: vulnerable JavaScript dependencies, matched by real version-range arithmetic. Embeds `data/retirejs_repository.json` via `go:embed` |
 | `jwt_weak.go` | SCAN-02: JWTs signed with a weak HMAC secret, proved by recomputing the signature |
+| `burpsy_rows.go` | `BurpsyNativeRows`: burpsy's own issue rows (not in Burp's catalogue), the Burp descriptor each rides and its CWE; the advisory text lives in `internal/advisory/native` |
+| `checks_idor.go` | Insecure direct object reference (burpsy row, CWE-639), switch `CheckIDOR`, riding "Broken access control": id swap decided by an invalid-id control, a credential-less control and a re-send |
 | `checks_*.go` | Per-family check runners (injection, dom, cache, headers, passive analysis/posture, stored, remaining, final, reflection). Each file is the single place its checks are defined and tested |
 | `infra_*.go` | Shared detection primitives: CSP parsing, ViewState/serialized-object detection, injection evidence classification, fingerprinting, forms, SMTP, crossdomain, XML |
 | `data/retirejs_repository.json` | The retire.js corpus as shipped by Burp. **Vendored — refresh from upstream, do not hand-edit** |

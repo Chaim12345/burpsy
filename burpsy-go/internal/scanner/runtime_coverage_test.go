@@ -732,6 +732,8 @@ func runtimeScanConfig() *ScanConfig {
 		// It plants a canary this test process serves on loopback, which the vulnapp SSRF fixtures
 		// reach because they share the host; no collaborator is involved.
 		CheckSSRFInBand: true,
+		// The IDOR check (0vzb.12). It only acts on a credentialed read with an object reference.
+		CheckIDOR: true,
 	}
 }
 
@@ -844,6 +846,10 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 	catalog := map[string]bool{}
 	for _, d := range NativeCheckRegistry() {
 		catalog[d.Name] = true
+	}
+	// burpsy's own rows (burpsy_rows.go) are reported by checks riding a Burp descriptor.
+	for _, r := range BurpsyNativeRows() {
+		catalog[r.Name] = true
 	}
 	for _, e := range vulnapp.Vulnerabilities() {
 		if e.Row != "" && !catalog[e.Row] {

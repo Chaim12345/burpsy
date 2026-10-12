@@ -260,7 +260,13 @@ type ScanConfig struct {
 	// replays the captured request with only the token changed. CheckExtendedActive also admits
 	// them, as it did before this switch existed. Off by default.
 	CheckJwtForgery bool
-	CustomPayloads  []string
+	// CheckIDOR admits the insecure-direct-object-reference check (checks_idor.go,
+	// burpsy-react-ui-0vzb.12): an object id in the query, path, an id-named cookie or a read-only
+	// POST body is swapped for a neighbour, and the swap is reported only when an invalid-id control
+	// and a credential-less control both refuse what the swapped id returned. Read-only probes (GET,
+	// or a POST naming a read operation). Off by default.
+	CheckIDOR      bool
+	CustomPayloads []string
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
