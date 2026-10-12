@@ -780,6 +780,9 @@ func runtimeScanConfig() *ScanConfig {
 		// The GraphQL hardening rows (checks_graphql_hardening.go). They act only on a URL whose answer to
 		// an aliased __typename query proves it executes GraphQL.
 		CheckGraphQLHardening: true,
+		// Insecure deserialization (0vzb.10): benign accepted/rejected pairs in recognised serialized
+		// values and opaque cookies; it touches only the /deser fixtures' kind of request.
+		CheckInsecureDeserialization: true,
 	}
 }
 

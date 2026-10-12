@@ -264,6 +264,14 @@ const (
 	SerializedDotNet
 	SerializedPHP
 	SerializedPython
+	// SerializedRuby is Ruby's Marshal format (Marshal.dump), version 4.8.
+	SerializedRuby
+	// SerializedYAML is a YAML document carrying a language type tag (!!python/object,
+	// !ruby/object, a SnakeYAML !!java.class tag): YAML that a full loader turns into objects.
+	SerializedYAML
+	// SerializedJSONTyped is JSON carrying polymorphic type metadata a binder resolves to a class:
+	// Jackson's "@class", fastjson's "@type" or Json.NET's "$type".
+	SerializedJSONTyped
 )
 
 // String renders k for findings/log text.
@@ -277,6 +285,12 @@ func (k SerializedObjectKind) String() string {
 		return "PHP serialized object"
 	case SerializedPython:
 		return "Python pickle"
+	case SerializedRuby:
+		return "Ruby Marshal object"
+	case SerializedYAML:
+		return "YAML object tag"
+	case SerializedJSONTyped:
+		return "JSON with polymorphic type metadata"
 	default:
 		return "none"
 	}
@@ -339,6 +353,57 @@ var picklePlausibleOpcodes = map[byte]struct{}{
 // byte-level scan pythonPickleContains performs for protocols 2-4.
 const pythonMagicB64 = "gASV"
 
+// javaMagicHex is javaMagic written as hex text, the form a Java stream takes in a hex-encoded
+// parameter. Matched in lower and in upper case.
+const javaMagicHex = "aced0005"
+
+// rubyMarshalMagic is Marshal's major/minor version (4.8), the two bytes every Marshal.dump output
+// begins with since Ruby 1.8. Public Ruby format, not a Burp literal. Two bytes is too short to
+// search for anywhere in a binary body, so it is only matched at the start of a value, followed by a
+// byte that is a Marshal type code (rubyMarshalTypes).
+var rubyMarshalMagic = []byte{0x04, 0x08}
+
+// rubyMarshalTypes are the Marshal type codes a dump's root can carry (marshal.c's TYPE_* constants).
+const rubyMarshalTypes = "0TFi\"lf:;[{}ou/IeCUdSMcm@"
+
+// yamlObjectTagPattern matches the YAML tags a full loader turns into a native object: PyYAML's
+// python/ tags, Psych's ruby/ tags and SnakeYAML's global-tag class names. A tag only counts where
+// YAML puts one, at the start of a line or after a mapping colon or sequence dash, so prose that
+// mentions a tag mid-sentence does not.
+var yamlObjectTagPattern = regexp.MustCompile(`(?m)(?:^|:[ \t]+|-[ \t]+)(?:!!python/(?:object|name|module|tuple)|` +
+	`tag:yaml\.org,2002:python/(?:object|name|module)|!ruby/(?:object|hash|struct|class|marshalable)|` +
+	`!!(?:javax?|com|org|net)\.[A-Za-z_$][\w$]*\.)`)
+
+// jsonTypeMetaPattern finds a JSON type-metadata member: Jackson's default "@class" property,
+// fastjson's "@type" and Json.NET's "$type". Its value is checked by jsonTypeIsClassName, because
+// "@type" is also JSON-LD's vocabulary keyword ("@type":"Person") and "$type" is MongoDB extended
+// JSON's binary subtype ("$type":"00"), neither of which names a class.
+var jsonTypeMetaPattern = regexp.MustCompile(`"(@class|@type|\$type)"\s*:\s*"([^"\\]{1,256})"`)
+
+// javaClassNamePattern is a package-qualified class name: at least one dot, no slash or colon.
+var javaClassNamePattern = regexp.MustCompile(`^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$`)
+
+// dotNetTypeNamePattern is an assembly-qualified .NET type name ("Ns.Type, Assembly").
+var dotNetTypeNamePattern = regexp.MustCompile(`^[A-Za-z_][\w.+\x60\[\]]*\.[\w+\x60\[\]]+\s*,\s*[A-Za-z_][\w.]*`)
+
+// jsonTypeIsClassName reports whether a type-metadata member names a class.
+func jsonTypeIsClassName(key, value string) bool {
+	if key == "$type" {
+		return dotNetTypeNamePattern.MatchString(value)
+	}
+	return javaClassNamePattern.MatchString(value)
+}
+
+// jsonTypedContains reports whether b holds a JSON type-metadata member naming a class.
+func jsonTypedContains(b []byte) bool {
+	for _, m := range jsonTypeMetaPattern.FindAllSubmatch(b, 8) {
+		if jsonTypeIsClassName(string(m[1]), string(m[2])) {
+			return true
+		}
+	}
+	return false
+}
+
 // DetectSerializedObject scans raw for the magic byte sequence of a known
 // native serialization format. It checks raw's own bytes first, then --
 // because these blobs travel base64-encoded in request/response parameters
@@ -346,6 +411,11 @@ const pythonMagicB64 = "gASV"
 // whole and scans the decoded candidate too. This second pass is what lets
 // PHP's serialize() format (which has no fixed-length base64 prefix, unlike
 // the other three) be recognized when it arrives base64-encoded.
+//
+// A third pass looks inside the base64 runs EMBEDDED in raw (a cookie, a hidden field, a JSON
+// member), which the whole-value decode cannot see. Those are matched at their start only
+// (detectSerializedPrefix): a decoded image or archive is arbitrary binary, and a magic searched
+// anywhere inside it would eventually be found by chance.
 func DetectSerializedObject(raw []byte) SerializedObjectKind {
 	if k := detectSerializedIn(raw); k != SerializedNone {
 		return k
@@ -355,7 +425,77 @@ func DetectSerializedObject(raw []byte) SerializedObjectKind {
 			return k
 		}
 	}
+	return detectSerializedInBase64Runs(raw)
+}
+
+// base64RunPattern is a run of base64 text long enough to carry a serialized object's header.
+var base64RunPattern = regexp.MustCompile(`[A-Za-z0-9+/_-]{12,}={0,2}`)
+
+// Bounds on the embedded-run pass, so a large body costs a bounded amount of work.
+const (
+	base64RunLimit     = 256
+	base64RunDecodeMax = 4096
+)
+
+func detectSerializedInBase64Runs(raw []byte) SerializedObjectKind {
+	for _, loc := range base64RunPattern.FindAllIndex(raw, base64RunLimit) {
+		run := raw[loc[0]:loc[1]]
+		if len(run) > base64RunDecodeMax {
+			run = run[:base64RunDecodeMax]
+		}
+		trimmed := strings.TrimRight(string(run), "=")
+		trimmed = trimmed[:len(trimmed)-len(trimmed)%4]
+		if len(trimmed) < 12 {
+			continue
+		}
+		decoded, err := decodeFlexibleBase64(trimmed)
+		if err != nil {
+			continue
+		}
+		if k := detectSerializedPrefix(decoded); k != SerializedNone {
+			return k
+		}
+	}
 	return SerializedNone
+}
+
+// detectSerializedPrefix recognises a serialized object that STARTS at b[0]: the strict form used for
+// decoded embedded base64 runs, where a magic found mid-buffer is more likely chance than structure.
+func detectSerializedPrefix(b []byte) SerializedObjectKind {
+	switch {
+	case bytes.HasPrefix(b, javaMagic):
+		return SerializedJava
+	case bytes.HasPrefix(b, dotNetMagic):
+		return SerializedDotNet
+	case len(b) >= 3 && b[0] == 0x80 && b[1] >= 0x02 && b[1] <= 0x05 && pickleOpcode(b[2]):
+		return SerializedPython
+	case rubyMarshalAt(b):
+		return SerializedRuby
+	case phpSerializedPrefix.Match(b):
+		return SerializedPHP
+	}
+	t := bytes.TrimLeft(b, " \t\r\n")
+	if len(t) > 0 && (t[0] == '{' || t[0] == '[') && jsonTypedContains(t) {
+		return SerializedJSONTyped
+	}
+	if yamlObjectTagPattern.Match(b) {
+		return SerializedYAML
+	}
+	return SerializedNone
+}
+
+// phpSerializedPrefix is a PHP serialize() value at the start of a buffer: an object, or an array
+// whose first member follows.
+var phpSerializedPrefix = regexp.MustCompile(`^(?:O:[0-9]+:"|a:[0-9]+:\{[isdbNO])`)
+
+func pickleOpcode(c byte) bool {
+	_, ok := picklePlausibleOpcodes[c]
+	return ok
+}
+
+// rubyMarshalAt reports whether b starts with a Marshal 4.8 header and a root type code.
+func rubyMarshalAt(b []byte) bool {
+	return len(b) >= 3 && bytes.HasPrefix(b, rubyMarshalMagic) && strings.IndexByte(rubyMarshalTypes, b[2]) >= 0
 }
 
 // detectSerializedIn scans a single byte slice (never a base64 candidate
@@ -363,9 +503,11 @@ func DetectSerializedObject(raw []byte) SerializedObjectKind {
 // every recognized magic sequence. Magic bytes/text are matched anywhere in
 // b, not only at offset 0, since a blob is frequently embedded inside a
 // larger parameter value or message body rather than occupying it exactly.
+// Ruby Marshal is the exception: its two-byte header is matched at the start only.
 func detectSerializedIn(b []byte) SerializedObjectKind {
 	switch {
-	case bytes.Contains(b, javaMagic), bytes.Contains(b, []byte(javaMagicB64)):
+	case bytes.Contains(b, javaMagic), bytes.Contains(b, []byte(javaMagicB64)),
+		bytes.Contains(b, []byte(javaMagicHex)), bytes.Contains(b, []byte(strings.ToUpper(javaMagicHex))):
 		return SerializedJava
 	case bytes.Contains(b, dotNetMagic), bytes.Contains(b, []byte(dotNetMagicB64)):
 		return SerializedDotNet
@@ -373,6 +515,12 @@ func detectSerializedIn(b []byte) SerializedObjectKind {
 		return SerializedPython
 	case phpSerializedPattern.Match(b):
 		return SerializedPHP
+	case rubyMarshalAt(b):
+		return SerializedRuby
+	case jsonTypedContains(b):
+		return SerializedJSONTyped
+	case yamlObjectTagPattern.Match(b):
+		return SerializedYAML
 	default:
 		return SerializedNone
 	}

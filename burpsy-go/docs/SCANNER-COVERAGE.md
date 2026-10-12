@@ -55,6 +55,7 @@ which is what carries its CWE onto the finding.
 | `b5001800` | GraphQL query batching enabled | 799 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001810` | GraphQL query depth not limited | 770 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001820` | GraphQL debug information disclosed | 209 | GraphQL endpoint found | `check_graphql_hardening` |
+| `b5001400` | Insecure deserialization | 502 | React Server Components remote code execution (React2Shell) | `check_insecure_deserialization` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
@@ -74,6 +75,11 @@ operations and one hundred aliases, each answered under its own alias; depth is 
 fields deep along a self-referential path of the introspected schema, never fanning out (needs
 introspection; undecided without it); debug is two or more stack frames in the errors of a malformed
 query, or Apollo's tracing extension.
+Insecure deserialization (`checks_deserialization.go`) is proved by benign accepted/rejected value
+pairs (a nonexistent class versus a corrupted Java stream or PHP string, a pushed int versus an
+undefined pickle opcode, a resolvable JDK collection versus a nonexistent `@class`/`@type`, and for a
+cookie an empty versus an unterminated JSON object), each pair repeated with fresh names. No gadget is
+sent. Unsigned JSON state is reported low/tentative; the other formats high/firm.
 
 ## Outside the catalog: DOM Invader's detections
 

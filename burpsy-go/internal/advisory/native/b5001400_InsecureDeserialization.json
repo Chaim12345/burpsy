@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036681216,
+  "name": "Insecure deserialization",
+  "description": "<p>The application deserializes a value the client controls - a cookie, a query parameter or a form field - with a deserializer that builds objects of a type the data itself names: Java's <code>ObjectInputStream</code>, PHP's <code>unserialize()</code>, Python's <code>pickle</code>, or a JSON binder with polymorphic typing enabled (Jackson's <code>@class</code>, fastjson's <code>@type</code>). An attacker who controls the bytes chooses which classes are instantiated and in what state, and a chain of ordinary library classes (a \"gadget chain\") reachable that way commonly turns this into remote code execution, file access or denial of service.</p>\n<p>burpsy proves the deserialization without sending a gadget: two values of the same length and encoding, one a deserializer accepts (for example a stream of a nonexistent class, or a resolvable JDK collection class) and one it rejects (the same stream with a corrupted type code, or a nonexistent class name), are answered consistently and differently, which nothing treating the value as an opaque string can do. A finding at low severity and tentative confidence means only that the server builds an object from unsigned JSON in a cookie: a client can forge its fields, but no class choice was shown.</p>\n<p>This row is burpsy's own: Burp's catalogue has only the passive 'Serialized object in HTTP message' row, and leaves active deserialization testing to extensions. It is classified under CWE-502.</p>",
+  "remediation": "<p>Do not deserialize data the client can modify. Keep state on the server and give the client an opaque identifier, or exchange plain data (JSON bound to one fixed, non-polymorphic type) and validate it like any other input.</p>\n<p>Where serialized state must travel through the client, sign it with a server-side key (an HMAC) and verify the signature before the bytes reach any parser. Turn off polymorphic typing in JSON binders (Jackson <code>activateDefaultTyping</code>, fastjson <code>autoType</code>, Json.NET <code>TypeNameHandling</code>) or restrict it to an explicit allowlist, and install a class allowlist on Java object streams (<code>ObjectInputFilter</code>). Never unpickle or <code>unserialize()</code> client data; PHP's <code>allowed_classes</code> option and Python's restricted unpicklers reduce but do not remove the risk.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "Web Security Academy: Insecure deserialization",
+      "url": "https://portswigger.net/web-security/deserialization"
+    },
+    {
+      "title": "OWASP Cheat Sheet: Deserialization",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Deserialization_Cheat_Sheet.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-502: Deserialization of Untrusted Data",
+      "url": "https://cwe.mitre.org/data/definitions/502.html"
+    }
+  ]
+}

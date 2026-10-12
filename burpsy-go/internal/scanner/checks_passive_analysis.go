@@ -343,21 +343,73 @@ func checkSerializedObjectInMessage(ctx context.Context, cc *CheckContext) ([]*F
 	if cc.Scanner == nil || cc.Exchange == nil {
 		return nil, nil
 	}
-	for label, raw := range map[string]string{
-		"request":  requestRaw(cc.Scanner, cc.Exchange),
-		"response": responseRaw(cc.Scanner, cc.Exchange),
-	} {
-		body := responseBody(raw)
-		if body == "" {
-			continue
-		}
-		if kind := DetectSerializedObject([]byte(body)); kind != SerializedNone {
+	reqRaw := requestRaw(cc.Scanner, cc.Exchange)
+	respRaw := responseRaw(cc.Scanner, cc.Exchange)
+	for _, c := range serializedCarriers(reqRaw, respRaw) {
+		if kind := DetectSerializedObject([]byte(c.value)); kind != SerializedNone {
 			return []*Finding{buildHeaderFinding(cc, "Serialized object in HTTP message",
-				"high", "firm", fmt.Sprintf("%s serialized object in the %s body", kind, label),
+				"high", "firm", fmt.Sprintf("%s in the %s", kind, c.where),
 				"a native serialized object crosses the trust boundary, which is the precondition for an insecure-deserialization attack")}, nil
 		}
 	}
 	return nil, nil
+}
+
+// serializedCarrier is one place in an exchange a serialized object can travel.
+type serializedCarrier struct{ where, value string }
+
+// serializedCarriers lists, in a fixed order (request before response), the places a serialized
+// object is carried: the request's query parameters, cookies and body, then the response's
+// Set-Cookie values and body. A parameter or cookie is offered both as sent and percent-decoded,
+// because a blob is commonly percent-encoded on the wire (PHP serialize() text always is in a query
+// string). The bodies are scanned whole, as they were before cookies and parameters were added.
+func serializedCarriers(reqRaw, respRaw string) []serializedCarrier {
+	var out []serializedCarrier
+	add := func(where, v string) {
+		if v == "" {
+			return
+		}
+		out = append(out, serializedCarrier{where, v})
+		if d, err := url.QueryUnescape(v); err == nil && d != v {
+			out = append(out, serializedCarrier{where, d})
+		}
+	}
+	head := reqRaw
+	if i := strings.Index(head, "\r\n\r\n"); i >= 0 {
+		head = head[:i]
+	}
+	if line, _, _ := strings.Cut(head, "\r\n"); line != "" {
+		if f := strings.Fields(line); len(f) >= 2 {
+			if _, q, ok := strings.Cut(f[1], "?"); ok {
+				for _, kv := range strings.Split(q, "&") {
+					k, v, _ := strings.Cut(kv, "=")
+					add(fmt.Sprintf("request parameter %q", k), v)
+				}
+			}
+		}
+	}
+	for _, h := range headerValues(head, "Cookie") {
+		for _, kv := range strings.Split(h, ";") {
+			k, v, _ := strings.Cut(strings.TrimSpace(kv), "=")
+			add(fmt.Sprintf("request cookie %q", k), v)
+		}
+	}
+	if b := responseBody(reqRaw); b != "" {
+		out = append(out, serializedCarrier{"request body", b})
+	}
+	respHead := respRaw
+	if i := strings.Index(respHead, "\r\n\r\n"); i >= 0 {
+		respHead = respHead[:i]
+	}
+	for _, h := range headerValues(respHead, headerSetCookie) {
+		first, _, _ := strings.Cut(h, ";")
+		k, v, _ := strings.Cut(strings.TrimSpace(first), "=")
+		add(fmt.Sprintf("response cookie %q", k), v)
+	}
+	if b := responseBody(respRaw); b != "" {
+		out = append(out, serializedCarrier{"response body", b})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

@@ -106,6 +106,9 @@ FULL_PROFILE = {
     # predicts the next token, plants a token before login, and replays a token after logout.
     # VulnerableApp's session levels need a working login first: see vulnapp_session_seed.py.
     "check_session_management": True,
+    # Insecure deserialization (0vzb.10): benign accepted/rejected pairs written into recognised
+    # serialized values and opaque cookies; never a gadget.
+    "check_insecure_deserialization": True,
 }
 
 

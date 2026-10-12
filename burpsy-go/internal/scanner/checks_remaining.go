@@ -1042,7 +1042,12 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		descriptorWithTier("External service interaction (HTTP)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (HTTP)", "http"), TierIntrusive, ""),
 
-		nativeDescriptor("React Server Components remote code execution (React2Shell)", DispatchScopePerUrl, remainingChecksEnabled, checkReact2Shell),
+		// The insecure-deserialization check (checks_deserialization.go) rides this row behind its own
+		// switch: React2Shell is the only active Burp row classified CWE-502, and the registry admits one
+		// descriptor per Burp type.
+		nativeDescriptor("React Server Components remote code execution (React2Shell)", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return remainingChecksEnabled(c) || insecureDeserializationEnabled(c) },
+			react2ShellOrDeserialization(checkReact2Shell)),
 		nativeDescriptor("SQL statement in request parameter", DispatchScopePerUrl, remainingChecksEnabled, checkSQLStatementInParameter),
 	}
 }

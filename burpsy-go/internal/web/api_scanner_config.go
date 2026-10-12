@@ -68,6 +68,9 @@ type scannerConfigView struct {
 	CheckHostHeader bool `json:"check_host_header"`
 	// The GraphQL hardening rows (scanner/checks_graphql_hardening.go), off by default.
 	CheckGraphQLHardening bool `json:"check_graphql_hardening"`
+
+	// The insecure-deserialization row (scanner/checks_deserialization.go), off by default.
+	CheckInsecureDeserialization bool `json:"check_insecure_deserialization"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -114,6 +117,8 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckSessionManagement:   c.CheckSessionManagement,
 		CheckRequestSmuggling:    c.CheckRequestSmuggling,
 		CheckHostHeader:          c.CheckHostHeader,
+
+		CheckInsecureDeserialization: c.CheckInsecureDeserialization,
 	}
 }
 
@@ -155,6 +160,8 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_session_management":   func(v *scannerConfigView) *bool { return &v.CheckSessionManagement },
 	"check_request_smuggling":    func(v *scannerConfigView) *bool { return &v.CheckRequestSmuggling },
 	"check_host_header":          func(v *scannerConfigView) *bool { return &v.CheckHostHeader },
+
+	"check_insecure_deserialization": func(v *scannerConfigView) *bool { return &v.CheckInsecureDeserialization },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -310,6 +317,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckSessionManagement = view.CheckSessionManagement
 		c.CheckRequestSmuggling = view.CheckRequestSmuggling
 		c.CheckHostHeader = view.CheckHostHeader
+		c.CheckInsecureDeserialization = view.CheckInsecureDeserialization
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

@@ -157,6 +157,16 @@ func BurpsyNativeRows() []BurpsyRow {
 		Why: "Burp's catalogue has no row for GraphQL debug output: its error-message rows are passive and " +
 			"read responses the proxy already saw, while this one provokes a GraphQL error and reads the " +
 			"envelope's errors and extensions. It rides 'GraphQL endpoint found' with the other GraphQL rows.",
+	}, {
+		Name:      IssueInsecureDeserialization,
+		TypeIndex: 0xb5001400,
+		CWE:       502,
+		Rides:     "React Server Components remote code execution (React2Shell)",
+		Why: "Burp's catalogue has only a passive deserialization row ('Serialized object in HTTP message', " +
+			"which reports a blob that looks serialized, not that the server deserializes it); active " +
+			"deserialization testing is left to extensions (Java Deserialization Scanner, Freddy), filed " +
+			"under the generic extension-generated type. It rides React2Shell, the only active Burp row " +
+			"classified CWE-502.",
 	}}
 }
 

@@ -231,6 +231,12 @@ type ScanConfig struct {
 	// because it sends a request to an address the probe chooses, which an operator should opt into on
 	// its own. Both file under "Out-of-band resource load (HTTP)" — CWE-918, the same catalogued issue.
 	CheckSSRFInBand bool
+	// CheckInsecureDeserialization admits burpsy's "Insecure deserialization" row (0vzb.10): benign
+	// accepted/rejected value pairs (a nonexistent class versus a corrupted stream, a resolvable JDK
+	// collection versus a nonexistent class name) written into recognised serialized values and opaque
+	// cookies. No gadget is ever sent. It rides the React2Shell descriptor (the only active CWE-502
+	// row). Off by default, like every family switch.
+	CheckInsecureDeserialization bool
 	// CheckExtendedActive admits the remaining wired rows in checks_remaining.go and
 	// checks_final.go: GraphQL, JWT forgery, SMTP header injection, CORS, cross-domain policy
 	// files, XXE and entity expansion, file-upload and OpenAPI discovery, React2Shell
