@@ -14,26 +14,19 @@ package vulnapp
 // map, so it never sees the reflected value. See the final report.)
 //
 // The cache endpoints implement real, if deliberately broken, caching. The
-// poisoning endpoint keys its store on the path only, so the cache-buster the
-// scanner appends is ignored and a follow-up without the unkeyed header is served
-// the poisoned body. The deception endpoint serves the same dynamic body on a
-// static-looking .css path — exactly the signature the check looks for.
+// poisoning endpoints sit behind vaSharedCache, which reports X-Cache HIT/MISS
+// the way a CDN does; the defect is what each one leaves out of its key. The
+// deception endpoint serves the same dynamic body on a static-looking .css path —
+// exactly the signature the check looks for.
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
-
-// poisonCache is keyed on the request path only. Ignoring the cache-buster query
-// parameter is the defect: a follow-up request that never sent the unkeyed header
-// is served the poisoned response, which is web cache poisoning.
-//
-// Entries are written only when a probe carries an unkeyed header and expired
-// immediately, so no entry outlives a single audit pass and the safe twin (which
-// holds no shared state at all) can never inherit a body it did not produce.
-var poisonCache sync.Map
 
 // hdDynamicBody is the sensitive, per-user content a cache should never store
 // under a static key.
@@ -71,9 +64,13 @@ func headerEndpoints() []Endpoint {
 			Note: "a single Set-Cookie, so no name is set to conflicting values"},
 
 		{Path: "/hd/cache-poison", Row: "Web cache poisoning",
-			Note: "a cache keyed only on the path reflects an unkeyed header into a cacheable body"},
+			Note: "a cache keyed on the full URL serves a body built from X-Forwarded-Host, which it does not key"},
 		{Path: "/hd/safe/cache-poison", Row: "Web cache poisoning", Safe: true,
-			Note: "reflects the unkeyed header into its own response only; no cross-request cache"},
+			Note: "reflects X-Forwarded-Host too, but the cache keys on it, so no other request is served it"},
+		{Path: "/hd/cache-poison-route/notice?msg=hello", Row: "Web cache poisoning",
+			Note: "a cache keyed on the route only (query excluded) serves a body that reflects the msg parameter"},
+		{Path: "/hd/safe/cache-poison-route/notice?msg=hello", Row: "Web cache poisoning", Safe: true,
+			Note: "reflects msg too, but the cache keys on the full URL including the query"},
 
 		{Path: "/hd/cache-decept", Row: "Web cache deception",
 			Note: "a static-looking .css path returns the same dynamic body as the directory root"},
@@ -96,6 +93,8 @@ func registerHeaders(mux *http.ServeMux) {
 	mux.HandleFunc("/hd/safe/dup-cookie", hdSafeDupCookie)
 	mux.HandleFunc("/hd/cache-poison", hdCachePoison)
 	mux.HandleFunc("/hd/safe/cache-poison", hdSafeCachePoison)
+	mux.HandleFunc("/hd/cache-poison-route/", hdCachePoisonRoute)
+	mux.HandleFunc("/hd/safe/cache-poison-route/", hdSafeCachePoisonRoute)
 	mux.HandleFunc("/hd/cache-decept", hdCacheDecept)
 	mux.HandleFunc("/hd/cache-decept/", hdCacheDecept)
 	mux.HandleFunc("/hd/safe/cache-decept", hdSafeCacheDecept)
@@ -174,53 +173,99 @@ func hdSafeDupCookie(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------------------
 // Web cache poisoning
-func hdCachePoison(w http.ResponseWriter, r *http.Request) {
-	if v, ok := poisonCache.Load(r.URL.Path); ok {
-		writePoisonResponse(w, v.(string))
-		return
-	}
-	val := unkeyedHeader(r)
-	if val == "" {
-		val = "default"
-	}
-	body := "<html><body>served: " + val + "</body></html>"
-	if val != "default" {
-		// A probe carrying an unkeyed header poisoned this path keyed only on the
-		// path, so the follow-up (which sends no such header) is served it from the
-		// cache. The entry persists for the process; the safe twin uses a distinct
-		// path and holds no state, so it can never read this body.
-		poisonCache.Store(r.URL.Path, body)
-	}
-	writePoisonResponse(w, body)
+// ---------------------------------------------------------------------------
+
+// vaSharedCache is a minimal shared cache: entries live 60 seconds under whatever key the endpoint
+// computes, and every response says HIT or MISS in X-Cache, as CDNs and reverse proxies do. Only
+// what a key leaves out differs between the vulnerable endpoints and their twins.
+type vaSharedCache struct {
+	mu sync.Mutex
+	m  map[string]vaCacheEntry
 }
 
-// hdSafeCachePoison is stateless: it reflects the unkeyed header into THIS
-// response only. A follow-up request sends no such header and receives only
-// "default", so the poisoning check cannot find its injected value in a response
-// that never sent it. No shared cache means no cross-request contamination.
-func hdSafeCachePoison(w http.ResponseWriter, r *http.Request) {
-	val := unkeyedHeader(r)
-	if val == "" {
-		val = "default"
-	}
-	writePoisonResponse(w, "<html><body>served: "+val+"</body></html>")
+type vaCacheEntry struct {
+	body    string
+	expires time.Time
 }
 
-// unkeyedHeader returns the value of the first of the headers a front-end cache
-// commonly excludes from its key — the inputs the poisoning probes inject.
-func unkeyedHeader(r *http.Request) string {
-	for _, h := range []string{"X-Forwarded-Host", "X-Forwarded-Scheme", "X-Original-URL"} {
-		if v := r.Header.Get(h); v != "" {
-			return v
+const vaCacheTTL = 60 * time.Second
+
+func (c *vaSharedCache) serve(w http.ResponseWriter, key string, render func() string) {
+	now := time.Now()
+	c.mu.Lock()
+	if c.m == nil {
+		c.m = map[string]vaCacheEntry{}
+	}
+	e, hit := c.m[key]
+	if hit && now.After(e.expires) {
+		hit = false
+	}
+	if !hit {
+		// Expired entries are swept on the way past so the map cannot grow without bound.
+		for k, old := range c.m {
+			if now.After(old.expires) {
+				delete(c.m, k)
+			}
 		}
+		e = vaCacheEntry{body: render(), expires: now.Add(vaCacheTTL)}
+		c.m[key] = e
 	}
-	return ""
-}
-
-func writePoisonResponse(w http.ResponseWriter, body string) {
+	c.mu.Unlock()
 	w.Header().Set("Content-Type", "text/html")
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	_, _ = w.Write([]byte(body))
+	if hit {
+		w.Header().Set("X-Cache", "HIT")
+	} else {
+		w.Header().Set("X-Cache", "MISS")
+	}
+	_, _ = w.Write([]byte(e.body))
+}
+
+// One cache per endpoint, so no endpoint can be served another's body.
+var (
+	cachePoisonHeaderStore     vaSharedCache
+	cachePoisonHeaderSafeStore vaSharedCache
+	cachePoisonRouteStore      vaSharedCache
+	cachePoisonRouteSafeStore  vaSharedCache
+)
+
+func assetHostBody(r *http.Request) string {
+	host := r.Header.Get("X-Forwarded-Host")
+	if host == "" {
+		host = "static.vulnapp.local"
+	}
+	return `<html><head><script src="https://` + html.EscapeString(host) + `/app.js"></script></head><body>home</body></html>`
+}
+
+// hdCachePoison keys on the full request URI but builds the page from X-Forwarded-Host, which is
+// not in the key: a request carrying it plants its body for every later request to that URI.
+func hdCachePoison(w http.ResponseWriter, r *http.Request) {
+	cachePoisonHeaderStore.serve(w, r.RequestURI, func() string { return assetHostBody(r) })
+}
+
+// hdSafeCachePoison reflects X-Forwarded-Host identically, but keys on it (what Vary:
+// X-Forwarded-Host achieves), so a request without the header never receives a body built with it.
+func hdSafeCachePoison(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Vary", "X-Forwarded-Host")
+	cachePoisonHeaderSafeStore.serve(w, r.RequestURI+"|"+r.Header.Get("X-Forwarded-Host"),
+		func() string { return assetHostBody(r) })
+}
+
+func noticeBody(r *http.Request) string {
+	return "<html><body><p>Notice: " + html.EscapeString(r.URL.Query().Get("msg")) + "</p></body></html>"
+}
+
+// hdCachePoisonRoute keys on the raw path alone, as a cache configured to ignore the query string
+// does; path parameters (";x=y") are part of that raw path, as in a servlet container's request URI.
+// The page reflects the msg query parameter, so any msg value is served to every visitor of the route.
+func hdCachePoisonRoute(w http.ResponseWriter, r *http.Request) {
+	key, _, _ := strings.Cut(r.RequestURI, "?")
+	cachePoisonRouteStore.serve(w, key, func() string { return noticeBody(r) })
+}
+
+// hdSafeCachePoisonRoute reflects msg identically but keys on the full URI, query included.
+func hdSafeCachePoisonRoute(w http.ResponseWriter, r *http.Request) {
+	cachePoisonRouteSafeStore.serve(w, r.RequestURI, func() string { return noticeBody(r) })
 }
 
 // ---------------------------------------------------------------------------

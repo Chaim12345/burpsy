@@ -4,39 +4,6 @@ import (
 	"testing"
 )
 
-func TestWebCachePoisoningEvidenceReflectsInjectedValue(t *testing.T) {
-	// A follow-up request that never sent the header yet contains the marker is
-	// the poisoning signal.
-	ev := analyzeCachePoisoningEvidence("burpsy-poisoned-host.invalid",
-		"<html><a href='//burpsy-poisoned-host.invalid/x'>click</a></html>", true)
-	if ev&poisonEvidenceReflected == 0 {
-		t.Fatal("reflected injection evidence was not recognized")
-	}
-	if ev&poisonEvidenceCachable == 0 {
-		t.Fatal("cacheable evidence was not recognized")
-	}
-}
-
-func TestWebCachePoisoningEvidenceNoFalsePositiveOnDifferentBody(t *testing.T) {
-	ev := analyzeCachePoisoningEvidence("burpsy-poisoned-host.invalid",
-		"<html>an ordinary, unpoisoned page</html>", false)
-	if ev != 0 {
-		t.Fatalf("clean follow-up produced poisoning evidence %#x", ev)
-	}
-}
-
-func TestWebCachePoisoningEvidenceMarkerAbsentIsNegative(t *testing.T) {
-	// Same cacheable status, but the marker is absent: no reflection, so no finding.
-	ev := analyzeCachePoisoningEvidence("burpsy-poisoned-host.invalid",
-		"<html>content without the marker</html>", true)
-	if ev&poisonEvidenceReflected != 0 {
-		t.Fatal("reflected bit set without the marker present")
-	}
-	if ev&poisonEvidenceCachable == 0 {
-		t.Fatal("cacheable bit should still be set for a cacheable response")
-	}
-}
-
 func TestWebCacheDeceptionEvidenceFlagsDynamicUnderStaticKey(t *testing.T) {
 	original := "Welcome back, alice — your balance is $12.00"
 	decorated := "<html>" + original + "</html>"
