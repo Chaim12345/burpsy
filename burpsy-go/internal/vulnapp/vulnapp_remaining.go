@@ -132,16 +132,14 @@ func remainingEndpoints() []Endpoint {
 			Row: "JWT signature not verified", Safe: true,
 			Note: "verifies the HMAC-SHA256 signature against the server secret"},
 
-		{Path: "/rm/jwt", RequestHeaders: map[string]string{"Authorization": "Bearer " + rmJWTToken},
-			Row:  "JWT none algorithm supported",
-			Note: "accepts alg:none (any casing) with an empty signature"},
+		// /rm/jwt accepts alg:none and a self-signed jwk too, but only because it checks no
+		// signature at all: that is one defect, reported once as "JWT signature not verified".
+		// The none and jwk rows have their own endpoints in vulnapp_jwt.go, whose verifiers do
+		// reject an altered signature.
 		{Path: "/rm/safe/jwt", RequestHeaders: map[string]string{"Authorization": "Bearer " + rmJWTToken},
 			Row: "JWT none algorithm supported", Safe: true,
 			Note: "rejects any alg other than HS256"},
 
-		{Path: "/rm/jwt", RequestHeaders: map[string]string{"Authorization": "Bearer " + rmJWTToken},
-			Row:  "JWT self-signed JWK header supported",
-			Note: "accepts a token carrying its own jwk header"},
 		{Path: "/rm/safe/jwt", RequestHeaders: map[string]string{"Authorization": "Bearer " + rmJWTToken},
 			Row: "JWT self-signed JWK header supported", Safe: true,
 			Note: "never consults the token's own jwk header"},

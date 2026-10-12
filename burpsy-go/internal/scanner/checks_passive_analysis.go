@@ -73,9 +73,13 @@ func checkCookieWithoutHttpOnly(ctx context.Context, cc *CheckContext) ([]*Findi
 	var out []*Finding
 	eachSetCookie(cc, func(c CookieAttrs, _ string) bool {
 		if c.MissingHttpOnly() {
+			detail := "the cookie is readable from JavaScript"
+			if isSignedJWT(c.Value) {
+				// Same row, a sharper statement: the readable value is a bearer credential.
+				detail = "the cookie holds a signed JWT, a bearer credential, and is readable from JavaScript"
+			}
 			out = append(out, buildHeaderFinding(cc, "Cookie without HttpOnly flag set",
-				"low", "certain", "Set-Cookie: "+c.Name,
-				"the cookie is readable from JavaScript"))
+				"low", "certain", "Set-Cookie: "+c.Name, detail))
 			return false
 		}
 		return true
@@ -92,19 +96,33 @@ func checkSessionTokenInURL(ctx context.Context, cc *CheckContext) ([]*Finding, 
 		return nil, nil
 	}
 	for name, values := range u.Query() {
-		if !LooksLikeSessionToken(name) {
-			continue
-		}
+		named := LooksLikeSessionToken(name)
 		for _, v := range values {
 			if strings.TrimSpace(v) == "" {
 				continue
 			}
-			return []*Finding{buildHeaderFinding(cc, "Session token in URL",
-				"medium", "certain", "query parameter "+name,
-				"a session-token-like parameter appears in the URL, where it is logged and leaked via Referer")}, nil
+			if named {
+				return []*Finding{buildHeaderFinding(cc, "Session token in URL",
+					"medium", "certain", "query parameter "+name,
+					"a session-token-like parameter appears in the URL, where it is logged and leaked via Referer")}, nil
+			}
+			// A signed JWT is a bearer credential whatever its parameter is called: the value
+			// itself is the evidence, decoded rather than guessed from the name.
+			if isSignedJWT(v) {
+				return []*Finding{buildHeaderFinding(cc, "Session token in URL",
+					"medium", "certain", "query parameter "+name+" carries a JWT",
+					"a signed JSON Web Token (a bearer credential) is sent in the URL, where it is logged and leaked via Referer")}, nil
+			}
 		}
 	}
 	return nil, nil
+}
+
+// isSignedJWT reports whether v is a whole JWS compact token with a JSON header naming a signing
+// algorithm and a non-empty signature: a credential, not merely a dotted string.
+func isSignedJWT(v string) bool {
+	t := ParseJWT(strings.TrimSpace(v))
+	return t.ParseError == "" && t.Header.Alg != "" && !strings.EqualFold(t.Header.Alg, "none") && t.RawSignature != ""
 }
 
 // ---------------------------------------------------------------------------

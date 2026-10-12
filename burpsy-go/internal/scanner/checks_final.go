@@ -558,9 +558,9 @@ func FinalCheckDescriptors() []CheckDescriptor {
 		descriptorWithTier("External service interaction (SMTP)", DispatchScopePerUrl, oobChecksEnabled,
 			oobCheck("External service interaction (SMTP)", "smtp"), TierIntrusive, ""),
 
-		nativeDescriptor("JWT arbitrary jku header supported", DispatchScopePerRequest, finalChecksEnabled,
+		nativeDescriptor("JWT arbitrary jku header supported", DispatchScopePerRequest, jwtForgeryEnabled,
 			jwtHostedCheck("JWT arbitrary jku header supported", true)),
-		nativeDescriptor("JWT arbitrary x5u header supported", DispatchScopePerRequest, finalChecksEnabled,
+		nativeDescriptor("JWT arbitrary x5u header supported", DispatchScopePerRequest, jwtForgeryEnabled,
 			jwtHostedCheck("JWT arbitrary x5u header supported", false)),
 	}
 	for _, src := range []FindingProvenance{ProvenanceBCheck, ProvenanceTool, ProvenanceManual, ProvenanceFilter} {

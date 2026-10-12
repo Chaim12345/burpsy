@@ -111,6 +111,9 @@ type ActiveScanner struct {
 	jsLib      *JsLibraryCheck
 	jwtWeak    *JwtWeakSecretCheck
 	nativeOnce sync.Once
+	// jwtKeys caches each origin's published JWT verification keys (*jwtHostKeyEntry by origin),
+	// so the algorithm-confusion probe fetches a host's JWKS once per scanner, not per request.
+	jwtKeys    sync.Map
 	findings   []*Finding
 	findingsMu sync.RWMutex
 }
@@ -252,6 +255,11 @@ type ScanConfig struct {
 	// dangerous extension, each only as far as it was demonstrated. Off by default: it leaves files on
 	// the target, which is the intrusive tier's whole meaning.
 	CheckFileUpload bool
+	// CheckJwtForgery admits the active JWT forgery rows (jwt_attacks.go, jwks_host.go): signature
+	// not verified, none algorithm, self-signed jwk, jku, x5u, and burpsy's expired-token row. Each
+	// replays the captured request with only the token changed. CheckExtendedActive also admits
+	// them, as it did before this switch existed. Off by default.
+	CheckJwtForgery bool
 	CustomPayloads  []string
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is

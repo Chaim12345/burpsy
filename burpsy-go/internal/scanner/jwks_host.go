@@ -118,45 +118,47 @@ func localAdvertisableAddr() string {
 	return "127.0.0.1"
 }
 
-// jwtHostedCheck builds the jku (jwks=true) or x5u (jwks=false) evaluator.
+// jwtHostedCheck builds the jku (jwks=true) or x5u (jwks=false) evaluator. It decides by the same
+// two-control differential as the other forgery rows (jwt_attacks.go), and stands down when the
+// signature is not checked at all: that is one defect, reported once by "JWT signature not verified".
 func jwtHostedCheck(row string, jwks bool) CheckRunner {
 	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		if cc.Scanner == nil || cc.Exchange == nil {
+		p, ok, err := newJWTProbe(ctx, cc, row)
+		if err != nil || !ok {
+			return nil, err
+		}
+		if !p.decidable() || p.garbageAccepted {
 			return nil, nil
 		}
-		original, token, ok := jwtFromExchange(cc)
-		if !ok {
+		if s, err := p.stripped(ctx); err != nil {
+			return nil, fmt.Errorf("%s: %w", row, err)
+		} else if s {
 			return nil, nil
 		}
 
-		// Forge first: the forge call produces both the token and the material the target
-		// must fetch, so the document is known before the listener starts.
-		var forged string
-		var material []byte
-		var contentType string
-		var err error
-		// A placeholder URL is replaced once the listener has a real one; ForgeWithJku and
-		// ForgeWithX5u both need the URL at signing time because it goes in the header.
+		// The token's header names the URL before the material it points at exists, so the
+		// listener starts first and the forged material is served from it afterwards.
 		host, hostErr := hostMaterial("application/json", []byte("{}"))
 		if hostErr != nil {
 			return nil, hostErr
 		}
 		defer host.Close()
 
+		var forged, contentType string
+		var material []byte
 		if jwks {
-			forged, material, err = ForgeWithJku(token, host.url)
+			forged, material, err = ForgeWithJku(p.token, host.url)
 			contentType = "application/json"
 		} else {
-			forged, material, err = ForgeWithX5u(token, host.url)
+			forged, material, err = ForgeWithX5u(p.token, host.url)
 			contentType = "application/x-pem-file"
 		}
 		if err != nil {
-			return nil, nil
+			return nil, fmt.Errorf("%s: could not forge a token to test with: %w", row, err)
 		}
-		// Serve the real material now that it exists, from the same listener at the same URL.
 		host.Serve(contentType, material)
 
-		accepted, detail, sendErr := jwtForgeryAccepted(ctx, cc, original, forged)
+		accepted, sendErr := p.accepted(ctx, forged)
 		if sendErr != nil {
 			return nil, fmt.Errorf("%s: %w", row, sendErr)
 		}
@@ -171,8 +173,12 @@ func jwtHostedCheck(row string, jwks bool) CheckRunner {
 		if !accepted {
 			return nil, nil
 		}
+		if ok, err := p.confirm(ctx, forged); err != nil || !ok {
+			return nil, err
+		}
 		return []*Finding{buildHeaderFinding(cc, row, "high", "certain", forged,
-			fmt.Sprintf("the target fetched key material from %s and accepted a token signed against it (%s); fetchers: %s",
-				host.url, detail, strings.Join(host.FetchLog(), "; ")))}, nil
+			fmt.Sprintf("the target fetched key material from %s and accepted a token signed against it (HTTP %d, twice, "+
+				"while an altered signature was rejected); fetchers: %s",
+				host.url, p.baseCode, strings.Join(host.FetchLog(), "; ")))}, nil
 	}
 }

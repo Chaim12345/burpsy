@@ -215,73 +215,6 @@ func jwtCandidatesIn(raw string) []string {
 	return out
 }
 
-// jwtForgeryAccepted replaces the original token with a forged one and reports whether the
-// application still served the authenticated response.
-//
-// The comparison is against the baseline, not against a status code alone: an endpoint that
-// returns 200 with a login page for both is not accepting the forgery.
-//
-// The error return is separate from the false return on purpose. "The application rejected the
-// forgery" and "the forgery was never sent" both used to come back as false with an
-// explanatory string the caller discarded, so a scan with no sender reported every JWT row
-// clean. Only the first of those is a verdict.
-func jwtForgeryAccepted(ctx context.Context, cc *CheckContext, original, forged string) (bool, string, error) {
-	raw := requestRaw(cc.Scanner, cc.Exchange)
-	if !strings.Contains(raw, original) {
-		return false, "", fmt.Errorf("the token was not found in the request bytes, so it could not be replaced")
-	}
-	h, err := NewProbeHarness(ctx, cc, []string{"header", "cookie"})
-	if err != nil {
-		return false, "", fmt.Errorf("forged-token probe not prepared: %w", err)
-	}
-	mutated := strings.Replace(raw, original, forged, 1)
-	res, err := h.send(ctx, []byte(mutated))
-	if err != nil {
-		return false, "", fmt.Errorf("forged-token probe not sent: %w", err)
-	}
-	base := NewResponseFingerprint(h.Baseline().Status, h.Baseline().Body)
-	got := NewResponseFingerprint(res.Status, res.Body)
-	if base.SameShape(got) {
-		return true, fmt.Sprintf("the forged token produced the same response as the original (HTTP %d)", res.Status), nil
-	}
-	return false, fmt.Sprintf("the forged token produced a different response (HTTP %d vs baseline %d)",
-		res.Status, h.Baseline().Status), nil
-}
-
-func jwtCheck(row string, forge func(JWTToken) ([]string, error)) CheckRunner {
-	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
-			return nil, nil
-		}
-		// A request with no JWT is genuinely nothing to do, and demanding egress for it would
-		// be a false refusal — so the precondition is checked before the capability.
-		original, token, ok := jwtFromExchange(cc)
-		if !ok {
-			return nil, nil
-		}
-		if err := cc.RequireEgress(); err != nil {
-			return nil, fmt.Errorf("%s: %w", row, err)
-		}
-		forged, err := forge(token)
-		if err != nil {
-			return nil, fmt.Errorf("%s: could not forge a token to test with: %w", row, err)
-		}
-		if len(forged) == 0 {
-			return nil, fmt.Errorf("%s: no forged token was produced, so nothing was tested", row)
-		}
-		for _, f := range forged {
-			accepted, detail, err := jwtForgeryAccepted(ctx, cc, original, f)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", row, err)
-			}
-			if accepted {
-				return []*Finding{buildHeaderFinding(cc, row, "high", "firm", f, detail)}, nil
-			}
-		}
-		return nil, nil
-	}
-}
-
 // checkJWTPrivateKeyDisclosed is passive: a JWKS that ships private material.
 func checkJWTPrivateKeyDisclosed(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if cc.Scanner == nil || cc.Exchange == nil {
@@ -889,22 +822,14 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("GraphQL suggestions enabled", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLSuggestions),
 		nativeDescriptor("GraphQL content type not validated", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLContentType),
 
-		nativeDescriptor("JWT signature not verified", DispatchScopePerRequest, remainingChecksEnabled,
-			jwtCheck("JWT signature not verified", func(t JWTToken) ([]string, error) {
-				// An unsigned-but-otherwise-intact token: if it is accepted, the
-				// signature was never checked.
-				tok, err := ForgeNoneAlg(t)
-				if err != nil {
-					return nil, err
-				}
-				return []string{tok}, nil
-			})),
-		nativeDescriptor("JWT none algorithm supported", DispatchScopePerRequest, remainingChecksEnabled,
-			jwtCheck("JWT none algorithm supported", func(t JWTToken) ([]string, error) {
+		// The three forgery rows decide by jwt_attacks.go's two-control differential.
+		nativeDescriptor("JWT signature not verified", DispatchScopePerRequest, jwtForgeryEnabled, jwtSignatureCheck),
+		nativeDescriptor("JWT none algorithm supported", DispatchScopePerRequest, jwtForgeryEnabled,
+			jwtForgeryRow("JWT none algorithm supported", func(t JWTToken) ([]string, error) {
 				return ForgeNoneAlgVariants(t), nil
 			})),
-		nativeDescriptor("JWT self-signed JWK header supported", DispatchScopePerRequest, remainingChecksEnabled,
-			jwtCheck("JWT self-signed JWK header supported", func(t JWTToken) ([]string, error) {
+		nativeDescriptor("JWT self-signed JWK header supported", DispatchScopePerRequest, jwtForgeryEnabled,
+			jwtForgeryRow("JWT self-signed JWK header supported", func(t JWTToken) ([]string, error) {
 				tok, _, err := ForgeSelfSignedJWK(t)
 				if err != nil {
 					return nil, err

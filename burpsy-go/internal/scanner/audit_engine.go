@@ -339,6 +339,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckStored = false
 		case "CheckFileUpload":
 			cfg.CheckFileUpload = false
+		case "CheckJwtForgery":
+			cfg.CheckJwtForgery = false
 		}
 	}
 }
