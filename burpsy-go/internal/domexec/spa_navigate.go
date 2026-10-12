@@ -256,5 +256,14 @@ func clickByText(ctx context.Context, container, label string, timeout time.Dura
 // return the sink observations. It is SubmitAndObserve's second half, split out so a caller can park
 // a tab on a view (NavigateSPA) and then drive it without re-navigating.
 func (b *Browser) SubmitAndObserveIn(tabCtx context.Context, spec FormSubmitSpec, canary string) ([]Observation, error) {
+	obs, _, err := submitAndObserveIn(tabCtx, spec, canary)
+	return obs, err
+}
+
+// SubmitAndObserveRequestsIn is SubmitAndObserveIn that also returns the requests the page sent during
+// the interaction whose URL or body carried the canary — the evidence of which endpoint and parameter
+// the typed value actually travelled through. A caller that attributes a finding to one endpoint uses
+// it to refuse a confirmation the page reached through some other request.
+func (b *Browser) SubmitAndObserveRequestsIn(tabCtx context.Context, spec FormSubmitSpec, canary string) ([]Observation, []SentRequest, error) {
 	return submitAndObserveIn(tabCtx, spec, canary)
 }

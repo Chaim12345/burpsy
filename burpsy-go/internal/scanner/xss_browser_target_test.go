@@ -1,47 +1,67 @@
 package scanner
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
+	"github.com/burpsy-go/burpsy/internal/sender"
+	"go.uber.org/zap"
 )
 
-// TestTheLevelIsTakenFromTheExchangePathWhenTheRouteNamesNone is the regression guard for the
-// reflected-XSS browser confirmation's silent per-level miss. VulnerableApp serves
-// .../XSSWithHtmlTagInjection/LEVEL_2 through one template per level, and the confirmation reaches
-// the view by clicking the level's entry in the SPA tree. A built-in route that names no level must
-// therefore take the level from the exchange it is confirming; a fixed level (the shipped default
-// was LEVEL_1) drives LEVEL_1's field for every level, so the sink never carries the payload of the
-// point under test except on LEVEL_1 — measured as LEVEL_1 confirmed and LEVEL_2..5 missed with
-// byte-identical wire responses.
-func TestTheLevelIsTakenFromTheExchangePathWhenTheRouteNamesNone(t *testing.T) {
-	sc := &ActiveScanner{config: &ScanConfig{XSSBrowserTargets: BuiltinXSSBrowserTargets()}}
+// perLevelRoute is a route for an application that serves one URL per level and labels each level's
+// navigation entry with the URL's last segment. It is test data: the scanner ships no route.
+func perLevelRoute() XSSBrowserTarget {
+	return XSSBrowserTarget{
+		Match:          "app.test",
+		RootURL:        "http://app.test/",
+		MasterSelector: ".nav-item",
+		MasterText:     "Reflect",
+		LevelSelector:  ".sub-item",
+		LevelFromPath:  true,
+		InputSelector:  "#q",
+		SubmitSelector: "#go",
+	}
+}
+
+// TestTheLevelIsTakenFromTheExchangePathWhenTheRouteAsksForIt is the regression guard for the
+// per-level silent miss: a route that is generic over levels must drive the level of the exchange it is
+// confirming, not a fixed one, or the sink never carries the payload of the point under test.
+func TestTheLevelIsTakenFromTheExchangePathWhenTheRouteAsksForIt(t *testing.T) {
+	sc := &ActiveScanner{config: &ScanConfig{XSSBrowserTargets: []XSSBrowserTarget{perLevelRoute()}}}
 	for _, level := range []string{"LEVEL_1", "LEVEL_2", "LEVEL_3"} {
 		cc := &CheckContext{
-			Scanner: sc,
-			Exchange: &core.Exchange{
-				Host: "127.0.0.1",
-				Path: "/VulnerableApp/XSSWithHtmlTagInjection/" + level + "?value=1",
-			},
+			Scanner:  sc,
+			Exchange: &core.Exchange{Host: "app.test", Path: "/Reflect/" + level + "?value=1"},
 		}
 		got, ok := xssBrowserTargetFor(cc)
 		if !ok {
 			t.Fatalf("no route matched %s, so the browser confirmation was declined", level)
 		}
 		if got.LevelText != level {
-			t.Errorf("confirming %s drove %q: a level taken from anywhere but the exchange's own path "+
-				"points the browser at another level's field, and the confirmation then misses for a "+
-				"reason that reads like the target is clean", level, got.LevelText)
+			t.Errorf("confirming %s drove %q", level, got.LevelText)
 		}
+	}
+	// Without LevelFromPath the path is not read: the route names its own view or none.
+	r := perLevelRoute()
+	r.LevelFromPath = false
+	sc = &ActiveScanner{config: &ScanConfig{XSSBrowserTargets: []XSSBrowserTarget{r}}}
+	got, _ := xssBrowserTargetFor(&CheckContext{Scanner: sc, Exchange: &core.Exchange{Host: "app.test", Path: "/Reflect/LEVEL_2"}})
+	if got.LevelText != "" {
+		t.Errorf("a route that did not ask for it had its level derived from the path: %q", got.LevelText)
 	}
 }
 
-// TestAnExplicitlyNamedLevelIsNotOverridden pins that a caller who states the level keeps it: the
-// derivation exists for a route generic over levels, not to second-guess a specific one.
+// TestAnExplicitlyNamedLevelIsNotOverridden pins that a caller who states the level keeps it.
 func TestAnExplicitlyNamedLevelIsNotOverridden(t *testing.T) {
 	sc := &ActiveScanner{config: &ScanConfig{XSSBrowserTargets: []XSSBrowserTarget{{
-		Match: "example.test", MasterText: "Fam", LevelText: "PINNED",
+		Match: "example.test", MasterText: "Fam", LevelText: "PINNED", LevelFromPath: true,
 	}}}}
 	cc := &CheckContext{Scanner: sc, Exchange: &core.Exchange{
 		Host: "example.test", Path: "/Fam/OTHER_LEVEL",
@@ -49,6 +69,100 @@ func TestAnExplicitlyNamedLevelIsNotOverridden(t *testing.T) {
 	got, ok := xssBrowserTargetFor(cc)
 	if !ok || got.LevelText != "PINNED" {
 		t.Fatalf("a stated LevelText was rewritten to %q (matched=%v)", got.LevelText, ok)
+	}
+}
+
+// TestNoRouteShipsWithTheScanner pins that the browser confirmation has no built-in route: with the
+// switch on and no caller-supplied route, every host is declined rather than driven through a route
+// written for one particular application.
+func TestNoRouteShipsWithTheScanner(t *testing.T) {
+	sc := &ActiveScanner{config: &ScanConfig{CheckXSSBrowserConfirm: true}}
+	for _, host := range []string{"127.0.0.1", "localhost", "example.test"} {
+		if _, ok := xssBrowserTargetFor(&CheckContext{Scanner: sc, Exchange: &core.Exchange{Host: host, Path: "/x/LEVEL_1"}}); ok {
+			t.Errorf("host %s matched a route nobody configured", host)
+		}
+	}
+}
+
+// TestABrowserRouteOffTheExchangesOriginIsNotNavigated pins the scope rule: the browser goes only to a
+// route on the audited exchange's own scheme, host and port.
+func TestABrowserRouteOffTheExchangesOriginIsNotNavigated(t *testing.T) {
+	ex := &core.Exchange{Host: "app.test", Port: 8080, Path: "/r?q=1"}
+	for root, wantOK := range map[string]bool{
+		"http://app.test:8080/":   true,
+		"http://APP.test:8080/x/": true,
+		"http://app.test/":        false,
+		"https://app.test:8080/":  false,
+		"http://evil.test:8080/":  false,
+		"/relative/":              false,
+	} {
+		reason := xssBrowserRouteOutOfScope(ex, XSSBrowserTarget{RootURL: root})
+		if (reason == "") != wantOK {
+			t.Errorf("root %q: in scope = %v, want %v (%s)", root, reason == "", wantOK, reason)
+		}
+	}
+}
+
+// TestABrowserConfirmationCreditsOnlyTheRequestItDrove is the attribution rule: a sink fed through a
+// request to another path, or carrying the value in another parameter, is not this point's.
+func TestABrowserConfirmationCreditsOnlyTheRequestItDrove(t *testing.T) {
+	ex := &core.Exchange{Host: "app.test", Port: 80, Path: "/api/echo?value=seed"}
+	query := bcheck.InsertionPoint{Kind: bcheck.IpQuery, Name: "value"}
+	const canary = "zxssAbC123"
+	cases := []struct {
+		name string
+		sent []domexec.SentRequest
+		want bool
+	}{
+		{"the audited path and parameter", []domexec.SentRequest{{Method: "GET", URL: "http://app.test/api/echo?value=%3Cb%3E" + canary}}, true},
+		{"another path", []domexec.SentRequest{{Method: "GET", URL: "http://app.test/api/other?value=" + canary}}, false},
+		{"another parameter", []domexec.SentRequest{{Method: "GET", URL: "http://app.test/api/echo?q=" + canary}}, false},
+		{"another origin", []domexec.SentRequest{{Method: "GET", URL: "http://cdn.test/api/echo?value=" + canary}}, false},
+		{"no request at all", nil, false},
+	}
+	for _, c := range cases {
+		if _, got := xssBrowserDroveThisPoint(ex, query, c.sent, canary); got != c.want {
+			t.Errorf("%s: attributed = %v, want %v", c.name, got, c.want)
+		}
+	}
+	body := bcheck.InsertionPoint{Kind: bcheck.IpBody, Name: "value"}
+	if _, ok := xssBrowserDroveThisPoint(ex, body, []domexec.SentRequest{{Method: "POST", URL: "http://app.test/api/echo",
+		Body: `{"value":"<b>` + canary + `"}`}}, canary); !ok {
+		t.Error("a JSON body carrying the value in the audited key was not attributed")
+	}
+	if xssBrowserAttributable(bcheck.InsertionPoint{Kind: bcheck.IpHeader, Name: "X-Foo"}) {
+		t.Error("a header point was treated as attributable to a page's request")
+	}
+}
+
+// TestTheBrowserConfirmationNeverWritesTheScannersConfig is the regression guard for the data race: the
+// reflected-XSS check used to install a default route list into the scanner's shared config from
+// inside a running check, without the config lock, while sibling checks read it.
+func TestTheBrowserConfirmationNeverWritesTheScannersConfig(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		// Reflected, but as text/plain: the shape that sends the check to the browser confirmation.
+		_ = http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("you said " + r.URL.Query().Get("value")))
+		}))
+	}()
+	port := targetPort(t, ln.Addr().String())
+	store := core.NewTrafficStore()
+	id := seedAuditExchange(t, store, "127.0.0.1", port, "/echo?value=seed", "you said seed")
+	scan := NewActiveScanner(store, zap.NewNop()).
+		WithSender(sender.NewSender(sender.DefaultSenderConfig())).
+		WithConfig(&ScanConfig{MaxConcurrency: 2, Timeout: 30 * time.Second, CheckXss: true, CheckXSSBrowserConfirm: true})
+	_, findings := scan.AuditSession(context.Background(), []core.ExchangeID{id}, DefaultAuditConfig())
+	if got := scan.ConfigSnapshot().XSSBrowserTargets; len(got) != 0 {
+		t.Fatalf("a check wrote %d browser route(s) into the scanner's shared config", len(got))
+	}
+	if hasFinding(findings, xssReflectedIssue) {
+		t.Fatal("reflected XSS was reported for a text/plain echo with no browser route configured")
 	}
 }
 

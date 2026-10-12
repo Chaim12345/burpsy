@@ -210,3 +210,46 @@ func TestRepeatedNavigationsDoNotAccumulateTabs(t *testing.T) {
 		t.Fatalf("navigating 8 times grew the open page count from %d to %d: a tab is not being closed when its context is cancelled", baseline, after)
 	}
 }
+
+// The request record is what lets a caller attribute a sink to an endpoint: the value typed into the
+// view must be reported in the request the page's script sent it in, and only requests carrying the
+// canary are reported (the navigation's own /nav fetch is not).
+func TestDrivingAViewReportsTheRequestTheValueTravelledIn(t *testing.T) {
+	t.Parallel()
+	b := newTestBrowser(t)
+	base := spaNavSite(t, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	tab, tcancel, err := b.NavigateSPA(ctx, SPARoute{
+		RootURL:        base + "/",
+		MasterSelector: ".master-item",
+		MasterText:     "Alpha",
+		LevelSelector:  ".inner-master-item",
+		LevelText:      "LEVEL_1",
+		ReadySelector:  "#textInput",
+	})
+	if err != nil {
+		t.Fatalf("NavigateSPA: %v", err)
+	}
+	defer tcancel()
+
+	const canary = "bsyspacanaryreq"
+	_, sent, err := b.SubmitAndObserveRequestsIn(tab, FormSubmitSpec{
+		InputSelector:  "#textInput",
+		SubmitSelector: "#submit",
+		ClickTrigger:   true,
+		Payload:        "<b>" + canary + "</b>",
+	}, canary)
+	if err != nil {
+		t.Fatalf("SubmitAndObserveRequestsIn: %v", err)
+	}
+	if len(sent) == 0 {
+		t.Fatal("no request carrying the canary was recorded, so no confirmation could ever be attributed")
+	}
+	for _, r := range sent {
+		if !strings.Contains(r.URL, "/api/echo?value=") || !strings.Contains(r.URL, canary) {
+			t.Errorf("recorded a request that is not the one the value travelled in: %s %s", r.Method, r.URL)
+		}
+	}
+}

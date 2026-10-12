@@ -209,10 +209,11 @@ type ScanConfig struct {
 	// Off by default, like every family switch, and additionally requiring a browser: a run with no
 	// -dom reports the decline rather than reporting the point clean.
 	CheckXSSBrowserConfirm bool
-	// XSSBrowserTargets are the application routes the browser confirmation drives. A target this list
-	// does not cover is DECLINED with that reason rather than reported clean — the scanner cannot guess
-	// another application's navigation, and a guessed route would fabricate a finding the moment it was
-	// wrong. Supplied by a caller that knows its target (the benchmark does).
+	// XSSBrowserTargets are the application routes the browser confirmation drives. The scanner ships
+	// none: a target this list does not cover is DECLINED with that reason rather than reported clean —
+	// the scanner cannot guess an application's navigation, and a guessed route would fabricate a
+	// finding the moment it was wrong. Supplied by a caller that knows its target. Not yet settable
+	// through /api/scanner/config, so only an embedding Go caller can supply one today.
 	XSSBrowserTargets []XSSBrowserTarget
 	// CheckSSRFInBand admits the IN-BAND technique of the SSRF row (0vzb.6): plant a canary URL this
 	// scanner serves and see whether the application fetches it and returns its body. Separate from
@@ -358,27 +359,6 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 		pathCov:  newPathCoverage(),
 		guide:    newPayloadGuide(),
 	}
-}
-
-// BuiltinXSSBrowserTargets are the application routes this build ships, keyed by the host fragment
-// they apply to. They exist because the route is a property of the TARGET — which page, which field,
-// which control — and cannot be inferred from a response; a caller that knows another application
-// supplies its own through ScanConfig.XSSBrowserTargets, and a host no route covers is DECLINED with
-// that reason rather than reported clean.
-//
-// The one here is OWASP VulnerableApp's reflected-XSS page, whose levels answer text/plain and render
-// the value with innerHTML: the exact case the wire-side check cannot confirm. Each entry is the
-// navigation path measured against the running application (master entry -> level entry -> the
-// field's own submit control, which is a click handler rather than a form submit).
-func BuiltinXSSBrowserTargets() []XSSBrowserTarget {
-	return []XSSBrowserTarget{{
-		Match:          "127.0.0.1",
-		RootURL:        "http://127.0.0.1:9090/VulnerableApp/",
-		MasterText:     "XSSWithHtmlTagInjection",
-		InputSelector:  "#textInput",
-		SubmitSelector: "#submit",
-		ClickTrigger:   true,
-	}}
 }
 
 // WithConfig sets the scan configuration. The pointer is installed under the config lock; after

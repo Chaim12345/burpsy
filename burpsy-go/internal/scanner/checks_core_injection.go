@@ -154,13 +154,10 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if cc != nil && cc.Scanner != nil && cc.Scanner.sender == nil {
 		return nil, nil
 	}
+	// The switch alone does nothing without a caller-supplied route (ScanConfig.XSSBrowserTargets):
+	// this build ships none, and a point no route covers is declined by name. The config is only READ
+	// here; a check never writes the scanner's shared config.
 	browserConfirm := cc != nil && cc.Scanner != nil && cc.Scanner.config != nil && cc.Scanner.config.CheckXSSBrowserConfirm
-	if browserConfirm && len(cc.Scanner.config.XSSBrowserTargets) == 0 {
-		// The switch is on and the caller named no routes: fall back to the built-in ones, so flipping
-		// the flag against a target this build knows works without a second step. A host the built-ins
-		// do not cover still declines by name.
-		cc.Scanner.config.XSSBrowserTargets = BuiltinXSSBrowserTargets()
-	}
 	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", xssReflectedIssue, err)

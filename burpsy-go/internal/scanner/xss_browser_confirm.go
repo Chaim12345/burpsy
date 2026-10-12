@@ -22,16 +22,35 @@ package scanner
 // # Why the routes are data
 //
 // The page URL, the field and the control are properties of the TARGET, not of this scanner. A caller
-// that knows them — the benchmark does — supplies them through Config.XSSBrowserTargets; a target
-// this build has no route for is DECLINED with that reason, never reported clean. A default route
-// guessed from the response would be a fabricated finding the moment it was wrong.
+// that knows them supplies them through ScanConfig.XSSBrowserTargets. This build ships NO route: a
+// route is one application's page, field and control, and a default naming one application would make
+// the scanner's result depend on which application it happened to be pointed at. A target no route
+// covers is DECLINED with that reason, never reported clean.
+//
+// # What a confirmation is allowed to claim
+//
+// The page's own script decides which request the typed value travels in. A confirmation therefore
+// credits the audited exchange only when the browser recorded a request, during the interaction, to
+// that exchange's origin and path carrying the payload in the audited parameter. A sink fed through any
+// other request proves the PAGE is exploitable but says nothing about THIS endpoint and parameter, and
+// is declined rather than attributed.
+//
+// # Scope
+//
+// The browser navigates only to a route whose RootURL is on the audited exchange's own origin, and only
+// after RequireEgress has authorised active traffic to that exchange. A route pointing anywhere else is
+// declined without a navigation.
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
+	"github.com/burpsy-go/burpsy/internal/core"
 	"github.com/burpsy-go/burpsy/internal/domexec"
 )
 
@@ -40,16 +59,22 @@ import (
 type XSSBrowserTarget struct {
 	// Match is the host (and optionally a path prefix) this route applies to. Empty matches any host.
 	Match string
-	// RootURL is the application root whose script builds the navigation.
+	// RootURL is the application root whose script builds the navigation. It must be on the audited
+	// exchange's own origin; a route elsewhere is declined.
 	RootURL string
-	// MasterText and LevelText select the navigation path to the view. LevelText may be left
-	// empty when the level is already in the exchange's own path (VulnerableApp's levels are
-	// /XSSWithHtmlTagInjection/LEVEL_2); the confirmation then takes the level from the path so
-	// an audit of LEVEL_2 drives LEVEL_2's view rather than a fixed one. Leaving it empty and
-	// NOT deriving it would drive another level's field, and the sink would never carry this
-	// point's payload — a silent miss on every level but the one the default happened to name.
-	MasterText string
-	LevelText  string
+	// MasterSelector and LevelSelector are the CSS containers of the SPA's first- and second-level
+	// navigation entries; MasterText and LevelText pick the entry within each by its text. They are
+	// the application's markup, so the caller states them: nothing here assumes any one SPA's class
+	// names. LevelSelector may be empty for a one-level tree.
+	MasterSelector string
+	MasterText     string
+	LevelSelector  string
+	LevelText      string
+	// LevelFromPath, when LevelText is empty, takes the level label from the last segment of the
+	// audited exchange's path. It is for an application that serves one URL per level and labels the
+	// level's navigation entry with that same segment, so an audit of …/LEVEL_2 drives LEVEL_2's view
+	// rather than a fixed one. Off unless the caller says its application has that shape.
+	LevelFromPath bool
 	// InputSelector is the field that produces the reflection; SubmitSelector activates it.
 	InputSelector  string
 	SubmitSelector string
@@ -74,6 +99,22 @@ func confirmReflectedXSSInBrowser(ctx context.Context, cc *CheckContext, point b
 		recordXSSBrowserDecline(cc, point, "no browser route is configured for this host, so the reflected value was not driven into a page")
 		return nil
 	}
+	if err := cc.RequireEgress(); err != nil {
+		recordXSSBrowserDecline(cc, point, "the browser was not driven: "+err.Error())
+		return nil
+	}
+	if reason := xssBrowserRouteOutOfScope(cc.Exchange, target); reason != "" {
+		recordXSSBrowserDecline(cc, point, reason)
+		return nil
+	}
+	if target.MasterSelector == "" || target.MasterText == "" || target.InputSelector == "" {
+		recordXSSBrowserDecline(cc, point, "the configured browser route names no navigation selector, entry or input, so there is no view to drive")
+		return nil
+	}
+	if !xssBrowserAttributable(point) {
+		recordXSSBrowserDecline(cc, point, fmt.Sprintf("a %s point cannot be matched to the request a page sends, so a browser confirmation could not be attributed to it", point.Kind))
+		return nil
+	}
 	browser, err := cc.Scanner.BrowserForRender(ctx)
 	if err != nil {
 		recordXSSBrowserDecline(cc, point, "no browser available: "+err.Error())
@@ -81,9 +122,9 @@ func confirmReflectedXSSInBrowser(ctx context.Context, cc *CheckContext, point b
 	}
 	tab, cancel, err := browser.NavigateSPA(ctx, domexec.SPARoute{
 		RootURL:        target.RootURL,
-		MasterSelector: ".master-item",
+		MasterSelector: target.MasterSelector,
 		MasterText:     target.MasterText,
-		LevelSelector:  ".inner-master-item",
+		LevelSelector:  target.LevelSelector,
 		LevelText:      target.LevelText,
 		ReadySelector:  target.InputSelector,
 	})
@@ -99,15 +140,10 @@ func confirmReflectedXSSInBrowser(ctx context.Context, cc *CheckContext, point b
 	}
 
 	// A filter that strips the first spelling leaves the sink un-fed for a reason that has nothing to do
-	// with the application being safe, so the confirmation walks a short ladder of spellings rather than
-	// sending exactly one. Measured on OWASP VulnerableApp's XSS levels: the whole family answers
-	// text/plain and renders it with innerHTML, but LEVEL_2 deletes any tag whose name begins with the
-	// letters its regex names — which includes the bank's `<svg onload=…>` — and LEVEL_3 additionally
-	// rejects the literal substrings `alert` and `javascript`. One payload reported that level as clean
-	// while a browser plainly executed a reflection; a `<details ontoggle=confirm(…)>` survives both
-	// filters, keeps the canary in the response (so the sink argument still carries it), and is the
-	// second rung. The ladder is bounded, leads with the context-specific payload, and stops at the first
+	// with the application being safe, so the confirmation walks a short, bounded ladder of spellings
+	// (a tag-name filter and a keyword filter are the common naive ones) and stops at the first
 	// confirmation.
+	unattributed := ""
 	for _, p := range xssBrowserConfirmLadder(bank, maxXSSBrowserConfirmAttempts) {
 		payload := p.build(newXSSCanary())
 		// The canary is embedded in the payload, so scanning the observed sink arguments for it is the
@@ -116,7 +152,7 @@ func confirmReflectedXSSInBrowser(ctx context.Context, cc *CheckContext, point b
 		if canary == "" {
 			continue
 		}
-		obs, err := browser.SubmitAndObserveIn(tab, domexec.FormSubmitSpec{
+		obs, sent, err := browser.SubmitAndObserveRequestsIn(tab, domexec.FormSubmitSpec{
 			InputSelector:  target.InputSelector,
 			SubmitSelector: target.SubmitSelector,
 			ClickTrigger:   target.ClickTrigger,
@@ -126,36 +162,137 @@ func confirmReflectedXSSInBrowser(ctx context.Context, cc *CheckContext, point b
 			recordXSSBrowserDecline(cc, point, "the browser could not drive the view: "+err.Error())
 			return nil
 		}
-		for _, sink := range sinks {
-			for _, o := range domexec.ObservationsForSink(obs, sink) {
-				// The confirmation is the payload's OWN evidence test against the sink argument, not a
-				// substring search for the canary. A canary-only test fires on a page that HTML-escaped the
-				// value (VulnerableApp LEVEL_4/5 render `&lt;details…&gt;`), so it reported a secure level as
-				// exploited — the exact false positive this project treats as its worst failure. confirm
-				// asks the parser whether the crafted element survived AS markup; the escaped form has no
-				// such element and is correctly not a hit.
-				if !xssSinkCarriesBreakout(o.Argument, canary, p) {
-					continue
+		sink, hit := xssBrowserSinkHit(obs, sinks, canary, p)
+		if !hit {
+			continue
+		}
+		// The sink confirms the PAGE. Only a request to this exchange's endpoint carrying the payload in
+		// this point's parameter confirms THIS point.
+		via, drove := xssBrowserDroveThisPoint(cc.Exchange, point, sent, canary)
+		if !drove {
+			if len(sent) > 0 {
+				unattributed = sent[0].Method + " " + sent[0].URL
+			} else {
+				unattributed = "no request the browser recorded"
+			}
+			continue
+		}
+		return &Finding{
+			Name:        xssReflectedIssue,
+			Severity:    "high",
+			Confidence:  "firm",
+			Description: fmt.Sprintf("reflected XSS confirmed in a browser: the page's own script wrote the payload into %s (the response was text/plain, so no wire-side breakout exists)", sink),
+			URL:         cc.Exchange.Path,
+			Method:      cc.Exchange.Method,
+			Evidence:    fmt.Sprintf("browser-confirmed: %s %q travelled in %s and landed in %s", point.Kind, point.Name, via, sink),
+			// The occurrence cites the audited exchange, which the request check above has tied to the
+			// interaction.
+			ExchangeID: cc.Exchange.ID,
+		}
+	}
+	if unattributed != "" {
+		recordXSSBrowserDecline(cc, point, fmt.Sprintf("the page fed a sink, but the value travelled in %s, not in this exchange's %s %q, so the confirmation is not attributed to it", unattributed, point.Kind, point.Name))
+	}
+	return nil
+}
+
+// xssBrowserSinkHit reports the first sink whose argument carries the rung's breakout.
+//
+// The confirmation is the payload's OWN evidence test against the sink argument, not a substring search
+// for the canary: a page that HTML-escaped the value still writes the canary into innerHTML, and a
+// canary-only test would report that safe page as exploited.
+func xssBrowserSinkHit(obs []domexec.Observation, sinks []domexec.SinkKind, canary string, p xssPayload) (domexec.SinkKind, bool) {
+	for _, sink := range sinks {
+		for _, o := range domexec.ObservationsForSink(obs, sink) {
+			if xssSinkCarriesBreakout(o.Argument, canary, p) {
+				return sink, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// xssBrowserAttributable reports whether a point's value can be recognised in a request a page sends:
+// a query parameter or a body parameter. A header, cookie or path point cannot be matched to a page's
+// own request by name, so a confirmation through one could never be attributed.
+func xssBrowserAttributable(point bcheck.InsertionPoint) bool {
+	return (point.Kind == bcheck.IpQuery || point.Kind == bcheck.IpBody) && point.Name != ""
+}
+
+// xssBrowserRouteOutOfScope returns a decline reason when the route's RootURL is not on the audited
+// exchange's own origin, or "" when it is.
+func xssBrowserRouteOutOfScope(ex *core.Exchange, t XSSBrowserTarget) string {
+	if ex == nil {
+		return "no audited exchange, so the browser route cannot be checked against scope"
+	}
+	u, err := url.Parse(t.RootURL)
+	if err != nil || u.Host == "" {
+		return fmt.Sprintf("the browser route's root %q is not an absolute URL, so it was not navigated", t.RootURL)
+	}
+	if !xssSameOrigin(ex, u) {
+		return fmt.Sprintf("the browser route's root %q is not on the audited exchange's origin, so it was not navigated", t.RootURL)
+	}
+	return ""
+}
+
+// xssSameOrigin reports whether u is on the exchange's scheme, host and port.
+func xssSameOrigin(ex *core.Exchange, u *url.URL) bool {
+	scheme := "http"
+	if ex.TLS {
+		scheme = "https"
+	}
+	if !strings.EqualFold(u.Scheme, scheme) || !strings.EqualFold(u.Hostname(), ex.Host) {
+		return false
+	}
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if strings.EqualFold(u.Scheme, "https") {
+			port = "443"
+		}
+	}
+	return port == strconv.Itoa(int(ex.Port))
+}
+
+// xssBrowserDroveThisPoint reports whether one of the requests the browser recorded went to the audited
+// exchange's origin and path and carried the canary in the audited parameter, and names it.
+func xssBrowserDroveThisPoint(ex *core.Exchange, point bcheck.InsertionPoint, sent []domexec.SentRequest, canary string) (string, bool) {
+	if ex == nil {
+		return "", false
+	}
+	wantPath := ex.Path
+	if i := strings.IndexByte(wantPath, '?'); i >= 0 {
+		wantPath = wantPath[:i]
+	}
+	for _, r := range sent {
+		u, err := url.Parse(r.URL)
+		if err != nil || !xssSameOrigin(ex, u) || u.Path != wantPath {
+			continue
+		}
+		switch point.Kind {
+		case bcheck.IpQuery:
+			for _, v := range u.Query()[point.Name] {
+				if strings.Contains(v, canary) {
+					return r.Method + " " + r.URL, true
 				}
-				return &Finding{
-					Name:        xssReflectedIssue,
-					Severity:    "high",
-					Confidence:  "firm",
-					Description: fmt.Sprintf("reflected XSS confirmed in a browser: the page's own script wrote the payload into %s (the response was text/plain, so no wire-side breakout exists)", sink),
-					URL:         cc.Exchange.Path,
-					Method:      cc.Exchange.Method,
-					Evidence:    fmt.Sprintf("browser-confirmed: %s %q landed in %s", point.Kind, point.Name, sink),
-					// The occurrence must cite the audited exchange. It is how the issues API attributes the
-					// finding to a host and path, and how a consumer (the live benchmark among them) tells
-					// which exchange a finding belongs to. Leaving it zero resolved to the store's first
-					// exchange, so every browser-confirmed hit was attributed to the wrong row and read as a
-					// miss — the finding existed but pointed at nothing the audit was about.
-					ExchangeID: cc.Exchange.ID,
+			}
+		case bcheck.IpBody:
+			if form, err := url.ParseQuery(r.Body); err == nil {
+				for _, v := range form[point.Name] {
+					if strings.Contains(v, canary) {
+						return r.Method + " " + r.URL, true
+					}
+				}
+			}
+			var obj map[string]any
+			if json.Unmarshal([]byte(r.Body), &obj) == nil {
+				if v, ok := obj[point.Name].(string); ok && strings.Contains(v, canary) {
+					return r.Method + " " + r.URL, true
 				}
 			}
 		}
 	}
-	return nil
+	return "", false
 }
 
 // xssSinkCarriesBreakout reports whether a sink argument is evidence that the payload broke out.
@@ -240,11 +377,13 @@ func xssBrowserConfirmLadder(bank []xssPayload, max int) []xssPayload {
 	return out
 }
 
-// xssBrowserTargetFor finds the route configured for this exchange's host.
+// xssBrowserTargetFor finds the route configured for this exchange's host. It reads the routes from a
+// config snapshot taken under the scanner's lock, never by writing to the shared config.
 func xssBrowserTargetFor(cc *CheckContext) (XSSBrowserTarget, bool) {
-	if cc == nil || cc.Scanner == nil || cc.Scanner.config == nil {
+	if cc == nil || cc.Scanner == nil {
 		return XSSBrowserTarget{}, false
 	}
+	targets := cc.Scanner.ConfigSnapshot().XSSBrowserTargets
 	host := ""
 	if cc.Exchange != nil {
 		host = cc.Exchange.Host
@@ -253,15 +392,13 @@ func xssBrowserTargetFor(cc *CheckContext) (XSSBrowserTarget, bool) {
 	if cc.Exchange != nil {
 		path = cc.Exchange.Path
 	}
-	for _, t := range cc.Scanner.config.XSSBrowserTargets {
+	for _, t := range targets {
 		if t.Match != "" && host != t.Match && !strings.HasPrefix(host, t.Match) && !strings.HasPrefix(path, t.Match) {
 			continue
 		}
-		// A route that names no level is generic over levels, and the level is the last path
-		// segment of the exchange the audit is walking (VulnerableApp: .../XSSWithHtmlTagInjection
-		// /LEVEL_3). Deriving it here — rather than at the call site — keeps the one place that
-		// already reads the exchange's path the one place that decides the view.
-		if t.LevelText == "" {
+		// A route that asks for it takes the level from the last path segment of the exchange the
+		// audit is walking, so each level's audit drives its own view.
+		if t.LevelText == "" && t.LevelFromPath {
 			if lvl := xssLevelFromPath(path); lvl != "" {
 				t.LevelText = lvl
 			}

@@ -78,9 +78,9 @@ FULL_PROFILE = {
     "check_passive_analysis": True, "check_active_injection": True, "check_extended_active": True,
     "check_out_of_band": True, "check_stored": True,
     # DOM stays off: it needs Chrome and its own budget, and the DOM family is scored separately.
-    # The browser CONFIRMATION of a reflected-XSS point is on: the XSS levels answer text/plain and
-    # render the value with innerHTML, so the wire-side check cannot confirm them and only a browser
-    # can (j1mk.38).
+    # The browser CONFIRMATION of a reflected-XSS point is switched on, but it does NOTHING in this
+    # harness today: it drives only caller-supplied routes (VULNAPP_XSS_BROWSER_TARGETS below), the
+    # scanner ships none, and /api/scanner/config has no key to supply one. See that constant.
     "check_dom": False, "check_corpus": False,
     "check_xss_browser_confirm": True,
     # The browser confirmation drives Chrome, which under a full-profile run competes with the
@@ -90,6 +90,30 @@ FULL_PROFILE = {
     # In-band SSRF: the canary-URL technique, which needs no collaborator (0vzb.6).
     "check_ssrf_in_band": True,
 }
+
+
+# VULNAPP_XSS_BROWSER_TARGETS is the reflected-XSS browser route for OWASP VulnerableApp: its XSS
+# levels answer text/plain and the SPA's own script writes the reply with innerHTML, so only a browser
+# can confirm them (j1mk.38). The route is benchmark knowledge — this app's root, navigation markup,
+# field and control — and therefore lives here, not in the scanner's defaults. The field names match
+# scanner.XSSBrowserTarget.
+#
+# UNSUPPORTED today: /api/scanner/config accepts only the boolean and timeout keys, so there is no way
+# to hand this route to a running burpsy, and the harness does not send it (an unknown key is refused
+# by name and would fail the whole profile PUT). Until the API gains an `xss_browser_targets` key, the
+# browser confirmation declines every VulnerableApp XSS point ("no browser route is configured"), and
+# the XSS levels it used to confirm score as misses.
+VULNAPP_XSS_BROWSER_TARGETS = [{
+    "match": "127.0.0.1",
+    "root_url": "http://127.0.0.1:9090/VulnerableApp/",
+    "master_selector": ".master-item",
+    "master_text": "XSSWithHtmlTagInjection",
+    "level_selector": ".inner-master-item",
+    "level_from_path": True,
+    "input_selector": "#textInput",
+    "submit_selector": "#submit",
+    "click_trigger": True,
+}]
 
 
 def configure_scanner(web, ms, profile):

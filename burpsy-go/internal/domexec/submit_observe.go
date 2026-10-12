@@ -23,8 +23,11 @@ package domexec
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -89,15 +92,84 @@ func (b *Browser) SubmitAndObserve(ctx context.Context, spec FormSubmitSpec, can
 	); err != nil {
 		return nil, fmt.Errorf("domexec: load %q: %w", spec.PageURL, err)
 	}
-	return submitAndObserveIn(tabCtx, spec, canary)
+	obs, _, err := submitAndObserveIn(tabCtx, spec, canary)
+	return obs, err
+}
+
+// SentRequest is one request the page sent while it was being driven, as the browser reported it.
+// Body is the request body when the browser exposed it (it may omit a large one).
+type SentRequest struct {
+	Method string
+	URL    string
+	Body   string
+}
+
+// requestRecorder collects the requests a tab sends whose URL or body carries a token. It exists so a
+// caller can tell WHICH request a typed value travelled in: a sink fed by the page's own script says
+// that the page is exploitable, but only the request that carried the value says which endpoint and
+// which parameter the exploit went through.
+type requestRecorder struct {
+	mu     sync.Mutex
+	token  string
+	open   bool
+	report []SentRequest
+}
+
+func recordRequests(tabCtx context.Context, token string) *requestRecorder {
+	rec := &requestRecorder{token: token, open: true}
+	chromedp.ListenTarget(tabCtx, func(ev interface{}) {
+		e, ok := ev.(*network.EventRequestWillBeSent)
+		if !ok || e.Request == nil {
+			return
+		}
+		body := ""
+		for _, entry := range e.Request.PostDataEntries {
+			if entry == nil {
+				continue
+			}
+			if b, err := base64.StdEncoding.DecodeString(entry.Bytes); err == nil {
+				body += string(b)
+			} else {
+				body += entry.Bytes
+			}
+		}
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		if !rec.open || (!strings.Contains(e.Request.URL, rec.token) && !strings.Contains(body, rec.token)) {
+			return
+		}
+		rec.report = append(rec.report, SentRequest{Method: e.Request.Method, URL: e.Request.URL, Body: body})
+	})
+	return rec
+}
+
+// close stops recording and returns what was recorded. A listener cannot be removed from a tab, so
+// it is closed instead; later events are ignored.
+func (r *requestRecorder) close() []SentRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.open = false
+	return append([]SentRequest(nil), r.report...)
 }
 
 // submitAndObserveIn is the interaction half, against a tab already parked on the view. Split out so
 // a SPA caller can navigate first (NavigateSPA) and then drive the reached view, and so the two
 // failure modes — "never reached the form" and "the form fed no sink" — stay distinguishable.
-func submitAndObserveIn(tabCtx context.Context, spec FormSubmitSpec, canary string) ([]Observation, error) {
+//
+// It also returns the requests the page sent, during the interaction, that carried the canary in their
+// URL or body; see requestRecorder.
+func submitAndObserveIn(tabCtx context.Context, spec FormSubmitSpec, canary string) ([]Observation, []SentRequest, error) {
 	opts := spec.Settle.withDefaults()
+	rec := recordRequests(tabCtx, canary)
+	obs, err := driveAndObserve(tabCtx, spec, canary, opts)
+	sent := rec.close()
+	if err != nil {
+		return nil, nil, err
+	}
+	return obs, sent, nil
+}
 
+func driveAndObserve(tabCtx context.Context, spec FormSubmitSpec, canary string, opts RenderOptions) ([]Observation, error) {
 	// Type the payload the way a user would: set the value and fire the events a framework listens
 	// for. Setting .value alone leaves a React/Vue-controlled input unchanged, because their own
 	// state never sees the edit.
