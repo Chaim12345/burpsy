@@ -179,3 +179,25 @@ func TestNoSQLiSignaturesAreMongoSpecific(t *testing.T) {
 		}
 	}
 }
+
+// No sender means the NoSQL check could not look, whichever switches admitted the descriptor it rides:
+// the combined runner must return an error, never nil findings that read as clean.
+func TestNoSQLiReportsAnErrorWhenItCannotProbe(t *testing.T) {
+	var ssjs CheckDescriptor
+	for _, d := range InjectionCheckDescriptors() {
+		if d.Name == "Server-side JavaScript code injection" {
+			ssjs = d
+		}
+	}
+	for name, cfg := range map[string]*ScanConfig{
+		"nosql only":    {CheckNoSQLInjection: true},
+		"both switches": {CheckNoSQLInjection: true, CheckActiveInjection: true},
+		"neither":       {},
+	} {
+		cc := postureFixture(t, "GET /?input=1 HTTP/1.1\r\nHost: app.test\r\n\r\n", htmlResponse("ok"), false)
+		cc.Config = cfg
+		if _, err := ssjs.Run(context.Background(), cc); err == nil {
+			t.Errorf("%s: no error with no sender configured; a caller would read that as clean", name)
+		}
+	}
+}

@@ -100,9 +100,12 @@ func ssjsOrNoSQLi(ssjs CheckRunner) CheckRunner {
 		if cc == nil {
 			return nil, nil
 		}
+		// The row's own check runs unless the NoSQL switch alone admitted the descriptor, so a run
+		// with neither switch (a direct call) still gets the row's own verdict, including its
+		// could-not-probe error, exactly as before this rider existed.
 		var sf []*Finding
 		var serr error
-		if injectionChecksEnabled(cc.Config) {
+		if injectionChecksEnabled(cc.Config) || !nosqliEnabled(cc.Config) {
 			sf, serr = ssjs(ctx, cc)
 		}
 		var nf []*Finding
@@ -125,7 +128,11 @@ func ssjsOrNoSQLi(ssjs CheckRunner) CheckRunner {
 // checkNoSQLInjection probes one audited request.
 func checkNoSQLInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
-		return nil, nil
+		return nil, fmt.Errorf("nosqli: no scanner or exchange: %w", errCapabilityMissing)
+	}
+	if cc.Scanner.sender == nil {
+		// Could not look: an error the engine counts as a refusal, never a clean nil.
+		return nil, fmt.Errorf("nosqli: no sender; an active probe cannot be sent: %w", errCapabilityMissing)
 	}
 	raw := requestRaw(cc.Scanner, cc.Exchange)
 	if raw == "" || !nosqliReadOnly(raw) {
