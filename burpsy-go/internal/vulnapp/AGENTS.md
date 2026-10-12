@@ -21,7 +21,7 @@ positive, the case a fires-on-vulnerable test alone can never catch).
 | File | Description |
 |------|-------------|
 | `vulnapp.go` | The core: the `Endpoint` type (the manifest schema), `Vulnerabilities()`, `Handler()`, the `familyEndpoints`/`familyRegistrars` fan-out, and the core routes (search/login/download/ping/redirect/echo/CORS, DOM sinks, XML/XPath/LDAP/template, stored comment pair, SSI/code-injection) |
-| `vulnapp_posture.go`, `vulnapp_analysis.go`, `vulnapp_headers.go`, `vulnapp_reflection.go`, `vulnapp_discovery.go`, `vulnapp_dom.go`, `vulnapp_remaining.go`, `vulnapp_final.go`, `vulnapp_stored.go`, `vulnapp_injection.go` | One file per check family; each exports `<family>Endpoints()` (manifest rows) and `register<Family>(mux)` (routes), the two halves that grow together |
+| `vulnapp_posture.go`, `vulnapp_analysis.go`, `vulnapp_headers.go`, `vulnapp_reflection.go`, `vulnapp_discovery.go`, `vulnapp_dom.go`, `vulnapp_remaining.go`, `vulnapp_final.go`, `vulnapp_stored.go`, `vulnapp_injection.go`, `vulnapp_sqli_dialects.go` | One file per check family; each exports `<family>Endpoints()` (manifest rows) and `register<Family>(mux)` (routes), the two halves that grow together |
 
 ## For AI Agents
 

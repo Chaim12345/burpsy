@@ -126,6 +126,7 @@ var familyEndpoints = []func() []Endpoint{
 	ssrfEndpoints,
 	idorEndpoints,
 	authEndpoints,
+	sqliDialectEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -147,6 +148,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerSSRF,
 	registerIDOR,
 	registerAuth,
+	registerSQLiDialects,
 }
 
 func coreEndpoints() []Endpoint {

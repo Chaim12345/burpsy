@@ -289,14 +289,23 @@ func TestTheBlindConfirmationRulesRejectAOneOff(t *testing.T) {
 		}
 	}
 
+	// The timing repeat rule now lives in confirmDelayScaling; a repeated delay with fast controls is
+	// confirmed only together with a second, scaled delay value (sqli_timing_dialects_test.go).
 	s := time.Second
-	if confirmTiming(100*time.Millisecond, 5*s, 120*time.Millisecond, 5*s, 5*s) != InjectionEvidenceTiming {
-		t.Error("a delay that repeated with a fast zero-delay control was not confirmed")
+	ms := time.Millisecond
+	ok := delayMeasurement{baseline: 100 * ms, controls: []time.Duration{120 * ms, 110 * ms},
+		lo: []time.Duration{2100 * ms}, hi: []time.Duration{5100 * ms, 5100 * ms}, loValue: 2, hiValue: 5, seconds: true}
+	if ev, why := confirmDelayScaling(ok); ev != InjectionEvidenceTiming {
+		t.Errorf("a scaled, repeated delay with fast zero-delay controls was not confirmed: %s", why)
 	}
-	if confirmTiming(100*time.Millisecond, 5*s, 120*time.Millisecond, 200*time.Millisecond, 5*s) == InjectionEvidenceTiming {
+	notRepeated := ok
+	notRepeated.hi = []time.Duration{5 * s, 200 * ms}
+	if ev, _ := confirmDelayScaling(notRepeated); ev == InjectionEvidenceTiming {
 		t.Error("a delay that did not repeat was confirmed — one slow response is not evidence")
 	}
-	if confirmTiming(100*time.Millisecond, 5*s, 5*s, 5*s, 5*s) == InjectionEvidenceTiming {
+	slowControl := ok
+	slowControl.controls = []time.Duration{5 * s, 110 * ms}
+	if ev, _ := confirmDelayScaling(slowControl); ev == InjectionEvidenceTiming {
 		t.Error("a delay whose zero-delay control was also slow was confirmed — the endpoint is just slow")
 	}
 }

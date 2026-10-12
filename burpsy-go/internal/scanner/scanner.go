@@ -133,10 +133,17 @@ type ScanConfig struct {
 	// audit's cancellation without its own clock. A positive value derives a
 	// child context with its own deadline, so one slow probe is cancelled on its
 	// own clock rather than hanging the whole audit.
-	ProbeTimeout       time.Duration
-	CheckSqli          bool
-	CheckXss           bool
-	CheckPathTraversal bool
+	ProbeTimeout time.Duration
+	CheckSqli    bool
+	// CheckSqliHeavyQuery admits the heavy-query time-delay families of the SQL-injection row
+	// (burpsy-react-ui-v0ei.1): SQLite, IBM DB2, H2, HSQLDB, Oracle's ALL_OBJECTS join and MySQL's
+	// BENCHMARK. Those engines' delay costs the database CPU rather than a waiting connection, so it
+	// is an opt-in on top of CheckSqli; every such query is bounded by an explicit work size in the
+	// payload and calibrated to seconds of work (sqli_timing_dialects.go). Off by default. The sleep
+	// families (PostgreSQL, SQL Server, MySQL SLEEP, Oracle DBMS_PIPE) run under CheckSqli alone.
+	CheckSqliHeavyQuery bool
+	CheckXss            bool
+	CheckPathTraversal  bool
 	// CheckSSRF is the SSRF family switch. Its single catalog row, "Out-of-band resource
 	// load (HTTP)", now has an evaluator that needs a collaborator binary and outbound DNS,
 	// so it is additionally gated behind CheckExtendedActive: enabling CheckSSRF alone no

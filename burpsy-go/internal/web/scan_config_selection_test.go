@@ -165,7 +165,7 @@ func TestTheImportedTimeBasedExclusionPresetRunsEverythingExceptWhatItRemoves(t 
 	// Four of the five removed types are in the injection family this scanner runs (Perl, Ruby, Python,
 	// server-side JavaScript; unidentified code injection is a reflection-probe row): the run's check
 	// set is exactly four smaller, and nothing else moved. The SQL-injection check STAYS dispatched
-	// even with Time delays off — since saq3.2.1 it declares its five implemented methods and is
+	// even with Time delays off — since saq3.2.1 it declares its implemented methods and is
 	// withheld only when they are all disabled (Zwy6's per-pair rule) — so the preset's method
 	// removal is visible here in the timings not sent, not in the dispatch count.
 	for i := range imported {

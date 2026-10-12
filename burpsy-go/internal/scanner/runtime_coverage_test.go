@@ -739,6 +739,9 @@ func runtimeScanConfig() *ScanConfig {
 		// stops after one request unless the answer shows the endpoint evaluates credentials.
 		CheckLoginRateLimit:      true,
 		CheckUsernameEnumeration: true,
+		// The heavy-query time-delay families of the SQL row (v0ei.1): the SQLite, DB2, H2, HSQLDB
+		// and filtered-MySQL dialect endpoints are reachable only through them.
+		CheckSqliHeavyQuery: true,
 	}
 }
 

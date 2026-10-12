@@ -161,8 +161,10 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //     differential (ProbeBoolean, "Boolean conditions") and the timing probes (ProbeTimingUnder,
 //     "Time delays"; PostgreSQL pg_sleep and SQL Server waitfor — the two dialect banks
 //     recoverable from the decompile — additionally under their dialect's own method). MySQL and
-//     Oracle timing remain declined by name: their payload banks are inside ZKM string decoders
-//     this tree does not run. Collaborator-based SQLi is likewise not implemented. The check
+//     Oracle timing are burpsy's own documented forms (Burp's banks are inside ZKM string decoders
+//     this tree does not run), gated by MySQL specific and Oracle specific (v0ei.1); the SQLite,
+//     DB2, H2 and HSQLDB families have no Burp method of their own and run under Time delays.
+//     Collaborator-based SQLi is not implemented and stays declined. The check
 //     itself is withheld only when every declared method is disabled, per Zwy6's rule above.
 //   - OS command, PHP, SSI and server-side template injection prove execution by an echoed marker
 //     or arithmetic result (ProbeEvaluation): Burp's "String echo".
@@ -181,22 +183,22 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - External service interaction plants an interactsh domain: Burp's "Burp Collaborator".
 //   - A loaded corpus check is a BCheck's active half: "Active checks".
 var burpsyDetectionMethods = map[uint32][]string{
-	0x00100100:               {MethodStringEcho},                                                                                                  // OS command injection
-	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific}, // SQL injection
-	0x00100300:               {MethodFileRetrieval},                                                                                               // File path traversal
-	0x00100400:               {MethodFileRetrieval},                                                                                               // XML external entity injection
-	0x00100500:               {MethodBooleanConditions},                                                                                           // LDAP injection
-	0x00100600:               {MethodErrorMessages},                                                                                               // XPath injection
-	0x00100700:               {MethodErrorMessages},                                                                                               // XML injection
-	0x00100850:               {MethodResponseDiffing},                                                                                             // Broken access control
-	0x00100c00:               {MethodStringEcho},                                                                                                  // PHP code injection
-	0x00101080:               {MethodStringEcho},                                                                                                  // Server-side template injection
-	0x00101100:               {MethodStringEcho},                                                                                                  // SSI injection
-	0x00200100:               {MethodInBand},                                                                                                      // Cross-site scripting (stored)
-	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                      // HTTP request smuggling
-	0x00200300:               {MethodClientSide},                                                                                                  // Cross-site scripting (reflected)
-	0x00300200:               {MethodCollaborator},                                                                                                // External service interaction (DNS)
-	0x00300210:               {MethodCollaborator},                                                                                                // External service interaction (HTTP)
+	0x00100100:               {MethodStringEcho},                                                                                                                                             // OS command injection
+	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific}, // SQL injection
+	0x00100300:               {MethodFileRetrieval},                                                                                                                                          // File path traversal
+	0x00100400:               {MethodFileRetrieval},                                                                                                                                          // XML external entity injection
+	0x00100500:               {MethodBooleanConditions},                                                                                                                                      // LDAP injection
+	0x00100600:               {MethodErrorMessages},                                                                                                                                          // XPath injection
+	0x00100700:               {MethodErrorMessages},                                                                                                                                          // XML injection
+	0x00100850:               {MethodResponseDiffing},                                                                                                                                        // Broken access control
+	0x00100c00:               {MethodStringEcho},                                                                                                                                             // PHP code injection
+	0x00101080:               {MethodStringEcho},                                                                                                                                             // Server-side template injection
+	0x00101100:               {MethodStringEcho},                                                                                                                                             // SSI injection
+	0x00200100:               {MethodInBand},                                                                                                                                                 // Cross-site scripting (stored)
+	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                                                                 // HTTP request smuggling
+	0x00200300:               {MethodClientSide},                                                                                                                                             // Cross-site scripting (reflected)
+	0x00300200:               {MethodCollaborator},                                                                                                                                           // External service interaction (DNS)
+	0x00300210:               {MethodCollaborator},                                                                                                                                           // External service interaction (HTTP)
 	BCheckGeneratedTypeIndex: {MethodActiveChecks},
 }
 

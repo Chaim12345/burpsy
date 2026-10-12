@@ -134,14 +134,15 @@ func TestEveryGatedProbeKindWithholdsItsRequests(t *testing.T) {
 // A check whose every declared method is disabled is not dispatched; one with a still-enabled
 // method runs and gates the disabled family's probes at the probe level.
 //
-// Since saq3.2.1 the SQL-injection check declares its five implemented methods (Error messages,
-// Boolean conditions, Time delays, PostgreSQL specific, SQL Server specific) on ONE descriptor,
+// Since saq3.2.1 the SQL-injection check declares its implemented methods (Error messages,
+// Boolean conditions, Time delays, PostgreSQL specific, SQL Server specific, and since v0ei.1
+// MySQL specific and Oracle specific) on ONE descriptor,
 // and the withholding follows Burp's own per-pair rule (Zwy6.java:36-75): kept while any pair is
 // enabled, withheld only when the set is exhausted. The per-method granularity is the probe gate,
 // whose declines are counted.
 func TestADisabledMethodSetLeavesACheckWithAnEnabledPairDispatchedAndWithholdsAnExhaustedOne(t *testing.T) {
 	scan := everyFamilyScanner(t)
-	// The full set: the one SQL-injection check, carrying its five implemented methods.
+	// The full set: the one SQL-injection check, carrying its seven implemented methods.
 	full := typesOf(scan.enabledChecksUnder(AuditConfig{}))[sqlInjectionType]
 	if full != 1 {
 		t.Fatalf("the SQL injection type dispatched %d check(s), want 1", full)
@@ -161,9 +162,11 @@ func TestADisabledMethodSetLeavesACheckWithAnEnabledPairDispatchedAndWithholdsAn
 		{TypeIndex: sqlInjectionType, Method: MethodTimeDelays},
 		{TypeIndex: sqlInjectionType, Method: MethodPostgreSQLSpecific},
 		{TypeIndex: sqlInjectionType, Method: MethodSQLServerSpecific},
+		{TypeIndex: sqlInjectionType, Method: MethodMySQLSpecific},
+		{TypeIndex: sqlInjectionType, Method: MethodOracleSpecific},
 	}}
 	if got := typesOf(scan.enabledChecksUnder(allOff))[sqlInjectionType]; got != 0 {
-		t.Errorf("with all five methods disabled, %d SQLi checks dispatched, want 0", got)
+		t.Errorf("with all seven methods disabled, %d SQLi checks dispatched, want 0", got)
 	}
 	// A method the check never declared cannot withhold it: burpsy never planned to send one,
 	// and the decline is recorded at configuration time instead.
@@ -197,21 +200,22 @@ func TestBurpInfiltratorIsDeclinedNotSilentlyIgnored(t *testing.T) {
 		}
 	}
 	// And the other SQL injection methods the file enables that burpsy does not run are named too.
-	// Oracle and MySQL timing banks are not recoverable from the decompile and Collaborator-based
-	// SQLi is not implemented, so those three stay declined (saq3.2.1). Boolean conditions and SQL
-	// Server specific ARE implemented now, and a decline for an implemented method would be a lie.
+	// Collaborator-based SQLi is not implemented, so it stays declined (saq3.2.1). Boolean
+	// conditions, SQL Server specific and — since v0ei.1, from burpsy's own documented timing forms —
+	// MySQL specific and Oracle specific ARE implemented, and a decline for an implemented method
+	// would be a lie.
 	var sqli []string
 	for _, d := range cfg.DeclinedDetectionMethods {
 		if d.TypeIndex == sqlInjectionType {
 			sqli = append(sqli, d.Method)
 		}
 	}
-	for _, want := range []string{MethodOracleSpecific, MethodMySQLSpecific, MethodCollaborator} {
+	for _, want := range []string{MethodCollaborator} {
 		if !slices.Contains(sqli, want) {
 			t.Errorf("SQL injection declines = %v, missing %q, which the file enables and burpsy does not implement", sqli, want)
 		}
 	}
-	for _, implemented := range []string{MethodErrorMessages, MethodBooleanConditions, MethodSQLServerSpecific} {
+	for _, implemented := range []string{MethodErrorMessages, MethodBooleanConditions, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific} {
 		if slices.Contains(sqli, implemented) {
 			t.Errorf("%q is declined for SQL injection, but saq3.2.1 implements it: %v", implemented, sqli)
 		}

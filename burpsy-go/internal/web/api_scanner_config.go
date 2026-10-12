@@ -53,6 +53,7 @@ type scannerConfigView struct {
 	CheckLoginRateLimit      bool `json:"check_login_rate_limit"`
 	CheckUsernameEnumeration bool `json:"check_username_enumeration"`
 	LoginRateLimitAttempts   int  `json:"login_rate_limit_attempts"`
+	CheckSqliHeavyQuery      bool `json:"check_sqli_heavy_query"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -91,6 +92,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckLoginRateLimit:      c.CheckLoginRateLimit,
 		CheckUsernameEnumeration: c.CheckUsernameEnumeration,
 		LoginRateLimitAttempts:   c.LoginRateLimitAttempts,
+		CheckSqliHeavyQuery:      c.CheckSqliHeavyQuery,
 	}
 }
 
@@ -126,6 +128,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_idor":                 func(v *scannerConfigView) *bool { return &v.CheckIDOR },
 	"check_login_rate_limit":     func(v *scannerConfigView) *bool { return &v.CheckLoginRateLimit },
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
+	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -242,6 +245,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckLoginRateLimit = view.CheckLoginRateLimit
 		c.CheckUsernameEnumeration = view.CheckUsernameEnumeration
 		c.LoginRateLimitAttempts = view.LoginRateLimitAttempts
+		c.CheckSqliHeavyQuery = view.CheckSqliHeavyQuery
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

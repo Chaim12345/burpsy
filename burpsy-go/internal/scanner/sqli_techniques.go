@@ -18,9 +18,10 @@ package scanner
 // # Which dialects, honestly
 //
 // Only PostgreSQL and SQL Server timing banks are recoverable in the decompile; Burp's MySQL
-// and Oracle timing payloads are not, so burpsy sends none. The selection layer already says
-// so: MySQL specific and Oracle specific stay in the declined list with their reason, and a
-// run that enables them is told burpsy will not run them rather than quietly pretending.
+// and Oracle timing payloads are not. Those two, and SQLite, IBM DB2, H2 and HSQLDB, are sent
+// from burpsy's OWN documented forms in sqli_timing_dialects.go (burpsy-react-ui-v0ei.1), which is
+// also where the evidence rule every timing family is confirmed under lives. They are labelled as
+// burpsy's, not as recovered bytes; MySQL specific and Oracle specific gate their families.
 //
 // # How each family is gated
 //
@@ -93,14 +94,25 @@ func sqlBooleanPayloads() [][2]string {
 	return append(out, sqlQuotedBooleanPairs...)
 }
 
-// sqlTimingPayload is one dialect's delay probe: the payload text with the delay already
-// substituted, and every Burp detection method that gates it.
+// sqlTimingPayload is one dialect's delay probe in one place: the first probe's text, how to spell
+// it for another delay value, every Burp detection method that gates it, and what a confirmed delay
+// may be attributed to.
 type sqlTimingPayload struct {
 	payload string
-	// render spells the probe for a given delay in seconds; render(0) is the zero-delay control a
-	// confirmation sends.
-	render  func(seconds int) string
+	// render spells the probe for a delay value: seconds for a sleep family, work units for a heavy
+	// one. render(0) is a sleep family's zero-delay control; a heavy family never renders 0 (see
+	// sqlTimingProbe: its control is a handful of units, and every heavy value carries a unique offset).
+	render  func(n int64) string
 	methods []string
+	// dbms names the engine whose own syntax the delay primitive is; primitive names it.
+	dbms, primitive string
+	// context is the quoting context (or, for a recovered form, the recovered break) it is placed in.
+	context string
+	// heavy marks a work-unit family, admitted only under ScanConfig.CheckSqliHeavyQuery.
+	heavy     bool
+	probeSize int64
+	// foreign spells the same place with another engine's sleep, the attribution control.
+	foreign func(seconds int64) string
 }
 
 // sqlTimingPayloads renders the time-based probes for the recoverable dialects.
@@ -116,15 +128,15 @@ type sqlTimingPayload struct {
 // boolean AND, `'1',”||pg_sleep(5)` concatenates a sleeping expression into a string list.
 // Burp sends one form per break it recovered for the dialect; the same set is sent here.
 func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
-	seconds := int(delay.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
+	seconds := delaySeconds(delay)
 	pgMethods := []string{MethodTimeDelays, MethodPostgreSQLSpecific}
 	mssqlMethods := []string{MethodTimeDelays, MethodSQLServerSpecific}
-	form := func(prefix, call string, methods []string) sqlTimingPayload {
-		render := func(n int) string { return prefix + fmt.Sprintf(call, n) }
-		return sqlTimingPayload{payload: render(seconds), render: render, methods: methods}
+	form := func(prefix, call, dbms, primitive string, methods []string) sqlTimingPayload {
+		render := func(n int64) string { return prefix + fmt.Sprintf(call, n) }
+		// The attribution control keeps the recovered break and swaps the call for MySQL's SLEEP.
+		foreign := func(n int64) string { return prefix + mysqlSleepExpr(n) + "--" }
+		return sqlTimingPayload{payload: render(seconds), render: render, methods: methods,
+			dbms: dbms, primitive: primitive, context: fmt.Sprintf("recovered break %q", prefix), foreign: foreign}
 	}
 
 	var out []sqlTimingPayload
@@ -132,15 +144,15 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 	// form — Zxpy builds `break+pg_sleep(%%)--` and `'break+pg_sleep(%%)--` per prefix.
 	for _, brk := range []string{"||", " AND ", ",''||"} {
 		out = append(out,
-			form(brk, "pg_sleep(%d)--", pgMethods),
-			form("'"+brk, "pg_sleep(%d)--", pgMethods),
+			form(brk, "pg_sleep(%d)--", "PostgreSQL", "pg_sleep", pgMethods),
+			form("'"+brk, "pg_sleep(%d)--", "PostgreSQL", "pg_sleep", pgMethods),
 		)
 	}
 	// SQL Server (Zuyg): every recovered break ahead of waitfor, same two forms per prefix.
 	for _, brk := range []string{" ", ")", ",0)", ",0,0)", ",0,0,0)"} {
 		out = append(out,
-			form(brk, "waitfor delay'0:0:%d'--", mssqlMethods),
-			form("'"+brk, "waitfor delay'0:0:%d'--", mssqlMethods),
+			form(brk, "waitfor delay'0:0:%d'--", "Microsoft SQL Server", "WAITFOR DELAY", mssqlMethods),
+			form("'"+brk, "waitfor delay'0:0:%d'--", "Microsoft SQL Server", "WAITFOR DELAY", mssqlMethods),
 		)
 	}
 	return out
@@ -148,16 +160,19 @@ func sqlTimingPayloads(delay time.Duration) []sqlTimingPayload {
 
 // blindInjectionPointProbes is the per-point body of the SQL-injection check's blind half: the
 // boolean pairs first (cheapest, one request each), then the timing probes — the two dialects'
-// recovered forms. The order matters for cost, not for truth: both banks are sent PROGRESSIVELY,
-// stopping at the first pair or delay whose evidence confirms — the same rule runInjection applies
+// recovered forms, then burpsy's own per-dialect families (sqli_timing_dialects.go; the heavy-query
+// ones only under check_sqli_heavy_query). The order matters for cost, not for truth: both banks
+// are sent PROGRESSIVELY, stopping at the first pair or delay whose evidence confirms — or, for
+// timing, at the first delay shown to follow a foreign dialect's sleep spelling too, which no
+// further family can attribute either. That is the same rule runInjection applies
 // between points ("further payloads cost requests and add nothing to a proven finding"), applied
 // inside the point, because the runInjection driver builds a point's whole list before it ever
 // looks at the evidence. Without the early stop a timing-vulnerable endpoint is billed one
-// 5-second sleep per payload form (16 here), and a boolean-vulnerable one three further pairs
+// 5-second sleep per payload form, and a boolean-vulnerable one three further pairs
 // that ask the same question in a different break style.
 //
 // The three banks all go through per-technique gates at the probe (error probes inside
-// ProbeErrorSignatures, boolean inside ProbeBoolean, timing inside ProbeTimingUnder), so a
+// ProbeErrorSignatures, boolean inside sqlBooleanProbe, timing inside sqlTimingProbe), so a
 // method-disabled family is WITHHELD and counted here, in exactly one shared insertion-point
 // walk — one enumeration, one coverage line, one effectiveness prior per point (any of which
 // would have been tripled by three separate checks of the same type).
@@ -180,14 +195,20 @@ func blindInjectionPointProbes(ctx context.Context, h *ProbeHarness, p bcheck.In
 			Detail: fmt.Sprintf("%s %q: the baseline took %s, too close to the %s delay for a delay to be told apart; no timing probe sent",
 				p.Kind, p.Name, h.baseline.Duration, InjectionTimingDelay)})
 	}
-	for _, tp := range sqlTimingPayloads(InjectionTimingDelay) {
+	heavy := heavyQueryTimingEnabled(h)
+	for _, tp := range append(sqlTimingPayloads(InjectionTimingDelay), sqlDialectDelayPayloads(InjectionTimingDelay)...) {
 		if ctx.Err() != nil {
 			return probes
 		}
-		pr := sqlTimingProbe(ctx, h, p, tp, InjectionTimingDelay)
+		if tp.heavy && !heavy {
+			continue // heavy-query families are an opt-in (check_sqli_heavy_query)
+		}
+		pr, outcome := sqlTimingProbe(ctx, h, p, tp, InjectionTimingDelay)
 		probes = append(probes, pr)
-		if pr.Evidence == InjectionEvidenceTiming {
-			break // the delay is proven; the further break styles ask the same question
+		if pr.Evidence == InjectionEvidenceTiming || outcome.notAttributable {
+			// Proven, or shown to follow any dialect's sleep spelling: either way the further
+			// families ask a question this point has already answered.
+			break
 		}
 	}
 	return probes
@@ -259,55 +280,4 @@ func sqlBooleanProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoi
 func confirmBooleanDifferential(base, base2, t1, f1, t2, f2 ResponseFingerprint) bool {
 	return base.SameShape(base2) && base.SameShape(t1) && base.SameShape(t2) &&
 		!base.SameShape(f1) && !base.SameShape(f2) && f1.SameShape(f2)
-}
-
-// sqlTimingProbe sends one delay probe appended to the point's value and confirms a delay before
-// reporting it (review of saq3.2.1): a single slow response is what a GC pause, a throttle after a
-// burst or a tarpit also produces. A delay stands only when the same probe with a zero-second delay
-// comes back fast and the delayed probe is slow again — three requests, only on a positive.
-func sqlTimingProbe(ctx context.Context, h *ProbeHarness, p bcheck.InsertionPoint, tp sqlTimingPayload, delay time.Duration) InjectionProbe {
-	out := InjectionProbe{Payload: tp.payload}
-	for _, method := range tp.methods {
-		if h.withhold(method, 1) {
-			return withheldProbe(p, tp.payload, method)
-		}
-	}
-	seconds := int(delay.Seconds())
-	first, err := h.SendAppending(ctx, p, tp.render(seconds))
-	if err != nil {
-		out.Evidence = InjectionEvidenceInconclusive
-		out.Detail = fmt.Sprintf("%s %q: probe not sent: %v", p.Kind, p.Name, err)
-		return out
-	}
-	ev := ClassifyTimingEvidence(h.baseline.Duration, first.Duration, delay)
-	if ev != InjectionEvidenceTiming {
-		out.Evidence = ev
-		out.Detail = fmt.Sprintf("%s %q: baseline %s, injected %s, requested %s: %s", p.Kind, p.Name, h.baseline.Duration, first.Duration, delay, ev)
-		return out
-	}
-	control, cerr := h.SendAppending(ctx, p, tp.render(0))
-	second, serr := h.SendAppending(ctx, p, tp.render(seconds))
-	if cerr != nil || serr != nil {
-		out.Evidence = InjectionEvidenceInconclusive
-		out.Detail = fmt.Sprintf("%s %q: one slow response, and its confirmation could not be sent", p.Kind, p.Name)
-		return out
-	}
-	out.Evidence = confirmTiming(h.baseline.Duration, first.Duration, control.Duration, second.Duration, delay)
-	out.Detail = fmt.Sprintf("%s %q: baseline %s, delayed %s and %s, zero-delay control %s, requested %s: %s",
-		p.Kind, p.Name, h.baseline.Duration, first.Duration, second.Duration, control.Duration, delay, out.Evidence)
-	return out
-}
-
-// confirmTiming is the repeat rule for a delay: both delayed probes read as the requested delay and
-// the zero-delay control does not.
-func confirmTiming(baseline, first, control, second, delay time.Duration) InjectionEvidence {
-	if ClassifyTimingEvidence(baseline, first, delay) != InjectionEvidenceTiming ||
-		ClassifyTimingEvidence(baseline, second, delay) != InjectionEvidenceTiming {
-		return InjectionEvidenceNone
-	}
-	if ClassifyTimingEvidence(baseline, control, delay) != InjectionEvidenceNone {
-		// The control was slow too: the endpoint is slow now, whatever the payload says.
-		return InjectionEvidenceNone
-	}
-	return InjectionEvidenceTiming
 }
