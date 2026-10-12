@@ -41,9 +41,11 @@ func newInteractSite(t *testing.T) *interactSite {
 		site.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html")
 		if r.URL.Path == "/app" {
+			// The click also fetches /forbidden, which the gated tests put out of scope: the browser's
+			// own request, not a link the crawl frontier would ever follow.
 			_, _ = w.Write([]byte(`<html><body>
 				<div id="app">Home</div>
-				<button id="go" onclick="document.getElementById('app').innerHTML='<a href=&quot;/scripted&quot;>x</a>'">Go</button>
+				<button id="go" onclick="fetch('/forbidden').catch(function(){}); document.getElementById('app').innerHTML='<a href=&quot;/scripted&quot;>x</a>'">Go</button>
 			</body></html>`))
 			return
 		}
@@ -94,7 +96,7 @@ func TestTheCrawlRouteClicksThroughToAScriptRoutedPage(t *testing.T) {
 	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
 	t.Cleanup(func() { _ = provider.Close() })
 	build := func() *Server {
-		return NewServer(core.NewTrafficStore(), core.NewScope()).WithScanner(
+		return NewServer(core.NewTrafficStore(), loopbackScope()).WithScanner(
 			scanner.NewActiveScanner(core.NewTrafficStore(), zap.NewNop()).WithBrowserProvider(provider))
 	}
 
@@ -113,5 +115,49 @@ func TestTheCrawlRouteClicksThroughToAScriptRoutedPage(t *testing.T) {
 		if strings.Contains(p, "scripted") {
 			t.Fatalf("interact:false crawled a page only a click reveals; the target saw %v", seen)
 		}
+	}
+}
+
+// loopbackScope declares 127.0.0.1 in scope and its /forbidden path out of it.
+func loopbackScope() *core.Scope {
+	sc := core.NewScope()
+	sc.Add(core.NewScopeRule(core.ScopeInclude, "127.0.0.1"))
+	sc.Add(core.NewScopeRuleWithPath(core.ScopeExclude, "127.0.0.1", "/forbidden"))
+	return sc
+}
+
+// The interaction pass's browser is scope-gated: the click on /app makes the page fetch /forbidden,
+// which the scope excludes, and the target must never see that request. An ungated browser sends it
+// (the crawl frontier never would — the request is the PAGE's, which is why only a network gate stops
+// it). The click-revealed route is still crawled, so the pass ran.
+func TestTheCrawlInteractionPassIsScopeGated(t *testing.T) {
+	if !chromeAvailable() {
+		t.Skip("no Chrome on PATH")
+	}
+	provider := scanner.NewLazyBrowserProvider(domexec.Options{})
+	t.Cleanup(func() { _ = provider.Close() })
+	s := NewServer(core.NewTrafficStore(), loopbackScope()).WithScanner(
+		scanner.NewActiveScanner(core.NewTrafficStore(), zap.NewNop()).WithBrowserProvider(provider))
+
+	site := newInteractSite(t)
+	startInteractCrawl(t, s, site.srv.URL+"/app", true)
+	if !site.saw("/scripted") {
+		t.Fatalf("the interaction pass did not run (no click-revealed page crawled); the target saw %v", site.seen)
+	}
+	if site.saw("/forbidden") {
+		t.Fatal("the interaction pass's browser sent a request the crawl scope excludes")
+	}
+}
+
+// With no declared scope an interacting crawl is refused before it starts, rather than run in a
+// browser that would follow whatever the page says.
+func TestAnInteractingCrawlNeedsADeclaredScope(t *testing.T) {
+	s := NewServer(core.NewTrafficStore(), core.NewScope()).WithScanner(
+		scanner.NewActiveScanner(core.NewTrafficStore(), zap.NewNop()))
+	rec := postJSON(t, s, "/api/crawl", map[string]any{
+		"seeds": []string{"http://127.0.0.1:1/app"}, "max_requests": 5, "interact": true,
+	})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "declared scope") {
+		t.Fatalf("an interacting crawl with no scope answered %d %s, want 400 naming the missing scope", rec.Code, rec.Body.String())
 	}
 }

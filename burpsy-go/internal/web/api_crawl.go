@@ -677,16 +677,24 @@ func (s *Server) crawlRendererIn(sess *domexec.Session, live *crawlLive) func(ct
 // always failed would record SkipInteractionUnavailable on every page of a crawl that was never meant
 // to interact.
 //
-// The session is the recorded login's, when there is one, so the pass drives the logged-in
-// application — and, on that path, it is scope-gated by the session's own proxy. With no session the
-// pass runs on the shared Browser, which is ungated; the caller that wires this is responsible for
-// the engagement scope being enforced on the crawl's own fetches, and a browser navigation inside an
-// ungated Browser is bounded to the seed's origin by the crawl's frontier, not by this function.
-func (s *Server) crawlInteractor(sess *domexec.Session, fillForms bool) func(context.Context, string, crawler.InteractionOptions) (crawler.Interaction, error) {
+// Every navigation, click and submit the pass makes is scope-gated. The page itself must be inside the
+// crawl's scope before the browser is pointed at it. With a recorded login the pass runs in the login's
+// session, which drives the logged-in application through that session's proxy (gated on the
+// engagement scope). Without one it runs in a fresh isolated session per page whose proxy gate is the
+// CRAWL's scope, so a click or form submit that leaves it is refused at the network layer exactly as a
+// crawl fetch would be. The shared Browser's ungated Interact is never used: a click goes wherever the
+// page says, and only a gate stops it.
+//
+// startCrawl refuses an interacting crawl when no scope is declared (errInteractNeedsScope), for the
+// recorded login's reason: a browser that follows whatever the page says needs something to stop it.
+func (s *Server) crawlInteractor(sess *domexec.Session, scope crawler.Scope, fillForms bool) func(context.Context, string, crawler.InteractionOptions) (crawler.Interaction, error) {
 	if s.wiredScanner() == nil || !s.wiredScanner().DOMCapabilityConfigured() {
 		return nil
 	}
 	return func(ctx context.Context, targetURL string, opts crawler.InteractionOptions) (crawler.Interaction, error) {
+		if err := crawlScopeAllows(scope, targetURL); err != nil {
+			return crawler.Interaction{}, fmt.Errorf("interaction refused: %w", err)
+		}
 		dopts := domexec.InteractOptions{
 			MaxClicks: opts.MaxClicks,
 			MaxForms:  opts.MaxForms,
@@ -702,7 +710,13 @@ func (s *Server) crawlInteractor(sess *domexec.Session, fillForms bool) func(con
 			if berr != nil {
 				return crawler.Interaction{}, berr
 			}
-			inter, err = browser.Interact(ctx, targetURL, dopts)
+			gated, gerr := browser.NewSession(crawlScopeGate{scope: scope, engagement: s.scope})
+			if gerr != nil {
+				return crawler.Interaction{}, fmt.Errorf("interaction refused: no scope-gated browser session: %w", gerr)
+			}
+			defer gated.Close()
+			gated.IgnoreCertificateErrors(s.sender != nil && !s.sender.Network().TLS.Verify)
+			inter, err = gated.Interact(ctx, targetURL, dopts)
 		}
 		if err != nil {
 			return crawler.Interaction{}, err
@@ -727,9 +741,63 @@ func (s *Server) crawlInteractor(sess *domexec.Session, fillForms bool) func(con
 	}
 }
 
+// errInteractNeedsScope is the refusal for an interacting crawl with nothing declared.
+var errInteractNeedsScope = errors.New("the interaction pass clicks and submits whatever a page offers, " +
+	"so it needs a declared scope: add the application to scope first, or start the crawl without interact")
+
+// crawlScopeGate is the browser-session gate for a crawl's interaction pass: a request the page makes
+// is allowed when the crawl's scope contains it. An HTTPS tunnel shows only its authority, so it is
+// decided by the engagement scope's host test (the crawl's prefixes narrow paths, which a tunnel
+// does not reveal; the request inside it is not seen by this gate).
+type crawlScopeGate struct {
+	scope      crawler.Scope
+	engagement *core.Scope
+}
+
+func (g crawlScopeGate) AllowURL(u *url.URL) error {
+	return crawlScopeAllowsURL(g.scope, u)
+}
+
+func (g crawlScopeGate) AllowAuthority(host string, port uint16, tls bool) error {
+	if g.engagement != nil && g.engagement.MayContainHost(host, port, tls) {
+		return nil
+	}
+	return errors.New("host out of scope")
+}
+
+// crawlScopeAllows reports whether the crawl's scope contains rawURL.
+func crawlScopeAllows(scope crawler.Scope, rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%q is not a URL: %w", rawURL, err)
+	}
+	return crawlScopeAllowsURL(scope, u)
+}
+
+func crawlScopeAllowsURL(scope crawler.Scope, u *url.URL) error {
+	if scope == nil {
+		return errInteractNeedsScope
+	}
+	if c, ok := scope.(*core.Scope); ok && c == nil {
+		return errInteractNeedsScope
+	}
+	tls := strings.EqualFold(u.Scheme, "https")
+	path := u.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if !scope.Contains(u.Hostname(), defaultPort(u), path, tls) {
+		return fmt.Errorf("%s is outside the crawl scope", u.Redacted())
+	}
+	return nil
+}
+
 func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, liveTaken int, unapplied []string, err error) {
 	if berr := validateCrawlBounds(req); berr != nil {
 		return 0, nil, 0, nil, berr
+	}
+	if req.Interact && (s.scope == nil || (s.scope.Empty() && !s.scope.AllowAll())) {
+		return 0, nil, 0, nil, errInteractNeedsScope
 	}
 	kind, kerr := scanKind(req.Kind)
 	if kerr != nil {
@@ -930,7 +998,7 @@ func (s *Server) startCrawl(req crawlStartReq) (taskID uint64, seeds []string, l
 	// crawlInteractor (no DOM capability) leaves cfg.Interact nil, which the crawler reads as "never
 	// interact" rather than as a failure per page.
 	if req.Interact {
-		cfg.Interact = s.crawlInteractor(loginSess, req.FillInteractionForms)
+		cfg.Interact = s.crawlInteractor(loginSess, cfg.Scope, req.FillInteractionForms)
 	}
 	var loginWrap *liveLogin
 	if loginRunner != nil {
