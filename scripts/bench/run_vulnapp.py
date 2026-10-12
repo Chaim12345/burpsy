@@ -97,6 +97,11 @@ FULL_PROFILE = {
     # The IDOR check (0vzb.12): swaps object ids in credentialed reads (GET, or a POST naming a read).
     # VulnerableApp's IDOR levels need a real session first: see vulnapp_idor_seed.py.
     "check_idor": True,
+    # The password-reset checks: they act only on reset requests for the test identities given in
+    # reset_test_identities and read tokens from reset_mailbox_url. VulnerableApp's reset levels need
+    # a request body and a mail server first: see vulnapp_pwreset_seed.py and mailsink.py. Without
+    # identities the check reports the missing input on reset-looking requests and sends nothing.
+    "check_password_reset": True,
 }
 
 

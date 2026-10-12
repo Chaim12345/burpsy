@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/scanner"
@@ -54,6 +56,11 @@ type scannerConfigView struct {
 	CheckUsernameEnumeration bool `json:"check_username_enumeration"`
 	LoginRateLimitAttempts   int  `json:"login_rate_limit_attempts"`
 	CheckSqliHeavyQuery      bool `json:"check_sqli_heavy_query"`
+	CheckPasswordReset       bool `json:"check_password_reset"`
+	// The password-reset checks' operator inputs: the test accounts they may act on, and the test
+	// inbox URL ("{identity}" is replaced by the query-escaped identity).
+	ResetTestIdentities []string `json:"reset_test_identities"`
+	ResetMailboxURL     string   `json:"reset_mailbox_url"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -93,6 +100,9 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckUsernameEnumeration: c.CheckUsernameEnumeration,
 		LoginRateLimitAttempts:   c.LoginRateLimitAttempts,
 		CheckSqliHeavyQuery:      c.CheckSqliHeavyQuery,
+		CheckPasswordReset:       c.CheckPasswordReset,
+		ResetTestIdentities:      append([]string{}, c.ResetTestIdentities...),
+		ResetMailboxURL:          c.ResetMailboxURL,
 	}
 }
 
@@ -129,6 +139,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_login_rate_limit":     func(v *scannerConfigView) *bool { return &v.CheckLoginRateLimit },
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
 	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
+	"check_password_reset":       func(v *scannerConfigView) *bool { return &v.CheckPasswordReset },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -199,6 +210,37 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 			view.LoginRateLimitAttempts = n
 			continue
 		}
+		if key == "reset_test_identities" {
+			var ids []string
+			if err := json.Unmarshal(raw, &ids); err != nil {
+				http.Error(w, fmt.Sprintf("key %q wants a list of strings", key), http.StatusBadRequest)
+				return
+			}
+			clean := []string{}
+			for _, id := range ids {
+				if id = strings.TrimSpace(id); id != "" {
+					clean = append(clean, id)
+				}
+			}
+			view.ResetTestIdentities = clean
+			continue
+		}
+		if key == "reset_mailbox_url" {
+			var u string
+			if err := json.Unmarshal(raw, &u); err != nil {
+				http.Error(w, fmt.Sprintf("key %q wants a string", key), http.StatusBadRequest)
+				return
+			}
+			if u = strings.TrimSpace(u); u != "" {
+				pu, err := url.Parse(strings.ReplaceAll(u, "{identity}", "x"))
+				if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+					http.Error(w, fmt.Sprintf("key %q wants an absolute http(s) URL", key), http.StatusBadRequest)
+					return
+				}
+			}
+			view.ResetMailboxURL = u
+			continue
+		}
 		if key == "max_concurrency" {
 			var n int
 			if err := json.Unmarshal(raw, &n); err != nil || n < 1 {
@@ -246,6 +288,9 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckUsernameEnumeration = view.CheckUsernameEnumeration
 		c.LoginRateLimitAttempts = view.LoginRateLimitAttempts
 		c.CheckSqliHeavyQuery = view.CheckSqliHeavyQuery
+		c.CheckPasswordReset = view.CheckPasswordReset
+		c.ResetTestIdentities = append([]string(nil), view.ResetTestIdentities...)
+		c.ResetMailboxURL = view.ResetMailboxURL
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

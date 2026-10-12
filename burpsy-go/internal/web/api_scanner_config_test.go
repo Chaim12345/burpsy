@@ -150,3 +150,32 @@ func TestConfigCarriesTheAuthenticationChecks(t *testing.T) {
 		t.Errorf("the running scanner did not take the patch: %+v", got)
 	}
 }
+
+// The password-reset checks' operator inputs: a list of test identities and a test-inbox URL, which
+// must be an absolute http(s) URL; the switch itself is off by default.
+func TestConfigPutTakesThePasswordResetInputs(t *testing.T) {
+	s := newScannerServer()
+	if cfg := getScannerConfig(t, s); cfg["check_password_reset"] != false {
+		t.Fatalf("check_password_reset = %v, want off by default", cfg["check_password_reset"])
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_password_reset": true,
+		"reset_test_identities": []string{" tester@corp.test ", ""},
+		"reset_mailbox_url":     "http://127.0.0.1:8025/inbox?to={identity}"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; %s", rec.Code, rec.Body.String())
+	}
+	got := s.wiredScanner().ConfigSnapshot()
+	if !got.CheckPasswordReset || len(got.ResetTestIdentities) != 1 || got.ResetTestIdentities[0] != "tester@corp.test" ||
+		got.ResetMailboxURL != "http://127.0.0.1:8025/inbox?to={identity}" {
+		t.Fatalf("applied %v %q %q", got.CheckPasswordReset, got.ResetTestIdentities, got.ResetMailboxURL)
+	}
+	for name, body := range map[string]map[string]any{
+		"identities not a list": {"reset_test_identities": "tester@corp.test"},
+		"relative mailbox":      {"reset_mailbox_url": "/inbox"},
+		"non-http mailbox":      {"reset_mailbox_url": "file:///etc/passwd"},
+	} {
+		if rec := putJSON(t, s, "/api/scanner/config", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: PUT = %d, want 400", name, rec.Code)
+		}
+	}
+}

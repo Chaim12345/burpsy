@@ -124,6 +124,7 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 	t.Helper()
 
 	srv := httptest.NewServer(vulnapp.Handler())
+	runtimeResetMailbox = srv.URL + vulnapp.PwresetMailboxPath
 
 	host, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
 	if err != nil {
@@ -742,8 +743,17 @@ func runtimeScanConfig() *ScanConfig {
 		// The heavy-query time-delay families of the SQL row (v0ei.1): the SQLite, DB2, H2, HSQLDB
 		// and filtered-MySQL dialect endpoints are reachable only through them.
 		CheckSqliHeavyQuery: true,
+		// The password-reset checks. They act only on a reset request for one of vulnapp's own test
+		// identities, and read the tokens from vulnapp's in-memory test inbox.
+		CheckPasswordReset:  true,
+		ResetTestIdentities: vulnapp.PwresetIdentities(),
+		ResetMailboxURL:     runtimeResetMailbox,
 	}
 }
+
+// runtimeResetMailbox is vulnapp's test inbox on the cleartext target, set by buildRuntimeTarget
+// before any scanner is configured (the TLS twin shares the same in-memory inbox).
+var runtimeResetMailbox string
 
 // findingsFor audits one seeded endpoint with the real engine and returns the row names reported.
 // dom selects the browser-enabled scanner, so non-DOM endpoints never pay for a page load.

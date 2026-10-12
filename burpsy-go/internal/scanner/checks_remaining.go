@@ -839,7 +839,12 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("JWT private key disclosed", DispatchScopePerUrl, remainingChecksEnabled, checkJWTPrivateKeyDisclosed),
 
 		nativeDescriptor("TLS certificate", DispatchScopePerHost, tlsProbeChecksEnabled, checkTLSCertificate),
-		nativeDescriptor("SMTP header injection", DispatchScopePerUrl, remainingChecksEnabled, checkSMTPHeaderInjection),
+		// The password-reset checks (checks_pwreset.go) ride this row behind their own switch: their
+		// findings are burpsy's own rows (BurpsyNativeRows), and the registry admits one descriptor per
+		// Burp catalogue type. Both are aimed at endpoints that send mail.
+		nativeDescriptor("SMTP header injection", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return remainingChecksEnabled(c) || pwresetEnabled(c) },
+			smtpOrPasswordReset(checkSMTPHeaderInjection)),
 		nativeDescriptor("Cross-origin resource sharing", DispatchScopePerRequest, remainingChecksEnabled, checkCORSBaseRow),
 
 		nativeDescriptor("Flash cross-domain policy", DispatchScopePerHost, remainingChecksEnabled,

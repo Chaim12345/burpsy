@@ -50,5 +50,63 @@ func BurpsyNativeRows() []BurpsyRow {
 			"later response', is a passive disclosure). It rides 'Broken access control' with the rate-limit " +
 			"row because both are failed-login probes of an authentication endpoint and no Burp row closer " +
 			"to authentication is active.",
+	}, {
+		Name:      pwrTokenInResponse,
+		TypeIndex: 0xb5000800,
+		CWE:       640,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset token in the reset request's own response"),
+	}, {
+		Name:      pwrPredictable,
+		TypeIndex: 0xb5000810,
+		CWE:       330,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset token predicted from a model and then issued"),
+	}, {
+		Name:      pwrLowEntropy,
+		TypeIndex: 0xb5000820,
+		CWE:       331,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset token with a keyspace small enough to brute-force online"),
+	}, {
+		Name:      pwrReusable,
+		TypeIndex: 0xb5000830,
+		CWE:       640,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset token that succeeds twice"),
+	}, {
+		Name:      pwrNoExpiry,
+		TypeIndex: 0xb5000840,
+		CWE:       613,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a self-contained (JWT) reset token without an exp claim"),
+	}, {
+		Name:      pwrInsecureLink,
+		TypeIndex: 0xb5000850,
+		CWE:       319,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset link with an http:// scheme"),
+	}, {
+		Name:      pwrReferer,
+		TypeIndex: 0xb5000860,
+		CWE:       200,
+		Rides:     "SMTP header injection",
+		Why: "Burp's 'Cross-domain Referer leakage' row (CWE-200) is the passive URL heuristic over pages " +
+			"in the site map; the reset page is reached only through the mailed link, so it is never in the " +
+			"map, and the row does not observe what the browser sends. This row is that leak for the reset " +
+			"token specifically, observed in the browser (or computed from the page's effective policy).",
+	}, {
+		Name:      pwrPoisoning,
+		TypeIndex: 0xb5000870,
+		CWE:       640,
+		Rides:     "SMTP header injection",
+		Why:       pwrRowWhy("a reset link built from an attacker-supplied Host or forwarding header"),
 	}}
+}
+
+// pwrRowWhy is the shared reason for the password-reset rows (checks_pwreset.go).
+func pwrRowWhy(what string) string {
+	return "Burp's catalogue has no password-reset rows: Burp's scanner never reads the reset message, " +
+		"so it cannot see " + what + ". The check rides 'SMTP header injection', the other row aimed " +
+		"at mail-sending endpoints."
 }

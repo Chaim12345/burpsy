@@ -287,7 +287,20 @@ type ScanConfig struct {
 	// captured username and invented ones, each with a random wrong password, compared for a
 	// consistent, repeatable difference. Off by default: it sends failed logins for a real username.
 	CheckUsernameEnumeration bool
-	CustomPayloads           []string
+	// CheckPasswordReset admits the password-reset token checks (checks_pwreset.go): a reset request
+	// for an identity listed in ResetTestIdentities is re-issued, its tokens are read from the
+	// response and from the test inbox at ResetMailboxURL, and the confirm step is exercised. It
+	// changes the TEST identity's password and makes the application send it reset messages, so it is
+	// off by default and does nothing for an identity the operator did not list.
+	CheckPasswordReset bool
+	// ResetTestIdentities are the accounts (email addresses or usernames) the operator owns for the
+	// password-reset checks. A reset request is only exercised when it carries one of these.
+	ResetTestIdentities []string
+	// ResetMailboxURL is the operator's test inbox: a GET URL returning the messages for an identity,
+	// with "{identity}" replaced by the query-escaped identity. Empty means tokens are read from
+	// responses only.
+	ResetMailboxURL string
+	CustomPayloads  []string
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
