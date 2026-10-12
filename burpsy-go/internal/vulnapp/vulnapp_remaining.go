@@ -30,6 +30,8 @@ package vulnapp
 // certificate" needs the tlsx subprocess. Neither is something a fixture inside this Go test binary
 // can honestly satisfy, so they are reported as undemonstrable rather than given an endpoint that
 // could never be reached by the check that is supposed to prove it.
+// "Out-of-band resource load (HTTP)" has a second, IN-BAND technique that needs no collaborator (a
+// canary the scanner serves on loopback); its fixtures live in vulnapp_ssrf.go.
 //
 // A fifth row, "SMTP header injection", was built and then removed: checkSMTPHeaderInjection
 // (checks_remaining.go) enumerates DefaultProbeInsertionKinds, which includes "header", and every

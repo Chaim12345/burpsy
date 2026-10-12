@@ -688,9 +688,10 @@ func buildRawResponse(t *testing.T, res *http.Response) string {
 //   - CheckDOM (48 rows) — needs a headless Chrome. capability_handles_live_test.go gates on a
 //     Chrome binary and this file has no such gate, so enabling it would make the corpus fail on a
 //     machine without one rather than skip. Worth adding behind the same guard.
-//   - CheckExtendedActive (22 rows) — of these only "Out-of-band resource load (HTTP)", the three
-//     External-service-interaction rows and "TLS certificate" need the network (a collaborator
-//     binary, or the tlsx subprocess). The other ~17 are network-free and SHOULD be enabled here;
+//   - CheckExtendedActive (22 rows) — of these only the three External-service-interaction rows,
+//     the collaborator technique of "Out-of-band resource load (HTTP)" and "TLS certificate" need
+//     the network (a collaborator binary, or the tlsx subprocess). That row's in-band technique
+//     needs neither and IS on (CheckSSRFInBand). The other ~17 are network-free and SHOULD be enabled here;
 //     an earlier version of this comment claimed the whole family needed outbound internet, which
 //     was simply wrong.
 //   - CheckStored (10 rows) — the manifest declares no stored vulnerability yet, so turning it on
@@ -727,6 +728,10 @@ func runtimeScanConfig() *ScanConfig {
 		// The active file-upload check (0vzb.15). It only acts on a request carrying a multipart
 		// file part, so every other endpoint costs it nothing.
 		CheckFileUpload: true,
+		// The in-band SSRF technique of the "Out-of-band resource load (HTTP)" row (0vzb.6, j1mk.9).
+		// It plants a canary this test process serves on loopback, which the vulnapp SSRF fixtures
+		// reach because they share the host; no collaborator is involved.
+		CheckSSRFInBand: true,
 	}
 }
 

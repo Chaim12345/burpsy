@@ -385,14 +385,21 @@ func storedSubmitNote(w http.ResponseWriter, r *http.Request) {
 // shaped that way cannot demonstrate stored XSS at all. Assigning the stored value as its own
 // expression is what an application that concatenates user input into a script body actually does,
 // and it is the shape in which a token really does reach executable position.
+//
+// Each note gets its own <script> element. With one element for all of them, any note that is not
+// valid JavaScript - a URL planted by the in-band SSRF check (`note = http://...;` is a syntax
+// error) or any other check's probe - made the whole element unparseable, so no note in it could
+// run, and the stored-XSS proof (which rightly requires the script to still parse) failed for a
+// reason that belonged to a different check's plant. Per-note elements are also how a list
+// rendered item by item actually comes out, and a browser runs each independently.
 func storedRenderNotes(w http.ResponseWriter, r *http.Request) {
 	notes := storedSnapshot(&storedNoteMu, &storedNoteLog)
 	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, "<!DOCTYPE html><html><body><h1>Sticky notes</h1><script>")
+	fmt.Fprint(w, "<!DOCTYPE html><html><body><h1>Sticky notes</h1>")
 	for _, n := range notes {
-		fmt.Fprintf(w, "var note = 'sticky'; note = %s; console.log(note);\n", n)
+		fmt.Fprintf(w, "<script>var note = 'sticky'; note = %s; console.log(note);</script>\n", n)
 	}
-	fmt.Fprint(w, "</script></body></html>")
+	fmt.Fprint(w, "</body></html>")
 }
 
 // ---------------------------------------------------------------------------
