@@ -39,6 +39,7 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 		ExchangeID    core.ExchangeID `json:"exchange_id"`
 		ActiveChecks  int             `json:"active_checks"`
 		Unimplemented int             `json:"unimplemented"`
+		CapMissing    int             `json:"capability_missing"`
 		Summary       string          `json:"summary"`
 		Outcome       struct {
 			State   string `json:"state"`
@@ -87,9 +88,11 @@ func Test_the_audit_endpoint_reports_what_the_engine_did_not_dispatch(t *testing
 		if d.Reason == "" {
 			t.Errorf("bucket %q carries no reason", d.Disposition)
 		}
-		if d.Disposition == "unsupported" && d.Count != body.Unimplemented {
-			t.Errorf("unsupported bucket = %d, want the %d unimplemented check(s) the endpoint reported",
-				d.Count, body.Unimplemented)
+		// The bucket is the unimplemented checks plus the implemented ones this scan lacked a
+		// capability for; each is reported on its own, and together they must account for all of it.
+		if d.Disposition == "unsupported" && d.Count != body.Unimplemented+body.CapMissing {
+			t.Errorf("unsupported bucket = %d, want the %d unimplemented + %d capability-missing check(s) the endpoint reported",
+				d.Count, body.Unimplemented, body.CapMissing)
 		}
 	}
 	if sum != body.ActiveChecks {

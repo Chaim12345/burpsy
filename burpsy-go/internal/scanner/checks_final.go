@@ -96,7 +96,7 @@ func (s *ActiveScanner) WithSessionCoordinator(c *session.Coordinator) *ActiveSc
 // SessionCoordinator returns the scan's coordinator, or an error when none is configured.
 func (cc *CheckContext) SessionCoordinator() (*session.Coordinator, error) {
 	if cc == nil || cc.Scanner == nil || cc.Scanner.sessions == nil {
-		return nil, fmt.Errorf("session: no session coordinator is configured for this scan: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("session: no session coordinator is configured for this scan: %w", errCapabilityMissing)
 	}
 	return cc.Scanner.sessions, nil
 }
@@ -282,7 +282,7 @@ func pipeliningCheck(row, detail string) CheckRunner {
 			return nil, nil
 		}
 		if cc.Scanner.sender == nil {
-			return nil, fmt.Errorf("%s: no sender; a framing probe cannot be sent: %w", row, errCheckUnsupported)
+			return nil, fmt.Errorf("%s: no sender; a framing probe cannot be sent: %w", row, errCapabilityMissing)
 		}
 		exchanges, err := cc.Scanner.sender.SendPipelined(ctx, cc.Exchange.Host, cc.Exchange.Port,
 			cc.Exchange.TLS, smugglingProbes(cc.Exchange.Host, cc.Exchange.Path))
@@ -514,7 +514,7 @@ func provenanceCheck(src FindingProvenance) CheckRunner {
 		if cc == nil || cc.Scanner == nil || cc.Scanner.provenance == nil {
 			// No ledger means nothing is tracking finding sources. That is not the same
 			// as "no such findings exist", so it is reported rather than assumed clean.
-			return nil, fmt.Errorf("%s: no provenance ledger is configured for this scan: %w", row, errCheckUnsupported)
+			return nil, fmt.Errorf("%s: no provenance ledger is configured for this scan: %w", row, errCapabilityMissing)
 		}
 		n := cc.Scanner.provenance.Count(src)
 		if n == 0 {

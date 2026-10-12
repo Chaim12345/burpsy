@@ -995,6 +995,12 @@ func Test_a_capability_less_check_does_not_abandon_the_rest_of_its_unit(t *testi
 	if outcome.Skipped == 0 {
 		t.Error("skipped = 0, want the capability-less checks counted as skipped rather than silently absent")
 	}
+	// The capability-less checks are named apart from unimplemented ones: an implemented check this
+	// scan could not run is a different fact from a check with no implementation.
+	if outcome.CapabilityMissing == 0 || outcome.CapabilityMissing > outcome.Skipped {
+		t.Errorf("capability_missing = %d with skipped = %d, want a non-zero subset of skipped",
+			outcome.CapabilityMissing, outcome.Skipped)
+	}
 	if !outcome.State.CompletedAudit() {
 		t.Errorf("state = %s, want audited: every check reached a disposition, none was abandoned",
 			outcome.State.Label())

@@ -217,7 +217,7 @@ func (s *ActiveScanner) CloseCapabilities() error {
 // that happened to be dispatched after a DOM one (burpsy-react-ui-<see gaps>).
 func (cc *CheckContext) Browser(ctx context.Context) (*domexec.Browser, error) {
 	if cc == nil || cc.Scanner == nil || cc.Scanner.browsers == nil {
-		return nil, fmt.Errorf("browser: no DOM execution capability is configured for this scan: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("browser: no DOM execution capability is configured for this scan: %w", errCapabilityMissing)
 	}
 	return cc.Scanner.browsers.Browser(ctx)
 }
@@ -228,7 +228,7 @@ func (cc *CheckContext) Browser(ctx context.Context) (*domexec.Browser, error) {
 // capability this scan does not have, not a failure of the target to answer a probe.
 func (cc *CheckContext) StoredLedger() (*StoredLedger, error) {
 	if cc == nil || cc.Scanner == nil || cc.Scanner.stored == nil {
-		return nil, fmt.Errorf("stored ledger: no stored-input tracking is configured for this scan: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("stored ledger: no stored-input tracking is configured for this scan: %w", errCapabilityMissing)
 	}
 	return cc.Scanner.stored, nil
 }
@@ -254,13 +254,13 @@ func (cc *CheckContext) StoredLedger() (*StoredLedger, error) {
 // them a missing sender is irrelevant and an error here would be a false refusal.
 func (cc *CheckContext) RequireEgress() error {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
-		return fmt.Errorf("egress: no scanner or exchange on this check context: %w", errCheckUnsupported)
+		return fmt.Errorf("egress: no scanner or exchange on this check context: %w", errCapabilityMissing)
 	}
 	if cc.Scanner.sender == nil {
-		return fmt.Errorf("egress: no sender is configured for this scan, so an active probe cannot be sent and this check cannot report a verdict: %w", errCheckUnsupported)
+		return fmt.Errorf("egress: no sender is configured for this scan, so an active probe cannot be sent and this check cannot report a verdict: %w", errCapabilityMissing)
 	}
 	if cc.Scanner.probeGate(context.Background(), cc.Exchange) == nil {
-		return fmt.Errorf("egress: no authorised sender for this exchange, so an active probe cannot be sent: %w", errCheckUnsupported)
+		return fmt.Errorf("egress: no authorised sender for this exchange, so an active probe cannot be sent: %w", errCapabilityMissing)
 	}
 	return nil
 }

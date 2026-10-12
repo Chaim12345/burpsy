@@ -300,6 +300,10 @@ func (s *Server) runAuditOn(ctx context.Context, id core.ExchangeID, cfg scanner
 	}
 	body["outcome"] = outcome
 	body["dispositions"] = outcome.Dispositions()
+	// The unsupported bucket holds two different facts: checks with no implementation
+	// ("unimplemented" above) and implemented checks this scan lacked a capability or an authorised
+	// sender for. The second is named on its own so the bucket reconciles and neither reads as the other.
+	body["capability_missing"] = outcome.CapabilityMissing
 	body["summary"] = outcome.Summary()
 	// The same four buckets the dashboard reads, on the audit's own response: a caller of this
 	// endpoint gets the count and what it does not account for without having to fold nine

@@ -151,11 +151,11 @@ func inertLengthTolerance(baseLen int) int {
 // would let a caller report "no evidence" for work that never happened.
 func NewProbeHarness(ctx context.Context, cc *CheckContext, kinds []string) (*ProbeHarness, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil {
-		return nil, fmt.Errorf("probe harness: no scanner or exchange: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("probe harness: no scanner or exchange: %w", errCapabilityMissing)
 	}
 	s, exchange := cc.Scanner, cc.Exchange
 	if s.sender == nil {
-		return nil, fmt.Errorf("probe harness: no sender; an active probe cannot be sent: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("probe harness: no sender; an active probe cannot be sent: %w", errCapabilityMissing)
 	}
 	raw := []byte(requestRaw(s, exchange))
 	if len(raw) == 0 {

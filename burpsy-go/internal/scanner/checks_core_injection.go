@@ -131,7 +131,7 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]
 	return nil, true, fmt.Errorf(
 		"%s: no sender is configured, so no probe could be sent, and the captured response carries "+
 			"none of this row's signatures — that is an untested endpoint, not a clean one: %w",
-		row, errCheckUnsupported)
+		row, errCapabilityMissing)
 }
 
 // sqlErrorProbePayloads are the minimal forms that unbalance a quoted or numeric context. The

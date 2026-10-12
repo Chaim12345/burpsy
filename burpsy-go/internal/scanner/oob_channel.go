@@ -195,18 +195,18 @@ func (s *ActiveScanner) WithOOBProvider(p OOBProvider) *ActiveScanner {
 // after an out-of-band one.
 func (s *ActiveScanner) OOBChannel(ctx context.Context) (OOBChannel, error) {
 	if s == nil {
-		return nil, fmt.Errorf("out-of-band: no scanner: %w", errCheckUnsupported)
+		return nil, fmt.Errorf("out-of-band: no scanner: %w", errCapabilityMissing)
 	}
 	s.oobMu.Lock()
 	p := s.oob
 	s.oobMu.Unlock()
 	if p == nil {
 		return nil, fmt.Errorf("out-of-band: no collaborator channel is configured for this scan, "+
-			"so a callback cannot be observed and this check cannot report a verdict: %w", errCheckUnsupported)
+			"so a callback cannot be observed and this check cannot report a verdict: %w", errCapabilityMissing)
 	}
 	ch, err := p.Channel(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("out-of-band: the configured collaborator channel could not be opened: %w: %w", err, errCheckUnsupported)
+		return nil, fmt.Errorf("out-of-band: the configured collaborator channel could not be opened: %w: %w", err, errCapabilityMissing)
 	}
 	return ch, nil
 }

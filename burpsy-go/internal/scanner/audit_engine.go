@@ -863,9 +863,14 @@ type AuditOutcome struct {
 	Findings int `json:"findings"`
 	// SendFailures counts checks abandoned because no probe could be sent or read.
 	SendFailures int `json:"send_failures"`
-	// Skipped counts checks the engine could not run at all — no implementation, or a dispatch scope
-	// with no addressable unit.
+	// Skipped counts checks the engine could not run at all — no implementation, a dispatch scope
+	// with no addressable unit, an evaluator decline, or a capability this scan lacks.
 	Skipped int `json:"skipped"`
+	// CapabilityMissing counts the checks inside Skipped that are implemented but could not run in
+	// this scan: no sender, browser, collaborator, session coordinator or ledger, or no authorised
+	// sender for the exchange (errCapabilityMissing). A qualifier on Skipped, not a tenth disposition,
+	// so an operator can tell "not implemented" from "implemented, but this scan could not run it".
+	CapabilityMissing int `json:"capability_missing"`
 	// NotRun counts checks never attempted because the time budget ran out.
 	NotRun int `json:"not_run"`
 	// AlreadyCovered counts checks not admitted because an identical (dispatch unit, check) already
@@ -1044,6 +1049,9 @@ func (o AuditOutcome) Summary() string {
 	}
 	if len(why) > 0 {
 		fmt.Fprintf(&b, "; %s", strings.Join(why, ", "))
+	}
+	if o.CapabilityMissing > 0 {
+		fmt.Fprintf(&b, "; %d of the unsupported are implemented checks this scan lacked a capability for", o.CapabilityMissing)
 	}
 	if o.RequestsRefused > 0 {
 		fmt.Fprintf(&b, "; %d probe(s) refused by scope", o.RequestsRefused)
@@ -1820,7 +1828,13 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				// check set still partitions and a clean outcome cannot be read as a clean bill of
 				// health for this check.
 				if errors.Is(runErr, errCheckUnsupported) {
+					first := !counted[pos-1]
 					countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+					// The qualifier follows the Skipped count exactly once per step, so a re-dispatched
+					// pass cannot count one missing capability twice.
+					if first && errors.Is(runErr, errCapabilityMissing) {
+						o.CapabilityMissing++
+					}
 					if s.logger != nil {
 						s.logger.Warn("active check could not run",
 							zap.String("check", checks[check].name),

@@ -35,6 +35,15 @@ import (
 // DispositionUnsupported (Skipped) rather than counting a clean miss.
 var errCheckUnsupported = errors.New("bcheck: check cannot be evaluated")
 
+// errCapabilityMissing is the refusal of a check that is implemented but cannot run in THIS scan: no
+// sender, no browser, no collaborator channel, no session coordinator, no ledger, or no authorised
+// sender for the exchange. It wraps errCheckUnsupported, so the engine still files it under
+// DispositionUnsupported (Skipped) and never as a send failure — the nine-way disposition partition is
+// a parity contract and gains no tenth bucket — but the engine ALSO counts it in
+// AuditOutcome.CapabilityMissing, so "this check is not implemented" and "this scan could not run an
+// implemented check" stay two separately reported facts.
+var errCapabilityMissing = fmt.Errorf("scanner: the scan lacks a capability this check needs: %w", errCheckUnsupported)
+
 // errCheckInconclusive: the check ran but could not decide. Counted as Unmeasurable, not clean.
 var errCheckInconclusive = errors.New("scanner: check ran but its evidence was inconclusive")
 
