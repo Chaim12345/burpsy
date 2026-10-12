@@ -158,7 +158,7 @@ driver.
 
 `DOMAndStoredXSSDescriptors()` returns nothing. Its nine rows — the DOM-based and stored XSS /
 JavaScript-injection variants plus `SQL injection (second order)` and
-`Client-side template injection` — moved to `checks_dom.go`, `checks_dom_extra.go` and
+`Client-side template injection` — moved to `checks_dom.go`, `checks_dom_extra.go` (with `checks_csti.go`) and
 `checks_stored.go` once `internal/domexec` and the stored ledger existed. The function is kept as a
 registration point; see `checks_declined_dom.go`.
 

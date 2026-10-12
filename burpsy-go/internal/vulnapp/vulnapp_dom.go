@@ -78,32 +78,6 @@ func dmHandler(page func(http.ResponseWriter, string), script string) http.Handl
 	}
 }
 
-// dmTemplatePage evaluates a {{a*b}} expression read from the URL, proving client-side template
-// evaluation by rendering the product rather than the marker.
-func dmTemplatePage(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>dm</title></head>
-<body><div id="out"></div><script>
-var taint = decodeURIComponent(location.hash.slice(1));
-var m = taint.match(/\{\{\s*(\d+)\s*\*\s*(\d+)\s*\}\}/);
-var out = document.getElementById('out');
-if (m) { out.textContent = String(Number(m[1]) * Number(m[2])); }
-</script></body></html>`)
-}
-
-// dmSafeTemplatePage reflects the marker verbatim, so a template engine that only echoed it would
-// show the marker — exactly what the check must not report as evaluated.
-func dmSafeTemplatePage(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(w, `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>dm</title></head>
-<body><div id="out"></div><script>
-var taint = decodeURIComponent(location.hash.slice(1));
-document.getElementById('out').textContent = taint;
-</script></body></html>`)
-}
-
 // dmPRSSI serves a page that imports a stylesheet by a path-relative URL — the PRSSI precondition.
 func dmPRSSI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html")
@@ -123,7 +97,7 @@ func dmSafePRSSI(w http.ResponseWriter, _ *http.Request) {
 
 // domFamilyEndpoints returns this family's manifest entries.
 func domFamilyEndpoints() []Endpoint {
-	return []Endpoint{
+	return append([]Endpoint{
 		// ---- WebSocket URL poisoning ----
 		{Path: "/dm/websocket", Row: "WebSocket URL poisoning (DOM-based)", DOM: true,
 			Note: "location.hash passed to the WebSocket constructor"},
@@ -233,15 +207,11 @@ func domFamilyEndpoints() []Endpoint {
 			Note: "location.hash used as a property name written onto Object.prototype"},
 		{Path: "/dm/safe/proto", Row: "Client-side prototype pollution", DOM: true, Safe: true,
 			Note: "same source assigned to textContent, never written to Object.prototype"},
-		{Path: "/dm/template", Row: "Client-side template injection", DOM: true,
-			Note: "a {{a*b}} expression from the URL is evaluated and rendered as its product"},
-		{Path: "/dm/safe/template", Row: "Client-side template injection", DOM: true, Safe: true,
-			Note: "the expression is reflected as text, never evaluated"},
 		{Path: "/dm/prssi", Row: "Path-relative style sheet import", DOM: true,
 			Note: "serves a stylesheet by a path-relative href"},
 		{Path: "/dm/safe/prssi", Row: "Path-relative style sheet import", DOM: true, Safe: true,
 			Note: "serves the same stylesheet by a root-relative href"},
-	}
+	}, cstiEndpoints()...) // vulnapp_csti.go
 }
 
 // registerDOMFamily serves this family's routes.
@@ -328,8 +298,7 @@ func registerDOMFamily(mux *http.ServeMux) {
 	// DOM-extra rows.
 	mux.HandleFunc("/dm/proto", dmHandler(dmPageHash, `try { Object.defineProperty(Object.prototype, taint, {value: 1, configurable: true}); } catch (e) {}`))
 	mux.HandleFunc("/dm/safe/proto", dmHandler(dmPageHash, `document.getElementById('out').textContent = taint;`))
-	mux.HandleFunc("/dm/template", dmTemplatePage)
-	mux.HandleFunc("/dm/safe/template", dmSafeTemplatePage)
+	registerCSTI(mux) // vulnapp_csti.go
 	mux.HandleFunc("/dm/prssi", dmPRSSI)
 	mux.HandleFunc("/dm/safe/prssi", dmSafePRSSI)
 }

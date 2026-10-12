@@ -6,14 +6,13 @@ package scanner
 //   - Client-side prototype pollution: the finding is a write to Object.prototype, which has
 //     no per-variant spelling in the catalog and is confirmed in two tiers (goja and a real
 //     browser) rather than one.
-//   - Client-side template injection: proved by an arithmetic expression being *rendered*, not
-//     by a value reaching a named sink.
+//   - Client-side template injection: proved by a computed value being *rendered*, not by a
+//     value reaching a named sink. Its runner lives in checks_csti.go.
 //   - Path-relative style sheet import: a page-structure condition, not a runtime flow.
 
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -42,63 +41,6 @@ func checkClientSidePrototypePollution(ctx context.Context, cc *CheckContext) ([
 			"then inherits. Exploitation additionally requires a gadget - code that reads the polluted property "+
 			"and acts on it. This check looks for the source only and did not search for one, which is the same "+
 			"scope Burp reports here before deferring gadget discovery to DOM Invader")}, nil
-}
-
-// templateInjectionMarkers are the delimiter families a client-side template engine evaluates.
-// The product, not the expression, is what proves evaluation.
-func templateInjectionMarkers() []string {
-	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
-	return []string{
-		"{{" + arith + "}}",
-		"${" + arith + "}",
-		"{{" + arith + "}}{{",
-		"[[" + arith + "]]",
-	}
-}
-
-// checkClientSideTemplateInjection plants a template expression in a URL source and looks for
-// its product in the rendered DOM.
-//
-// The check is on the *rendered* markup because a client-side template engine evaluates after
-// script runs; the served HTML never contains the product, which is exactly why an HTTP-only
-// scanner cannot see this row at all.
-func checkClientSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if cc == nil || cc.Exchange == nil {
-		return nil, nil
-	}
-	browser, err := cc.Browser(ctx)
-	if err != nil {
-		return nil, err
-	}
-	base := exchangeURL(cc.Exchange)
-	product := ArithmeticProofProduct()
-
-	// The baseline rendering decides whether the product was already on the page. Without
-	// it a page that legitimately displays "42" would report every payload as evaluated.
-	baseline, err := browser.RenderedDOM(ctx, base)
-	if err != nil {
-		return nil, err
-	}
-	if strings.Contains(baseline, product) {
-		return nil, nil
-	}
-
-	for _, marker := range templateInjectionMarkers() {
-		target := base + "#" + url.QueryEscape(marker)
-		rendered, err := browser.RenderedDOM(ctx, target)
-		if err != nil {
-			continue
-		}
-		// The marker itself must not be what matched: a page echoing the expression
-		// verbatim has not evaluated it.
-		if !strings.Contains(rendered, product) || strings.Contains(rendered, marker) {
-			continue
-		}
-		return []*Finding{buildHeaderFinding(cc, "Client-side template injection", "high", "firm",
-			marker,
-			fmt.Sprintf("the expression %q was evaluated by a client-side template engine and rendered as %s", marker, product))}, nil
-	}
-	return nil, nil
 }
 
 // checkPathRelativeStyleSheetImport reports the PRSSI precondition: a stylesheet referenced by
