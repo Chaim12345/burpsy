@@ -2854,16 +2854,22 @@ func (s *Store) LoadFileLogging() (*filelog.Settings, error) {
 // A stored document that no longer parses is returned as an error rather than dropped. Refuse-by-default
 // on unparseable input: an operator whose resolution overrides failed to load must be told, because the
 // alternative is requests quietly going where DNS points instead of where they said.
+//
+// The document is decoded ONTO sender.DefaultNetworkSettings(), not onto a zero struct, so a key the
+// stored document does not carry keeps its shipped default. The one that matters is tls.verify: a
+// document saved before the tls section existed (or edited without it) decoded onto a zero struct
+// came back as Verify=false, and applying it turned certificate verification off for every send
+// without the operator ever choosing that.
 func (s *Store) LoadNetworkSettings() (*sender.NetworkSettings, error) {
 	v, err := s.getSetting("network.settings")
 	if err != nil || v == "" {
 		return nil, err
 	}
-	out := &sender.NetworkSettings{}
-	if err := json.Unmarshal([]byte(v), out); err != nil {
+	out := sender.DefaultNetworkSettings()
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &out, nil
 }
 
 // ---- Upstream proxy ----------------------------------------------------------------------------

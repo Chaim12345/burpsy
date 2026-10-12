@@ -413,9 +413,9 @@ type StreamingSettings struct {
 	// this document (api_network pushes them into proxy.StreamingPolicy).
 
 	// Store is "Store streaming responses (may result in large temp files)". A pointer, not a bare
-	// bool, because LoadNetworkSettings unmarshals onto an empty struct: a bare bool would decode a
-	// previously-saved document that predates this field as `false` and silently stop recording
-	// streamed bodies. Nil means the shipped default, which StoreStreamed reads as on.
+	// bool, so a document that predates this field decodes to nil whatever struct it is decoded onto
+	// (LoadNetworkSettings now decodes onto DefaultNetworkSettings, but other callers decode onto a
+	// zero struct). Nil means the shipped default, which StoreStreamed reads as on.
 	Store *bool `json:"store,omitempty"`
 	// StripChunkedMetadata is "Strip chunked encoding metadata from streamed responses". Defaults off,
 	// which reproduces forwarding a streamed response exactly as it arrived.

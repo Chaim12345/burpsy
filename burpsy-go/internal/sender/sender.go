@@ -1458,8 +1458,8 @@ func (s *Sender) WithTLSVerify(verify bool) *Sender {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.config.TLSVerify = verify
-	// Keep the live settings in agreement, or the setting would be outvoted by the OR above exactly
-	// where a caller deliberately switched verification off.
+	// Keep the live settings in agreement: effectiveTLSVerify reads s.net.TLS.Verify alone, so a
+	// config field updated without it would leave every dial still verifying (or still not).
 	s.net.TLS.Verify = verify
 	// A fresh transport rather than a write into the live one's tls.Config: that config is read by
 	// every handshake, including one happening on another goroutine right now.
