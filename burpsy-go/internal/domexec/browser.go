@@ -351,20 +351,25 @@ func (b *Browser) newTab(ctx context.Context) (context.Context, context.CancelFu
 	// own thread and V8 isolate, so isolation is if anything stronger), costs
 	// one localhost dial, and was 20/20 stable where shared tabs were 10/20.
 	if b.remoteURL != "" {
-		tabAllocCtx, tabAllocCancel := chromedp.NewRemoteAllocator(ctx, b.remoteURL)
+		// The per-tab connection is detached from ctx (WithoutCancel) and torn down only by teardown.
+		// Deriving it from ctx meant that by the time ctx's AfterFunc ran, the connection the target
+		// would be closed over was already cancelled with it, so CloseTarget never reached the server
+		// and every timed-out tab stayed open there. Detached, teardown closes the target over a live
+		// connection first and only then drops it. ctx still bounds the tab: its cancellation runs
+		// teardown, which cancels opCtx.
+		tabAllocCtx, tabAllocCancel := chromedp.NewRemoteAllocator(context.WithoutCancel(ctx), b.remoteURL)
 		tabCtx, tabCancel := chromedp.NewContext(tabAllocCtx, b.ctxOpts...)
 		opCtx, opCancel := context.WithTimeout(tabCtx, b.opts.resolvedTimeout())
-		stop := context.AfterFunc(ctx, func() {
+		teardown := sync.OnceFunc(func() {
 			opCancel()
 			closeTabTarget(tabCtx, tabCtx)
 			tabCancel()
 			tabAllocCancel()
 		})
+		stop := context.AfterFunc(ctx, teardown)
 		cancel := func() {
 			stop()
-			opCancel()
-			tabCancel()
-			tabAllocCancel()
+			teardown()
 		}
 		return opCtx, cancel, nil
 	}
