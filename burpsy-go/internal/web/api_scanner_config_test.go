@@ -245,6 +245,18 @@ func TestConfigCarriesTheWebSocketHijackingAndClientIPChecks(t *testing.T) {
 	s := newScannerServer()
 	cfg := getScannerConfig(t, s)
 	for _, k := range []string{"check_websocket_hijacking", "check_client_ip_spoofing"} {
+		if cfg[k] != false {
+			t.Fatalf("%s = %v, want present and off by default", k, cfg[k])
+		}
+	}
+	body := map[string]any{"check_websocket_hijacking": true, "check_client_ip_spoofing": true}
+	if rec := putJSON(t, s, "/api/scanner/config", body); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	snap := s.wiredScanner().ConfigSnapshot()
+	if !snap.CheckWebSocketHijacking || !snap.CheckClientIPSpoofing {
+		t.Errorf("the running scanner did not take the switches: ws=%v ip=%v",
+			snap.CheckWebSocketHijacking, snap.CheckClientIPSpoofing)
 	}
 }
 
@@ -258,15 +270,10 @@ func TestConfigCarriesTheCookieAndTakeoverChecks(t *testing.T) {
 			t.Fatalf("%s = %v, want present and off by default", k, cfg[k])
 		}
 	}
-	body := map[string]any{"check_websocket_hijacking": true, "check_client_ip_spoofing": true}
+	body := map[string]any{"check_cookie_attributes": true, "check_subdomain_takeover": true}
 	if rec := putJSON(t, s, "/api/scanner/config", body); rec.Code != http.StatusOK {
 		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
 	}
-	snap := s.wiredScanner().ConfigSnapshot()
-	if !snap.CheckWebSocketHijacking || !snap.CheckClientIPSpoofing {
-		t.Errorf("the running scanner did not take the switches: ws=%v ip=%v",
-			snap.CheckWebSocketHijacking, snap.CheckClientIPSpoofing)
-	body := map[string]any{"check_cookie_attributes": true, "check_subdomain_takeover": true}
 	got := s.wiredScanner().ConfigSnapshot()
 	if !got.CheckCookieAttributes || !got.CheckSubdomainTakeover {
 		t.Errorf("the running scanner did not take the switches: cookie=%v takeover=%v",

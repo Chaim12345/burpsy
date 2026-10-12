@@ -660,7 +660,10 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 func buildRawRequest(method, path, host string, port uint16, body, contentType string, extra map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", method, path)
-	fmt.Fprintf(&b, "Host: %s\r\n", net.JoinHostPort(host, fmt.Sprint(port)))
+	// The endpoint's own Host, when it declares one (the takeover fixtures answer per hostname).
+	if _, named := extra["Host"]; !named {
+		fmt.Fprintf(&b, "Host: %s\r\n", net.JoinHostPort(host, fmt.Sprint(port)))
+	}
 	// The default Origin, unless the endpoint declares its own: a WebSocket handshake is captured from
 	// the application's own origin, and a second Origin line would make the capture ambiguous.
 	ownOrigin := false
@@ -670,7 +673,6 @@ func buildRawRequest(method, path, host string, port uint16, body, contentType s
 	if !ownOrigin {
 		b.WriteString("Origin: https://evil.example\r\n")
 	}
-	if _, named := extra["Host"]; !named {
 	for k, v := range extra {
 		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 	}
