@@ -58,12 +58,12 @@ import (
 // that answer the same question. Each technique still carries its own method gate at the probe:
 // a disabled family is withheld and counted, and the remaining techniques still run.
 func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures); isOffline {
+	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures, signatureOwnedByShell); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
-			probes := h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			probes := h.ProbeSQLErrorSignatures(ctx, p, sqlErrorProbePayloads())
 			// The statement echo only when no quote probe already proved a syntax error: it is
 			// the weaker proof, and a confirmed point stops here anyway.
 			if _, confirmed := BestEvidence(probes); !confirmed {
@@ -92,7 +92,11 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 // The second return value distinguishes "this was the offline path" from "the offline path found
 // nothing", so a caller cannot mistake one for the other. The third is the refusal: absence of a
 // signature offline is NOT a clean result, because no probe was sent to make it one.
-func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]*Finding, bool, error) {
+//
+// foreign, when set, names a signature occurrence that another interpreter owns (a shell's own
+// diagnostic for the SQL row); such a signature is skipped exactly as the online path skips it.
+func offlineSignatureScan(cc *CheckContext, row string, signatures []string,
+	foreign func(body, sig string) bool) ([]*Finding, bool, error) {
 	if cc == nil || cc.Scanner == nil || cc.Exchange == nil || cc.Scanner.sender != nil {
 		return nil, false, nil
 	}
@@ -104,6 +108,9 @@ func offlineSignatureScan(cc *CheckContext, row string, signatures []string) ([]
 	forms := matchableForms(body)
 	for _, sig := range signatures {
 		if !containsAny(forms, strings.ToLower(sig)) {
+			continue
+		}
+		if foreign != nil && foreign(body, sig) {
 			continue
 		}
 		severity, remediation := "high", ""
@@ -421,7 +428,7 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 // This row is the dot-dot-slash escape. Its sibling "File path manipulation" takes the absolute
 // path forms — see filePathManipulationPayloads for why the two banks are kept apart.
 func checkFilePathTraversalCore(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures); isOffline {
+	if offline, isOffline, err := offlineSignatureScan(cc, "File path traversal", TraversalFileSignatures, nil); isOffline {
 		return offline, err
 	}
 	res, err := runInjection(ctx, cc, "FilePathTraversalCore", cc.ProbeInsertionKinds(),

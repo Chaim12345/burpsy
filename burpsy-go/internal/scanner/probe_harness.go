@@ -503,7 +503,15 @@ func withheldProbe(point bcheck.InsertionPoint, payload, method string) Injectio
 // pair), so a payload carrying a literal `../` arrives decoded by the target's own parameter parser.
 func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
-	return h.probeErrorSignatures(ctx, point, payloads, signatures, false)
+	return h.probeErrorSignatures(ctx, point, payloads, signatures, false, nil)
+}
+
+// ProbeSQLErrorSignatures is ProbeErrorSignatures for the SQL bank: an introduced signature that a
+// shell's own diagnostic carries is attributed to the shell and does not count
+// (burpsy-react-ui-j1mk.40, sqli_error_attribution.go).
+func (h *ProbeHarness) ProbeSQLErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
+	payloads []string) []InjectionProbe {
+	return h.probeErrorSignatures(ctx, point, payloads, SQLErrorSignatures, false, attributeSQLErrors)
 }
 
 // ProbeErrorSignaturesRaw is ProbeErrorSignatures with the Raw escape policy (burpsy-react-ui-79ld;
@@ -515,11 +523,12 @@ func (h *ProbeHarness) ProbeErrorSignatures(ctx context.Context, point bcheck.In
 // to get past, so this bank is sent raw.
 func (h *ProbeHarness) ProbeErrorSignaturesRaw(ctx context.Context, point bcheck.InsertionPoint,
 	payloads []string, signatures []string) []InjectionProbe {
-	return h.probeErrorSignatures(ctx, point, payloads, signatures, true)
+	return h.probeErrorSignatures(ctx, point, payloads, signatures, true, nil)
 }
 
 func (h *ProbeHarness) probeErrorSignatures(ctx context.Context, point bcheck.InsertionPoint,
-	payloads []string, signatures []string, raw bool) []InjectionProbe {
+	payloads []string, signatures []string, raw bool,
+	attribute func(ev ErrorEvidence, injectedBody string) ErrorEvidence) []InjectionProbe {
 
 	payloads = h.boundPayloads(payloads)
 	out := make([]InjectionProbe, 0, len(payloads))
@@ -534,11 +543,17 @@ func (h *ProbeHarness) probeErrorSignatures(ctx context.Context, point bcheck.In
 		out = append(out, h.probeOpts(ctx, point, payload, bcheck.ApplyOptions{Raw: raw},
 			func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
 				ev := ClassifyErrorEvidence(baseline.Body, injected.Body, signatures)
+				if attribute != nil {
+					ev = attribute(ev, injected.Body)
+				}
 				switch ev.Evidence {
 				case InjectionEvidenceErrorSignature:
 					return ev.Evidence, "introduced " + ev.Matched[0]
 				case InjectionEvidenceInconclusive:
 					return ev.Evidence, "signature " + ev.Preexisting[0] + " was already in the baseline"
+				}
+				if len(ev.Foreign) > 0 {
+					return ev.Evidence, "introduced " + ev.Foreign[0] + ", but inside a command shell's own diagnostic, not a database error"
 				}
 				return ev.Evidence, "no signature introduced"
 			}))

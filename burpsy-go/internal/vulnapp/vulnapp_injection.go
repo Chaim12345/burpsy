@@ -97,6 +97,13 @@ func injectionEndpoints() []Endpoint {
 		{Path: "/ij/safe/jobs?queue=seed", Row: "SQL injection", Safe: true,
 			Note: "stores the parameter verbatim and returns immediately, the way a parameterised query does"},
 
+		// j1mk.40: one wording, two interpreters. Both answer an unbalanced quote with
+		// "unterminated quoted string"; only the first has a database behind it.
+		{Path: "/ij/net/hosts?name=gateway", Row: "SQL injection",
+			Note: "concatenates name into a PostgreSQL string literal and relays the database's unterminated-quoted-string error"},
+		{Path: "/ij/net/ping?host=127.0.0.1", Row: "SQL injection", Safe: true,
+			Note: "hands host to a simulated dash `sh -c ping`; an unbalanced quote yields the shell's own Unterminated quoted string, and replies vary in content and latency"},
+
 		// The XSS decoding endpoints (burpsy-react-ui-79ld): each strips the LITERAL form of
 		// the angle brackets an ordinary breakout needs, then performs one decoding before
 		// reflecting — the decode-after-filter bug class. A payload that arrives already
@@ -177,6 +184,8 @@ func registerInjection(mux *http.ServeMux) {
 	mux.HandleFunc("/ij/vehicles", vehicleByID)
 	mux.HandleFunc("/ij/safe/vehicles", safeVehicleByID)
 	mux.HandleFunc("/ij/safe/jobs", safeQueueJobWithDelay)
+	mux.HandleFunc("/ij/net/hosts", hostByName)
+	mux.HandleFunc("/ij/net/ping", pingThroughShell)
 
 	mux.HandleFunc("/ij/upload/preview", uploadPreview)
 	mux.HandleFunc("/ij/safe/upload/preview", safeUploadPreview)

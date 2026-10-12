@@ -95,6 +95,10 @@ type ErrorEvidence struct {
 	// than discarded: an endpoint that always emits a SQL error is worth knowing about,
 	// and it is why the verdict is inconclusive instead of positive.
 	Preexisting []string
+	// Foreign are signatures the injected response introduced but that another interpreter's own
+	// diagnostic carries, so they are not evidence for this family (attributeSQLErrors). Recorded
+	// so a probe's detail can say what was seen and why it did not count.
+	Foreign []string
 }
 
 // ClassifyErrorEvidence looks for signatures the injected response introduced.
@@ -162,8 +166,11 @@ func containsAny(forms []string, needle string) bool {
 }
 
 // ClassifySQLError and ClassifyXPathError bind the recovered banks to the comparison.
+//
+// The SQL binding also attributes each introduced signature to its interpreter: one a shell's
+// diagnostic carries is not SQL evidence (sqli_error_attribution.go).
 func ClassifySQLError(baselineBody, injectedBody string) ErrorEvidence {
-	return ClassifyErrorEvidence(baselineBody, injectedBody, SQLErrorSignatures)
+	return classifySQLErrorAttributed(baselineBody, injectedBody, SQLErrorSignatures)
 }
 
 func ClassifyXPathError(baselineBody, injectedBody string) ErrorEvidence {
