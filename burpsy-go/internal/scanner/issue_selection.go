@@ -174,8 +174,9 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - XPath and XML injection read parser error signatures: "Error messages".
 //   - Broken access control compares two sessions' responses: "Response diffing".
 //   - Stored XSS re-reads a planted canary in a later response: "In-band".
-//   - Request smuggling pipelines a CL.TE / TE.CL pair down one connection and reads the response
-//     that follows — Burp's socket-poisoning method, not its timing one.
+//   - Request smuggling detects CL.TE / TE.CL / H2 downgrade disagreements by a timeout against a
+//     consistently framed control: Burp's "Time delays". Its "Back-end socket poisoning" method is
+//     declined on purpose — confirming by a poisoned prefix can reach another user's request.
 //   - Reflected XSS confirms a client-side markup or script breakout: "Client-side".
 //   - The DOM rows run in the instrumented browser (domexec): "Javascript dynamic analysis". The
 //     static DOM pass is not a descriptor — it is the audit item's JavaScript tail
@@ -195,7 +196,7 @@ var burpsyDetectionMethods = map[uint32][]string{
 	0x00101080:               {MethodStringEcho},                                                                                                                                             // Server-side template injection
 	0x00101100:               {MethodStringEcho},                                                                                                                                             // SSI injection
 	0x00200100:               {MethodInBand},                                                                                                                                                 // Cross-site scripting (stored)
-	0x00200140:               {MethodBackEndSocketPoisoning},                                                                                                                                 // HTTP request smuggling
+	0x00200140:               {MethodTimeDelays},                                                                                                                                             // HTTP request smuggling
 	0x00200300:               {MethodClientSide},                                                                                                                                             // Cross-site scripting (reflected)
 	0x00300200:               {MethodCollaborator},                                                                                                                                           // External service interaction (DNS)
 	0x00300210:               {MethodCollaborator},                                                                                                                                           // External service interaction (HTTP)

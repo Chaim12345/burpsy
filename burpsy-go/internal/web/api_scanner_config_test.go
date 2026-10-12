@@ -179,3 +179,18 @@ func TestConfigPutTakesThePasswordResetInputs(t *testing.T) {
 		}
 	}
 }
+
+// The request smuggling switch is on the wire, off by default, and a PUT reaches the running scanner.
+func TestConfigCarriesTheRequestSmugglingCheck(t *testing.T) {
+	s := newScannerServer()
+	if got := getScannerConfig(t, s)["check_request_smuggling"]; got != false {
+		t.Fatalf("check_request_smuggling = %v, want present and off by default", got)
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_request_smuggling": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckRequestSmuggling {
+		t.Error("the running scanner did not take check_request_smuggling")
+	}
+}

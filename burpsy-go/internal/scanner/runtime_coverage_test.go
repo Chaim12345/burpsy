@@ -108,6 +108,10 @@ type runtimeTarget struct {
 	tlsSrv  *httptest.Server
 	tlsHost string
 	tlsPort uint16
+	// listeners serve the endpoints that declare a listener of their own (Endpoint.Listener), keyed
+	// by listener name: per-host rows such as request smuggling, whose defect is in how the server
+	// itself parses requests and so cannot be a route on the shared server.
+	listeners map[string]*vulnapp.Listener
 }
 
 // startRuntimeTarget serves vulnapp, requests every declared endpoint over real HTTP, and stores
@@ -159,6 +163,20 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 		tlsSrv: tlsSrv, tlsHost: tlsHost, tlsPort: tlsPort,
 		store:     core.NewTrafficStore(),
 		exchanges: map[string]core.ExchangeID{},
+		listeners: map[string]*vulnapp.Listener{},
+	}
+	for _, e := range vulnapp.Vulnerabilities() {
+		if e.Listener == "" || rt.listeners[e.Listener] != nil {
+			continue
+		}
+		l, err := vulnapp.StartListener(e.Listener)
+		if err != nil {
+			t.Fatalf("start listener %s for %s: %v", e.Listener, e.Path, err)
+		}
+		if l.TLS {
+			t.Fatalf("listener %s is TLS; the runtime corpus seeds listeners over cleartext only", e.Listener)
+		}
+		rt.listeners[e.Listener] = l
 	}
 
 	client := &http.Client{
@@ -583,6 +601,9 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	if e.TLS {
 		baseURL = rt.tlsSrv.URL
 	}
+	if l := rt.listeners[e.Listener]; l != nil {
+		baseURL = l.URL()
+	}
 	req, err := http.NewRequest(method, baseURL+e.Path, reader)
 	if err != nil {
 		t.Fatalf("build request for %s: %v", e.Path, err)
@@ -607,6 +628,9 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	exHost, exPort, exTLS := rt.host, rt.port, false
 	if e.TLS {
 		exHost, exPort, exTLS = rt.tlsHost, rt.tlsPort, true
+	}
+	if l := rt.listeners[e.Listener]; l != nil {
+		exHost, exPort, exTLS = l.Host, l.Port, l.TLS
 	}
 	rawReq := buildRawRequest(method, e.Path, exHost, exPort, body, contentType, e.RequestHeaders)
 	rawResp := buildRawResponse(t, res)
@@ -954,7 +978,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 164
+	const wantDemonstrated = 165
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

@@ -351,6 +351,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckPasswordReset = false
 		case "CheckSessionManagement":
 			cfg.CheckSessionManagement = false
+		case "CheckRequestSmuggling":
+			cfg.CheckRequestSmuggling = false
 		}
 	}
 }

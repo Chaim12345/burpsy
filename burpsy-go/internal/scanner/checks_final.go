@@ -256,64 +256,8 @@ func withRefererHeader(raw, referer string) string {
 }
 
 // ---------------------------------------------------------------------------
-// pipelining rows
+// pipelining rows: HTTP request smuggling and Client-side desync live in checks_smuggling.go
 // ---------------------------------------------------------------------------
-
-// smugglingProbes are the CL.TE and TE.CL framing disagreements. A front end and back end that
-// disagree about where a request ends is the whole of request smuggling.
-func smugglingProbes(host, path string) [][]byte {
-	clte := "POST " + path + " HTTP/1.1\r\nHost: " + host +
-		"\r\nContent-Length: 6\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nX"
-	tecl := "POST " + path + " HTTP/1.1\r\nHost: " + host +
-		"\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nA\r\n0\r\n\r\n"
-	follow := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\n\r\n"
-	return [][]byte{[]byte(clte), []byte(tecl), []byte(follow)}
-}
-
-// pipeliningCheck runs the framing probes down one connection and reports a disagreement.
-//
-// The verdict is deliberately narrow: a probe that provokes a 4xx from the front end proves the
-// framing was rejected, which is the safe outcome. What signals smuggling is the *following*
-// request on the same connection getting an answer that does not belong to it, which only shows
-// up because SendPipelined keeps the connection and returns per-response framing.
-func pipeliningCheck(row, detail string) CheckRunner {
-	return func(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-		if cc.Scanner == nil || cc.Exchange == nil {
-			return nil, nil
-		}
-		if cc.Scanner.sender == nil {
-			return nil, fmt.Errorf("%s: no sender; a framing probe cannot be sent: %w", row, errCapabilityMissing)
-		}
-		exchanges, err := cc.Scanner.sender.SendPipelined(ctx, cc.Exchange.Host, cc.Exchange.Port,
-			cc.Exchange.TLS, smugglingProbes(cc.Exchange.Host, cc.Exchange.Path))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", row, err)
-		}
-		if len(exchanges) < 3 {
-			// Fewer responses than requests means the connection closed early. That is a
-			// framing signal on its own, but not a confirmed desync.
-			return nil, nil
-		}
-		// The trailing plain GET must come back as its own well-formed response. A 4xx or a
-		// body carrying the smuggled marker means the back end read the boundary elsewhere.
-		last := exchanges[len(exchanges)-1]
-		text := strings.ToLower(string(last.Raw))
-		if !strings.Contains(text, " 400 ") && !strings.Contains(text, " 405 ") &&
-			!strings.Contains(text, "unrecognized") && !strings.Contains(text, "invalid chunk") {
-			return nil, nil
-		}
-		return []*Finding{buildHeaderFinding(cc, row, "high", "tentative",
-			strings.TrimSpace(firstResponseLine(string(last.Raw))),
-			detail+" The trailing request on the same connection was answered with a framing error, which means the boundary was read differently by two hops. Confirm by hand before acting on it.")}, nil
-	}
-}
-
-func firstResponseLine(s string) string {
-	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
 
 // ---------------------------------------------------------------------------
 // Hidden HTTP/2
@@ -559,10 +503,10 @@ func FinalCheckDescriptors() []CheckDescriptor {
 			withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl)))),
 		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest, finalChecksEnabled, checkCSRF),
 
-		nativeDescriptor("HTTP request smuggling", DispatchScopePerHost, finalChecksEnabled,
-			pipeliningCheck("HTTP request smuggling", "A CL.TE / TE.CL framing pair was pipelined down one connection.")),
-		nativeDescriptor("Client-side desync", DispatchScopePerHost, finalChecksEnabled,
-			pipeliningCheck("Client-side desync", "A framing pair was pipelined down one connection to test whether the browser-visible boundary disagrees with the server's.")),
+		// Timing-only CL.TE / TE.CL / H2 downgrade detection (checks_smuggling.go). Medium tier: each
+		// attack holds a back-end connection open for the read window, though it leaves nothing on it.
+		mediumDescriptor("HTTP request smuggling", DispatchScopePerHost, smugglingEnabled, checkRequestSmuggling),
+		nativeDescriptor("Client-side desync", DispatchScopePerHost, finalChecksEnabled, checkClientSideDesync),
 
 		nativeDescriptor("Hidden HTTP 2", DispatchScopePerHost, finalChecksEnabled, checkHiddenHTTP2),
 

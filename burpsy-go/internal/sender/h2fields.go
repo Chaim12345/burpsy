@@ -223,6 +223,14 @@ type h2FieldsExchange struct {
 	ended    string
 }
 
+// h2FieldsEndedTimeout is Ended's value when the deadline passed before the stream ended — the one
+// ending a timing probe reads as "the server was still waiting", so it is named once, here.
+const h2FieldsEndedTimeout = "the response timeout passed"
+
+// TimedOut reports whether the read ended because the deadline passed rather than because the stream
+// ended, was reset or the peer went away.
+func (r H2FieldsResult) TimedOut() bool { return r.Ended == h2FieldsEndedTimeout }
+
 // errH2FieldsDone ends the read loop when stream 1 is finished.
 var errH2FieldsDone = errors.New("done")
 
@@ -250,7 +258,7 @@ func (x *h2FieldsExchange) run(headerFrames []burpsyhttp2.FrameSpec) error {
 			case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 				x.ended = "the server closed the connection"
 			case errors.As(err, &netErr) && netErr.Timeout():
-				x.ended = "the response timeout passed"
+				x.ended = h2FieldsEndedTimeout
 			default:
 				x.ended = "the read failed: " + err.Error()
 			}

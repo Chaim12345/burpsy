@@ -62,6 +62,8 @@ type scannerConfigView struct {
 	ResetTestIdentities    []string `json:"reset_test_identities"`
 	ResetMailboxURL        string   `json:"reset_mailbox_url"`
 	CheckSessionManagement bool     `json:"check_session_management"`
+	// The timing-only HTTP request smuggling check (scanner/checks_smuggling.go), off by default.
+	CheckRequestSmuggling bool `json:"check_request_smuggling"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -105,6 +107,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		ResetTestIdentities:      append([]string{}, c.ResetTestIdentities...),
 		ResetMailboxURL:          c.ResetMailboxURL,
 		CheckSessionManagement:   c.CheckSessionManagement,
+		CheckRequestSmuggling:    c.CheckRequestSmuggling,
 	}
 }
 
@@ -143,6 +146,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
 	"check_password_reset":       func(v *scannerConfigView) *bool { return &v.CheckPasswordReset },
 	"check_session_management":   func(v *scannerConfigView) *bool { return &v.CheckSessionManagement },
+	"check_request_smuggling":    func(v *scannerConfigView) *bool { return &v.CheckRequestSmuggling },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -295,6 +299,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.ResetTestIdentities = append([]string(nil), view.ResetTestIdentities...)
 		c.ResetMailboxURL = view.ResetMailboxURL
 		c.CheckSessionManagement = view.CheckSessionManagement
+		c.CheckRequestSmuggling = view.CheckRequestSmuggling
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

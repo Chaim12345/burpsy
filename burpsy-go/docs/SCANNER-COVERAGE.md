@@ -170,8 +170,11 @@ The rows `NativeCheckRegistry`'s own body still declares. `SQL injection`,
 | `Web cache deception` | 2098768 |
 
 `HTTP request smuggling` and `Client-side desync` were listed here while this family declined them
-for want of a pipelining primitive. They moved to `checks_final.go` when `SendPipelined` gained a
-driver.
+for want of a pipelining primitive. They are registered in `checks_final.go`; since 0vzb.1 their
+runners live in `checks_smuggling.go`: request smuggling is detected by timing alone (CL.TE, TE.CL,
+H2.TE, H2.CL against a consistently framed control, switch `check_request_smuggling`) and is
+demonstrated on vulnapp's two-tier listeners (`/desync/*`); Client-side desync declines at run time,
+because its only confirmation can poison a shared back-end connection (see `gaps.md`).
 
 ### Main-claimed family (0)
 

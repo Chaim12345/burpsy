@@ -21,6 +21,9 @@ func main() {
 	flag.Parse()
 
 	fmt.Printf("demo target on http://%s\n", *addr)
+	// Endpoints on a listener of their own (request smuggling's two-tier targets) are not routes on
+	// the shared server; each listener is started on a loopback port and its URL printed instead.
+	listeners := map[string]*vulnapp.Listener{}
 	for _, e := range vulnapp.Vulnerabilities() {
 		kind := "VULNERABLE"
 		switch {
@@ -32,6 +35,18 @@ func main() {
 		method := e.Method
 		if method == "" {
 			method = "GET"
+		}
+		if e.Listener != "" {
+			l := listeners[e.Listener]
+			if l == nil {
+				var err error
+				if l, err = vulnapp.StartListener(e.Listener); err != nil {
+					log.Fatalf("start listener %s: %v", e.Listener, err)
+				}
+				listeners[e.Listener] = l
+			}
+			fmt.Printf("  %s %-6s %-34s %s (on %s)\n", kind, method, e.Path, e.Row, l.URL())
+			continue
 		}
 		fmt.Printf("  %s %-6s %-34s %s\n", kind, method, e.Path, e.Row)
 	}

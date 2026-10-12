@@ -13,8 +13,8 @@ import (
 // Cache-related checks: web cache poisoning and web cache deception are
 // implemented natively (they are observable through ordinary request/response
 // pairs). HTTP request smuggling and client-side desync used to be declined here for
-// want of a keep-alive/pipelining primitive; both now run on SendPipelined and are
-// registered by FinalCheckDescriptors in checks_final.go.
+// want of a keep-alive/pipelining primitive; both are registered by FinalCheckDescriptors
+// in checks_final.go, with their runners in checks_smuggling.go.
 //
 // The evidence classifiers below are pure: they take observed response bodies,
 // statuses and headers and return a bitmask with no network or storage access,

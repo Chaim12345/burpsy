@@ -61,4 +61,6 @@ go test ./internal/scanner/...        # e.g. runtime_coverage_test.go drives thi
 
 No other `internal/` packages — the dependency runs the other way (`internal/scanner` tests import
 this). Standard library only: `net/http`, `encoding/*`, `crypto/rsa`+`crypto/x509` (JWT/JWKS),
-`regexp`, `sync`, etc. There is no matching Rust crate under `crates/` — this package is Go-only.
+`regexp`, `sync`, etc. — plus `golang.org/x/net/http2` for the HTTP/2 side of the request-smuggling
+listeners in `vulnapp_desync.go`, which are the one family served by listeners of their own
+(`Endpoint.Listener`, `StartListener`) rather than routes on `Handler()`. There is no matching Rust crate under `crates/` — this package is Go-only.

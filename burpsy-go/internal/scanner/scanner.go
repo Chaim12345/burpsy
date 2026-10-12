@@ -307,6 +307,12 @@ type ScanConfig struct {
 	// sessions that survive logout. It replays the captured login, with the credentials it carries, for
 	// fresh sessions of its own and logs out only sessions it created. Off by default.
 	CheckSessionManagement bool
+	// CheckRequestSmuggling admits the HTTP request smuggling check (checks_smuggling.go,
+	// burpsy-react-ui-0vzb.1): CL.TE, TE.CL and HTTP/2 downgrade disagreements detected by timing
+	// alone, an attack that times out twice against a consistently framed control that does not.
+	// Nothing is queued on a back-end connection. CheckExtendedActive also admits it. Off by default:
+	// each confirmed attack holds a back-end connection open for its read window.
+	CheckRequestSmuggling bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

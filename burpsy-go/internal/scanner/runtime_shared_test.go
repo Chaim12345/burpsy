@@ -54,6 +54,9 @@ func TestMain(m *testing.M) {
 		if sharedTarget.tlsSrv != nil {
 			sharedTarget.tlsSrv.Close()
 		}
+		for _, l := range sharedTarget.listeners {
+			l.Close()
+		}
 		if sharedTarget.domScan != nil {
 			_ = sharedTarget.domScan.CloseCapabilities()
 		}

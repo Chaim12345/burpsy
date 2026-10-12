@@ -85,6 +85,11 @@ type Endpoint struct {
 	// find one the seeded request actually sent: the URL-override rows read X-Original-URL and
 	// X-Rewrite-URL, and are unreachable unless the captured request carried them.
 	RequestHeaders map[string]string
+	// Listener names a target of its own (StartListener) that serves this endpoint instead of
+	// Handler(). Empty for every route on the shared server. A per-host row whose verdict depends on
+	// how the server itself parses requests — request smuggling is the case — cannot be planted on a
+	// route of a server that parses consistently, so its endpoints are listeners.
+	Listener string
 	// Note explains the mechanism, so a failing assertion can be read without opening the
 	// handler.
 	Note string
@@ -129,6 +134,7 @@ var familyEndpoints = []func() []Endpoint{
 	sqliDialectEndpoints,
 	pwresetEndpoints,
 	sessionEndpoints,
+	desyncEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -153,6 +159,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerSQLiDialects,
 	registerPwreset,
 	registerSession,
+	registerDesync,
 }
 
 func coreEndpoints() []Endpoint {

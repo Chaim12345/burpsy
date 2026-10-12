@@ -142,6 +142,10 @@ func run() error {
 func vulnappSeeds(base string) []string {
 	seeds := []string{base + "/"}
 	for _, e := range vulnapp.Vulnerabilities() {
+		if e.Listener != "" {
+			// Served by a listener of its own, not by the server this crawl starts from.
+			continue
+		}
 		if e.Path == "/" || e.Method == http.MethodPost {
 			// The crawler issues GETs; a POST-only row is reached by form submission, which is the
 			// crawler's own business and not something a seed can express.

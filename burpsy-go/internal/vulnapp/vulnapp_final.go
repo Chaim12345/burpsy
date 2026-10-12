@@ -36,12 +36,10 @@ package vulnapp
 //     its quiet twin in the way this row measures. The fixture has to be its own TLS listener with a
 //     hand-controlled ALPN offer, which is what internal/scanner/hidden_http2_test.go builds: a real
 //     hidden-h2 origin plus the two negatives (advertises h2; speaks no h2 at all).
-//   - HTTP request smuggling, Client-side desync: pipeliningCheck dials cc.Exchange.Host/Port
-//     directly. Endpoint has no field to point an exchange at a different listener, and
-//     runtime_coverage_test.go's seed() always sets Host/Port to one of the two shared httptest
-//     servers. A raw net.Listener built in this file would never be the dial target - nothing
-//     routes an audited exchange to it. Needs a host-override field on Endpoint plus a third
-//     listener; both are outside this file.
+//   - HTTP request smuggling: now declared, by vulnapp_desync.go, on listeners of its own
+//     (Endpoint.Listener) — a two-tier front end and back end per endpoint.
+//   - Client-side desync: the row's runner declines (checks_smuggling.go): no confirmation that
+//     cannot poison a shared back-end connection is implemented, so there is nothing to demonstrate.
 //   - BCheck / Bambda / Extension / Manually generated issue: provenanceCheck reads an internal
 //     ProvenanceLedger, never an HTTP exchange, so no endpoint could demonstrate it even in
 //     principle. It is also moot here: WithProvenanceLedger is never called anywhere in

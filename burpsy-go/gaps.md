@@ -2759,3 +2759,31 @@ Two burpsy-own rows (Burp's catalogue has neither; see `docs/SCANNER-COVERAGE.md
   filtered benchmark seed (`username=admin`, not an account at Authentication LEVEL_7) there is
   nothing to compare; with the level's own account captured (`admin_enum`) it is found and the
   secure LEVEL_9 (`admin_secure`) stays quiet.
+
+## HTTP request smuggling: timing only; Client-side desync declined (2026-10-12, burpsy-react-ui-0vzb.1)
+
+`HTTP request smuggling` (`internal/scanner/checks_smuggling.go`, switch `check_request_smuggling`,
+also admitted by `check_extended_active`) detects CL.TE, TE.CL, H2.TE and H2.CL by Burp's "Time
+delays" method: an attack request complete under one framing rule and not the other times out twice,
+interleaved with a consistently framed control (same headers, same Transfer-Encoding spelling) that is
+answered in under half the read window both times. Twelve Transfer-Encoding spellings. The finding's
+Param is the technique and spelling. What it does NOT do, on purpose or not yet:
+
+- **Burp's "Back-end socket poisoning" method is declined.** Confirming by queueing a prefix for the
+  next request on the back-end connection can land on another user's request. The previous runner did
+  exactly that (a pipelined CL.TE/TE.CL pair, sent without a scope check, reporting the poisoned
+  follow-up); it is gone. TE.CL is only sent for a spelling whose CL.TE probe was answered promptly,
+  because a TE.CL probe against a CL.TE pair leaves one byte on the back end.
+- **A front end that gives up on its back end quickly** (answers 5xx in under half the window, the
+  window being 5x the baseline, at least 5 s) is not detected: the delay is not long enough to call a
+  timeout. HTTP Request Smuggler reads such a delayed error as a signal; burpsy does not.
+- **CL.0, TE.0, H2.0 and request tunnelling** are not probed. HTTP/2 downgrade probes run only where
+  TLS ALPN negotiates h2 (no h2c), with the plain `transfer-encoding: chunked` spelling only.
+- **One finding per host**: the run stops at the first confirmed technique and spelling.
+- **`Client-side desync` declines** (errCheckUnsupported, nothing sent). Its proof — a body that is
+  itself a request, answered on the same connection — poisons the back-end connection whenever a front
+  end that honours Content-Length streams the request to a server that does not. No safe confirmation
+  is implemented.
+- Observed while building the fixture, not this check: `SMTP header injection` fires on the
+  `/desync/clte` and `/desync/safe/compliant` listeners, whose back end answers one fixed page. Likely a
+  differential on the strict front end's 400 for a CR/LF payload; not investigated.
