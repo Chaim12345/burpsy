@@ -1,0 +1,32 @@
+{
+  "typeIndex": 3036676864,
+  "name": "Username enumeration",
+  "description": "<p>The application answers a failed login differently depending on whether the submitted username exists. With the same wrong password, a known username and several invented ones produced responses that differ consistently - in status code, in message or in page structure - while each side was stable across repeats. An attacker can use the difference to compile a list of valid accounts, which makes password guessing, credential stuffing and targeted phishing much more efficient.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no username-enumeration entry. It is classified under CWE-204 (observable response discrepancy).</p>",
+  "remediation": "<p>Return the same response for every failed authentication, whatever the reason: the same status code, the same message (for example \"Invalid username or password\"), the same page structure and, as far as practical, the same response time - including running the password hash comparison for accounts that do not exist. Apply the same rule to registration, password-reset and account-recovery flows, which leak account existence in the same way.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "OWASP Authentication Cheat Sheet: Authentication and Error Messages",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html#authentication-and-error-messages"
+    },
+    {
+      "title": "OWASP WSTG-IDNT-04: Testing for Account Enumeration and Guessable User Account",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/03-Identity_Management_Testing/04-Testing_for_Account_Enumeration_and_Guessable_User_Account"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-204: Observable Response Discrepancy",
+      "url": "https://cwe.mitre.org/data/definitions/204.html"
+    },
+    {
+      "title": "CWE-203: Observable Discrepancy",
+      "url": "https://cwe.mitre.org/data/definitions/203.html"
+    },
+    {
+      "title": "CAPEC-575: Account Footprinting",
+      "url": "https://capec.mitre.org/data/definitions/575.html"
+    }
+  ]
+}

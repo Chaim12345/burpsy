@@ -548,9 +548,12 @@ func FinalCheckDescriptors() []CheckDescriptor {
 		// The IDOR check (checks_idor.go) rides this row behind its own switch: its finding is burpsy's
 		// own "Insecure direct object reference" row (CWE-639, a descendant of this row's CWE-284), and
 		// the registry admits one descriptor per Burp catalogue type.
+		// The login rate-limit and username-enumeration checks (checks_auth_logic.go) ride it too.
 		nativeDescriptor("Broken access control", DispatchScopePerUrl,
-			func(c *ScanConfig) bool { return finalChecksEnabled(c) || idorEnabled(c) },
-			brokenAccessControlOrIDOR(checkBrokenAccessControl)),
+			func(c *ScanConfig) bool {
+				return finalChecksEnabled(c) || idorEnabled(c) || loginRateLimitEnabled(c) || usernameEnumerationEnabled(c)
+			},
+			brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl))),
 		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest, finalChecksEnabled, checkCSRF),
 
 		nativeDescriptor("HTTP request smuggling", DispatchScopePerHost, finalChecksEnabled,

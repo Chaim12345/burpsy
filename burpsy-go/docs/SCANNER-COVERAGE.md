@@ -38,6 +38,25 @@ Sum check: 5 + 6 + 2 + 6 + 5 + 5 + 15 + 28 + 12 + 48 + 3 + 10 + 22 + 16 = 183. E
 (`ValidateRegistry` rejects a duplicate, and `TestDeclinedCatalogDescriptors` fails if the
 per-family partition stops summing to 183).
 
+## Outside the catalog: burpsy's own rows
+
+Classes burpsy detects that Burp's catalogue has no row for. They are not catalogue rows: the 183
+above stay Burp's, and each burpsy row is reported by a check riding an existing Burp descriptor
+behind its own switch (`scanner.BurpsyNativeRows`, `internal/scanner/burpsy_rows.go`). Each has a
+burpsy-authored advisory in `internal/advisory/native/` (index range `0xb5000000`-`0xb5ffffff`),
+which is what carries its CWE onto the finding.
+
+| TypeIndex | Row | CWE | Rides | Switch |
+|---|---|---|---|---|
+| `b5000100` | Insecure direct object reference | 639 | Broken access control | `check_idor` |
+| `b5000200` | Authentication attempts not rate limited | 307 | Broken access control | `check_login_rate_limit` (+ `login_rate_limit_attempts`, default 20, 5-100) |
+| `b5000300` | Username enumeration | 204 | Broken access control | `check_username_enumeration` |
+
+The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
+logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
+real account can be locked, which also means a lockout that engages only for existing accounts is
+not observable. Riding "Broken access control" puts them in that row's light tier and per-URL scope.
+
 ## Outside the catalog: DOM Invader's detections
 
 The 183-row catalog above is the **scanner's** issue set — the rows Burp's own audit engine can

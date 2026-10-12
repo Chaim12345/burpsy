@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036676608,
+  "name": "Authentication attempts not rate limited",
+  "description": "<p>The application accepted a burst of failed authentication attempts (wrong passwords or one-time codes) and answered every one of them identically: no HTTP 429, no Retry-After header, no CAPTCHA, no lockout or \"try again later\" message, and no growing delay. An attacker can therefore try passwords or codes as fast as the server answers, which makes online password guessing, credential stuffing and brute force of short one-time codes practical.</p>\n<p>burpsy tests this with an identity it invents (an account name that cannot exist), so no real account is ever locked. A defence that only engages for accounts that exist - per-account lockout without any per-client or per-identifier throttle - is not observable that way, and is why this finding is reported as tentative.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no entry for missing login rate limiting. It is classified under CWE-307, which descends from the CWE-284 class that Burp's 'Broken access control' row uses.</p>",
+  "remediation": "<p>Restrict repeated failed authentication attempts. Apply a throttle per client and per submitted identifier (whether or not the account exists), with progressive delays or a temporary lockout, and answer throttled attempts with HTTP 429 and a Retry-After header. Consider requiring a CAPTCHA after a small number of failures, and multi-factor authentication for sensitive accounts. One-time codes must be invalidated after a small number of wrong guesses, and the issuing of fresh codes must be rate limited too.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "OWASP Authentication Cheat Sheet: Protect Against Automated Attacks",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html#protect-against-automated-attacks"
+    },
+    {
+      "title": "OWASP WSTG-ATHN-03: Testing for Weak Lock Out Mechanism",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/03-Testing_for_Weak_Lock_Out_Mechanism"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-307: Improper Restriction of Excessive Authentication Attempts",
+      "url": "https://cwe.mitre.org/data/definitions/307.html"
+    },
+    {
+      "title": "CAPEC-49: Password Brute Forcing",
+      "url": "https://capec.mitre.org/data/definitions/49.html"
+    }
+  ]
+}

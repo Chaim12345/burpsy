@@ -48,6 +48,11 @@ type scannerConfigView struct {
 	CheckFileUpload         bool `json:"check_file_upload"`
 	CheckJwtForgery         bool `json:"check_jwt_forgery"`
 	CheckIDOR               bool `json:"check_idor"`
+	// The login rate-limit and username-enumeration rows (scanner/checks_auth_logic.go), each off by
+	// default, and the rate-limit check's burst size (0 = the scanner's default).
+	CheckLoginRateLimit      bool `json:"check_login_rate_limit"`
+	CheckUsernameEnumeration bool `json:"check_username_enumeration"`
+	LoginRateLimitAttempts   int  `json:"login_rate_limit_attempts"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -82,6 +87,10 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckFileUpload:         c.CheckFileUpload,
 		CheckJwtForgery:         c.CheckJwtForgery,
 		CheckIDOR:               c.CheckIDOR,
+
+		CheckLoginRateLimit:      c.CheckLoginRateLimit,
+		CheckUsernameEnumeration: c.CheckUsernameEnumeration,
+		LoginRateLimitAttempts:   c.LoginRateLimitAttempts,
 	}
 }
 
@@ -89,32 +98,34 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 // switch joins this map or it does not exist on the wire, which keeps the endpoint's honesty
 // mechanical rather than a matter of remembering to update a doc.
 var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
-	"check_sqli":                func(v *scannerConfigView) *bool { return &v.CheckSqli },
-	"check_xss":                 func(v *scannerConfigView) *bool { return &v.CheckXss },
-	"check_path_traversal":      func(v *scannerConfigView) *bool { return &v.CheckPathTraversal },
-	"check_ssrf":                func(v *scannerConfigView) *bool { return &v.CheckSSRF },
-	"check_xxe":                 func(v *scannerConfigView) *bool { return &v.CheckXXE },
-	"check_jwt_weak":            func(v *scannerConfigView) *bool { return &v.CheckJwtWeak },
-	"check_js_vulns":            func(v *scannerConfigView) *bool { return &v.CheckJSVulns },
-	"check_headers":             func(v *scannerConfigView) *bool { return &v.CheckHeaders },
-	"check_cache_poisoning":     func(v *scannerConfigView) *bool { return &v.CheckCachePoisoning },
-	"check_corpus":              func(v *scannerConfigView) *bool { return &v.CheckCorpus },
-	"check_dom":                 func(v *scannerConfigView) *bool { return &v.CheckDOM },
-	"check_xss_browser_confirm": func(v *scannerConfigView) *bool { return &v.CheckXSSBrowserConfirm },
-	"check_ssrf_in_band":        func(v *scannerConfigView) *bool { return &v.CheckSSRFInBand },
-	"check_extended_coverage":   func(v *scannerConfigView) *bool { return &v.CheckExtendedCoverage },
-	"check_reflection_probes":   func(v *scannerConfigView) *bool { return &v.CheckReflectionProbes },
-	"check_host_discovery":      func(v *scannerConfigView) *bool { return &v.CheckHostDiscovery },
-	"check_response_dependence": func(v *scannerConfigView) *bool { return &v.CheckResponseDependence },
-	"check_passive_posture":     func(v *scannerConfigView) *bool { return &v.CheckPassivePosture },
-	"check_passive_analysis":    func(v *scannerConfigView) *bool { return &v.CheckPassiveAnalysis },
-	"check_active_injection":    func(v *scannerConfigView) *bool { return &v.CheckActiveInjection },
-	"check_extended_active":     func(v *scannerConfigView) *bool { return &v.CheckExtendedActive },
-	"check_out_of_band":         func(v *scannerConfigView) *bool { return &v.CheckOutOfBand },
-	"check_stored":              func(v *scannerConfigView) *bool { return &v.CheckStored },
-	"check_file_upload":         func(v *scannerConfigView) *bool { return &v.CheckFileUpload },
-	"check_jwt_forgery":         func(v *scannerConfigView) *bool { return &v.CheckJwtForgery },
-	"check_idor":                func(v *scannerConfigView) *bool { return &v.CheckIDOR },
+	"check_sqli":                 func(v *scannerConfigView) *bool { return &v.CheckSqli },
+	"check_xss":                  func(v *scannerConfigView) *bool { return &v.CheckXss },
+	"check_path_traversal":       func(v *scannerConfigView) *bool { return &v.CheckPathTraversal },
+	"check_ssrf":                 func(v *scannerConfigView) *bool { return &v.CheckSSRF },
+	"check_xxe":                  func(v *scannerConfigView) *bool { return &v.CheckXXE },
+	"check_jwt_weak":             func(v *scannerConfigView) *bool { return &v.CheckJwtWeak },
+	"check_js_vulns":             func(v *scannerConfigView) *bool { return &v.CheckJSVulns },
+	"check_headers":              func(v *scannerConfigView) *bool { return &v.CheckHeaders },
+	"check_cache_poisoning":      func(v *scannerConfigView) *bool { return &v.CheckCachePoisoning },
+	"check_corpus":               func(v *scannerConfigView) *bool { return &v.CheckCorpus },
+	"check_dom":                  func(v *scannerConfigView) *bool { return &v.CheckDOM },
+	"check_xss_browser_confirm":  func(v *scannerConfigView) *bool { return &v.CheckXSSBrowserConfirm },
+	"check_ssrf_in_band":         func(v *scannerConfigView) *bool { return &v.CheckSSRFInBand },
+	"check_extended_coverage":    func(v *scannerConfigView) *bool { return &v.CheckExtendedCoverage },
+	"check_reflection_probes":    func(v *scannerConfigView) *bool { return &v.CheckReflectionProbes },
+	"check_host_discovery":       func(v *scannerConfigView) *bool { return &v.CheckHostDiscovery },
+	"check_response_dependence":  func(v *scannerConfigView) *bool { return &v.CheckResponseDependence },
+	"check_passive_posture":      func(v *scannerConfigView) *bool { return &v.CheckPassivePosture },
+	"check_passive_analysis":     func(v *scannerConfigView) *bool { return &v.CheckPassiveAnalysis },
+	"check_active_injection":     func(v *scannerConfigView) *bool { return &v.CheckActiveInjection },
+	"check_extended_active":      func(v *scannerConfigView) *bool { return &v.CheckExtendedActive },
+	"check_out_of_band":          func(v *scannerConfigView) *bool { return &v.CheckOutOfBand },
+	"check_stored":               func(v *scannerConfigView) *bool { return &v.CheckStored },
+	"check_file_upload":          func(v *scannerConfigView) *bool { return &v.CheckFileUpload },
+	"check_jwt_forgery":          func(v *scannerConfigView) *bool { return &v.CheckJwtForgery },
+	"check_idor":                 func(v *scannerConfigView) *bool { return &v.CheckIDOR },
+	"check_login_rate_limit":     func(v *scannerConfigView) *bool { return &v.CheckLoginRateLimit },
+	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -173,6 +184,18 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 			*get(&view) = n
 			continue
 		}
+		if key == "login_rate_limit_attempts" {
+			// 0 restores the scanner's default; anything else must be a burst the check will actually
+			// send, so an out-of-range value is refused rather than silently clamped.
+			var n int
+			if err := json.Unmarshal(raw, &n); err != nil || (n != 0 && (n < scanner.MinLoginRateLimitAttempts || n > scanner.MaxLoginRateLimitAttempts)) {
+				http.Error(w, fmt.Sprintf("key %q wants 0 (the default, %d) or an integer from %d to %d", key,
+					scanner.DefaultLoginRateLimitAttempts, scanner.MinLoginRateLimitAttempts, scanner.MaxLoginRateLimitAttempts), http.StatusBadRequest)
+				return
+			}
+			view.LoginRateLimitAttempts = n
+			continue
+		}
 		if key == "max_concurrency" {
 			var n int
 			if err := json.Unmarshal(raw, &n); err != nil || n < 1 {
@@ -216,6 +239,9 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckFileUpload = view.CheckFileUpload
 		c.CheckJwtForgery = view.CheckJwtForgery
 		c.CheckIDOR = view.CheckIDOR
+		c.CheckLoginRateLimit = view.CheckLoginRateLimit
+		c.CheckUsernameEnumeration = view.CheckUsernameEnumeration
+		c.LoginRateLimitAttempts = view.LoginRateLimitAttempts
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

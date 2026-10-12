@@ -343,6 +343,10 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckJwtForgery = false
 		case "CheckIDOR":
 			cfg.CheckIDOR = false
+		case "CheckLoginRateLimit":
+			cfg.CheckLoginRateLimit = false
+		case "CheckUsernameEnumeration":
+			cfg.CheckUsernameEnumeration = false
 		}
 	}
 }

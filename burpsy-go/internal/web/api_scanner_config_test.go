@@ -124,3 +124,29 @@ func TestConfigPutSurvivesARestartThroughPersistedOverrides(t *testing.T) {
 		t.Fatalf("check_stored after restart = %v; a policy the operator set that dies with the process was never really set", got)
 	}
 }
+
+// The authentication rows' switches and burst size are on the wire, off by default, and the burst is
+// refused outside the range the check would actually send rather than silently clamped.
+func TestConfigCarriesTheAuthenticationChecks(t *testing.T) {
+	s := newScannerServer()
+	cfg := getScannerConfig(t, s)
+	for _, k := range []string{"check_login_rate_limit", "check_username_enumeration"} {
+		if cfg[k] != false {
+			t.Errorf("%s = %v, want present and off by default", k, cfg[k])
+		}
+	}
+	for _, bad := range []any{3, 101, -1, "x"} {
+		if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"login_rate_limit_attempts": bad}); rec.Code != http.StatusBadRequest {
+			t.Errorf("login_rate_limit_attempts=%v answered %d, want 400", bad, rec.Code)
+		}
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_login_rate_limit": true,
+		"check_username_enumeration": true, "login_rate_limit_attempts": 12})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	got := s.wiredScanner().ConfigSnapshot()
+	if !got.CheckLoginRateLimit || !got.CheckUsernameEnumeration || got.LoginRateLimitAttempts != 12 {
+		t.Errorf("the running scanner did not take the patch: %+v", got)
+	}
+}

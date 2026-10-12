@@ -265,8 +265,22 @@ type ScanConfig struct {
 	// POST body is swapped for a neighbour, and the swap is reported only when an invalid-id control
 	// and a credential-less control both refuse what the swapped id returned. Read-only probes (GET,
 	// or a POST naming a read operation). Off by default.
-	CheckIDOR      bool
-	CustomPayloads []string
+	CheckIDOR bool
+	// CheckLoginRateLimit admits the login rate-limiting check (checks_auth_logic.go): on a POST
+	// that carries an identity and a password or one-time-code parameter, a burst of failed attempts
+	// under an INVENTED identity, reporting "Authentication attempts not rate limited" only when every
+	// attempt got the same unthrottled answer. Off by default: a burst of failed logins is exactly
+	// what a monitoring system is built to alert on, and an operator opts into sending one.
+	CheckLoginRateLimit bool
+	// LoginRateLimitAttempts is the burst size for CheckLoginRateLimit. Zero means
+	// DefaultLoginRateLimitAttempts; any value is clamped to [MinLoginRateLimitAttempts,
+	// MaxLoginRateLimitAttempts], so the check can neither be made meaningless nor turned into a flood.
+	LoginRateLimitAttempts int
+	// CheckUsernameEnumeration admits the username-enumeration check (checks_auth_logic.go): the
+	// captured username and invented ones, each with a random wrong password, compared for a
+	// consistent, repeatable difference. Off by default: it sends failed logins for a real username.
+	CheckUsernameEnumeration bool
+	CustomPayloads           []string
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

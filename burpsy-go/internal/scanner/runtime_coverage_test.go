@@ -734,6 +734,11 @@ func runtimeScanConfig() *ScanConfig {
 		CheckSSRFInBand: true,
 		// The IDOR check (0vzb.12). It only acts on a credentialed read with an object reference.
 		CheckIDOR: true,
+		// The login rate-limit and username-enumeration rows (checks_auth_logic.go). They act only on a
+		// request carrying an identity and a password or one-time-code field, and the rate-limit burst
+		// stops after one request unless the answer shows the endpoint evaluates credentials.
+		CheckLoginRateLimit:      true,
+		CheckUsernameEnumeration: true,
 	}
 }
 
@@ -934,7 +939,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 160
+	const wantDemonstrated = 164
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

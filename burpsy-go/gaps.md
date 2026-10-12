@@ -2737,3 +2737,25 @@ The significance is **computed exactly at N**, not read from Burp's tables (`Zw_
   (and the ry5n keep-alive pool) present no platform credential, as before. The NTLMv2 AUTHENTICATE carries no MIC:
   `micBitSet` reads AV-flag bit 0x4 rather than deciding from MsvAvTimestamp, and the MIC-present flag is never
   placed in the response's AV pairs, so a server that requires a MIC refuses it.
+
+## Authentication logic: login rate limiting and username enumeration (2026-10-12)
+
+Two burpsy-own rows (Burp's catalogue has neither; see `docs/SCANNER-COVERAGE.md`,
+"burpsy's own rows"), both off by default: `check_login_rate_limit` and
+`check_username_enumeration` (`internal/scanner/checks_auth_logic.go`). What they do NOT cover:
+
+- **Lockout that only engages for real accounts.** The rate-limit burst uses an invented identity,
+  so a per-account lockout without any per-identifier/per-client throttle reads as "not rate
+  limited". Reported tentative for this reason; locking a real account to find out is refused.
+- **OTP issuance and silent attempt caps.** Identity-only requests ("send me a code", "forgot
+  password") are never repeated, because that mails a real person. An OTP check that caps attempts
+  but answers the capped guess exactly like a wrong one is indistinguishable black-box from no cap.
+  OWASP VulnerableApp's OTPVulnerability LEVEL_1-4 are both of these (seeded on the issuing endpoint;
+  validation answers "Login unsuccessful" either way), so they stay FN.
+- **Enumeration through reset / registration flows** (VulnerableApp PasswordReset LEVEL_4) and
+  **timing-only enumeration**: latency is recorded in the evidence but never decides.
+- **Login over GET** is not burst-tested (POST/PUT/PATCH only); enumeration covers any method.
+- **Enumeration needs a real username in the captured request.** Against VulnerableApp's
+  filtered benchmark seed (`username=admin`, not an account at Authentication LEVEL_7) there is
+  nothing to compare; with the level's own account captured (`admin_enum`) it is found and the
+  secure LEVEL_9 (`admin_secure`) stays quiet.
