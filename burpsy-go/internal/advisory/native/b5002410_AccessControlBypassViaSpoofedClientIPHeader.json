@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036685328,
+  "name": "Access control bypass via spoofed client IP header",
+  "description": "<p>The application decides whether to serve this request from the client address named in a request header such as X-Forwarded-For, and the client sets that header. A request that is refused as sent is served when the header claims the client is 127.0.0.1, so any client can claim to be local and pass the restriction.</p>\n<p>burpsy sent each client-address header on its own. For the header named in the finding, a loopback claim turned a 401 or 403 into a 2xx with a different page; the same header claiming a random documentation address (203.0.113.0/24) was still refused, so the claimed address decides and not the header's presence; and the loopback claim was admitted again afterwards. The test runs only for GET, HEAD and OPTIONS requests.</p>\n<p>This row is burpsy's own: Burp's catalogue has only the informational 'Spoofable client IP address' row, which does not show a decision made on the address.</p>",
+  "remediation": "<p>Never base access control on a client-supplied address header. If the application is behind a reverse proxy, have the proxy overwrite (not append to) the header and have the application read the address the proxy recorded only when the connection comes from that proxy; otherwise use the connection's own address. Prefer authentication over network location for administrative functions.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Access control vulnerabilities",
+      "url": "https://portswigger.net/web-security/access-control"
+    },
+    {
+      "title": "OWASP WSTG-ATHZ-02: Testing for Bypassing Authorization Schema",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/05-Authorization_Testing/02-Testing_for_Bypassing_Authorization_Schema"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-290: Authentication Bypass by Spoofing",
+      "url": "https://cwe.mitre.org/data/definitions/290.html"
+    },
+    {
+      "title": "CWE-348: Use of Less Trusted Source",
+      "url": "https://cwe.mitre.org/data/definitions/348.html"
+    }
+  ]
+}

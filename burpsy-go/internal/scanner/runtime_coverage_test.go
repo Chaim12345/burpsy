@@ -656,7 +656,15 @@ func buildRawRequest(method, path, host string, port uint16, body, contentType s
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", method, path)
 	fmt.Fprintf(&b, "Host: %s\r\n", net.JoinHostPort(host, fmt.Sprint(port)))
-	b.WriteString("Origin: https://evil.example\r\n")
+	// The default Origin, unless the endpoint declares its own: a WebSocket handshake is captured from
+	// the application's own origin, and a second Origin line would make the capture ambiguous.
+	ownOrigin := false
+	for k := range extra {
+		ownOrigin = ownOrigin || strings.EqualFold(k, "Origin")
+	}
+	if !ownOrigin {
+		b.WriteString("Origin: https://evil.example\r\n")
+	}
 	for k, v := range extra {
 		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 	}
@@ -689,6 +697,11 @@ func buildRawResponse(t *testing.T, res *http.Response) string {
 		}
 	}
 	b.WriteString("\r\n")
+	if res.StatusCode == http.StatusSwitchingProtocols {
+		// A 101 has no body: what follows is the WebSocket stream, which the proxy records as messages,
+		// not as part of the handshake's response.
+		return b.String()
+	}
 	// io.ReadAll, not a single Read.
 	//
 	// A bare res.Body.Read fills the buffer with whatever one read returns, which for a chunked or
@@ -789,6 +802,11 @@ func runtimeScanConfig() *ScanConfig {
 		// The NoSQL injection check (v0ei.6). It acts only on reads and logins with a query, form or
 		// JSON value.
 		CheckNoSQLInjection: true,
+		// Cross-site WebSocket hijacking and the client-IP header checks (vulnapp_wsip.go). The first acts
+		// only on a captured cookie-authenticated handshake; the second puts loopback and documentation
+		// (203.0.113.0/24) addresses in client-IP headers, sent to the loopback target only.
+		CheckWebSocketHijacking: true,
+		CheckClientIPSpoofing:   true,
 	}
 }
 
@@ -993,7 +1011,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 171
+	const wantDemonstrated = 173
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

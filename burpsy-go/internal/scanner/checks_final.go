@@ -494,14 +494,20 @@ func FinalCheckDescriptors() []CheckDescriptor {
 		// the registry admits one descriptor per Burp catalogue type.
 		// The login rate-limit and username-enumeration checks (checks_auth_logic.go) ride it too, and so
 		// does the session-management check (checks_session_mgmt.go): its three findings are burpsy's
-		// own rows (CWE-384, CWE-330, CWE-613).
+		// own rows (CWE-384, CWE-330, CWE-613). So does the client-IP spoofing check
+		// (checks_client_ip.go): two burpsy rows (CWE-290, CWE-348) and, for a reflected address,
+		// Burp's own "Spoofable client IP address", whose registered descriptor is the passive one.
 		nativeDescriptor("Broken access control", DispatchScopePerUrl,
 			func(c *ScanConfig) bool {
 				return finalChecksEnabled(c) || idorEnabled(c) || loginRateLimitEnabled(c) ||
-					usernameEnumerationEnabled(c) || sessionMgmtEnabled(c)
+					usernameEnumerationEnabled(c) || sessionMgmtEnabled(c) || clientIPSpoofEnabled(c)
 			},
-			withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl)))),
-		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest, finalChecksEnabled, checkCSRF),
+			withClientIPSpoofing(withSessionManagement(brokenAccessControlWithAuthLogic(brokenAccessControlOrIDOR(checkBrokenAccessControl))))),
+		// Cross-site WebSocket hijacking (checks_ws_hijack.go) rides this row behind its own switch: it is
+		// a cross-site request forgery of the WebSocket handshake, reported as burpsy's own row (CWE-1385).
+		nativeDescriptor("Cross-site request forgery", DispatchScopePerRequest,
+			func(c *ScanConfig) bool { return finalChecksEnabled(c) || wsHijackEnabled(c) },
+			withWebSocketHijacking(checkCSRF)),
 
 		// Timing-only CL.TE / TE.CL / H2 downgrade detection (checks_smuggling.go). Medium tier: each
 		// attack holds a back-end connection open for the read window, though it leaves nothing on it.

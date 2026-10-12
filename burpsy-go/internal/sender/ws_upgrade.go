@@ -67,7 +67,7 @@ type UpgradeResult struct {
 // hands back the live connection.
 //
 // The connection is returned only for a 101. Any other response is an error carrying the
-// status line, and the connection is closed: a 404 from a mis-pathed upgrade is not a
+// status line (and the refusal's head in RawResp, with a nil Conn), and the connection is closed: a 404 from a mis-pathed upgrade is not a
 // WebSocket conversation the caller could continue, and handing back a socket that is
 // speaking HTTP rather than WebSocket would make every subsequent frame write a protocol
 // violation the target is entitled to answer by dropping the connection.
@@ -103,7 +103,9 @@ func (s *Sender) SendUpgrade(ctx context.Context, host string, port uint16, useT
 	}
 	if status := httputil.ResponseStatus(head); status == nil || *status != 101 {
 		conn.Close()
-		return UpgradeResult{}, fmt.Errorf("the target refused the WebSocket upgrade: %s",
+		// The refusal's head is handed back with the error (and no Conn): a caller comparing how a
+		// target answers two handshakes needs the status it refused with, not only that it refused.
+		return UpgradeResult{RawResp: head, DurationMs: time.Since(started).Milliseconds()}, fmt.Errorf("the target refused the WebSocket upgrade: %s",
 			strings.TrimSpace(string(upgradeStatusLine(head))))
 	}
 	// The handshake's deadline comes off the socket: the frames the caller is about to
@@ -124,4 +126,26 @@ func upgradeStatusLine(raw []byte) []byte {
 		return raw[:i]
 	}
 	return raw
+}
+
+// SendUpgrade is the scope-gated WebSocket handshake: the same AuthoriseRaw decision Send makes, on
+// the exact handshake bytes about to be written, against this sender's bound authority, then the
+// pool's pacing, then Sender.SendUpgrade. A refusal is counted and nothing is dialled. On success the
+// caller owns the returned connection.
+func (a *AuthorisedSender) SendUpgrade(ctx context.Context, rawUpgrade []byte) (UpgradeResult, error) {
+	if err := a.scope.AuthoriseRaw(a.host, a.port, a.tls, rawUpgrade); err != nil {
+		a.refused.Add(1)
+		return UpgradeResult{}, err
+	}
+	release, err := a.pacing(ctx)
+	if err != nil {
+		return UpgradeResult{}, err
+	}
+	defer release()
+	res, err := a.net.SendUpgrade(ctx, a.host, a.port, a.tls, rawUpgrade)
+	if err == nil || len(res.RawResp) > 0 {
+		// A refused handshake still reached the target and was answered.
+		a.sent.Add(1)
+	}
+	return res, err
 }

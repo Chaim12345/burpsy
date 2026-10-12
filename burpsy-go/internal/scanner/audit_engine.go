@@ -359,6 +359,10 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckGraphQLHardening = false
 		case "CheckNoSQLInjection":
 			cfg.CheckNoSQLInjection = false
+		case "CheckWebSocketHijacking":
+			cfg.CheckWebSocketHijacking = false
+		case "CheckClientIPSpoofing":
+			cfg.CheckClientIPSpoofing = false
 		}
 	}
 }

@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036685344,
+  "name": "Rate limit bypass via spoofed client IP header",
+  "description": "<p>The application's rate limiting is keyed on the client address named in a request header such as X-Forwarded-For, and the client sets that header. A client that puts a different address in the header on each request is never limited, which defeats brute-force and abuse protection that depends on the limit.</p>\n<p>burpsy took a request the application answered with 429. For the header named in the finding, a fresh random documentation address (203.0.113.0/24) was answered; the unmodified request sent straight afterwards was still limited, so the limit had not lapsed; and a second fresh address was answered again. The test runs only for safe-method requests and captured logins.</p>\n<p>This row is burpsy's own: Burp's catalogue has only the informational 'Spoofable client IP address' row.</p>",
+  "remediation": "<p>Key rate limits on something the client cannot choose: the connection's address (or the address a trusted reverse proxy recorded, read only from that proxy), the account being acted on, or both. Never key them on a client-supplied header.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Flawed brute-force protection",
+      "url": "https://portswigger.net/web-security/authentication/password-based#flawed-brute-force-protection"
+    },
+    {
+      "title": "OWASP WSTG-ATHN-03: Testing for Weak Lock Out Mechanism",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/04-Authentication_Testing/03-Testing_for_Weak_Lock_Out_Mechanism"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-348: Use of Less Trusted Source",
+      "url": "https://cwe.mitre.org/data/definitions/348.html"
+    },
+    {
+      "title": "CWE-307: Improper Restriction of Excessive Authentication Attempts",
+      "url": "https://cwe.mitre.org/data/definitions/307.html"
+    }
+  ]
+}

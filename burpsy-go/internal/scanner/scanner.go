@@ -344,6 +344,16 @@ type ScanConfig struct {
 	// against a plain-value control or by a MongoDB error a repaired control does not draw. Reads only
 	// (GET, or a POST naming a read or a login). Off by default.
 	CheckNoSQLInjection bool
+	// CheckWebSocketHijacking admits the cross-site WebSocket hijacking check (checks_ws_hijack.go):
+	// a captured cookie-authenticated handshake is re-opened with a random .invalid Origin and with no
+	// cookies, reading only what the server sends on connect. Off by default: it opens authenticated
+	// sockets as the captured session.
+	CheckWebSocketHijacking bool
+	// CheckClientIPSpoofing admits the spoofable client-IP header check (checks_client_ip.go): each of
+	// X-Forwarded-For, X-Real-IP, X-Client-IP, True-Client-IP, CF-Connecting-IP, X-Originating-IP and
+	// Forwarded as its own probe, for an access-control (401/403) or rate-limit (429) differential and
+	// for the claimed address reflected. Off by default: it claims loopback to refused pages.
+	CheckClientIPSpoofing bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

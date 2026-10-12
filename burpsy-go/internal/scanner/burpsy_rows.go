@@ -176,6 +176,32 @@ func BurpsyNativeRows() []BurpsyRow {
 			"and NoSQL findings come from extensions, filed under the generic extension-generated type. It " +
 			"rides 'Server-side JavaScript code injection' because the $where form of the flaw is " +
 			"server-side JavaScript evaluated by the database, and that row probes the same parameters.",
+	}, {
+		Name:      IssueWebSocketHijacking,
+		TypeIndex: 0xb5002400,
+		CWE:       1385,
+		Rides:     "Cross-site request forgery",
+		Why: "Burp's catalogue has no WebSocket hijacking row: Burp's scanner audits WebSocket messages as " +
+			"insertion points and leaves the handshake's Origin check to manual testing (the Academy topic). " +
+			"It rides 'Cross-site request forgery' because the attack is a cross-site forgery of the " +
+			"handshake, and CWE-1385 is that row's CWE-352 specialised to WebSockets.",
+	}, {
+		Name:      IssueClientIPAccessBypass,
+		TypeIndex: 0xb5002410,
+		CWE:       290,
+		Rides:     "Broken access control",
+		Why: "Burp's only client-IP row, 'Spoofable client IP address', is informational: it shows the " +
+			"header is read, not that a decision depends on it. A refused page served on a loopback claim " +
+			"is an access-control failure, so it rides 'Broken access control' (CWE-290 descends from " +
+			"CWE-284 through CWE-287).",
+	}, {
+		Name:      IssueClientIPRateLimitBypass,
+		TypeIndex: 0xb5002420,
+		CWE:       348,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no rate-limit row at all, and its 'Spoofable client IP address' row is " +
+			"informational. It rides 'Broken access control' with the client-IP access bypass, which the " +
+			"same probes test.",
 	}}
 }
 

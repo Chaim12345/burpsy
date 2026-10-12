@@ -57,6 +57,9 @@ which is what carries its CWE onto the finding.
 | `b5001820` | GraphQL debug information disclosed | 209 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001400` | Insecure deserialization | 502 | React Server Components remote code execution (React2Shell) | `check_insecure_deserialization` |
 | `b5002000` | NoSQL injection | 943 | Server-side JavaScript code injection | `check_nosql_injection` |
+| `b5002400` | Cross-site WebSocket hijacking | 1385 | Cross-site request forgery | `check_websocket_hijacking` |
+| `b5002410` | Access control bypass via spoofed client IP header | 290 | Broken access control | `check_client_ip_spoofing` |
+| `b5002420` | Rate limit bypass via spoofed client IP header | 348 | Broken access control | `check_client_ip_spoofing` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
@@ -88,6 +91,11 @@ alike, two always-false ones alike and equal to a plain random value, a stable p
 unchanged afterwards, every random value masked) or a MongoDB error a repaired control does not draw.
 It probes reads only (GET, or a POST naming a read or a login, never a write). Timing through `$where`
 is not implemented.
+Cross-site WebSocket hijacking (`checks_ws_hijack.go`) re-opens a captured cookie-only handshake with a
+random `.invalid` Origin and, as a control, without cookies; the client-IP check (`checks_client_ip.go`)
+probes seven client-address headers one at a time. Its reflection result is Burp's own informational
+"Spoofable client IP address" row, reported from this active check (the registered descriptor for that
+row is the passive one). Both switches are off by default.
 
 ## Outside the catalog: DOM Invader's detections
 

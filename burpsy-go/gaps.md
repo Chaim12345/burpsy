@@ -2867,3 +2867,43 @@ parameters in bracket syntax (`name[$ne]=x`, `name[$in][]=x`), and breaks out of
   `/nosql/report` from its error bank matching "unterminated string literal", the JavaScript engine's
   message inside the MongoServerError. The flaw is real but it is not SQL; the SQL error bank should
   not treat that JavaScript message as a SQL signature (`sqli_*` files are another agent's area).
+
+## Cross-site WebSocket hijacking and spoofable client-IP headers (2026-10-12, burpsy-react-ui-0vzb.11, 0vzb.14)
+
+`Cross-site WebSocket hijacking` (burpsy row `b5002400`, CWE-1385, `check_websocket_hijacking`, rides
+"Cross-site request forgery"): for a captured 101 handshake with a Cookie, no Authorization and no
+secret-shaped query value or subprotocol, three handshakes through the scope gate
+(`AuthorisedSender.SendUpgrade`): as captured, with `Origin: https://<random>.invalid`, and without
+cookies. Firm when the foreign Origin gets 101 and either the cookie-less control is refused or the
+foreign socket's first message equals the authenticated one and differs from the cookie-less one
+(digit runs masked); tentative when all three open and no socket says anything. Not done:
+
+- **No client message is ever sent**, so a server that speaks only after the client does (a "READY"
+  first message) gives no messages to compare: it is firm only when the cookie-less handshake is
+  refused, and tentative when that handshake opens too.
+- **SameSite is not evaluated**: a Lax/Strict session cookie would not be sent cross-site; the finding
+  says so rather than looking up the Set-Cookie.
+- Token detection in the URL and subprotocol is a shape heuristic (16+ URL-safe characters with a
+  letter and a digit); a short ticket is not recognised as a defence.
+
+Client-IP headers (`check_client_ip_spoofing`, rides "Broken access control"; each of X-Forwarded-For,
+X-Real-IP, X-Client-IP, True-Client-IP, CF-Connecting-IP, X-Originating-IP, Forwarded for= as its own
+probe; the finding's Param is the header):
+
+- `Access control bypass via spoofed client IP header` (`b5002410`, CWE-290): safe-method request,
+  baseline 401/403, 127.0.0.1 -> 2xx with a different body, a 203.0.113.x control not 2xx, loopback
+  2xx again. Firm.
+- `Rate limit bypass via spoofed client IP header` (`b5002420`, CWE-348): safe-method request or a
+  captured login, baseline 429, a fresh documentation address not 429/5xx, the plain request still
+  429, a second fresh address not 429. Firm.
+- Burp's `Spoofable client IP address` (info): one probe with every header at a distinct random
+  address plus an `X-Burpsy-Echo-Control` echo control; the address must come back as a whole token
+  (parsed header value or body) and, sent alone with a fresh address, again. Firm.
+
+Not done: loopback spellings other than `127.0.0.1` (`::1`, `localhost`, `127.1`, private ranges) are
+not tried; only the first header that bypasses is reported; a refused state-changing request is never
+replayed with a bypass. The rate-limit pair is not in the runtime corpus manifest (no Row): a route
+that answers its captured request 429 puts every step of a whole audit behind the 2 s auto-backoff
+(99 waits, 200 s measured), so `checks_ws_ip_test.go` audits it with only this switch on. The passive
+`Spoofable client IP address` check still fires on any captured request that merely carries one of
+these headers; that is unchanged here.

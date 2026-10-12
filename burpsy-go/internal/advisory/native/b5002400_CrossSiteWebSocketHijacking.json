@@ -1,0 +1,32 @@
+{
+  "typeIndex": 3036685312,
+  "name": "Cross-site WebSocket hijacking",
+  "description": "<p>The application's WebSocket handshake is authenticated by cookies alone and is accepted from a page on any origin. A browser attaches the target's cookies to a WebSocket handshake that any web page opens, and the Same-Origin Policy does not stop that page reading the socket, so a page the victim visits can open an authenticated socket as the victim and send and read messages with the victim's privileges. The handshake's Origin header is the only thing that distinguishes the application's own pages, and this server does not act on it.</p>\n<p>burpsy re-opened a captured cookie-authenticated handshake with the Origin of a host the application does not serve, and the server accepted it. It then showed the socket is authenticated: either the same handshake without its cookies was refused, or the foreign-origin socket received the same first message as the authenticated socket while a socket without cookies received a different one. A tentative finding shows only that the foreign Origin was accepted. burpsy reads only what the server sends on connect and never sends a message. The session cookie's SameSite attribute is not evaluated: a Lax or Strict cookie is not sent by a cross-site page in current browsers.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no cross-site WebSocket hijacking entry.</p>",
+  "remediation": "<p>Validate the Origin header of every WebSocket handshake against an allow-list of the application's own origins and refuse the upgrade otherwise. Do not rely on ambient credentials alone: require a per-session unpredictable token in the handshake (a URL parameter or a first message) that a cross-site page cannot know, and set session cookies with SameSite=Lax or Strict.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Cross-site WebSocket hijacking",
+      "url": "https://portswigger.net/web-security/websockets/cross-site-websocket-hijacking"
+    },
+    {
+      "title": "Christian Schneider: Cross-Site WebSocket Hijacking (CSWSH)",
+      "url": "https://christian-schneider.net/CrossSiteWebSocketHijacking.html"
+    },
+    {
+      "title": "OWASP WSTG-CLNT-10: Testing WebSockets",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/11-Client-side_Testing/10-Testing_WebSockets"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-1385: Missing Origin Validation in WebSockets",
+      "url": "https://cwe.mitre.org/data/definitions/1385.html"
+    },
+    {
+      "title": "CWE-352: Cross-Site Request Forgery (CSRF)",
+      "url": "https://cwe.mitre.org/data/definitions/352.html"
+    }
+  ]
+}
