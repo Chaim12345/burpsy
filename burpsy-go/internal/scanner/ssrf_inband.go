@@ -28,14 +28,25 @@ package scanner
 // the response. A target that fetches it proves the fetch; a target that merely echoes the URL string
 // back does not, because the marker is not in the URL, it is in what the URL RETURNS. That is the
 // difference between "the application repeated my input" and "the application made the request".
+//
+// # Same-host only
+//
+// The canary listens on 127.0.0.1. A target fetches it only when the target and this scanner share a
+// host (or a network namespace): a remote target that requests http://127.0.0.1:N/… reaches ITS OWN
+// loopback, finds nothing, and the canary payloads are silent there. They never produce a false
+// positive that way (the marker is random and only this listener serves it), but they also prove
+// nothing against a remote target. Against one, the file and metadata payloads below are what can
+// fire, and a BLIND fetch is the out-of-band row's job. There is no collaborator or listener address
+// in ScanConfig to bind to instead; binding to a routable interface would also turn the canary into a
+// listener reachable from the network, which this check deliberately is not.
 
 import (
 	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -49,13 +60,11 @@ type ssrfCanaryServer struct {
 	path   string
 	marker string
 
-	mu   sync.Mutex
-	hits int
 }
 
-// startSSRFCanary binds the listener. It binds loopback only: the scan's own process must be able to
-// reach it, which it can, and nothing outside this host should be able to, which keeps the canary
-// from being an open reflector.
+// startSSRFCanary binds the listener. It binds loopback only (see "Same-host only" above): nothing
+// outside this host can reach it, which keeps the canary from being an open reflector, and a target on
+// another host cannot fetch it either.
 func startSSRFCanary() (*ssrfCanaryServer, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -69,9 +78,6 @@ func startSSRFCanary() (*ssrfCanaryServer, error) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(c.path, func(w http.ResponseWriter, r *http.Request) {
-		c.mu.Lock()
-		c.hits++
-		c.mu.Unlock()
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte(c.marker))
 	})
@@ -85,13 +91,6 @@ func (c *ssrfCanaryServer) URL() string { return "http://" + c.addr + c.path }
 
 // Marker is the token a successful fetch returns.
 func (c *ssrfCanaryServer) Marker() string { return c.marker }
-
-// Hit reports whether the canary was actually requested.
-func (c *ssrfCanaryServer) Hit() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.hits > 0
-}
 
 func (c *ssrfCanaryServer) Close() {
 	if c == nil || c.srv == nil {
@@ -127,6 +126,7 @@ func checkSSRFInBand(ctx context.Context, cc *CheckContext) ([]*Finding, error) 
 	}
 	defer canary.Close()
 
+	baseline := h.Baseline().Body
 	for _, point := range points {
 		for _, payload := range ssrfInBandPayloads(canary.URL()) {
 			res, err := h.Send(ctx, point, payload)
@@ -136,7 +136,7 @@ func checkSSRFInBand(ctx context.Context, cc *CheckContext) ([]*Finding, error) 
 			// The marker is in what the canary RETURNS, never in the URL, so finding it in the response
 			// means the target made the request. A target that echoed the URL back carries the address
 			// but not the marker. The file and metadata payloads are judged by their own content.
-			if what, ok := ssrfInBandEvidence(res.Body, canary.Marker()); ok {
+			if what, ok := ssrfInBandEvidence(res.Body, baseline, payload, canary.Marker()); ok {
 				return []*Finding{buildHeaderFinding(cc, row, "high", "firm",
 					payload,
 					fmt.Sprintf("%s %q: %s, so a server-side request can be sent to an attacker-chosen address", point.Kind, point.Name, what))}, nil
@@ -152,15 +152,14 @@ func checkSSRFInBand(ctx context.Context, cc *CheckContext) ([]*Finding, error) 
 //
 // The HTTP canary URL is the strongest probe — it proves the server made an attacker-chosen request
 // and returned its body, with the marker living in what the URL RETURNS rather than in the URL. The
-// rest cover the other resource schemes and addresses an SSRF actually reaches, each with its own
-// evidence:
+// rest cover the other resource schemes and addresses an SSRF actually reaches, each judged by content
+// only the fetched resource produces:
 //
 //   - `file:///etc/passwd` and the Windows equivalent: the classic local-file read, evidenced by a
-//     known line of the file rather than by a marker. Measured on OWASP VulnerableApp, whose SSRF
-//     level documents exactly this payload — and whose arbitrary-HTTP path 500s, so a check that only
-//     planted an http:// canary reported clean against a target that IS vulnerable through file://.
-//   - the cloud metadata addresses (AWS IMDS, GCP, Azure): an in-band read of the instance identity,
-//     evidenced by the field names those services return.
+//     known line of the file.
+//   - the cloud metadata addresses (AWS IMDS, GCP): an in-band read of the instance identity, evidenced
+//     by the listing and document shapes those services return — never by a word the URL itself
+//     contains, because an application that echoes the URL would then match.
 func ssrfInBandPayloads(canaryURL string) []string {
 	upper := canaryURL
 	if len(upper) >= 4 {
@@ -171,31 +170,53 @@ func ssrfInBandPayloads(canaryURL string) []string {
 		"file:///etc/passwd",
 		"file:///c:/windows/win.ini",
 		"http://169.254.169.254/latest/meta-data/",
-		"http://metadata.google.internal/computeMetadata/v1/",
+		"http://metadata.google.internal/computeMetadata/v1/instance/?recursive=true",
 	}
+}
+
+// ssrfInBandSignature is one piece of content a fetched resource carries.
+type ssrfInBandSignature struct {
+	re   *regexp.Regexp
+	what string
+}
+
+// ssrfInBandSignatures are judged by ssrfInBandEvidence under the echo and baseline rules.
+//
+//   - /etc/passwd: the root entry.
+//   - win.ini: its section headers and the 16-bit comment it ships with.
+//   - AWS IMDS: the meta-data listing is one key per line in a fixed order, so `ami-id` directly
+//     followed by `ami-launch-index` on the next line is the listing itself, and `instance-id` alone
+//     on its own line is a key of it.
+//   - GCP: the recursive instance document is JSON whose keys include `machineType` and
+//     `serviceAccounts`; a quoted key followed by a colon is the document, not prose mentioning it.
+var ssrfInBandSignatures = []ssrfInBandSignature{
+	{regexp.MustCompile(`root:[x*]:0:0:`), "/etc/passwd was read"},
+	{regexp.MustCompile(`(?m)^\[fonts\]\r?$`), "win.ini was read"},
+	{regexp.MustCompile(`(?m)^\[extensions\]\r?$`), "win.ini was read"},
+	{regexp.MustCompile(`for 16-bit app support`), "win.ini was read"},
+	{regexp.MustCompile(`(?m)^ami-id\r?\nami-launch-index\r?$`), "the AWS instance metadata listing was read"},
+	{regexp.MustCompile(`(?m)^instance-id\r?$`), "the instance metadata listing was read"},
+	{regexp.MustCompile(`"machineType"\s*:\s*"projects/`), "the GCP instance metadata document was read"},
+	{regexp.MustCompile(`"serviceAccounts"\s*:\s*\{`), "the GCP instance metadata document was read"},
 }
 
 // ssrfInBandEvidence reports whether a response body carries evidence that the planted URL was
 // fetched, and what that evidence was.
 //
-// The canary marker is the unambiguous case. The file and metadata payloads are judged by the content
-// those resources are known to contain, the same discipline the traversal signatures use: a distinctive
-// string the page would not otherwise carry, so a target that merely echoes the URL back cannot match.
-func ssrfInBandEvidence(body, marker string) (string, bool) {
-	if strings.Contains(body, marker) {
+// The canary marker is the unambiguous case: it lives only in what the canary RETURNS. Every other
+// signature counts only when it is ABSENT from the baseline response (a page that already shows a
+// passwd line or an IMDS listing proves nothing by showing it again) and is NOT a substring of the
+// payload that was sent (an application that echoes the URL must never match the URL's own words).
+func ssrfInBandEvidence(body, baseline, payload, marker string) (string, bool) {
+	if marker != "" && strings.Contains(body, marker) && !strings.Contains(payload, marker) && !strings.Contains(baseline, marker) {
 		return "the scanner's canary endpoint was fetched and its body returned", true
 	}
-	for _, sig := range []struct{ text, what string }{
-		{"root:x:0:0:", "/etc/passwd was read"},
-		{"[fonts]", "win.ini was read"},
-		{"[extensions]", "win.ini was read"},
-		{"ami-id", "the AWS instance metadata service was read"},
-		{"instance-id", "the instance metadata service was read"},
-		{"computeMetadata", "the GCP metadata service was read"},
-	} {
-		if strings.Contains(body, sig.text) {
-			return sig.what, true
+	for _, sig := range ssrfInBandSignatures {
+		m := sig.re.FindString(body)
+		if m == "" || strings.Contains(payload, m) || sig.re.MatchString(baseline) {
+			continue
 		}
+		return sig.what, true
 	}
 	return "", false
 }
