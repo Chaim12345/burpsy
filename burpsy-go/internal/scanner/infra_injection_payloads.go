@@ -314,6 +314,7 @@ func TraversalPayloadsFor(base string) []string {
 			"../../../../../../../../etc/passwd%00"+base,
 			"../../application.properties%00"+base,
 			"..%2f..%2fapplication.properties%00"+base,
+			"%2e%2e/%2e%2e/application.properties%00"+base,
 			`..\..\..\..\..\..\..\..\windows\win.ini%00`+base,
 		)
 		if i := strings.LastIndexByte(base, '/'); i > 0 {
