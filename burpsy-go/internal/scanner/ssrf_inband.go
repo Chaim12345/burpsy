@@ -59,7 +59,6 @@ type ssrfCanaryServer struct {
 	addr   string
 	path   string
 	marker string
-
 }
 
 // startSSRFCanary binds the listener. It binds loopback only (see "Same-host only" above): nothing
