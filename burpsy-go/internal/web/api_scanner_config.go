@@ -59,8 +59,9 @@ type scannerConfigView struct {
 	CheckPasswordReset       bool `json:"check_password_reset"`
 	// The password-reset checks' operator inputs: the test accounts they may act on, and the test
 	// inbox URL ("{identity}" is replaced by the query-escaped identity).
-	ResetTestIdentities []string `json:"reset_test_identities"`
-	ResetMailboxURL     string   `json:"reset_mailbox_url"`
+	ResetTestIdentities    []string `json:"reset_test_identities"`
+	ResetMailboxURL        string   `json:"reset_mailbox_url"`
+	CheckSessionManagement bool     `json:"check_session_management"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -103,6 +104,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckPasswordReset:       c.CheckPasswordReset,
 		ResetTestIdentities:      append([]string{}, c.ResetTestIdentities...),
 		ResetMailboxURL:          c.ResetMailboxURL,
+		CheckSessionManagement:   c.CheckSessionManagement,
 	}
 }
 
@@ -140,6 +142,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
 	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
 	"check_password_reset":       func(v *scannerConfigView) *bool { return &v.CheckPasswordReset },
+	"check_session_management":   func(v *scannerConfigView) *bool { return &v.CheckSessionManagement },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -291,6 +294,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckPasswordReset = view.CheckPasswordReset
 		c.ResetTestIdentities = append([]string(nil), view.ResetTestIdentities...)
 		c.ResetMailboxURL = view.ResetMailboxURL
+		c.CheckSessionManagement = view.CheckSessionManagement
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

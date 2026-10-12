@@ -748,6 +748,8 @@ func runtimeScanConfig() *ScanConfig {
 		CheckPasswordReset:  true,
 		ResetTestIdentities: vulnapp.PwresetIdentities(),
 		ResetMailboxURL:     runtimeResetMailbox,
+		// The session-management check (0vzb wave 5). It only acts on a captured login that set a cookie.
+		CheckSessionManagement: true,
 	}
 }
 

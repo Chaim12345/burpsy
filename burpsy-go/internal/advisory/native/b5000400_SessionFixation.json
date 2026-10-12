@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036677120,
+  "name": "Session fixation",
+  "description": "<p>The application keeps a session token that the client supplied before logging in and continues to use it after authentication. An attacker who can plant a token of their choosing in a victim's browser (through a link, a subdomain, a cookie-injection flaw or a shared computer) and wait for the victim to log in then holds an authenticated session as the victim, without ever learning the password.</p>\n<p>burpsy chose a well-formed token the application had never issued, showed that it was not accepted by a page that depends on the session, logged in with it set as the session cookie, and showed that the same token was accepted by that page afterwards as the user who logged in.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no session fixation entry.</p>",
+  "remediation": "<p>Issue a new session token on every successful authentication and on every change of privilege, and invalidate the token presented before it. Never adopt a session identifier the client supplied that the server did not issue; frameworks usually provide this as session regeneration or a session-fixation protection setting.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "OWASP Session Management Cheat Sheet: Renew the Session ID After Any Privilege Level Change",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html#renew-the-session-id-after-any-privilege-level-change"
+    },
+    {
+      "title": "OWASP WSTG-SESS-03: Testing for Session Fixation",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/03-Testing_for_Session_Fixation"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-384: Session Fixation",
+      "url": "https://cwe.mitre.org/data/definitions/384.html"
+    }
+  ]
+}

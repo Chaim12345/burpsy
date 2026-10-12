@@ -102,6 +102,10 @@ FULL_PROFILE = {
     # a request body and a mail server first: see vulnapp_pwreset_seed.py and mailsink.py. Without
     # identities the check reports the missing input on reset-looking requests and sends nothing.
     "check_password_reset": True,
+    # The session-management check (0vzb wave 5): replays a captured login for fresh sessions, then
+    # predicts the next token, plants a token before login, and replays a token after logout.
+    # VulnerableApp's session levels need a working login first: see vulnapp_session_seed.py.
+    "check_session_management": True,
 }
 
 

@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036677376,
+  "name": "Predictable session token",
+  "description": "<p>The session tokens the application issues are predictable: each one is derived from a counter or from the clock, possibly hidden behind a reversible encoding such as base64 or hex. An attacker who obtains one token (for example by logging in to their own account) can compute the tokens issued to other users who log in around the same time and use them to take over those sessions.</p>\n<p>burpsy collected a series of fresh tokens from the login, fitted a model to them, predicted the next token and then confirmed the prediction: the next login was issued one of the predicted values. A statistical judgement that the tokens look weak is not reported on its own.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no predictable session token entry (Burp analyses token randomness in Sequencer, a manual tool).</p>",
+  "remediation": "<p>Generate session tokens with a cryptographically secure pseudo-random number generator, with at least 64 bits of entropy, and use the session management of a well-tested framework rather than a custom one. Never derive a token from a counter, a timestamp, a user identifier or any other guessable value; encoding or hashing a predictable value does not make it unpredictable.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "OWASP Session Management Cheat Sheet: Session ID Entropy",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html#session-id-entropy"
+    },
+    {
+      "title": "OWASP WSTG-SESS-01: Testing for Session Management Schema",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/01-Testing_for_Session_Management_Schema"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-330: Use of Insufficiently Random Values",
+      "url": "https://cwe.mitre.org/data/definitions/330.html"
+    },
+    {
+      "title": "CWE-341: Predictable from Observable State",
+      "url": "https://cwe.mitre.org/data/definitions/341.html"
+    }
+  ]
+}

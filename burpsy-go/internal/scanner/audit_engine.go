@@ -349,6 +349,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckUsernameEnumeration = false
 		case "CheckPasswordReset":
 			cfg.CheckPasswordReset = false
+		case "CheckSessionManagement":
+			cfg.CheckSessionManagement = false
 		}
 	}
 }

@@ -101,6 +101,27 @@ func BurpsyNativeRows() []BurpsyRow {
 		CWE:       640,
 		Rides:     "SMTP header injection",
 		Why:       pwrRowWhy("a reset link built from an attacker-supplied Host or forwarding header"),
+	}, {
+		Name:      sessionFixationIssue,
+		TypeIndex: 0xb5000400,
+		CWE:       384,
+		Rides:     "Broken access control",
+		Why: "Burp's scanner has no session-fixation check or row; testing it is a manual step. Its " +
+			"'Session token in URL' row lists CWE-384 only as a consequence of a token in a URL.",
+	}, {
+		Name:      predictableSessionIssue,
+		TypeIndex: 0xb5000500,
+		CWE:       330,
+		Rides:     "Broken access control",
+		Why: "Burp analyses token randomness in Sequencer, a manual tool whose results are not scanner " +
+			"issues; its catalogue has no row for a predictable session token.",
+	}, {
+		Name:      logoutInvalidationIssue,
+		TypeIndex: 0xb5000600,
+		CWE:       613,
+		Rides:     "Broken access control",
+		Why: "Burp's catalogue has no row for a session that survives logout (CWE-613); it is found by " +
+			"hand or by an extension.",
 	}}
 }
 

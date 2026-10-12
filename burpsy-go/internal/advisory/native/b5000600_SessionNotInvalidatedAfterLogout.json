@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036677632,
+  "name": "Session not invalidated after logout",
+  "description": "<p>Logging out does not end the session on the server. The logout response expires the session cookie in the browser, but the token itself remains valid: replaying it afterwards is still accepted as the user who logged out. Anyone who obtained the token earlier (from a shared or public computer, a proxy log, a cross-site scripting flaw or a stolen device) keeps the session even after the user has logged out, which defeats the point of logging out.</p>\n<p>burpsy logged in, confirmed that the new token was accepted by a page that depends on the session, sent the token to the application's logout, saw the cookie expired, and replayed the same token read-only to the same page.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Destroy the server-side session at logout, so that the token is rejected from then on; for stateless tokens, keep a revocation list or a per-user token version until the token expires. Apply idle and absolute session timeouts as well. Clearing the cookie in the browser is not enough.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "OWASP Session Management Cheat Sheet: Manual Session Expiration",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html#manual-session-expiration"
+    },
+    {
+      "title": "OWASP WSTG-SESS-06: Testing for Logout Functionality",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/06-Session_Management_Testing/06-Testing_for_Logout_Functionality"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-613: Insufficient Session Expiration",
+      "url": "https://cwe.mitre.org/data/definitions/613.html"
+    }
+  ]
+}

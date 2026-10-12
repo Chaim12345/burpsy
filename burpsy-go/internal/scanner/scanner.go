@@ -301,6 +301,12 @@ type ScanConfig struct {
 	// responses only.
 	ResetMailboxURL string
 	CustomPayloads  []string
+	// CheckSessionManagement admits the session-management check (checks_session_mgmt.go,
+	// burpsy-react-ui-0vzb wave 5) on a captured login: predictable session tokens (a predicted token
+	// confirmed by the next login), session fixation (a planted token accepted after login) and
+	// sessions that survive logout. It replays the captured login, with the credentials it carries, for
+	// fresh sessions of its own and logs out only sessions it created. Off by default.
+	CheckSessionManagement bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
