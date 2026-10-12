@@ -430,19 +430,44 @@ func crossDomainPolicyCheck(row, path string, parse func([]byte) CrossdomainPoli
 	}
 }
 
-// xxeInjectedExternally reports whether the external-entity answer carries content the internal
-// control's document does not — the evidence the file was READ rather than the entity being blanked.
+// xxeExternalSubstitution is the XXE differential's discriminator. It reports the value the external
+// entity was expanded to, and ok=true only when that value is the ONLY thing distinguishing the
+// external answer from the internal-entity control's answer.
 //
-// It compares by length-and-content rather than by inequality, because "the bodies differ" is true
-// for both a successful read and a refused one: a target that blocks external entities substitutes
-// the empty string, so its answer differs from the control's marker substitution without any file
-// being read. The test is that the external answer is LONGER than the control's and does not carry
-// the control's marker — something was substituted for an entity that held a marker of known length.
-func xxeInjectedExternally(externalBody, controlBody, marker string) bool {
-	if len(externalBody) <= len(controlBody) {
-		return false
+// The two documents differ in exactly one place, the entity declaration (`<!ENTITY e SYSTEM "uri">`
+// against `<!ENTITY e "marker">`), so a parser that expands both produces two answers that differ in
+// exactly two places: the echoed declaration, if the application echoes the document, and the
+// substituted value. The declaration is normalised out of both answers first; the control's answer
+// is then split at its single copy of the marker, and the external answer must carry the SAME prefix
+// and the SAME suffix around a non-empty value. Anything weaker is not evidence:
+//
+//   - "the bodies differ", or "the external answer is longer", is true of a safe parser that answers a
+//     SYSTEM entity with an error page or a stack trace — a longer 500 is a refusal, not a read;
+//   - an expansion to the empty string is a parser that blanked the reference (measured on OWASP
+//     VulnerableApp's secure levels), which is the safe behaviour;
+//   - an answer whose status class differs from the control's, or that is an error status at all,
+//     came from a different code path than the one the control established, so its content says
+//     nothing about what the entity resolved to.
+func xxeExternalSubstitution(external, control ProbeResponse, entity, uri, marker string) (string, bool) {
+	if external.Status/100 != control.Status/100 || external.Status >= 400 || control.Status >= 400 {
+		return "", false
 	}
-	return !strings.Contains(externalBody, marker)
+	const decl = "\x00bsy-xxe-decl\x00"
+	ext := strings.ReplaceAll(external.Body, `<!ENTITY `+entity+` SYSTEM "`+uri+`">`, decl)
+	ctl := strings.ReplaceAll(control.Body, `<!ENTITY `+entity+` "`+marker+`">`, decl)
+	if strings.Count(ctl, marker) != 1 {
+		return "", false
+	}
+	i := strings.Index(ctl, marker)
+	prefix, suffix := ctl[:i], ctl[i+len(marker):]
+	if len(ext) <= len(prefix)+len(suffix) || !strings.HasPrefix(ext, prefix) || !strings.HasSuffix(ext, suffix) {
+		return "", false
+	}
+	value := ext[len(prefix) : len(ext)-len(suffix)]
+	if strings.TrimSpace(value) == "" || strings.Contains(value, marker) || strings.Contains(value, entity) || strings.Contains(value, uri) {
+		return "", false
+	}
+	return value, true
 }
 
 // bodyOfRawRequest returns the body of a raw HTTP request: everything after the header/body
@@ -480,7 +505,11 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	// already knows. See XXEFilePayloadsFor.
 	baseBody := bodyOfRawRequest(string(h.reqBytes))
 	for _, point := range points {
-		for _, payload := range XXEFilePayloadsFor(baseBody, "bsyxxe") {
+		// The internal-entity control is the same for every payload at this point, so it is sent at
+		// most once, and only when a payload's own signature did not already decide.
+		var control *ProbeResponse
+		controlSent := false
+		for _, payload := range XXEFilePayloadsFor(baseBody, xxeEntityMarker) {
 			res, err := h.Send(ctx, point, payload.Body)
 			if err != nil {
 				continue
@@ -494,52 +523,37 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 					payload.Name, fmt.Sprintf("%s %q: the external entity was resolved", point.Kind, point.Name))}, nil
 			}
 			// No recognised content signature. That is the normal case for a file whose content has
-			// no fixed marker — /etc/hostname is the container's own id — so fall back to a
-			// differential that is SOUND, in the sense the removed one was not.
-			//
-			// The removed version compared a real file against a missing file and fired on the
-			// difference. It was wrong because the two payloads were different DOCUMENTS (they name
-			// different URIs inside the DTD), so a target that echoes or rejects the body at all
-			// answers them differently for a reason unrelated to reading a file — it fired on all four
-			// SECURE VulnerableApp levels.
-			//
-			// This version holds the document identical and varies only what the entity points at:
-			//   control  — an INTERNAL entity holding a known marker: `<!ENTITY xxe "bsyxxe-int">`
+			// no fixed marker — /etc/hostname is the machine's own name — so fall back to a
+			// differential that holds the document identical and varies only what the entity points at:
+			//   control  — an INTERNAL entity holding a known marker
 			//   external — the same document with `SYSTEM "file:///…"` in its place
 			// An internal-entity reference is substitution with no file access, which every XML parser
-			// does and no XXE defence blocks. So the control establishes that this document reaches the
-			// parser and that an entity reference in THIS element is expanded at all. Only then does the
-			// external answer mean anything: if the parser accepts the internal one and the external one
-			// produced DIFFERENT output, the difference is the file's content, and the entity was
-			// resolved. A target that refuses external entities answers the external probe exactly as
-			// it answers the document with no entity at all, so nothing differs and nothing is reported.
-			marker := "bsyxxeint"
-			control, cerr := h.Send(ctx, point, xxeInternalEntityDocument(baseBody, marker))
-			if cerr != nil || !strings.Contains(control.Body, marker) {
-				// The internal-entity control did not come back substituted, so this target does not
-				// expand an entity reference in this element at all — the external probe's silence
-				// proves nothing about file access and must not be read as either a finding or a pass.
+			// does and no XXE defence blocks, so the control establishes that this document reaches the
+			// parser and that a reference in THIS element is expanded. xxeExternalSubstitution then
+			// accepts the external answer only when it is the control's answer with the marker replaced
+			// by a non-empty value, under the same non-error status class.
+			if !controlSent {
+				controlSent = true
+				if c, cerr := h.Send(ctx, point, xxeInternalEntityDocument(baseBody, xxeControlMarker)); cerr == nil {
+					control = &c
+				}
+			}
+			if control == nil || !strings.Contains(control.Body, xxeControlMarker) {
+				// The control did not come back substituted, so this target does not expand an entity
+				// reference in this element at all — the external probe's silence proves nothing.
 				continue
 			}
-			// The external answer must carry CONTENT the internal control does not — not merely
-			// differ from it. A target that refuses external entities answers the external document
-			// with the entity expanded to the EMPTY string (measured on VulnerableApp's SECURE
-			// levels: the internal control returns "bsyxxeint" where the external one returns ""),
-			// so "the bodies differ" is true both when a file was read and when the reference was
-			// blanked. Only content in the external answer that the control's document does not
-			// produce is evidence the file was read.
-			if strings.Contains(res.Body, payload.Marker) || strings.Contains(res.Body, "xxebsyxxe") {
-				// The application echoed the URI or the entity name back — the target repeating
-				// what it was sent, not reading a file.
+			value, ok := xxeExternalSubstitution(res, *control, xxeEntityName, payload.Marker, xxeControlMarker)
+			if !ok {
 				continue
 			}
-			if !xxeInjectedExternally(res.Body, control.Body, marker) {
-				continue
+			if len(value) > 64 {
+				value = value[:64] + "…"
 			}
 			return []*Finding{buildHeaderFinding(cc, "XML external entity injection", "high", "tentative",
-				payload.Name, fmt.Sprintf("%s %q: the external entity expanded to content the same document's "+
-					"internal-entity control does not produce, so the file was read",
-					point.Kind, point.Name))}, nil
+				payload.Name, fmt.Sprintf("%s %q: the external entity expanded to %q where the same document's "+
+					"internal-entity control expanded to its marker, with the rest of the answer identical, so "+
+					"the file was read", point.Kind, point.Name, value))}, nil
 		}
 	}
 	return nil, nil

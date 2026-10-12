@@ -222,12 +222,28 @@ func XXEFilePayloadsFor(baseBody, marker string) []XXEPayload {
 // xxeDocument wraps an external entity declaration and reference in a document the target is most
 // likely to accept: the base body's own XML when it has one, else a synthetic root.
 func xxeDocument(baseBody, entity, uri string) string {
-	doctype := `<!DOCTYPE ` + xxeRootOf(baseBody) + ` [<!ENTITY ` + entity + ` SYSTEM "` + uri + `"> ]>`
-	if injected, ok := xxeInjectIntoXML(baseBody, entity); ok {
-		return `<?xml version="1.0" encoding="UTF-8"?>` + doctype + injected
-	}
-	return doctype[0:0] + `<!DOCTYPE foo [<!ENTITY ` + entity + ` SYSTEM "` + uri + `"> ]><foo>&` + entity + `;</foo>`
+	return xxeWrap(baseBody, entity, `<!ENTITY `+entity+` SYSTEM "`+uri+`">`)
 }
+
+// xxeWrap places one entity declaration in a DOCTYPE and a reference to it in the base body's first
+// text element, or in a synthetic <foo> root when the base body offers none. The DOCTYPE names the
+// root the document actually uses: the base body's own when the reference went into it, "foo" for
+// the synthetic document.
+func xxeWrap(baseBody, entity, decl string) string {
+	if injected, ok := xxeInjectIntoXML(baseBody, entity); ok {
+		return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE ` + xxeRootOf(baseBody) + ` [` + decl + ` ]>` + injected
+	}
+	return `<!DOCTYPE foo [` + decl + ` ]><foo>&` + entity + `;</foo>`
+}
+
+// The names the XXE payloads and their internal-entity control share. The external payloads and the
+// control MUST declare the same entity name, because the differential (xxeExternalSubstitution)
+// relies on the two documents differing only in the declaration's target.
+const (
+	xxeEntityMarker  = "bsyxxe"
+	xxeEntityName    = "xxe" + xxeEntityMarker
+	xxeControlMarker = "bsyxxeint"
+)
 
 // xxeRootOf names the root element the DOCTYPE must declare, so the declaration and the document
 // agree (a DOCTYPE naming a different root than the document uses is itself a parse error).
@@ -238,7 +254,11 @@ func xxeRootOf(baseBody string) string {
 	return "foo"
 }
 
-var xxeRootRe = regexp.MustCompile(`(?is)<\s*([A-Za-z_][A-Za-z0-9_.-]*)[\s>/]`)
+var (
+	xxeRootRe     = regexp.MustCompile(`(?is)<\s*([A-Za-z_][A-Za-z0-9_.-]*)[\s>/]`)
+	xxeOpenTagRe  = regexp.MustCompile(`(?is)<([A-Za-z_][A-Za-z0-9_.-]*)([^>]*)>`)
+	xxeCloseTagRe = regexp.MustCompile(`(?is)</\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*>`)
+)
 
 // xxeInjectIntoXML replaces the text of the base document's first text-bearing element with an entity
 // reference and returns the result, or ok=false when the body does not look like XML. That element is
@@ -255,26 +275,24 @@ func xxeInjectIntoXML(baseBody, entity string) (string, bool) {
 	// Go's regexp is RE2: no backreferences, so the close tag's name cannot be matched against the
 	// open tag's. Find an open element with a text value and its close tag separately, and require the
 	// names to agree in code.
-	open := regexp.MustCompile(`(?is)<([A-Za-z_][A-Za-z0-9_.-]*)([^>]*)>`)
-	closeRe := regexp.MustCompile(`(?is)</\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*>`)
-	for _, m := range open.FindAllStringSubmatchIndex(baseBody, -1) {
+	for _, m := range xxeOpenTagRe.FindAllStringSubmatchIndex(baseBody, -1) {
 		name := baseBody[m[2]:m[3]]
 		// The content between this open tag's end and the NEXT tag: if that next tag is a close tag of
 		// the same name, the element has a plain text value and can hold an entity reference.
 		rest := baseBody[m[1]:]
-		nextTag := regexp.MustCompile(`(?is)<`).FindStringIndex(rest)
-		if nextTag == nil {
+		next := strings.IndexByte(rest, '<')
+		if next < 0 {
 			continue
 		}
-		inner := rest[:nextTag[0]]
+		inner := rest[:next]
 		if strings.TrimSpace(inner) == "" || strings.ContainsAny(inner, "<>") {
 			continue
 		}
-		cm := closeRe.FindStringSubmatchIndex(rest[nextTag[0]:])
-		if cm == nil || cm[0] != 0 || !strings.EqualFold(rest[nextTag[0]+cm[2]:nextTag[0]+cm[3]], name) {
+		cm := xxeCloseTagRe.FindStringSubmatchIndex(rest[next:])
+		if cm == nil || cm[0] != 0 || !strings.EqualFold(rest[next+cm[2]:next+cm[3]], name) {
 			continue
 		}
-		injected := baseBody[:m[1]] + "&" + entity + ";" + rest[nextTag[0]:]
+		injected := baseBody[:m[1]] + "&" + entity + ";" + rest[next:]
 		injected = strings.TrimPrefix(strings.TrimSpace(injected), "\ufeff")
 		if idx := strings.Index(injected, "?>"); strings.HasPrefix(injected, "<?xml") && idx >= 0 {
 			injected = strings.TrimSpace(injected[idx+2:])
@@ -295,12 +313,7 @@ func xxeInjectIntoXML(baseBody, entity string) (string, bool) {
 // The key is that the two documents are the same but for the entity's target, so nothing else can
 // explain a difference.
 func xxeInternalEntityDocument(baseBody, marker string) string {
-	entity := "xxebsyxxe"
-	doctype := `<!DOCTYPE ` + xxeRootOf(baseBody) + ` [<!ENTITY ` + entity + ` "` + marker + `"> ]>`
-	if injected, ok := xxeInjectIntoXML(baseBody, entity); ok {
-		return `<?xml version="1.0" encoding="UTF-8"?>` + doctype + injected
-	}
-	return `<!DOCTYPE foo [<!ENTITY ` + entity + ` "` + marker + `"> ]><foo>&` + entity + `;</foo>`
+	return xxeWrap(baseBody, xxeEntityName, `<!ENTITY `+xxeEntityName+` "`+marker+`">`)
 }
 
 // ---------------------------------------------------------------------------
