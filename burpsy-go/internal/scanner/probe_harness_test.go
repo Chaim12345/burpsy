@@ -216,6 +216,81 @@ func TestHarnessEvaluationProbeSeparatesEvaluationFromEcho(t *testing.T) {
 	}
 }
 
+// The confirmation control of ProbeEvaluationConfirmed (j1mk.34). A response that contains the
+// first challenge's answer by coincidence must not be believed until an independent second
+// challenge is answered too; one that never is stays undecided, not evaluated and not clean.
+func TestHarnessConfirmedEvaluationNeedsAnIndependentSecondHit(t *testing.T) {
+	// The endpoint prints a fixed number whenever the input is not the baseline value: it
+	// evaluates nothing, but the first challenge happens to expect that number.
+	cc := harnessAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("q") == "1" {
+			fmt.Fprint(w, "ok")
+			return
+		}
+		fmt.Fprint(w, "error 123456789")
+	}, "/calc?q=1")
+	h, err := NewProbeHarness(context.Background(), cc, []string{"query"})
+	if err != nil {
+		t.Fatalf("NewProbeHarness: %v", err)
+	}
+	renders := [][2]string{{"p-one", "123456789"}, {"p-two", "987654321"}}
+	n := 0
+	got := h.ProbeEvaluationConfirmed(context.Background(), h.Points()[0], func() (string, string) {
+		r := renders[n%2]
+		n++
+		return r[0], r[1]
+	})
+	if got.Evidence != InjectionEvidenceInconclusive {
+		t.Fatalf("a hit that did not reproduce gave %v, want Inconclusive (%s)", got.Evidence, got.Detail)
+	}
+	if n != 2 {
+		t.Fatalf("render called %d times, want 2: the first hit must be re-asked once", n)
+	}
+
+	// Negative control: an endpoint that really evaluates answers both challenges.
+	eval := harnessAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("q") {
+		case "p-one":
+			fmt.Fprint(w, "123456789")
+		case "p-two":
+			fmt.Fprint(w, "987654321")
+		default:
+			fmt.Fprint(w, "ok")
+		}
+	}, "/calc?q=1")
+	h2, err := NewProbeHarness(context.Background(), eval, []string{"query"})
+	if err != nil {
+		t.Fatalf("NewProbeHarness: %v", err)
+	}
+	n = 0
+	got = h2.ProbeEvaluationConfirmed(context.Background(), h2.Points()[0], func() (string, string) {
+		r := renders[n%2]
+		n++
+		return r[0], r[1]
+	})
+	if got.Evidence != InjectionEvidenceEvaluated {
+		t.Fatalf("an endpoint answering both challenges gave %v, want Evaluated (%s)", got.Evidence, got.Detail)
+	}
+}
+
+// A payload that spells its own proof cannot be told from a reflection of it, whatever the
+// response says; the probe refuses to call it evaluated.
+func TestHarnessConfirmedEvaluationRefusesAProofThePayloadSpells(t *testing.T) {
+	cc := harnessAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, strings.ReplaceAll(r.URL.Query().Get("q"), "\n", `\n`))
+	}, "/calc?q=1")
+	h, err := NewProbeHarness(context.Background(), cc, []string{"query"})
+	if err != nil {
+		t.Fatalf("NewProbeHarness: %v", err)
+	}
+	got := h.ProbeEvaluationConfirmed(context.Background(), h.Points()[0], func() (string, string) {
+		return "\necho MARKER\n", "MARKER"
+	})
+	if got.Evidence == InjectionEvidenceEvaluated {
+		t.Fatalf("a payload carrying its own proof was reported as evaluated: %s", got.Detail)
+	}
+}
+
 func TestHarnessBooleanProbeNeedsBothHalves(t *testing.T) {
 	cc := harnessAgainst(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")

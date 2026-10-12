@@ -23,7 +23,10 @@ package scanner
 // substituted. It is preserved rather than pre-expanded so the substitution stays visible.
 
 import (
+	crand "crypto/rand"
 	"fmt"
+	"math/big"
+	mrand "math/rand"
 	"strings"
 )
 
@@ -415,6 +418,88 @@ func ArithmeticProofProduct() string {
 	return fmt.Sprintf("%d", ArithmeticProofLeft*ArithmeticProofRight)
 }
 
+// ArithmeticChallenge is one arithmetic proof with operands drawn fresh for the probe that carries
+// it (burpsy-react-ui-j1mk.34).
+//
+// The recovered 7*6 is kept above as provenance, but its product is not a proof: "42" is in an H2
+// error code ([42000-214]), in a random token, in a timestamp, in a row count. A baseline that
+// happened not to contain it and a probe response that happened to was reported as code
+// injection, at certain confidence, on endpoints that evaluate nothing. Operands drawn per probe
+// from [ArithmeticChallengeMin, ArithmeticChallengeMax) give a nine- or ten-digit product that
+// appears by chance with negligible probability, and the evaluators send a second, independent
+// challenge before believing the first (see ProbeHarness.ProbeEvaluationConfirmed).
+//
+// The bound keeps the product under 2^31: SpEL, Thymeleaf and Java EL multiply ints, and an
+// overflowed product would make a genuinely evaluating sink answer with a different number.
+type ArithmeticChallenge struct {
+	Left, Right int
+}
+
+const (
+	ArithmeticChallengeMin = 10007
+	ArithmeticChallengeMax = 46340 // 46340^2 < 2^31
+)
+
+// NewArithmeticChallenge draws fresh operands. crypto/rand, because a predictable pair is a
+// constant marker by another name; a failed read falls back to math/rand rather than to a fixed
+// pair, for the same reason.
+func NewArithmeticChallenge() ArithmeticChallenge {
+	return ArithmeticChallenge{Left: challengeOperand(), Right: challengeOperand()}
+}
+
+func challengeOperand() int {
+	span := big.NewInt(ArithmeticChallengeMax - ArithmeticChallengeMin)
+	n, err := crand.Int(crand.Reader, span)
+	if err != nil {
+		return ArithmeticChallengeMin + mrand.Intn(ArithmeticChallengeMax-ArithmeticChallengeMin)
+	}
+	return ArithmeticChallengeMin + int(n.Int64())
+}
+
+// recoveredChallenge is burp.Zxvv's own 7*6, for rendering the recovered bank as recovered.
+var recoveredChallenge = ArithmeticChallenge{Left: ArithmeticProofLeft, Right: ArithmeticProofRight}
+
+// Expr is the expression as a payload spells it.
+func (a ArithmeticChallenge) Expr() string { return fmt.Sprintf("%d*%d", a.Left, a.Right) }
+
+// Product is what an evaluating sink must emit.
+func (a ArithmeticChallenge) Product() string { return fmt.Sprintf("%d", a.Left*a.Right) }
+
+// OSCommandEvaluation is one OS-command probe: the payload to send and the output that proves a
+// shell ran it.
+type OSCommandEvaluation struct {
+	Payload  string
+	Expected string
+}
+
+// OSCommandEvaluations renders the recovered burp.Zx8l breakouts so the proof is COMPUTED by the
+// shell rather than copied by it (burpsy-react-ui-j1mk.34).
+//
+// The bank used to plant `echo <marker>` and look for <marker>. The marker is then a substring of
+// the payload, so every endpoint that reflects its input contains it, and the only thing standing
+// between a reflection and an OS-command finding was subtracting the echo — which fails the moment
+// the reflection is transformed: a JSON body writes the newline as `\n`, H2's syntax error writes
+// it as `\000a` and doubles the `"`, a template HTML-escapes half the value. VulnerableApp's file
+// upload, XXE, LDAP, error-based SQLi and cache-poisoning endpoints all reflected that way and were
+// all reported as executing commands.
+//
+// Now the shell has to do arithmetic: `echo <canary>$((A*B))` prints <canary><product>, and the
+// payload never contains that string in any encoding. A reflection, stored or transformed, can
+// only ever show `$((`. POSIX arithmetic expansion is in dash, bash, busybox ash and ksh.
+//
+// cmd.exe does not expand `$((`, so a Windows sink is covered by one `set /a` form whose output is
+// the bare product: weaker on its own than a canary-prefixed one, which is what the confirmation
+// pass (a second, independent challenge) is for.
+func OSCommandEvaluations(canary string, ch ArithmeticChallenge) []OSCommandEvaluation {
+	expected := canary + ch.Product()
+	out := make([]OSCommandEvaluation, 0, 7)
+	for _, p := range OSCommandPayloads(canary + "$((" + ch.Expr() + "))") {
+		out = append(out, OSCommandEvaluation{Payload: p, Expected: expected})
+	}
+	out = append(out, OSCommandEvaluation{Payload: "&set /a " + ch.Expr() + "&", Expected: ch.Product()})
+	return out
+}
+
 // PHPCodeInjectionPayloads is recovered from burp.Zxvv. The arithmetic form is the safe
 // confirmation; the two out-of-band forms need a collaborator host and are returned by
 // PHPOutOfBandPayloads.
@@ -480,8 +565,13 @@ func CodeInjectionEmitters() []CodeInjectionEmitter {
 // RenderCodeInjection substitutes the recovered arithmetic into an emitter, then wraps it
 // for the quoting context under test.
 func RenderCodeInjection(e CodeInjectionEmitter, ctx QuotingContext) string {
-	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
-	body := fmt.Sprintf(e.Template, arith)
+	return RenderCodeInjectionWith(e, ctx, recoveredChallenge)
+}
+
+// RenderCodeInjectionWith is RenderCodeInjection with the probe's own arithmetic challenge, which
+// is what the evaluators send: the recovered 7*6 is provenance, not a usable proof.
+func RenderCodeInjectionWith(e CodeInjectionEmitter, ctx QuotingContext, ch ArithmeticChallenge) string {
+	body := fmt.Sprintf(e.Template, ch.Expr())
 	// The php `".(%s)."` and javascript `"+(%s)+"` forms already carry their own quote
 	// escape, so wrapping them again would double it.
 	if strings.HasPrefix(e.Template, `"`) {

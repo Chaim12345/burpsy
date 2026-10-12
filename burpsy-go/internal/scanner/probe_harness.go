@@ -560,6 +560,58 @@ func (h *ProbeHarness) ProbeEvaluation(ctx context.Context, point bcheck.Inserti
 		})
 }
 
+// ProbeEvaluationConfirmed is the evaluation probe for a payload whose proof is computed
+// (burpsy-react-ui-j1mk.34). render is called once per send and must return a payload carrying a
+// FRESH challenge each time, plus the value only evaluation of that payload can produce.
+//
+// Two controls, both required for a verdict of Evaluated:
+//
+//   - the expected value must not be spelled anywhere in the payload. A proof the payload carries
+//     is a proof any reflection carries, and subtracting the echo only works when the reflection
+//     is byte-faithful — a JSON `\n`, a doubled quote or a half-escaped value defeats it. A render
+//     that breaks this is refused as Inconclusive rather than trusted.
+//   - the first hit is re-asked with a second, independent challenge, and only a second hit
+//     confirms. A response that contained the first product by chance (a token, a timestamp, an
+//     error code) will not contain an unrelated second one; an interpreter will.
+//
+// A hit that does not reproduce is Inconclusive, not None: something produced the value once, and
+// the honest report is "undecided", never "clean".
+func (h *ProbeHarness) ProbeEvaluationConfirmed(ctx context.Context, point bcheck.InsertionPoint,
+	render func() (payload, expected string)) InjectionProbe {
+
+	payload, expected := render()
+	if h.withhold(MethodStringEcho, 1) {
+		return withheldProbe(point, payload, MethodStringEcho)
+	}
+	classify := func(payload, expected string) func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
+		return func(baseline, injected ProbeResponse) (InjectionEvidence, string) {
+			if expected == "" || strings.Contains(payload, expected) {
+				return InjectionEvidenceInconclusive, fmt.Sprintf("looking for %q: the payload itself spells it, so a reflection cannot be told from evaluation", expected)
+			}
+			ev := ClassifyEvaluation(baseline.Body, injected.Body, payload, expected)
+			return ev, fmt.Sprintf("looking for %q: %s", expected, ev)
+		}
+	}
+	first := h.probe(ctx, point, payload, classify(payload, expected))
+	if first.Evidence != InjectionEvidenceEvaluated {
+		return first
+	}
+	payload2, expected2 := render()
+	if payload2 == payload || expected2 == expected {
+		first.Evidence = InjectionEvidenceInconclusive
+		first.Detail += "; not confirmed: the render gave no independent second challenge"
+		return first
+	}
+	second := h.probe(ctx, point, payload2, classify(payload2, expected2))
+	if second.Evidence != InjectionEvidenceEvaluated {
+		first.Evidence = InjectionEvidenceInconclusive
+		first.Detail += fmt.Sprintf("; did not reproduce with a second challenge (%s)", second.Detail)
+		return first
+	}
+	first.Detail += fmt.Sprintf("; reproduced with an independent second challenge, %q evaluated to %q", payload2, expected2)
+	return first
+}
+
 // ProbeTiming sends payload and reports whether the delay it requested was observed. The
 // baseline duration is the reference, so a uniformly slow endpoint does not read as
 // injectable.

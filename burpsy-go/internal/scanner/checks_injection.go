@@ -349,15 +349,19 @@ func checkOSCommandInjection(ctx context.Context, cc *CheckContext) ([]*Finding,
 	// endpoint renders a stored copy of a previous scan's marker — a comment field, a log viewer,
 	// an error page quoting the last request — this check goes permanently silent on a genuinely
 	// command-injectable target, and silently, because Inconclusive never reaches a report.
-	marker := newProbeCanary("bsycmd")
+	canary := newProbeCanary("bsycmd")
 	res, err := runInjection(ctx, cc, "OSCommandInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
-			for _, payload := range OSCommandPayloads(marker) {
-				// The marker is echoed by the shell, so it appears in the response
-				// without being part of a reflection of the payload — which is what
-				// ClassifyMarkerEcho distinguishes.
-				probes = append(probes, h.ProbeEvaluation(ctx, p, payload, marker))
+			// The proof is computed by the shell (`echo <canary>$((A*B))`), never spelled in the
+			// payload, so no reflection of it — verbatim, JSON-escaped, quote-doubled or stored and
+			// replayed by a later request — can read as execution (j1mk.34). Each send draws its
+			// own operands, which is what lets ProbeEvaluationConfirmed re-ask independently.
+			for i := range OSCommandEvaluations(canary, recoveredChallenge) {
+				probes = append(probes, h.ProbeEvaluationConfirmed(ctx, p, func() (string, string) {
+					e := OSCommandEvaluations(canary, NewArithmeticChallenge())[i]
+					return e.Payload, e.Expected
+				}))
 			}
 			return probes
 		})
@@ -385,10 +389,20 @@ func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 		res, err := runInjection(ctx, cc, rowName, cc.ProbeInsertionKinds(),
 			func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 				var probes []InjectionProbe
-				for _, probe := range CodeInjectionProbeSet(language) {
-					out := h.ProbeEvaluation(ctx, p, probe.Payload, ArithmeticProofProduct())
-					out.Context = probe.Context
-					probes = append(probes, out)
+				// Fresh operands per send, confirmed by a second independent pair (j1mk.34): the
+				// recovered 7*6 made "42" the proof, and "42" is in error codes and random tokens.
+				for _, e := range CodeInjectionEmitters() {
+					if e.Language != language {
+						continue
+					}
+					for _, qc := range AllQuotingContexts {
+						out := h.ProbeEvaluationConfirmed(ctx, p, func() (string, string) {
+							ch := NewArithmeticChallenge()
+							return RenderCodeInjectionWith(e, qc, ch), ch.Product()
+						})
+						out.Context = qc
+						probes = append(probes, out)
+					}
 				}
 				return probes
 			})
@@ -417,8 +431,8 @@ func codeInjectionCheck(rowName, language, severity string) CheckRunner {
 // of the template statement context. The resulting response contained the string ..."), and
 // burp.Zp3p's recovered payloads are all out-of-band. These are the documented standard forms
 // for each engine, labelled here rather than presented as recovered.
-func templateArithmeticPayloads() []string {
-	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
+func templateArithmeticPayloads(ch ArithmeticChallenge) []string {
+	arith := ch.Expr()
 	return []string{
 		"${" + arith + "}",     // JSP EL, FreeMarker, Java EL
 		"{{" + arith + "}}",    // Jinja2, Twig, Django, Handlebars
@@ -435,8 +449,12 @@ func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 	res, err := runInjection(ctx, cc, "ServerSideTemplateInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
-			for _, payload := range templateArithmeticPayloads() {
-				probes = append(probes, h.ProbeEvaluation(ctx, p, payload, ArithmeticProofProduct()))
+			// Fresh operands per send, confirmed by a second independent pair (j1mk.34).
+			for i := range templateArithmeticPayloads(recoveredChallenge) {
+				probes = append(probes, h.ProbeEvaluationConfirmed(ctx, p, func() (string, string) {
+					ch := NewArithmeticChallenge()
+					return templateArithmeticPayloads(ch)[i], ch.Product()
+				}))
 			}
 			return probes
 		})
@@ -450,14 +468,21 @@ func checkServerSideTemplateInjection(ctx context.Context, cc *CheckContext) ([]
 }
 
 func checkExpressionLanguageInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	arith := fmt.Sprintf("%d*%d", ArithmeticProofLeft, ArithmeticProofRight)
+	elPayloads := func(ch ArithmeticChallenge) []string {
+		arith := ch.Expr()
+		return []string{"${" + arith + "}", "#{" + arith + "}", "${{" + arith + "}}"}
+	}
 	res, err := runInjection(ctx, cc, "ExpressionLanguageInjection", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			var probes []InjectionProbe
 			// The EL subset of the template delimiters, plus the recovered class-probe
-			// shape from burp.Zp1w (`${''.class}`) rendered as arithmetic.
-			for _, payload := range []string{"${" + arith + "}", "#{" + arith + "}", "${{" + arith + "}}"} {
-				probes = append(probes, h.ProbeEvaluation(ctx, p, payload, ArithmeticProofProduct()))
+			// shape from burp.Zp1w (`${''.class}`) rendered as arithmetic — with fresh operands
+			// per send, confirmed by a second independent pair (j1mk.34).
+			for i := range elPayloads(recoveredChallenge) {
+				probes = append(probes, h.ProbeEvaluationConfirmed(ctx, p, func() (string, string) {
+					ch := NewArithmeticChallenge()
+					return elPayloads(ch)[i], ch.Product()
+				}))
 			}
 			return probes
 		})

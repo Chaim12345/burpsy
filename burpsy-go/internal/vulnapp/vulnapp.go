@@ -523,6 +523,22 @@ func simulateShell(input string) (string, bool) {
 	if !strings.ContainsAny(input, ";|&`$()\n") {
 		return "", false
 	}
+	// POSIX arithmetic expansion happens before the command runs, so `echo x$((3*4))` prints
+	// `x12`. The scanner's OS-command proof is computed this way (j1mk.34) precisely because a
+	// reflection can never produce it; a shell simulation that skipped the expansion would stop
+	// being detectable for the same reason.
+	input = shellArithmetic.ReplaceAllStringFunc(input, func(m string) string {
+		p := shellArithmetic.FindStringSubmatch(m)
+		a, _ := strconv.Atoi(p[1])
+		b, _ := strconv.Atoi(p[3])
+		switch p[2] {
+		case "+":
+			return strconv.Itoa(a + b)
+		case "-":
+			return strconv.Itoa(a - b)
+		}
+		return strconv.Itoa(a * b)
+	})
 	// Split on the separators a shell would honour, then look for an echo command in any
 	// resulting segment. $(...) and `...` wrap their contents, so the delimiters are simply
 	// separators for this purpose.
@@ -541,6 +557,9 @@ func simulateShell(input string) (string, bool) {
 	}
 	return "", false
 }
+
+// shellArithmetic is a `$((a op b))` arithmetic expansion over two integers.
+var shellArithmetic = regexp.MustCompile(`\$\(\(\s*(-?\d+)\s*([*+-])\s*(-?\d+)\s*\)\)`)
 
 func safePing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
@@ -1000,8 +1019,9 @@ func matchingParen(s string) int {
 
 // renderTemplate evaluates an arithmetic expression inside template delimiters, which is what a
 // server-side template engine handed untrusted input does. It computes the product rather than
-// recognising any particular one, so no specific payload is privileged.
-var templateExpr = regexp.MustCompile(`(?:\{\{|\$\{|#\{|<%=)\s*(\d{1,4})\s*\*\s*(\d{1,4})\s*(?:\}\}|\}|%>)`)
+// recognising any particular one, so no specific payload is privileged. Operands up to nine digits:
+// the scanner draws five-digit operands per probe (j1mk.34), and an engine has no digit limit.
+var templateExpr = regexp.MustCompile(`(?:\{\{|\$\{|#\{|<%=)\s*(\d{1,9})\s*\*\s*(\d{1,9})\s*(?:\}\}|\}|%>)`)
 
 func renderTemplate(w http.ResponseWriter, r *http.Request) {
 	v := r.URL.Query().Get("greeting")

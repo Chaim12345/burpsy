@@ -506,3 +506,39 @@ func TestAPoisonedBaselineReportsUndecidedRatherThanClean(t *testing.T) {
 		t.Errorf("summary does not mention the undecided check: %q", outcome.Summary())
 	}
 }
+
+// The OS-command and arithmetic probes must never spell their own proof (j1mk.34): a proof the
+// payload carries is a proof every reflection carries, in whatever encoding the reflection uses.
+func TestComputedProofsAreNeverSpelledInThePayload(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ch := NewArithmeticChallenge()
+		if ch.Left < ArithmeticChallengeMin || ch.Left >= ArithmeticChallengeMax ||
+			ch.Right < ArithmeticChallengeMin || ch.Right >= ArithmeticChallengeMax {
+			t.Fatalf("operands %d, %d outside [%d, %d)", ch.Left, ch.Right, ArithmeticChallengeMin, ArithmeticChallengeMax)
+		}
+		if int64(ch.Left)*int64(ch.Right) >= 1<<31 {
+			t.Fatalf("product of %s overflows a 32-bit int", ch.Expr())
+		}
+		for _, e := range OSCommandEvaluations("bsycmdabc", ch) {
+			if strings.Contains(e.Payload, e.Expected) {
+				t.Fatalf("payload %q spells its own proof %q", e.Payload, e.Expected)
+			}
+		}
+		for _, em := range CodeInjectionEmitters() {
+			for _, qc := range AllQuotingContexts {
+				if p := RenderCodeInjectionWith(em, qc, ch); strings.Contains(p, ch.Product()) {
+					t.Fatalf("payload %q spells its own product %s", p, ch.Product())
+				}
+			}
+		}
+		for _, p := range templateArithmeticPayloads(ch) {
+			if strings.Contains(p, ch.Product()) {
+				t.Fatalf("payload %q spells its own product %s", p, ch.Product())
+			}
+		}
+	}
+	a, b := NewArithmeticChallenge(), NewArithmeticChallenge()
+	if a == b {
+		t.Errorf("two draws gave the same operands %s; the confirmation needs independent challenges", a.Expr())
+	}
+}

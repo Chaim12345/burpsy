@@ -7,10 +7,14 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
@@ -157,17 +161,39 @@ func TestFilePathManipulationStaysQuietWhenOnlyThePayloadIsReflected(t *testing.
 
 // ---------- OS command ----------
 
+// shellArith is a POSIX `$((a*b))` arithmetic expansion; arithProduct is any bare `a*b`.
+var (
+	shellArith   = regexp.MustCompile(`\$\(\(\s*(\d+)\s*\*\s*(\d+)\s*\)\)`)
+	arithProduct = regexp.MustCompile(`(\d+)\s*\*\s*(\d+)`)
+)
+
+func multiply(m []string) string {
+	a, _ := strconv.Atoi(m[1])
+	b, _ := strconv.Atoi(m[2])
+	return strconv.Itoa(a * b)
+}
+
+// simulatedShell is what `sh -c "ping " + input` prints: arithmetic expansion first, then the
+// argument of any echo that follows a separator. It evaluates whatever operands arrive, so no
+// particular payload is privileged.
+func simulatedShell(in string) (string, bool) {
+	in = shellArith.ReplaceAllStringFunc(in, func(m string) string { return multiply(shellArith.FindStringSubmatch(m)) })
+	i := strings.IndexAny(in, ";&|\n")
+	if i < 0 {
+		return "", false
+	}
+	rest := strings.TrimSpace(in[i+1:])
+	if !strings.HasPrefix(rest, "echo ") {
+		return "", false
+	}
+	return strings.Trim(strings.Fields(rest)[1], ";&|"), true
+}
+
 func TestOSCommandInjectionFiresWhenTheShellEchoesTheMarker(t *testing.T) {
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
-		in := r.URL.Query().Get("input")
-		// Crude shell simulation: anything after a metacharacter "runs".
-		if i := strings.IndexAny(in, ";&|\n"); i >= 0 {
-			rest := in[i+1:]
-			if strings.HasPrefix(strings.TrimSpace(rest), "echo ") {
-				word := strings.Fields(strings.TrimSpace(rest))[1]
-				fmt.Fprintf(w, "PING output\n%s\n", strings.Trim(word, ";&|"))
-				return
-			}
+		if out, ran := simulatedShell(r.URL.Query().Get("input")); ran {
+			fmt.Fprintf(w, "PING output\n%s\n", out)
+			return
 		}
 		fmt.Fprint(w, "PING output for a host")
 	})
@@ -175,16 +201,102 @@ func TestOSCommandInjectionFiresWhenTheShellEchoesTheMarker(t *testing.T) {
 	if f.Confidence != "certain" {
 		t.Errorf("confidence = %q, want certain for an evaluated payload", f.Confidence)
 	}
+	if !strings.Contains(f.Description, "reproduced with an independent second challenge") {
+		t.Errorf("a finding must rest on two independent challenges: %q", f.Description)
+	}
 }
 
-// The critical false-positive case: the server reflects the whole payload, so the marker is
-// present in the response without any command having run.
-func TestOSCommandInjectionReportsUndecidedWhenThePayloadIsMerelyReflected(t *testing.T) {
+// The tightened form of the old critical case: the server reflects the whole payload. The proof is
+// computed by the shell and never spelled in the payload, so a reflection is now decisively clean —
+// no finding and no undecided verdict either.
+func TestOSCommandInjectionStaysCleanWhenThePayloadIsMerelyReflected(t *testing.T) {
 	cc := injectionFixture(t, echoServer)
-	requireUndecided(t, checkOSCommandInjection, cc)
+	if got := runCheck(t, checkOSCommandInjection, cc); len(got) != 0 {
+		t.Fatalf("got %d findings against a reflecting server, want 0", len(got))
+	}
+}
+
+// reflectionFixtures are endpoints that run nothing but give the payload back TRANSFORMED, which
+// is what defeated the old echo subtraction on OWASP VulnerableApp (j1mk.34): each of these was
+// reported as OS command injection at certain confidence.
+func reflectionFixtures() map[string]http.HandlerFunc {
+	var mu sync.Mutex
+	var stored []string
+	return map[string]http.HandlerFunc{
+		// A JSON API: the newline in "\necho X\n" comes back as the two characters `\n`.
+		"json-escaped": func(w http.ResponseWriter, r *http.Request) {
+			b, _ := json.Marshal(map[string]string{"content": r.URL.Query().Get("input")})
+			w.Write(b)
+		},
+		// H2's syntax error: quotes doubled, newlines written as \000a, a [*] cursor inserted.
+		"sql-error": func(w http.ResponseWriter, r *http.Request) {
+			in := r.URL.Query().Get("input")
+			if in == "seed" {
+				fmt.Fprint(w, `{"isCarPresent": true}`)
+				return
+			}
+			q := strings.NewReplacer(`"`, `""`, "\n", `\000a`).Replace(in)
+			fmt.Fprintf(w, `Syntax error in SQL statement "select * from cars where id=[*]%s"; [42000-214]`, q)
+		},
+		// A stored comment list: every earlier probe is rendered back alongside the current one,
+		// so a payload sent later never covers the marker an earlier one planted.
+		"stored": func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			if in := r.URL.Query().Get("input"); in != "seed" {
+				stored = append(stored, in)
+			}
+			fmt.Fprintf(w, "<ul><li>%s</li></ul>", strings.Join(stored, "</li><li>"))
+		},
+		// Partial HTML escaping: only the double quote is escaped.
+		"half-escaped": func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(w, "<p>Banner: %s</p>", strings.ReplaceAll(r.URL.Query().Get("input"), `"`, "&quot;"))
+		},
+	}
+}
+
+func TestEvaluationChecksStayCleanOnTransformedAndStoredReflections(t *testing.T) {
+	checks := map[string]CheckRunner{
+		"OS command": checkOSCommandInjection,
+		"template":   checkServerSideTemplateInjection,
+		"EL":         checkExpressionLanguageInjection,
+		"python":     codeInjectionCheck("Python code injection", "python", "high"),
+		"php":        codeInjectionCheck("PHP code injection", "php", "high"),
+		"perl":       codeInjectionCheck("Perl code injection", "perl", "high"),
+		"ruby":       codeInjectionCheck("Ruby code injection", "ruby", "high"),
+		"javascript": codeInjectionCheck("Server-side JavaScript code injection", "javascript", "high"),
+	}
+	for fixture, handler := range reflectionFixtures() {
+		for name, fn := range checks {
+			t.Run(fixture+"/"+name, func(t *testing.T) {
+				got, err := fn(context.Background(), injectionFixture(t, handler))
+				if len(got) != 0 {
+					t.Fatalf("got %d finding(s) on an endpoint that only reflects its input: %s", len(got), got[0].Description)
+				}
+				if err != nil && !errors.Is(err, errCheckInconclusive) {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+		}
+	}
 }
 
 // ---------- interpreted languages ----------
+
+// evaluatingServer computes every a*b product in the input and prints only the results: an
+// interpreter, without an echo.
+func evaluatingServer(w http.ResponseWriter, r *http.Request) {
+	ms := arithProduct.FindAllStringSubmatch(r.URL.Query().Get("input"), -1)
+	if len(ms) == 0 {
+		fmt.Fprint(w, "computed: nothing")
+		return
+	}
+	var outs []string
+	for _, m := range ms {
+		outs = append(outs, multiply(m))
+	}
+	fmt.Fprint(w, "computed: "+strings.Join(outs, ","))
+}
 
 func TestCodeInjectionFiresOnAnEvaluatingServerPerLanguage(t *testing.T) {
 	for _, tc := range []struct{ row, lang string }{
@@ -195,14 +307,7 @@ func TestCodeInjectionFiresOnAnEvaluatingServerPerLanguage(t *testing.T) {
 		{"Server-side JavaScript code injection", "javascript"},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
-			cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
-				// Evaluates the arithmetic without echoing the payload.
-				if strings.Contains(r.URL.Query().Get("input"), "7*6") {
-					fmt.Fprint(w, "computed: 42")
-					return
-				}
-				fmt.Fprint(w, "computed: nothing")
-			})
+			cc := injectionFixture(t, evaluatingServer)
 			f := requireInjectionFinding(t, runCheck(t, codeInjectionCheck(tc.row, tc.lang, "high"), cc), tc.row)
 			if !strings.Contains(f.Description, "context") {
 				t.Errorf("finding should name the quoting context: %q", f.Description)
@@ -221,35 +326,47 @@ func TestCodeInjectionStaysQuietOnReflection(t *testing.T) {
 	}
 }
 
-// A page that already contains "42" must not make every payload look evaluated. It also cannot be
-// called clean: the product was there before any probe, so nothing about the probe is knowable.
-func TestCodeInjectionReportsUndecidedWhenTheBaselineAlreadyContainsTheProduct(t *testing.T) {
+// The recovered 7*6 made "42" the proof, and "42" turns up on its own: in an error code, a random
+// token, a row count. A page that shows "42" only when the input is not the baseline value — an
+// error page, here — was reported as code injection by every language. With drawn operands the
+// page proves nothing and says nothing.
+func TestCodeInjectionIgnoresAFortyTwoTheEndpointPrintsOnItsOwn(t *testing.T) {
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "the answer is 42, always")
+		if r.URL.Query().Get("input") == "seed" {
+			fmt.Fprint(w, "ok")
+			return
+		}
+		fmt.Fprint(w, "error [42000-214], token 4242")
 	})
-	requireUndecided(t, codeInjectionCheck("PHP code injection", "php", "high"), cc)
+	for _, lang := range []string{"php", "perl", "ruby", "python", "javascript"} {
+		got, err := codeInjectionCheck("PHP code injection", lang, "high")(context.Background(), cc)
+		if len(got) != 0 || err != nil {
+			t.Errorf("%s: got %d finding(s), err %v; want clean", lang, len(got), err)
+		}
+	}
+	for name, fn := range map[string]CheckRunner{"template": checkServerSideTemplateInjection, "el": checkExpressionLanguageInjection} {
+		if got, err := fn(context.Background(), cc); len(got) != 0 || err != nil {
+			t.Errorf("%s: got %d finding(s), err %v; want clean", name, len(got), err)
+		}
+	}
 }
 
 // ---------- template and expression language ----------
 
 func TestTemplateInjectionFiresOnAnEvaluatingTemplateEngine(t *testing.T) {
+	tmpl := regexp.MustCompile(`(?:\$\{|\{\{|#\{|<%=)\s*(\d+)\*(\d+)\s*(?:\}\}|\}|%>)`)
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
 		in := r.URL.Query().Get("input")
-		for _, open := range []string{"${", "{{", "#{", "<%="} {
-			if strings.Contains(in, open+"7*6") || strings.Contains(in, open+" 7*6") {
-				fmt.Fprint(w, "rendered: 42")
-				return
-			}
-		}
-		fmt.Fprint(w, "rendered: "+in)
+		fmt.Fprint(w, "rendered: "+tmpl.ReplaceAllStringFunc(in, func(m string) string { return multiply(tmpl.FindStringSubmatch(m)) }))
 	})
 	requireInjectionFinding(t, runCheck(t, checkServerSideTemplateInjection, cc), "Server-side template injection")
 }
 
 func TestExpressionLanguageInjectionFiresOnAnEvaluatingEL(t *testing.T) {
+	el := regexp.MustCompile(`^\$\{(\d+)\*(\d+)\}$`)
 	cc := injectionFixture(t, func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Query().Get("input"), "${7*6}") {
-			fmt.Fprint(w, "value: 42")
+		if m := el.FindStringSubmatch(r.URL.Query().Get("input")); m != nil {
+			fmt.Fprint(w, "value: "+multiply(m))
 			return
 		}
 		fmt.Fprint(w, "value: none")
