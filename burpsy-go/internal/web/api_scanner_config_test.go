@@ -223,3 +223,18 @@ func TestConfigCarriesTheGraphQLHardeningSwitch(t *testing.T) {
 		t.Error("the running scanner did not take the patch")
 	}
 }
+
+// The NoSQL injection switch is on the wire, off by default, and a PUT reaches the running scanner.
+func TestConfigCarriesTheNoSQLInjectionCheck(t *testing.T) {
+	s := newScannerServer()
+	if got := getScannerConfig(t, s)["check_nosql_injection"]; got != false {
+		t.Fatalf("check_nosql_injection = %v, want present and off by default", got)
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_nosql_injection": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckNoSQLInjection {
+		t.Error("the running scanner did not take check_nosql_injection")
+	}
+}

@@ -357,6 +357,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckHostHeader = false
 		case "CheckGraphQLHardening":
 			cfg.CheckGraphQLHardening = false
+		case "CheckNoSQLInjection":
+			cfg.CheckNoSQLInjection = false
 		}
 	}
 }

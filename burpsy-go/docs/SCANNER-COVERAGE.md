@@ -56,6 +56,7 @@ which is what carries its CWE onto the finding.
 | `b5001810` | GraphQL query depth not limited | 770 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001820` | GraphQL debug information disclosed | 209 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001400` | Insecure deserialization | 502 | React Server Components remote code execution (React2Shell) | `check_insecure_deserialization` |
+| `b5002000` | NoSQL injection | 943 | Server-side JavaScript code injection | `check_nosql_injection` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
@@ -80,6 +81,13 @@ pairs (a nonexistent class versus a corrupted Java stream or PHP string, a pushe
 undefined pickle opcode, a resolvable JDK collection versus a nonexistent `@class`/`@type`, and for a
 cookie an empty versus an unterminated JSON object), each pair repeated with fresh names. No gadget is
 sent. Unsigned JSON state is reported low/tentative; the other formats high/firm.
+NoSQL injection (`checks_nosqli.go`) targets MongoDB-style back ends: operator objects in place of JSON,
+query and form values (`{"$ne": x}`, `name[$ne]=x`) and JavaScript string breakouts for `$where`. A
+finding needs a two-round TRUE/FALSE differential (two different always-true operators or expressions
+alike, two always-false ones alike and equal to a plain random value, a stable page, the original
+unchanged afterwards, every random value masked) or a MongoDB error a repaired control does not draw.
+It probes reads only (GET, or a POST naming a read or a login, never a write). Timing through `$where`
+is not implemented.
 
 ## Outside the catalog: DOM Invader's detections
 

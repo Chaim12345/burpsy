@@ -2838,3 +2838,32 @@ burpsy-own rows (`check_graphql_hardening`, off by default) plus GraphQL argumen
   Field-suggestion-driven schema recovery (clairvoyance), directive overloading, GraphiQL/IDE
   exposure and subscription (WebSocket) endpoints are not implemented. Stack-frame recognition
   covers JS, Java/Kotlin, .NET, Python, Ruby, PHP and Go formats only.
+
+## NoSQL injection: operator and $where syntax injection, no timing (2026-10-12, burpsy-react-ui-v0ei.6)
+
+Burp's catalogue has no NoSQL row. `NoSQL injection` is burpsy's own row (`b5002000`, CWE-943,
+`internal/scanner/checks_nosqli.go`, switch `check_nosql_injection`, riding "Server-side JavaScript
+code injection"). It replaces JSON string values with operator objects, re-sends query and form
+parameters in bracket syntax (`name[$ne]=x`, `name[$in][]=x`), and breaks out of a JavaScript string
+(`'||'x'=='x`, `'`, `"`, `\`). What it does NOT do:
+
+- **No `$where` timing (`sleep(n)`).** It holds a database worker for the delay. Endpoints that show
+  neither a result difference nor an error are not found.
+- **Strings only.** Numbers and booleans in JSON bodies are not replaced by operators: `{"$gt": ""}`
+  against a number compares by BSON type order, so the always-true class would disagree with itself.
+  An integer PIN compared in a filter is not tested. Arrays in JSON bodies are not walked.
+- **Reads and logins only.** A POST is probed only when its path names a read or an authentication
+  step and no write. An injectable filter behind an update, delete or reset endpoint is never tested,
+  on purpose: a match-everything operator there changes every record.
+- **APIs that support filter operators by design** (Feathers, some REST query layers) answer the
+  operator differential exactly as an injectable endpoint does, and are reported. Whether that is a
+  flaw depends on whether the filter was meant to restrict the result set; the finding says what was
+  evaluated, the reviewer decides.
+- **Only MongoDB.** CouchDB, Cassandra CQL, Redis and Elasticsearch query syntaxes are not probed;
+  the error bank is MongoDB/Mongoose/driver-specific.
+- **A cookie or header value** is never re-sent as an operator (qs-style bracket parsing does not
+  apply there).
+- Observed while building the fixture, not this check: `SQL injection` fires on `/nosql/where` and
+  `/nosql/report` from its error bank matching "unterminated string literal", the JavaScript engine's
+  message inside the MongoServerError. The flaw is real but it is not SQL; the SQL error bank should
+  not treat that JavaScript message as a SQL signature (`sqli_*` files are another agent's area).

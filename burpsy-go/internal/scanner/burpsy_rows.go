@@ -167,6 +167,15 @@ func BurpsyNativeRows() []BurpsyRow {
 			"deserialization testing is left to extensions (Java Deserialization Scanner, Freddy), filed " +
 			"under the generic extension-generated type. It rides React2Shell, the only active Burp row " +
 			"classified CWE-502.",
+	}, {
+		Name:      nosqliIssue,
+		TypeIndex: 0xb5002000,
+		CWE:       943,
+		Rides:     "Server-side JavaScript code injection",
+		Why: "Burp's catalogue has no NoSQL injection row: Burp's scanner does not probe MongoDB operators, " +
+			"and NoSQL findings come from extensions, filed under the generic extension-generated type. It " +
+			"rides 'Server-side JavaScript code injection' because the $where form of the flaw is " +
+			"server-side JavaScript evaluated by the database, and that row probes the same parameters.",
 	}}
 }
 

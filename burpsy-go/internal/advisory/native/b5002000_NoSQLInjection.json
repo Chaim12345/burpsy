@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036684288,
+  "name": "NoSQL injection",
+  "description": "<p>NoSQL injection arises when user-controllable data reaches a NoSQL database query in a form that changes the query's logic rather than being compared as a value. Against MongoDB-style back ends it takes two forms. In operator injection, a value the application expects to be a string is supplied as an object (a JSON body field, or a query or form parameter written in bracket syntax such as <code>password[$ne]=x</code>, which common frameworks decode into an object), and the database evaluates the object's query operators: <code>{\"$ne\": \"x\"}</code> matches every record whose value is not <code>x</code>. In syntax injection, input is concatenated into server-side JavaScript evaluated by the database, typically a <code>$where</code> clause, and quotes in the input rewrite the expression.</p>\n<p>An attacker can typically bypass authentication by matching any password, read records the query was meant to restrict, extract data one character at a time through a boolean or regular-expression oracle, and, where server-side JavaScript is evaluated, run arbitrary JavaScript inside the database.</p>\n<p>burpsy reports this only on proof: either the database evaluated an always-true operator or expression differently from an always-false one, the always-false one answered exactly like an ordinary random value, and the whole set held twice with fresh random values against a stable page; or a MongoDB error appeared for a broken value and not for its repaired control.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no NoSQL injection entry.</p>",
+  "remediation": "<p>Treat every query input as data of the type the field holds: cast it to that type before it reaches the query, and refuse objects where a string is expected. Use the driver's or ODM's filter sanitisation (for example Mongoose's <code>sanitizeFilter</code>, or a middleware that strips keys beginning with <code>$</code>). Do not concatenate input into <code>$where</code>, <code>mapReduce</code> or <code>$function</code> JavaScript; express conditions with query operators instead, and disable server-side JavaScript execution in the database where it is not required.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "OWASP WSTG-INPV-05.6: Testing for NoSQL Injection",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/05.6-Testing_for_NoSQL_Injection"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: NoSQL injection",
+      "url": "https://portswigger.net/web-security/nosql-injection"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-943: Improper Neutralization of Special Elements in Data Query Logic",
+      "url": "https://cwe.mitre.org/data/definitions/943.html"
+    }
+  ]
+}

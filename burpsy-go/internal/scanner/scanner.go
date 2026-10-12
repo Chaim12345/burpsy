@@ -332,6 +332,12 @@ type ScanConfig struct {
 	// and debug information in error responses. Off by default: the batch and depth probes are
 	// exactly the shapes a GraphQL gateway's abuse monitoring is built to alert on.
 	CheckGraphQLHardening bool
+	// CheckNoSQLInjection admits the NoSQL injection check (checks_nosqli.go,
+	// burpsy-react-ui-v0ei.6): MongoDB operator objects in place of JSON, query and form values, and
+	// JavaScript string breakouts for $where, decided by a two-round TRUE/FALSE operator differential
+	// against a plain-value control or by a MongoDB error a repaired control does not draw. Reads only
+	// (GET, or a POST naming a read or a login). Off by default.
+	CheckNoSQLInjection bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

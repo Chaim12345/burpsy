@@ -109,6 +109,9 @@ FULL_PROFILE = {
     # Insecure deserialization (0vzb.10): benign accepted/rejected pairs written into recognised
     # serialized values and opaque cookies; never a gadget.
     "check_insecure_deserialization": True,
+    # The NoSQL injection check (v0ei.6): MongoDB operators and $where breakouts on reads and logins.
+    # VulnerableApp has no NoSQL family, so every firing here is off-target and counts as a false positive.
+    "check_nosql_injection": True,
 }
 
 

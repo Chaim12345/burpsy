@@ -783,6 +783,9 @@ func runtimeScanConfig() *ScanConfig {
 		// Insecure deserialization (0vzb.10): benign accepted/rejected pairs in recognised serialized
 		// values and opaque cookies; it touches only the /deser fixtures' kind of request.
 		CheckInsecureDeserialization: true,
+		// The NoSQL injection check (v0ei.6). It acts only on reads and logins with a query, form or
+		// JSON value.
+		CheckNoSQLInjection: true,
 	}
 }
 
@@ -987,7 +990,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 170
+	const wantDemonstrated = 171
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

@@ -517,7 +517,11 @@ func InjectionCheckDescriptors() []CheckDescriptor {
 			codeInjectionCheck("Ruby code injection", "ruby", "high")),
 		nativeDescriptor("Python code injection", DispatchScopePerUrl, injectionChecksEnabled,
 			codeInjectionCheck("Python code injection", "python", "high")),
-		nativeDescriptor("Server-side JavaScript code injection", DispatchScopePerUrl, injectionChecksEnabled,
-			codeInjectionCheck("Server-side JavaScript code injection", "javascript", "high")),
+		// The NoSQL injection check (checks_nosqli.go) rides this row behind its own switch: its finding
+		// is burpsy's own "NoSQL injection" row (CWE-943), whose $where form is server-side JavaScript,
+		// and the registry admits one descriptor per Burp catalogue type.
+		nativeDescriptor("Server-side JavaScript code injection", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return injectionChecksEnabled(c) || nosqliEnabled(c) },
+			ssjsOrNoSQLi(codeInjectionCheck("Server-side JavaScript code injection", "javascript", "high"))),
 	}
 }

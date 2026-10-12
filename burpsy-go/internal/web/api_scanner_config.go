@@ -71,6 +71,8 @@ type scannerConfigView struct {
 
 	// The insecure-deserialization row (scanner/checks_deserialization.go), off by default.
 	CheckInsecureDeserialization bool `json:"check_insecure_deserialization"`
+	// The NoSQL injection check (scanner/checks_nosqli.go), off by default.
+	CheckNoSQLInjection bool `json:"check_nosql_injection"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -119,6 +121,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckHostHeader:          c.CheckHostHeader,
 
 		CheckInsecureDeserialization: c.CheckInsecureDeserialization,
+		CheckNoSQLInjection:          c.CheckNoSQLInjection,
 	}
 }
 
@@ -162,6 +165,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_host_header":          func(v *scannerConfigView) *bool { return &v.CheckHostHeader },
 
 	"check_insecure_deserialization": func(v *scannerConfigView) *bool { return &v.CheckInsecureDeserialization },
+	"check_nosql_injection":          func(v *scannerConfigView) *bool { return &v.CheckNoSQLInjection },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -318,6 +322,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckRequestSmuggling = view.CheckRequestSmuggling
 		c.CheckHostHeader = view.CheckHostHeader
 		c.CheckInsecureDeserialization = view.CheckInsecureDeserialization
+		c.CheckNoSQLInjection = view.CheckNoSQLInjection
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {
