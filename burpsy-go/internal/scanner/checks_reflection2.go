@@ -55,6 +55,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -164,6 +165,25 @@ var openRedirectPrefixes = [...]string{
 	"http://a", "https://a", "//a", "Http://a", "/\\a", "\\a",
 }
 
+// openRedirectAuthorityPrefixes are burpsy's own, not recovered from Burp's bank (burpsy-react-ui-j1mk.36).
+//
+// Every prefix above assumes the value BEGINS the Location header. An application that builds the
+// target as scheme + "://" + its own authority + value - the "keep the user on our origin" pattern -
+// defeats all of them: "//a..." lands in the path, and "http://a..." becomes a path too. What it
+// does not defeat is the userinfo delimiter. RFC 3986 section 3.2 ends the userinfo at "@", so
+// "http://app.example:8080" + "@a<token>/" parses with "app.example:8080" as credentials and
+// a<token> as the host, and every browser navigates there.
+//
+// Kept apart from the recovered list so the provenance comment above stays true.
+var openRedirectAuthorityPrefixes = [...]string{"@a"}
+
+// openRedirectProbePrefixes is the order checkOpenRedirect sends them in: Burp's bank first.
+func openRedirectProbePrefixes() []string {
+	out := make([]string, 0, len(openRedirectPrefixes)+len(openRedirectAuthorityPrefixes))
+	out = append(out, openRedirectPrefixes[:]...)
+	return append(out, openRedirectAuthorityPrefixes[:]...)
+}
+
 // checkOpenRedirect ports Zuag's confirmation logic: build url = prefix + token + "/", place it in
 // each enumerated insertion point, and confirm a 3xx whose Location header (lowercased) starts with
 // the payload (lowercased) — Zuag's own Zq() comparison.
@@ -185,9 +205,13 @@ func checkOpenRedirect(ctx context.Context, cc *CheckContext) ([]*Finding, error
 	}
 
 	for _, point := range points {
-		for _, prefix := range openRedirectPrefixes {
+		for _, prefix := range openRedirectProbePrefixes() {
 			token := newProbeCanary("")
 			payload := prefix + token + "/"
+			// The host the payload names: the prefix's trailing "a" plus the token. Every prefix
+			// ends in "a" so the host label starts with a letter whatever the token's first hex
+			// digit is.
+			wantHost := "a" + token
 			res, err := h.Send(ctx, point, payload)
 			if err != nil {
 				continue
@@ -199,18 +223,72 @@ func checkOpenRedirect(ctx context.Context, cc *CheckContext) ([]*Finding, error
 			if location == "" {
 				continue
 			}
-			// Prefix, not contains: a Location that merely mentions the payload somewhere is a
-			// reflection, whereas one that STARTS with it is where the browser will actually go.
-			if !strings.HasPrefix(strings.ToLower(location), strings.ToLower(payload)) {
+			// Where the browser goes, not what the header mentions. Zuag compared with startsWith,
+			// which cannot see a target the application prefixed with its own origin; a substring
+			// test would see it but would also accept "http://app/@a<token>/", which never leaves
+			// the app. The Location is resolved the way a browser resolves it, and only a host
+			// equal to the one the payload named counts.
+			target, ok := redirectTargetHost(exchangeURL(cc.Exchange), location)
+			if !ok || target != wantHost {
 				continue
 			}
 			return []*Finding{buildProbeFinding(cc, openRedirectIssue, "firm",
-				strconv.Itoa(res.Status)+" redirect Location header started with the injected external target "+payload,
+				strconv.Itoa(res.Status)+" redirect Location "+strconv.Quote(location)+" resolves to host "+target+
+					", the external host named by the injected value "+payload,
 				fmt.Sprintf("%s %q controlled the target of a server-issued redirect to an attacker-chosen external origin",
 					point.Kind, point.Name))}, nil
 		}
 	}
 	return nil, nil
+}
+
+// redirectTargetHost resolves a Location value against the request URL the way a browser does
+// (WHATWG URL Standard, basic URL parser) and returns the lowercased host it navigates to, without
+// the port. It reports false when the value does not parse.
+//
+// Three browser behaviours net/url does not share are applied first, because each is a known
+// redirect-filter bypass and ignoring it would both miss real targets and mis-read safe ones:
+//   - leading and trailing C0 controls and spaces are stripped;
+//   - ASCII tab, LF and CR are removed wherever they appear (slash, tab, slash, "evil" is "//evil");
+//   - for a special scheme, or a scheme-less reference resolved against an http(s) base, "\" is
+//     a path separator, so "/\evil" is the protocol-relative "//evil".
+func redirectTargetHost(base, location string) (string, bool) {
+	loc := strings.TrimFunc(location, func(r rune) bool { return r <= 0x20 })
+	loc = strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, loc)
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return "", false
+	}
+	scheme := ""
+	if i := strings.IndexByte(loc, ':'); i > 0 && !strings.ContainsAny(loc[:i], "/\\?#") {
+		scheme = strings.ToLower(loc[:i])
+	}
+	special := map[string]bool{"http": true, "https": true, "ws": true, "wss": true, "ftp": true, "file": true}
+	if special[scheme] || (scheme == "" && special[strings.ToLower(baseURL.Scheme)]) {
+		// Only up to the query: a backslash in the query or fragment is data, not a separator.
+		end := len(loc)
+		if i := strings.IndexAny(loc, "?#"); i >= 0 {
+			end = i
+		}
+		loc = strings.ReplaceAll(loc[:end], "\\", "/") + loc[end:]
+		if special[scheme] && scheme != "file" {
+			// "http:evil" and "http:/evil" are, for a special scheme, "http://evil".
+			rest := strings.TrimLeft(loc[len(scheme)+1:], "/")
+			loc = scheme + "://" + rest
+		}
+	}
+	ref, err := url.Parse(loc)
+	if err != nil {
+		return "", false
+	}
+	resolved := baseURL.ResolveReference(ref)
+	host := strings.ToLower(resolved.Hostname())
+	return host, host != ""
 }
 
 // rawHeaderValue reads one header value out of a raw HTTP response.

@@ -172,3 +172,41 @@ func TestReflectionProbeCheckDescriptorsAreValidAndNative(t *testing.T) {
 		seen[d.TypeIndex] = struct{}{}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// redirectTargetHost (burpsy-react-ui-j1mk.36)
+// ---------------------------------------------------------------------------
+
+// The open-redirect proof is the host a browser would navigate to, so every row here is a Location
+// value paired with where a WHATWG-conforming browser actually goes from http://app.example:8080/r.
+func TestRedirectTargetHostResolvesTheWayABrowserDoes(t *testing.T) {
+	const base = "http://app.example:8080/r?next=x"
+	cases := []struct {
+		location, want string
+	}{
+		{"http://evil.example/", "evil.example"},
+		{"//evil.example/", "evil.example"},
+		{"HTTP://Evil.Example/", "evil.example"},
+		// The origin-prefix pattern: the app wrote its own authority, the value supplied userinfo.
+		{"http://app.example:8080@evil.example/", "evil.example"},
+		// Backslash is a separator for a special scheme or a scheme-less reference.
+		{`/\evil.example/`, "evil.example"},
+		{`\/evil.example/`, "evil.example"},
+		{"https:evil.example", "evil.example"},
+		{"/\t/evil.example", "evil.example"},
+		{"  //evil.example", "evil.example"},
+		// Same-origin targets that merely CONTAIN the external name.
+		{"http://app.example:8080/@evil.example/", "app.example"},
+		{`http://app.example:8080/\/evil.example`, "app.example"},
+		{"/evil.example/", "app.example"},
+		{`\aevil.example/`, "app.example"},
+		{"/?u=//evil.example", "app.example"},
+		{"@evil.example/", "app.example"},
+	}
+	for _, c := range cases {
+		got, ok := redirectTargetHost(base, c.location)
+		if !ok || got != c.want {
+			t.Errorf("redirectTargetHost(%q) = %q, %v; want %q", c.location, got, ok, c.want)
+		}
+	}
+}

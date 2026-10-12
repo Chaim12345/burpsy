@@ -64,6 +64,11 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			probes := h.ProbeErrorSignatures(ctx, p, sqlErrorProbePayloads(), SQLErrorSignatures)
+			// The statement echo only when no quote probe already proved a syntax error: it is
+			// the weaker proof, and a confirmed point stops here anyway.
+			if _, confirmed := BestEvidence(probes); !confirmed {
+				probes = append(probes, sqlStatementEchoProbe(ctx, h, p))
+			}
 			return append(probes, blindInjectionPointProbes(ctx, h, p)...)
 		})
 	if err != nil {

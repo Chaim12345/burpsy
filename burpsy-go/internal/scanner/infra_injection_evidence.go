@@ -343,6 +343,10 @@ type InjectionProbe struct {
 	// this issue type (burpsy-react-ui-2hze). Its Evidence is None, and it must never be read as a
 	// clean answer: nothing was asked, so nothing was answered.
 	Withheld bool
+	// Tentative marks evidence that proves less than its Evidence kind usually does - the SQL
+	// statement echo proves concatenation, not a changed query - so the finding is rated
+	// tentative whatever the kind's default confidence (burpsy-react-ui-j1mk.36).
+	Tentative bool
 }
 
 // BestEvidence returns the strongest probe in a set, and whether anything confirmed.

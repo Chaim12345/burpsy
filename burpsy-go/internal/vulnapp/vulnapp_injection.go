@@ -87,6 +87,11 @@ func injectionEndpoints() []Endpoint {
 		{Path: "/ij/safe/books?sort_col=seed", Row: "SQL injection", Safe: true,
 			Note: "sorts by the named column only; no condition in the value is ever evaluated"},
 
+		{Path: "/ij/vehicles?id=1", Row: "SQL injection",
+			Note: "strips quotes, concatenates id into a quoted literal of a numeric column, and relays the database error with the statement text"},
+		{Path: "/ij/safe/vehicles?id=1", Row: "SQL injection", Safe: true,
+			Note: "binds id as a parameter; a non-numeric value raises the same conversion error, whose statement shows the placeholder"},
+
 		{Path: "/ij/jobs?queue=seed", Row: "SQL injection",
 			Note: "concatenates queue into a job query; a sleep directive in the value executes and delays the response"},
 		{Path: "/ij/safe/jobs?queue=seed", Row: "SQL injection", Safe: true,
@@ -169,6 +174,8 @@ func registerInjection(mux *http.ServeMux) {
 	mux.HandleFunc("/ij/books", sortBookedByCondition)
 	mux.HandleFunc("/ij/safe/books", safeSortBookedByCondition)
 	mux.HandleFunc("/ij/jobs", queueJobWithDelay)
+	mux.HandleFunc("/ij/vehicles", vehicleByID)
+	mux.HandleFunc("/ij/safe/vehicles", safeVehicleByID)
 	mux.HandleFunc("/ij/safe/jobs", safeQueueJobWithDelay)
 
 	mux.HandleFunc("/ij/upload/preview", uploadPreview)
@@ -437,6 +444,32 @@ func safeSortBookedByCondition(w http.ResponseWriter, r *http.Request) {
 	// The safe twin treats the value as a column name only: no condition is ever evaluated,
 	// so `1=1` and `1=2` both sort and both return the full listing.
 	fmt.Fprintf(w, "Products sorted by %s: Widget, Gadget, Gizmo", r.URL.Query().Get("sort_col"))
+}
+
+// vehicleByID strips every single quote from id and concatenates it into a quoted literal compared
+// with an integer column - a quote filter that leaves no way to close the literal. A non-numeric
+// value fails the database's type conversion, and the handler relays the error the way a debug
+// error page does, in PostgreSQL's error-plus-STATEMENT log form. No database is opened: the
+// failure is decided by whether the literal is an integer, which is what the engine decides too.
+func vehicleByID(w http.ResponseWriter, r *http.Request) {
+	v := strings.ReplaceAll(r.URL.Query().Get("id"), "'", "")
+	vehicleLookup(w, v, "SELECT name FROM vehicles WHERE id = '"+v+"'")
+}
+
+// safeVehicleByID binds id as a parameter. The same non-numeric value raises the same conversion
+// error, but the statement text holds the placeholder, never the value.
+func safeVehicleByID(w http.ResponseWriter, r *http.Request) {
+	vehicleLookup(w, r.URL.Query().Get("id"), "SELECT name FROM vehicles WHERE id = $1")
+}
+
+func vehicleLookup(w http.ResponseWriter, v, statement string) {
+	w.Header().Set("Content-Type", "text/plain")
+	if _, err := strconv.Atoi(strings.TrimSpace(v)); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, "ERROR:  invalid input syntax for type integer: \"%s\"\nSTATEMENT:  %s\n", v, statement)
+		return
+	}
+	fmt.Fprintf(w, "vehicle %s: Roadster", strings.TrimSpace(v))
 }
 
 // sqlSleepAfterLiteral is what may follow the queue literal and execute: a PostgreSQL pg_sleep(N)

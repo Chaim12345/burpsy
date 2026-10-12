@@ -209,6 +209,9 @@ func buildInjectionFinding(cc *CheckContext, name, severity string, res injectio
 	case InjectionEvidenceBooleanDifferential:
 		confidence = "tentative"
 	}
+	if res.best.Tentative {
+		confidence = "tentative"
+	}
 	detail := fmt.Sprintf("%s (%s). Probed %d insertion point(s) with %d payload(s); %d inconclusive, %d point(s) could not be enumerated.",
 		res.best.Detail, res.best.Evidence,
 		res.coverage.PointsTested, res.coverage.PayloadsSent,

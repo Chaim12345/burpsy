@@ -170,6 +170,8 @@ func coreEndpoints() []Endpoint {
 
 		{Path: "/redirect?url=/", Row: "Open redirection (reflected)",
 			Note: "redirects to an unvalidated absolute URL"},
+		{Path: "/redirect/origin?path=/", Row: "Open redirection (reflected)",
+			Note: "prefixes path with its own scheme and authority; a value starting with @ turns that authority into userinfo"},
 
 		{Path: "/echo?msg=seed", Row: "HTTP response header injection",
 			Note: "reflects msg into a response header, so CRLF splits it"},
@@ -279,6 +281,8 @@ func coreEndpoints() []Endpoint {
 			Note: "echoes metacharacters without any command-output artefact"},
 		{Path: "/safe/redirect?url=/", Row: "Open redirection (reflected)", Safe: true,
 			Note: "redirects only to same-origin paths, rejecting absolute URLs"},
+		{Path: "/safe/redirect/origin?path=/", Row: "Open redirection (reflected)", Safe: true,
+			Note: "prefixes path with its own origin AND a slash, so the value always lands in the path, whatever it spells"},
 		{Path: "/safe/echo?msg=seed", Row: "HTTP response header injection", Safe: true,
 			Note: "strips CR and LF before reflecting into the header"},
 	}
@@ -296,6 +300,7 @@ func Handler() http.Handler {
 	mux.HandleFunc("/download", download)
 	mux.HandleFunc("/ping", ping)
 	mux.HandleFunc("/redirect", redirect)
+	mux.HandleFunc("/redirect/origin", originRedirect)
 	mux.HandleFunc("/echo", echo)
 	mux.HandleFunc("/api/data", cors)
 	mux.HandleFunc("/safe/api/data", safeCORS)
@@ -305,6 +310,7 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/download", safeDownload)
 	mux.HandleFunc("/safe/ping", safePing)
 	mux.HandleFunc("/safe/redirect", safeRedirect)
+	mux.HandleFunc("/safe/redirect/origin", safeOriginRedirect)
 	mux.HandleFunc("/safe/echo", safeEcho)
 
 	// DOM sinks reading location.hash. No server involvement, which is what makes the rows
@@ -602,6 +608,31 @@ func safeRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// originRedirect keeps the user "on our origin" the way many applications try to: it writes its
+// own scheme and authority and appends the value. Nothing separates the authority from the value,
+// so "@evil.example/" makes the application's host:port the userinfo and evil.example the host
+// (RFC 3986 section 3.2). Every prefix that assumes the value starts the Location misses this.
+func originRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Location", requestOrigin(r)+r.URL.Query().Get("path"))
+	w.WriteHeader(http.StatusFound)
+}
+
+// safeOriginRedirect is the same pattern with the separator in place: the origin is followed by
+// "/", which ends the authority before the value starts, so "@host", "//host" and "\host" all
+// land in the path of this origin. Its Location still CONTAINS whatever host the value names, which
+// is the point of the twin: a detector that matches the host as a substring fires here wrongly.
+func safeOriginRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Location", requestOrigin(r)+"/"+strings.TrimPrefix(r.URL.Query().Get("path"), "/"))
+	w.WriteHeader(http.StatusFound)
+}
+
+func requestOrigin(r *http.Request) string {
+	if r.TLS != nil {
+		return "https://" + r.Host
+	}
+	return "http://" + r.Host
 }
 
 // echo reflects msg into a response header, so a value carrying CRLF splits it.
