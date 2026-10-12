@@ -14,9 +14,11 @@ Flow, per case:
   4. POST /api/audit/{exchange_id} runs the active scan over that exchange;
   5. a finding counts when one of the CWE numbers in its advisory matches one of the case's.
 
-TP/FN on UNSECURE cases, FP/TN on SECURE ones. "Strict" drops the blanket posture checks that
-fire on every response (BLANKET_CHECK_NAMES), which is what the earlier hand-run baseline
-reported; the lenient number is kept beside it. Exit code 0 always — this is a report, and the
+TP/FN on UNSECURE cases, FP/TN on SECURE ones. The headline ("strict") is DETECTION ONLY: a finding
+counts when its own CWE matches the case's, or when it is a detection row named in CWE_PARENT_OF.
+Posture rows (POSTURE_CHECK_NAMES: the blanket header rows and the cookie-flag rows) never earn a
+detection credit by name; where one answers a case's coarse CWE, the case is counted separately as
+POSTURE CREDIT and reported beside the headline, not in it. The lenient number is kept as well. Exit code 0 always — this is a report, and the
 caller (CI or a person) decides what a score means. `--fail-under N` turns it into a gate.
 
 The result is JSON (machine) plus a markdown table (human), both written under --out.
@@ -218,21 +220,30 @@ def case_param(url):
 # answer every client-side-JWT case — which is the dishonest counting this project forbids. Naming
 # the rows keeps the credit to the ones that genuinely report the case's defect.
 #
-# Every entry is a defect the app names and burpsy has a row for, confirmed live, not a guess:
-#
-#   CWE-522 (Insufficiently Protected Credentials) is the app's label for its client-side JWT levels.
-#   Those levels hand a JWT to the browser in a Set-Cookie missing HttpOnly, Secure or SameSite,
-#   which burpsy reports as the cookie-flag rows named below. Verified live on LEVEL_2 with
-#   ?fetch=true: the app sets `Set-Cookie: JWT=…; httponly` (no Secure, no SameSite).
+# Every entry is a DETECTION row: a check that tests the defect the case is about, confirmed live.
 #
 #   CWE-1188 (Insecure Default Initialization) is the app's label for its weak-key and algorithm-
 #   confusion JWT levels, answered by the weak-secret row.
 CWE_PARENT_OF = {
+    1188: {"JWT weak HMAC secret"},
+}
+
+# POSTURE_CREDIT_OF names posture rows that relate to a case's coarse CWE without testing the case's
+# defect. They are reported as posture credit, never as a detection TP.
+#
+#   CWE-522 (Insufficiently Protected Credentials) is the app's label for its client-side JWT levels.
+#   Those levels hand a JWT to the browser in a Set-Cookie missing HttpOnly, Secure or SameSite, which
+#   burpsy reports as the cookie-flag rows below. Those rows fire on ANY cookie missing a flag; they
+#   say nothing about a JWT being exposed to the client, so crediting them as detection overstated
+#   the score.
+POSTURE_CREDIT_OF = {
     522: {"Cookie without HttpOnly flag set", "Cookie Missing HttpOnly Flag",
           "TLS cookie without secure flag set", "Cookie Missing SameSite Flag",
           "Cookie Missing Secure Flag"},
-    1188: {"JWT weak HMAC secret"},
 }
+
+# Every row that reports response posture rather than testing a case's defect.
+POSTURE_CHECK_NAMES = set(BLANKET_CHECK_NAMES) | set().union(*POSTURE_CREDIT_OF.values())
 
 
 def family_cwes(types):
@@ -242,13 +253,30 @@ def family_cwes(types):
     return out
 
 
-def credit_names(types):
-    """Finding NAMES that legitimately answer any of these VulnerabilityTypes, via CWE_PARENT_OF."""
+def credit_names(types, table=None):
+    """Finding NAMES credited for any of these VulnerabilityTypes through table (CWE_PARENT_OF)."""
+    table = CWE_PARENT_OF if table is None else table
     names = set()
     for t in types:
         for cwe in TYPE_CWES.get(t, ()):
-            names |= CWE_PARENT_OF.get(cwe, set())
+            names |= table.get(cwe, set())
     return names
+
+
+def detection_hits(res, types):
+    """The findings that are DETECTION evidence for a case: the row's own CWE matches, or it is a
+    detection row CWE_PARENT_OF names. A posture row matched only by name is never one."""
+    case_cwes = family_cwes(types)
+    named = credit_names(types)
+    return [f for f in res
+            if f["check_name"] in named
+            or (finding_cwes(f) & case_cwes and f["check_name"] not in credit_names(types, POSTURE_CREDIT_OF))]
+
+
+def posture_hits(res, types):
+    """Posture rows that answer a case's coarse CWE by name (POSTURE_CREDIT_OF)."""
+    named = credit_names(types, POSTURE_CREDIT_OF)
+    return [f for f in res if f["check_name"] in named]
 
 
 def finding_cwes(finding):
@@ -275,6 +303,13 @@ def seed_value(app, family, param, example):
       present; without it the handler throws and answers 500. `fetch=true` is the value the app's own
       JS sends, so it is the request the case is actually about.
     """
+    if family == "PathTraversal":
+        # The app's own page requests this file through the parameter, so it is the value a real
+        # request carries. The scanner derives its NUL-with-allowed-suffix and prefix-preserving
+        # traversal forms from the point's own value (TraversalPayloadsFor); an inert "1" gives those
+        # forms nothing to preserve. This is benchmark knowledge and lives here, not in the scanner.
+        # Not re-verified live in the change that added it.
+        return "UserInfo.json"
     if family == "JWTVulnerability":
         for _ in range(3):
             try:
@@ -415,11 +450,11 @@ def score(cases, results, blanket_credits=False):
         if res is None:  # untestable case, already reported
             continue
         types = case["vulnerabilityTypes"]
-        case_cwes = family_cwes(types)
         unsecure = case["variant"] != "SECURE"
 
-        rel = [f for f in res if finding_cwes(f) & case_cwes or f["check_name"] in credit_names(types)]
+        rel = detection_hits(res, types)
         if blanket_credits:
+            rel = rel or posture_hits(res, types)
             rel = rel or [f for f in res if f["check_name"] in BLANKET_CHECK_NAMES]
         hit = bool(rel)
         for t in types:
@@ -434,6 +469,30 @@ def score(cases, results, blanket_credits=False):
             fp += hit
             tn += not hit
     return tp, fn, tn, fp, by_type
+
+
+def posture_score(cases, results):
+    """Cases a posture row answers by name while no detection row did, reported beside the headline.
+
+    Returns (unsecure_cases_credited, secure_cases_hit, by_type). The secure count is shown because a
+    posture row that fires on the SECURE level too is evidence it is not about the case at all."""
+    by_type = defaultdict(lambda: Counter())
+    credited = secure_hit = 0
+    for case, res in zip(cases, results):
+        if res is None:
+            continue
+        types = case["vulnerabilityTypes"]
+        if detection_hits(res, types) or not posture_hits(res, types):
+            continue
+        if case["variant"] != "SECURE":
+            credited += 1
+            for t in types:
+                by_type[t]["posture"] += 1
+        else:
+            secure_hit += 1
+            for t in types:
+                by_type[t]["posture_on_secure"] += 1
+    return credited, secure_hit, by_type
 
 
 def main():
@@ -514,6 +573,7 @@ def main():
 
     strict = score(cases, results, blanket_credits=False)
     lenient = score(cases, results, blanket_credits=True)
+    posture = posture_score(cases, results)
 
     def pct(t):
         tp, fn, tn, fp, _ = t
@@ -528,12 +588,13 @@ def main():
         if res is None:
             continue
         types = case["vulnerabilityTypes"]
-        rel = [f for f in res if finding_cwes(f) & family_cwes(types) or f["check_name"] in credit_names(types)]
+        rel = detection_hits(res, types)
         per_case.append({
             "url": case["url"],
             "variant": case["variant"],
             "types": types,
             "hit": bool(rel),
+            "posture_only": not rel and bool(posture_hits(res, types)),
             "findings": sorted({f["check_name"] for f in res}),
         })
 
@@ -543,6 +604,10 @@ def main():
         "untestable": notes,
         "strict": {"tp": strict[0], "fn": strict[1], "tn": strict[2], "fp": strict[3], "score_pct": round(pct(strict), 1)},
         "lenient": {"tp": lenient[0], "fn": lenient[1], "tn": lenient[2], "fp": lenient[3], "score_pct": round(pct(lenient), 1)},
+        # Not part of any score: unsecure cases a posture row answered by name with no detection, and
+        # secure cases the same rows fired on.
+        "posture_credit": {"unsecure_cases": posture[0], "secure_cases_hit": posture[1],
+                           "by_type": {t: dict(c) for t, c in sorted(posture[2].items())}},
         "by_type": {
             t: dict(c) for t, c in sorted(strict[4].items())
         },
@@ -557,7 +622,9 @@ def main():
         f"# VulnerableApp score — {stamp}",
         "",
         f"- app: {args.app}, cases: {len(cases)} (untestable: {len(notes)})",
-        f"- strict: TP {strict[0]} / FN {strict[1]} / TN {strict[2]} / FP {strict[3]} = **{pct(strict):.1f}%**",
+        f"- strict (detection only): TP {strict[0]} / FN {strict[1]} / TN {strict[2]} / FP {strict[3]} = **{pct(strict):.1f}%**",
+        f"- posture credit (NOT in the score): {posture[0]} unsecure case(s) answered only by a posture row; "
+        f"the same rows also fired on {posture[1]} secure case(s)",
         f"- lenient: TP {lenient[0]} / FN {lenient[1]} / TN {lenient[2]} / FP {lenient[3]} = {pct(lenient):.1f}%",
         "",
         "| Vulnerability type | TP | FN | TN | FP |",
