@@ -724,6 +724,9 @@ func runtimeScanConfig() *ScanConfig {
 		// need outbound network (the OOB row, three external-service-interaction rows, TLS
 		// certificate); the rest are network-free and are exercised here.
 		CheckExtendedActive: true,
+		// The active file-upload check (0vzb.15). It only acts on a request carrying a multipart
+		// file part, so every other endpoint costs it nothing.
+		CheckFileUpload: true,
 	}
 }
 

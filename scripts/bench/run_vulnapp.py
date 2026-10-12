@@ -91,6 +91,9 @@ FULL_PROFILE = {
     # reflected-XSS family reported "no baseline response: send exceeded its deadline").
     # In-band SSRF: the canary-URL technique, which needs no collaborator (0vzb.6).
     "check_ssrf_in_band": True,
+    # The active file-upload check (0vzb.15): uploads inert HTML/SVG/server-script files and a "../"
+    # filename to every multipart file part, and fetches the stored copies back.
+    "check_file_upload": True,
 }
 
 

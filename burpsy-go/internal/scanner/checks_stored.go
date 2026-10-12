@@ -361,8 +361,16 @@ func StoredCheckDescriptors() []CheckDescriptor {
 	// ranked there rather than split by severity.
 	out := make([]CheckDescriptor, 0, len(rows))
 	for _, r := range rows {
+		enabled, run := storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx)
+		if r.row == "Cross-site scripting (stored)" {
+			// The row's second technique, the active file-upload check (checks_file_upload.go),
+			// rides this descriptor behind its own switch: the registry allows one descriptor per
+			// catalogue type, and an uploaded document served back with live script IS this row.
+			enabled = func(c *ScanConfig) bool { return storedChecksEnabled(c) || fileUploadEnabled(c) }
+			run = storedXSSOrFileUpload(run)
+		}
 		out = append(out, descriptorWithTier(r.row, DispatchScopeStoredPerInsertionPoint,
-			storedChecksEnabled, storedContextCheck(r.row, r.severity, r.ctx), TierIntrusive, ""))
+			enabled, run, TierIntrusive, ""))
 	}
 	return out
 }

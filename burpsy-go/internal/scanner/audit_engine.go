@@ -337,6 +337,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckOutOfBand = false
 		case "CheckStored":
 			cfg.CheckStored = false
+		case "CheckFileUpload":
+			cfg.CheckFileUpload = false
 		}
 	}
 }

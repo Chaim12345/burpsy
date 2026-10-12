@@ -49,3 +49,43 @@ func TestAFilePartCanBeResentAsHTML(t *testing.T) {
 		t.Errorf("Content-Length was not recomputed: %q", s)
 	}
 }
+
+// The file-upload check (burpsy-react-ui-0vzb.15) varies the filename, the declared part type and the
+// content independently. A NUL in the filename is a filter bypass it must be able to send (it is body
+// bytes, not a header); a quote, CR or LF would re-frame the part and is refused; and a part that
+// declared no Content-Type gets one added rather than the rewrite silently leaving it out.
+func TestAFilePartCanBeResentAsAnyFile(t *testing.T) {
+	body := "--B\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"notes.txt\"\r\n\r\nhello\r\n--B--\r\n"
+	req := []byte("POST /up HTTP/1.1\r\nHost: h\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: " +
+		itoa(len(body)) + "\r\n\r\n" + body)
+	points, _ := Enumerate(req, []string{"any"})
+	var doc *InsertionPoint
+	for i := range points {
+		if points[i].Kind == IpBody && points[i].Name == "doc" {
+			doc = &points[i]
+		}
+	}
+	if doc == nil {
+		t.Fatal("the file part's content point was not enumerated")
+	}
+	got, err := doc.ApplyUpload(req, "marker", "a.html\x00.png", "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--B\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"a.html\x00.png\"\r\nContent-Type: image/png\r\n\r\nmarker\r\n--B--\r\n"
+	if !strings.HasSuffix(string(got), want) {
+		t.Errorf("rewritten body:\n%q\nwant suffix\n%q", got, want)
+	}
+	for _, bad := range []string{"a\".html", "a\r\n.html", "a\n.html"} {
+		if _, err := doc.ApplyUpload(req, "x", bad, "text/html"); err == nil {
+			t.Errorf("filename %q was accepted, but it re-frames the part header", bad)
+		}
+	}
+	if _, err := doc.ApplyUpload(req, "x", "a.html", "text/html\r\nX-Injected: 1"); err == nil {
+		t.Error("a content type carrying CRLF was accepted")
+	}
+	// The HTML variant keeps its own stricter rule: Burp's variant never sends a NUL.
+	if _, err := doc.ApplyHTMLUpload(req, "x", "a.html\x00.png"); err == nil {
+		t.Error("ApplyHTMLUpload accepted a NUL filename")
+	}
+}

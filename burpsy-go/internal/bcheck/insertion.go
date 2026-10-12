@@ -2837,14 +2837,35 @@ func (p *InsertionPoint) UploadFilename(req []byte) (string, bool) {
 // serves back is tested as the HTML page a victim would be sent to. Only a file part's content
 // point carries the spans; any other point is refused.
 func (p *InsertionPoint) ApplyHTMLUpload(req []byte, payload, newName string) ([]byte, error) {
+	if strings.ContainsRune(newName, 0) {
+		return nil, fmt.Errorf("filename %q cannot be written into a Content-Disposition header", newName)
+	}
+	return p.ApplyUpload(req, payload, newName, "text/html")
+}
+
+// ApplyUpload re-sends the multipart file part this content point belongs to as a different file:
+// its filename becomes newName, its part Content-Type contentType (replaced, or added when the part
+// declared none), and its content the given bytes. Every other byte of the body is untouched and
+// Content-Length is recomputed. The file-upload check (burpsy-react-ui-0vzb.15) is the caller: it
+// needs the filename, the declared type and the content to vary independently, because each is a
+// different filter an application may or may not apply.
+//
+// A NUL byte IS allowed in newName: it sits inside the body, not in an HTTP header, and the
+// null-byte filename (`x.html\x00.png`) is one of the filter bypasses the check exists to try. A
+// double quote, CR or LF is refused, since each would end the quoted filename or the header line
+// and re-frame the part rather than name a file.
+func (p *InsertionPoint) ApplyUpload(req []byte, content, newName, contentType string) ([]byte, error) {
 	if p.upload == nil {
 		return nil, fmt.Errorf("%s %q is not a multipart file part", p.Kind, p.Name)
 	}
-	if err := p.refuseValue(payload); err != nil {
+	if err := p.refuseValue(content); err != nil {
 		return nil, err
 	}
-	if strings.ContainsAny(newName, "\"\r\n\x00") {
+	if strings.ContainsAny(newName, "\"\r\n") {
 		return nil, fmt.Errorf("filename %q cannot be written into a Content-Disposition header", newName)
+	}
+	if strings.ContainsAny(contentType, "\r\n\x00") {
+		return nil, fmt.Errorf("content type %q cannot be written into a part header", contentType)
 	}
 	e, err := core.ParseRequestEdit(req)
 	if err != nil {
@@ -2863,7 +2884,7 @@ func (p *InsertionPoint) ApplyHTMLUpload(req []byte, payload, newName string) ([
 	replaced := false
 	for i, line := range lines {
 		if name, _, ok := strings.Cut(line, ":"); ok && strings.EqualFold(strings.TrimSpace(name), "content-type") {
-			lines[i] = "Content-Type: text/html" + func() string {
+			lines[i] = "Content-Type: " + contentType + func() string {
 				if strings.HasSuffix(line, "\r") {
 					return "\r"
 				}
@@ -2874,12 +2895,15 @@ func (p *InsertionPoint) ApplyHTMLUpload(req []byte, payload, newName string) ([
 	}
 	head = strings.Join(lines, "\n")
 	if !replaced {
-		eol := "\r\n"
-		if !strings.Contains(head, "\r\n") {
-			eol = "\n"
+		// The part's own line ending. A one-line header block (only Content-Disposition) holds no
+		// line break of its own, so the terminator that follows the block is what says CRLF or LF;
+		// reading the block alone took a CRLF part for an LF one and wrote a bare-LF header line.
+		eol := "\n"
+		if strings.Contains(head, "\r\n") || strings.HasPrefix(body[he:], "\r\n") {
+			eol = "\r\n"
 		}
-		head += eol + "Content-Type: text/html"
+		head += eol + "Content-Type: " + contentType
 	}
-	e.Body = []byte(body[:hs] + head + body[he:cs] + payload + body[ce:])
+	e.Body = []byte(body[:hs] + head + body[he:cs] + content + body[ce:])
 	return e.ToRaw(), nil
 }

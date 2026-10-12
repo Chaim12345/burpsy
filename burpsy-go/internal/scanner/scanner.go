@@ -244,8 +244,15 @@ type ScanConfig struct {
 	// CheckStored admits the stored (second-order) checks in checks_stored.go. They plant
 	// canaries into endpoints they audit and can only confirm a finding once one surfaces in a
 	// later exchange, so they need a StoredLedger. Off by default.
-	CheckStored    bool
-	CustomPayloads []string
+	CheckStored bool
+	// CheckFileUpload admits the active file-upload check (checks_file_upload.go,
+	// burpsy-react-ui-0vzb.15): a multipart file part is re-sent as HTML, SVG and server-script files
+	// (with the usual filter bypasses) and as a "../" filename, each an inert marker, and the stored
+	// copies are fetched back. It reports stored XSS, filename path traversal and an accepted
+	// dangerous extension, each only as far as it was demonstrated. Off by default: it leaves files on
+	// the target, which is the intrusive tier's whole meaning.
+	CheckFileUpload bool
+	CustomPayloads  []string
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on
