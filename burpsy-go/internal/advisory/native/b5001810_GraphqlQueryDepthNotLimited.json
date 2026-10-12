@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036682256,
+  "name": "GraphQL query depth not limited",
+  "description": "<p>The GraphQL endpoint executed a query nested ten object fields deep without a depth or complexity error. burpsy builds the query from the endpoint's own introspected schema: the shortest path from the query root to a type that refers back to itself, followed round that cycle until the query is ten fields deep. It never fans out - a list field is followed only through a first/limit-style argument set to 1 - so the probe itself costs the server ten small lookups.</p>\n<p>A schema with a cycle (a category with a parent category, a user with friends who are users) admits queries of any depth, and with list fields each level multiplies the work of the one before it. Without a depth or cost limit, one small request can therefore make the server do an amount of work that grows exponentially with its nesting, which is a denial-of-service lever for anyone who can send a query.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no entry for GraphQL query depth. It is classified under CWE-770, Allocation of Resources Without Limits or Throttling. The probe needs introspection to find a cycle; on an endpoint with introspection disabled it is not run and nothing is reported either way.</p>",
+  "remediation": "<p>Reject queries deeper than the application needs (a maximum depth in the GraphQL server, or a validation rule such as graphql-depth-limit), and prefer a query cost or complexity limit that also accounts for list sizes. Require pagination arguments with a server-side maximum on list fields, and set an execution timeout.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "OWASP GraphQL Cheat Sheet: Query Limiting (Depth and Amount)",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#query-limiting-depth-amount"
+    },
+    {
+      "title": "graphql-cop: circular query test",
+      "url": "https://github.com/dolevf/graphql-cop"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-770: Allocation of Resources Without Limits or Throttling",
+      "url": "https://cwe.mitre.org/data/definitions/770.html"
+    }
+  ]
+}

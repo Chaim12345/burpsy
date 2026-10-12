@@ -2812,3 +2812,29 @@ header injection" evaluator (`checks_crlf.go`) and the SMTP header injection fix
 - **SMTP header injection** is now reported only on a separator-specific mail-library error
   (tentative). A mailer that fails silently, or queues and fails later, is not seen; the collaborator
   SMTP route (Bcc to the collaborator domain) is not wired into this row.
+## GraphQL (2026-10-12, burpsy-react-ui-0vzb.13)
+
+Burp's four GraphQL rows were already wired; this round hardened their evidence and added three
+burpsy-own rows (`check_graphql_hardening`, off by default) plus GraphQL argument insertion points.
+
+- **Evidence changes to Burp's rows.** "GraphQL content type not validated" now asks under a fresh
+  alias with only the captured cookie (what a cross-site form carries), and additionally reports
+  when `mutation{<alias>:__typename}` executes over GET. "GraphQL suggestions enabled" probes ten
+  near-misses of common root fields (graphql-js suggests within edit distance) instead of one
+  nonsense name that is near nothing, and ignores a "suggestion" that only echoes a probe name.
+  "GraphQL endpoint discovered" requires `data.__typename` to be a string, and also tries `/query`
+  (gqlgen's default mount). Every GraphQL probe now carries the captured request's session headers
+  (cookies, Authorization, API keys), minus framing and conditional headers.
+- **Injection through arguments.** Each string-literal argument of a GraphQL document in a JSON
+  body string, a form value or a query-string value is a nested insertion point
+  (`bcheck/insertion_graphql.go`), so every server-side injection row reaches it; `variables`
+  values were already JSON body points. Demonstrated for SQL injection (`/gql/api`
+  `book(title:)`). NOT done: XSS through a GraphQL argument is probed but never demonstrated (a JSON
+  response is not an HTML context); Int/Boolean/enum literals and block strings are not points
+  (GraphQL type-checks the former before any resolver runs).
+- **Not covered.** Depth needs introspection (no schema, no cycle to follow); a cycle only through
+  a list field with no first/limit-style argument is never followed, so such schemas stay
+  undecided. Batching sizes are fixed (10 / 100), so a limit above them reads as "not limited".
+  Field-suggestion-driven schema recovery (clairvoyance), directive overloading, GraphiQL/IDE
+  exposure and subscription (WebSocket) endpoints are not implemented. Stack-frame recognition
+  covers JS, Java/Kotlin, .NET, Python, Ruby, PHP and Go formats only.

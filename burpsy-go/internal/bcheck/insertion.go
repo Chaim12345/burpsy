@@ -264,6 +264,11 @@ const (
 	// Content-Disposition header. RFC 2045's quoted-string is the container:
 	// `\` and `"` are backslash-escaped, and CR/LF cannot appear in one at all.
 	codingMultipartAttr
+	// codingJSONString is a JSON string literal's CONTENT used as the outer container of a
+	// nested point: decoding unescapes it, encoding re-escapes it. Only GraphQL nested points
+	// use it (insertion_graphql.go). The other nested kinds keep reading a JSON value's wire
+	// text as-is, so adding this coding changes none of them.
+	codingJSONString
 )
 
 // refusal is the byte sequence a payload must not carry to be spliceable into a
@@ -309,6 +314,9 @@ const (
 	nestedBase64
 	// nestedXML: the param value is XML text.
 	nestedXML
+	// nestedGraphQL: the param value is a GraphQL executable document; each string literal
+	// argument inside it is one point (insertion_graphql.go).
+	nestedGraphQL
 )
 
 // Describe returns a short human-readable label for a nested encoding kind.
@@ -322,6 +330,8 @@ func (k nestedKind) Describe() string {
 		return "base64"
 	case nestedXML:
 		return "xml"
+	case nestedGraphQL:
+		return "graphql"
 	default:
 		return "unknown"
 	}
@@ -2319,6 +2329,12 @@ func expandNested(parents []InsertionPoint) []InsertionPoint {
 			}
 		}
 		if !ok {
+			// A GraphQL document is not JSON, base64 or XML, so it is tried last and only when
+			// nothing else nested. Its points are named per argument, so it builds them itself.
+			nested = appendGraphQLPoints(nested, p)
+			if len(nested) >= maxNestedPoints {
+				return nested[:maxNestedPoints]
+			}
 			continue
 		}
 		for _, sp := range innerSpans(kind, inner) {
@@ -2471,8 +2487,11 @@ func trimTrailingWS(s string, i, end int) int {
 // re-encoded through percentEscape on the way back, reintroducing the
 // `=`→`%3D` corruption the codec change exists to stop.
 func containerDecode(c coding, s string) string {
-	if c == codingForm {
+	switch c {
+	case codingForm:
 		return percentDecode(s)
+	case codingJSONString:
+		return jsonStringContentDecode(s)
 	}
 	return s
 }
@@ -2480,8 +2499,11 @@ func containerDecode(c coding, s string) string {
 // containerEncode applies the outer container encoding (percent-encoding for
 // query/form params, identity for headers and cookie values).
 func containerEncode(c coding, s string) string {
-	if c == codingForm {
+	switch c {
+	case codingForm:
 		return percentEscape(s)
+	case codingJSONString:
+		return jsonEscape(s)
 	}
 	return s
 }
@@ -2523,6 +2545,9 @@ func nestedEncode(k nestedKind, s string) string {
 func escapeForNested(k nestedKind, payload string) string {
 	switch k {
 	case nestedJSON, nestedBase64JSON:
+		return jsonEscape(payload)
+	case nestedGraphQL:
+		// GraphQL's string-literal escapes (\", \\, \n, \uXXXX ...) are JSON's.
 		return jsonEscape(payload)
 	case nestedXML:
 		return xmlEscape(payload)

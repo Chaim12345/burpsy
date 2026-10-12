@@ -10,6 +10,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 )
@@ -128,8 +129,9 @@ const (
 
 // graphQLCandidatePaths are the standard, publicly documented GraphQL endpoint conventions
 // (graphql.org / Apollo / GraphQL Yoga default mount points). burp.Zmzj's own path list was not
-// recoverable as a literal string array; these are industry-standard, not Burp-specific.
-var graphQLCandidatePaths = [...]string{"/graphql", "/graphql/", "/api/graphql", "/v1/graphql"}
+// recoverable as a literal string array; these are industry-standard, not Burp-specific. /query is
+// gqlgen's default mount point (its generated server.go serves the handler there).
+var graphQLCandidatePaths = [...]string{"/graphql", "/graphql/", "/api/graphql", "/v1/graphql", "/query"}
 
 // checkGraphQLEndpointDiscovered POSTs Zmzj's own recovered introspection-lite query to each
 // candidate path and confirms when the response is valid JSON naming the query back — a GraphQL
@@ -144,8 +146,15 @@ func checkGraphQLEndpointDiscovered(ctx context.Context, cc *CheckContext) ([]*F
 		if resp == nil || resp.StatusCode != 200 {
 			continue
 		}
-		respBody := strings.ToLower(string(resp.Body))
-		if strings.Contains(respBody, "__typename") && strings.Contains(respBody, `"data"`) {
+		// data.__typename must be a string - the name of the root type the server executed the
+		// query against. A body that merely contains both words (an echo of the request inside a
+		// "data" wrapper, a documentation page) is not an answer.
+		var env struct {
+			Data struct {
+				Typename string `json:"__typename"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(resp.Body, &env) == nil && env.Data.Typename != "" {
 			return []*Finding{buildProbeFinding(cc, graphQLEndpointIssue, "firm",
 				"POST "+path+" with query{__typename} returned a data.__typename response",
 				"a GraphQL endpoint was found at "+path)}, nil

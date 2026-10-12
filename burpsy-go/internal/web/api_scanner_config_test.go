@@ -208,3 +208,18 @@ func TestConfigCarriesTheHostHeaderCheck(t *testing.T) {
 		t.Error("the running scanner did not take check_host_header")
 	}
 }
+
+// The GraphQL hardening switch is on the wire, off by default, and a PUT reaches the running scanner.
+func TestConfigCarriesTheGraphQLHardeningSwitch(t *testing.T) {
+	s := newScannerServer()
+	if cfg := getScannerConfig(t, s); cfg["check_graphql_hardening"] != false {
+		t.Errorf("check_graphql_hardening = %v, want present and off by default", cfg["check_graphql_hardening"])
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_graphql_hardening": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckGraphQLHardening {
+		t.Error("the running scanner did not take the patch")
+	}
+}

@@ -777,6 +777,9 @@ func runtimeScanConfig() *ScanConfig {
 		// The Host header check (checks_host_header.go). It sends canary hosts under .invalid to the
 		// loopback target only; the scope gate never reads the Host header.
 		CheckHostHeader: true,
+		// The GraphQL hardening rows (checks_graphql_hardening.go). They act only on a URL whose answer to
+		// an aliased __typename query proves it executes GraphQL.
+		CheckGraphQLHardening: true,
 	}
 }
 
@@ -981,7 +984,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 167
+	const wantDemonstrated = 170
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

@@ -52,6 +52,9 @@ which is what carries its CWE onto the finding.
 | `b5000200` | Authentication attempts not rate limited | 307 | Broken access control | `check_login_rate_limit` (+ `login_rate_limit_attempts`, default 20, 5-100) |
 | `b5000300` | Username enumeration | 204 | Broken access control | `check_username_enumeration` |
 | `b5001000` | Host header injection | 20 | Link manipulation (reflected) | `check_host_header` |
+| `b5001800` | GraphQL query batching enabled | 799 | GraphQL endpoint found | `check_graphql_hardening` |
+| `b5001810` | GraphQL query depth not limited | 770 | GraphQL endpoint found | `check_graphql_hardening` |
+| `b5001820` | GraphQL debug information disclosed | 209 | GraphQL endpoint found | `check_graphql_hardening` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
@@ -65,6 +68,12 @@ or a body URL starting at an attribute/string boundary), was absent from the bas
 canary through the same vehicle moved with it. Routing-based SSRF through the Host header is filed
 under Burp's own "External service interaction (DNS/HTTP)" rows, which now also plant the
 collaborator as the request's Host and absolute-form target.
+The three GraphQL rows (`checks_graphql_hardening.go`) are off by default and probe only a URL whose
+answer to `query{<fresh alias>:__typename}` carries that alias back: batching is ten array-batched
+operations and one hundred aliases, each answered under its own alias; depth is one query ten object
+fields deep along a self-referential path of the introspected schema, never fanning out (needs
+introspection; undecided without it); debug is two or more stack frames in the errors of a malformed
+query, or Apollo's tracing extension.
 
 ## Outside the catalog: DOM Invader's detections
 

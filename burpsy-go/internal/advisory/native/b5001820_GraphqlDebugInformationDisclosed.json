@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036682272,
+  "name": "GraphQL debug information disclosed",
+  "description": "<p>The GraphQL endpoint returns debugging information in its responses. burpsy reports one of two things: a server stack trace in the error answer to a malformed query (a missing closing brace, or a field that does not exist), recognised by at least two stack frames in the error's message or extensions; or Apollo's tracing extension, which attaches the path and timing of every resolver to each answer.</p>\n<p>A stack trace names source files, functions and library versions of the code behind the endpoint, which tells an attacker what the server runs and where to look for known vulnerabilities. Resolver traces map the schema and time each resolver, which helps find the expensive ones. Both are development settings (debug mode, includeStacktraceInErrorResponses, tracing) left on in a deployed server.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no entry for GraphQL debug output. It is classified under CWE-209, Generation of Error Message Containing Sensitive Information.</p>",
+  "remediation": "<p>Run the GraphQL server in production mode: disable debug mode and stack traces in error responses (for example Apollo Server's includeStacktraceInErrorResponses, Hot Chocolate's IncludeExceptionDetails, graphene's debug middleware), mask unexpected errors behind a generic message, and turn off tracing extensions or restrict them to trusted clients.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "OWASP GraphQL Cheat Sheet: Don't return excessive errors",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#dont-return-excessive-errors"
+    },
+    {
+      "title": "graphql-cop: trace mode and unhandled error detection tests",
+      "url": "https://github.com/dolevf/graphql-cop"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-209: Generation of Error Message Containing Sensitive Information",
+      "url": "https://cwe.mitre.org/data/definitions/209.html"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "typeIndex": 3036682240,
+  "name": "GraphQL query batching enabled",
+  "description": "<p>The GraphQL endpoint executes many operations in a single HTTP request. burpsy proves this with one or both of two probes, each asking only for <code>__typename</code> under fresh random aliases: an array of ten operations in one JSON body, every one answered under its own alias (array batching), and one operation selecting <code>__typename</code> under one hundred aliases, all answered (alias overloading).</p>\n<p>Batching defeats any limit that is counted per HTTP request. Rate limiting on a login mutation, on the verification of a one-time code or on an expensive query typically counts requests, so one request carrying hundreds of password or code guesses as batched operations or aliased fields passes it as a single attempt. Array batching multiplies whole operations, mutations included, and is reported at a higher severity than alias overloading alone.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no entry for GraphQL batching. It is classified under CWE-799, Improper Control of Interaction Frequency.</p>",
+  "remediation": "<p>Disable array batching unless clients need it, and if they do, cap the number of operations per request. Limit the number of aliases (or the number of root fields) an operation may select, for example with an alias or cost limit in the GraphQL server or a gateway in front of it. Apply rate limits to sensitive operations per operation executed - per login attempt, per code verified - rather than per HTTP request.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "OWASP GraphQL Cheat Sheet: Query Batching Attacks",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/GraphQL_Cheat_Sheet.html#mitigating-batching-attacks"
+    },
+    {
+      "title": "Web Security Academy: Bypassing rate limiting using aliases",
+      "url": "https://portswigger.net/web-security/graphql#bypassing-rate-limiting-using-aliases"
+    },
+    {
+      "title": "graphql-cop: batch query and alias overloading tests",
+      "url": "https://github.com/dolevf/graphql-cop"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-799: Improper Control of Interaction Frequency",
+      "url": "https://cwe.mitre.org/data/definitions/799.html"
+    },
+    {
+      "title": "CWE-307: Improper Restriction of Excessive Authentication Attempts",
+      "url": "https://cwe.mitre.org/data/definitions/307.html"
+    }
+  ]
+}

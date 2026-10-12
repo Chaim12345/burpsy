@@ -66,6 +66,8 @@ type scannerConfigView struct {
 	CheckRequestSmuggling bool `json:"check_request_smuggling"`
 	// The Host header check (scanner/checks_host_header.go), off by default.
 	CheckHostHeader bool `json:"check_host_header"`
+	// The GraphQL hardening rows (scanner/checks_graphql_hardening.go), off by default.
+	CheckGraphQLHardening bool `json:"check_graphql_hardening"`
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -103,6 +105,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 
 		CheckLoginRateLimit:      c.CheckLoginRateLimit,
 		CheckUsernameEnumeration: c.CheckUsernameEnumeration,
+		CheckGraphQLHardening:    c.CheckGraphQLHardening,
 		LoginRateLimitAttempts:   c.LoginRateLimitAttempts,
 		CheckSqliHeavyQuery:      c.CheckSqliHeavyQuery,
 		CheckPasswordReset:       c.CheckPasswordReset,
@@ -146,6 +149,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_idor":                 func(v *scannerConfigView) *bool { return &v.CheckIDOR },
 	"check_login_rate_limit":     func(v *scannerConfigView) *bool { return &v.CheckLoginRateLimit },
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
+	"check_graphql_hardening":    func(v *scannerConfigView) *bool { return &v.CheckGraphQLHardening },
 	"check_sqli_heavy_query":     func(v *scannerConfigView) *bool { return &v.CheckSqliHeavyQuery },
 	"check_password_reset":       func(v *scannerConfigView) *bool { return &v.CheckPasswordReset },
 	"check_session_management":   func(v *scannerConfigView) *bool { return &v.CheckSessionManagement },
@@ -297,6 +301,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckIDOR = view.CheckIDOR
 		c.CheckLoginRateLimit = view.CheckLoginRateLimit
 		c.CheckUsernameEnumeration = view.CheckUsernameEnumeration
+		c.CheckGraphQLHardening = view.CheckGraphQLHardening
 		c.LoginRateLimitAttempts = view.LoginRateLimitAttempts
 		c.CheckSqliHeavyQuery = view.CheckSqliHeavyQuery
 		c.CheckPasswordReset = view.CheckPasswordReset

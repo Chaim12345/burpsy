@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -101,15 +102,37 @@ func checkGraphQLIntrospection(ctx context.Context, cc *CheckContext) ([]*Findin
 			len(schema.ObjectTypes()), len(schema.StringArguments())))}, nil
 }
 
+// graphQLSuggestionProbe selects near-misses of the root fields GraphQL APIs most often expose
+// (user, node, viewer, product, order, search, item, customer, account, me), one edit or two from
+// the real name. graphql-js suggests a field within that distance, so a server with suggestions on
+// names whichever of those fields it really has. A single nonsense name (the probe this replaced)
+// is near nothing, so it drew a suggestion only from a schema that happened to hold a lookalike.
+// The names go in one operation: one request, one error per unknown field.
+const graphQLSuggestionProbe = "query{bsyNoSuchField usr nod viewr produc ordr serch itm custmer accnt mee}"
+
+var graphQLSuggestionProbeNames = func() map[string]bool {
+	m := map[string]bool{}
+	for _, f := range strings.Fields(strings.Trim(strings.TrimPrefix(graphQLSuggestionProbe, "query"), "{}")) {
+		m[f] = true
+	}
+	return m
+}()
+
 func checkGraphQLSuggestions(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	if cc.Scanner == nil || cc.Exchange == nil {
 		return nil, nil
 	}
-	res, err := newGraphQLClient(cc).Execute(ctx, graphqlmap.SuggestionProbe(""))
+	res, err := newGraphQLClient(cc).Execute(ctx, graphQLSuggestionProbe)
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL suggestion probe: %w", err)
 	}
-	suggestions := graphqlmap.FieldSuggestions(res.ErrorMessages())
+	// A name the probe itself sent is not a suggestion: an echo of the query must not count.
+	var suggestions []string
+	for _, name := range graphqlmap.FieldSuggestions(res.ErrorMessages()) {
+		if !graphQLSuggestionProbeNames[name] {
+			suggestions = append(suggestions, name)
+		}
+	}
 	if len(suggestions) == 0 {
 		return nil, nil
 	}
@@ -137,16 +160,31 @@ func checkGraphQLContentType(ctx context.Context, cc *CheckContext) ([]*Finding,
 		{"application/x-www-form-urlencoded", graphqlmap.WithEncoding(graphqlmap.EncodingForm)},
 		{"query string (GET)", graphqlmap.WithEncoding(graphqlmap.EncodingGet)},
 	} {
-		res, err := newGraphQLClient(cc, enc.opt).Execute(ctx, "query{__typename}")
+		// Asked under a fresh alias and with only the captured cookies, the one credential a
+		// cross-site form or link carries: the answer must be data keyed by that alias, which a
+		// fixed or cached body cannot be.
+		alias := graphQLNonce()
+		res, err := newCrossSiteGraphQLClient(cc, enc.opt).Execute(ctx, "query{"+alias+":__typename}")
 		if err != nil || res == nil {
 			continue
 		}
-		if graphqlmap.IsGraphQLEnvelope(res.Body) && !res.HasErrors() {
+		if graphQLAliasTyped(res, alias) && !res.HasErrors() {
 			accepted = append(accepted, enc.name)
 		}
 	}
 	if len(accepted) == 0 {
 		return nil, nil
+	}
+	// A query over GET is the weaker half of CSRF: it changes nothing by itself. Whether the
+	// endpoint also EXECUTES A MUTATION OPERATION over GET is what turns a link into a state change,
+	// and `mutation{<alias>:__typename}` answers that without running any mutation resolver.
+	if slices.Contains(accepted, "query string (GET)") {
+		alias := graphQLNonce()
+		res, err := newCrossSiteGraphQLClient(cc, graphqlmap.WithEncoding(graphqlmap.EncodingGet)).
+			Execute(ctx, "mutation{"+alias+":__typename}")
+		if err == nil && graphQLAliasTyped(res, alias) && !res.HasErrors() {
+			accepted = append(accepted, "mutation operations over GET")
+		}
 	}
 	return []*Finding{buildHeaderFinding(cc, "GraphQL content type not validated", "low", "firm",
 		strings.Join(accepted, ", "),
@@ -953,7 +991,10 @@ func checkSQLStatementInParameter(ctx context.Context, cc *CheckContext) ([]*Fin
 // RemainingCheckDescriptors returns the rows wired by this file.
 func RemainingCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
-		nativeDescriptor("GraphQL endpoint found", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLEndpointFound),
+		// The GraphQL hardening rows (checks_graphql_hardening.go) ride this one, behind their own switch.
+		nativeDescriptor("GraphQL endpoint found", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return remainingChecksEnabled(c) || graphQLHardeningEnabled(c) },
+			graphQLEndpointWithHardening(checkGraphQLEndpointFound)),
 		nativeDescriptor("GraphQL introspection enabled", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLIntrospection),
 		nativeDescriptor("GraphQL suggestions enabled", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLSuggestions),
 		nativeDescriptor("GraphQL content type not validated", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLContentType),

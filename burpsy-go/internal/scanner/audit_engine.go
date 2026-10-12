@@ -355,6 +355,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckRequestSmuggling = false
 		case "CheckHostHeader":
 			cfg.CheckHostHeader = false
+		case "CheckGraphQLHardening":
+			cfg.CheckGraphQLHardening = false
 		}
 	}
 }

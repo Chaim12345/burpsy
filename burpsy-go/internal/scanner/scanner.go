@@ -319,6 +319,13 @@ type ScanConfig struct {
 	// header injection" only when the canary became the host of a URL in the response and a control
 	// canary moved with it. Off by default: it sends requests naming hosts the target does not serve.
 	CheckHostHeader bool
+	// CheckGraphQLHardening admits the GraphQL hardening probes (checks_graphql_hardening.go) on an
+	// endpoint that has proved it executes GraphQL: query batching (ten array-batched operations and
+	// one hundred aliases, both of __typename), query depth (one nested query of depth ten along a
+	// self-referential path of the introspected schema, never fanning out past one item per level),
+	// and debug information in error responses. Off by default: the batch and depth probes are
+	// exactly the shapes a GraphQL gateway's abuse monitoring is built to alert on.
+	CheckGraphQLHardening bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

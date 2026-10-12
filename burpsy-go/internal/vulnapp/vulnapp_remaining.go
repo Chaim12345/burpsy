@@ -379,14 +379,31 @@ func rmParseGraphQLQuery(r *http.Request) (string, bool) {
 // separately, by the literal "__schema" they contain regardless of where it falls: the legacy
 // introspection document's first brace belongs to a fragment definition, not to the query
 // itself, so this regex alone would miss it.
-var rmGraphQLTopFieldRe = regexp.MustCompile(`\{\s*([A-Za-z_][A-Za-z0-9_]*)`)
+//
+// An alias (`{n1:__typename}`) is honoured: the field is the name after the colon and the answer
+// is keyed by the alias, as GraphQL does. The scanner's existence probes ask under a fresh alias
+// precisely so an answer cannot be a fixed body that merely looks like GraphQL.
+var rmGraphQLTopFieldRe = regexp.MustCompile(`\{\s*(?:([A-Za-z_][A-Za-z0-9_]*)\s*:\s*)?([A-Za-z_][A-Za-z0-9_]*)`)
 
-func rmGraphQLTopField(query string) string {
+// rmGraphQLTopField returns the top field and the key its answer goes under (the alias, or the
+// field's own name).
+func rmGraphQLTopField(query string) (field, key string) {
 	m := rmGraphQLTopFieldRe.FindStringSubmatch(query)
-	if len(m) != 2 {
-		return ""
+	if len(m) != 3 {
+		return "", ""
 	}
-	return m[1]
+	if m[1] != "" {
+		return m[2], m[1]
+	}
+	return m[2], m[2]
+}
+
+// rmGraphQLRootType is the operation's root type name: Mutation for a mutation operation.
+func rmGraphQLRootType(query string) string {
+	if strings.HasPrefix(strings.TrimSpace(query), "mutation") {
+		return "Mutation"
+	}
+	return "Query"
 }
 
 // rmGraphQLNearestField picks the schema field closest to name by edit distance - a small,
@@ -427,14 +444,14 @@ func rmLevenshtein(a, b string) int {
 
 // rmGraphQLResolve renders {"data":{field:...}} for __typename or one of rmGraphQLFields.
 // Callers must only pass a field already known to be one of those.
-func rmGraphQLResolve(w http.ResponseWriter, field string) {
+func rmGraphQLResolve(w http.ResponseWriter, field, key, rootType string) {
 	switch field {
 	case "__typename":
-		fmt.Fprint(w, `{"data":{"__typename":"Query"}}`)
+		fmt.Fprintf(w, `{"data":{%q:%q}}`, key, rootType)
 	case "products":
-		fmt.Fprint(w, `{"data":{"products":[{"id":"1","name":"Espresso Machine","price":129.99}]}}`)
+		fmt.Fprintf(w, `{"data":{%q:[{"id":"1","name":"Espresso Machine","price":129.99}]}}`, key)
 	case "product":
-		fmt.Fprint(w, `{"data":{"product":{"id":"1","name":"Espresso Machine","price":129.99}}}`)
+		fmt.Fprintf(w, `{"data":{%q:{"id":"1","name":"Espresso Machine","price":129.99}}}`, key)
 	}
 }
 
@@ -500,9 +517,9 @@ func rmGraphQL(w http.ResponseWriter, r *http.Request) {
 		w.Write(rmGraphQLIntrospectionDoc())
 		return
 	}
-	field := rmGraphQLTopField(query)
+	field, key := rmGraphQLTopField(query)
 	if field == "__typename" || slices.Contains(rmGraphQLFields, field) {
-		rmGraphQLResolve(w, field)
+		rmGraphQLResolve(w, field, key, rmGraphQLRootType(query))
 		return
 	}
 	suggestion := rmGraphQLNearestField(field)
@@ -540,9 +557,9 @@ func rmSafeGraphQL(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"errors":[{"message":"introspection is disabled"}]}`)
 		return
 	}
-	field := rmGraphQLTopField(query)
+	field, key := rmGraphQLTopField(query)
 	if field == "__typename" || slices.Contains(rmGraphQLFields, field) {
-		rmGraphQLResolve(w, field)
+		rmGraphQLResolve(w, field, key, rmGraphQLRootType(query))
 		return
 	}
 	fmt.Fprint(w, `{"errors":[{"message":"the requested field does not exist"}]}`)

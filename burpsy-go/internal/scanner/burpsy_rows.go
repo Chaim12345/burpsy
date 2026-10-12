@@ -133,6 +133,30 @@ func BurpsyNativeRows() []BurpsyRow {
 			"documents the attack class without a catalogue entry. It rides 'Link manipulation (reflected)' " +
 			"because a Host that becomes a link's host is link manipulation through the HOST insertion point " +
 			"(the relabelling Zb_5 does), and shares that row's CWE-20.",
+	}, {
+		Name:      IssueGraphQLBatching,
+		TypeIndex: 0xb5001800,
+		CWE:       799,
+		Rides:     "GraphQL endpoint found",
+		Why: "Burp's catalogue has four GraphQL rows (endpoint found, introspection, suggestions, content type " +
+			"not validated) and none for batching; Burp leaves it to manual testing with Repeater and to " +
+			"extensions such as InQL. It rides 'GraphQL endpoint found' because it is probed only on an " +
+			"endpoint that row's probe has shown to execute GraphQL, once per URL.",
+	}, {
+		Name:      IssueGraphQLDepth,
+		TypeIndex: 0xb5001810,
+		CWE:       770,
+		Rides:     "GraphQL endpoint found",
+		Why: "Burp's catalogue has no GraphQL depth or complexity row. It rides 'GraphQL endpoint found' with " +
+			"the batching row, for the same reason.",
+	}, {
+		Name:      IssueGraphQLDebug,
+		TypeIndex: 0xb5001820,
+		CWE:       209,
+		Rides:     "GraphQL endpoint found",
+		Why: "Burp's catalogue has no row for GraphQL debug output: its error-message rows are passive and " +
+			"read responses the proxy already saw, while this one provokes a GraphQL error and reads the " +
+			"envelope's errors and extensions. It rides 'GraphQL endpoint found' with the other GraphQL rows.",
 	}}
 }
 
