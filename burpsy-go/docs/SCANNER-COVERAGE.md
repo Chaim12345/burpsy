@@ -60,6 +60,9 @@ which is what carries its CWE onto the finding.
 | `b5002400` | Cross-site WebSocket hijacking | 1385 | Cross-site request forgery | `check_websocket_hijacking` |
 | `b5002410` | Access control bypass via spoofed client IP header | 290 | Broken access control | `check_client_ip_spoofing` |
 | `b5002420` | Rate limit bypass via spoofed client IP header | 348 | Broken access control | `check_client_ip_spoofing` |
+| `b5002800` | Cookie prefix requirements not met | 693 | Cookie scoped to parent domain | `check_cookie_attributes` |
+| `b5002810` | Session cookie without SameSite protection | 1275 | Cookie scoped to parent domain | `check_cookie_attributes` |
+| `b5002820` | Subdomain takeover | 672 | Strict transport security not enforced | `check_subdomain_takeover` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
@@ -96,6 +99,20 @@ random `.invalid` Origin and, as a control, without cookies; the client-IP check
 probes seven client-address headers one at a time. Its reflection result is Burp's own informational
 "Spoofable client IP address" row, reported from this active check (the registered descriptor for that
 row is the passive one). Both switches are off by default.
+The two cookie rows (`checks_cookie_attrs.go`) are passive readings of Set-Cookie under the RFC 6265bis
+storage model: a `__Host-`/`__Secure-` cookie (prefix matched case-insensitively, deletions included)
+that a browser ignores for lacking Secure, Path=/ or host-only scope, and a session cookie (session or
+token name, or a signed-JWT value; anti-CSRF names excluded; deletions skipped) with no SameSite, an
+unrecognised SameSite value, or SameSite=None without Secure. Cookie tossing is not a row of its own:
+its provable form, a session cookie with a parent Domain, is Burp's "Cookie scoped to parent domain",
+which now prefers the session cookie and names the overwrite. Subdomain takeover (`checks_takeover.go`)
+asks DNS (`ScanConfig.DNSResolver`, the system resolver by default) for the CNAME of each audited
+hostname, once per host, and reports high/firm only when the CNAME is a curated service's domain (dot
+boundary) and either the captured response carries that service's unclaimed-resource text (and status),
+or, for services whose unclaimed resource is a dangling name, the target is authoritatively NXDOMAIN on
+two lookups. The table is the "Vulnerable" entries of can-i-take-over-xyz that name a CNAME domain;
+GitHub Pages, Heroku, Fastly, Shopify and Netlify are "Edge case" or "Not vulnerable" there and are not
+in it. Nothing is claimed.
 
 ## Outside the catalog: DOM Invader's detections
 

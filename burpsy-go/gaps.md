@@ -2907,3 +2907,24 @@ that answers its captured request 429 puts every step of a whole audit behind th
 (99 waits, 200 s measured), so `checks_ws_ip_test.go` audits it with only this switch on. The passive
 `Spoofable client IP address` check still fires on any captured request that merely carries one of
 these headers; that is unchanged here.
+## Cookie prefixes / SameSite and subdomain takeover (2026-10-12, burpsy-react-ui-0vzb.19, 0vzb.17)
+
+Three burpsy rows (`b5002800`, `b5002810` under `check_cookie_attributes`; `b5002820` under
+`check_subdomain_takeover`), all passive and off by default.
+
+- **Cookie rows, not covered.** Transport is not judged: a Secure or prefixed cookie set over
+  cleartext HTTP is ignored by the 6265bis storage model too, but browsers treat http://localhost as
+  secure and the cleartext exchange is already "Unencrypted communications". SameSite=None with
+  Secure on a session cookie is not reported (an explicit opt-in). Cookies set from script
+  (`document.cookie`) are not seen. The legacy `PassiveScanner` path still reports "Cookie Missing
+  SameSite Flag" for every cookie, session or not; that unmapped row is unchanged.
+- **Cookie tossing** has no row of its own: its provable form is Burp's "Cookie scoped to parent
+  domain", which now prefers a session cookie and names the overwrite. Shadowing by a sibling's
+  Domain=parent cookie (true of any cookie without `__Host-`) is not reported.
+- **Takeover, not covered.** Go's resolver returns the END of a CNAME chain, so a service whose
+  live CNAME chains onward into another provider's domain is matched only on that last name (S3's
+  regional endpoints are matched for this reason). Services marked "Edge case" or "Not vulnerable"
+  in can-i-take-over-xyz (GitHub Pages, Heroku, Fastly, Shopify, Netlify, Vercel, ...) are not in
+  the table, nor are entries without a CNAME domain or with a status-only fingerprint. Only hostnames
+  the audit dispatches (captured exchanges) are looked up: a hostname that appears only in a link or
+  a certificate SAN is not. NS/MX delegation takeovers are not checked.

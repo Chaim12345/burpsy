@@ -354,6 +354,18 @@ type ScanConfig struct {
 	// Forwarded as its own probe, for an access-control (401/403) or rate-limit (429) differential and
 	// for the claimed address reflected. Off by default: it claims loopback to refused pages.
 	CheckClientIPSpoofing bool
+	// CheckCookieAttributes admits burpsy's two cookie rows (checks_cookie_attrs.go, 0vzb.19), read from
+	// captured Set-Cookie headers: a __Host-/__Secure- cookie a browser rejects for missing its prefix's
+	// attributes, and a session cookie with no effective SameSite restriction. Passive; off by default
+	// like every burpsy row's switch.
+	CheckCookieAttributes bool
+	// CheckSubdomainTakeover admits burpsy's "Subdomain takeover" row (checks_takeover.go, 0vzb.17): a
+	// host whose CNAME points at a hosting service that reports the resource unclaimed. Passive towards
+	// the target, but it sends DNS queries for every audited hostname to DNSResolver. Off by default.
+	CheckSubdomainTakeover bool
+	// DNSResolver is the resolver the takeover check asks; nil is the system resolver. Not persisted:
+	// it exists so tests inject a fake and no fixture depends on real DNS.
+	DNSResolver DNSResolver `json:"-"`
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036686336,
+  "name": "Cookie prefix requirements not met",
+  "description": "<p>The response sets a cookie whose name begins with <code>__Host-</code> or <code>__Secure-</code> (browsers match these prefixes case-insensitively) without the attributes the prefix requires. A <code>__Secure-</code> cookie must carry <code>Secure</code>; a <code>__Host-</code> cookie must carry <code>Secure</code> and <code>Path=/</code> and no <code>Domain</code> attribute. A browser that implements cookie prefixes ignores such a Set-Cookie header entirely, and so does one that receives a nameless cookie whose value starts with a prefix.</p>\n<p>The prefixes exist so that a server reading a prefixed cookie can rely on how it was set: a <code>__Host-</code> cookie cannot have been set or overwritten by a sibling subdomain or over cleartext. A server that sets a prefixed cookie without its attributes is therefore built on an assumption that does not hold: either the cookie never reaches the browser, and the application runs without it (often falling back to a less protected cookie), or a browser that does not enforce prefixes stores it without the protection the name promises.</p>\n<p>This row is burpsy's own: Burp's catalogue has no row for cookie name prefixes. It is classified under CWE-693 (protection mechanism failure).</p>",
+  "remediation": "<p>Set the attributes the prefix requires on every Set-Cookie header that uses it: <code>Secure</code> for <code>__Secure-</code>; <code>Secure; Path=/</code> and no <code>Domain</code> for <code>__Host-</code>. Set prefixed cookies only over HTTPS. If the cookie must be shared with subdomains, use <code>__Secure-</code> rather than <code>__Host-</code>, and review whether sharing is needed at all.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "MDN: Set-Cookie, cookie prefixes",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#cookie_prefixes"
+    },
+    {
+      "title": "RFC 6265bis: Cookie Name Prefixes",
+      "url": "https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis#name-cookie-name-prefixes"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-693: Protection Mechanism Failure",
+      "url": "https://cwe.mitre.org/data/definitions/693.html"
+    }
+  ]
+}

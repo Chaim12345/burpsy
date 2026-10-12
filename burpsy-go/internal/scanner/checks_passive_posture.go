@@ -353,7 +353,11 @@ func PassivePostureCheckDescriptors() []CheckDescriptor {
 		passiveDescriptor("Content type is not specified", DispatchScopePerUrl, passivePostureEnabled, checkContentTypeNotSpecified),
 		passiveDescriptor("Cross-domain Referer leakage", DispatchScopePerUrl, passivePostureEnabled, checkCrossDomainRefererLeakage),
 		passiveDescriptor("Unencrypted communications", DispatchScopePerHost, passivePostureEnabled, checkUnencryptedCommunications),
-		passiveDescriptor("Strict transport security not enforced", DispatchScopePerHost, passivePostureEnabled, checkStrictTransportSecurity),
+		// The subdomain-takeover row (checks_takeover.go) rides this descriptor behind its own switch: it is
+		// a passive property of the hostname, checked once per host like this row.
+		passiveDescriptor("Strict transport security not enforced", DispatchScopePerHost,
+			func(c *ScanConfig) bool { return passivePostureEnabled(c) || subdomainTakeoverEnabled(c) },
+			hstsOrTakeover(checkStrictTransportSecurity)),
 		passiveDescriptor("Cacheable HTTPS response", DispatchScopePerUrl, passivePostureEnabled, checkCacheableHTTPSResponse),
 		passiveDescriptor("Mixed content", DispatchScopePerHost, passivePostureEnabled, checkMixedContent),
 	}

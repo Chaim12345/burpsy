@@ -182,6 +182,8 @@ var auditLevelPassiveFamilies = []string{
 	"CheckPassivePosture",
 	"CheckHostDiscovery",
 	"CheckHeaders",
+	"CheckCookieAttributes",
+	"CheckSubdomainTakeover",
 }
 
 // auditLevelJavaScriptFamilies is the DOM family.
@@ -363,6 +365,10 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckWebSocketHijacking = false
 		case "CheckClientIPSpoofing":
 			cfg.CheckClientIPSpoofing = false
+		case "CheckCookieAttributes":
+			cfg.CheckCookieAttributes = false
+		case "CheckSubdomainTakeover":
+			cfg.CheckSubdomainTakeover = false
 		}
 	}
 }

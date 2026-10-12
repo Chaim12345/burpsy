@@ -618,6 +618,11 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 	for k, v := range e.RequestHeaders {
 		req.Header.Set(k, v)
 	}
+	// net/http sends req.Host, never a Host in the header map: an endpoint addressed by a hostname of
+	// its own (the subdomain-takeover fixtures) declares it as a Host request header.
+	if h, ok := e.RequestHeaders["Host"]; ok {
+		req.Host = h
+	}
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -665,6 +670,7 @@ func buildRawRequest(method, path, host string, port uint16, body, contentType s
 	if !ownOrigin {
 		b.WriteString("Origin: https://evil.example\r\n")
 	}
+	if _, named := extra["Host"]; !named {
 	for k, v := range extra {
 		fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 	}
@@ -807,6 +813,11 @@ func runtimeScanConfig() *ScanConfig {
 		// (203.0.113.0/24) addresses in client-IP headers, sent to the loopback target only.
 		CheckWebSocketHijacking: true,
 		CheckClientIPSpoofing:   true,
+		// The cookie prefix / SameSite rows and subdomain takeover (0vzb.19, 0vzb.17): passive. The
+		// takeover check asks vulnapp's fake DNS, never a real resolver.
+		CheckCookieAttributes:  true,
+		CheckSubdomainTakeover: true,
+		DNSResolver:            vulnapp.NewTakeoverResolver(),
 	}
 }
 

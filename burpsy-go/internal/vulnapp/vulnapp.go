@@ -141,6 +141,7 @@ var familyEndpoints = []func() []Endpoint{
 	hostCRLFEndpoints,
 	deserializationEndpoints,
 	wsipEndpoints,
+	cookieTakeoverEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -172,6 +173,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerHostCRLF,
 	registerDeserialization,
 	registerWsip,
+	registerCookieTakeover,
 }
 
 func coreEndpoints() []Endpoint {

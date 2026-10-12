@@ -202,6 +202,32 @@ func BurpsyNativeRows() []BurpsyRow {
 		Why: "Burp's catalogue has no rate-limit row at all, and its 'Spoofable client IP address' row is " +
 			"informational. It rides 'Broken access control' with the client-IP access bypass, which the " +
 			"same probes test.",
+	}, {
+		Name:      IssueCookiePrefixViolated,
+		TypeIndex: 0xb5002800,
+		CWE:       693,
+		Rides:     "Cookie scoped to parent domain",
+		Why: "Burp's catalogue has no row for cookie name prefixes: its cookie rows read the Secure, " +
+			"HttpOnly and Domain attributes one at a time and never the __Host-/__Secure- contract that ties " +
+			"them to the name. It rides 'Cookie scoped to parent domain', a passive per-request reading of " +
+			"the same Set-Cookie headers.",
+	}, {
+		Name:      IssueSessionCookieSameSite,
+		TypeIndex: 0xb5002810,
+		CWE:       1275,
+		Rides:     "Cookie scoped to parent domain",
+		Why: "Burp's catalogue has no SameSite row: SameSite enters only as one of the defences its " +
+			"'Cross-site request forgery' check weighs. It rides 'Cookie scoped to parent domain' with the " +
+			"prefix row.",
+	}, {
+		Name:      IssueSubdomainTakeover,
+		TypeIndex: 0xb5002820,
+		CWE:       672,
+		Rides:     "Strict transport security not enforced",
+		Why: "Burp's catalogue has no subdomain-takeover row and its scanner makes no DNS lookups of its " +
+			"own; takeover is found with external tools (subjack, can-i-take-over-xyz). It rides 'Strict " +
+			"transport security not enforced', a passive per-host row, because it is a property of the " +
+			"hostname checked once per host.",
 	}}
 }
 

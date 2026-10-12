@@ -112,6 +112,10 @@ FULL_PROFILE = {
     # The NoSQL injection check (v0ei.6): MongoDB operators and $where breakouts on reads and logins.
     # VulnerableApp has no NoSQL family, so every firing here is off-target and counts as a false positive.
     "check_nosql_injection": True,
+    # Cookie prefix / SameSite rows (0vzb.19) and subdomain takeover (0vzb.17): passive; takeover asks
+    # the system resolver for each audited hostname's CNAME.
+    "check_cookie_attributes": True,
+    "check_subdomain_takeover": True,
 }
 
 

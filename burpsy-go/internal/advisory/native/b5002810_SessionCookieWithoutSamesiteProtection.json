@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036686352,
+  "name": "Session cookie without SameSite protection",
+  "description": "<p>The response sets a cookie that carries a session identifier or bearer token (by its name, or because its value is a signed JWT) without an effective <code>SameSite</code> restriction: the attribute is missing, has a value browsers do not recognise, or is <code>SameSite=None</code> without <code>Secure</code>.</p>\n<p>A cookie without <code>SameSite</code> is attached to requests that other sites cause the browser to make. Firefox and Safari send it on every cross-site request; Chrome treats it as <code>Lax</code> but still sends it on a cross-site top-level POST within two minutes of the cookie being set. That is the precondition for cross-site request forgery, and for cross-site leaks that read the authenticated state of a page. <code>SameSite=None</code> without <code>Secure</code> is ignored by current browsers, so the session cookie is not stored at all there, while older browsers store it and send it cross-site.</p>\n<p>This row is burpsy's own: Burp's catalogue has no SameSite row. It is classified under CWE-1275.</p>",
+  "remediation": "<p>Set <code>SameSite=Lax</code> (or <code>Strict</code> where cross-site navigation into an authenticated page is not needed) on session cookies. Where a cookie genuinely has to be sent in a cross-site context, set <code>SameSite=None; Secure</code> explicitly and protect state-changing requests with anti-CSRF tokens. Do not rely on a browser's default.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "Web Security Academy: Bypassing SameSite cookie restrictions",
+      "url": "https://portswigger.net/web-security/csrf/bypassing-samesite-restrictions"
+    },
+    {
+      "title": "MDN: Set-Cookie, SameSite",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie#samesitesamesite-value"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-1275: Sensitive Cookie with Improper SameSite Attribute",
+      "url": "https://cwe.mitre.org/data/definitions/1275.html"
+    }
+  ]
+}

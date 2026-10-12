@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036686368,
+  "name": "Subdomain takeover",
+  "description": "<p>A hostname of the application is a DNS alias (CNAME) of a resource on a third-party hosting service - a storage bucket, a hosted site, a cloud application - and that resource no longer exists. The service shows its page for an unclaimed resource, or the alias target no longer resolves at all. On these services anyone can create a resource with that name, and the service will then serve the creator's content for the organisation's hostname.</p>\n<p>An attacker who claims it controls a page under the organisation's own domain: phishing that passes every domain check, script that is same-site with the application, cookies scoped to the parent domain delivered to the attacker's server, and any origin the application trusts by subdomain (CORS policies, CSP allowlists, OAuth redirect URIs).</p>\n<p>burpsy reports this only when the CNAME points at the service's own domain and, for a service that still answers HTTP for an unclaimed name, the captured response carries that service's unclaimed-resource text, or, for a service whose unclaimed resource is a dangling name, the alias target does not resolve on two lookups. Nothing is claimed or registered. This row is burpsy's own: Burp's catalogue has no subdomain-takeover row. It is classified under CWE-672 (operation on a resource after expiration or release).</p>",
+  "remediation": "<p>Remove the DNS record (the CNAME) for any hostname whose hosted resource has been deleted, or re-create the resource on the service under the organisation's account. Remove DNS records before deprovisioning the resource they point at, never after, and keep an inventory of the hostnames that alias third-party services so that one left behind is noticed.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "can-i-take-over-xyz",
+      "url": "https://github.com/EdOverflow/can-i-take-over-xyz"
+    },
+    {
+      "title": "OWASP WSTG: Test for Subdomain Takeover",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/02-Configuration_and_Deployment_Management_Testing/10-Test_for_Subdomain_Takeover"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-672: Operation on a Resource after Expiration or Release",
+      "url": "https://cwe.mitre.org/data/definitions/672.html"
+    }
+  ]
+}

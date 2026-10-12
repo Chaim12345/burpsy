@@ -53,17 +53,34 @@ func checkCookieScopedToParentDomain(ctx context.Context, cc *CheckContext) ([]*
 	if cc.Scanner == nil || cc.Exchange == nil {
 		return nil, nil
 	}
-	var out []*Finding
+	// A session cookie is preferred over any other parent-scoped cookie: it is the one whose scope is
+	// a provable cookie-tossing exposure (0vzb.19), reported here rather than on a row of its own.
+	var first, session *CookieAttrs
 	eachSetCookie(cc, func(c CookieAttrs, _ string) bool {
-		if c.ScopedToParentDomain(cc.Exchange.Host) {
-			out = append(out, buildHeaderFinding(cc, "Cookie scoped to parent domain",
-				"info", "certain", fmt.Sprintf("Set-Cookie: %s; Domain=%s", c.Name, c.Domain),
-				"the cookie is scoped to a parent domain, so every sibling host receives it"))
+		if !c.ScopedToParentDomain(cc.Exchange.Host) {
+			return true
+		}
+		if first == nil {
+			first = &c
+		}
+		if LooksLikeSessionCookie(c.Name, c.Value) {
+			session = &c
 			return false
 		}
 		return true
 	})
-	return out, nil
+	if first == nil {
+		return nil, nil
+	}
+	c, detail := first, "the cookie is scoped to a parent domain, so every sibling host receives it"
+	if session != nil {
+		c = session
+		detail = "the session cookie is scoped to a parent domain, so every sibling host receives it, and " +
+			"any sibling host can set a cookie with the same name, Domain and Path that replaces it in the " +
+			"browser (cookie tossing): a session fixation or login-CSRF vector from the least trusted subdomain"
+	}
+	return []*Finding{buildHeaderFinding(cc, "Cookie scoped to parent domain",
+		"info", "certain", fmt.Sprintf("Set-Cookie: %s; Domain=%s", c.Name, c.Domain), detail)}, nil
 }
 
 func checkCookieWithoutHttpOnly(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
@@ -500,7 +517,11 @@ func checkCSPMalformedSyntax(ctx context.Context, cc *CheckContext) ([]*Finding,
 func PassiveAnalysisCheckDescriptors() []CheckDescriptor {
 	out := []CheckDescriptor{
 		passiveDescriptor("TLS cookie without secure flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkTLSCookieWithoutSecure),
-		passiveDescriptor("Cookie scoped to parent domain", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieScopedToParentDomain),
+		// The two burpsy cookie rows (checks_cookie_attrs.go) ride this descriptor behind their own
+		// switch: both read the same Set-Cookie headers, and the registry admits one descriptor per Burp type.
+		passiveDescriptor("Cookie scoped to parent domain", DispatchScopePerRequest,
+			func(c *ScanConfig) bool { return passiveAnalysisEnabled(c) || cookieAttributesEnabled(c) },
+			cookieScopedOrAttributes(checkCookieScopedToParentDomain)),
 		passiveDescriptor("Cookie without HttpOnly flag set", DispatchScopePerRequest, passiveAnalysisEnabled, checkCookieWithoutHttpOnly),
 		passiveDescriptor("Session token in URL", DispatchScopePerUrl, passiveAnalysisEnabled, checkSessionTokenInURL),
 
