@@ -1,0 +1,32 @@
+{
+  "typeIndex": 3036680192,
+  "name": "Host header injection",
+  "description": "<p>The application builds absolute URLs - links, script and resource sources, redirect targets - from the Host header of the request, or from a header a proxy uses to override it (such as X-Forwarded-Host), without checking the value against the hosts it actually serves. A request carrying a host chosen by the scanner produced a response whose URLs pointed at that host, and a second request with a different host moved the URLs with it.</p>\n<p>A browser never sends an attacker-chosen Host header on its own, so exploitation needs a second step: a shared cache that stores the poisoned response and serves it to other users (web cache poisoning), a server-generated message such as a password-reset e-mail whose link is built from the header (password reset poisoning), or a front end that routes requests by the header (routing-based server-side request forgery). Each of these turns the injected host into a page, script or secret delivered to a victim from the attacker's server.</p>\n<p>This row is burpsy's own: Burp's issue catalogue has no Host header entry. It is classified under CWE-20 (improper input validation), the classification of the link-manipulation row it is related to.</p>",
+  "remediation": "<p>Do not derive absolute URLs from the Host header or from X-Forwarded-Host and similar headers. Configure the application's canonical domain (and scheme) explicitly and build links and redirects from that configuration, or use relative URLs. Where the Host header has to be read, compare it against an allow-list of the domains the application serves and reject anything else. Disable support for override headers such as X-Forwarded-Host unless a trusted proxy sets them, and make that proxy overwrite any value the client sent. Configure the web server to send requests with an unrecognised Host to a default virtual host that serves nothing.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "Web Security Academy: HTTP Host header attacks",
+      "url": "https://portswigger.net/web-security/host-header"
+    },
+    {
+      "title": "Web Security Academy: How to identify and exploit HTTP Host header vulnerabilities",
+      "url": "https://portswigger.net/web-security/host-header/exploiting"
+    },
+    {
+      "title": "OWASP WSTG-INPV-17: Testing for Host Header Injection",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/07-Input_Validation_Testing/17-Testing_for_Host_Header_Injection"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-20: Improper Input Validation",
+      "url": "https://cwe.mitre.org/data/definitions/20.html"
+    },
+    {
+      "title": "CAPEC-153: Input Data Manipulation",
+      "url": "https://capec.mitre.org/data/definitions/153.html"
+    }
+  ]
+}

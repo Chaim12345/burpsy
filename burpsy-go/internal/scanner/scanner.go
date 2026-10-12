@@ -313,6 +313,12 @@ type ScanConfig struct {
 	// Nothing is queued on a back-end connection. CheckExtendedActive also admits it. Off by default:
 	// each confirmed attack holds a back-end connection open for its read window.
 	CheckRequestSmuggling bool
+	// CheckHostHeader admits the Host header check (checks_host_header.go): an arbitrary Host, an
+	// absolute-form target with a different Host, duplicate Host headers, a Host port carrying text,
+	// and the X-Forwarded-Host override family, each with a random .invalid canary, reporting "Host
+	// header injection" only when the canary became the host of a URL in the response and a control
+	// canary moved with it. Off by default: it sends requests naming hosts the target does not serve.
+	CheckHostHeader bool
 
 	// IssueTypes is the operator's per-issue selection: the catalogue type indexes a run is
 	// restricted to, and an EMPTY list means no restriction — the reading every optional field on

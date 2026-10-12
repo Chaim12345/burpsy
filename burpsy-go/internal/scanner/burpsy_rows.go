@@ -122,6 +122,17 @@ func BurpsyNativeRows() []BurpsyRow {
 		Rides:     "Broken access control",
 		Why: "Burp's catalogue has no row for a session that survives logout (CWE-613); it is found by " +
 			"hand or by an extension.",
+	}, {
+		Name:      IssueHostHeaderInjection,
+		TypeIndex: 0xb5001000,
+		CWE:       20,
+		Rides:     "Link manipulation (reflected)",
+		Why: "Burp's catalogue has no Host header row: Burp's scanner treats the Host header as one more " +
+			"insertion point and files what it finds there under the row the payload proves (link " +
+			"manipulation, open redirection, cache poisoning, external service interaction), and the Academy " +
+			"documents the attack class without a catalogue entry. It rides 'Link manipulation (reflected)' " +
+			"because a Host that becomes a link's host is link manipulation through the HOST insertion point " +
+			"(the relabelling Zb_5 does), and shares that row's CWE-20.",
 	}}
 }
 

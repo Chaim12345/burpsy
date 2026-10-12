@@ -353,6 +353,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckSessionManagement = false
 		case "CheckRequestSmuggling":
 			cfg.CheckRequestSmuggling = false
+		case "CheckHostHeader":
+			cfg.CheckHostHeader = false
 		}
 	}
 }

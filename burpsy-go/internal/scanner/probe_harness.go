@@ -213,6 +213,33 @@ func (h *ProbeHarness) send(ctx context.Context, raw []byte) (ProbeResponse, err
 // response — a redirect follower needs the bytes as they arrived and the same gate the probe left
 // through, so its hops are refused and counted on the counters the probe's own refusal would be.
 func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSender, raw []byte) (ProbeResponse, []byte, error) {
+	return h.sendViaAs(ctx, gate, raw, sender.ProtocolPreferenceAuto)
+}
+
+// SendRequestHTTP1 sends a whole request the caller built from RequestBytes, pinned to HTTP/1.1 so
+// the header block reaches the wire byte for byte: a duplicated Host header, an absolute-form request
+// target or a header whose value is the probe has no faithful HTTP/2 rendering, and re-expressing it
+// as :authority would test a different request. It leaves through the same gate as every probe — the
+// scope decision is made on these bytes against the exchange's bound authority, never against a Host
+// header the probe wrote — and is metered and recorded like one.
+func (h *ProbeHarness) SendRequestHTTP1(ctx context.Context, raw []byte) (ProbeResponse, error) {
+	gate := h.scanner.probeGate(ctx, h.exchange)
+	if gate == nil {
+		return ProbeResponse{}, errors.New("no authorised sender")
+	}
+	resp, _, err := h.sendViaAs(ctx, gate, raw, sender.ProtocolPreferenceHTTP1)
+	if err != nil {
+		return resp, err
+	}
+	h.recordCoverage(nil, "", resp)
+	return resp, nil
+}
+
+// RequestBytes is a copy of the captured request every probe of this harness is derived from.
+func (h *ProbeHarness) RequestBytes() []byte { return append([]byte(nil), h.reqBytes...) }
+
+func (h *ProbeHarness) sendViaAs(ctx context.Context, gate *sender.AuthorisedSender, raw []byte,
+	pref sender.ProtocolPreference) (ProbeResponse, []byte, error) {
 	// The per-probe clock, the same rule bcheck_runner.go applies through sendProbe. Without it a
 	// native probe that never gets an answer rides the audit item's deadline — the WHOLE budget —
 	// because gate.Send takes the dispatch context straight through. A target that accepts the
@@ -231,7 +258,7 @@ func (h *ProbeHarness) sendVia(ctx context.Context, gate *sender.AuthorisedSende
 	meter := meterFrom(ctx)
 	meter.attempt()
 	refusedBefore := gate.Refused()
-	res, err := gate.Send(sendCtx, raw)
+	res, err := gate.SendAs(sendCtx, raw, pref)
 	if gate.Refused() > refusedBefore {
 		meter.refusal()
 		return ProbeResponse{}, nil, fmt.Errorf("refused: outside the engagement scope: %w", err)

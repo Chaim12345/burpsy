@@ -23,8 +23,8 @@
 //     exactly those prefixes and applies the same startsWith comparison.
 //   - Zwi (HTTP response header injection) splices one of three separators ("\r\n", "\r", "\n")
 //     into a random token via three encodings selected by Zw9s.Ze: raw, percent-encode every
-//     non-alphanumeric byte, or a leading NUL byte. checkHeaderInjection below reproduces that
-//     3-separator x 3-encoding matrix exactly.
+//     non-alphanumeric byte, or a leading NUL byte. checkResponseHeaderInjection (checks_crlf.go)
+//     sends that 3-separator x 3-encoding matrix in wire form, plus deeper encodings.
 //
 // Zsn3 (code injection) and Zexx (SSI injection) only yielded where they probe — the same
 // map_root.tsv strings show both target the User-Agent and Referer headers, not just the query
@@ -423,56 +423,9 @@ func percentEncodeNonAlnum(s string) string {
 	return b.String()
 }
 
-const headerInjectionMarkerName = "X-Burpsy-Canary"
-
-// checkHeaderInjection ports Zwi's separator x encoding matrix (9 probes: 3 separators x 3
-// encodings). Each probe splices one encoded separator plus a full marker header line into a fresh
-// random token, submitted as a query parameter value (Zwi mutates an existing insertion point via
-// REPLACE/APPEND; this port uses a fixed parameter name, the same simplification as elsewhere in
-// this file). Confirmation reads the actual response: either the marker landed as a real header, or
-// the injection broke straight through into the body.
-func checkHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
-	h, err := NewProbeHarness(ctx, cc, []string{"query", "body"})
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", headerInjectionIssue, err)
-	}
-	points := h.Points()
-	if len(points) > MaxInjectionPointsPerCheck {
-		points = points[:MaxInjectionPointsPerCheck]
-	}
-
-	for _, point := range points {
-		for _, sep := range headerInjectionSeparators {
-			for variant := range 3 {
-				token := newProbeCanary("brph")
-				markerValue := token[:4]
-				encoded := encodeHeaderInjectionSeparator(sep, variant)
-				payload := token[4:] + encoded + headerInjectionMarkerName + ": " + markerValue
-
-				res, err := h.Send(ctx, point, payload)
-				if err != nil {
-					continue
-				}
-				// Read the header block of the raw response: a split header is a new line in the
-				// header block, which a parsed header map on the client side may already have
-				// normalised away.
-				if v := rawHeaderValue(string(res.Raw), headerInjectionMarkerName); strings.Contains(v, markerValue) {
-					return []*Finding{buildProbeFinding(cc, headerInjectionIssue, "certain",
-						"a CRLF-family separator injected into "+string(point.Kind)+" "+point.Name+
-							" produced a new response header "+headerInjectionMarkerName+": "+v,
-						"the parameter value was terminated with an injected line break, allowing an attacker-controlled HTTP response header to be added")}, nil
-				}
-				if strings.Contains(res.Body, headerInjectionMarkerName+": "+markerValue) {
-					return []*Finding{buildProbeFinding(cc, headerInjectionIssue, "firm",
-						"a CRLF-family separator injected into "+string(point.Kind)+" "+point.Name+
-							" broke out of the response headers into the body",
-						"the parameter value was terminated with an injected line break, and the injected content reached the raw response")}, nil
-				}
-			}
-		}
-	}
-	return nil, nil
-}
+// The row's evaluator is checkResponseHeaderInjection (checks_crlf.go): the 3x3 matrix above in wire
+// form plus the deeper encodings, over the request's query, body, cookie and header values and its
+// URL path, confirmed only by a new header in the parsed response head.
 
 // ---------------------------------------------------------------------------
 // Unidentified code injection — Zsn3
@@ -639,8 +592,13 @@ func ReflectionProbeCheckDescriptors() []CheckDescriptor {
 	return []CheckDescriptor{
 		mediumDescriptor(inputReflectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkInputReflection),
 		mediumDescriptor(openRedirectIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkOpenRedirect),
-		mediumDescriptor(linkManipulationIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkLinkManipulation),
-		mediumDescriptor(headerInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkHeaderInjection),
+		// The Host header check (checks_host_header.go) rides this row behind its own switch: its finding is
+		// burpsy's own "Host header injection" row, and a Host reflected into a link is link manipulation
+		// through the request's HOST insertion point, which is how Burp's Zb_5 labels it.
+		mediumDescriptor(linkManipulationIssue, DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return reflectionProbeChecksEnabled(c) || hostHeaderEnabled(c) },
+			linkManipulationWithHostHeader(checkLinkManipulation)),
+		mediumDescriptor(headerInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkResponseHeaderInjection),
 		mediumDescriptor(codeInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkCodeInjection),
 		mediumDescriptor(ssiInjectionIssue, DispatchScopePerUrl, reflectionProbeChecksEnabled, checkSSIInjection),
 	}

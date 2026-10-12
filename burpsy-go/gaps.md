@@ -2787,3 +2787,28 @@ Param is the technique and spelling. What it does NOT do, on purpose or not yet:
 - Observed while building the fixture, not this check: `SMTP header injection` fires on the
   `/desync/clte` and `/desync/safe/compliant` listeners, whose back end answers one fixed page. Likely a
   differential on the strict front end's 400 for a CR/LF payload; not investigated.
+## Host header attacks, CRLF depth, SMTP header injection evidence (2026-10-12)
+
+`check_host_header` (burpsy row b5001000, `checks_host_header.go`), the rewritten "HTTP response
+header injection" evaluator (`checks_crlf.go`) and the SMTP header injection fix (j1mk.41). Not done:
+
+- **Routing-based SSRF in band.** Only the collaborator path exists (the External service interaction
+  rows plant the collaborator as Host / absolute-form target). Brute-forcing internal Host values
+  (`192.168.0.0/16` and friends) to spot a different back end is not attempted: it is a sweep of
+  someone else's internal network through the target.
+- **Virtual-host confusion without reflection.** A different site answering an unknown Host is not
+  reported on its own; it is not a vulnerability without a URL, a cache or a route built from it.
+- **Password-reset poisoning** is the password-reset work's (reset links are e-mailed, not in the
+  response this check reads).
+- **Connection-state Host attacks** (first request valid, second request on the same connection with
+  a different Host) and **Host header SSRF to the collaborator through the override family** are not
+  sent.
+- **Duplicate Host / absolute-form** vehicles only matter behind a front end that accepts them; Go and
+  Tomcat refuse duplicate Host and take the authority from an absolute-form target.
+- **CRLF:** bare CR is sent but can only be confirmed if the server turns it into a line end (a bare
+  CR does not end a header line for the parser used, which is the RFC 9112 reading). Raw CR/LF bytes
+  are sent to request-header points only. No response-splitting beyond one injected header/cookie
+  (no body injection payload).
+- **SMTP header injection** is now reported only on a separator-specific mail-library error
+  (tentative). A mailer that fails silently, or queues and fails later, is not seen; the collaborator
+  SMTP route (Bcc to the collaborator domain) is not wired into this row.

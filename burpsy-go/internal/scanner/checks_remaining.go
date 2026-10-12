@@ -284,6 +284,27 @@ func checkTLSCertificate(ctx context.Context, cc *CheckContext) ([]*Finding, err
 // SMTP header injection
 // ---------------------------------------------------------------------------
 
+// checkSMTPHeaderInjection reports a value whose line break reached a mail library.
+//
+// It used to report ANY response ClassifyMailHeaderResponse did not call "none" — including a body
+// that merely differed from the baseline (MailInjectionStatusOrBodyDivergence, which infra_smtp.go
+// itself calls "a weak signal only") and a payload printed back verbatim (MailInjectionReflectedVerbatim,
+// documented there as evidence AGAINST a split). Every page with a timestamp or a nonce differs from
+// its own baseline, so the row fired on the User-Agent header of every endpoint of a benchmark that
+// sends no mail at all (burpsy-react-ui-j1mk.41).
+//
+// What is accepted now is the one class that can be attributed to a mail layer, and only with two
+// controls behind it:
+//
+//   - the probe response carries a mail-library error (mailLibraryErrorSignatures) the baseline does
+//     not;
+//   - the same value with the separator replaced by a space does NOT carry it, so the error is caused
+//     by the line break and not by an input the library rejects whatever it contains (an address
+//     validator throwing AddressException on any punctuation is the case this rules out);
+//   - a fresh canary through the same separator raises it again.
+//
+// "tentative": no mail was observed being sent with the injected header. Seeing the Bcc reach a
+// mailbox, or an SMTP interaction at a collaborator, is what would make it certain.
 func checkSMTPHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 	h, err := NewProbeHarness(ctx, cc, cc.ProbeInsertionKinds())
 	if err != nil {
@@ -293,23 +314,59 @@ func checkSMTPHeaderInjection(ctx context.Context, cc *CheckContext) ([]*Finding
 	if len(points) > MaxInjectionPointsPerCheck {
 		points = points[:MaxInjectionPointsPerCheck]
 	}
+	base := h.Baseline()
+	mailError := func(res ProbeResponse) bool {
+		return ClassifyMailHeaderResponse(base.Body, res.Body, base.Status, res.Status) == MailInjectionMailLibraryError
+	}
 	for _, point := range points {
 		for _, payload := range MailHeaderPayloads("") {
 			res, err := h.Send(ctx, point, payload.Payload)
-			if err != nil {
+			if err != nil || !mailError(res) {
 				continue
 			}
-			ev := ClassifyMailHeaderResponse(h.Baseline().Body, res.Body,
-				h.Baseline().Status, res.Status)
-			if ev == MailInjectionNone {
+			control := strings.Replace(payload.Payload, smtpEncodedSeparator(payload), " ", 1)
+			if control == payload.Payload {
 				continue
 			}
-			return []*Finding{buildHeaderFinding(cc, "SMTP header injection", "high", "firm",
+			ctl, err := h.Send(ctx, point, control)
+			if err != nil || mailError(ctl) {
+				continue
+			}
+			again := MailHeaderPayloads("")
+			var repeat *MailHeaderInjection
+			for i := range again {
+				if again[i].Separator == payload.Separator && again[i].Encoding == payload.Encoding {
+					repeat = &again[i]
+				}
+			}
+			if repeat == nil {
+				continue
+			}
+			res2, err := h.Send(ctx, point, repeat.Payload)
+			if err != nil || !mailError(res2) {
+				continue
+			}
+			return []*Finding{buildHeaderFinding(cc, "SMTP header injection", "high", "tentative",
 				payload.Payload,
-				fmt.Sprintf("%s %q: mail-header evidence %d", point.Kind, point.Name, int(ev)))}, nil
+				fmt.Sprintf("%s %q: a line break (%s, %s) followed by a Bcc header raised a mail-library error the "+
+					"baseline does not show; the same value with a space in place of the line break did not, and a "+
+					"fresh canary raised it again. The separator reached the mail-composition layer. No mail carrying "+
+					"the injected header was observed.", point.Kind, point.Name, strconv.Quote(payload.Separator), payload.Encoding))}, nil
 		}
 	}
 	return nil, nil
+}
+
+// smtpEncodedSeparator is the separator exactly as it was written into the payload.
+func smtpEncodedSeparator(p MailHeaderInjection) string {
+	switch p.Encoding {
+	case mailEncodingPercent:
+		return encodeHeaderInjectionSeparator(p.Separator, 1)
+	case mailEncodingPercentDoubled:
+		return percentDoubleEncodedSeparator(p.Separator)
+	default:
+		return p.Separator
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -644,7 +701,8 @@ func oobCheck(row, protocol string) CheckRunner {
 		if err != nil {
 			return nil, err
 		}
-		if len(h.Points()) == 0 {
+		hostVehiclesApply := oobHostVehiclesApply(row, protocol)
+		if len(h.Points()) == 0 && !hostVehiclesApply {
 			// Nowhere to plant a callback domain. Registering one would prove nothing.
 			return nil, nil
 		}
@@ -671,7 +729,12 @@ func oobCheck(row, protocol string) CheckRunner {
 				sent++
 			}
 		}
-		if sent == 0 {
+		var routed int
+		hostMarker := strings.ToLower(domCanary("oobh"))
+		if hostVehiclesApply {
+			routed = plantOOBHostVehicles(ctx, h, cc, hostMarker+"."+channel.Domain())
+		}
+		if sent == 0 && routed == 0 {
 			// Nothing left the process, so there is nothing a callback could be a response to.
 			return nil, fmt.Errorf("%s: no probe carrying the collaborator domain could be sent: %w",
 				row, errCheckInconclusive)
@@ -685,6 +748,15 @@ func oobCheck(row, protocol string) CheckRunner {
 		deadline := nowUTC().Add(DefaultPendingDeadline)
 		if cc.Config != nil && cc.Config.PendingDeadline > 0 {
 			deadline = nowUTC().Add(cc.Config.PendingDeadline)
+		}
+		if routed > 0 {
+			if err := registerOOBHostVehicles(cc, channel, row, protocol, hostMarker, routed, deadline); err != nil {
+				return nil, err
+			}
+		}
+		if sent == 0 {
+			return nil, fmt.Errorf("%s: collaborator domain planted in the Host header, awaiting callback: %w",
+				row, errCheckInconclusive)
 		}
 		if err := cc.Scanner.Pending().Register(PendingItem{
 			Row:      row,
@@ -717,6 +789,70 @@ func oobCheck(row, protocol string) CheckRunner {
 		return nil, fmt.Errorf("%s: collaborator domain planted, awaiting callback: %w",
 			row, errCheckInconclusive)
 	}
+}
+
+// oobHostVehiclesApply says which out-of-band rows also plant the collaborator domain as the host of
+// the request: the two external-service-interaction rows over DNS and HTTP. That is routing-based
+// SSRF (PortSwigger, "HTTP Host header attacks"): a front end that forwards a request to whatever host
+// its Host header — or its absolute-form request target — names will resolve and contact the
+// collaborator. Burp's scanner plants Collaborator payloads in the Host header insertion point and
+// files the interaction under these same rows.
+func oobHostVehiclesApply(row, protocol string) bool {
+	return strings.HasPrefix(row, "External service interaction") &&
+		(strings.EqualFold(protocol, "http") || strings.EqualFold(protocol, "dns"))
+}
+
+// plantOOBHostVehicles sends the request with host as its Host header, and again with an absolute-form
+// target naming the real authority and host in the Host header. Both go to the exchange's own
+// authorised authority — the scope gate never reads the Host header — so the only party that could
+// contact the collaborator is the target itself. It returns how many were sent.
+func plantOOBHostVehicles(ctx context.Context, h *ProbeHarness, cc *CheckContext, host string) int {
+	base := h.RequestBytes()
+	authority := requestHostHeader(base)
+	if authority == "" {
+		authority = hostPort(cc.Exchange.Host, cc.Exchange.Port, cc.Exchange.TLS)
+	}
+	sent := 0
+	for _, raw := range [][]byte{
+		withHostHeaders(base, host),
+		withAbsoluteTarget(withHostHeaders(base, host), authority),
+	} {
+		if _, err := h.SendRequestHTTP1(ctx, withCacheBuster(raw)); err == nil {
+			sent++
+		}
+	}
+	return sent
+}
+
+// registerOOBHostVehicles waits for an interaction carrying the Host-vehicle marker, which can only be
+// the target acting on a Host header it should have refused.
+func registerOOBHostVehicles(cc *CheckContext, channel OOBChannel, row, protocol, marker string, sent int,
+	deadline time.Time) error {
+	return cc.Scanner.Pending().Register(PendingItem{
+		Row:      row,
+		Exchange: cc.Exchange.ID,
+		Deadline: deadline,
+		What: fmt.Sprintf("%d probe(s) naming %s.%s as the request's host sent to %s, awaiting a %s callback",
+			sent, marker, channel.Domain(), cc.Exchange.Path, protocol),
+	}, func(context.Context) (*Finding, bool, error) {
+		interactions, err := channel.InteractionsFor(marker)
+		if err != nil {
+			return nil, false, fmt.Errorf("reading out-of-band interactions: %w", err)
+		}
+		for _, i := range oob.Deduplicate(interactions) {
+			if !strings.EqualFold(i.Protocol, protocol) {
+				continue
+			}
+			return buildHeaderFinding(cc, row, "high", "certain",
+				fmt.Sprintf("%s interaction from %s after the request named the collaborator as its host",
+					i.Protocol, i.RemoteAddress),
+				"routing-based SSRF: the target contacted the host named in the request's Host header (or "+
+					"absolute-form target), so a front end routes requests by a value the client controls and "+
+					"can be pointed at internal systems"), true, nil
+		}
+		// Never settles negatively, like the parameter-planted item: no callback is not evidence of none.
+		return nil, false, nil
+	})
 }
 
 // oobPayloadsFor returns the payload shapes that can plausibly provoke a callback over the

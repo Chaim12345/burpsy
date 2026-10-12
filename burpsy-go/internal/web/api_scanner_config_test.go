@@ -194,3 +194,17 @@ func TestConfigCarriesTheRequestSmugglingCheck(t *testing.T) {
 		t.Error("the running scanner did not take check_request_smuggling")
 	}
 }
+
+// The Host header check's switch is on the wire, off by default, and reaches the running scanner.
+func TestConfigCarriesTheHostHeaderCheck(t *testing.T) {
+	s := newScannerServer()
+	if cfg := getScannerConfig(t, s); cfg["check_host_header"] != false {
+		t.Fatalf("check_host_header = %v, want present and off by default", cfg["check_host_header"])
+	}
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_host_header": true}); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckHostHeader {
+		t.Error("the running scanner did not take check_host_header")
+	}
+}

@@ -774,6 +774,9 @@ func runtimeScanConfig() *ScanConfig {
 		ResetMailboxURL:     runtimeResetMailbox,
 		// The session-management check (0vzb wave 5). It only acts on a captured login that set a cookie.
 		CheckSessionManagement: true,
+		// The Host header check (checks_host_header.go). It sends canary hosts under .invalid to the
+		// loopback target only; the scope gate never reads the Host header.
+		CheckHostHeader: true,
 	}
 }
 
@@ -978,7 +981,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 165
+	const wantDemonstrated = 167
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

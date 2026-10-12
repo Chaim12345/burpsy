@@ -44,7 +44,9 @@ package vulnapp
 // separately documents as "evidence AGAINST injection, not for it". No fixture-side response body
 // can distinguish itself from this once a header-kind insertion point exists at all, so no safe
 // twin could be built and demonstrating the row honestly was not possible in the time available.
-// Reported to the coordinator as a check defect rather than fixed here.
+// Reported to the coordinator as a check defect rather than fixed here. Since fixed (j1mk.41): the
+// check now needs a separator-specific mail-library error, and the row's fixtures, including a safe
+// twin of exactly the page described above, live in vulnapp_hostcrlf.go.
 //
 // /graphql at the host root is discovery family's row ("GraphQL endpoint discovered", a different
 // row from this family's four); this family's GraphQL endpoints live entirely under /rm/ to avoid

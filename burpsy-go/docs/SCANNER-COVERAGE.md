@@ -51,11 +51,20 @@ which is what carries its CWE onto the finding.
 | `b5000100` | Insecure direct object reference | 639 | Broken access control | `check_idor` |
 | `b5000200` | Authentication attempts not rate limited | 307 | Broken access control | `check_login_rate_limit` (+ `login_rate_limit_attempts`, default 20, 5-100) |
 | `b5000300` | Username enumeration | 204 | Broken access control | `check_username_enumeration` |
+| `b5001000` | Host header injection | 20 | Link manipulation (reflected) | `check_host_header` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
 real account can be locked, which also means a lockout that engages only for existing accounts is
 not observable. Riding "Broken access control" puts them in that row's light tier and per-URL scope.
+
+Host header injection (`checks_host_header.go`) is off by default because it sends requests naming
+hosts the target does not serve (random labels under `.invalid`, each with a cache-buster). It is
+reported only when the canary became the host of a URL in the response (Location, Refresh, Link,
+or a body URL starting at an attribute/string boundary), was absent from the baseline, and a second
+canary through the same vehicle moved with it. Routing-based SSRF through the Host header is filed
+under Burp's own "External service interaction (DNS/HTTP)" rows, which now also plant the
+collaborator as the request's Host and absolute-form target.
 
 ## Outside the catalog: DOM Invader's detections
 
