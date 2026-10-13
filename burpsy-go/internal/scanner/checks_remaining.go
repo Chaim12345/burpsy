@@ -590,6 +590,18 @@ func checkXXE(ctx context.Context, cc *CheckContext) ([]*Finding, error) {
 					"the file was read", point.Kind, point.Name, value))}, nil
 		}
 	}
+	// No general entity resolved. A parser with only external GENERAL entities disabled still loads
+	// an external DTD through a parameter entity (xxe_param_entity.go); that probe makes the target
+	// fetch a URL this scanner serves, so it runs under the in-band SSRF opt-in.
+	if inBandSSRFOn(cc.Config) {
+		f, err := xxeParameterEntityProbe(ctx, cc, h, points, baseBody)
+		if err != nil {
+			return nil, fmt.Errorf("XML external entity injection: %w", err)
+		}
+		if f != nil {
+			return []*Finding{f}, nil
+		}
+	}
 	return nil, nil
 }
 

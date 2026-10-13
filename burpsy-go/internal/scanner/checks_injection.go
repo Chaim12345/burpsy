@@ -327,7 +327,14 @@ func checkFilePathManipulation(ctx context.Context, cc *CheckContext) ([]*Findin
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			// A read is proven by file content, not by the absence of an error, which is
 			// why TraversalFileSignatures rather than an error bank.
-			return h.ProbeErrorSignatures(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
+			probes := h.ProbeErrorSignatures(ctx, p, PathTraversalPayloads, TraversalFileSignatures)
+			if _, confirmed := BestEvidence(probes); confirmed {
+				return probes
+			}
+			// No file content: the value may still be a raw path confined to one directory, which
+			// path equivalence shows (checks_path_equivalence.go). Only when the stronger evidence
+			// did not decide, so a point that read a file reports that rather than this.
+			return append(probes, h.ProbePathEquivalence(ctx, p))
 		})
 	if err != nil {
 		return nil, err
