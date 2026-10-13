@@ -1,0 +1,3474 @@
+[
+ {
+  "test": "PasswordResetVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_1",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "PREDICTABLE_PASSWORD_RESET_TOKEN"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   613
+  ],
+  "vulnerabilityTypes": [
+   "PASSWORD_RESET_TOKEN_WITHOUT_EXPIRY"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_3",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   640
+  ],
+  "vulnerabilityTypes": [
+   "REUSABLE_PASSWORD_RESET_TOKEN"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_4",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   204
+  ],
+  "vulnerabilityTypes": [
+   "USERNAME_ENUMERATION"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_5",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   319
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_PASSWORD_RESET_LINK"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_6",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   338
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_RANDOM_NUMBER_GENERATION"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_7",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   200
+  ],
+  "vulnerabilityTypes": [
+   "PASSWORD_RESET_TOKEN_EXPOSED_VIA_REFERRER"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_8/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_8",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "PREDICTABLE_PASSWORD_RESET_TOKEN"
+  ]
+ },
+ {
+  "test": "PasswordResetVulnerability/LEVEL_9/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PasswordResetVulnerability/LEVEL_9",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "PasswordResetRequest"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307
+  ],
+  "vulnerabilityTypes": [
+   "NO_LOGIN_RATE_LIMITING"
+  ]
+ },
+ {
+  "test": "CommandInjection/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CommandInjection/LEVEL_1",
+  "query": {
+   "ipaddress": "127.0.0.1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   77
+  ],
+  "vulnerabilityTypes": [
+   "COMMAND_INJECTION"
+  ]
+ },
+ {
+  "test": "CommandInjection/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CommandInjection/LEVEL_2",
+  "query": {
+   "ipaddress": "127.0.0.1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   77
+  ],
+  "vulnerabilityTypes": [
+   "COMMAND_INJECTION"
+  ]
+ },
+ {
+  "test": "CommandInjection/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CommandInjection/LEVEL_3",
+  "query": {
+   "ipaddress": "127.0.0.1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   77
+  ],
+  "vulnerabilityTypes": [
+   "COMMAND_INJECTION"
+  ]
+ },
+ {
+  "test": "CommandInjection/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CommandInjection/LEVEL_4",
+  "query": {
+   "ipaddress": "127.0.0.1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   77
+  ],
+  "vulnerabilityTypes": [
+   "COMMAND_INJECTION"
+  ]
+ },
+ {
+  "test": "CommandInjection/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CommandInjection/LEVEL_5",
+  "query": {
+   "ipaddress": "127.0.0.1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   77
+  ],
+  "vulnerabilityTypes": [
+   "COMMAND_INJECTION"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_1",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_2",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_3",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_4",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_5",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "PersistentXSSInHTMLTagVulnerability/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PersistentXSSInHTMLTagVulnerability/LEVEL_6",
+  "query": {
+   "comment": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "XSSWithHtmlTagInjection/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSWithHtmlTagInjection/LEVEL_1",
+  "query": {
+   "value": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSWithHtmlTagInjection/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSWithHtmlTagInjection/LEVEL_2",
+  "query": {
+   "value": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSWithHtmlTagInjection/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSWithHtmlTagInjection/LEVEL_3",
+  "query": {
+   "value": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSWithHtmlTagInjection/LEVEL_4/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSWithHtmlTagInjection/LEVEL_4",
+  "query": {
+   "value": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSWithHtmlTagInjection/LEVEL_5/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSWithHtmlTagInjection/LEVEL_5",
+  "query": {
+   "value": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_1",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_2",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_3",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_4",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_5",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "XSSInImgTagAttribute/LEVEL_6/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/XSSInImgTagAttribute/LEVEL_6",
+  "query": {
+   "src": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "SessionManagementVulnerability/LEVEL_1/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/SessionManagementVulnerability/LEVEL_1",
+  "query": {
+   "action": "login"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "json",
+   "content_type": "application/json",
+   "example": {
+    "username": "admin",
+    "password": "password"
+   }
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   384
+  ],
+  "vulnerabilityTypes": [
+   "SESSION_FIXATION"
+  ]
+ },
+ {
+  "test": "SessionManagementVulnerability/LEVEL_2/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/SessionManagementVulnerability/LEVEL_2",
+  "query": {
+   "action": "login"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "json",
+   "content_type": "application/json",
+   "example": {
+    "username": "admin",
+    "password": "password"
+   }
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "PREDICTABLE_SESSION_ID"
+  ]
+ },
+ {
+  "test": "SessionManagementVulnerability/LEVEL_3/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/SessionManagementVulnerability/LEVEL_3",
+  "query": {
+   "action": "login"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "json",
+   "content_type": "application/json",
+   "example": {
+    "username": "admin",
+    "password": "password"
+   }
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "OBSCURED_PREDICTABLE_SESSION_ID"
+  ]
+ },
+ {
+  "test": "SessionManagementVulnerability/LEVEL_4/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/SessionManagementVulnerability/LEVEL_4",
+  "query": {
+   "action": "login"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "json",
+   "content_type": "application/json",
+   "example": {
+    "username": "admin",
+    "password": "password"
+   }
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   613
+  ],
+  "vulnerabilityTypes": [
+   "MISSING_LOGOUT_INVALIDATION"
+  ]
+ },
+ {
+  "test": "SessionManagementVulnerability/LEVEL_5/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/SessionManagementVulnerability/LEVEL_5",
+  "query": {
+   "action": "login"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "json",
+   "content_type": "application/json",
+   "example": {
+    "username": "admin",
+    "password": "password"
+   }
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307
+  ],
+  "vulnerabilityTypes": [
+   "NO_LOGIN_RATE_LIMITING"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_1",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   326
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_CRYPTOGRAPHIC_STORAGE"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_2",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   326
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_CRYPTOGRAPHIC_STORAGE"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_3",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "USE_OF_BROKEN_CRYPTOGRAPHIC_ALGORITHM"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_4",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "USE_OF_BROKEN_CRYPTOGRAPHIC_ALGORITHM"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_5",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   327
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_CRYPTOGRAPHIC_HASH"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_6",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   327
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_CRYPTOGRAPHIC_HASH"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_7",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   327
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_CRYPTOGRAPHIC_HASH"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_8/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_8",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   327
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_CRYPTOGRAPHIC_HASH"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_9/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_9",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   327
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_CRYPTOGRAPHIC_HASH"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_10/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_10",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "USE_OF_BROKEN_CRYPTOGRAPHIC_ALGORITHM"
+  ]
+ },
+ {
+  "test": "CryptographicFailures/LEVEL_11/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CryptographicFailures/LEVEL_11",
+  "query": {
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   330
+  ],
+  "vulnerabilityTypes": [
+   "USE_OF_BROKEN_CRYPTOGRAPHIC_ALGORITHM"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_1",
+  "query": {
+   "JWT": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.MZiW2KkIRI6GhKsu16Me7-3IpS4nBw1W47CW67QAqS0"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_2",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_3",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_4",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_4/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_4",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1188
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_CONFIGURATION_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_5",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_5/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_5",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_6",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_6/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_6",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_7",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_8/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_8",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_8/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_8",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_9/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_9",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_9/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_9",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_10/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_10",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   522
+  ],
+  "vulnerabilityTypes": [
+   "CLIENT_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_10/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_10",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_13/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_13",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   113
+  ],
+  "vulnerabilityTypes": [
+   "HEADER_INJECTION"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_14/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_14",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1188
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_CONFIGURATION_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_15/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_15",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   347
+  ],
+  "vulnerabilityTypes": [
+   "SERVER_SIDE_VULNERABLE_JWT"
+  ]
+ },
+ {
+  "test": "JWTVulnerability/LEVEL_16/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/JWTVulnerability/LEVEL_16",
+  "query": {
+   "fetch": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1188
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_CONFIGURATION_JWT"
+  ]
+ },
+ {
+  "test": "SSRFVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/SSRFVulnerability/LEVEL_1",
+  "query": {
+   "fileurl": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   918
+  ],
+  "vulnerabilityTypes": [
+   "SIMPLE_SSRF"
+  ]
+ },
+ {
+  "test": "SSRFVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/SSRFVulnerability/LEVEL_2",
+  "query": {
+   "fileurl": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   918
+  ],
+  "vulnerabilityTypes": [
+   "SIMPLE_SSRF"
+  ]
+ },
+ {
+  "test": "SSRFVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/SSRFVulnerability/LEVEL_3",
+  "query": {
+   "fileurl": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   918
+  ],
+  "vulnerabilityTypes": [
+   "SIMPLE_SSRF"
+  ]
+ },
+ {
+  "test": "SSRFVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/SSRFVulnerability/LEVEL_4",
+  "query": {
+   "fileurl": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   918
+  ],
+  "vulnerabilityTypes": [
+   "SIMPLE_SSRF"
+  ]
+ },
+ {
+  "test": "SSRFVulnerability/LEVEL_5/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/SSRFVulnerability/LEVEL_5",
+  "query": {
+   "fileurl": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   918
+  ],
+  "vulnerabilityTypes": [
+   "SIMPLE_SSRF"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_1/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_1",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22,
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS",
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_2/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_3/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_3",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_4/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_4",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_5/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_5",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_6/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_6",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_7/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_7",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_8/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_8",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_9/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_9",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   400,
+   730
+  ],
+  "vulnerabilityTypes": [
+   "UNCONTROLLED_RESOURCE_CONSUMPTION",
+   "DENIAL_OF_SERVICE"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_9/UNSECURE#2",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_9",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_10/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_10",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_11/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_11",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   22,
+   79,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "PERSISTENT_XSS",
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "UnrestrictedFileUpload/LEVEL_12/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/UnrestrictedFileUpload/LEVEL_12",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "multipart_file": "file"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   400,
+   434
+  ],
+  "vulnerabilityTypes": [
+   "UNRESTRICTED_FILE_UPLOAD",
+   "UNCONTROLLED_RESOURCE_CONSUMPTION"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_1",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_2",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_3",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_4",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_5",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_6",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_7",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_9/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_9",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_10/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_10",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_11/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_11",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "Http3xxStatusCodeBasedInjection/LEVEL_12/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/Http3xxStatusCodeBasedInjection/LEVEL_12",
+  "query": {
+   "returnTo": "/"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   601
+  ],
+  "vulnerabilityTypes": [
+   "OPEN_REDIRECT_3XX_STATUS_CODE"
+  ]
+ },
+ {
+  "test": "OTPVulnerability/LEVEL_1/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/OTPVulnerability/LEVEL_1",
+  "query": {},
+  "form": {
+   "email": "user@example.com"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307,
+   338,
+   613
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_RANDOM_NUMBER_GENERATION",
+   "NO_LOGIN_RATE_LIMITING",
+   "PASSWORD_RESET_TOKEN_WITHOUT_EXPIRY"
+  ]
+ },
+ {
+  "test": "OTPVulnerability/LEVEL_2/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/OTPVulnerability/LEVEL_2",
+  "query": {},
+  "form": {
+   "email": "user@example.com"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307,
+   338,
+   613
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_RANDOM_NUMBER_GENERATION",
+   "NO_LOGIN_RATE_LIMITING",
+   "PASSWORD_RESET_TOKEN_WITHOUT_EXPIRY"
+  ]
+ },
+ {
+  "test": "OTPVulnerability/LEVEL_3/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/OTPVulnerability/LEVEL_3",
+  "query": {},
+  "form": {
+   "email": "user@example.com"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307,
+   640
+  ],
+  "vulnerabilityTypes": [
+   "REUSABLE_PASSWORD_RESET_TOKEN",
+   "NO_LOGIN_RATE_LIMITING"
+  ]
+ },
+ {
+  "test": "OTPVulnerability/LEVEL_4/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/OTPVulnerability/LEVEL_4",
+  "query": {},
+  "form": {
+   "email": "user@example.com"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   307
+  ],
+  "vulnerabilityTypes": [
+   "NO_LOGIN_RATE_LIMITING"
+  ]
+ },
+ {
+  "test": "IDORVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/IDORVulnerability/LEVEL_1",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "token_level1": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   639
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DIRECT_OBJECT_REFERENCE"
+  ]
+ },
+ {
+  "test": "IDORVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/IDORVulnerability/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "token_level2": "test",
+   "userId_level2": "1"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   639
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DIRECT_OBJECT_REFERENCE"
+  ]
+ },
+ {
+  "test": "IDORVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/IDORVulnerability/LEVEL_3",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "token_level3": "test",
+   "role_level3": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   639
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DIRECT_OBJECT_REFERENCE"
+  ]
+ },
+ {
+  "test": "IDORVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/IDORVulnerability/LEVEL_4",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "token_level4": "test",
+   "role_level4": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   639
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DIRECT_OBJECT_REFERENCE"
+  ]
+ },
+ {
+  "test": "IDORVulnerability/LEVEL_5/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/IDORVulnerability/LEVEL_5",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "token_level5": "test"
+  },
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   639
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DIRECT_OBJECT_REFERENCE"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_1",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   349
+  ],
+  "vulnerabilityTypes": [
+   "WEB_CACHE_POISONING"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_1/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_1",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_2",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   349
+  ],
+  "vulnerabilityTypes": [
+   "WEB_CACHE_POISONING"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_2/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_2",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_3",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   349
+  ],
+  "vulnerabilityTypes": [
+   "WEB_CACHE_POISONING"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_3/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_3",
+  "query": {
+   "banner": "test",
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   79
+  ],
+  "vulnerabilityTypes": [
+   "REFLECTED_XSS"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_4",
+  "query": {
+   "browserCache": "true"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   349
+  ],
+  "vulnerabilityTypes": [
+   "WEB_CACHE_POISONING"
+  ]
+ },
+ {
+  "test": "CachePoisoning/LEVEL_5/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/CachePoisoning/LEVEL_5",
+  "query": {
+   "banner": "test"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   349
+  ],
+  "vulnerabilityTypes": [
+   "WEB_CACHE_POISONING"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_1",
+  "query": {
+   "username": "admin"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_2",
+  "query": {
+   "username": "admin"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_3",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_4/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_4",
+  "query": {
+   "username": "admin"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_5",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "LDAPInjectionVulnerability/LEVEL_6/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/LDAPInjectionVulnerability/LEVEL_6",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   90
+  ],
+  "vulnerabilityTypes": [
+   "LDAP_INJECTION"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_1",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_2",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_3",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_4",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_5",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_6",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_7",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_8/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_8",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_9/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_9",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_10/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_10",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_11/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_11",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "PathTraversal/LEVEL_12/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/PathTraversal/LEVEL_12",
+  "query": {
+   "fileName": "UserInfo.json"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   22
+  ],
+  "vulnerabilityTypes": [
+   "PATH_TRAVERSAL"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_1/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_1",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_2/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_3/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_3",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_4/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_4",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_5/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_5",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_6/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_6",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "XXEVulnerability/LEVEL_7/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/XXEVulnerability/LEVEL_7",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": {
+   "type": "xml",
+   "content_type": "application/xml",
+   "example": "<?xml version=\"1.0\"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>"
+  },
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   611
+  ],
+  "vulnerabilityTypes": [
+   "XXE"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_1",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "preferences_level1": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   502
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DESERIALIZATION"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "session_level2": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   502
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DESERIALIZATION"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_2/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "session_level2": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   285
+  ],
+  "vulnerabilityTypes": [
+   "IMPROPER_AUTHORIZATION"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_3/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_3",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "session_level3": "test"
+  },
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   502
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DESERIALIZATION"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_4",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "activity_level4": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   502
+  ],
+  "vulnerabilityTypes": [
+   "INSECURE_DESERIALIZATION"
+  ]
+ },
+ {
+  "test": "InsecureDeserialization/LEVEL_4/UNSECURE#2",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/InsecureDeserialization/LEVEL_4",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {
+   "activity_level4": "test"
+  },
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   94
+  ],
+  "vulnerabilityTypes": [
+   "REMOTE_CODE_EXECUTION"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_1",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "ERROR_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_2",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   256
+  ],
+  "vulnerabilityTypes": [
+   "PLAINTEXT_PASSWORD_STORAGE"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_3",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   256
+  ],
+  "vulnerabilityTypes": [
+   "PLAINTEXT_PASSWORD_STORAGE"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_4",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   916
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_PASSWORD_HASHING"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_5/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_5",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   916
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_PASSWORD_HASHING"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_6",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   916
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_PASSWORD_HASHING"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_7",
+  "query": {
+   "username": "admin",
+   "password": "password"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   204
+  ],
+  "vulnerabilityTypes": [
+   "USERNAME_ENUMERATION"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_8/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_8",
+  "query": {},
+  "form": {
+   "username": "admin",
+   "password": "password"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   916
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_PASSWORD_HASHING"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_9/SECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_9",
+  "query": {},
+  "form": {
+   "username": "admin",
+   "password": "password"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   204
+  ],
+  "vulnerabilityTypes": [
+   "USERNAME_ENUMERATION"
+  ]
+ },
+ {
+  "test": "AuthenticationVulnerability/LEVEL_10/UNSECURE",
+  "method": "POST",
+  "url": "http://localhost:9090/VulnerableApp/AuthenticationVulnerability/LEVEL_10",
+  "query": {},
+  "form": {
+   "username": "admin",
+   "password": "password"
+  },
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   916
+  ],
+  "vulnerabilityTypes": [
+   "WEAK_PASSWORD_HASHING"
+  ]
+ },
+ {
+  "test": "ErrorBasedSQLInjectionVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ErrorBasedSQLInjectionVulnerability/LEVEL_1",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "ERROR_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "ErrorBasedSQLInjectionVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ErrorBasedSQLInjectionVulnerability/LEVEL_2",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "ERROR_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "ErrorBasedSQLInjectionVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ErrorBasedSQLInjectionVulnerability/LEVEL_3",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "ERROR_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "ErrorBasedSQLInjectionVulnerability/LEVEL_4/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ErrorBasedSQLInjectionVulnerability/LEVEL_4",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "ERROR_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "UnionBasedSQLInjectionVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/UnionBasedSQLInjectionVulnerability/LEVEL_1",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "UNION_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "UnionBasedSQLInjectionVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/UnionBasedSQLInjectionVulnerability/LEVEL_2",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "UNION_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "UnionBasedSQLInjectionVulnerability/LEVEL_3/SECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/UnionBasedSQLInjectionVulnerability/LEVEL_3",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "SECURE",
+  "vulnerable": false,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "UNION_BASED_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "BlindSQLInjectionVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/BlindSQLInjectionVulnerability/LEVEL_1",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "BLIND_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "BlindSQLInjectionVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/BlindSQLInjectionVulnerability/LEVEL_2",
+  "query": {
+   "id": "1"
+  },
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   89
+  ],
+  "vulnerabilityTypes": [
+   "BLIND_SQL_INJECTION"
+  ]
+ },
+ {
+  "test": "ClickjackingVulnerability/LEVEL_1/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ClickjackingVulnerability/LEVEL_1",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1021
+  ],
+  "vulnerabilityTypes": [
+   "CLICKJACKING"
+  ]
+ },
+ {
+  "test": "ClickjackingVulnerability/LEVEL_2/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ClickjackingVulnerability/LEVEL_2",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1021
+  ],
+  "vulnerabilityTypes": [
+   "CLICKJACKING"
+  ]
+ },
+ {
+  "test": "ClickjackingVulnerability/LEVEL_3/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ClickjackingVulnerability/LEVEL_3",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1021
+  ],
+  "vulnerabilityTypes": [
+   "CLICKJACKING"
+  ]
+ },
+ {
+  "test": "ClickjackingVulnerability/LEVEL_6/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ClickjackingVulnerability/LEVEL_6",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1021
+  ],
+  "vulnerabilityTypes": [
+   "CLICKJACKING"
+  ]
+ },
+ {
+  "test": "ClickjackingVulnerability/LEVEL_7/UNSECURE",
+  "method": "GET",
+  "url": "http://localhost:9090/VulnerableApp/ClickjackingVulnerability/LEVEL_7",
+  "query": {},
+  "form": {},
+  "headers": {},
+  "cookies": {},
+  "body": null,
+  "variant": "UNSECURE",
+  "vulnerable": true,
+  "cwes": [
+   1021
+  ],
+  "vulnerabilityTypes": [
+   "CLICKJACKING"
+  ]
+ }
+]
