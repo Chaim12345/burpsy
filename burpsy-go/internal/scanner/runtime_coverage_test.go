@@ -582,6 +582,14 @@ func chromeOnPath() bool {
 // seed performs one real request and records the exchange, mirroring what the proxy captures.
 func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpoint) {
 	t.Helper()
+	rt.exchanges[e.Path] = rt.capture(t, client, e)
+}
+
+// capture sends e's request to the live target and stores the exchange, returning its ID without
+// registering it in rt.exchanges: that map is built once and read by parallel tests, so a test that
+// needs a fresh capture of its own takes the ID instead of writing to it.
+func (rt *runtimeTarget) capture(t *testing.T, client *http.Client, e vulnapp.Endpoint) core.ExchangeID {
+	t.Helper()
 
 	method := e.Method
 	if method == "" {
@@ -654,7 +662,7 @@ func (rt *runtimeTarget) seed(t *testing.T, client *http.Client, e vulnapp.Endpo
 		Method: method, Path: e.Path,
 	}
 	rt.store.AddExchange(ex)
-	rt.exchanges[e.Path] = ex.ID
+	return ex.ID
 }
 
 func buildRawRequest(method, path, host string, port uint16, body, contentType string, extra map[string]string) string {
