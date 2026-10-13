@@ -217,30 +217,85 @@ func LooksLikeSessionToken(name string) bool {
 // ---------------------------------------------------------------------------
 
 // IsFrameable reports whether a response can be embedded in a frame/iframe
-// by another origin: no X-Frame-Options of DENY or SAMEORIGIN (the only two
-// values every major browser still honours — the deprecated ALLOW-FROM
-// value is ignored by Chrome and Firefox, so it counts as no protection at
-// all), and no CSP frame-ancestors directive. This backs the "Frameable
-// response (potential Clickjacking)" declined row, which is a distinct
-// catalog entry from the "CSP allows Clickjacking" row checks_headers.go
-// already covers natively — that existing check only inspects a header/CSP
-// substring; this one exists as an independent, directly-callable primitive
-// a future evaluator can invoke without the checks_headers.go probe plumbing
-// around it.
+// by another origin, given one X-Frame-Options value and one Content-Security-Policy
+// value. It is IsFrameableHeaders for a response carrying at most one of each.
 //
-// The CSP half reuses infra_csp.go's real directive parser (ParseCSP /
-// CSPPolicy.EffectiveSources) rather than re-deriving a second substring
-// search for "frame-ancestors": frame-ancestors has no fetch-directive
-// fallback chain entry, so EffectiveSources returns non-nil if and only if
-// the directive was actually declared, which is exactly the presence test
-// this needs.
+// This backs the "Frameable response (potential Clickjacking)" declined row, which is a
+// distinct catalog entry from the "CSP allows Clickjacking" row checks_headers.go already
+// covers natively — that existing check only inspects a header/CSP substring; this one
+// follows what a browser enforces.
 func IsFrameable(xFrameOptions, cspHeader string) bool {
-	switch strings.ToUpper(strings.TrimSpace(xFrameOptions)) {
-	case "DENY", "SAMEORIGIN":
-		return false
+	var xfo, csp []string
+	if xFrameOptions != "" {
+		xfo = []string{xFrameOptions}
 	}
-	return ParseCSP(cspHeader).EffectiveSources("frame-ancestors") == nil
+	if cspHeader != "" {
+		csp = []string{cspHeader}
+	}
+	return IsFrameableHeaders(xfo, csp)
 }
+
+// IsFrameableHeaders reports whether a browser lets another origin frame a response carrying
+// these X-Frame-Options and Content-Security-Policy header values (every occurrence of each).
+//
+// It is the HTML standard's "check a navigation response's adherence to X-Frame-Options", and every
+// branch below was confirmed against Chrome by framing a test page from another origin
+// (0vzb.32):
+//
+//   - an enforced policy with a frame-ancestors directive makes X-Frame-Options irrelevant; the page
+//     is frameable by any origin only when every such directive admits any origin ("*" or a bare
+//     scheme such as "https:"), so "frame-ancestors *" with "X-Frame-Options: DENY" IS frameable;
+//   - otherwise every X-Frame-Options value is split on commas, trimmed, lower-cased and de-duplicated
+//     (empty items dropped). No item: frameable. More than one distinct item: blocked when any of
+//     them is deny, sameorigin or allowall (a conflict), frameable otherwise. One item: deny and
+//     sameorigin block another origin; anything else - allowall, the deprecated ALLOW-FROM, a
+//     misspelling such as SAME-ORIGIN, "DENY;" - is not enforced at all.
+//
+// SAMEORIGIN is enforced against every ancestor, so a cross-origin page cannot frame it even through
+// a same-origin intermediate frame; whether an attacker can place a page ON the origin is not
+// something a response header shows.
+func IsFrameableHeaders(xFrameOptions, csp []string) bool {
+	declared, anyOrigin := false, true
+	for _, header := range csp {
+		for _, policy := range strings.Split(header, ",") {
+			d, ok := ParseCSP(policy).directive("frame-ancestors")
+			if !ok {
+				continue
+			}
+			declared = true
+			anyOrigin = anyOrigin && frameAncestorsAdmitsAnyOrigin(d.Sources)
+		}
+	}
+	if declared {
+		return anyOrigin
+	}
+	items := map[string]bool{}
+	for _, header := range xFrameOptions {
+		for _, item := range strings.Split(header, ",") {
+			if item = strings.ToLower(strings.TrimSpace(item)); item != "" {
+				items[item] = true
+			}
+		}
+	}
+	if len(items) > 1 {
+		return !(items["deny"] || items["sameorigin"] || items["allowall"])
+	}
+	return !(items["deny"] || items["sameorigin"])
+}
+
+// frameAncestorsAdmitsAnyOrigin reports whether a frame-ancestors source list lets an arbitrary
+// origin frame the page: a bare "*", or a scheme source ("https:") that names no host.
+func frameAncestorsAdmitsAnyOrigin(sources []string) bool {
+	for _, s := range sources {
+		s = strings.ToLower(s)
+		if s == "*" || cspSchemeSource.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+var cspSchemeSource = regexp.MustCompile(`^[a-z][a-z0-9+.-]*:$`)
 
 // XSSFilterDisabled reports whether a browser's built-in XSS filter has been
 // explicitly turned off via "X-XSS-Protection: 0" (any trailing directives

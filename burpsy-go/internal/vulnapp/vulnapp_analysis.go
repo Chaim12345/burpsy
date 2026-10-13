@@ -56,6 +56,12 @@ func analysisEndpoints() []Endpoint {
 			Note: "HTML with no X-Frame-Options and no CSP frame-ancestors"},
 		{Path: "/an/safe/framed", Row: "Frameable response (potential Clickjacking)", Safe: true,
 			Note: "same page carrying X-Frame-Options: DENY"},
+		{Path: "/an/frameable/any-ancestor", Row: "Frameable response (potential Clickjacking)",
+			Note: "X-Frame-Options: DENY overridden by CSP frame-ancestors *, which a browser obeys instead " +
+				"(0vzb.32, observed in Chrome)"},
+		{Path: "/an/safe/framed/conflicting", Row: "Frameable response (potential Clickjacking)", Safe: true,
+			Note: "two X-Frame-Options headers, SAMEORIGIN and DENY: a conflict a browser resolves by blocking " +
+				"(0vzb.32, observed in Chrome)"},
 
 		{Path: "/an/xss-filter-disabled", Row: "Browser cross-site scripting filter disabled",
 			Note: "sends X-XSS-Protection: 0"},
@@ -210,6 +216,19 @@ func registerAnalysis(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/an/safe/framed", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>protected content</body></html>"))
+	})
+
+	mux.HandleFunc("/an/frameable/any-ancestor", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors *")
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>frameable content</body></html>"))
+	})
+	mux.HandleFunc("/an/safe/framed/conflicting", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Add("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html><body>protected content</body></html>"))
 	})

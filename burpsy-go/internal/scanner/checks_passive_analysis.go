@@ -151,11 +151,20 @@ func checkFrameableResponse(ctx context.Context, cc *CheckContext) ([]*Finding, 
 		return nil, nil
 	}
 	respRaw := responseRaw(cc.Scanner, cc.Exchange)
-	if !IsFrameable(headerValue(respRaw, headerXFrameOptions), headerValue(respRaw, headerContentSecurityPolicy)) {
+	xfo := nonEmptyHeaderValues(headerValues(respRaw, headerXFrameOptions))
+	csp := nonEmptyHeaderValues(headerValues(respRaw, headerContentSecurityPolicy))
+	if !IsFrameableHeaders(xfo, csp) {
 		return nil, nil
 	}
+	evidence := "no X-Frame-Options and no frame-ancestors directive"
+	switch {
+	case len(csp) > 0 && strings.Contains(strings.ToLower(strings.Join(csp, ";")), "frame-ancestors"):
+		evidence = "Content-Security-Policy: " + strings.Join(csp, ", ") + " (frame-ancestors admits any origin)"
+	case len(xfo) > 0:
+		evidence = "X-Frame-Options: " + strings.Join(xfo, ", ") + " (not a value browsers enforce) and no frame-ancestors directive"
+	}
 	return []*Finding{buildHeaderFinding(cc, "Frameable response (potential Clickjacking)",
-		"info", "certain", "no X-Frame-Options and no frame-ancestors directive",
+		"info", "certain", evidence,
 		"the response can be framed by another origin")}, nil
 }
 
@@ -551,6 +560,17 @@ func PassiveAnalysisCheckDescriptors() []CheckDescriptor {
 	} {
 		out = append(out, passiveDescriptor(disclosureRows[kind].name, DispatchScopePerUrl,
 			passiveAnalysisEnabled, checkDisclosureFamily(kind)))
+	}
+	return out
+}
+
+// nonEmptyHeaderValues drops empty header values (a header line with no value enforces nothing).
+func nonEmptyHeaderValues(vs []string) []string {
+	var out []string
+	for _, v := range vs {
+		if strings.TrimSpace(v) != "" {
+			out = append(out, v)
+		}
 	}
 	return out
 }

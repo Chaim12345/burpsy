@@ -104,6 +104,14 @@ func react2ShellOrDeserialization(r2s CheckRunner) CheckRunner {
 		var dErr error
 		if insecureDeserializationEnabled(cc.Config) {
 			dF, dErr = checkInsecureDeserialization(ctx, cc)
+			// The forged-role probe (checks_client_state_role.go) is the same switch's second
+			// question about the same client-held JSON: not whether it is parsed, but whether an
+			// authorization member in it is believed.
+			roleF, roleErr := checkForgedClientRole(ctx, cc)
+			dF = append(dF, roleF...)
+			if dErr == nil {
+				dErr = roleErr
+			}
 		}
 		switch {
 		case len(dF) > 0:

@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036681232,
+  "name": "Privilege escalation via forged client-side state",
+  "description": "<p>The application keeps an authorization attribute - the user's role, group or an is-admin flag - inside state the client holds and sends back, such as a cookie carrying JSON, and believes whatever value comes back. The state is not signed or encrypted, so any user can edit the attribute and the server then treats them as holding the privileged role.</p>\n<p>burpsy proves this without performing any action: on a GET request only, it sends the cookie three ways - as the application issued it, with the authorization member set to a privileged value (for example <code>admin</code> in the issued value's letter case, or an admin flag set to true), and with the member set to a random value of the same length as a control. A finding means the forged privileged value was accepted and answered with content that neither the issued value nor the control produced, both answers repeated exactly, and the forged answer was not a refusal or an error.</p>\n<p>This row is burpsy's own: Burp's catalogue has no row for an authorization decision taken from unsigned client-held state. It is classified under CWE-285 (Improper Authorization); the cookie form is CWE-565.</p>",
+  "remediation": "<p>Never take an authorization decision from a value the client can modify. Keep the user's role and privileges on the server, keyed by an opaque session identifier, and look them up on every request.</p>\n<p>Where state must travel through the client, sign it with a server-side key (an HMAC, or a signed token whose algorithm the server fixes) and verify the signature before reading any field; even then, re-check privileges against the server's own record for sensitive operations.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "Web Security Academy: Access control vulnerabilities and privilege escalation",
+      "url": "https://portswigger.net/web-security/access-control"
+    },
+    {
+      "title": "OWASP Cheat Sheet: Authorization",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-285: Improper Authorization",
+      "url": "https://cwe.mitre.org/data/definitions/285.html"
+    },
+    {
+      "title": "CWE-565: Reliance on Cookies without Validation and Integrity Checking in a Security Decision",
+      "url": "https://cwe.mitre.org/data/definitions/565.html"
+    }
+  ]
+}

@@ -176,6 +176,15 @@ func BurpsyNativeRows() []BurpsyRow {
 			"under the generic extension-generated type. It rides React2Shell, the only active Burp row " +
 			"classified CWE-502.",
 	}, {
+		Name:      IssueForgedClientRole,
+		TypeIndex: 0xb5001410,
+		CWE:       285,
+		Rides:     "React Server Components remote code execution (React2Shell)",
+		Why: "Burp's catalogue has no row for an authorization attribute the server reads back from unsigned " +
+			"client-held state: Burp's 'Broken access control' row is reported by hand or extension, and its " +
+			"cookie rows read attributes, not contents. It rides React2Shell with 'Insecure deserialization', " +
+			"whose check probes the same unsigned JSON cookie and runs this probe behind the same switch.",
+	}, {
 		Name:      nosqliIssue,
 		TypeIndex: 0xb5002000,
 		CWE:       943,

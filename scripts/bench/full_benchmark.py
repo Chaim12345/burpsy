@@ -68,6 +68,7 @@ import vulnapp_auth_seed  # noqa: E402
 import vulnapp_idor_seed  # noqa: E402
 import vulnapp_jwt_seed  # noqa: E402
 import vulnapp_otp_seed  # noqa: E402
+import vulnapp_state_seed  # noqa: E402
 import vulnapp_upload_seed  # noqa: E402
 from vulnapp_cases import BLANKET_CHECK_NAMES  # noqa: E402
 
@@ -399,6 +400,10 @@ def seed_all(reqs, app_base, work):
                 identities.append(acct)
         if fam == "UnrestrictedFileUpload" and not vulnapp_upload_seed.seed_entry(r):
             fails.append({"test": r["test"], "seeder": "upload", "note": "no multipart file part"})
+        if fam in ("InsecureDeserialization", "LDAPInjectionVulnerability"):
+            note = vulnapp_state_seed.seed_entry(r, vbase)
+            if note:
+                fails.append({"test": r["test"], "seeder": "state", "note": note})
         if fam in ("IDORVulnerability", "JWTVulnerability"):
             try:
                 refresh_entry(r, vbase)

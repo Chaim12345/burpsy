@@ -92,6 +92,7 @@ which is what carries its CWE onto the finding.
 | `b5001810` | GraphQL query depth not limited | 770 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001820` | GraphQL debug information disclosed | 209 | GraphQL endpoint found | `check_graphql_hardening` |
 | `b5001400` | Insecure deserialization | 502 | React Server Components remote code execution (React2Shell) | `check_insecure_deserialization` |
+| `b5001410` | Privilege escalation via forged client-side state | 285 | React Server Components remote code execution (React2Shell) | `check_insecure_deserialization` (GET/HEAD only) |
 | `b5002000` | NoSQL injection | 943 | Server-side JavaScript code injection | `check_nosql_injection` |
 | `b5002400` | Cross-site WebSocket hijacking | 1385 | Cross-site request forgery | `check_websocket_hijacking` |
 | `b5002410` | Access control bypass via spoofed client IP header | 290 | Broken access control | `check_client_ip_spoofing` |

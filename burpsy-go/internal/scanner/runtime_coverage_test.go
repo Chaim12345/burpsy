@@ -1056,7 +1056,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 187
+	const wantDemonstrated = 188
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.
