@@ -67,9 +67,10 @@ func (s *ActiveScanner) RunPassiveChecks(ctx context.Context, ex *core.Exchange,
 		return nil
 	}
 	ctx = withRunConfig(ctx, cfg)
+	rowSel := newRowSelection(s.ConfigSnapshot().OnlyRows)
 	var out []*Finding
 	for _, c := range s.enabledChecksUnder(cfg) {
-		if c.run == nil || c.enabled == nil {
+		if c.run == nil || c.enabled == nil || c.rowSkip != "" {
 			continue
 		}
 		// Not one of the two passive families. The family switches themselves were already applied
@@ -82,7 +83,7 @@ func (s *ActiveScanner) RunPassiveChecks(ctx context.Context, ex *core.Exchange,
 			continue // a passive row's refusal is the audit's Skipped, not a finding; the sweep counts rows it got
 		}
 		for _, f := range findings {
-			if f != nil {
+			if f != nil && rowSel.admits(f.Name) {
 				out = append(out, f)
 			}
 		}

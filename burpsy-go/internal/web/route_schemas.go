@@ -201,7 +201,7 @@ var routeSchemas = map[string]opSchema{
 	"DELETE /api/scanner/configs":       {body: typeOf[scanConfigWriteReq]()},
 	"PUT /api/scanner/config": {
 		body: typeOf[map[string]json.RawMessage](), schema: scannerConfigPatchSchema,
-		keysCheckedBy: "applyScannerConfigPatch refuses a key in none of scannerConfigBoolKeys, scannerConfigIntMSKeys, its named keys (max_concurrency, xss_browser_targets, ...)",
+		keysCheckedBy: "applyScannerConfigPatch refuses a key in none of scannerConfigBoolKeys, scannerConfigIntMSKeys, its named keys (max_concurrency, xss_browser_targets, only_rows, ...)",
 	},
 
 	"PUT /api/proxy/options": {
@@ -343,6 +343,10 @@ func scannerConfigPatchSchema() map[string]any {
 	}
 	for k := range scannerConfigIntMSKeys {
 		props[k] = map[string]any{"type": "integer", "minimum": 0, "description": "milliseconds"}
+	}
+	props["only_rows"] = map[string]any{
+		"type": "array", "maxItems": MaxOnlyRows, "items": map[string]any{"type": "string"},
+		"description": "restrict audits to the checks that can report these issue rows, named as findings name them; [] runs everything; an unknown name is refused",
 	}
 	str := map[string]any{"type": "string", "maxLength": maxXSSBrowserTargetField}
 	props["xss_browser_targets"] = map[string]any{

@@ -91,6 +91,14 @@ type activeCheck struct {
 	// A nil run stays the table's honest "configurable but not implemented" marker: counted as
 	// undispatchable, never admitted.
 	run func(*ActiveScanner, context.Context, *core.Exchange) ([]*Finding, error)
+	// rows are the issue rows this check can report (only_rows.go): its own catalogue row, the burpsy
+	// rows riding it, and the other catalogue rows it files findings under (alsoReports). Nil for a check whose rows are not known in advance (a corpus BCheck),
+	// which a row selection therefore never admits.
+	rows []string
+	// rowSkip is non-empty when ScanConfig.OnlyRows excluded this check from the run: it stays in the
+	// set (ledger positions and the Considered() partition are unchanged) but is never dispatched, and
+	// the outcome counts it Skipped with this reason.
+	rowSkip string
 }
 
 // activeCheckSet is the built-in active check set, adapted from the typed
@@ -131,7 +139,7 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 	// Applied here rather than in each source so a corpus check is subject to the same selection as a
 	// native one. A list that filtered the built-in table and not the corpus would be a selection
 	// with a hole in it exactly where the operator least expects one.
-	return filterByIssueTypes(out, cfg.IssueTypes)
+	return markRowSelection(filterByIssueTypes(out, cfg.IssueTypes), cfg.OnlyRows)
 }
 
 // filterByIssueTypes narrows a check set to the issue types an operator selected.
@@ -222,7 +230,7 @@ func (s *ActiveScanner) enabledChecksUnder(cfg AuditConfig) []activeCheck {
 	// configuration with a gate — now including an imported deny-only selection — silently dropped an
 	// operator's whitelist and dispatched every type.
 	checks = filterByIssueTypes(checks, base.IssueTypes)
-	return filterBySelection(checks, cfg)
+	return markRowSelection(filterBySelection(checks, cfg), base.OnlyRows)
 }
 
 // hasAuditLevelGate reports whether the configuration narrows the check set at all.
@@ -1009,6 +1017,17 @@ type AuditOutcome struct {
 	// pass once, and each browser-driven check or tier by name. The checks it names are also counted
 	// in Skipped — this is the reason beside the count, Burp's per-item alert. Marshals as [].
 	JavaScriptAnalysisSkips JSAnalysisSkips `json:"javascript_analysis_skips"`
+	// RowsNotSelected names each check ScanConfig.OnlyRows kept from running, with the reason
+	// (only_rows.go). Every one of them is also counted in Skipped: the check was considered and sent
+	// nothing, which is not the same as a check that ran clean. Marshals as [].
+	RowsNotSelected RowsNotSelected `json:"rows_not_selected"`
+	// FindingsNotSelected counts findings dropped because ScanConfig.OnlyRows does not list their row:
+	// a second row an admitted check reported, or a passive / JavaScript-analysis finding.
+	FindingsNotSelected int `json:"findings_not_selected"`
+	// undeclaredRows are rows a dispatched check reported that its declaration (activeCheck.rows) does
+	// not list, as "check -> row". Not on the wire: a selection of such a row could never admit the
+	// check, so the runtime corpus fails on any entry (alsoReports is where the fix goes).
+	undeclaredRows []string
 }
 
 // Considered is every check that reached a disposition. Equals the size of the enabled check set
@@ -1109,6 +1128,12 @@ func (o AuditOutcome) Summary() string {
 	}
 	if n := len(o.MethodsDeclined); n > 0 {
 		fmt.Fprintf(&b, "; %d detection method(s) declined", n)
+	}
+	if n := len(o.RowsNotSelected); n > 0 {
+		fmt.Fprintf(&b, "; %d of the unsupported were not selected by only_rows", n)
+	}
+	if o.FindingsNotSelected > 0 {
+		fmt.Fprintf(&b, "; %d finding(s) of rows only_rows does not list dropped", o.FindingsNotSelected)
 	}
 	if o.Error != "" {
 		fmt.Fprintf(&b, " (%s)", o.Error)
@@ -1472,7 +1497,7 @@ func plan(ex *core.Exchange, checks []activeCheck) (units []dispatchUnit, steps 
 	for _, scope := range DispatchScopeAll {
 		var members []int
 		for i, c := range checks {
-			if c.scope != scope {
+			if c.scope != scope || c.rowSkip != "" {
 				continue
 			}
 			// A check with no implementation has nowhere to run, whatever its scope claims. Counted
@@ -1664,10 +1689,18 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	units, steps, undispatchable := plan(ex, checks)
 	o.Skipped += undispatchable
 	for _, c := range checks {
+		if c.rowSkip != "" {
+			// Not selected by only_rows: considered, never dispatched, and said so by name. plan()
+			// left it out, so this is its one disposition.
+			bumpPhase(&o, c.phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
+			o.RowsNotSelected = append(o.RowsNotSelected, RowNotSelected{Check: c.name, Reason: c.rowSkip})
+			continue
+		}
 		if c.run == nil {
 			bumpPhase(&o, c.phase, func(o *AuditOutcome) *int { return &o.Skipped }, func(po *PhaseOutcome) { po.Skipped++ })
 		}
 	}
+	rowSel := newRowSelection(s.ConfigSnapshot().OnlyRows)
 	o.UnitsPlanned = len(units)
 
 	// The queue's row for this item, filled in at the one moment every fact it needs is in hand: the
@@ -1951,6 +1984,14 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 				}
 				countOnce(pos-1, checks[check].phase, func(o *AuditOutcome) *int { return &o.Ran }, func(po *PhaseOutcome) { po.Ran++ })
 				breaker.checkSucceeded()
+				for _, f := range verdict {
+					if f != nil && !checks[check].declares(f.Name) {
+						o.undeclaredRows = append(o.undeclaredRows, checks[check].name+" -> "+f.Name)
+					}
+				}
+				var notSelected int
+				verdict, notSelected = rowSel.filterFindings(verdict)
+				o.FindingsNotSelected += notSelected
 				recordPhase(&o, checks[check].phase, func(po *PhaseOutcome) { po.Findings += len(verdict) })
 				o.Findings += len(verdict)
 				found = append(found, verdict...)
@@ -2065,6 +2106,9 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 	// candidates without one.
 	if s.javascriptTailRuns(run.cfg) {
 		if jsFound := s.javascriptAnalysisFor(ictx, ex, itemCfg, domClock); len(jsFound) > 0 {
+			var notSelected int
+			jsFound, notSelected = rowSel.filterFindings(jsFound)
+			o.FindingsNotSelected += notSelected
 			found = append(found, jsFound...)
 		}
 	}

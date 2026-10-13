@@ -212,12 +212,16 @@ func (s *ActiveScanner) javascriptAnalysisFor(ctx context.Context, ex *core.Exch
 			"the findings are what was reached before it", secondsLimit(cfg.MaxStaticTimePerItem), a.Budget.Statements, a.Budget.Scripts))
 	}
 
-	scanWide := s.ConfigSnapshot().IssueTypes
+	snap := s.ConfigSnapshot()
+	scanWide := snap.IssueTypes
+	// only_rows (only_rows.go): a candidate of an unlisted row is neither reported nor sent to the
+	// browser, so a selection that names no DOM row spends no browser time here.
+	rowSel := newRowSelection(snap.OnlyRows)
 	var confirmable, staticOnly []DOMFlow
 	notConfirmed := map[string]string{}
 	for _, f := range a.Flows {
 		def, ok := ByName(f.Issue)
-		if !ok || !cfg.admitsIssue(def.TypeIndex, scanWide) {
+		if !ok || !cfg.admitsIssue(def.TypeIndex, scanWide) || !rowSel.admits(f.Issue) {
 			continue
 		}
 		disabled := cfg.disabledMethodsFor(def.TypeIndex)

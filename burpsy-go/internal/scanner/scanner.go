@@ -425,6 +425,12 @@ type ScanConfig struct {
 	// workflow — fix a bug, re-audit for that one issue class — is unreachable
 	// (burpsy-react-ui-kvmx).
 	IssueTypes []uint32
+	// OnlyRows restricts an audit to the checks that can report one of these issue rows, named exactly
+	// as findings name them ("Cross-site scripting (reflected)"). Empty — the default — runs every
+	// enabled check. Every other check is counted Skipped with the reason and sends nothing, and a
+	// finding of an unlisted row from any path is dropped and counted (only_rows.go). Burp's "Issues
+	// reported → select individual issues", by row name.
+	OnlyRows []string `json:"only_rows,omitempty"`
 }
 
 // Finding represents a security finding.
@@ -1099,16 +1105,17 @@ func (s *PassiveScanner) WithRunConfigSource(src RunConfigSource) *PassiveScanne
 
 // captureRunConfig returns the run configuration and scan-wide whitelist capture applies, and false
 // when no source is set.
-func (s *PassiveScanner) captureRunConfig() (AuditConfig, []uint32, bool) {
+func (s *PassiveScanner) captureRunConfig() (AuditConfig, []uint32, rowSelection, bool) {
 	if s == nil {
-		return AuditConfig{}, nil, false
+		return AuditConfig{}, nil, nil, false
 	}
 	p := s.runConfig.Load()
 	if p == nil {
-		return AuditConfig{}, nil, false
+		return AuditConfig{}, nil, nil, false
 	}
 	src := *p
-	return src.AuditConfig(), src.ConfigSnapshot().IssueTypes, true
+	snap := src.ConfigSnapshot()
+	return src.AuditConfig(), snap.IssueTypes, newRowSelection(snap.OnlyRows), true
 }
 
 // SetSecretDetection turns the gitleaks-backed secret scan of every captured response on or off.

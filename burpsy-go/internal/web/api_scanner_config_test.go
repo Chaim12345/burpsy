@@ -481,3 +481,66 @@ func TestConfigCarriesTheWeakCryptoCheck(t *testing.T) {
 		t.Error("the running scanner did not take check_weak_crypto")
 	}
 }
+
+// only_rows (scanner/only_rows.go) is on the wire, empty by default, a whole replacement, persisted,
+// and refused with 400 — naming every unknown row — when it names a row no finding can carry.
+func TestConfigOnlyRowsRoundTripAndValidation(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "cfg.db")
+	p, err := persist.Open(db, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	s := newScannerServer().WithPersist(p)
+	if l, ok := getScannerConfig(t, s)["only_rows"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("only_rows default = %v, want []", getScannerConfig(t, s)["only_rows"])
+	}
+
+	rows := []any{"Cross-site scripting (reflected)", " " + scanner.IssueLoginRateLimitMissing + " ", "Cross-site scripting (reflected)"}
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"only_rows": rows}); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	want := "Cross-site scripting (reflected)|" + scanner.IssueLoginRateLimitMissing
+	if got := strings.Join(s.wiredScanner().ConfigSnapshot().OnlyRows, "|"); got != want {
+		t.Fatalf("live only_rows = %q, want %q (trimmed, de-duplicated, a burpsy row accepted)", got, want)
+	}
+	if l, _ := getScannerConfig(t, s)["only_rows"].([]any); len(l) != 2 {
+		t.Fatalf("GET only_rows = %v", l)
+	}
+	if loaded, err := p.LoadScanConfig(); err != nil || loaded == nil || strings.Join(loaded.OnlyRows, "|") != want {
+		t.Fatalf("persisted only_rows = %+v (err %v)", loaded, err)
+	}
+
+	// Unknown names: 400, every unknown named, and nothing in the body applied.
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{
+		"only_rows":    []any{"SQL injection", "Cross site scripting", "No such row"},
+		"check_stored": true,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown rows: PUT = %d, want 400", rec.Code)
+	}
+	for _, n := range []string{`"Cross site scripting"`, `"No such row"`} {
+		if !strings.Contains(rec.Body.String(), n) {
+			t.Errorf("refusal %q does not name %s", rec.Body.String(), n)
+		}
+	}
+	if strings.Contains(rec.Body.String(), `"SQL injection"`) {
+		t.Errorf("refusal names a known row: %q", rec.Body.String())
+	}
+	if cfg := s.wiredScanner().ConfigSnapshot(); strings.Join(cfg.OnlyRows, "|") != want || cfg.CheckStored {
+		t.Errorf("a refused PUT applied something: only_rows=%v check_stored=%v", cfg.OnlyRows, cfg.CheckStored)
+	}
+	for name, v := range map[string]any{"not a list": "SQL injection", "not strings": []any{1}} {
+		if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"only_rows": v}); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: PUT = %d, want 400", name, rec.Code)
+		}
+	}
+
+	// [] clears the selection.
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"only_rows": []any{}}); rec.Code != http.StatusOK {
+		t.Fatalf("clearing PUT = %d", rec.Code)
+	}
+	if n := len(s.wiredScanner().ConfigSnapshot().OnlyRows); n != 0 {
+		t.Fatalf("only_rows after [] has %d names", n)
+	}
+}

@@ -491,10 +491,15 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 	// detection method or switched static JavaScript analysis off stopped all of it in the audit and
 	// left it running on every captured exchange. Without a source (a bare test harness), everything
 	// runs as before.
-	cfg, scanWide, configured := c.Scanner.captureRunConfig()
+	cfg, scanWide, rowSel, configured := c.Scanner.captureRunConfig()
 	admit := func(name, method string) bool {
 		if !configured {
 			return true
+		}
+		// only_rows (only_rows.go) applies to capture as it does to the audit: a row the selection
+		// does not list is not reported, whether or not the catalogue knows it.
+		if !rowSel.admits(name) {
+			return false
 		}
 		def, ok := ByName(name)
 		if !ok {
@@ -548,7 +553,11 @@ func (c Capture) ScanExchange(ex *core.Exchange) {
 	// translated into the check shape below rather than appended directly: a finding that bypassed
 	// coreNewFindingFor would carry no exchange and be unreachable from history.
 	modules := append(c.ResponseModules[:len(c.ResponseModules):len(c.ResponseModules)], c.Scanner.ResponseModules()...)
-	findings = append(findings, moduleFindings(c.Store, ex, modules)...)
+	modFindings := moduleFindings(c.Store, ex, modules)
+	if configured {
+		modFindings, _ = rowSel.filterFindings(modFindings)
+	}
+	findings = append(findings, modFindings...)
 
 	for _, f := range findings {
 		EnrichFinding(f)

@@ -68,6 +68,9 @@ type ScanCompletion struct {
 	Outstanding []*PendingItem
 	// Pending is the registry's summary line.
 	Pending string
+	// NotSelected counts resolved stored findings dropped because ScanConfig.OnlyRows does not list
+	// their row (only_rows.go).
+	NotSelected int
 }
 
 // FinishScan settles the deferred half of a scan: look again, then ask every claim once more.
@@ -115,6 +118,9 @@ func (s *ActiveScanner) FinishScan(ctx context.Context, cfg AuditConfig) ([]*Fin
 		}
 	}
 	findings := s.Pending().Await(ctx)
+	// only_rows (only_rows.go): a stored claim resolved for a row the selection does not list is
+	// dropped and counted, as the audit drops it.
+	findings, c.NotSelected = newRowSelection(s.ConfigSnapshot().OnlyRows).filterFindings(findings)
 	c.Outstanding = s.Pending().Outstanding()
 	c.Pending = s.Pending().Summarise()
 	return findings, c

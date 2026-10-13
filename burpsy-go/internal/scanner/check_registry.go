@@ -164,6 +164,7 @@ func nativeActiveCheckSet() []activeCheck {
 			methods:      d.DetectionMethods,
 			dynamicJS:    isDynamicJavaScriptCheck(d.Enabled),
 			run:          run,
+			rows:         declaredRows(d.Name),
 		})
 	}
 	return out

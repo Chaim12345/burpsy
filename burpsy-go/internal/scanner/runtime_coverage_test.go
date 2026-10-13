@@ -341,6 +341,9 @@ func (rt *runtimeTarget) auditStoredEndpoint(t *testing.T, path string, dom bool
 
 	byRow := map[string]*Finding{}
 	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
+	for _, u := range outcome.undeclaredRows {
+		t.Errorf("audit of %s: check reported an undeclared row: %s", path, u)
+	}
 	deferred, completion := scan.FinishScan(ctx, DefaultAuditConfig())
 	if completion.RefetchError != "" {
 		t.Fatalf("the deferred phase could not re-fetch: %s", completion.RefetchError)
@@ -863,6 +866,11 @@ func (rt *runtimeTarget) auditEndpoint(t *testing.T, path string, dom bool) (map
 	outcome, findings := scan.AuditWithin(ctx, id, scan.AuditConfig())
 	if outcome.Error != "" {
 		t.Fatalf("audit of %s failed outright: %s", path, outcome.Error)
+	}
+	// A check that reports a row it does not declare could never be admitted by only_rows naming that
+	// row (only_rows.go). The fix is alsoReports, or a rider in BurpsyNativeRows.
+	for _, u := range outcome.undeclaredRows {
+		t.Errorf("audit of %s: check reported an undeclared row: %s", path, u)
 	}
 	byRow := make(map[string]*Finding, len(findings))
 	for _, f := range findings {

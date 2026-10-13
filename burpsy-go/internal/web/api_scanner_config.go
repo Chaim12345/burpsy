@@ -95,7 +95,15 @@ type scannerConfigView struct {
 	// The application routes the reflected-XSS browser confirmation drives
 	// (scanner.ScanConfig.XSSBrowserTargets). Always a list on the wire, empty when none is set.
 	XSSBrowserTargets []xssBrowserTargetView `json:"xss_browser_targets"`
+
+	// The issue rows an audit is restricted to (scanner.ScanConfig.OnlyRows), named as findings name
+	// them. Always a list on the wire; empty runs every enabled check.
+	OnlyRows []string `json:"only_rows"`
 }
+
+// MaxOnlyRows bounds only_rows. The catalogue and burpsy's rows together are a few hundred names, so
+// a longer list cannot be a selection of distinct rows.
+const MaxOnlyRows = 512
 
 // xssBrowserTargetView is scanner.XSSBrowserTarget on the wire, one JSON key per struct field. Sink
 // is the sink's name as domexec.SinkKind.String spells it, or "" for the default innerHTML family.
@@ -269,6 +277,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckSubdomainTakeover: c.CheckSubdomainTakeover,
 
 		XSSBrowserTargets: xssBrowserTargetViews(c.XSSBrowserTargets),
+		OnlyRows:          append([]string{}, c.OnlyRows...),
 	}
 }
 
@@ -437,6 +446,34 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 			xssTargets = ts
 			continue
 		}
+		if key == "only_rows" {
+			// A whole replacement: [] clears the selection and every enabled check runs again. Every
+			// name must be a row a finding can carry (the catalogue or burpsy's own), because a
+			// misspelt row would otherwise select nothing and the audit would skip every check.
+			var rows []string
+			if err := json.Unmarshal(raw, &rows); err != nil {
+				http.Error(w, fmt.Sprintf("key %q wants a list of issue row names", key), http.StatusBadRequest)
+				return
+			}
+			if len(rows) > MaxOnlyRows {
+				http.Error(w, fmt.Sprintf("key %q holds %d names; at most %d", key, len(rows), MaxOnlyRows), http.StatusBadRequest)
+				return
+			}
+			clean := []string{}
+			seen := map[string]bool{}
+			for _, r := range rows {
+				if r = strings.TrimSpace(r); r != "" && !seen[r] {
+					seen[r] = true
+					clean = append(clean, r)
+				}
+			}
+			if unknown := scanner.UnknownRows(clean); len(unknown) > 0 {
+				http.Error(w, fmt.Sprintf("key %q names unknown issue row(s): %s", key, strings.Join(quoteAll(unknown), ", ")), http.StatusBadRequest)
+				return
+			}
+			view.OnlyRows = clean
+			continue
+		}
 		if key == "max_concurrency" {
 			var n int
 			if err := json.Unmarshal(raw, &n); err != nil || n < 1 {
@@ -505,6 +542,11 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		if xssTargets != nil {
 			c.XSSBrowserTargets = xssTargets
 		}
+		// nil, not an empty slice, for no selection, so the persisted config omits the key.
+		c.OnlyRows = nil
+		if len(view.OnlyRows) > 0 {
+			c.OnlyRows = append([]string(nil), view.OnlyRows...)
+		}
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {
@@ -514,4 +556,13 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusOK, scannerConfigFrom(confirmed))
+}
+
+// quoteAll quotes each name for an error message, so a name with a comma in it stays readable.
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = fmt.Sprintf("%q", n)
+	}
+	return out
 }

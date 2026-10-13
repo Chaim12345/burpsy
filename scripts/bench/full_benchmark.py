@@ -454,6 +454,11 @@ def profile_body(api, a, identities, withheld):
     body["xss_browser_targets"] = [route]
     body["reset_test_identities"] = identities
     body["reset_mailbox_url"] = "http://127.0.0.1:%d/inbox?to={identity}" % a.inbox_port
+    # --rows: only the checks that can report these rows run (only_rows on /api/scanner/config); every
+    # other check is skipped by the scanner and sends nothing. The switches above stay ON so the rows'
+    # own families are never the reason a row is missing. Scoring is unchanged.
+    if a.rows:
+        body["only_rows"] = a.rows
     return body
 
 
@@ -822,6 +827,9 @@ def write_report(out, meta, rows, untestable, adv, baseline_path):
           "posture row; the same rows fired on %d secure case(s)" % (
               report["posture_credit"]["unsecure_cases_posture_only"], report["posture_credit"]["secure_cases_posture_hit"]),
           "- untestable (never scored as a pass or a miss): %d" % len(untestable),
+          ] + (["- **rows limited to: %s** (only_rows: every other check was skipped and sent nothing; "
+                "a miss of an unlisted row is the selection, not the scanner)" % "; ".join(meta["only_rows"])]
+               if meta.get("only_rows") else []) + [
           "- wall time for the cases: %ss at %d workers (main lane %ss); timing lane %ss at %d workers, %s" % (
               meta["wall_time"]["cases_secs"], meta["workers"], meta["wall_time"]["lanes_secs"].get("main"),
               meta["wall_time"]["lanes_secs"].get("timing"), meta["timing_workers"], meta["timing_lane"]),
@@ -938,6 +946,9 @@ def main():
     ap.add_argument("--burpsy", default="", help="burpsy binary; default: build this checkout's into --out, removed at the end")
     ap.add_argument("--requests", default=str(HERE / "vulnapp_requests.json"), help="the generated case list")
     ap.add_argument("--only", default="", help="comma-separated categories (test-id prefixes, e.g. JWTVulnerability)")
+    ap.add_argument("--rows", default="",
+                    help='comma-separated issue rows, named as findings name them (e.g. "Cross-site scripting (reflected)"): '
+                         "run only the checks that can report them (only_rows); an unknown row fails the profile")
     ap.add_argument("--baseline", default="", help="a previous report.json, or score_va.py -raw.jsonl, to diff against")
     ap.add_argument("--app-port", type=int, default=9190)
     ap.add_argument("--app-host", default="localhost", help="host name the cases use (scope and XSS route match it)")
@@ -974,6 +985,8 @@ def main():
     ap.add_argument("--run-as-current-user", action="store_true", help="non-root only: run the app as yourself")
     ap.add_argument("--allow-list-drift", action="store_true", help="score even when the list differs from the live app")
     a = ap.parse_args()
+    # Trimmed and de-duplicated as the server does, so apply_profile's read-back compares like with like.
+    a.rows = list(dict.fromkeys(r.strip() for r in a.rows.split(",") if r.strip()))
     if a.collaborator_client and not a.collaborator_server:
         # A client with no server named used to leave OOB SKIPPED, silently: interactsh-client's own
         # default is the public pool, so naming the client means "use it".
@@ -1087,6 +1100,7 @@ def main():
         "burpsy": a.burpsy or ("built from %s" % subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
                                                                  capture_output=True, text=True).stdout.strip()),
         "app": app_base, "app_uid": app_uid, "cases_in_list": len(reqs), "cases_selected": len(order), "only": only,
+        "only_rows": a.rows,
         "dom": dom, "reset_test_identities": identities,
         "reset_mailbox_url": profile.get("reset_mailbox_url", ""),
         "checks_on": sorted(k for k, v in profile.items() if k.startswith("check_") and v is True),
