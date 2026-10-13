@@ -52,7 +52,7 @@ func UnknownRows(rows []string) []string {
 
 // declaredRows is the row set a check registered under the catalogue row name can report: that row,
 // the burpsy rows riding it (BurpsyNativeRows order), then the other catalogue rows it reports
-// (alsoReports).
+// (alsoReports), catalogue or burpsy rows.
 func declaredRows(name string) []string {
 	out := []string{name}
 	for _, r := range BurpsyNativeRows() {

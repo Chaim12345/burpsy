@@ -2297,7 +2297,11 @@
       "runs": true,
       "imported": true,
       "file": "checks/other/tokens/jwt-none-algorithm.bcheck",
-      "enabled": true
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on a safe twin whose token is optional — it calls an endpoint that answers its alg:none token vulnerable with no control that the endpoint rejects a token at all; burpsy's native 'JWT none algorithm supported' row decides this with a two-control differential"
+      }
     },
     {
       "source_path": "other/tokens/jwt-token.bcheck",

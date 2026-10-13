@@ -164,8 +164,10 @@ func TestEveryRegisteredCheckDeclaresItsOwnRowAndItsRiders(t *testing.T) {
 			t.Errorf("alsoReports names %q, which is not a registered check", check)
 		}
 		for _, r := range rows {
-			if _, ok := ByName(r); !ok {
-				t.Errorf("alsoReports[%q] names %q, which is not a catalogue row", check, r)
+			// A catalogue row, or a burpsy row a second check also files (the reset form's enumeration
+			// differential reports the login check's row): either way a name only_rows accepts.
+			if !KnownRowNames()[r] {
+				t.Errorf("alsoReports[%q] names %q, which is neither a catalogue row nor a burpsy row", check, r)
 			}
 		}
 	}
