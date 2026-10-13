@@ -89,3 +89,60 @@ func TestAFilePartCanBeResentAsAnyFile(t *testing.T) {
 		t.Error("ApplyHTMLUpload accepted a NUL filename")
 	}
 }
+
+// A real upload is binary (an image, a PDF). The body used to be gated on UTF-8 as a whole, so a
+// binary file part made the request look like it had no parts at all and the file-upload check never
+// ran on the uploads that matter most. Binary bytes inside a FILE part's content are read; binary
+// framing is still refused, and a non-file part whose value is binary is declined by name.
+func TestABinaryFilePartIsStillAnUploadPoint(t *testing.T) {
+	png := "\x89PNG\r\n\x1a\n\x00\xff\xfe"
+	mk := func(body string) []byte {
+		return []byte("POST /up HTTP/1.1\r\nHost: h\r\nContent-Type: multipart/form-data; boundary=B\r\nContent-Length: " +
+			itoa(len(body)) + "\r\n\r\n" + body)
+	}
+	find := func(ps []InsertionPoint, name string) *InsertionPoint {
+		for i := range ps {
+			if ps[i].Kind == IpBody && ps[i].Name == name {
+				return &ps[i]
+			}
+		}
+		return nil
+	}
+
+	req := mk("--B\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhi\r\n" +
+		"--B\r\nContent-Disposition: form-data; name=\"img\"; filename=\"a.png\"\r\nContent-Type: image/png\r\n\r\n" + png + "\r\n--B--\r\n")
+	ps, declined := Enumerate(req, []string{"any"})
+	img, title := find(ps, "img"), find(ps, "title")
+	if img == nil || title == nil {
+		t.Fatalf("a multipart body with a binary file part enumerated %v (declined %v); want the file and text parts", ps, declined)
+	}
+	got, err := img.ApplyHTMLUpload(req, "<b>x</b>", "a.html")
+	if err != nil {
+		t.Fatalf("the binary file part could not be re-sent as an upload: %v", err)
+	}
+	if !strings.Contains(string(got), "filename=\"a.html\"\r\nContent-Type: text/html\r\n\r\n<b>x</b>\r\n--B--") {
+		t.Errorf("rewritten body = %q", got)
+	}
+	// A splice into the text part carries the binary file part through byte for byte.
+	out, err := title.Apply(req, "zz", false)
+	if err != nil || !strings.Contains(string(out), png) {
+		t.Errorf("splicing the text part altered the binary file content (err %v): %q", err, out)
+	}
+
+	// A binary value in a part that is not a file has no text to splice into: declined by name.
+	req = mk("--B\r\nContent-Disposition: form-data; name=\"blob\"\r\n\r\n" + png + "\r\n--B--\r\n")
+	ps, declined = Enumerate(req, []string{"any"})
+	if find(ps, "blob") != nil {
+		t.Error("a non-file part with a binary value was offered as a text point")
+	}
+	if len(declined) == 0 || !strings.Contains(declined[0].What, "blob") {
+		t.Errorf("declined = %v, want the binary non-file part named", declined)
+	}
+
+	// Binary bytes in the framing (a part header) are not a readable part list.
+	req = mk("--B\r\nContent-Disposition: form-data; name=\"x\xff\"\r\n\r\nv\r\n--B--\r\n")
+	ps, declined = Enumerate(req, []string{"body"})
+	if len(ps) != 0 || len(declined) == 0 {
+		t.Errorf("binary framing: points %v declined %v, want the body refused", ps, declined)
+	}
+}

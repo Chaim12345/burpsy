@@ -1029,6 +1029,24 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 	if len(e.Body) == 0 {
 		return
 	}
+	body := string(e.Body)
+	ctype := strings.ToLower(e.Header("content-type"))
+
+	// Multipart is read before the UTF-8 gate because its framing is the only part that has to be
+	// text: a file part's content is opaque bytes the application stores as given, and a real
+	// upload - an image, a PDF - is binary by nature. Gating the whole body on UTF-8 made every
+	// such request look like it had no file part at all, so the file-upload check never ran on the
+	// uploads that matter most and the audit said nothing about why (multipartBodyPoints).
+	if strings.Contains(ctype, "multipart/") {
+		if multipartBodyPoints(e.Header("Content-Type"), body, out, declined) {
+			return
+		}
+		*declined = append(*declined, Declined{
+			What:   "request body",
+			Reason: "multipart body whose framing could not be read (no boundary parameter, a part list that never closes, or non-UTF-8 bytes outside a file part's content): splicing would invent framing the server rejects before the code under test sees the payload",
+		})
+		return
+	}
 	if !utf8.Valid(e.Body) {
 		*declined = append(*declined, Declined{
 			What:   "request body",
@@ -1036,20 +1054,7 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 		})
 		return
 	}
-	body := string(e.Body)
-	ctype := strings.ToLower(e.Header("content-type"))
 	trimmed := strings.TrimLeft(body, " \t\r\n")
-
-	if strings.Contains(ctype, "multipart/") {
-		if multipartBodyPoints(e.Header("Content-Type"), body, out) {
-			return
-		}
-		*declined = append(*declined, Declined{
-			What:   "request body",
-			Reason: "multipart body whose framing could not be read (no boundary parameter, or a part list that never closes): splicing would invent framing the server rejects before the code under test sees the payload",
-		})
-		return
-	}
 
 	if strings.Contains(ctype, "json") || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
 		for _, jv := range jsonStringValues(body) {
@@ -1133,13 +1138,26 @@ func bodyPoints(e *core.RequestEdit, out *[]InsertionPoint, declined *[]Declined
 // this enumerator already addresses as a body byte range, and Burp's own model
 // carries multipart attributes as their own parameter location
 // (PARAM_MULTIPART_ATTR) rather than as the form-body name location.
-func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
+//
+// # Binary content
+//
+// A body that is not valid UTF-8 is read when the invalid bytes all sit inside part contents: the
+// framing (delimiters, part headers, name and filename attributes) must still be text, or the
+// body is refused as unreadable. Every splice here is a byte-range replacement on the original
+// bytes, so a binary range elsewhere in the body is carried through untouched. A FILE part's
+// binary content is still a point (it is what an upload check replaces wholesale, and the file an
+// application stores); a non-file part whose value is binary is declined by name, since it is no
+// text value a payload could be appended to.
+func multipartBodyPoints(ctype, body string, out *[]InsertionPoint, declined *[]Declined) bool {
 	boundary, ok := multipartBoundary(ctype)
 	if !ok {
 		return false
 	}
 	parts, ok := multipartParts(body, boundary)
 	if !ok {
+		return false
+	}
+	if !utf8.ValidString(body) && !multipartFramingIsText(body, parts) {
 		return false
 	}
 	if len(parts) == 0 {
@@ -1156,6 +1174,23 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		label := part.name
 		if label == "" {
 			label = "part[" + strconv.Itoa(i) + "]"
+		}
+		if !part.hasFile && !utf8.ValidString(body[part.content[0]:part.content[1]]) {
+			*declined = append(*declined, Declined{
+				What:   "multipart part " + strconv.Quote(label),
+				Reason: "non-UTF-8 value in a part that is not a file: no text value to splice a payload into",
+			})
+			if part.hasName {
+				*out = append(*out, InsertionPoint{
+					Kind:      IpMultipartAttr,
+					Name:      label + " name",
+					BaseValue: body[part.nameSpan[0]:part.nameSpan[1]],
+					loc:       loc{kind: locBody, start: part.nameSpan[0], end: part.nameSpan[1]},
+					coding:    codingMultipartAttr,
+					refuse:    refusal{any: "\r\n\x00"},
+				})
+			}
+			continue
 		}
 		content := InsertionPoint{
 			Kind:      IpBody,
@@ -1191,6 +1226,20 @@ func multipartBodyPoints(ctype, body string, out *[]InsertionPoint) bool {
 		}
 	}
 	return true
+}
+
+// multipartFramingIsText reports whether every byte of body outside the parts' content ranges is
+// valid UTF-8: the delimiters, the part headers and anything before the first or after the last
+// delimiter. Only then is a body with binary content readable as a part list.
+func multipartFramingIsText(body string, parts []multipartPart) bool {
+	prev := 0
+	for _, part := range parts {
+		if !utf8.ValidString(body[prev:part.content[0]]) {
+			return false
+		}
+		prev = part.content[1]
+	}
+	return utf8.ValidString(body[prev:])
 }
 
 // multipartBoundary returns the boundary parameter of a multipart Content-Type,

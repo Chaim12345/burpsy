@@ -461,22 +461,8 @@ func (b *Browser) ObserveTaint(ctx context.Context, targetURL string, source Sou
 	}
 	defer cancel()
 
-	var mu sync.Mutex
-	var navigatedURLs []string
-	chromedp.ListenTarget(tabCtx, func(ev any) {
-		switch e := ev.(type) {
-		case *page.EventFrameNavigated:
-			if e.Frame != nil && e.Frame.ParentID == "" {
-				mu.Lock()
-				navigatedURLs = append(navigatedURLs, e.Frame.URL+e.Frame.URLFragment)
-				mu.Unlock()
-			}
-		case *page.EventNavigatedWithinDocument:
-			mu.Lock()
-			navigatedURLs = append(navigatedURLs, e.URL)
-			mu.Unlock()
-		}
-	})
+	nav := &navigationRecorder{}
+	chromedp.ListenTarget(tabCtx, nav.listen)
 
 	// window.name cannot be planted by navigating first: planting relied on the
 	// browser preserving window.name across a navigation, and obscura rebuilds
@@ -537,10 +523,7 @@ func (b *Browser) ObserveTaint(ctx context.Context, targetURL string, source Sou
 		return nil, err
 	}
 
-	mu.Lock()
-	navigated := append([]string(nil), navigatedURLs...)
-	mu.Unlock()
-	return append(observations, navigationObservations(navigated, plantedURL, source, []string{canary})...), nil
+	return append(observations, navigationObservations(nav.later(), plantedURL, source, []string{canary})...), nil
 }
 
 // decodeObservations turns the JSON window.__burpsyTaint dump into observations, keeping only
@@ -611,6 +594,62 @@ func engineInternalStack(stack string) bool {
 		return strings.Contains(frame, marker)
 	}
 	return false
+}
+
+// navigationRecorder collects the main-frame navigations of one tab, setting aside the commit of
+// the navigation the caller issued itself.
+//
+// # Why the first commit is never a flow
+//
+// The navigation the caller issues commits exactly once, at whatever URL the server finally
+// answered from: an HTTP 3xx is followed inside that one navigation, and Chrome carries the
+// fragment of the requested URL onto a Location that has none (the Fetch/HTML redirect rule). So a
+// hash-planted load of an endpoint that answers "302 Location: /" commits at "/#canary". Compared
+// only against the URL that was planted, that commit looked like a navigation to a new place
+// carrying the canary - and every redirecting endpoint was reported as DOM-based open
+// redirection, the safe ones included, with no script involved at all (the server never even sees
+// a fragment). A script-driven navigation needs a document whose script ran, so it can only come
+// after that first commit; the first commit is the caller's own navigation, wherever the server
+// sent it.
+//
+// Same-document navigations (pushState, fragment changes) are always recorded: none is the
+// caller's own load.
+type navigationRecorder struct {
+	mu        sync.Mutex
+	committed bool
+	urls      []string
+}
+
+func (r *navigationRecorder) listen(ev any) {
+	switch e := ev.(type) {
+	case *page.EventFrameNavigated:
+		if e.Frame == nil || e.Frame.ParentID != "" {
+			return
+		}
+		u := e.Frame.URL + e.Frame.URLFragment
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if u == "about:blank" && !r.committed {
+			// The new tab's own blank document, before the caller's navigation.
+			return
+		}
+		if !r.committed {
+			r.committed = true
+			return
+		}
+		r.urls = append(r.urls, u)
+	case *page.EventNavigatedWithinDocument:
+		r.mu.Lock()
+		r.urls = append(r.urls, e.URL)
+		r.mu.Unlock()
+	}
+}
+
+// later returns the navigations recorded after the caller's own commit.
+func (r *navigationRecorder) later() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.urls...)
 }
 
 // navigationObservations reports a script-driven navigation carrying one of tokens as a
@@ -967,22 +1006,8 @@ func (b *Browser) ObserveStored(ctx context.Context, targetURL string, tokens []
 	}
 	defer cancel()
 
-	var mu sync.Mutex
-	var navigatedURLs []string
-	chromedp.ListenTarget(tabCtx, func(ev any) {
-		switch e := ev.(type) {
-		case *page.EventFrameNavigated:
-			if e.Frame != nil && e.Frame.ParentID == "" {
-				mu.Lock()
-				navigatedURLs = append(navigatedURLs, e.Frame.URL+e.Frame.URLFragment)
-				mu.Unlock()
-			}
-		case *page.EventNavigatedWithinDocument:
-			mu.Lock()
-			navigatedURLs = append(navigatedURLs, e.URL)
-			mu.Unlock()
-		}
-	})
+	nav := &navigationRecorder{}
+	chromedp.ListenTarget(tabCtx, nav.listen)
 
 	var raw string
 	err = chromedp.Run(tabCtx,
@@ -1009,10 +1034,7 @@ func (b *Browser) ObserveStored(ctx context.Context, targetURL string, tokens []
 	if err != nil {
 		return out, err
 	}
-	mu.Lock()
-	navigated := append([]string(nil), navigatedURLs...)
-	mu.Unlock()
-	out.Observations = append(obs, navigationObservations(navigated, targetURL, SourceStored, tokens)...)
+	out.Observations = append(obs, navigationObservations(nav.later(), targetURL, SourceStored, tokens)...)
 	return out, nil
 }
 

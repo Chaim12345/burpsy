@@ -277,6 +277,8 @@ func coreEndpoints() []Endpoint {
 			Note: "reflects the directive without running it through the processor"},
 		{Path: "/safe/dom/redirect", Row: "Open redirection (DOM-based)", DOM: true, Safe: true,
 			Note: "navigates only to same-origin paths, rejecting any value naming an authority"},
+		{Path: "/safe/dom/redirect/server", Row: "Open redirection (DOM-based)", DOM: true, Safe: true,
+			Note: "a server-side 302 to a fixed same-origin page and no script at all: the browser carries the probe's fragment onto the Location, which is not a script navigating"},
 
 		// XML, XPath, LDAP and server-side template rows. The XML pair carries a document body
 		// because the checks look for a body insertion point; without one the row is unreachable.
@@ -366,6 +368,7 @@ func Handler() http.Handler {
 	mux.HandleFunc("/safe/dom/storage", safeDOMStorage)
 	mux.HandleFunc("/safe/dom/cookie", safeDOMCookie)
 	mux.HandleFunc("/safe/dom/redirect", safeDOMRedirect)
+	mux.HandleFunc("/safe/dom/redirect/server", safeServerRedirect)
 
 	// XML, XPath, LDAP and template rows.
 	mux.HandleFunc("/xml/parse", parseXML)
@@ -808,6 +811,13 @@ func safeDOMCookie(w http.ResponseWriter, r *http.Request) {
 // authority - the DOM counterpart of the safeRedirect rule.
 func safeDOMRedirect(w http.ResponseWriter, r *http.Request) {
 	domPage(w, `if (/^\/[a-z0-9\/]*$/.test(taint)) { location.assign(taint); }`)
+}
+
+// safeServerRedirect answers with a plain HTTP redirect to a fixed same-origin page. A browser that
+// loads it with a fragment carries that fragment onto the Location (which has none), so the page it
+// lands on has the probe's canary in its URL without any script having navigated.
+func safeServerRedirect(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // ---------------------------------------------------------------------------
