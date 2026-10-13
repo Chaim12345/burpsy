@@ -1,11 +1,17 @@
 name: Nightly
 
-# What the per-merge gate (go.yml) does not run, run once a day against master's tip. Both jobs were
-# listed in AGENTS.md as part of "the gate" while nothing ran them; they live here so that claim is
-# true in a weaker, stated form: nightly, not per merge. A red run here is a defect on master to
-# file and fix, not a reason to block a merge that its own checks passed.
+# What the per-merge gate (go.yml) does not run, run once a day against master's tip. A red run here
+# is a defect on master to file and fix, not a reason to block a merge that its own checks passed.
 #
 # Not required by branch protection: a scheduled run is attached to no pull request.
+#
+#   e2e-go   e2e-go.sh against a local target.
+#   race     every go.yml test shard except race-web-0/1, under -race (CI_SHARD_RACE=1). With
+#            race-web on every push to master, the race detector covers the whole module.
+#
+# There is no separate plain (non-race) full-suite job: the push to master already runs the full
+# suite on the commit this run tests, and the race run executes the same tests again (a superset,
+# as in go.yml's reasoning for dropping the plain internal/web shard).
 
 on:
   schedule:
@@ -33,10 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      # The shared Go setup (toolchain + module/build cache); the lint flavor is the closest build.
+      - uses: ./.github/actions/burpsy-test-env
         with:
-          go-version-file: burpsy-go/go.mod
-          cache-dependency-path: burpsy-go/go.sum
+          cache-flavor: lint
+          tools: "false"
 
       # NO_PROXY is cleared because curl applies it even to an explicit `-x` proxy: with 127.0.0.1
       # in NO_PROXY (as some environments set it) the suite's proxied request goes direct, nothing
@@ -50,47 +57,43 @@ jobs:
           tail -100 /tmp/burpsy-go.log || true
           cat /tmp/burpsy-go-e2e-build.log 2>/dev/null || true
 
-  # The race detector beyond internal/web (which go.yml's gate already runs under -race on every
-  # merge). Every package here passed `go test -race -count=1` on 2026-10-09 (locally, without
-  # Chrome, so the browser-driving tests there skipped; on this runner Chrome is present and they run).
-  #
-  # Excluded, and why — not "clean", just not shown clean yet:
-  #   internal/web      — gated per merge in go.yml.
-  #   internal/scanner  — ~8 minutes WITHOUT -race and drives Chrome; under -race a multiple of that.
-  #   internal/extscan  — needs the pinned ffuf/nuclei/interactsh install go.yml performs.
-  # Widen by deleting a line from EXCLUDE once that package has been shown race-clean.
+  # The race detector beyond internal/web (which go.yml runs under -race on every push to master).
+  # Until 2026-10-13 this was one job over the module minus three exclusions, and two of them
+  # were "not yet shown race-clean": internal/scanner (~8 minutes WITHOUT -race, Chrome-driving) and
+  # internal/extscan (needs the pinned ffuf/nuclei/interactsh install). Both now run here, through
+  # the same shards and the same tool install as go.yml, so a race in them is found rather than
+  # assumed absent. A red scanner shard is a race or a race-mode timeout to file, as before.
   race:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: burpsy-go
-
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { shard: scanner-budget, flavor: race-scanner, save: true }
+          - { shard: scanner-detect, flavor: race-scanner, save: false }
+          - { shard: scanner-rest-0, flavor: race-scanner, save: false }
+          - { shard: scanner-rest-1, flavor: race-scanner, save: false }
+          - { shard: rest, flavor: race-rest, save: true }
+    name: race (${{ matrix.shard }})
+    env:
+      CI_SHARD_RACE: "1"
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/burpsy-test-env
+        id: env
         with:
-          go-version-file: burpsy-go/go.mod
-          cache-dependency-path: burpsy-go/go.sum
-
-      # internal/report validates its Burp-XML export with xmllint and skips that test without it.
-      - name: Install xmllint
-        run: |
-          if ! command -v xmllint >/dev/null 2>&1; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
-          fi
-          xmllint --version
-
-      - name: go test -race (module minus the exclusions)
+          cache-flavor: ${{ matrix.flavor }}
+          shard: ${{ matrix.shard }}
+      - name: go test -race (${{ matrix.shard }})
         env:
-          EXCLUDE: |
-            github.com/burpsy-go/burpsy/internal/web
-            github.com/burpsy-go/burpsy/internal/scanner
-            github.com/burpsy-go/burpsy/internal/extscan
-        run: |
-          set -euo pipefail
-          mapfile -t pkgs < <(go list ./... | grep -vxF -f <(printf '%s\n' "$EXCLUDE" | sed '/^$/d'))
-          echo "racing ${#pkgs[@]} packages; excluded:"
-          printf '%s\n' "$EXCLUDE" | sed '/^$/d; s/^/  /'
-          go test -race -count=1 -timeout 3000s "${pkgs[@]}"
+          SHARD: ${{ matrix.shard }}
+        run: scripts/ci-shard.sh "$SHARD"
+      - name: Save the Go cache (${{ matrix.flavor }})
+        if: always() && matrix.save && steps.env.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ steps.env.outputs.cache-key }}

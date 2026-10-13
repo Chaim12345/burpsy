@@ -34,8 +34,8 @@ steps:
     matrix:
       - scanner-budget
       - scanner-detect
-      - scanner-rest
-      - web
+      - scanner-rest-0
+      - scanner-rest-1
       - rest
       - race-web-0
       - race-web-1

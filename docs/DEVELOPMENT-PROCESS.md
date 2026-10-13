@@ -55,8 +55,8 @@ for the UI bundle and warns when bun or Go differ from what CI uses.
 |---|---|---|---|---|
 | T1 | implementing agent | before reporting | `gofmt -l`, `go vet`, and `go test -count=1 -timeout 30m` on the packages `scripts/affected-go-tests.sh origin/master` prints (changed packages + every package whose tests import one); `bun run check` if `burpsy-go/internal/web/ui/` changed; a negative control for each new test (revert the fix, watch it fail) | local |
 | T2 | lead | merging an item into the round branch | the same on the merge result, plus `go build ./...` | local |
-| T3 | CI | every PR into master (in practice the round PR) and every push to master | `gate` (aggregates `lint` and the `test` shard matrix): `lint` runs gofmt, `go build`, `go vet`; `test` runs the full `go test ./... -count=1` and `go test -race ./internal/web/` split into parallel shards by `scripts/ci-shard.sh` (`ci-shard.sh all` lists them; their union is every test); `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`: `scripts/beads-lint.py`; `review-gate`: `scripts/review-gate.sh` | `.github/workflows/go.yml`, `review-gate.yml` |
-| Nightly | CI | 03:17 UTC, and on demand | `e2e-go.sh`; `go test -race` on every package except `internal/web` (T3 covers it), `internal/scanner` and `internal/extscan` (not yet shown race-clean) | `.github/workflows/nightly.yml` |
+| T3 | CI | every PR into master (in practice the round PR) and every push to master | `gate` (aggregates `changes`, `lint` and the `test` shard matrix): `changes` classifies the diff (`scripts/ci-changes.py`) and checks every tracked text file for raw control bytes; `lint` runs gofmt, `go build`, `go vet` on the whole module; `test` runs `go test ./... -count=1` and `go test -race ./internal/web/` split into parallel shards by `scripts/ci-shard.sh` (`ci-shard.sh all` lists them, `ci-shard.sh verify` proves their union is every test) — on a **push to master the full suite**, on a **PR only the affected set** (`scripts/affected-go-tests.sh` against the PR base; the full suite when the PR touches `go.mod`/`go.sum`, `.github/**`, `scripts/ci-*`, the selector or any `testdata/`); `ui`: `bun install --frozen-lockfile`, `bun run check`, `bun run build`, bundle freshness; `beads`: `scripts/beads-lint.py`; `review-gate`: `scripts/review-gate.sh`. A change to docs, `.beads` data (not hooks) or benchmark scripts only skips `lint`, `test` and `ui`; `gate` still reports | `.github/workflows/go.yml`, `review-gate.yml` |
+| Nightly | CI | 03:17 UTC, and on demand | `e2e-go.sh`; every T3 shard except `race-web-*` under `-race` (`CI_SHARD_RACE=1`), so with T3's push-to-master `internal/web` race run the whole module, `internal/scanner` and `internal/extscan` included, runs under the race detector | `.github/workflows/nightly.yml` |
 | Manual | whoever changed the console | before reporting a UI change | the live browser pass: `./ui-live.sh`, driven per `burpsy-go/docs/UI-VERIFICATION.md` | local |
 
 Running the affected set:
@@ -66,15 +66,18 @@ Running the affected set:
 
 The script reads the import graph of the checked-out tree. It cannot see a test that reads another
 directory's file without importing it, except through the explicit rules in its header, and it
-cannot see merge skew (two branches that pass alone and fail together). T3 runs the whole suite on
-the exact tree that lands for exactly that reason; the affected set narrows the inner loop and is
-never the gate. To reproduce one red T3 shard locally, run `scripts/ci-shard.sh <shard>` from the
-repository root.
+cannot see merge skew (two branches that pass alone and fail together). The push to master runs the
+whole suite on the exact tree that landed for exactly that reason. On a PR, CI tests the affected
+set (on GitHub's merge commit, so skew against the base is covered for every selected package) and
+`lint` builds and vets the whole module; a test outside the set that only fails on the merged tree
+shows up on the master push, not on the PR. To reproduce one red T3 shard locally, run
+`scripts/ci-shard.sh <shard>` from the repository root (set `CI_AFFECTED_BASE=<base>` to reproduce a
+PR's affected-mode shard).
 `.buildkite/` runs the same shards on Buildkite for comparison; it is optional and never a
 required check (see `.buildkite/README.md`).
 
 Whole-module, race and Chrome-heavy runs go through `scripts/capped-run.sh -- <command>`, e.g.
-`scripts/capped-run.sh -- scripts/ci-shard.sh web`. It runs the command in its own cgroup with a
+`scripts/capped-run.sh -- scripts/ci-shard.sh rest`. It runs the command in its own cgroup with a
 hard CPU quota and memory limit (default: half the machine each, so two runs share it without
 starving each other), sets `GOMAXPROCS`, `go -p` and `GOMEMLIMIT` to match, and queues for one of
 the machine's slots (`/tmp/burpsy-heavy.<n>.lock`, replacing the single `/tmp/burpsy-heavy.lock`).

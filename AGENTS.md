@@ -86,10 +86,13 @@ There are two hierarchies, one per tree:
 - **How work lands — rounds, test tiers, review, beads closure — is `docs/DEVELOPMENT-PROCESS.md`.**
   Where an instruction here disagrees with it, it wins.
 - **The Go gate, honestly stated.** What CI runs on every PR into master and every master push
-  (T3, `.github/workflows/go.yml`): `gofmt -l .`, `go build ./...`, `go vet ./...`,
-  `go test ./... -count=1`, `go test -race ./internal/web/`, and for the console `bun run check`,
-  `bun run build` and a bundle-freshness check. What runs only nightly
-  (`.github/workflows/nightly.yml`): `e2e-go.sh`, and `-race` on the other packages. What no CI runs:
+  (T3, `.github/workflows/go.yml`): `gofmt -l .`, `go build ./...`, `go vet ./...` on the whole
+  module; `go test ./... -count=1` and `go test -race ./internal/web/` — in full on a push to master,
+  and on a PR only for the packages `scripts/affected-go-tests.sh` selects (in full when the PR
+  touches go.mod/go.sum, CI files or testdata); and for the console `bun run check`, `bun run build`
+  and a bundle-freshness check. A docs/.beads/bench-only change runs none of the Go or console jobs.
+  What runs only nightly (`.github/workflows/nightly.yml`): `e2e-go.sh`, and `-race` on every other
+  package, `internal/scanner` and `internal/extscan` included. What no CI runs:
   the live browser pass for a console change (`./ui-live.sh`, then
   `burpsy-go/docs/UI-VERIFICATION.md`) — that one is yours to do and report; Playwright is no longer
   the UI gate. Before reporting, run the affected-package tier (T1 in the process doc). The Rust
@@ -118,8 +121,9 @@ go vet ./...                   # must be clean
 [ -n "$pkgs" ] && ../scripts/capped-run.sh -- go test -count=1 -timeout 30m $pkgs   # heavy runs are capped
 
 # T3, CI on every PR into master and every master push (.github/workflows/go.yml; `gate` aggregates
-# `lint` and the `test` shard matrix). The shards together are the whole suite plus the internal/web
-# race run; reproduce one red shard locally with:
+# `changes`, `lint` and the `test` shard matrix). The shards together are the whole suite plus the
+# internal/web race run (a PR runs only its affected part); reproduce one red shard locally with
+# (prefix CI_AFFECTED_BASE=origin/master to reproduce a PR's affected-mode shard):
 ../scripts/capped-run.sh -- ../scripts/ci-shard.sh <shard>   # ../scripts/ci-shard.sh all lists them
 
 # Nightly only (.github/workflows/nightly.yml) — not run per merge

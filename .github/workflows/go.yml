@@ -1,23 +1,43 @@
 name: Go
 
-# The gate for burpsy-go, which is the active implementation. Until this file existed the Go tree
-# had no CI at all: release.yml builds only the Rust CLI, so every Go guarantee in the repo rested
-# on someone running the suite by hand and reporting the result honestly.
+# The gate for burpsy-go, which is the active implementation (T3 in docs/DEVELOPMENT-PROCESS.md
+# section 4). Until this file existed the Go tree had no CI at all: release.yml builds only the Rust
+# CLI, so every Go guarantee in the repo rested on someone running the suite by hand.
 #
-# The four commands here are the same four AGENTS.md names as the gate, in the same order, each its
-# own step so a failure says which one broke rather than "the job failed".
-
-# Pushes run only on master. Every other branch is covered by its pull request, so a push to a PR
-# branch no longer runs the gate twice for the same commit.
+# What runs when (scripts/ci-changes.py decides, in the `changes` job, and prints why):
 #
-# Pull requests run only when they target master. Under docs/DEVELOPMENT-PROCESS.md item PRs target
-# a round branch (round/<date>-<n>) and are covered by the T1/T2 tiers; this workflow is T3, the
-# full gate run once per round on the exact tree that lands. That is deliberate, not an oversight:
-# an item PR into a round branch shows no checks.
+#   push to master, workflow_dispatch  lint + the FULL sharded suite + ui + beads. Master is the tree
+#                                      that landed; its full run is the evidence it passes.
+#   pull request into master           lint (whole module) + the AFFECTED tests + ui + beads. The
+#                                      round workflow already ran the affected set locally (T1 per
+#                                      item, T2 per merge); CI repeats it once on GitHub's merge
+#                                      commit, on clean runners with the pinned tools, rather than
+#                                      the whole suite a second time. A PR that touches go.mod/
+#                                      go.sum, .github/**, scripts/ci-*, the affected-test selector
+#                                      or any testdata/ runs the full suite instead.
+#   docs / .beads data / bench scripts only (either event): changes + beads; lint, test and ui are
+#                                      skipped and `gate` reports success. The one Go test such a
+#                                      change could break (no tracked text file holds a raw control
+#                                      byte) is re-checked by the changes job itself.
+#   nightly (nightly.yml)              e2e-go.sh, and every shard but race-web under -race: the whole
+#                                      module under the race detector, internal/web's part of it
+#                                      being here on every push to master.
+#
+# What the affected set cannot see, and what closes each gap: merge skew between two PRs (the full
+# run on the push to master, on the exact merged tree); a test that reads another directory's file
+# without importing it (the explicit rules in scripts/affected-go-tests.sh, plus "testdata/ runs
+# everything" above); a compile error anywhere (lint builds and vets the whole module on every run).
+#
+# Pushes run only on master; every other branch is covered by its pull request. Pull requests run
+# only when they target master: item PRs into a round branch (round/<date>-<n>) are covered by T1/T2
+# and show no checks, deliberately.
 #
 # The review gate lives in its own workflow (review-gate.yml): it must re-run when a verdict is
-# posted as a comment or review, and it runs under pull_request_target with the default branch's
-# rules; neither fits this workflow.
+# posted as a comment or review, and it runs under pull_request_target; neither fits this workflow.
+#
+# Required checks (branch protection): `gate`, `ui`, `beads` here and `review-gate`. Their names are
+# unchanged by the 2026-10-13 optimisation. A job skipped by its `if:` reports success to branch
+# protection, which is what a docs-only PR needs from `ui`; `gate` is never skipped (if: always()).
 on:
   push:
     branches: [master]
@@ -28,8 +48,8 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same PR cancels the run it supersedes: the suite takes tens of minutes, and
-# finishing a run for a commit nobody will merge only delays the one that matters.
+# A newer push to the same PR cancels the run it supersedes: finishing a run for a commit nobody
+# will merge only delays the one that matters.
 #
 # A push to master is never cancelled. Each one is a commit that landed, and its run is the only
 # evidence that master passes at that commit; with cancel-in-progress on master, 15 of 19 master
@@ -46,16 +66,55 @@ defaults:
     working-directory: burpsy-go
 
 jobs:
-  # gofmt, build and vet: the checks that need only Go, run once and in parallel with the shards.
+  # Decides what the rest of the run does (see the header) and runs the repository-wide control-
+  # byte check. Git and python only — no Go — so it adds ~10s, not a toolchain setup, in front of
+  # the shards.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+      mode: ${{ steps.decide.outputs.mode }}
+      base: ${{ steps.decide.outputs.base }}
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      # Depth 2: on a pull request the checkout is GitHub's merge commit and HEAD^1 is the base tip.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      # A push compares with the previous tip (github.event.before). Only its tree is needed for a
+      # two-dot diff, so one shallow fetch of that commit suffices. If it cannot be fetched (a force
+      # push, a new branch) ci-changes.py finds no usable base and runs everything.
+      - name: Fetch the pushed-over commit
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: git fetch --no-tags --depth=1 origin "$BEFORE" || echo "could not fetch $BEFORE; everything will run"
+
+      - name: Classify the change and check tracked files for control bytes
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: python3 -I scripts/ci-changes.py --event "$EVENT" --base "$BASE"
+
+  # gofmt, build and vet over the WHOLE module on every run, PRs included: ~1 minute, and the only
+  # check that sees a compile error in a package the affected set did not select.
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: ./.github/actions/burpsy-test-env
+        id: env
         with:
-          go-version-file: burpsy-go/go.mod
-          cache-dependency-path: burpsy-go/go.sum
+          cache-flavor: lint
+          tools: "false"
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -68,53 +127,133 @@ jobs:
         run: go build ./...
       - name: go vet
         run: go vet ./...
+      - name: Save the Go cache (lint)
+        if: always() && github.event_name != 'pull_request' && steps.env.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ steps.env.outputs.cache-key }}
 
   # The Go test suite, split into parallel shards by scripts/ci-shard.sh (the same script the
-  # Buildkite pipeline runs). Until 2026-10-09 this was one serial job: `go test ./...` (~9 min, of
-  # which internal/scanner alone was 441s) followed by the internal/web race step (~5 min), ~15
-  # minutes of wall clock. The shards' union is every test in the module — ci-shard.sh refuses a
-  # split that would drop one — so this runs exactly what the serial job ran, with -count=1
-  # (no cached passes) and the race detector on internal/web.
+  # Buildkite pipeline runs; `ci-shard.sh all` lists them, `ci-shard.sh verify` proves the union is
+  # every test, each selected once). In full mode this is exactly `go test ./... -count=1` plus
+  # `go test -race ./internal/web/`; the plain internal/web run is not repeated, because the race
+  # run executes the same tests (ci-shard.sh's header has the evidence).
+  #
+  # Shard balance, from run 38360049157 on 2026-10-13 (master 5cfcc338; test time / whole job):
+  # scanner-rest 649s/11.9min was the critical path, then scanner-budget 414s/8.0min, scanner-detect
+  # 164s/3.9min, race-web-0 99s/3.5min and race-web-1 79s/3.4min (each spending ~65s recompiling the
+  # race build: fixed by the per-flavor cache), web 90s/2.7min (now removed), rest ~65s/1.9min.
+  # Every test job also spent ~55s on setup (toolchain, cache, Chrome warm-up, apt, tools), now ~30s.
+  # The first split of scanner-rest by index (run 38362486870) came out 562s / ~90s: a few heavy
+  # tests shared a parity. The scanner tests other than the budget test are now dealt to
+  # scanner-detect and scanner-rest-0/1 longest-first on measured per-test seconds
+  # (scripts/ci-shard-weights.txt; ~80s each locally), which leaves the unsplittable
+  # scanner-budget test (one test, ~414s) as the critical path. Regenerate the weights with
+  # scripts/ci-shard-weights.py when the scanner suite's shape changes.
+  #
+  # -p is left at go's default (GOMAXPROCS = the runner's 4 vCPUs): only the rest shard tests more
+  # than one package, and its long pole is one Chrome-driving package (internal/domexec, ~51s), so
+  # more package parallelism would not shorten it, and fewer would lengthen it.
+  #
+  # In affected mode (pull requests) each shard's plan step asks ci-shard.sh whether its package
+  # is affected; a shard that is not skips its tools install and tests, says NOT RUN in the job
+  # summary, and passes. The matrix itself is static so every shard's check exists on every run.
   #
   # fail-fast is off: each shard's verdict is its own evidence, and a red scanner shard must not
   # cancel the web shard that would have shown a second, unrelated failure.
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        shard: [scanner-budget, scanner-detect, scanner-rest, web, rest, race-web-0, race-web-1]
+        # flavor: which Go build cache the shard shares; save: the one shard per flavor that writes
+        # it on a push to master (the others would race it for the same key and lose).
+        include:
+          - { shard: scanner-budget, flavor: scanner, save: true }
+          - { shard: scanner-detect, flavor: scanner, save: false }
+          - { shard: scanner-rest-0, flavor: scanner, save: false }
+          - { shard: scanner-rest-1, flavor: scanner, save: false }
+          - { shard: rest, flavor: rest, save: true }
+          - { shard: race-web-0, flavor: race-web, save: true }
+          - { shard: race-web-1, flavor: race-web, save: false }
     name: test (${{ matrix.shard }})
+    env:
+      CI_AFFECTED_BASE: ${{ needs.changes.outputs.mode == 'affected' && needs.changes.outputs.base || '' }}
+      # The lint job runs the full `go vet ./...` on every run; go test's built-in vet subset would
+      # re-run part of it in every shard.
+      CI_SHARD_GO_TEST_FLAGS: -vet=off
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # HEAD^1, the PR's base tip, for affected-go-tests.sh
       - uses: ./.github/actions/burpsy-test-env
+        id: env
+        with:
+          cache-flavor: ${{ matrix.flavor }}
+          shard: ${{ matrix.shard }}
       - name: go test (${{ matrix.shard }})
+        if: steps.env.outputs.run == 'true'
         working-directory: .
         env:
           SHARD: ${{ matrix.shard }}
         run: scripts/ci-shard.sh "$SHARD"
+      - name: Save the Go cache (${{ matrix.flavor }})
+        if: always() && matrix.save && github.event_name != 'pull_request' && steps.env.outputs.run == 'true' && steps.env.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ steps.env.outputs.cache-key }}
 
-  # The required check. Branch protection names `gate` (docs/DEVELOPMENT-PROCESS.md section 11),
-  # so it stays one check that is green only when lint and every shard passed — a skipped, failed
-  # or cancelled dependency fails it. if: always() makes it report on a failure rather than be
-  # skipped, which branch protection would treat as missing.
+  # The required check. Branch protection names `gate` (docs/DEVELOPMENT-PROCESS.md section 11), so
+  # it stays one check, never skipped (if: always()), that is green only when:
+  #   - `changes` succeeded (it also holds the control-byte check), and
+  #   - lint and every test shard succeeded, or — only when `changes` said code=false — they were
+  #     skipped. A failed or cancelled dependency is red in every case, and so is a skip that
+  #     `changes` did not ask for.
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint, test]
+    needs: [changes, lint, test]
     if: always()
     steps:
-      - name: every lint and test shard passed
+      - name: changes, lint and every test shard passed (or were legitimately skipped)
         working-directory: .
         env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          MODE: ${{ needs.changes.outputs.mode }}
           LINT: ${{ needs.lint.result }}
           TEST: ${{ needs.test.result }}
         run: |
-          echo "lint: $LINT  test shards: $TEST"
+          echo "changes: $CHANGES (code=$CODE mode=$MODE)  lint: $LINT  test shards: $TEST"
+          if [ "$CHANGES" != success ]; then
+            echo "::error::the Go gate is red: the changes job is $CHANGES"
+            exit 1
+          fi
+          if [ "$CODE" = false ]; then
+            for r in "$LINT" "$TEST"; do
+              if [ "$r" != skipped ] && [ "$r" != success ]; then
+                echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST"
+                exit 1
+              fi
+            done
+            echo "Only documentation, .beads data or benchmark scripts changed: no Go job needed to run."
+            exit 0
+          fi
           if [ "$LINT" != success ] || [ "$TEST" != success ]; then
             echo "::error::the Go gate is red: lint=$LINT, test shards=$TEST"
             exit 1
+          fi
+          if [ "$MODE" = affected ]; then
+            echo "Green on the AFFECTED test set (see each shard's summary for what did not run); the full suite runs on the push to master."
           fi
 
   # The React console: type check, the source guards, and bundle freshness. Until this job existed
@@ -122,7 +261,16 @@ jobs:
   # three real breaks on 2026-10-09 alone) and check:gated-routes included. `bun run check` is the
   # package's own definition of those checks (package.json), so a guard added there is gated here
   # without editing this file.
+  #
+  # Skipped (reporting success) only for docs / .beads / bench-only changes. Not narrowed further to
+  # the UI directory: check:gated-routes reads internal/web's Go sources, the whole job takes ~20s,
+  # and a narrower rule would have to track every such read.
+  #
+  # No bun install cache: `bun install --frozen-lockfile` took 0.7s for 130 packages on 2026-10-13
+  # (run 38360049157); restoring a cache costs about as much as it would save.
   ui:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -177,7 +325,8 @@ jobs:
   # .beads/issues.jsonl on master is the issue tracker's source of truth. This job holds every
   # change to it to the closure rule: a bead closed by this change must cite the PR and the commit
   # that did the work, and that commit must be in the history being merged. Closures already on the
-  # base are grandfathered. The rule and its exceptions are in scripts/beads-lint.py.
+  # base are grandfathered. The rule and its exceptions are in scripts/beads-lint.py. It runs on
+  # every change, docs-only included: it is ~15s and .beads changes are exactly what it checks.
   beads:
     runs-on: ubuntu-latest
     timeout-minutes: 5
