@@ -18,7 +18,8 @@ package scanner
 // is the application's, not the probe's (the observation probe carries a bare alphanumeric
 // canary, so every tag in its answer came from the application). A plain-text echo endpoint —
 // the case the content-type gate exists for — is not a fragment and stays exactly as gated as it
-// was. JSON cannot open with '<' and is never a fragment here.
+// was. A JSON body is never a fragment itself; one of its string values can be, when it opens with
+// the application's own element (the envelope a page unwraps before innerHTML: xssFragmentSite).
 //
 // # The evidence
 //
@@ -42,7 +43,9 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,7 +65,9 @@ const maxXSSFragmentRenders = 4
 type xssFragmentCandidate struct {
 	payload xssPayload
 	canary  string
-	body    string
+	// body is the fragment itself: the whole answer, or the JSON string value site names.
+	body string
+	site xssFragmentSite
 	// contentType is the answer's declared type, cited in the finding.
 	contentType string
 }
@@ -87,6 +92,146 @@ func xssIsMarkupFragment(body, canary string) bool {
 		return atom.Lookup(name) != 0
 	}
 	return false
+}
+
+// xssFragmentSite is where a non-markup answer carries the application's HTML fragment: the whole
+// body (jsonPath nil), or one string value of a JSON document.
+//
+// # The JSON envelope
+//
+// A page script that inserts server-built markup very often receives it wrapped: `{"content":
+// "<section>…</section>", "ok": true}`, then `el.innerHTML = data.content`. The body opens with `{`,
+// so it is never a fragment by xssIsMarkupFragment, and the reflected value inside it was invisible
+// to the fragment path. The rule for the value is the same rule as for a body: the string must
+// itself open with a start tag of a known element and must carry the observation canary — a bare
+// alphanumeric token that cannot open a tag, so the markup is the application's. A JSON field that
+// merely echoes the value (`{"q": "<canary>"}`) is not markup and is not entered, and neither is a
+// markup field the value never reaches.
+//
+// What the JSON layer does to the payload is undone by decoding it, which is exactly what the page
+// does before assigning the value; the render then decides, as for a body.
+type xssFragmentSite struct {
+	jsonPath []any // string keys and int indices; nil for the whole body
+}
+
+func (s xssFragmentSite) isJSON() bool { return s.jsonPath != nil }
+
+// String names the site for a finding: "the response body" or "JSON value content[0].html".
+func (s xssFragmentSite) String() string {
+	if !s.isJSON() {
+		return "the response body"
+	}
+	var b strings.Builder
+	for i, p := range s.jsonPath {
+		switch v := p.(type) {
+		case string:
+			if i > 0 {
+				b.WriteByte('.')
+			}
+			b.WriteString(v)
+		case int:
+			fmt.Fprintf(&b, "[%d]", v)
+		}
+	}
+	if b.Len() == 0 {
+		return "the JSON string value"
+	}
+	return "JSON value " + b.String()
+}
+
+// extract returns the fragment at this site in body. A JSON site whose path no longer leads to a
+// string (the answer changed shape) is not found.
+func (s xssFragmentSite) extract(body string) (string, bool) {
+	if !s.isJSON() {
+		return body, true
+	}
+	doc, ok := decodeJSONDocument(body)
+	if !ok {
+		return "", false
+	}
+	cur := doc
+	for _, p := range s.jsonPath {
+		switch k := p.(type) {
+		case string:
+			m, ok := cur.(map[string]any)
+			if !ok {
+				return "", false
+			}
+			if cur, ok = m[k]; !ok {
+				return "", false
+			}
+		case int:
+			a, ok := cur.([]any)
+			if !ok || k < 0 || k >= len(a) {
+				return "", false
+			}
+			cur = a[k]
+		}
+	}
+	v, ok := cur.(string)
+	return v, ok
+}
+
+// decodeJSONDocument parses body when it is a JSON object or array.
+func decodeJSONDocument(body string) (any, bool) {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return nil, false
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, false
+	}
+	return doc, true
+}
+
+// xssLocateFragment finds where a non-markup answer carries an application-built HTML fragment that
+// the observation canary reached: the body itself, else the first JSON string value (keys in sorted
+// order, so the choice is stable) that qualifies. ok=false when neither does.
+func xssLocateFragment(body, canary string) (xssFragmentSite, string, bool) {
+	if xssIsMarkupFragment(body, canary) {
+		return xssFragmentSite{}, body, true
+	}
+	doc, ok := decodeJSONDocument(body)
+	if !ok {
+		return xssFragmentSite{}, "", false
+	}
+	var found []any
+	var view string
+	var walk func(v any, path []any) bool
+	walk = func(v any, path []any) bool {
+		switch t := v.(type) {
+		case string:
+			if xssIsMarkupFragment(t, canary) {
+				found, view = append([]any{}, path...), t
+				return true
+			}
+		case map[string]any:
+			keys := make([]string, 0, len(t))
+			for k := range t {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				if walk(t[k], append(path, k)) {
+					return true
+				}
+			}
+		case []any:
+			for i, e := range t {
+				if walk(e, append(path, i)) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if !walk(doc, []any{}) || len(found) == 0 {
+		return xssFragmentSite{}, "", false
+	}
+	return xssFragmentSite{jsonPath: found}, view, true
 }
 
 func isASCIILetter(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
@@ -153,12 +298,16 @@ func xssFragmentFinding(ctx context.Context, cc *CheckContext, h *ProbeHarness, 
 		contentType = "a non-markup content type"
 	}
 	name, severity := xssReflectedIssue, "high"
-	detail := fmt.Sprintf("%s %q: the response is an HTML fragment served as %q, so it is live only once a page's script inserts it; "+
+	shape := "the response is an HTML fragment"
+	if c.site.isJSON() {
+		shape = "the response's " + c.site.String() + " is an HTML fragment"
+	}
+	detail := fmt.Sprintf("%s %q: %s served as %q, so it is live only once a page's script inserts it; "+
 		"rendered the way such a script does (innerHTML, isolated, no network), the payload executed: %s",
-		point.Kind, point.Name, contentType, how)
+		point.Kind, point.Name, shape, contentType, how)
 	evidence := fmt.Sprintf("payload %q (%s); browser-confirmed on fragment insertion: %s", c.payload.build(c.canary), c.payload.note, how)
 
-	if later, ok := xssStoredReplay(ctx, h, c.canary); ok {
+	if later, ok := xssStoredReplay(ctx, h, c.canary, c.site); ok {
 		if calls, err := browser.RenderFragment(ctx, later, 0); err == nil {
 			if how2, ok := xssFragmentExecuted(calls, c.canary); ok {
 				name = xssStoredIssue
@@ -191,12 +340,21 @@ func xssFragmentFinding(ctx context.Context, cc *CheckContext, h *ProbeHarness, 
 // xssStoredReplay re-sends the captured request unmodified — the point at its original value — and
 // returns the answer when it carries the canary. A request that never carried the canary can only
 // answer with it if the application kept it.
-func xssStoredReplay(ctx context.Context, h *ProbeHarness, canary string) (string, bool) {
+//
+// The fragment returned is the one at site, so a JSON-wrapped fragment is rendered as the page would
+// render it. Behind a shared cache the harness sends this replay with a fresh buster
+// (probe_cache_isolation.go), so an answer served from the probe's own cache entry cannot pass for a
+// stored value.
+func xssStoredReplay(ctx context.Context, h *ProbeHarness, canary string, site xssFragmentSite) (string, bool) {
 	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	res, err := h.send(rctx, h.RequestBytes())
 	if err != nil || !strings.Contains(res.Body, canary) {
 		return "", false
 	}
-	return res.Body, true
+	view, ok := site.extract(res.Body)
+	if !ok || !strings.Contains(view, canary) {
+		return "", false
+	}
+	return view, true
 }

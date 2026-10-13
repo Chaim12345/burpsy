@@ -329,6 +329,53 @@ func cachePoisonQueryInputs(method, rawPath string) []cachePoisonInput {
 	return ins
 }
 
+// cachePoisonCookieInputs: each cookie the request carries, its value replaced by the canary and the
+// request's other cookies kept as they were. A cache that keys on the URL alone ignores the Cookie
+// header, so a page the application personalises from a cookie — a display name, a preference, a
+// tracking id written into the markup — is stored under the URL and served to every later visitor,
+// whatever cookie they send. The clean replay carries no cookies at all, so the canary coming back
+// in it can only be the poisoned request's stored answer.
+//
+// Only cookies the captured request carries are tried; a name is never guessed.
+func cachePoisonCookieInputs(cookieHeader string) []cachePoisonInput {
+	type pair struct{ name, value string }
+	var pairs []pair
+	for _, part := range strings.Split(cookieHeader, ";") {
+		part = strings.TrimSpace(part)
+		name, value, ok := strings.Cut(part, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		pairs = append(pairs, pair{name, value})
+	}
+	seen := map[string]bool{}
+	var ins []cachePoisonInput
+	for i := range pairs {
+		if seen[pairs[i].name] {
+			continue
+		}
+		seen[pairs[i].name] = true
+		idx := i
+		ins = append(ins, cachePoisonInput{
+			label: "cookie " + pairs[i].name,
+			build: func(bustered, canary string) (string, map[string]string, []byte) {
+				parts := make([]string, len(pairs))
+				for j, p := range pairs {
+					v := p.value
+					if j == idx {
+						v = canary
+					}
+					parts[j] = p.name + "=" + v
+				}
+				return bustered, map[string]string{"Cookie": strings.Join(parts, "; ")}, nil
+			},
+			needle: plainNeedle,
+		})
+	}
+	return ins
+}
+
 // responseCarries reports whether needle appears in the response body or any header value.
 func responseCarries(r *sender.Response, needle string) bool {
 	if r == nil || needle == "" {
@@ -506,6 +553,7 @@ func checkWebCachePoisoning(ctx context.Context, cc *CheckContext) ([]*Finding, 
 		return nil, nil
 	}
 	inputs := append(cachePoisonHeaderInputs(), cachePoisonQueryInputs(ex.Method, ex.Path)...)
+	inputs = append(inputs, cachePoisonCookieInputs(strings.Join(headerValues(requestRaw(cc.Scanner, ex), "Cookie"), "; "))...)
 	var hits []*cachePoisonHit
 	for _, in := range inputs {
 		if ctx.Err() != nil {

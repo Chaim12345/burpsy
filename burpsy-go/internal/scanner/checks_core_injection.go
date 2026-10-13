@@ -231,6 +231,14 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", xssReflectedIssue, err)
 	}
+	// Behind a shared cache whose key leaves the probed value out, every probe after the first is
+	// answered with the first one's stored page — the point reads as "not reflected" — and every
+	// probe is stored where other visitors are served it. Each probe carries a fresh, verified-keyed
+	// buster instead, or none is sent (probe_cache_isolation.go).
+	cacheNote, err := h.IsolateFromSharedCache(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", xssReflectedIssue, err)
+	}
 	points := h.Points()
 	// The cap is reported rather than silently applied. A finding that says "Probed 8 insertion
 	// points" for a request carrying 20 is a coverage claim the check did not earn; the extra
@@ -274,6 +282,9 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// classified like a document's, and a payload that survives is decided in a browser, so it
 		// is only entered when the browser confirmation is on.
 		fragment := false
+		// fragSite is where that fragment sits: the whole answer, or a JSON string value the page
+		// unwraps before inserting it (xssFragmentSite).
+		var fragSite xssFragmentSite
 		if sent, err := h.SendFollowing(ctx, point, observed); err == nil {
 			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
@@ -281,9 +292,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 				evidence |= XSSEvidenceReflected
 				if rendersAsMarkup(contentType) {
 					contexts = classifyXSSContexts(res.Body, observed)
-				} else if browserConfirm && xssIsMarkupFragment(res.Body, observed) {
-					fragment = true
-					contexts = classifyXSSContexts(res.Body, observed)
+				} else if browserConfirm {
+					if site, view, ok := xssLocateFragment(res.Body, observed); ok {
+						fragment, fragSite = true, site
+						contexts = classifyXSSContexts(view, observed)
+					}
 				}
 			}
 		}
@@ -314,8 +327,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 				// Reflected into something no browser parses. Recorded, never a breakout on the
 				// wire; a fragment whose payload survived is kept for the browser to decide.
 				evidence |= XSSEvidenceReflectedEncoded
-				if fragment && payload.confirm != nil && payload.confirm(res.Body, canary) {
-					fragmentCands = append(fragmentCands, xssFragmentCandidate{payload: payload, canary: canary, body: res.Body, contentType: contentType})
+				if fragment && payload.confirm != nil {
+					if view, ok := fragSite.extract(res.Body); ok && strings.Contains(view, canary) && payload.confirm(view, canary) {
+						fragmentCands = append(fragmentCands, xssFragmentCandidate{payload: payload, canary: canary, body: view,
+							site: fragSite, contentType: contentType})
+					}
 				}
 				continue
 			}
@@ -440,6 +456,9 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// levels answer text/plain and render it with innerHTML. Only a browser can settle it.
 		if fragment && !xssBreakoutConfirmed(evidence) {
 			if f := xssFragmentFindings(ctx, cc, h, point, fragmentCands); f != nil {
+				if cacheNote != "" {
+					f.Description += "; " + cacheNote
+				}
 				findings = append(findings, f)
 				break
 			}
@@ -466,6 +485,9 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		if capped > 0 {
 			detail += fmt.Sprintf("; %d further insertion point(s) were NOT probed (cap %d reached)",
 				capped, MaxInjectionPointsPerCheck)
+		}
+		if cacheNote != "" {
+			detail += "; " + cacheNote
 		}
 		// The evidence names the decoding when a variant carried the breakout: "markup
 		// breakout via URL decoding" says what the plain payload could not — that the

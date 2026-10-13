@@ -80,6 +80,12 @@ OVERRIDE = {
  'SessionManagementVulnerability': dict(query={'action': 'login'}, body={'type': 'json', 'content_type': 'application/json', 'example': {'username': 'admin', 'password': 'password'}}),
  'XXEVulnerability': dict(body={'type': 'xml', 'content_type': 'application/xml', 'example': '<?xml version="1.0"?><book><name>a</name><author>b</author><isbn>1</isbn><publisher>c</publisher><otherComments>d</otherComments></book>'}),
 }
+# Cookies a level reads through request.getCookies() rather than @CookieValue, so the controller scan
+# above cannot see them. Names from the console templates: CachePoisoning/Common's setDemoUserCookie is
+# what the LEVEL_4 page sends with its own request. Merged into whatever the controller scan found.
+LEVEL_COOKIES = {
+ ('CachePoisoning', 'LEVEL_4'): {'demo_user': 'test'},
+}
 truth, reqs, miss, seen = [], [], [], {}
 for s in scanner:
     path = s['url'].split('/VulnerableApp/', 1)[1]; vuln, level = path.split('/')[:2]
@@ -97,6 +103,7 @@ for s in scanner:
     p = params.get((vuln, level, s['variant'])) or params.get((vuln, level, 'UNSECURE'))
     if p is None: miss.append(entry['test']); p = dict(query={}, headers={}, cookies={}, body=None, path_vars=[])
     if vuln in OVERRIDE and not (p['query'] or p['body'] or p['cookies'] or p['headers']): p = {**p, **OVERRIDE[vuln]}
+    if (vuln, level) in LEVEL_COOKIES: p = {**p, 'cookies': {**p['cookies'], **LEVEL_COOKIES[(vuln, level)]}}
     q = dict(p['query']); form = {}
     if s['method'] != 'GET' and not p['body']: form, q = q, {}
     reqs.append(dict(test=entry['test'], method=s['method'], url=url, query=q, form=form, headers=p['headers'], cookies=p['cookies'],

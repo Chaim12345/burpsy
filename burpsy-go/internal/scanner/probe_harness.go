@@ -95,6 +95,10 @@ type ProbeHarness struct {
 	// tier can ask whether a point's input changed anything before it counts the point as repetitive.
 	shapesMu sync.Mutex
 	shapes   []probeShape
+
+	// buster, when set, is the verified-keyed cache-buster location every probe carries with a fresh
+	// value (IsolateFromSharedCache, probe_cache_isolation.go). Nil sends requests as built.
+	buster *cacheBusterLocation
 }
 
 // probeShape is what the repetitive-behaviour rule compares a probe's response on: its shape, not its
@@ -254,6 +258,11 @@ func (h *ProbeHarness) sendViaAs(ctx context.Context, gate *sender.AuthorisedSen
 		var cancel context.CancelFunc
 		sendCtx, cancel = context.WithTimeout(ctx, budget)
 		defer cancel()
+	}
+	// A fresh buster per send, so no two probes share a cache entry and none shares the entry other
+	// visitors are served (probe_cache_isolation.go).
+	if h.buster != nil {
+		raw = withCacheBusterRaw(raw, *h.buster, freshBuster())
 	}
 	meter := meterFrom(ctx)
 	meter.attempt()

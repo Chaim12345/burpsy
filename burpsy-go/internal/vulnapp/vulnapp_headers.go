@@ -72,6 +72,13 @@ func headerEndpoints() []Endpoint {
 		{Path: "/hd/safe/cache-poison-route/notice?msg=hello", Row: "Web cache poisoning", Safe: true,
 			Note: "reflects msg too, but the cache keys on the full URL including the query"},
 
+		{Path: "/hd/cache-poison-cookie", Row: "Web cache poisoning",
+			RequestHeaders: map[string]string{"Cookie": "theme=light; display_name=alice"},
+			Note:           "a cache keyed on the URL only serves a page personalised from the display_name cookie, so the first visitor's name is served to everyone"},
+		{Path: "/hd/safe/cache-poison-cookie", Row: "Web cache poisoning", Safe: true,
+			RequestHeaders: map[string]string{"Cookie": "theme=light; display_name=alice"},
+			Note:           "personalises from the cookie identically, but the cache keys on the Cookie header (Vary: Cookie), so no visitor is served another's page"},
+
 		{Path: "/hd/cache-decept", Row: "Web cache deception",
 			Note: "a static-looking .css path returns the same dynamic body as the directory root"},
 		{Path: "/hd/safe/cache-decept", Row: "Web cache deception", Safe: true,
@@ -95,6 +102,8 @@ func registerHeaders(mux *http.ServeMux) {
 	mux.HandleFunc("/hd/safe/cache-poison", hdSafeCachePoison)
 	mux.HandleFunc("/hd/cache-poison-route/", hdCachePoisonRoute)
 	mux.HandleFunc("/hd/safe/cache-poison-route/", hdSafeCachePoisonRoute)
+	mux.HandleFunc("/hd/cache-poison-cookie", hdCachePoisonCookie)
+	mux.HandleFunc("/hd/safe/cache-poison-cookie", hdSafeCachePoisonCookie)
 	mux.HandleFunc("/hd/cache-decept", hdCacheDecept)
 	mux.HandleFunc("/hd/cache-decept/", hdCacheDecept)
 	mux.HandleFunc("/hd/safe/cache-decept", hdSafeCacheDecept)
@@ -191,6 +200,11 @@ type vaCacheEntry struct {
 const vaCacheTTL = 60 * time.Second
 
 func (c *vaSharedCache) serve(w http.ResponseWriter, key string, render func() string) {
+	c.serveAs(w, key, "text/html", render)
+}
+
+// serveAs is serve with the answer's content type named, for the endpoints that answer JSON.
+func (c *vaSharedCache) serveAs(w http.ResponseWriter, key, contentType string, render func() string) {
 	now := time.Now()
 	c.mu.Lock()
 	if c.m == nil {
@@ -211,7 +225,7 @@ func (c *vaSharedCache) serve(w http.ResponseWriter, key string, render func() s
 		c.m[key] = e
 	}
 	c.mu.Unlock()
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	if hit {
 		w.Header().Set("X-Cache", "HIT")
@@ -227,7 +241,32 @@ var (
 	cachePoisonHeaderSafeStore vaSharedCache
 	cachePoisonRouteStore      vaSharedCache
 	cachePoisonRouteSafeStore  vaSharedCache
+	cachePoisonCookieStore     vaSharedCache
+	cachePoisonCookieSafeStore vaSharedCache
 )
+
+// cookieGreetingBody personalises the page from the display_name cookie, escaped: the defect these
+// endpoints carry is whose page is served, not markup injection.
+func cookieGreetingBody(r *http.Request) string {
+	name := "guest"
+	if c, err := r.Cookie("display_name"); err == nil && c.Value != "" {
+		name = c.Value
+	}
+	return "<html><body><p>Signed in as " + html.EscapeString(name) + "</p></body></html>"
+}
+
+// hdCachePoisonCookie keys on the request URI alone while the body is built from a cookie, which is
+// the "personalised page cached as public" defect: one request's cookie decides every later visitor's page.
+func hdCachePoisonCookie(w http.ResponseWriter, r *http.Request) {
+	cachePoisonCookieStore.serve(w, r.RequestURI, func() string { return cookieGreetingBody(r) })
+}
+
+// hdSafeCachePoisonCookie personalises identically but keys on the Cookie header too, which is what
+// Vary: Cookie makes a shared cache do, so a request is only ever served a page built from its own cookies.
+func hdSafeCachePoisonCookie(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Vary", "Cookie")
+	cachePoisonCookieSafeStore.serve(w, r.RequestURI+"|"+r.Header.Get("Cookie"), func() string { return cookieGreetingBody(r) })
+}
 
 func assetHostBody(r *http.Request) string {
 	host := r.Header.Get("X-Forwarded-Host")

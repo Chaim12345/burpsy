@@ -2323,7 +2323,9 @@
   },
   "form": {},
   "headers": {},
-  "cookies": {},
+  "cookies": {
+   "demo_user": "test"
+  },
   "body": null,
   "variant": "UNSECURE",
   "vulnerable": true,
