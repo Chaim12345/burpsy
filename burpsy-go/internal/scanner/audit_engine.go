@@ -36,6 +36,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/bcheck"
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/sender"
 	"go.uber.org/zap"
 )
@@ -1859,6 +1860,17 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 					continue
 				}
 
+				// A browser page the target answered with an HTTP error status and no document is an
+				// answer, not a failure to reach the target (burpsy-react-ui-4kmr). The browser can only
+				// navigate, so a DOM check on a POST seed loads the URL by GET, and a route mapped to POST
+				// alone answers 405 with no body. Counted as a send failure, the first two DOM checks of
+				// the unit tripped the breaker and abandoned every check after them, the login and
+				// session rows among them. There was no DOM to observe: the check ran and is undecided.
+				if runErr != nil && !errors.Is(runErr, errCheckInconclusive) && !errors.Is(runErr, errCheckUnsupported) &&
+					domexec.IsErrorStatusPage(runErr) {
+					runErr = fmt.Errorf("%w: the target answered the browser's navigation with an HTTP error status and no document to observe: %w",
+						errCheckInconclusive, runErr)
+				}
 				// A check the evaluator declined is in the same position as one with no implementation:
 				// nothing ran and nothing proved. Counted as Skipped (DispositionUnsupported) so the
 				// check set still partitions and a clean outcome cannot be read as a clean bill of
@@ -1906,7 +1918,13 @@ func (s *ActiveScanner) auditItem(ctx context.Context, exchangeID core.ExchangeI
 					}
 					// The unit and check names go in so a follow-up pass can tell a check that
 					// already failed here from one that has not been tried (burpsy-react-ui-5efx).
-					abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
+					// A browser-driven check's failure is remembered but does not count towards
+					// abandoning the unit: it is not evidence the target is failing (4kmr).
+					if checks[check].dynamicJS {
+						breaker.browserCheckFailed(units[unitIx].key, checks[check].name)
+					} else {
+						abandoned = breaker.checkFailed(units[unitIx].key, checks[check].name)
+					}
 					continue
 				}
 

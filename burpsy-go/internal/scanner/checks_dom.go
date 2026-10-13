@@ -220,10 +220,22 @@ func (s *ActiveScanner) observeTaintCached(ctx context.Context, browser *domexec
 		s.domObsMu.Unlock()
 		return obs, nil
 	}
+	if err, ok := s.domNoDoc[key]; ok {
+		s.domObsMu.Unlock()
+		return nil, err
+	}
 	s.domObsMu.Unlock()
 
 	obs, err := browser.ObserveTaint(ctx, target, source, domCanary(fmt.Sprintf("%d", idx)))
 	if err != nil {
+		if domexec.IsErrorStatusPage(err) {
+			s.domObsMu.Lock()
+			if s.domNoDoc == nil {
+				s.domNoDoc = map[string]error{}
+			}
+			s.domNoDoc[key] = err
+			s.domObsMu.Unlock()
+		}
 		return obs, err
 	}
 	s.domObsMu.Lock()

@@ -2348,6 +2348,29 @@ func (b *itemBreaker) checkSucceeded() { b.consecutiveCheckFailures = 0 }
 // map is created lazily — the common case, a run where nothing fails, allocates nothing.
 func (b *itemBreaker) checkFailed(unit, check string) bool {
 	b.consecutiveCheckFailures++
+	b.rememberFailure(unit, check)
+	return b.abandonUnitAfter > 0 && b.consecutiveCheckFailures >= b.abandonUnitAfter
+}
+
+// browserCheckFailed records that a browser-driven check failed within unit, WITHOUT counting it
+// towards abandoning the unit (burpsy-react-ui-4kmr).
+//
+// The breaker asks whether the TARGET is failing, so the probes still queued for it are pointless. A
+// browser-driven check fails for reasons of its own - the engine cannot launch, its process died, a
+// render timed out, the page it navigated to is not the request being audited - none of which says
+// anything about the HTTP checks queued behind it. Counted, two of them abandoned every check left
+// in the unit: with a DOM engine attached, the login and session rows of a POST login never ran.
+// A target that really is down fails those HTTP checks itself, and they trip the breaker as before.
+//
+// The consecutive count is left as it is, neither bumped nor reset: a browser check says nothing
+// either way about whether the transport recovered. The failure is still remembered, so a follow-up
+// pass does not re-run it blind.
+func (b *itemBreaker) browserCheckFailed(unit, check string) {
+	b.rememberFailure(unit, check)
+}
+
+// rememberFailure is the per-unit failure memory a follow-up pass consults (AlreadyFailed).
+func (b *itemBreaker) rememberFailure(unit, check string) {
 	if unit != "" && check != "" {
 		if b.failedUnits == nil {
 			b.failedUnits = make(map[string]map[string]bool)
@@ -2359,7 +2382,6 @@ func (b *itemBreaker) checkFailed(unit, check string) bool {
 		}
 		checks[check] = true
 	}
-	return b.abandonUnitAfter > 0 && b.consecutiveCheckFailures >= b.abandonUnitAfter
 }
 
 // beginPass starts a follow-up pass: the consecutive counters reset so a pass is measured against the

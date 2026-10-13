@@ -166,9 +166,14 @@ func jwtHostedCheck(row string, jwks bool) CheckRunner {
 		// The target has to have fetched the document for the header to have been honoured.
 		// Acceptance without a fetch is some other reason the response matched, and saying
 		// so is the difference between a finding and a guess.
+		//
+		// No fetch is undecided, not a failure: the forged token WAS sent and answered, and a target
+		// that ignores the header looks exactly like one that cannot reach the listener. Reported as
+		// a send failure it tripped the unit breaker on every JWT-bearing request - with its x5u
+		// twin, two in a row - and abandoned every check queued behind them (burpsy-react-ui-4kmr).
 		if !host.Fetched() {
-			return nil, fmt.Errorf("%s: the target never fetched %s, so the header could not be shown to be honoured (a target that cannot reach this scanner will always look this way)",
-				row, host.url)
+			return nil, fmt.Errorf("%s: the target never fetched %s, so the header could not be shown to be honoured (a target that cannot reach this scanner will always look this way): %w",
+				row, host.url, errCheckInconclusive)
 		}
 		if !accepted {
 			return nil, nil

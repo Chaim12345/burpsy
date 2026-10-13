@@ -82,7 +82,13 @@ type ActiveScanner struct {
 	// across two variants each asked for the same page with the same sources and then filtered the
 	// shared result by sink — roughly eighty browser tabs per exchange to learn one thing five
 	// times. Observe once, match many.
-	domObs   map[string][]domexec.Observation
+	domObs map[string][]domexec.Observation
+	// domNoDoc remembers, under the same key, a page the target answered with an HTTP error status
+	// and no document (domexec.IsErrorStatusPage) - a DOM check on a POST seed whose route answers a
+	// GET with an empty 405. Asking again cannot produce a DOM, and without this every DOM family
+	// opened its own tab to learn the same undecided answer: ~34 navigations per such exchange
+	// instead of one per source (burpsy-react-ui-4kmr). Kept as long as domObs is, for the same reason.
+	domNoDoc map[string]error
 	domObsMu sync.Mutex
 	// domStored holds the stored canaries a page's own script carried into an instrumented sink,
 	// filled by RenderStoredTargets during the deferred phase. Separate from domObs because it is

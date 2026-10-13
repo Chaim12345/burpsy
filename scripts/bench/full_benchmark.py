@@ -439,11 +439,8 @@ def abilities(a, dom, dom_note):
 
 
 DOM_SWITCHES = ("check_dom", "check_xss_browser_confirm")
-DOM_SCOPED_OFF = ("scoped off by --dom-off-categories: with a DOM engine attached, audits of non-browser POSTs "
-                  "(a JSON login, an OTP validate step) reported 2 checks 'send failed' and 50-53 'unit abandoned', "
-                  "and the session-management and login-rate-limit rows never reported: SessionManagement 0/5 "
-                  "with -dom vs 5/5 without, OTP 0/4 vs 4/4, same binary and parallelism. A scanner defect, "
-                  "reported, not fixed here")
+DOM_SCOPED_OFF = ("scoped off by --dom-off-categories: these categories were audited without the DOM engine "
+                  "at the operator's request (no longer needed for any known defect; see README)")
 
 
 def profile_body(api, a, identities, withheld):
@@ -962,8 +959,8 @@ def main():
     ap.add_argument("--reseed-minutes", type=float, default=50, help="re-fetch a case's token when older than this")
     ap.add_argument("--no-dom", action="store_true", help="run without a DOM engine (DOM checks off, listed)")
     ap.add_argument("--dom-off-categories", default="",
-                    help="categories audited WITHOUT the DOM engine, e.g. SessionManagementVulnerability (see README: "
-                         "with -dom attached its session checks never report)")
+                    help="categories audited WITHOUT the DOM engine (default: none). Not needed since "
+                         "burpsy-react-ui-4kmr was fixed; kept to measure a category with and without the browser")
     ap.add_argument("--dom-remote", default="",
                     help="ws:// CDP endpoint of a shared Chrome, or @FILE holding one (default: $BURPSY_DOM_REMOTE)")
     ap.add_argument("--chrome", default="", help="browser binary for -dom when BURPSY_DOM_REMOTE is unset")
