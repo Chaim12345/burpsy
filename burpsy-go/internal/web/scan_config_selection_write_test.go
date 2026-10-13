@@ -54,10 +54,11 @@ func TestTheIssueTypeCatalogueRouteListsEveryTypeWithItsMethods(t *testing.T) {
 	if got := string(sqli["name"]); got != `"SQL injection"` {
 		t.Errorf("name = %s, want \"SQL injection\"", got)
 	}
-	// The seven methods the SQL injection check probes: error signatures, boolean differentials, and
+	// The eight methods the SQL injection check probes: error signatures, boolean differentials, and
 	// time delays from the SQL Server and PostgreSQL banks (saq3.2.1) and burpsy's own MySQL and
-	// Oracle families (v0ei.1); Collaborator and Infiltrator stay out because burpsy does not send them.
-	if got := string(sqli["implemented_methods"]); got != `["Error messages","Boolean conditions","Time delays","SQL Server specific","MySQL specific","Oracle specific","PostgreSQL specific"]` {
+	// Oracle families (v0ei.1), and the out-of-band lookups (v0ei.3); Infiltrator stays out because
+	// burpsy does not send it.
+	if got := string(sqli["implemented_methods"]); got != `["Error messages","Boolean conditions","Time delays","Burp Collaborator","SQL Server specific","MySQL specific","Oracle specific","PostgreSQL specific"]` {
 		t.Errorf("implemented_methods = %s, want exactly the methods burpsy's SQL injection check uses", got)
 	}
 	if !strings.Contains(string(sqli["detection_methods"]), `"Time delays"`) {

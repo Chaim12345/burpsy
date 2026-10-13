@@ -164,16 +164,25 @@ func TestADisabledMethodSetLeavesACheckWithAnEnabledPairDispatchedAndWithholdsAn
 		{TypeIndex: sqlInjectionType, Method: MethodSQLServerSpecific},
 		{TypeIndex: sqlInjectionType, Method: MethodMySQLSpecific},
 		{TypeIndex: sqlInjectionType, Method: MethodOracleSpecific},
+		{TypeIndex: sqlInjectionType, Method: MethodCollaborator},
 	}}
 	if got := typesOf(scan.enabledChecksUnder(allOff))[sqlInjectionType]; got != 0 {
-		t.Errorf("with all seven methods disabled, %d SQLi checks dispatched, want 0", got)
+		t.Errorf("with all eight methods disabled, %d SQLi checks dispatched, want 0", got)
 	}
-	// A method the check never declared cannot withhold it: burpsy never planned to send one,
-	// and the decline is recorded at configuration time instead.
+	// Burp Collaborator (v0ei.3) is implemented and probe-gated like the others: disabling it alone
+	// keeps the check, whose in-band techniques still run.
 	collabOff := AuditConfig{DisabledDetectionMethods: []IssueDetectionMethod{
 		{TypeIndex: sqlInjectionType, Method: MethodCollaborator},
 	}}
 	if got := typesOf(scan.enabledChecksUnder(collabOff))[sqlInjectionType]; got != 1 {
+		t.Errorf("disabling Burp Collaborator dispatched %d SQLi checks, want 1", got)
+	}
+	// A method the check never declared cannot withhold it: burpsy never planned to send one,
+	// and the decline is recorded at configuration time instead.
+	infiltratorOff := AuditConfig{DisabledDetectionMethods: []IssueDetectionMethod{
+		{TypeIndex: sqlInjectionType, Method: MethodInfiltrator},
+	}}
+	if got := typesOf(scan.enabledChecksUnder(infiltratorOff))[sqlInjectionType]; got != 1 {
 		t.Errorf("disabling an unimplemented method dispatched %d SQLi checks, want 1", got)
 	}
 }
@@ -200,22 +209,22 @@ func TestBurpInfiltratorIsDeclinedNotSilentlyIgnored(t *testing.T) {
 		}
 	}
 	// And the other SQL injection methods the file enables that burpsy does not run are named too.
-	// Collaborator-based SQLi is not implemented, so it stays declined (saq3.2.1). Boolean
-	// conditions, SQL Server specific and — since v0ei.1, from burpsy's own documented timing forms —
-	// MySQL specific and Oracle specific ARE implemented, and a decline for an implemented method
-	// would be a lie.
+	// Infiltrator is the one SQL injection method burpsy does not run. Boolean conditions, SQL Server
+	// specific, — since v0ei.1, from burpsy's own documented timing forms — MySQL specific and Oracle
+	// specific, and — since v0ei.3 — Burp Collaborator ARE implemented, and a decline for an
+	// implemented method would be a lie.
 	var sqli []string
 	for _, d := range cfg.DeclinedDetectionMethods {
 		if d.TypeIndex == sqlInjectionType {
 			sqli = append(sqli, d.Method)
 		}
 	}
-	for _, want := range []string{MethodCollaborator} {
+	for _, want := range []string{MethodInfiltrator} {
 		if !slices.Contains(sqli, want) {
 			t.Errorf("SQL injection declines = %v, missing %q, which the file enables and burpsy does not implement", sqli, want)
 		}
 	}
-	for _, implemented := range []string{MethodErrorMessages, MethodBooleanConditions, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific} {
+	for _, implemented := range []string{MethodErrorMessages, MethodBooleanConditions, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific, MethodCollaborator} {
 		if slices.Contains(sqli, implemented) {
 			t.Errorf("%q is declined for SQL injection, but saq3.2.1 implements it: %v", implemented, sqli)
 		}

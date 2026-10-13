@@ -61,6 +61,10 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 	if offline, isOffline, err := offlineSignatureScan(cc, sqlInjectionIssue, SQLErrorSignatures, signatureOwnedByShell, sqlmapOfflineSignature); isOffline {
 		return offline, err
 	}
+	oobState := &sqlOOBState{cc: cc}
+	// stackedNote is the confirmed point's stacked-query sentence (sqli_stacked.go). The point walk
+	// stops at the first confirmed point, so the last note written is that point's.
+	var stackedNote string
 	res, err := runInjection(ctx, cc, "SQLInjectionCore", cc.ProbeInsertionKinds(),
 		func(h *ProbeHarness, p bcheck.InsertionPoint) []InjectionProbe {
 			probes := h.ProbeSQLErrorSignatures(ctx, p, sqlErrorProbePayloads())
@@ -69,15 +73,49 @@ func checkSQLInjectionCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			if _, confirmed := BestEvidence(probes); !confirmed {
 				probes = append(probes, sqlStatementEchoProbe(ctx, h, p))
 			}
-			return append(probes, blindInjectionPointProbes(ctx, h, p)...)
+			// UNION (v0ei.5) before the blind techniques: its proof is the strongest in-band one, and
+			// on a point with no SQL behaviour it costs two ORDER BY requests per context.
+			unionRan, unionConfirmed, unionCounted := false, false, false
+			if _, confirmed := BestEvidence(probes); !confirmed && ctx.Err() == nil {
+				u, counted := sqlUnionProbe(ctx, h, p, true, false)
+				probes = append(probes, u)
+				unionRan, unionConfirmed, unionCounted = true, u.Evidence == InjectionEvidenceEvaluated, counted
+			}
+			if !unionConfirmed {
+				probes = append(probes, blindInjectionPointProbes(ctx, h, p)...)
+			}
+			_, confirmed := BestEvidence(probes)
+			// A point another technique proved: learn whether UNION reaches it too (column count,
+			// reflected column, DBMS), with the NULL-count fallback this time — unless ORDER BY
+			// already settled a count here and no column reflected, which the fallback cannot change.
+			// It can only add an Evaluated probe to a point that is already a finding.
+			if confirmed && !unionConfirmed && !unionCounted && ctx.Err() == nil {
+				u, _ := sqlUnionProbe(ctx, h, p, !unionRan, true)
+				probes = append(probes, u)
+			}
+			if confirmed && stackedQueriesEnabled(h) && ctx.Err() == nil {
+				stackedNote = sqlStackedNote(ctx, h, p)
+			}
+			// Out of band (v0ei.3) only where nothing in band confirmed.
+			if !confirmed && sqlOOBEnabled(h) && ctx.Err() == nil {
+				probes = append(probes, oobState.plant(ctx, h, p)...)
+			}
+			return probes
 		})
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", sqlInjectionIssue, err)
 	}
 	if !res.confirmed {
+		if len(oobState.plants) > 0 {
+			return nil, oobState.register()
+		}
 		return nil, res.unresolved(sqlInjectionIssue)
 	}
-	return []*Finding{buildInjectionFinding(cc, sqlInjectionIssue, "high", res)}, nil
+	f := buildInjectionFinding(cc, sqlInjectionIssue, "high", res)
+	if stackedNote != "" {
+		f.Description += " " + stackedNote
+	}
+	return []*Finding{f}, nil
 }
 
 // offlineSignatureScan is the no-sender path: read the captured response for the row's signatures

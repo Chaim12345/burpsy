@@ -148,6 +148,12 @@ type ScanConfig struct {
 	// every row, so it is an opt-in on top of CheckSqli. Off by default; the narrowing `and` shapes
 	// run under CheckSqli alone.
 	CheckSqliOrBoolean bool
+	// CheckSqliStacked admits the stacked-query probe of the SQL-injection row (burpsy-react-ui-v0ei.5):
+	// on a point another technique has already proven, `;SELECT SLEEP(n)-- ` and its PostgreSQL and SQL
+	// Server spellings, confirmed under the timing evidence rule, annotate the finding with "stacked
+	// queries supported". Only a sleep is ever stacked. Off by default: it never makes a finding and a
+	// confirming walk costs several multi-second sleeps.
+	CheckSqliStacked   bool
 	CheckXss           bool
 	CheckPathTraversal bool
 	// CheckSSRF is the SSRF family switch. Its single catalog row, "Out-of-band resource

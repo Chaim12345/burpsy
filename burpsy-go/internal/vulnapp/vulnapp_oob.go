@@ -78,6 +78,7 @@ func fetchTargetHost(raw string) string {
 func registerOOBFixtures(mux *http.ServeMux) {
 	mux.HandleFunc("/oob/fetch", oobFetch)
 	mux.HandleFunc("/safe/oob/fetch", safeOOBFetch)
+	registerOOBSQLFixtures(mux)
 }
 
 // oobFetch resolves and "requests" any host it is handed.

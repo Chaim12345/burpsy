@@ -164,7 +164,10 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //     Oracle timing are burpsy's own documented forms (Burp's banks are inside ZKM string decoders
 //     this tree does not run), gated by MySQL specific and Oracle specific (v0ei.1); the SQLite,
 //     DB2, H2 and HSQLDB families have no Burp method of their own and run under Time delays.
-//     Collaborator-based SQLi is not implemented and stays declined. The check
+//     Collaborator-based SQLi plants xp_dirtree / UTL_INADDR / HTTPURITYPE / LOAD_FILE lookups
+//     (sqli_oob.go, v0ei.3) under "Burp Collaborator", only where the collaborator rows run; init
+//     below appends that method (appended there so this table's alignment is not rewritten). The
+//     UNION technique (sqli_union.go) has no Burp method and runs under the check itself. The check
 //     itself is withheld only when every declared method is disabled, per Zwy6's rule above.
 //   - OS command, PHP, SSI and server-side template injection prove execution by an echoed marker
 //     or arithmetic result (ProbeEvaluation): Burp's "String echo".
@@ -185,7 +188,7 @@ var burpIssueDetectionMethods = map[uint32][]string{
 //   - A loaded corpus check is a BCheck's active half: "Active checks".
 var burpsyDetectionMethods = map[uint32][]string{
 	0x00100100:               {MethodStringEcho},                                                                                                                                             // OS command injection
-	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific}, // SQL injection
+	0x00100200:               {MethodErrorMessages, MethodBooleanConditions, MethodTimeDelays, MethodPostgreSQLSpecific, MethodSQLServerSpecific, MethodMySQLSpecific, MethodOracleSpecific}, // SQL injection; + Burp Collaborator in init (sqli_oob.go)
 	0x00100300:               {MethodFileRetrieval},                                                                                                                                          // File path traversal
 	0x00100400:               {MethodFileRetrieval},                                                                                                                                          // XML external entity injection
 	0x00100500:               {MethodBooleanConditions},                                                                                                                                      // LDAP injection
@@ -223,6 +226,8 @@ var burpsyMethodlessTypes = map[uint32]string{
 var burpsyEngineMethods = map[uint32][]string{}
 
 func init() {
+	// SQL injection's out-of-band families (sqli_oob.go, burpsy-react-ui-v0ei.3).
+	burpsyDetectionMethods[0x00100200] = append(burpsyDetectionMethods[0x00100200], MethodCollaborator)
 	// Every DOM-based type Burp defines (static and dynamic analysis): the descriptor drives the
 	// instrumented browser, and the audit's JavaScript tail is the static half. Filled from Burp's own
 	// table rather than typed out, so a DOM row cannot be missed.
