@@ -1,26 +1,126 @@
 name: burpsy test environment
 description: >
-  Go from go.mod, plus the external tools the Go test gate exercises (Chrome check, xmllint,
-  pinned ffuf / nuclei / interactsh-client and the nuclei template corpus). Every test shard in
-  go.yml uses this, so the shards cannot drift apart in what they test against.
+  Go from go.mod (toolchain, module and build caches), the affected-mode plan for one test shard,
+  and the external tools the Go test gate exercises (Chrome check and warm-up, xmllint, pinned
+  ffuf / nuclei / interactsh-client and the nuclei template corpus). Every Go job in go.yml and
+  nightly.yml uses this, so they cannot drift apart in what they build and test against.
+
+inputs:
+  cache-flavor:
+    description: >
+      Which Go build cache to restore: one per distinct build (lint, scanner, rest, race-web,
+      race-scanner, race-rest). Jobs of one flavor compile the same packages the same way.
+    required: true
+  shard:
+    description: >
+      The scripts/ci-shard.sh shard this job runs. When set, `ci-shard.sh plan` decides whether it
+      has anything to run (affected mode, CI_AFFECTED_BASE), and the tools are installed only if so.
+    default: ""
+  tools:
+    description: Install the external test tools ("false" for a job that runs no test).
+    default: "true"
+
+outputs:
+  run:
+    description: '"true" when the shard has something to run (always "true" without a shard).'
+    value: ${{ steps.plan.outputs.run || 'true' }}
+  cache-key:
+    description: The exact key to save the Go module and build cache under after the job.
+    value: ${{ steps.gocache.outputs.key }}
+  cache-hit:
+    description: '"true" when that exact key was restored (nothing new to save).'
+    value: ${{ steps.restore.outputs.cache-hit }}
 
 runs:
   using: composite
   steps:
+    # The Go toolchain itself. setup-go downloads go1.26.2 (it is not on the runner image) and then
+    # copies it into the tool cache: 16s download+extract and 13s "Adding to the cache" in every Go
+    # job on 2026-10-09 (run 37984373730). Restoring the tool-cache directory first makes setup-go
+    # find it there (the x64.complete marker is inside the cached directory). The version comes
+    # from go.mod's toolchain/go line; a non-exact version (`go 1.26`) skips this cache rather than
+    # pin a toolchain setup-go would not have chosen.
+    - name: Go version from go.mod
+      id: gover
+      shell: bash
+      run: |
+        v=$(sed -n 's/^toolchain go\([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' burpsy-go/go.mod)
+        [ -n "$v" ] || v=$(sed -n 's/^go \([0-9]*\.[0-9]*\.[0-9]*\)$/\1/p' burpsy-go/go.mod)
+        echo "version=$v" >>"$GITHUB_OUTPUT"
+        echo "go.mod pins Go ${v:-<no exact version>}"
+
+    - name: Restore the Go toolchain
+      if: steps.gover.outputs.version != ''
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/go/${{ steps.gover.outputs.version }}
+        key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.gover.outputs.version }}
+
+    # cache: false — setup-go's own cache is keyed on go.sum alone, so it was written ONCE per
+    # go.sum by whichever job finished first (lint, which compiles no test) and never updated: the
+    # race-web shards then spent 90-130s of their 185-252s step recompiling the race build of
+    # internal/web and its dependencies on every run. The step below replaces it.
     - uses: actions/setup-go@v5
       with:
         go-version-file: burpsy-go/go.mod
-        cache-dependency-path: burpsy-go/go.sum
+        cache: false
+
+    # GOMODCACHE + GOCACHE, one cache per flavor, saved per commit by the push to master (and the
+    # nightly run) and restored by the newest prefix match everywhere else. Restore-only here; the
+    # job saves after its tests, with the key this step computes, when it is the flavor's designated
+    # saver (see go.yml). Pull requests never save: a PR's cache is visible only to that PR, and
+    # writing ~600MB per push would evict master's.
+    - name: Go cache key
+      id: gocache
+      shell: bash
+      env:
+        FLAVOR: ${{ inputs.cache-flavor }}
+        GOVER: ${{ steps.gover.outputs.version }}
+        SUM: ${{ hashFiles('burpsy-go/go.sum') }}
+      run: |
+        prefix="go-build-$FLAVOR-${RUNNER_OS}-${GOVER:-unknown}-$SUM-"
+        echo "prefix=$prefix" >>"$GITHUB_OUTPUT"
+        echo "key=$prefix$GITHUB_SHA" >>"$GITHUB_OUTPUT"
+
+    - name: Restore the Go module and build cache (${{ inputs.cache-flavor }})
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ steps.gocache.outputs.key }}
+        restore-keys: |
+          ${{ steps.gocache.outputs.prefix }}
+          go-build-${{ inputs.cache-flavor }}-${{ runner.os }}-${{ steps.gover.outputs.version || 'unknown' }}-
+
+    - name: Plan (${{ inputs.shard }})
+      id: plan
+      if: inputs.shard != ''
+      shell: bash
+      env:
+        SHARD: ${{ inputs.shard }}
+      run: scripts/ci-shard.sh plan "$SHARD"
 
     # Only the DOWNLOAD is cached: scripts/ci-install-tools.sh re-checks every archive against the
     # SHA-256 pinned in it, and fetches again on a mismatch. Keyed on that script, so bumping a pin
-    # starts a fresh cache rather than reusing an archive for the old one.
+    # starts a fresh cache rather than reusing an archive for the old one. Previous cost: ~2.5s of
+    # downloads per job (on a miss — every job missed on 2026-10-13 because the key had just changed
+    # and seven jobs raced to save it); the cache is kept because the downloads also depend on
+    # github.com release hosting being up.
+    #
+    # Chromium is NOT installed or cached: it is on the runner image (Chromium 154 on 2026-10-13).
+    # What it cost was the warm-up (13-15s per job), which ci-install-tools.sh now overlaps with
+    # the installs. xmllint comes from apt (~9s with apt-get update); caching a .deb would pin a
+    # libxml2 build against an image whose libxml2 moves under it, so it is not cached.
     - name: Restore the pinned tool and template archives
+      if: inputs.tools == 'true' && (steps.plan.outputs.run || 'true') == 'true'
       uses: actions/cache@v4
       with:
         path: ~/.cache/burpsy-ci-downloads
         key: burpsy-ci-downloads-${{ runner.os }}-${{ hashFiles('scripts/ci-install-tools.sh') }}
 
     - name: Install the pinned test tools
+      if: inputs.tools == 'true' && (steps.plan.outputs.run || 'true') == 'true'
       shell: bash
       run: scripts/ci-install-tools.sh

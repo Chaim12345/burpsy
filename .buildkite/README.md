@@ -38,7 +38,7 @@ token to an agent session as an environment secret (`BUILDKITE_API_TOKEN`), neve
 |---|---|
 | `agent image` | (Buildkite only) build or reuse the image |
 | `lint` | `lint` job: gofmt, build, vet |
-| `test` × 7 shards | `test` matrix: `scanner-budget`, `scanner-detect`, `scanner-rest`, `web`, `rest`, `race-web-0`, `race-web-1` |
+| `test` × 7 shards | `test` matrix: `scanner-budget`, `scanner-detect`, `scanner-rest-0`, `scanner-rest-1`, `rest`, `race-web-0`, `race-web-1` (always the full suite; affected mode is GitHub PRs only) |
 | `ui` | `ui` job: `bun run check`, build, bundle freshness |
 
 The `beads` and `review-gate` checks stay on GitHub only: they depend on GitHub's merge commit,

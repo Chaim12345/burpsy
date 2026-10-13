@@ -46,24 +46,48 @@ echo "found $chrome: $("$chrome" --version 2>&1 | head -1)"
 # Start it once, here, the way internal/domexec starts it (headless, no sandbox: the tests run it
 # as root in containers and as the runner user here), so a shard's first test does not pay for a
 # cold start, and so a Chrome that cannot start at all is visible here with its own error output
-# instead of only as "websocket url timeout reached" deep in a test. The time is printed; a failed
-# warm-up warns (the tests decide) and shows the tail of what Chrome said.
+# instead of only as "websocket url timeout reached" deep in a test (bead burpsy-react-ui-2o0c).
+# The time is printed; a failed warm-up warns (the tests decide) and shows the tail of what Chrome
+# said.
+#
+# It runs in the BACKGROUND while xmllint and the pinned tools install, and is reported (time, exit
+# status, stderr tail) by warm_report at the end of this script. On GitHub runners the warm-up took
+# 13-15s and the apt/download work after it ~10s, serially, in every test job (run 38360049157,
+# 2026-10-13); overlapping them takes the shorter of the two off every job. The diagnostics are
+# unchanged; the measured time now includes contention with the installs, which only makes a slow
+# start look slower, never a failed one look healthy.
 warm_log=$(mktemp)
+warm_rc=$(mktemp)
 warm_start=$(date +%s)
-if timeout 120 "$chrome" --headless --no-sandbox --disable-gpu --no-first-run --dump-dom about:blank >/dev/null 2>"$warm_log"; then
-  echo "$chrome warm-up: $(( $(date +%s) - warm_start ))s"
-else
-  echo "ci-install-tools: warning: $chrome warm-up failed after $(( $(date +%s) - warm_start ))s; its last output:" >&2
-  tail -n 25 "$warm_log" >&2
-fi
-rm -f "$warm_log"
+( rc=0; timeout 120 "$chrome" --headless --no-sandbox --disable-gpu --no-first-run --dump-dom about:blank >/dev/null 2>"$warm_log" || rc=$?
+  echo "$rc $(( $(date +%s) - warm_start ))" >"$warm_rc" ) &
+warm_pid=$!
+warm_report() {
+  [ -f "$warm_rc" ] || return 0  # already reported
+  wait "$warm_pid" || true
+  local rc secs
+  read -r rc secs <"$warm_rc" || { rc=unknown; secs="?"; }
+  if [ "$rc" = 0 ]; then
+    echo "$chrome warm-up: ${secs}s (in parallel with the installs)"
+  else
+    echo "ci-install-tools: warning: $chrome warm-up failed (exit $rc) after ${secs}s; its last output:" >&2
+    tail -n 25 "$warm_log" >&2
+  fi
+  rm -f "$warm_log" "$warm_rc"
+}
+# A failing install below must not swallow the warm-up's diagnostics.
+trap warm_report EXIT
 
 # xmllint validates the Burp-XML export against the DTD in internal/report/burpxml.go. Without it
 # those tests skip with a reason; installing it keeps CI from reporting "the export validates" over
 # a test that never ran (burpsy-react-ui-m7dk).
 if ! command -v xmllint >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-utils
+    # NEEDRESTART_SUSPEND: the runner image's needrestart apt hook otherwise restarts services
+    # (packagekit, php-fpm) after the install — ~4s of every job, for nothing a test uses. sudo
+    # resets the environment, so it is passed through env.
+    sudo env NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    sudo env NEEDRESTART_SUSPEND=1 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libxml2-utils
   else
     echo "ci-install-tools: xmllint missing and no apt-get to install it" >&2
     exit 1
@@ -146,6 +170,8 @@ if ! current templates "$TEMPLATES_SHA256" "$templates/http"; then
   stamp templates "$TEMPLATES_SHA256"
 fi
 test -d "$templates/http" || { echo "ci-install-tools: nuclei template corpus did not land in $templates" >&2; exit 1; }
+
+warm_report
 
 if [ -n "${GITHUB_PATH:-}" ]; then echo "$bin" >> "$GITHUB_PATH"; fi
 export PATH="$bin:$PATH"

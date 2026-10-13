@@ -87,6 +87,8 @@ risk=(
   "scripts/review-verdict.sh|CI gate code"
   "scripts/beads-lint.py|CI gate code"
   "scripts/ci-shard.sh|CI gate code"
+  "scripts/ci-changes.py|CI gate code"
+  "scripts/affected-go-tests.sh|CI gate code"
   "scripts/ci-install-tools.sh|CI gate code/pinned hashes"
   ".buildkite/*|CI pipeline/agent image"
   # What the `ui` job runs (package.json's `check` script) and what it installs (lockfile, bun
