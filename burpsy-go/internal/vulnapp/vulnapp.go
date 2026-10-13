@@ -148,6 +148,7 @@ var familyEndpoints = []func() []Endpoint{
 	fragmentXSSEndpoints,
 	weakCryptoEndpoints,
 	cacheXSSEndpoints,
+	jwtExposureEndpoints,
 }
 
 // familyRegistrars mirrors familyEndpoints: every family serves its own routes.
@@ -186,6 +187,7 @@ var familyRegistrars = []func(*http.ServeMux){
 	registerFragmentXSS,
 	registerWeakCrypto,
 	registerCacheXSS,
+	registerJWTExposure,
 }
 
 func coreEndpoints() []Endpoint {

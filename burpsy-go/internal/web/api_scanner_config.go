@@ -50,7 +50,9 @@ type scannerConfigView struct {
 	CheckStored             bool `json:"check_stored"`
 	CheckFileUpload         bool `json:"check_file_upload"`
 	CheckJwtForgery         bool `json:"check_jwt_forgery"`
-	CheckIDOR               bool `json:"check_idor"`
+	// The JWT credential-exposure row (scanner/jwt_exposure.go), off by default.
+	CheckJwtExposure bool `json:"check_jwt_exposure"`
+	CheckIDOR        bool `json:"check_idor"`
 	// The login rate-limit and username-enumeration rows (scanner/checks_auth_logic.go), each off by
 	// default, and the rate-limit check's burst size (0 = the scanner's default).
 	CheckLoginRateLimit      bool `json:"check_login_rate_limit"`
@@ -249,6 +251,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckStored:             c.CheckStored,
 		CheckFileUpload:         c.CheckFileUpload,
 		CheckJwtForgery:         c.CheckJwtForgery,
+		CheckJwtExposure:        c.CheckJwtExposure,
 		CheckIDOR:               c.CheckIDOR,
 
 		CheckLoginRateLimit:      c.CheckLoginRateLimit,
@@ -310,6 +313,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_stored":               func(v *scannerConfigView) *bool { return &v.CheckStored },
 	"check_file_upload":          func(v *scannerConfigView) *bool { return &v.CheckFileUpload },
 	"check_jwt_forgery":          func(v *scannerConfigView) *bool { return &v.CheckJwtForgery },
+	"check_jwt_exposure":         func(v *scannerConfigView) *bool { return &v.CheckJwtExposure },
 	"check_idor":                 func(v *scannerConfigView) *bool { return &v.CheckIDOR },
 	"check_login_rate_limit":     func(v *scannerConfigView) *bool { return &v.CheckLoginRateLimit },
 	"check_username_enumeration": func(v *scannerConfigView) *bool { return &v.CheckUsernameEnumeration },
@@ -516,6 +520,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckStored = view.CheckStored
 		c.CheckFileUpload = view.CheckFileUpload
 		c.CheckJwtForgery = view.CheckJwtForgery
+		c.CheckJwtExposure = view.CheckJwtExposure
 		c.CheckIDOR = view.CheckIDOR
 		c.CheckLoginRateLimit = view.CheckLoginRateLimit
 		c.CheckUsernameEnumeration = view.CheckUsernameEnumeration

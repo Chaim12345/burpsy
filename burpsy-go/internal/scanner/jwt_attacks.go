@@ -40,6 +40,9 @@ package scanner
 //     random constant we then sign with. Again, acceptance proves our chosen key was used;
 //   - alg none and its case variants ("JWT none algorithm supported");
 //   - a self-signed embedded jwk ("JWT self-signed JWK header supported");
+//   - a signature truncated at a NUL ("JWT signature truncated at null byte", a burpsy-native row,
+//     jwt_exposure.go): "%00" plus random bytes appended to the valid signature is accepted while the
+//     same bytes without the NUL are refused;
 //   - expired tokens ("JWT expired token accepted", a burpsy-native row: Burp's catalogue has none).
 //     Either the captured token's own exp is in the past and it is still accepted while the garbage
 //     control is rejected, or — when the token's HMAC secret falls to the configured wordlist — a
@@ -68,8 +71,8 @@ import (
 	"github.com/burpsy-go/burpsy/internal/core"
 )
 
-// jwtExpiredIssue is burpsy's own row for a server that does not enforce exp. Burp's catalogue has no
-// such issue, so the name is not a catalogue name and EnrichFinding attaches no remediation.
+// jwtExpiredIssue is burpsy's own row (b5003420, BurpsyNativeRows) for a server that does not enforce
+// exp. Burp's catalogue has no such issue; the native advisory carries its CWE-613.
 const jwtExpiredIssue = "JWT expired token accepted"
 
 // jwtForgeryEnabled admits the forgery rows. check_jwt_forgery is their own switch; the extended-
@@ -338,6 +341,9 @@ func jwtSignatureCheck(ctx context.Context, cc *CheckContext) ([]*Finding, error
 			fmt.Sprintf("%s: it got the same response as the original token (HTTP %d), sent twice, while a token "+
 				"with an altered signature and the request with no token were both answered differently", how, p.baseCode)))
 		break
+	}
+	if f := jwtNullByteFinding(ctx, cc, p); f != nil {
+		out = append(out, f)
 	}
 	if f := jwtExpiredFinding(ctx, cc, p); f != nil {
 		out = append(out, f)

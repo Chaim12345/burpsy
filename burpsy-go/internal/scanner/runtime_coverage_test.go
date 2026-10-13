@@ -834,6 +834,9 @@ func runtimeScanConfig() *ScanConfig {
 		// Weak cryptography (0vzb.28): random markers in query and body values, their computed digests
 		// and ECB block repetition looked for in the answer; the hashing and login endpoints are vulnapp's.
 		CheckWeakCrypto: true,
+		// JWT credential exposure (0vzb.29): the captured request replayed with the token's signature
+		// altered and with the token removed, to show the exposed JWT is a verified credential.
+		CheckJwtExposure: true,
 		// Cross-site WebSocket hijacking and the client-IP header checks (vulnapp_wsip.go). The first acts
 		// only on a captured cookie-authenticated handshake; the second puts loopback and documentation
 		// (203.0.113.0/24) addresses in client-IP headers, sent to the loopback target only.
@@ -1053,7 +1056,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 184
+	const wantDemonstrated = 187
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

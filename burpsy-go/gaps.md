@@ -3031,3 +3031,46 @@ Not covered:
   and five requests each. Not re-sent: destructive, account-creating or -changing, mail and payment
   paths, and POSTs with confirm/new/old/current/repeat password fields. On a login form every marker
   is a failed login, which can count towards an account lockout.
+
+## JWT gaps against VulnerableApp (2026-10-13, burpsy-react-ui-0vzb.29)
+
+JWTVulnerability was 3/20 (benchmark 9715e083); with the JWT rows selected (`--rows`), 4/20 before this
+change and 17/20 after, 0 FP (the app lists no secure JWT case). Root causes, per type:
+
+- **CLIENT_SIDE_VULNERABLE_JWT (CWE-522), scanner.** No row said a VERIFIED token was exposed: the
+  cookie-flag and token-in-URL rows fire on any cookie or URL token by shape and are posture credit
+  only. New burpsy row `b5003400` JWT credential insufficiently protected (CWE-522, also 1004, 614,
+  598, 319), switch `check_jwt_exposure`: vectors are the request line, the Set-Cookie that stored the
+  token (captured response, else same-origin history), and cleartext transport; nothing is reported
+  unless the forgery differential shows the server verifies the token. A server that verifies nothing
+  is the signature row's finding and this row stands down (LEVEL_15).
+- **SERVER_SIDE_VULNERABLE_JWT (CWE-347).** LEVEL_6#2 and LEVEL_9#2 were found ("JWT none algorithm
+  supported", "JWT self-signed JWK header supported") but Burp's transcribed catalogue files them under
+  CWE-345 and no CWE; scored as misses. The benchmark now credits those rows (and jku/x5u) for CWE-347
+  by name: each is reported only when a forged token was accepted while an altered signature was
+  refused, which is CWE-347 by definition. The catalogue itself is unchanged. LEVEL_5#2 was a scanner
+  gap: new burpsy row `b5003410` JWT signature truncated at null byte (CWE-347, 158), under
+  `check_jwt_forgery`.
+- **INSECURE_CONFIGURATION_JWT (CWE-1188), scoring.** LEVEL_4 and LEVEL_4#2 are byte-identical
+  requests; the weak-secret row cracks one signing input once, so the finding landed on whichever twin
+  ran first. full_benchmark.py now pools findings across cases with identical seeded requests.
+
+Not covered:
+
+- **LEVEL_8#2, RS256 to HS256 key confusion.** The confusion forgeries exist, but need the server's
+  public key: LEVEL_8 tokens carry no jwk/x5c/kid and the host publishes no JWKS. The same key is
+  embedded in LEVEL_9/13 tokens; harvesting public keys from other same-host tokens in history is a
+  sound follow-up, but the benchmark audits LEVEL_8 before those exchanges exist in its chunk.
+- **LEVEL_16, declared alg never checked.** The proof is a token with a changed alg header signed with
+  the server's own key; the key is HIGH strength and not in any wordlist, so it is not provable from
+  outside. Not done.
+- **LEVEL_13 (HEADER_INJECTION, CWE-113).** Reported correctly as "JWT self-signed JWK header
+  supported"; the app labels the JWT-header defect with HTTP response splitting's CWE. Not aliased.
+- **Web storage.** A JWT written to localStorage/sessionStorage by page script (CWE-922) is not
+  observed yet; the DOM engine already records Storage.setItem arguments (domexec/taint.go), so the
+  vector needs a page-render hook and a verified-token join. VulnerableApp has no such level.
+
+Fixed on the way: "JWT expired token accepted" was neither a catalogue nor a native row, so `only_rows`
+rejected it and TestEveryRegisteredCheckDeclaresItsOwnRowAndItsRiders failed on master (4b408007). It
+is now native row `b5003420` (CWE-613) riding the signature row, and its vulnapp routes declare it.
+

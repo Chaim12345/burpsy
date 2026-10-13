@@ -84,9 +84,9 @@ var (
 		map[string]any{"sub": "alice", "exp": time.Now().Add(24 * time.Hour).Unix()})
 )
 
-// JWTExpiryEndpoints names the routes of the burpsy-native "JWT expired token accepted" row, which
-// has no catalogue name and so cannot be declared in the manifest. The scanner's own test drives
-// them: vulnerable paths first, then their safe twins.
+// JWTExpiryEndpoints names the routes of the burpsy-native "JWT expired token accepted" row
+// (b5003420). They are declared in the manifest too; the scanner's own test drives them by name:
+// vulnerable paths first, then their safe twins.
 func JWTExpiryEndpoints() (vulnerable, safe []string, bearer map[string]string) {
 	return []string{"/jw/expired", "/jw/expiry"}, []string{"/jw/safe/expired", "/jw/safe/expiry"},
 		map[string]string{
@@ -137,11 +137,15 @@ func jwtEndpoints() []Endpoint {
 		{Path: "/jw/safe/url?t=release-2.4.1-build.7", Row: "Session token in URL", Safe: true,
 			Note: "a dotted value in the same parameter that is not a token"},
 
-		// The expiry routes are served but declare no row: see JWTExpiryEndpoints.
-		{Path: "/jw/expired", RequestHeaders: jwBearer(jwExpiredToken), Note: "verifies HS256, ignores exp"},
-		{Path: "/jw/safe/expired", RequestHeaders: jwBearer(jwExpiredToken), Note: "verifies HS256 and exp"},
-		{Path: "/jw/expiry", RequestHeaders: jwBearer(jwWeakToken), Note: "weak HS256 key, ignores exp"},
-		{Path: "/jw/safe/expiry", RequestHeaders: jwBearer(jwWeakToken), Note: "weak HS256 key, enforces exp"},
+		// The expiry routes: see JWTExpiryEndpoints.
+		{Path: "/jw/expired", RequestHeaders: jwBearer(jwExpiredToken), Row: "JWT expired token accepted",
+			Note: "verifies HS256, ignores exp"},
+		{Path: "/jw/safe/expired", RequestHeaders: jwBearer(jwExpiredToken), Row: "JWT expired token accepted", Safe: true,
+			Note: "verifies HS256 and exp"},
+		{Path: "/jw/expiry", RequestHeaders: jwBearer(jwWeakToken), Row: "JWT expired token accepted",
+			Note: "weak HS256 key, ignores exp"},
+		{Path: "/jw/safe/expiry", RequestHeaders: jwBearer(jwWeakToken), Row: "JWT expired token accepted", Safe: true,
+			Note: "weak HS256 key, enforces exp"},
 	}
 }
 

@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036689440,
+  "name": "JWT expired token accepted",
+  "description": "<p>The application accepts a JSON Web Token whose <code>exp</code> (expiration time) claim is in the past. The signature is verified, but the expiry is not enforced, so a token that leaked once (from a log, a browser, a proxy) works for as long as its signing key does, and logging out or a short token lifetime protects nothing.</p>\n<p>burpsy reports this only by differential: either the captured token's own <code>exp</code> is in the past and it is still accepted while the same token with an altered signature is refused, or the token's HMAC secret is a wordlist entry, the original claims re-signed by burpsy are accepted, and the same claims re-signed with <code>exp</code> a day in the past are accepted too, twice.</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Validate <code>exp</code> (and <code>nbf</code>) on every request, with at most a small clock-skew allowance, and reject tokens without an <code>exp</code> where the token is a session credential. Use a maintained JWT library with claim validation switched on.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "RFC 7519 section 4.1.4: \"exp\" (Expiration Time) Claim",
+      "url": "https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: JWT attacks",
+      "url": "https://portswigger.net/web-security/jwt"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-613: Insufficient Session Expiration",
+      "url": "https://cwe.mitre.org/data/definitions/613.html"
+    }
+  ]
+}

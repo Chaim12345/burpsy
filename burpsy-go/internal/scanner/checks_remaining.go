@@ -1006,7 +1006,11 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("GraphQL content type not validated", DispatchScopePerUrl, remainingChecksEnabled, checkGraphQLContentType),
 
 		// The three forgery rows decide by jwt_attacks.go's two-control differential.
-		nativeDescriptor("JWT signature not verified", DispatchScopePerRequest, jwtForgeryEnabled, jwtSignatureCheck),
+		// The credential-exposure row (jwt_exposure.go) rides the signature row behind its own switch,
+		// check_jwt_exposure: it is decided by the same differential.
+		nativeDescriptor("JWT signature not verified", DispatchScopePerRequest,
+			func(c *ScanConfig) bool { return jwtForgeryEnabled(c) || jwtExposureEnabled(c) },
+			jwtSignatureOrExposure(jwtSignatureCheck)),
 		nativeDescriptor("JWT none algorithm supported", DispatchScopePerRequest, jwtForgeryEnabled,
 			jwtForgeryRow("JWT none algorithm supported", func(t JWTToken) ([]string, error) {
 				return ForgeNoneAlgVariants(t), nil

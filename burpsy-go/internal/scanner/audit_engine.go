@@ -352,6 +352,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckFileUpload = false
 		case "CheckJwtForgery":
 			cfg.CheckJwtForgery = false
+		case "CheckJwtExposure":
+			cfg.CheckJwtExposure = false
 		case "CheckIDOR":
 			cfg.CheckIDOR = false
 		case "CheckLoginRateLimit":

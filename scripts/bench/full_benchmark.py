@@ -698,6 +698,12 @@ def finding_view(f, adv):
     return g
 
 
+def request_key(r):
+    """What the scanner was given for a case: every field send_seed turns into bytes."""
+    return json.dumps({k: r.get(k) for k in ("method", "url", "query", "form", "headers", "cookies", "body", "companions")},
+                      sort_keys=True, default=str)
+
+
 def score(reqs_by_test, chunks, adv, order):
     audits, per_ex, per_path = {}, collections.defaultdict(list), collections.defaultdict(list)
     for ci, d in enumerate(chunks):
@@ -715,6 +721,17 @@ def score(reqs_by_test, chunks, adv, order):
                     per_ex[t].append(g)
                 per_path[(ci, (o.get("path") or "").split("?")[0])].append(g)
     chunk_of = {a["test"]: ci for ci, d in enumerate(chunks) for a in d["audits"]}
+    # Cases the app lists more than once for one level (LEVEL_4 and LEVEL_4#2: one per AttackVector)
+    # are seeded into byte-identical requests. The scanner is given the same input twice, and a
+    # finding it deduplicates (the weak-HMAC row cracks one signing input once) lands on whichever
+    # exchange came first, so which of the twins "found" it was an accident of chunk order. Their
+    # findings are pooled: identical input, identical evidence. Only audited twins are pooled, and
+    # the row says it was.
+    twins = collections.defaultdict(list)
+    for name in order:
+        a = audits.get(name)
+        if a is not None and "error" not in a:
+            twins[request_key(reqs_by_test[name])].append(name)
     rows, untestable = [], []
     for name in order:
         r = reqs_by_test[name]
@@ -723,6 +740,9 @@ def score(reqs_by_test, chunks, adv, order):
             untestable.append({"test": name, "reason": (a or {}).get("error", "never audited")})
             continue
         res, matched_by = per_ex.get(name), "exchange"
+        pooled = [t for t in twins[request_key(r)] if t != name]
+        if pooled:
+            res = list(res or []) + [f for t in pooled for f in per_ex.get(t, [])]
         if not res:
             res = per_path.get((chunk_of[name], urllib.parse.urlsplit(r["url"]).path), [])
             matched_by = "path" if res else "none"
@@ -742,7 +762,7 @@ def score(reqs_by_test, chunks, adv, order):
             "posture_only": not det and bool(post),
             "matched": sorted({f["check_name"] for f in det}),
             "findings": sorted({"%s %s" % (f["check_name"], f["_cwes"]) for f in res}),
-            "matched_by": matched_by, "seed_status": a.get("seed_status"), "seed_note": a.get("seed_note"),
+            "matched_by": matched_by, "pooled_with": pooled, "seed_status": a.get("seed_status"), "seed_note": a.get("seed_note"),
             "reseeded": a.get("reseeded", False), "audit_secs": a.get("secs"),
         })
     return rows, untestable

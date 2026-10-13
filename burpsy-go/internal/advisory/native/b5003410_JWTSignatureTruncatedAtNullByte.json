@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036689424,
+  "name": "JWT signature truncated at null byte",
+  "description": "<p>The application's JWT verifier stops reading the signature at a null byte (an encoded <code>%00</code>, or a C-string comparison), so a token whose signature segment carries arbitrary bytes after the real signature is accepted as valid. The verifier therefore does not verify the token it was given, only a prefix of it. Tokens become malleable: one credential has unlimited distinct spellings, which defeats denylists, replay caches and revocation lists keyed on the token string, and the truncating code path is the kind that turns into a full bypass when the comparison length is attacker-controlled.</p>\n<p>burpsy reports this only by differential: the valid token with random bytes appended to its signature was refused, the token with every signature byte altered and the token with no signature were refused, and the valid token with <code>%00</code> and random bytes appended was accepted like the original, twice with two different suffixes.</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Verify JWTs with a maintained library rather than custom string handling. Decode the signature segment strictly as base64url, reject any token containing characters outside that alphabet, and compare the full decoded signature in constant time against the full expected value.</p>",
+  "webIntro": null,
+  "typicalSeverity": "LOW",
+  "references": [
+    {
+      "title": "RFC 7515 section 5.2: JWS validation",
+      "url": "https://www.rfc-editor.org/rfc/rfc7515#section-5.2"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: JWT attacks",
+      "url": "https://portswigger.net/web-security/jwt"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-347: Improper Verification of Cryptographic Signature",
+      "url": "https://cwe.mitre.org/data/definitions/347.html"
+    },
+    {
+      "title": "CWE-158: Improper Neutralization of Null Byte or NUL Character",
+      "url": "https://cwe.mitre.org/data/definitions/158.html"
+    }
+  ]
+}

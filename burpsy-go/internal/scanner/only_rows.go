@@ -79,9 +79,6 @@ var alsoReports = map[string][]string{
 	// It also files a payload that executes again when the unchanged request is replayed as stored XSS
 	// (xss_fragment.go): the replay is what proves storage, and it is the reflected check that sent it.
 	"Cross-site scripting (reflected)": {"Suspicious input transformation (reflected)", "Cross-site scripting (stored)"},
-	// The JWT forgery family runs under the signature row; an expired token the server still accepts is
-	// decided in the same differential (checks_jwt.go) and filed under its own burpsy row.
-	"JWT signature not verified": {"JWT expired token accepted"},
 }
 
 // rowSelection is OnlyRows as a set. A nil selection selects everything.

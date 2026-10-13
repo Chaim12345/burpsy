@@ -308,6 +308,11 @@ type ScanConfig struct {
 	// replays the captured request with only the token changed. CheckExtendedActive also admits
 	// them, as it did before this switch existed. Off by default.
 	CheckJwtForgery bool
+	// CheckJwtExposure admits the JWT credential-exposure row (jwt_exposure.go,
+	// burpsy-react-ui-0vzb.29): a JWT carried in the URL, set in a cookie without HttpOnly or Secure,
+	// or sent over cleartext HTTP, reported only once the server is shown to verify it (the captured
+	// request replayed with the token's signature altered and with the token removed). Off by default.
+	CheckJwtExposure bool
 	// CheckIDOR admits the insecure-direct-object-reference check (checks_idor.go,
 	// burpsy-react-ui-0vzb.12): an object id in the query, path, an id-named cookie or a read-only
 	// POST body is swapped for a neighbour, and the swap is reported only when an invalid-id control

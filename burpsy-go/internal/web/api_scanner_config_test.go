@@ -482,6 +482,21 @@ func TestConfigCarriesTheWeakCryptoCheck(t *testing.T) {
 	}
 }
 
+// The JWT credential-exposure switch is on the wire, off by default, and a PUT reaches the running scanner.
+func TestConfigCarriesTheJWTExposureCheck(t *testing.T) {
+	s := newScannerServer()
+	if got := getScannerConfig(t, s)["check_jwt_exposure"]; got != false {
+		t.Fatalf("check_jwt_exposure = %v, want present and off by default", got)
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_jwt_exposure": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckJwtExposure {
+		t.Error("the running scanner did not take check_jwt_exposure")
+	}
+}
+
 // only_rows (scanner/only_rows.go) is on the wire, empty by default, a whole replacement, persisted,
 // and refused with 400 — naming every unknown row — when it names a row no finding can carry.
 func TestConfigOnlyRowsRoundTripAndValidation(t *testing.T) {

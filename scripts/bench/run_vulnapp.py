@@ -125,6 +125,9 @@ FULL_PROFILE = {
     # Weak cryptography (0vzb.28): random markers whose computed digests (MD4/MD5/SHA-1/NTLM/LM/SHA-2), bcrypt
     # cost, plaintext record and ECB block repetition are looked for in the answer.
     "check_weak_crypto": True,
+    # JWT credential exposure (0vzb.29): a verified JWT carried in the URL, a cookie without HttpOnly or Secure,
+    # or over cleartext HTTP; the captured request is replayed with the signature altered and the token removed.
+    "check_jwt_exposure": True,
 }
 
 
@@ -252,8 +255,17 @@ def case_param(url):
 #
 #   CWE-1188 (Insecure Default Initialization) is the app's label for its weak-key and algorithm-
 #   confusion JWT levels, answered by the weak-secret row.
+#   CWE-347 (Improper Verification of Cryptographic Signature) is the app's label for its server-side
+#   JWT levels. Burp's catalogue, which burpsy transcribes unchanged, files "JWT none algorithm
+#   supported" under CWE-345 only and the jwk/jku/x5u rows under no CWE at all. Each of those rows is
+#   reported only when a forged token was ACCEPTED - unsigned, or verified with a key the scanner
+#   chose - while a token with an altered signature was refused: that is CWE-347 by its definition
+#   ("does not verify, or incorrectly verifies, the cryptographic signature"), not a neighbour of it.
+#   The weak-secret row is NOT here: there the signature is verified correctly, with a guessable key.
 CWE_PARENT_OF = {
     1188: {"JWT weak HMAC secret"},
+    347: {"JWT none algorithm supported", "JWT self-signed JWK header supported",
+          "JWT arbitrary jku header supported", "JWT arbitrary x5u header supported"},
 }
 
 # POSTURE_CREDIT_OF names posture rows that relate to a case's coarse CWE without testing the case's

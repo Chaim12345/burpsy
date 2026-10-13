@@ -280,6 +280,31 @@ func BurpsyNativeRows() []BurpsyRow {
 		CWE:       256,
 		Rides:     "Suspicious input transformation (reflected)",
 		Why:       weakCryptoRowWhy("a password returned verbatim from the server's record"),
+	}, {
+		Name:      IssueJWTCredentialExposed,
+		TypeIndex: 0xb5003400,
+		CWE:       522,
+		Rides:     "JWT signature not verified",
+		Why: "Burp's catalogue has no row for a verified JWT carried in the URL, set in a script-readable or " +
+			"non-Secure cookie, or sent in cleartext: its cookie-flag and token-in-URL rows fire on any cookie or " +
+			"URL token by shape and never show the value is a credential the server verifies. It rides the " +
+			"signature row because it is decided by that row's altered-signature differential.",
+	}, {
+		Name:      jwtExpiredIssue,
+		TypeIndex: 0xb5003420,
+		CWE:       613,
+		Rides:     "JWT signature not verified",
+		Why: "Burp's catalogue has no row for a server that accepts a JWT past its exp; JWT Editor leaves " +
+			"claim validation to the tester. It rides the signature row because it is decided in that row's " +
+			"differential (jwt_attacks.go).",
+	}, {
+		Name:      IssueJWTNullByteSignature,
+		TypeIndex: 0xb5003410,
+		CWE:       347,
+		Rides:     "JWT signature not verified",
+		Why: "Burp's catalogue has no row for a JWT verifier that truncates the signature at a NUL; its JWT rows " +
+			"are the forgeries JWT Editor automates. It rides the signature row because it is decided in that " +
+			"row's differential, against a token-with-trailing-bytes control.",
 	}}
 }
 
