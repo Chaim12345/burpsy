@@ -59,6 +59,9 @@ type pwVariant struct {
 	metaPolicy string // <meta name="referrer"> on the page
 	staticImg  bool   // the page embeds a third-party image in its markup
 	scriptImg  bool   // the page's script adds a third-party image
+	enumerate  bool   // an unknown address is answered "no account found" (404), a known one generically
+	echoEmail  bool   // the generic answer echoes the submitted address, known or not
+	throttle   int    // > 0: at most this many requests per address in pwThrottleWindow, then no mail
 }
 
 func pwRandomHex(n int) string {
@@ -106,6 +109,8 @@ var pwVariants = map[string]pwVariant{
 	"plain":          {token: pwStrong, httpLink: true}, // served over TLS, links over http://
 	"referer":        {token: pwStrong, policy: "unsafe-url", staticImg: true},
 	"referer-script": {token: pwStrong, metaPolicy: "unsafe-url", scriptImg: true},
+	"enum":           {token: pwStrong, enumerate: true},
+	"rate":           {token: pwStrong},
 
 	// Safe twins.
 	"safe-leak":           {token: pwStrong, decoy: true},
@@ -117,6 +122,8 @@ var pwVariants = map[string]pwVariant{
 	"safe-plain":          {token: pwStrong}, // served over TLS, links over https://
 	"safe-referer":        {token: pwStrong, policy: "no-referrer", staticImg: true, scriptImg: true},
 	"safe-referer-script": {token: pwStrong, metaPolicy: "no-referrer", scriptImg: true},
+	"safe-enum":           {token: pwStrong, echoEmail: true},
+	"safe-rate":           {token: pwStrong, throttle: 5},
 }
 
 type pwTok struct {
@@ -129,7 +136,12 @@ var pw = struct {
 	inbox  map[string][]map[string]any
 	tokens map[string]map[string]*pwTok // variant -> token -> state
 	seq    int
-}{inbox: map[string][]map[string]any{}, tokens: map[string]map[string]*pwTok{}}
+	asked  map[string][]time.Time // variant + " " + address -> recent accepted requests (throttled variants)
+}{inbox: map[string][]map[string]any{}, tokens: map[string]map[string]*pwTok{}, asked: map[string][]time.Time{}}
+
+// pwThrottleWindow is the throttled variant's window: the reset check's burst of requests for one
+// address (about a dozen within seconds) always exceeds 5 in it.
+const pwThrottleWindow = 30 * time.Second
 
 func pwresetEndpoints() []Endpoint {
 	req := func(v, row string, safe bool, note string) Endpoint {
@@ -145,6 +157,8 @@ func pwresetEndpoints() []Endpoint {
 		insecure = "Password reset link over unencrypted HTTP"
 		referer  = "Password reset token leaked via Referer"
 		poison   = "Password reset poisoning"
+		enum     = "Username enumeration"
+		rate     = "Password reset requests not rate limited"
 	)
 	plain := req("plain", insecure, false, "served over https, but the mailed reset link is http://")
 	plain.TLS = true
@@ -166,7 +180,13 @@ func pwresetEndpoints() []Endpoint {
 		plain,
 		req("referer", referer, false, "the reset page sends Referrer-Policy: unsafe-url and embeds a third-party image"),
 		refScript,
+		req("enum", enum, false, "an unknown address is answered 404 \"No account found for that email\", a known one "+
+			"with the generic message"),
+		req("rate", rate, false, "every reset request for the address is accepted and mailed, however many"),
 
+		req("safe-enum", enum, true, "known and unknown addresses get the same generic answer, which echoes the "+
+			"submitted address"),
+		req("safe-rate", rate, true, "more than 5 requests for one address in 30 seconds: \"Too many reset requests, try again later\" and no mail"),
 		req("safe-leak", inResp, true, "the response carries only an unrelated random csrfToken, which is not a reset token"),
 		req("safe-pred", pred, true, "128-bit random tokens"),
 		req("safe-entropy", entropy, true, "128-bit random tokens"),
@@ -219,7 +239,45 @@ func pwRequest(w http.ResponseWriter, r *http.Request, name string, v pwVariant)
 	}
 	email := strings.ToLower(strings.TrimSpace(body.Email))
 	resp := map[string]any{"message": "If the account exists, a reset link has been sent."}
+	// The decoy and the echoes are the same for every address, so only the planted defect tells a
+	// known address from an unknown one.
+	if v.decoy {
+		resp["csrfToken"] = pwRandomHex(16)
+	}
+	if v.reflectXFH {
+		resp["forwardedFor"] = r.Header.Get("X-Forwarded-Host")
+	}
+	if v.echoEmail {
+		resp["email"] = body.Email
+	}
+	if v.throttle > 0 {
+		// At most v.throttle requests per address in any pwThrottleWindow; the excess is answered 200
+		// (a 429 would make the scanner's own backoff the subject of the test) and sends no mail.
+		now := time.Now()
+		pw.Lock()
+		key := name + " " + email
+		recent := pw.asked[key][:0]
+		for _, at := range pw.asked[key] {
+			if now.Sub(at) < pwThrottleWindow {
+				recent = append(recent, at)
+			}
+		}
+		blocked := len(recent) >= v.throttle
+		if !blocked {
+			recent = append(recent, now)
+		}
+		pw.asked[key] = recent
+		pw.Unlock()
+		if blocked {
+			idorJSON(w, http.StatusOK, map[string]string{"error": "Too many reset requests, try again later"})
+			return
+		}
+	}
 	if email != name+"@pwreset.test" {
+		if v.enumerate {
+			idorJSON(w, http.StatusNotFound, map[string]string{"error": "No account found for that email"})
+			return
+		}
 		idorJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -253,12 +311,6 @@ func pwRequest(w http.ResponseWriter, r *http.Request, name string, v pwVariant)
 	pw.Unlock()
 	if v.echo {
 		resp["resetToken"] = tok
-	}
-	if v.decoy {
-		resp["csrfToken"] = pwRandomHex(16)
-	}
-	if v.reflectXFH {
-		resp["forwardedFor"] = r.Header.Get("X-Forwarded-Host")
 	}
 	idorJSON(w, http.StatusOK, resp)
 }

@@ -89,7 +89,7 @@ What it does, in order:
    |---|---|---|
    | SessionManagement | `vulnapp_session_seed.py` | the app's seeded `session_user` login |
    | PasswordReset | `vulnapp_pwreset_seed.py` | each level's reset body + a confirm companion; its accounts become `reset_test_identities` |
-   | Authentication | `vulnapp_auth_seed.py` | each level's own account name (enumeration needs a username that exists) |
+   | Authentication | `vulnapp_auth_seed.py` | each level's own working credential, name and password (enumeration needs a username that exists; levels 3-6 and 10 show the stored password or hash only after a successful login) |
    | JWT | `vulnapp_jwt_seed.py` | each level's own issued token, where that level reads it (query, `Authorization`, or cookie), without `fetch` |
    | IDOR | `vulnapp_idor_seed.py` | a real login's cookies (tokens expire after an hour) |
    | OTP | `vulnapp_otp_seed.py` | each level's account, plus its `/validate` step as an AUDITED companion |

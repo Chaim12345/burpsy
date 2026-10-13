@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,33 +19,43 @@ import (
 )
 
 var pwrRows = []string{pwrTokenInResponse, pwrPredictable, pwrLowEntropy, pwrReusable, pwrNoExpiry,
-	pwrInsecureLink, pwrReferer, pwrPoisoning}
+	pwrInsecureLink, pwrReferer, pwrPoisoning, pwrNoRateLimit, IssueUsernameEnumeration}
 
 // Every reset variant reports exactly the password-reset rows its defect explains — the planted row,
-// plus the http:// link every cleartext variant mails — and nothing else of the family. This is the
-// cross-row half the per-row manifest assertions cannot see: a safe twin of one row reporting another.
+// plus the http:// link every cleartext variant mails and the missing rate limit every variant but
+// safe-rate has — and nothing else of the family. This is the cross-row half the per-row manifest
+// assertions cannot see: a safe twin of one row reporting another.
 func TestPasswordResetRowsPerVariant(t *testing.T) {
 	rt := startRuntimeTarget(t)
+	// leak answers a known address with its token and an unknown one without: that is enumeration too.
 	want := map[string][]string{
-		"leak":                {pwrTokenInResponse, pwrInsecureLink},
-		"clock":               {pwrPredictable, pwrInsecureLink},
-		"weak":                {pwrLowEntropy, pwrInsecureLink},
-		"reuse":               {pwrReusable, pwrInsecureLink},
-		"jwt":                 {pwrNoExpiry, pwrInsecureLink},
-		"poison":              {pwrPoisoning, pwrInsecureLink},
-		"plain":               {pwrInsecureLink},
-		"referer":             {pwrReferer, pwrInsecureLink},
-		"referer-script":      {pwrReferer, pwrInsecureLink},
-		"safe-leak":           {pwrInsecureLink},
-		"safe-pred":           {pwrInsecureLink},
-		"safe-entropy":        {pwrInsecureLink},
-		"safe-reuse":          {pwrInsecureLink},
-		"safe-jwt":            {pwrInsecureLink},
-		"safe-poison":         {pwrInsecureLink},
-		"safe-plain":          {},
-		"safe-referer":        {pwrInsecureLink},
-		"safe-referer-script": {pwrInsecureLink},
+		"leak":                {pwrTokenInResponse, pwrInsecureLink, pwrNoRateLimit, IssueUsernameEnumeration},
+		"clock":               {pwrPredictable, pwrInsecureLink, pwrNoRateLimit},
+		"weak":                {pwrLowEntropy, pwrInsecureLink, pwrNoRateLimit},
+		"reuse":               {pwrReusable, pwrInsecureLink, pwrNoRateLimit},
+		"jwt":                 {pwrNoExpiry, pwrInsecureLink, pwrNoRateLimit},
+		"poison":              {pwrPoisoning, pwrInsecureLink, pwrNoRateLimit},
+		"plain":               {pwrInsecureLink, pwrNoRateLimit},
+		"referer":             {pwrReferer, pwrInsecureLink, pwrNoRateLimit},
+		"referer-script":      {pwrReferer, pwrInsecureLink, pwrNoRateLimit},
+		"enum":                {IssueUsernameEnumeration, pwrInsecureLink, pwrNoRateLimit},
+		"rate":                {pwrInsecureLink, pwrNoRateLimit},
+		"safe-leak":           {pwrInsecureLink, pwrNoRateLimit},
+		"safe-pred":           {pwrInsecureLink, pwrNoRateLimit},
+		"safe-entropy":        {pwrInsecureLink, pwrNoRateLimit},
+		"safe-reuse":          {pwrInsecureLink, pwrNoRateLimit},
+		"safe-jwt":            {pwrInsecureLink, pwrNoRateLimit},
+		"safe-poison":         {pwrInsecureLink, pwrNoRateLimit},
+		"safe-plain":          {pwrNoRateLimit},
+		"safe-referer":        {pwrInsecureLink, pwrNoRateLimit},
+		"safe-referer-script": {pwrInsecureLink, pwrNoRateLimit},
+		"safe-enum":           {pwrInsecureLink, pwrNoRateLimit},
 	}
+	// safe-rate throttles by address, and every other check of the audit re-sends the captured request
+	// too, so whether the reset check's own first request still gets a token depends on timing. Only
+	// the rows its throttle answers are pinned: absent. TestPasswordResetRateNeedsDeliveryAndNoThrottle
+	// pins the guard itself.
+	absentOnly := map[string][]string{"safe-rate": {pwrNoRateLimit, IssueUsernameEnumeration}}
 	seen := 0
 	for _, e := range vulnapp.Vulnerabilities() {
 		if !strings.HasPrefix(e.Path, "/pwreset/") {
@@ -50,7 +63,8 @@ func TestPasswordResetRowsPerVariant(t *testing.T) {
 		}
 		variant := strings.TrimSuffix(strings.TrimPrefix(e.Path, "/pwreset/"), "/request")
 		exp, ok := want[variant]
-		if !ok {
+		absent, onlyAbsent := absentOnly[variant]
+		if !ok && !onlyAbsent {
 			t.Fatalf("variant %q has no expectation here", variant)
 		}
 		seen++
@@ -61,6 +75,14 @@ func TestPasswordResetRowsPerVariant(t *testing.T) {
 				t.Skip("no Chrome on PATH: this browser-observed variant is NOT exercised in this run")
 			}
 			got := rt.findingsFor(t, e.Path, e.DOM)
+			if onlyAbsent {
+				for _, r := range absent {
+					if f := got[r]; f != nil {
+						t.Errorf("%s (%s): %q reported: %s", e.Path, e.Note, r, f.Evidence)
+					}
+				}
+				return
+			}
 			var have []string
 			for _, r := range pwrRows {
 				if got[r] != nil {
@@ -80,7 +102,7 @@ func TestPasswordResetRowsPerVariant(t *testing.T) {
 			}
 		})
 	}
-	if seen != len(want) {
+	if seen != len(want)+len(absentOnly) {
 		t.Fatalf("exercised %d variants, expectations cover %d", seen, len(want))
 	}
 }
@@ -182,4 +204,95 @@ func TestPasswordResetTokensInText(t *testing.T) {
 	if len(got) != 1 || got[0].value != "abcd1234" || got[0].param != "resetToken" {
 		t.Fatalf("got %+v", got)
 	}
+}
+
+// The rate verdict needs every reset request to have delivered a message and none to be throttled;
+// each guard alone keeps it undecided.
+func TestPasswordResetRateNeedsDeliveryAndNoThrottle(t *testing.T) {
+	ok := func() *pwrIssuance {
+		return &pwrIssuance{resp: ProbeResponse{Status: 200, Body: `{"message":"If the account exists, a link was sent"}`},
+			mailText: "Reset: https://app.test/r?token=x"}
+	}
+	run := func(mut func([]*pwrIssuance)) bool {
+		p := &pwrProber{}
+		for i := 0; i < pwrRateMin; i++ {
+			p.issued = append(p.issued, ok())
+		}
+		if mut != nil {
+			mut(p.issued)
+		}
+		return p.rateUndecided()
+	}
+	if run(nil) {
+		t.Fatal("ten delivered, unthrottled requests were left undecided")
+	}
+	if !run(func(is []*pwrIssuance) { is[7].mailText = "" }) {
+		t.Error("a request that delivered nothing (a silent limit) was not treated as undecided")
+	}
+	if !run(func(is []*pwrIssuance) {
+		is[6].resp = ProbeResponse{Status: 200, Body: `{"error":"Too many reset requests, try again later"}`}
+	}) {
+		t.Error("a throttled answer (HTTP 200, wording) was not treated as undecided")
+	}
+	if !run(func(is []*pwrIssuance) { is[3].resp = ProbeResponse{Status: 429} }) {
+		t.Error("an HTTP 429 answer was not treated as undecided")
+	}
+}
+
+// Enumeration through the reset form needs a stable difference between the declared identity and
+// invented ones that is not a throttle and not the echoed address.
+func TestPasswordResetEnumerationNeedsAStableUnthrottledDifference(t *testing.T) {
+	const me = "me@corp.test"
+	run := func(t *testing.T, answer func(email string) string) *Finding {
+		t.Helper()
+		cc := harnessAgainst(t, func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, answer(r.URL.Query().Get("email")))
+		}, "/forgot?email="+url.QueryEscape(me))
+		cc.Config = &ScanConfig{CheckPasswordReset: true, ResetTestIdentities: []string{me}}
+		raw := requestRaw(cc.Scanner, cc.Exchange)
+		p := &pwrProber{cc: cc, raw: raw, identity: me}
+		h, err := NewProbeHarness(context.Background(), cc, []string{"query", "body"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.h = h
+		base := h.Baseline()
+		first, err := p.issue(context.Background(), raw, &base, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := p.enumeration(context.Background(), first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	generic := `{"message":"If the account exists, a link was sent to %s"}`
+	t.Run("not found for unknown", func(t *testing.T) {
+		f := run(t, func(e string) string {
+			if e == me {
+				return fmt.Sprintf(generic, e)
+			}
+			return `{"error":"No account found for ` + e + `"}`
+		})
+		if f == nil || f.Name != IssueUsernameEnumeration {
+			t.Fatalf("a not-found answer for invented identities was not reported: %+v", f)
+		}
+	})
+	t.Run("same answer echoing the address", func(t *testing.T) {
+		if f := run(t, func(e string) string { return fmt.Sprintf(generic, e) }); f != nil {
+			t.Fatalf("an identical answer that echoes the address was reported: %s", f.Evidence)
+		}
+	})
+	t.Run("known identity throttled", func(t *testing.T) {
+		f := run(t, func(e string) string {
+			if e == me {
+				return `{"error":"Too many reset requests for this account, try again later"}`
+			}
+			return fmt.Sprintf(generic, e)
+		})
+		if f != nil {
+			t.Fatalf("a per-account throttle was reported as enumeration: %s", f.Evidence)
+		}
+	})
 }

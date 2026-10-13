@@ -26,7 +26,9 @@ package scanner
 //   - Password reset token with insufficient entropy: at least four distinct samples whose varying
 //     part, after the common prefix and suffix, has a computed keyspace of at most 10^6.
 //   - Reusable password reset token: the same fresh token succeeds twice in the confirm request (two
-//     different new passwords), under the same two-random-token control.
+//     different new passwords), under the same two-random-token control. Its classification carries
+//     CWE-613 beside CWE-640: use is the one expiry event every reset token has, and a token that
+//     survives it is an old credential accepted again, which is CWE-613's definition.
 //   - Password reset token without expiry: the token is a JWT with no exp claim. Tentative: a server
 //     may still expire it from its own records. Nothing here waits real time.
 //   - Password reset link over unencrypted HTTP: a link carrying an issued token whose scheme is
@@ -38,6 +40,12 @@ package scanner
 //     the full URL cross-origin (header or meta) AND a cross-origin subresource in the markup.
 //   - Password reset poisoning: the reset request re-sent with a forwarding header (or Host) naming a
 //     random canary host returns or mails a link whose host is that canary.
+//   - Username enumeration (the login check's row): the reset request's answer for the declared
+//     identity differs from its answer for invented identities of the same shape, each side internally
+//     identical after masking the submitted values, and no answer throttled (checks_pwreset_account.go).
+//   - Password reset requests not rate limited: at least pwrRateMin reset requests for the declared
+//     identity, every one answered without a sign of throttling AND each delivering its own message
+//     to the test inbox (checks_pwreset_account.go).
 //
 // # What it does to the target
 //
@@ -90,6 +98,7 @@ const (
 	pwrInsecureLink    = "Password reset link over unencrypted HTTP"
 	pwrReferer         = "Password reset token leaked via Referer"
 	pwrPoisoning       = "Password reset poisoning"
+	pwrNoRateLimit     = "Password reset requests not rate limited"
 )
 
 func pwresetEnabled(c *ScanConfig) bool { return c != nil && c.CheckPasswordReset }
@@ -285,6 +294,9 @@ type pwrProber struct {
 	offsetN   int
 	offsetSet bool
 	notes     []string
+	// issued is every reset request this prober sent for the declared identity, in order: the
+	// rate-limit verdict reads them all (checks_pwreset_account.go).
+	issued []*pwrIssuance
 }
 
 func (p *pwrProber) send(ctx context.Context, raw string) (ProbeResponse, error) {
@@ -319,6 +331,7 @@ func (p *pwrProber) issue(ctx context.Context, raw string, first *ProbeResponse,
 	}
 	is.recv = time.Now()
 	p.last = is.recv
+	p.issued = append(p.issued, is)
 	if d := headerValue(string(is.resp.Raw), "Date"); d != "" {
 		if t, err := http.ParseTime(d); err == nil {
 			is.server = t.Unix()
@@ -339,7 +352,10 @@ func (p *pwrProber) issue(ctx context.Context, raw string, first *ProbeResponse,
 		}
 	}
 	is.links = append(is.links, pwrURLs(is.resp.Body)...)
-	if p.mail != nil {
+	if p.mail != nil && throttleSignal(is.resp) != "" {
+		// A throttled answer sends nothing; waiting for its message would only spend pwrMailWait.
+		p.notes = append(p.notes, "a reset request was throttled: "+throttleSignal(is.resp))
+	} else if p.mail != nil {
 		text, err := p.mail.waitNew(ctx, pwrMailWait)
 		if err != nil {
 			p.notes = append(p.notes, "mailbox: "+err.Error())
@@ -381,6 +397,14 @@ func (p *pwrProber) run(ctx context.Context) ([]*Finding, error) {
 	var findings []*Finding
 	var failures []string
 
+	// Enumeration before anything else: its known side is the identity's second request, so a
+	// per-account limit cannot have engaged yet (a throttled answer leaves it undecided anyway).
+	if f, err := p.enumeration(ctx, first); err != nil {
+		failures = append(failures, err.Error())
+	} else if f != nil {
+		findings = append(findings, f)
+	}
+
 	// Poisoning first: its probes are not samples.
 	if f, err := p.poisoning(ctx); err != nil {
 		failures = append(failures, err.Error())
@@ -419,6 +443,12 @@ func (p *pwrProber) run(ctx context.Context) ([]*Finding, error) {
 		failures = append(failures, errs...)
 	}
 	if f := p.insecureLink(issuances); f != nil {
+		findings = append(findings, f)
+	}
+	// Last: it reads every reset request sent above, topped up to pwrRateMin.
+	if f, err := p.rateLimit(ctx); err != nil {
+		failures = append(failures, err.Error())
+	} else if f != nil {
 		findings = append(findings, f)
 	}
 	if len(findings) == 0 && len(failures) > 0 {

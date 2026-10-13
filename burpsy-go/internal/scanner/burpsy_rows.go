@@ -102,6 +102,14 @@ func BurpsyNativeRows() []BurpsyRow {
 		Rides:     "SMTP header injection",
 		Why:       pwrRowWhy("a reset link built from an attacker-supplied Host or forwarding header"),
 	}, {
+		Name:      pwrNoRateLimit,
+		TypeIndex: 0xb5000880,
+		CWE:       799,
+		Rides:     "SMTP header injection",
+		Why: pwrRowWhy("how many reset messages one account can be sent") + " The login row 'Authentication " +
+			"attempts not rate limited' (CWE-307) is about failed authentication attempts; a reset request is not " +
+			"one, so this is its own row under CWE-799.",
+	}, {
 		Name:      sessionFixationIssue,
 		TypeIndex: 0xb5000400,
 		CWE:       384,

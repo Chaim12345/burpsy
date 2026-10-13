@@ -79,6 +79,9 @@ var alsoReports = map[string][]string{
 	// It also files a payload that executes again when the unchanged request is replayed as stored XSS
 	// (xss_fragment.go): the replay is what proves storage, and it is the reflected check that sent it.
 	"Cross-site scripting (reflected)": {"Suspicious input transformation (reflected)", "Cross-site scripting (stored)"},
+	// The password-reset check (checks_pwreset_account.go) files a reset form that answers existing and
+	// unknown accounts differently under the login check's enumeration row: it is the same class.
+	"SMTP header injection": {"Username enumeration"},
 }
 
 // rowSelection is OnlyRows as a set. A nil selection selects everything.
