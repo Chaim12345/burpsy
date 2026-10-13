@@ -102,6 +102,7 @@ which is what carries its CWE onto the finding.
 | `b5002c00` | Server-side parameter pollution (query string) | 235 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
 | `b5002c10` | Server-side parameter pollution (REST path) | 74 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
 | `b5002c20` | Server-side parameter pollution (structured data) | 74 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
+| `b5003000` | LLM prompt injection | 1427 | Server-side template injection | `check_llm_prompt_injection` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no

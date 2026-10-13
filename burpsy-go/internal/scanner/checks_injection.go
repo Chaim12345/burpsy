@@ -506,7 +506,13 @@ func InjectionCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("XPath injection", DispatchScopePerUrl, injectionChecksEnabled, checkXPathInjection),
 		nativeDescriptor("XML injection", DispatchScopePerUrl, injectionChecksEnabled, checkXMLInjection),
 		nativeDescriptor("File path manipulation", DispatchScopePerUrl, injectionChecksEnabled, checkFilePathManipulation),
-		nativeDescriptor("Server-side template injection", DispatchScopePerUrl, injectionChecksEnabled, checkServerSideTemplateInjection),
+		// The LLM prompt injection check (checks_llm.go) rides this row behind its own switch: its finding
+		// is burpsy's own "LLM prompt injection" row (CWE-1427), an instruction in user input executed by
+		// a server-side interpreter and proven by a computed value, and the registry admits one
+		// descriptor per Burp catalogue type.
+		nativeDescriptor("Server-side template injection", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return injectionChecksEnabled(c) || llmEnabled(c) },
+			sstiOrLLM(checkServerSideTemplateInjection)),
 		nativeDescriptor("Expression Language injection", DispatchScopePerUrl, injectionChecksEnabled, checkExpressionLanguageInjection),
 
 		nativeDescriptor("PHP code injection", DispatchScopePerUrl, injectionChecksEnabled,

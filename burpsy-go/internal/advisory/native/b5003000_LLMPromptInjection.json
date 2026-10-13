@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036688384,
+  "name": "LLM prompt injection",
+  "description": "<p>LLM prompt injection arises when an application places user-supplied input into the prompt of a large language model (LLM) without separating it from the application's own instructions. The model cannot reliably tell the two apart, so instructions in the input are followed as though the application had given them. Direct prompt injection places the instruction in the user's own message; indirect prompt injection places it in data the model reads later (a stored review, a web page, an email).</p>\n<p>An attacker can typically override the application's instructions: disclose the system prompt or data in the model's context, make the model call the APIs and tools it has been given with arguments of the attacker's choosing, or have it produce content that the application then trusts. The impact depends on what the model can reach: a model that can query other users' records, send messages or change state turns prompt injection into data disclosure or unauthorised actions (excessive agency), and output rendered into a page unencoded turns it into cross-site scripting (insecure output handling).</p>\n<p>burpsy reports this only when an appended, benign instruction was followed: the model was asked to start its reply with the sum of two random numbers followed by a random word, or with a random word spelt backwards, and the answer carried that result, which the request never contains. The same request carrying the same random material without the instruction did not produce it, and at least two of three attempts with fresh material held. The instruction asks for nothing but that transform; no tool, function or data is requested.</p><p>This row is burpsy's own: Burp's issue catalogue has no LLM entry.</p>",
+  "remediation": "<p>Treat everything a user or a third-party document supplies as data, never as instructions: pass it in its own message role or a clearly delimited block, and do not rely on the system prompt to make the model ignore instructions in it. Give the model only the data, APIs and tools the current user may already use, enforce that user's authorisation in the API rather than in the prompt, and require explicit user confirmation for any action with side effects. Treat the model's output as untrusted: encode it for the context it is placed in, and validate it before it reaches any interpreter or API.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Web LLM attacks",
+      "url": "https://portswigger.net/web-security/llm-attacks"
+    },
+    {
+      "title": "OWASP Top 10 for LLM Applications: LLM01 Prompt Injection",
+      "url": "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-1427: Improper Neutralization of Input Used for LLM Prompting",
+      "url": "https://cwe.mitre.org/data/definitions/1427.html"
+    }
+  ]
+}

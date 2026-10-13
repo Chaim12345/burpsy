@@ -360,6 +360,12 @@ type ScanConfig struct {
 	// against its once-more-encoded literal and a plain random value, for burpsy's query-string,
 	// REST-path and structured-data rows. GET and POST only. Off by default.
 	CheckServerSideParamPollution bool
+	// CheckLLMPromptInjection admits the LLM prompt injection check (checks_llm.go,
+	// burpsy-react-ui-0vzb.18): on a request a model likely answers, a benign instruction asking for
+	// the sum of two random numbers or a random word reversed is appended to a text value, against a
+	// control carrying the same material without the instruction; two of three attempts must hold.
+	// GET and POST only. Off by default.
+	CheckLLMPromptInjection bool
 	// CheckWebSocketHijacking admits the cross-site WebSocket hijacking check (checks_ws_hijack.go):
 	// a captured cookie-authenticated handshake is re-opened with a random .invalid Origin and with no
 	// cookies, reading only what the server sends on connect. Off by default: it opens authenticated

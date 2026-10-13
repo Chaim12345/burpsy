@@ -814,6 +814,9 @@ func runtimeScanConfig() *ScanConfig {
 		// Server-side parameter pollution (0vzb.3): delimiters appended to query and body values of GET
 		// and POST requests, each against its literal control; the internal APIs are vulnapp's own.
 		CheckServerSideParamPollution: true,
+		// LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of
+		// requests a model likely answers; the stand-in models are vulnapp's own.
+		CheckLLMPromptInjection: true,
 		// Cross-site WebSocket hijacking and the client-IP header checks (vulnapp_wsip.go). The first acts
 		// only on a captured cookie-authenticated handshake; the second puts loopback and documentation
 		// (203.0.113.0/24) addresses in client-IP headers, sent to the loopback target only.
@@ -1028,7 +1031,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 179
+	const wantDemonstrated = 180
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

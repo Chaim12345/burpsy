@@ -246,6 +246,16 @@ func BurpsyNativeRows() []BurpsyRow {
 		CWE:       74,
 		Rides:     "Client-side HTTP parameter pollution (reflected)",
 		Why:       ssppRowWhy("a value that adds a member to an internal JSON document"),
+	}, {
+		Name:      IssueLLMPromptInjection,
+		TypeIndex: 0xb5003000,
+		CWE:       1427,
+		Rides:     "Server-side template injection",
+		Why: "Burp's catalogue has no LLM row: PortSwigger documents prompt injection as an Academy topic " +
+			"(Web LLM attacks) tested by hand, and Burp's scanner sends no instruction to a model. It rides " +
+			"'Server-side template injection' because both are instructions in user input executed by a " +
+			"server-side interpreter, proven the same way: by a value computed from operands only the " +
+			"instruction names.",
 	}}
 }
 

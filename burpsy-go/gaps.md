@@ -2960,3 +2960,39 @@ Not covered:
   set is ~30 requests, i.e. ~30 mails. A mail-sending endpoint with neutral names is still probed.
 - **VulnerableApp** has no parameter-pollution family; the rows cannot move its TP count, only add
   false positives.
+## LLM prompt injection (2026-10-13, burpsy-react-ui-0vzb.18)
+
+One burpsy row (`b5003000` LLM prompt injection, CWE-1427) under `check_llm_prompt_injection`, off by
+default, riding "Server-side template injection". Burp's catalogue has no LLM row; PortSwigger
+documents the class as an Academy topic (Web LLM attacks) tested by hand. Direct injection only: a
+benign instruction (start the reply with A+B followed by a random word, or a random word reversed)
+appended to a text value; the transform must be in the answer and not in an instruction-free control
+carrying the same material, the baseline or the request; two of three attempts.
+
+Not covered:
+
+- **Indirect prompt injection** (the instruction planted in a stored review, profile or document the
+  model later reads, as in the Academy's indirect lab) is not tested. The stored-canary machinery
+  could carry it, but planting an instruction in a stored field other users' sessions feed to a model
+  is a write that outlives the scan; it needs its own opt-in.
+- **WebSocket chat** (the Academy labs' live chat) is not probed: insertion points are query and body
+  values of GET/POST requests only. JSON chat bodies are probed through their nested string values
+  (each `content` of `messages`, the system message included when the client sends it).
+- **Excessive agency and insecure output handling are not reported.** Neither can be proven without
+  asking the model to call a tool or API, or to emit active markup, which this check never does. A
+  model that obeys the canary instruction is reported as prompt injection only; what it can reach is
+  the tester's step.
+- **Endpoint selection is name and shape based**: a model behind a parameter with an unrelated name
+  (`id`, `s`) whose value is not natural language, on a path with no chat/completion/assistant/ask
+  word and no stream, is not probed. A one-word value in a generic text parameter (`q=shoes`) is not
+  probed either.
+- **Real models are not deterministic and are poor at reversing random strings**; a model that
+  follows instructions but fails both sum attempts (or one sum and the reversal) is not reported. The
+  stand-in models in vulnapp are deterministic; no live model was measured.
+- **The request guard** (evidence absent from the probe request in any spelling) has no fixture that
+  depends on it: the evidence is a transform the request never carries by construction, so it is a
+  backstop for a future wording change.
+- **Requests**: GET and POST only; destructive path words skip the request, and so does any POST whose
+  path or parameter names suggest mail, notification, contact or payment side effects (every attempt
+  is a real message to the model, ~6 per parameter, at most 4 parameters).
+- **VulnerableApp** has no LLM family; the row cannot move its TP count, only add false positives.

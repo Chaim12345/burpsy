@@ -119,6 +119,9 @@ FULL_PROFILE = {
     # Server-side parameter pollution (0vzb.3): delimiters appended to query/body values of GET/POST requests.
     # VulnerableApp has no parameter-pollution family, so every firing here is off-target.
     "check_server_side_parameter_pollution": True,
+    # LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of requests a
+    # model likely answers. VulnerableApp has no LLM family, so every firing here is off-target.
+    "check_llm_prompt_injection": True,
 }
 
 

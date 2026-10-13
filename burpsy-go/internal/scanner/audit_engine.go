@@ -363,6 +363,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckNoSQLInjection = false
 		case "CheckServerSideParamPollution":
 			cfg.CheckServerSideParamPollution = false
+		case "CheckLLMPromptInjection":
+			cfg.CheckLLMPromptInjection = false
 		case "CheckWebSocketHijacking":
 			cfg.CheckWebSocketHijacking = false
 		case "CheckClientIPSpoofing":

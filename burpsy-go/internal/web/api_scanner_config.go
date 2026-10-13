@@ -82,6 +82,8 @@ type scannerConfigView struct {
 	CheckClientIPSpoofing bool `json:"check_client_ip_spoofing"`
 	// The server-side parameter pollution check (scanner/checks_sspp.go), off by default.
 	CheckServerSideParamPollution bool `json:"check_server_side_parameter_pollution"`
+	// The LLM prompt injection check (scanner/checks_llm.go), off by default.
+	CheckLLMPromptInjection bool `json:"check_llm_prompt_injection"`
 
 	// The cookie prefix / SameSite rows (scanner/checks_cookie_attrs.go) and the subdomain-takeover row
 	// (scanner/checks_takeover.go), both passive and off by default.
@@ -258,6 +260,7 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckWebSocketHijacking:       c.CheckWebSocketHijacking,
 		CheckClientIPSpoofing:         c.CheckClientIPSpoofing,
 		CheckServerSideParamPollution: c.CheckServerSideParamPollution,
+		CheckLLMPromptInjection:       c.CheckLLMPromptInjection,
 
 		CheckCookieAttributes:  c.CheckCookieAttributes,
 		CheckSubdomainTakeover: c.CheckSubdomainTakeover,
@@ -312,6 +315,7 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_websocket_hijacking":             func(v *scannerConfigView) *bool { return &v.CheckWebSocketHijacking },
 	"check_client_ip_spoofing":              func(v *scannerConfigView) *bool { return &v.CheckClientIPSpoofing },
 	"check_server_side_parameter_pollution": func(v *scannerConfigView) *bool { return &v.CheckServerSideParamPollution },
+	"check_llm_prompt_injection":            func(v *scannerConfigView) *bool { return &v.CheckLLMPromptInjection },
 	"check_cookie_attributes":               func(v *scannerConfigView) *bool { return &v.CheckCookieAttributes },
 	"check_subdomain_takeover":              func(v *scannerConfigView) *bool { return &v.CheckSubdomainTakeover },
 }
@@ -490,6 +494,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckWebSocketHijacking = view.CheckWebSocketHijacking
 		c.CheckClientIPSpoofing = view.CheckClientIPSpoofing
 		c.CheckServerSideParamPollution = view.CheckServerSideParamPollution
+		c.CheckLLMPromptInjection = view.CheckLLMPromptInjection
 		c.CheckCookieAttributes = view.CheckCookieAttributes
 		c.CheckSubdomainTakeover = view.CheckSubdomainTakeover
 		if xssTargets != nil {
