@@ -366,6 +366,8 @@ func zeroFamilies(cfg *ScanConfig, families []string) {
 			cfg.CheckServerSideParamPollution = false
 		case "CheckLLMPromptInjection":
 			cfg.CheckLLMPromptInjection = false
+		case "CheckWeakCrypto":
+			cfg.CheckWeakCrypto = false
 		case "CheckWebSocketHijacking":
 			cfg.CheckWebSocketHijacking = false
 		case "CheckClientIPSpoofing":

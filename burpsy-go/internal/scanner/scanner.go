@@ -384,6 +384,13 @@ type ScanConfig struct {
 	// control carrying the same material without the instruction; two of three attempts must hold.
 	// GET and POST only. Off by default.
 	CheckLLMPromptInjection bool
+	// CheckWeakCrypto admits the weak-cryptography check (checks_weakcrypto.go,
+	// burpsy-react-ui-0vzb.28): fresh random markers are submitted and the answer is searched for their
+	// computed MD4/MD5/SHA-1/NTLM/LM/SHA-2 digests (confirmed with a second marker), a low-cost bcrypt
+	// of the submitted password, a plaintext password returned from the record, and ECB block
+	// repetition. GET and POST only; at most four parameters and five requests each. Off by default:
+	// on a login form the markers are failed logins.
+	CheckWeakCrypto bool
 	// CheckWebSocketHijacking admits the cross-site WebSocket hijacking check (checks_ws_hijack.go):
 	// a captured cookie-authenticated handshake is re-opened with a random .invalid Origin and with no
 	// cookies, reading only what the server sends on connect. Off by default: it opens authenticated

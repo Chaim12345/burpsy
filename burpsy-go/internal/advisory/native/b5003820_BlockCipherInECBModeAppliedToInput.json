@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036690464,
+  "name": "Block cipher in ECB mode applied to input",
+  "description": "<p>The application encrypts user input with a block cipher in electronic codebook (ECB) mode, or another deterministic mode without an initialisation vector, and discloses the ciphertext. In ECB mode every block is encrypted independently under the same key, so identical plaintext blocks give identical ciphertext blocks: the ciphertext reveals which parts of the plaintext are equal, equal values encrypt to equal ciphertexts, and an attacker can cut, reorder and splice blocks between ciphertexts to build a different valid plaintext. With a byte-at-a-time oracle (attacker-controlled input next to a secret) the secret can be recovered without the key.</p>\n<p>burpsy reports this only on proof: it submitted four copies of a random 16-character block and the answer carried a new token whose ciphertext blocks repeat, a non-periodic control of the same length produced a token with no repeated block, a second periodic probe with a different random block repeated again with a different ciphertext block, and no repeating token contained the plaintext (which would make it an encoding, not a cipher).</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Use an authenticated encryption mode such as AES-GCM or ChaCha20-Poly1305 with a unique nonce for every message, from a well-reviewed library, and keep keys out of user control. Do not derive the key from the data being encrypted.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "OWASP WSTG-CRYP-04: Testing for Weak Encryption",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/04-Testing_for_Weak_Encryption"
+    },
+    {
+      "title": "OWASP Cryptographic Storage Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-327: Use of a Broken or Risky Cryptographic Algorithm",
+      "url": "https://cwe.mitre.org/data/definitions/327.html"
+    }
+  ]
+}

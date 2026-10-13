@@ -122,6 +122,9 @@ FULL_PROFILE = {
     # LLM prompt injection (0vzb.18): a benign canary-transform instruction appended to text values of requests a
     # model likely answers. VulnerableApp has no LLM family, so every firing here is off-target.
     "check_llm_prompt_injection": True,
+    # Weak cryptography (0vzb.28): random markers whose computed digests (MD4/MD5/SHA-1/NTLM/LM/SHA-2), bcrypt
+    # cost, plaintext record and ECB block repetition are looked for in the answer.
+    "check_weak_crypto": True,
 }
 
 

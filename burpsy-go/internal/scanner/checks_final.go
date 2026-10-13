@@ -480,8 +480,12 @@ func finalChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckExtended
 // FinalCheckDescriptors returns the last sixteen rows.
 func FinalCheckDescriptors() []CheckDescriptor {
 	out := []CheckDescriptor{
-		nativeDescriptor("Suspicious input transformation (reflected)", DispatchScopePerUrl, finalChecksEnabled,
-			reflectedContextCheck("Suspicious input transformation (reflected)", "info", contextTransformed)),
+		// The weak-cryptography check (checks_weakcrypto.go) rides this row behind its own switch: its
+		// findings are burpsy's own rows for a hash or cipher applied to the input, each a transformation
+		// of the input proven by computing it, and the registry admits one descriptor per Burp type.
+		nativeDescriptor("Suspicious input transformation (reflected)", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return finalChecksEnabled(c) || weakCryptoEnabled(c) },
+			suspiciousOrWeakCrypto(reflectedContextCheck("Suspicious input transformation (reflected)", "info", contextTransformed))),
 		nativeDescriptor("CSS injection (reflected)", DispatchScopePerUrl, finalChecksEnabled,
 			reflectedContextCheck("CSS injection (reflected)", "medium", contextInsideTag("style"))),
 		// The server-side parameter pollution check (checks_sspp.go) rides this row behind its own switch:

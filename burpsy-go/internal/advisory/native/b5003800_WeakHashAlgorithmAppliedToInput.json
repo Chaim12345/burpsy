@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036690432,
+  "name": "Weak hash algorithm applied to input",
+  "description": "<p>The application hashes user input with a broken hash algorithm (MD4, MD5, SHA-1, NTLM, LM or MySQL 4.1's double SHA-1), without a salt or key, and discloses the digest. These algorithms are fast, have practical collision attacks or tiny effective key spaces (LM upper-cases its input and splits it into two independent 7-character halves), and their unsalted digests of common values are reversed by a table lookup. Where the input is a password, token or other secret, anyone who obtains the digest can usually recover the value; where the digest is used for integrity or identity, collisions let an attacker forge a matching value.</p>\n<p>burpsy reports this only on proof: it submitted a fresh random marker, computed that marker's digest under each scheme, found the exact digest in the answer (and not in the baseline answer or the request), and found the same scheme's digest of a second random marker in the second answer; or, for a replayed request with working credentials, found the digest of the submitted value in the answer and not in the answer to a random marker. A string that merely looks like a hash is never reported by this row.</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Do not use MD4, MD5, SHA-1, NTLM or LM for anything security-relevant. Store passwords with a salted, deliberately slow password hash (Argon2id, scrypt, bcrypt or PBKDF2 with a high iteration count). For integrity or message authentication use SHA-256 or better inside an HMAC with a secret key. Do not return digests of secrets to the client.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "OWASP Password Storage Cheat Sheet",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html"
+    },
+    {
+      "title": "OWASP WSTG-CRYP-04: Testing for Weak Encryption",
+      "url": "https://owasp.org/www-project-web-security-testing-guide/latest/4-Web_Application_Security_Testing/09-Testing_for_Weak_Cryptography/04-Testing_for_Weak_Encryption"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-328: Use of Weak Hash",
+      "url": "https://cwe.mitre.org/data/definitions/328.html"
+    },
+    {
+      "title": "CWE-327: Use of a Broken or Risky Cryptographic Algorithm",
+      "url": "https://cwe.mitre.org/data/definitions/327.html"
+    }
+  ]
+}

@@ -256,7 +256,39 @@ func BurpsyNativeRows() []BurpsyRow {
 			"'Server-side template injection' because both are instructions in user input executed by a " +
 			"server-side interpreter, proven the same way: by a value computed from operands only the " +
 			"instruction names.",
+	}, {
+		Name:      IssueWeakHashOfInput,
+		TypeIndex: 0xb5003800,
+		CWE:       328,
+		Rides:     "Suspicious input transformation (reflected)",
+		Why:       weakCryptoRowWhy("an unsalted MD4, MD5, SHA-1, NTLM, LM or MySQL 4.1 digest of the input"),
+	}, {
+		Name:      IssueWeakPasswordHash,
+		TypeIndex: 0xb5003810,
+		CWE:       916,
+		Rides:     "Suspicious input transformation (reflected)",
+		Why:       weakCryptoRowWhy("a password hashed with a fast unsalted hash or a low-cost bcrypt"),
+	}, {
+		Name:      IssueECBEncryptionOfInput,
+		TypeIndex: 0xb5003820,
+		CWE:       327,
+		Rides:     "Suspicious input transformation (reflected)",
+		Why:       weakCryptoRowWhy("ECB encryption of the input, shown by repeated ciphertext blocks"),
+	}, {
+		Name:      IssuePlaintextPasswordStore,
+		TypeIndex: 0xb5003830,
+		CWE:       256,
+		Rides:     "Suspicious input transformation (reflected)",
+		Why:       weakCryptoRowWhy("a password returned verbatim from the server's record"),
 	}}
+}
+
+// weakCryptoRowWhy is the shared reason for the weak-cryptography rows (checks_weakcrypto.go).
+func weakCryptoRowWhy(what string) string {
+	return "Burp's catalogue has no row for " + what + ": its only hash-related output is passive " +
+		"(a string shaped like a hash), and Burp's scanner never computes a digest of what it sent. It rides " +
+		"'Suspicious input transformation (reflected)' because the finding is a transformation of the input " +
+		"proven by computing it, which is that row's own method."
 }
 
 // ssppRowWhy is the shared reason for the server-side parameter pollution rows (checks_sspp.go).

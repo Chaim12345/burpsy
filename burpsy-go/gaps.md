@@ -2996,3 +2996,38 @@ Not covered:
   path or parameter names suggest mail, notification, contact or payment side effects (every attempt
   is a real message to the model, ~6 per parameter, at most 4 parameters).
 - **VulnerableApp** has no LLM family; the row cannot move its TP count, only add false positives.
+## Weak cryptography applied to input (2026-10-13, burpsy-react-ui-0vzb.28)
+
+Four burpsy rows under `check_weak_crypto`, off by default, riding "Suspicious input transformation
+(reflected)": `b5003800` Weak hash algorithm applied to input (CWE-328, also 327), `b5003810` Password
+hash with insufficient computational effort (CWE-916, also 759), `b5003820` Block cipher in ECB mode
+applied to input (CWE-327), `b5003830` Password stored in plaintext (CWE-256, also 312). Every finding
+is a computed value: the digest the scanner computed of a random marker (confirmed by a second marker)
+or of a replayed working login's own value (absent from the marker answer), a bcrypt hash bcrypt
+verifies, a JSON record member equal to the submitted password while the field is not echoed, or
+ciphertext blocks that repeat for a periodic input and not for a non-periodic control. The
+"Potential Hash (MD5)" posture row is a shape guess and is unchanged.
+
+Not covered:
+
+- **A cipher whose output for the input is never shown.** VulnerableApp's CryptographicFailures
+  LEVEL_3 (Caesar) and LEVEL_4 (reverse + base64) compare the transformed input with a stored secret
+  and only ever disclose the secret's ciphertext; proving the scheme would mean decrypting candidates
+  and logging in with them. Not done.
+- **Authentication levels need working credentials.** The benchmark's login cases carry the level's
+  account with a wrong password, and AuthenticationVulnerability shows the stored hash or plaintext
+  only after a successful login, so LEVEL_2/3/4/5/6/8/10 cannot fire from those seeds. With a working
+  login captured (vulnapp `/crypto/account/*`) the rows fire. LEVEL_2 (password written to a log) and
+  LEVEL_8 (bcrypt cost 10 with a common password) disclose nothing in any answer.
+- **CWE mismatch with VulnerableApp's labels.** VulnerableApp files ECB (LEVEL_10) under CWE-330 and
+  unsalted SHA-256 of a password (LEVEL_9) under CWE-327; burpsy reports them as CWE-327 (ECB) and
+  CWE-916/759 (a fast unsalted password hash; SHA-256 is not a weak algorithm). Not aliased.
+- **Salted or keyed schemes** (HMAC, per-user salt, a pepper) are correctly not reported: their
+  output cannot be computed. A weak scheme with a fixed, unknown salt is therefore missed too.
+- **Encodings.** A reversible encoding of the input (base64, hex) is not reported by these rows; the
+  ECB probe refuses a repeating token that contains the plaintext.
+- **LM** is computed for ASCII values only (non-ASCII goes through an OEM code page not modelled).
+- **Requests**: GET and POST, query and body values, at most four parameters (password-named first)
+  and five requests each. Not re-sent: destructive, account-creating or -changing, mail and payment
+  paths, and POSTs with confirm/new/old/current/repeat password fields. On a login form every marker
+  is a failed login, which can count towards an account lockout.

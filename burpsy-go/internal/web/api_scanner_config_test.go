@@ -466,3 +466,18 @@ func TestConfigCarriesTheLLMPromptInjectionCheck(t *testing.T) {
 		t.Error("the running scanner did not take check_llm_prompt_injection")
 	}
 }
+
+// The weak-cryptography switch is on the wire, off by default, and a PUT reaches the running scanner.
+func TestConfigCarriesTheWeakCryptoCheck(t *testing.T) {
+	s := newScannerServer()
+	if got := getScannerConfig(t, s)["check_weak_crypto"]; got != false {
+		t.Fatalf("check_weak_crypto = %v, want present and off by default", got)
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_weak_crypto": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckWeakCrypto {
+		t.Error("the running scanner did not take check_weak_crypto")
+	}
+}
