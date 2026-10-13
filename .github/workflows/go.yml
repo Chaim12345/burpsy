@@ -147,9 +147,12 @@ jobs:
   # 164s/3.9min, race-web-0 99s/3.5min and race-web-1 79s/3.4min (each spending ~65s recompiling the
   # race build: fixed by the per-flavor cache), web 90s/2.7min (now removed), rest ~65s/1.9min.
   # Every test job also spent ~55s on setup (toolchain, cache, Chrome warm-up, apt, tools), now ~30s.
-  # scanner-rest is now two index shards (~325s each if the split is even), which leaves the
-  # unsplittable scanner-budget test (one test, 414s) as the critical path; a third scanner-rest
-  # shard would not shorten the run. Rebalance from the first green run's job times.
+  # The first split of scanner-rest by index (run 38362486870) came out 562s / ~90s: a few heavy
+  # tests shared a parity. The scanner tests other than the budget test are now dealt to
+  # scanner-detect and scanner-rest-0/1 longest-first on measured per-test seconds
+  # (scripts/ci-shard-weights.txt; ~80s each locally), which leaves the unsplittable
+  # scanner-budget test (one test, ~414s) as the critical path. Regenerate the weights with
+  # scripts/ci-shard-weights.py when the scanner suite's shape changes.
   #
   # -p is left at go's default (GOMAXPROCS = the runner's 4 vCPUs): only the rest shard tests more
   # than one package, and its long pole is one Chrome-driving package (internal/domexec, ~51s), so

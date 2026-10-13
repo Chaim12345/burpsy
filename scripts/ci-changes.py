@@ -21,8 +21,9 @@ Rules, and why each one exists:
     without importing it (scripts/affected-go-tests.sh lists both); the round workflow already ran
     the affected set locally (T1/T2), so on a PR CI repeats it on GitHub's merge commit, and the
     push to master closes the gap.
-  * A PR that touches what decides or provisions the run itself runs everything: go.mod/go.sum
-    (every package), .github/** and scripts/ci-* and scripts/affected-go-tests.sh (the selection
+  * A PR that touches what decides or provisions the run itself runs everything: any go.mod,
+    go.sum, go.work or go.work.sum (at any depth — a workspace file at the repository root changes
+    burpsy-go's build) and any vendor/ directory, .github/** and scripts/ci-* and scripts/affected-go-tests.sh (the selection
     logic and the test environment), and any testdata/ directory (testdata is the one kind of input
     another package's tests read without importing — internal/web reads internal/scanner/testdata —
     so a narrower rule would depend on knowing every such reader).
@@ -61,8 +62,15 @@ def git(*args):
 
 def runs_everything(path):
     """A path whose change makes a PR run the full suite, with the reason."""
-    if path in ("burpsy-go/go.mod", "burpsy-go/go.sum"):
-        return "the module's dependencies changed"
+    # Any go.mod/go.sum/go.work/go.work.sum, at any depth: burpsy-go's own, a nested module's, or a
+    # workspace file — the go command finds go.work by walking UP from burpsy-go, so one at the
+    # repository root changes the build as much as one beside go.mod. A vendor/ directory replaces
+    # module sources. None of these is a package file, so affected-go-tests.sh would attribute them
+    # to no package and select nothing.
+    if os.path.basename(path) in ("go.mod", "go.sum", "go.work", "go.work.sum"):
+        return "a module, workspace or dependency file changed"
+    if "/vendor/" in "/" + path:
+        return "vendored module sources changed"
     if path.startswith(".github/"):
         return "the CI definition changed"
     if path.startswith("scripts/ci-") or path == "scripts/affected-go-tests.sh":
@@ -145,7 +153,11 @@ def main():
         spec = f"{base}...{args.head}" if args.event == "pull_request" else f"{base}..{args.head}"
         files = [f for f in git("diff", "--name-only", "--no-renames", spec).splitlines() if f]
         print(f"{len(files)} file(s) changed in {spec}")
-        if files and all(skippable(f) for f in files):
+        if not files:
+            # Nothing to select from (an empty merge, a revert of a revert): run everything rather
+            # than an affected set that is empty by construction.
+            reasons.append("the diff is empty: nothing to select from, so the full suite runs")
+        elif all(skippable(f) for f in files):
             decision["code"] = "false"
             reasons.append("every changed file is documentation, .beads data or a benchmark script: "
                            "the Go and ui jobs are skipped (gate still reports)")
@@ -157,11 +169,10 @@ def main():
                 decision["mode"] = "affected"
                 decision["base"] = base
                 reasons.append("pull request: the test shards run only the packages "
-                               "scripts/affected-go-tests.sh selects (the push to master runs them all)")
+                               "scripts/affected-go-tests.sh selects (the push to master runs them all); "
+                               "a shard with nothing selected says NOT RUN in its summary")
         else:
             reasons.append(f"{args.event}: the full suite runs")
-        if not files:
-            reasons.append("the diff is empty: everything runs")
 
     for k, v in decision.items():
         print(f"{k}={v}")

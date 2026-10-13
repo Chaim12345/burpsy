@@ -11,9 +11,10 @@
 # 271s and 223s of test time on the 2026-10-09 green run 37984373730).
 #
 # Shards (the union is every test in the module, by construction — `verify` checks it):
-#   scanner-budget    internal/scanner: TestAnAuditSendsProbesAndStaysWithinARequestBudget
-#   scanner-detect    internal/scanner: TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo
-#   scanner-rest-0/1  internal/scanner: every other test, split in two by index
+#   scanner-budget    internal/scanner: TestAnAuditSendsProbesAndStaysWithinARequestBudget, alone
+#   scanner-detect    internal/scanner: TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo,
+#                     plus its share of the other scanner tests (see "Scanner balance")
+#   scanner-rest-0/1  internal/scanner: the other scanner tests, split by measured time
 #   rest              every package except internal/scanner and internal/web
 #   race-web-0/1      internal/web under -race, its tests split in two by index
 #
@@ -24,11 +25,20 @@
 # the same time: at 649s of test time on 2026-10-13 (run 38360049157) it was the critical path of
 # the whole gate, ahead of scanner-budget's single test at 414s.
 #
+# Scanner balance. The budget test is one test (~414-434s on CI) and sets the floor. Every other
+# scanner test is dealt to scanner-detect, scanner-rest-0 and scanner-rest-1 by a greedy
+# longest-first partition on the per-test seconds in scripts/ci-shard-weights.txt (measured; the
+# file's header says how to regenerate it), with the detect test pinned to scanner-detect. A test
+# not in the file weighs the file's `default`, so a new test still lands in exactly one shard; a
+# stale file only costs balance, never coverage. The split was by index until 2026-10-13, when the
+# first run (38362486870) put 562s of test time in scanner-rest-0 and ~90s in scanner-rest-1: a
+# handful of heavy tests happened to share a parity.
+#
 # Completeness rules, so a split never silently drops a test:
 #   - the two pinned scanner tests are checked to exist before running; a rename fails this
 #     script instead of leaving a shard that runs nothing and passes;
-#   - scanner-rest-0/1 are computed from `go test -list` at run time, minus exactly those two
-#     names, so a new scanner test lands in one of them;
+#   - the scanner partition is computed from `go test -list` at run time, minus exactly the budget
+#     test, so a new scanner test lands in one of the three partitioned shards;
 #   - rest is "every package except the two above", computed from `go list` at run time;
 #   - an index shard that selects no test fails.
 #
@@ -78,10 +88,17 @@ read -r -a extra <<<"${CI_SHARD_GO_TEST_FLAGS:-}" || true
 # "ok" line). Fails if listing fails — a package that does not compile is not "no tests". The
 # explicit `|| return` matters: errexit is off inside the command substitutions that call this,
 # so without it a build failure came back as an empty list and was reported as a missing test.
+# Memoized per package in a temp directory: every scanner shard lists the package three or four
+# times (require_test, the partition), and each listing ran the test binary — ~50s of the shard's
+# step on run 38362486870 before any test started.
+list_cache=$(mktemp -d)
+trap 'rm -rf "$list_cache"' EXIT
 list_tests() {
-  local out
+  local out f="$list_cache/${1//\//_}"
+  if [ -f "$f" ]; then cat "$f"; return 0; fi
   out=$(go test -list '.*' "$1") || { echo "ci-shard: could not list the tests in $1 (see the build error above)" >&2; return 1; }
-  printf '%s\n' "$out" | grep -E '^(Test|Fuzz|Example)' || true
+  printf '%s\n' "$out" | grep -E '^(Test|Fuzz|Example)' >"$f" || true
+  cat "$f"
 }
 
 require_test() {
@@ -104,6 +121,38 @@ index_names() {
   awk -v n="$n" -v i="$i" 'NF { if (k % n == i) print; k++ }' <<<"$names"
 }
 
+# scanner_bin I: the scanner tests dealt to bin I (0 scanner-detect, 1 scanner-rest-0,
+# 2 scanner-rest-1). Longest first, each to the currently lightest bin (ties to the lowest index),
+# after the detect test is placed in bin 0. Deterministic for a given test list and weights file.
+weights="$repo/scripts/ci-shard-weights.txt"
+scanner_bin() {
+  local bin=$1 names
+  names=$(list_tests "$scanner") || return 1
+  grep -vxF "$budget" <<<"$names" | awk -v wf="$weights" '
+    BEGIN {
+      def = 1
+      while ((getline line < wf) > 0) {
+        n = split(line, f, " ")
+        if (n < 2 || f[1] ~ /^#/) continue
+        if (f[1] == "default") def = f[2] + 0; else wt[f[2]] = f[1] + 0
+      }
+    }
+    NF { printf "%.3f %s\n", ($1 in wt) ? wt[$1] : def, $1 }' |
+    sort -k1,1gr -k2,2 |
+    awk -v d="$detect" -v want="$bin" '
+      { w[NR] = $1; t[NR] = $2; if ($2 == d) load[0] += $1 }
+      END {
+        for (k = 1; k <= NR; k++) {
+          if (t[k] == d) { b = 0 } else {
+            b = 0
+            for (i = 1; i < 3; i++) if (load[i] + 0 < load[b] + 0) b = i
+            load[b] += w[k]
+          }
+          if (b == want) print t[k]
+        }
+      }'
+}
+
 rest_pkgs() { go list ./... | grep -vxF -e "$scanner" -e "$web" || true; }
 
 if [ "$verb" = verify ]; then
@@ -121,11 +170,7 @@ if [ "$verb" = verify ]; then
     fi
   }
   all=$(list_tests "$scanner" | sort)
-  got=$({
-    echo "$budget"; echo "$detect"
-    index_names "$scanner" 2 0 "$budget" "$detect"
-    index_names "$scanner" 2 1 "$budget" "$detect"
-  } | sort)
+  got=$({ echo "$budget"; scanner_bin 0; scanner_bin 1; scanner_bin 2; } | sort)
   compare internal/scanner "$all" "$got"
   all=$(list_tests "$web" | sort)
   got=$({ index_names "$web" 2 0; index_names "$web" 2 1; } | sort)
@@ -190,21 +235,18 @@ if [ -z "$selected" ]; then
   exit 0
 fi
 
-gotest() { exec go test -count=1 "${race[@]}" "${extra[@]}" "$@"; }
+gotest() { go test -count=1 "${race[@]}" "${extra[@]}" "$@"; }  # not exec: the EXIT trap cleans the list cache
 
 case "$shard" in
   scanner-budget)
     require_test "$budget"
     gotest "${timeout[@]}" -run "^${budget}\$" "$scanner"
     ;;
-  scanner-detect)
-    require_test "$detect"
-    gotest "${timeout[@]}" -run "^${detect}\$" "$scanner"
-    ;;
-  scanner-rest-0|scanner-rest-1)
+  scanner-detect|scanner-rest-0|scanner-rest-1)
     require_test "$budget"
     require_test "$detect"
-    names=$(index_names "$scanner" 2 "${shard##*-}" "$budget" "$detect") || exit 1
+    case "$shard" in scanner-detect) bin=0 ;; scanner-rest-0) bin=1 ;; scanner-rest-1) bin=2 ;; esac
+    names=$(scanner_bin "$bin") || exit 1
     [ -n "$names" ] || { echo "ci-shard: $shard selected no tests" >&2; exit 1; }
     echo "ci-shard: $shard runs $(wc -l <<<"$names") of internal/scanner's tests${race[*]:+ under -race}"
     gotest "${timeout[@]}" -run "^($(paste -sd'|' - <<<"$names"))\$" "$scanner"
