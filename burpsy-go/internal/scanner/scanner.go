@@ -246,6 +246,11 @@ type ScanConfig struct {
 	// non-markup content type is confirmed by driving the application's own page: type the payload,
 	// submit, and see whether the page's script feeds it to a sink.
 	//
+	// It also admits the route-free half (xss_fragment.go, j1mk.42): a non-markup answer whose own
+	// product is an HTML fragment is classified like a document, and a payload that survives is
+	// rendered the way a fetching page inserts it (innerHTML, in an isolated tab with no network). A
+	// finding needs the browser to have executed the payload with this probe's canary.
+	//
 	// Off by default, like every family switch, and additionally requiring a browser: a run with no
 	// -dom reports the decline rather than reporting the point clean.
 	CheckXSSBrowserConfirm bool

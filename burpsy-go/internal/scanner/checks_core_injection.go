@@ -269,6 +269,11 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// error message returned only after a redirect. Everything below reads the page a browser
 		// would render: the landing page when the run followed, the response itself otherwise.
 		landedOn := ""
+		// fragment is a non-markup answer whose own product is an HTML fragment — the shape a
+		// page's script fetches and inserts with innerHTML (xss_fragment.go). Its context is
+		// classified like a document's, and a payload that survives is decided in a browser, so it
+		// is only entered when the browser confirmation is on.
+		fragment := false
 		if sent, err := h.SendFollowing(ctx, point, observed); err == nil {
 			res := sent.landing()
 			contentType := rawHeaderValue(string(res.Raw), "Content-Type")
@@ -276,9 +281,13 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 				evidence |= XSSEvidenceReflected
 				if rendersAsMarkup(contentType) {
 					contexts = classifyXSSContexts(res.Body, observed)
+				} else if browserConfirm && xssIsMarkupFragment(res.Body, observed) {
+					fragment = true
+					contexts = classifyXSSContexts(res.Body, observed)
 				}
 			}
 		}
+		var fragmentCands []xssFragmentCandidate
 
 		// Each distinct context gets the payload that actually works there. Distinct, because a
 		// value echoed into both a text node and an attribute is ordinary, and the two need
@@ -302,8 +311,12 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 			}
 			evidence |= XSSEvidenceReflected
 			if !rendersAsMarkup(contentType) {
-				// Reflected into something no browser parses. Recorded, never a breakout.
+				// Reflected into something no browser parses. Recorded, never a breakout on the
+				// wire; a fragment whose payload survived is kept for the browser to decide.
 				evidence |= XSSEvidenceReflectedEncoded
+				if fragment && payload.confirm != nil && payload.confirm(res.Body, canary) {
+					fragmentCands = append(fragmentCands, xssFragmentCandidate{payload: payload, canary: canary, body: res.Body, contentType: contentType})
+				}
 				continue
 			}
 			// Each payload brings its own evidence. Checking a context-specific payload against
@@ -425,6 +438,12 @@ func checkReflectedXSSCore(ctx context.Context, cc *CheckContext) ([]*Finding, e
 		// refusal is right on the wire and wrong about the application when the PAGE's own script takes
 		// the answer and writes it into the document — measured on OWASP VulnerableApp, whose XSS
 		// levels answer text/plain and render it with innerHTML. Only a browser can settle it.
+		if fragment && !xssBreakoutConfirmed(evidence) {
+			if f := xssFragmentFindings(ctx, cc, h, point, fragmentCands); f != nil {
+				findings = append(findings, f)
+				break
+			}
+		}
 		if evidence&XSSEvidenceReflected != 0 && !xssBreakoutConfirmed(evidence) && browserConfirm {
 			if f := confirmReflectedXSSInBrowser(ctx, cc, point, bank); f != nil {
 				findings = append(findings, f)

@@ -223,6 +223,9 @@ func buildRuntimeTarget(t *testing.T) *runtimeTarget {
 	if rt.chrome {
 		domCfg := runtimeScanConfig()
 		domCfg.CheckDOM = true
+		// The fragment rows (vulnapp_fragment_xss.go) are decided by rendering a text/plain HTML
+		// fragment in the browser, which is the browser confirmation's switch.
+		domCfg.CheckXSSBrowserConfirm = true
 		// Headless unless BURPSY_DOM_HEADED=1, which is for watching a flow live.
 		// The provider is the package-wide shared Chrome — see runtime_shared_test.go.
 		rt.domScan = NewActiveScanner(rt.store, zap.NewNop()).

