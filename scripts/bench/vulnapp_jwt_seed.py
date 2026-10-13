@@ -17,6 +17,9 @@ This fetches each level's own token (GET LEVEL_N?fetch=true answers {"content": 
 algorithm) and rewrites the case into that verification request. The tokens carry no exp claim, so
 they do not go stale during a run.
 
+Every JWT case also gets the family's token-issuing pages as companions sent before it
+(add_issuer_companions): the history a crawl of the family would have captured.
+
 This is benchmark knowledge - the app's level routes and where each reads its token - so it lives
 here and never in the scanner. A level whose token cannot be fetched keeps its generated request and
 is reported on stderr, so the case scores as a miss rather than being silently dropped.
@@ -61,6 +64,29 @@ def seed_entry(r, base):
     return r
 
 
+def add_issuer_companions(entries):
+    """Give every JWT case the family's token-issuing pages as companions sent BEFORE it.
+
+    A tester's project history holds the application's other pages, not just the request under test;
+    a scan that starts from one captured request has none of it. The issuing pages are what a crawl
+    of this family captures (each level's `?fetch=true` answers the token it issues), so sending them
+    first gives the scanner the same history a crawled project would have. Nothing names a level the
+    scanner should use: every case gets every issuing page of the family, in level order. Some of
+    those tokens carry a jwk header (LEVEL_9, LEVEL_13), which is how a target discloses the public key
+    an algorithm-confusion check needs; the scanner finds it there generally (jwt_confusion.go).
+    """
+    levels = sorted({e["test"].split("/")[1] for e in entries if e["test"].startswith(FAMILY)},
+                    key=lambda lv: int(lv.split("_")[1]) if lv.split("_")[1].isdigit() else 0)
+    for r in entries:
+        if not r["test"].startswith(FAMILY):
+            continue
+        root = r["url"].rsplit("/", 1)[0]
+        r["companions"] = [{"test": "%s#issuer-%s" % (r["test"], lv), "method": "GET", "url": "%s/%s" % (root, lv),
+                            "query": {"fetch": "true"}, "form": {}, "headers": {}, "cookies": {}, "body": None}
+                           for lv in levels]
+    return entries
+
+
 def main():
     src, dst = sys.argv[1], sys.argv[2]
     base = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:9090/VulnerableApp"
@@ -74,6 +100,7 @@ def main():
             n += 1
         except Exception as e:  # reported, not hidden
             print("%s: token fetch failed, request left as generated: %s" % (r["test"], e), file=sys.stderr)
+    add_issuer_companions(reqs)
     json.dump(reqs, open(dst, "w"), indent=1)
     print("seeded %d JWT case(s)" % n, file=sys.stderr)
 

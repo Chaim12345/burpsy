@@ -18,6 +18,7 @@ import (
 var jwtRows = []string{
 	"JWT signature not verified", "JWT none algorithm supported", "JWT self-signed JWK header supported",
 	"JWT arbitrary jku header supported", "JWT arbitrary x5u header supported", jwtExpiredIssue,
+	IssueJWTAlgorithmConfusion,
 }
 
 func TestJWTForgeryRowsEachFireOnTheirOwnDefect(t *testing.T) {
@@ -27,7 +28,11 @@ func TestJWTForgeryRowsEachFireOnTheirOwnDefect(t *testing.T) {
 	}{
 		{"/jw/none", "JWT none algorithm supported", ""},
 		{"/jw/jwk", "JWT self-signed JWK header supported", ""},
-		{"/jw/confusion", "JWT signature not verified", "algorithm confusion"},
+		{"/jw/confusion", IssueJWTAlgorithmConfusion, "PEM SubjectPublicKeyInfo"},
+		// The key is disclosed only in another endpoint's token (/jw/keyring's jwk header).
+		{"/jw/confusion/der", IssueJWTAlgorithmConfusion, "DER SubjectPublicKeyInfo"},
+		// Any HS256 token accepted: the random-key control makes it the signature row, not confusion.
+		{"/jw/confusion/anyhs", "JWT signature not verified", "random key"},
 		{"/jw/kid", "JWT signature not verified", "kid path traversal"},
 		{"/jw/kidsql", "JWT signature not verified", "kid injection"},
 		{"/jw/empty", "JWT signature not verified", "all empty"},
@@ -60,10 +65,11 @@ func TestJWTForgeryRowsEachFireOnTheirOwnDefect(t *testing.T) {
 
 func TestJWTForgeryRowsStayQuietOnVerifiersThatWork(t *testing.T) {
 	rt := startRuntimeTarget(t)
-	if rt.findingsFor(t, "/jw/confusion", false)["JWT signature not verified"] == nil {
-		t.Fatal("algorithm confusion did not fire on /jw/confusion in this run, so the safe twins' silence proves nothing")
+	if rt.findingsFor(t, "/jw/confusion/der", false)[IssueJWTAlgorithmConfusion] == nil {
+		t.Fatal("algorithm confusion did not fire on /jw/confusion/der in this run, so the safe twins' silence proves nothing")
 	}
-	for _, path := range []string{"/jw/safe/hs", "/jw/safe/rs", "/jw/safe/kid", "/rm/safe/jwt"} {
+	for _, path := range []string{"/jw/safe/hs", "/jw/safe/rs", "/jw/safe/kid", "/rm/safe/jwt",
+		"/jw/safe/confusion/pin", "/jw/safe/confusion/nohs"} {
 		got := rt.findingsFor(t, path, false)
 		for _, row := range jwtRows {
 			if f := got[row]; f != nil {

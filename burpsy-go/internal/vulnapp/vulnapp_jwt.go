@@ -49,6 +49,27 @@ var jwRSA = func() *rsa.PrivateKey {
 
 const jwRSAKid = "jw-rs-1"
 
+// jwRSA2 is a second RS256 key, published in no JWKS: its public half appears only as the jwk header
+// of the sample token /jw/keyring answers.
+var jwRSA2 = func() *rsa.PrivateKey {
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		panic("vulnapp: generating jw rsa key 2: " + err.Error())
+	}
+	return k
+}()
+
+const jwRSA2Kid = "jw-rs-2"
+
+// JWTKeyringPath is the support route disclosing jw-rs-2. The scanner's confusion test seeds it (or
+// leaves it out, for the negative control) by this name.
+const JWTKeyringPath = "/jw/keyring"
+
+func jwRS2JWK() map[string]any {
+	return map[string]any{"kty": "RSA", "kid": jwRSA2Kid, "use": "sig",
+		"n": jwB64(jwRSA2.PublicKey.N.Bytes()), "e": jwB64(big.NewInt(int64(jwRSA2.PublicKey.E)).Bytes())}
+}
+
 func jwB64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func jwMintHS(key []byte, header, claims map[string]any) string {
@@ -60,12 +81,14 @@ func jwMintHS(key []byte, header, claims map[string]any) string {
 	return in + "." + jwB64(mac.Sum(nil))
 }
 
-func jwMintRS(header, claims map[string]any) string {
+func jwMintRS(header, claims map[string]any) string { return jwMintRSWith(jwRSA, header, claims) }
+
+func jwMintRSWith(key *rsa.PrivateKey, header, claims map[string]any) string {
 	h, _ := json.Marshal(header)
 	c, _ := json.Marshal(claims)
 	in := jwB64(h) + "." + jwB64(c)
 	sum := sha256.Sum256([]byte(in))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, jwRSA, crypto.SHA256, sum[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
 	if err != nil {
 		panic("vulnapp: signing jw token: " + err.Error())
 	}
@@ -73,8 +96,13 @@ func jwMintRS(header, claims map[string]any) string {
 }
 
 var (
-	jwHSToken  = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT"}, map[string]any{"sub": "alice"})
-	jwRSToken  = jwMintRS(map[string]any{"alg": "RS256", "typ": "JWT", "kid": jwRSAKid}, map[string]any{"sub": "alice"})
+	jwHSToken = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT"}, map[string]any{"sub": "alice"})
+	jwRSToken = jwMintRS(map[string]any{"alg": "RS256", "typ": "JWT", "kid": jwRSAKid}, map[string]any{"sub": "alice"})
+	// jwRS2Token is signed with jw-rs-2 and names it only by kid.
+	jwRS2Token = jwMintRSWith(jwRSA2, map[string]any{"alg": "RS256", "typ": "JWT", "kid": jwRSA2Kid}, map[string]any{"sub": "alice"})
+	// jwKeyringToken is a sample token embedding jw-rs-2's public key as a jwk header.
+	jwKeyringToken = jwMintRSWith(jwRSA2, map[string]any{"alg": "RS256", "typ": "JWT", "jwk": jwRS2JWK()},
+		map[string]any{"sub": "sample"})
 	jwKidToken = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT", "kid": "main"}, map[string]any{"sub": "alice"})
 	// jwExpiredToken is properly signed and expired an hour before the fixture was built.
 	jwExpiredToken = jwMintHS(jwSecret, map[string]any{"alg": "HS256", "typ": "JWT"},
@@ -111,10 +139,25 @@ func jwtEndpoints() []Endpoint {
 		{Path: "/jw/safe/rs", RequestHeaders: jwBearer(jwRSToken), Row: "JWT self-signed JWK header supported", Safe: true,
 			Note: "pins RS256 and its own key"},
 
-		{Path: "/jw/confusion", RequestHeaders: jwBearer(jwRSToken), Row: "JWT signature not verified",
+		{Path: "/jw/confusion", RequestHeaders: jwBearer(jwRSToken), Row: "JWT algorithm confusion",
 			Note: "picks the algorithm from the header; HS256 is verified with the PEM public key as the HMAC secret"},
-		{Path: "/jw/safe/rs", RequestHeaders: jwBearer(jwRSToken), Row: "JWT signature not verified", Safe: true,
+		{Path: "/jw/safe/rs", RequestHeaders: jwBearer(jwRSToken), Row: "JWT algorithm confusion", Safe: true,
 			Note: "pins RS256 and its own key"},
+
+		// Algorithm confusion with a key published nowhere but in another token: jw-rs-2 is in no
+		// JWKS, and its token carries no jwk. The only disclosure is /jw/keyring's sample token.
+		{Path: JWTKeyringPath,
+			Note: "support route: answers a sample RS256 token whose header embeds the jw-rs-2 public key as a jwk"},
+		{Path: "/jw/confusion/der", RequestHeaders: jwBearer(jwRS2Token), Row: "JWT algorithm confusion",
+			Note: "picks the algorithm from the header; HS256 is verified with the DER SubjectPublicKeyInfo of jw-rs-2 " +
+				"(what a Java Key.getEncoded() returns), a key disclosed only in /jw/keyring's token"},
+		{Path: "/jw/safe/confusion/pin", RequestHeaders: jwBearer(jwRS2Token), Row: "JWT algorithm confusion", Safe: true,
+			Note: "pins RS256 with jw-rs-2 whatever the header says"},
+		{Path: "/jw/safe/confusion/nohs", RequestHeaders: jwBearer(jwRS2Token), Row: "JWT algorithm confusion", Safe: true,
+			Note: "picks the algorithm from the header but refuses every HS algorithm for its RSA key"},
+		{Path: "/jw/confusion/anyhs", RequestHeaders: jwBearer(jwRS2Token), Row: "JWT signature not verified",
+			Note: "verifies RS256 with jw-rs-2 and accepts ANY HS256 token with a signature: the random-key control " +
+				"is refused nowhere, so this is the signature row, never confusion"},
 
 		{Path: "/jw/kid", RequestHeaders: jwBearer(jwKidToken), Row: "JWT signature not verified",
 			Note: "reads the HMAC key from a file named by kid, so ../../dev/null is an empty key"},
@@ -188,6 +231,39 @@ func registerJWT(mux *http.ServeMux) {
 			return finalVerifyRS256(&jwRSA.PublicKey, in, sig)
 		case "HS256":
 			return jwHSOK(h, in, sig, jwPublicPEM())
+		}
+		return false
+	}, false))
+	mux.HandleFunc(JWTKeyringPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"sample": jwKeyringToken})
+	})
+	rs2DER, _ := x509.MarshalPKIXPublicKey(&jwRSA2.PublicKey)
+	mux.HandleFunc("/jw/confusion/der", jwHandler(func(h map[string]any, in, sig string) bool {
+		switch alg, _ := h["alg"].(string); alg {
+		case "RS256":
+			return finalVerifyRS256(&jwRSA2.PublicKey, in, sig)
+		case "HS256":
+			return jwHSOK(h, in, sig, rs2DER)
+		}
+		return false
+	}, false))
+	mux.HandleFunc("/jw/safe/confusion/pin", jwHandler(func(h map[string]any, in, sig string) bool {
+		return finalVerifyRS256(&jwRSA2.PublicKey, in, sig)
+	}, false))
+	mux.HandleFunc("/jw/safe/confusion/nohs", jwHandler(func(h map[string]any, in, sig string) bool {
+		alg, _ := h["alg"].(string)
+		if strings.HasPrefix(strings.ToUpper(alg), "HS") {
+			return false
+		}
+		return alg == "RS256" && finalVerifyRS256(&jwRSA2.PublicKey, in, sig)
+	}, false))
+	mux.HandleFunc("/jw/confusion/anyhs", jwHandler(func(h map[string]any, in, sig string) bool {
+		switch alg, _ := h["alg"].(string); alg {
+		case "RS256":
+			return finalVerifyRS256(&jwRSA2.PublicKey, in, sig)
+		case "HS256":
+			return sig != ""
 		}
 		return false
 	}, false))

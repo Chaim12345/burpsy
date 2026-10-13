@@ -31,11 +31,10 @@ package scanner
 //
 //   - signature not verified: altered signature, stripped signature (original alg), and a token whose
 //     three segments are all empty — a validator that splits on dots and treats "no parts" as valid;
-//   - RS/ES -> HS algorithm confusion: HS256 over the token, keyed with the server's own public key
-//     in the encodings a verifier plausibly holds it in (PEM, DER; SPKI and PKCS#1). The key comes
-//     from the token's own jwk/x5c header or from the host's published JWKS (/.well-known/jwks.json,
-//     /jwks.json, or the OpenID configuration's same-host jwks_uri). Acceptance proves the server ran
-//     HMAC with a key we chose, which nothing else produces;
+//   - RS/ES -> HS algorithm confusion: its own row, "JWT algorithm confusion" (a burpsy-native row,
+//     jwt_confusion.go), decided with an extra control — the same claims HS256-signed with a random
+//     key must be refused — and keyed with public keys the target disclosed (token headers, captured
+//     traffic, the host's JWKS);
 //   - kid path traversal to /dev/null with an empty HMAC key, and kid SQL injection that selects a
 //     random constant we then sign with. Again, acceptance proves our chosen key was used;
 //   - alg none and its case variants ("JWT none algorithm supported");
@@ -54,18 +53,11 @@ package scanner
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"crypto/hmac"
-	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/burpsy-go/burpsy/internal/core"
@@ -305,20 +297,39 @@ func jwtSignatureCheck(ctx context.Context, cc *CheckContext) ([]*Finding, error
 				"while the same request without a token did not: the signature is not checked", p.baseCode))}, nil
 	}
 
+	var out []*Finding
+	// Algorithm confusion has its own row (jwt_confusion.go). It is decided only when the stripped
+	// token was refused: an unsigned token accepted explains any forgery, and is reported below.
+	stripped, err := p.stripped(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", row, err)
+	}
+	reported := false
+	if !stripped {
+		conf, err := jwtConfusionFindings(ctx, cc, p)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", row, err)
+		}
+		for _, f := range conf {
+			reported = reported || f.Name == row
+		}
+		out = append(out, conf...)
+	}
+
 	type attempt struct {
 		tok, how, confidence string
 	}
 	var tries []attempt
 	tries = append(tries, attempt{"", "stripped", "firm"})
 	tries = append(tries, attempt{"..", "a token whose header, payload and signature are all empty was accepted", "firm"})
-	for _, f := range jwtConfusionForgeries(ctx, cc, p.token) {
-		tries = append(tries, attempt{f.tok, f.how, "certain"})
-	}
 	for _, f := range jwtKidForgeries(p.token) {
 		tries = append(tries, attempt{f.tok, f.how, "certain"})
 	}
+	if reported {
+		// The random-key HS256 control already reported this row; it is one defect.
+		tries = nil
+	}
 
-	var out []*Finding
 	for _, a := range tries {
 		var accepted bool
 		tok, how := a.tok, a.how
@@ -396,178 +407,6 @@ func jwtForgeryRow(row string, forge func(JWTToken) ([]string, error)) CheckRunn
 		}
 		return nil, nil
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Algorithm confusion
-// ---------------------------------------------------------------------------
-
-type jwtForgery struct{ tok, how string }
-
-// jwtConfusionForgeries signs the token as HS256 with each candidate public key, in each encoding.
-func jwtConfusionForgeries(ctx context.Context, cc *CheckContext, t JWTToken) []jwtForgery {
-	if !jwtAsymmetric(t.Header.Alg) {
-		return nil
-	}
-	var out []jwtForgery
-	for _, k := range jwtCandidateKeys(ctx, cc, t) {
-		for _, enc := range jwtKeyEncodings(k.pub) {
-			header := map[string]any{"alg": "HS256"}
-			passthroughHeaderFields(header, t.Header, true)
-			tok, err := jwtSignHS256(header, t.RawPayload, enc.bytes)
-			if err != nil {
-				continue
-			}
-			out = append(out, jwtForgery{tok, fmt.Sprintf(
-				"algorithm confusion: the %s token re-signed as HS256 with the server's public key (%s, %s) as the HMAC secret was accepted",
-				t.Header.Alg, k.source, enc.name)})
-		}
-	}
-	return out
-}
-
-type jwtKey struct {
-	pub    any
-	source string
-	kid    string
-}
-
-type jwtKeyEncoding struct {
-	name  string
-	bytes []byte
-}
-
-// jwtKeyEncodings renders a public key the ways a verifier plausibly stores it. HMAC is keyed by the
-// exact bytes, so each representation is a separate guess.
-func jwtKeyEncodings(pub any) []jwtKeyEncoding {
-	var out []jwtKeyEncoding
-	if spki, err := x509.MarshalPKIXPublicKey(pub); err == nil {
-		p := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: spki})
-		out = append(out,
-			jwtKeyEncoding{"PEM SubjectPublicKeyInfo", p},
-			jwtKeyEncoding{"PEM SubjectPublicKeyInfo without the final newline", []byte(strings.TrimRight(string(p), "\n"))},
-			jwtKeyEncoding{"DER SubjectPublicKeyInfo", spki})
-	}
-	if rsaPub, ok := pub.(*rsa.PublicKey); ok {
-		der := x509.MarshalPKCS1PublicKey(rsaPub)
-		out = append(out,
-			jwtKeyEncoding{"PEM PKCS#1", pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: der})},
-			jwtKeyEncoding{"DER PKCS#1", der})
-	}
-	return out
-}
-
-// jwtMaxCandidateKeys bounds the keys tried; each costs five probes.
-const jwtMaxCandidateKeys = 3
-
-// jwtCandidateKeys collects public keys the server may verify with: the token's own jwk and x5c
-// headers, then the host's published JWKS. A JWKS key whose kid matches the token's is tried first.
-func jwtCandidateKeys(ctx context.Context, cc *CheckContext, t JWTToken) []jwtKey {
-	var keys []jwtKey
-	if t.Header.Jwk != nil {
-		if pub := jwkPublicKey(t.Header.Jwk); pub != nil {
-			keys = append(keys, jwtKey{pub: pub, source: "from the token's jwk header"})
-		}
-	}
-	if len(t.Header.X5c) > 0 {
-		if der, err := base64.StdEncoding.DecodeString(t.Header.X5c[0]); err == nil {
-			if cert, err := x509.ParseCertificate(der); err == nil {
-				keys = append(keys, jwtKey{pub: cert.PublicKey, source: "from the token's x5c certificate"})
-			}
-		}
-	}
-	host := jwtHostKeys(ctx, cc)
-	var matched, rest []jwtKey
-	for _, k := range host {
-		if t.Header.Kid != "" && k.kid == t.Header.Kid {
-			matched = append(matched, k)
-		} else {
-			rest = append(rest, k)
-		}
-	}
-	keys = append(keys, matched...)
-	keys = append(keys, rest...)
-	if len(keys) > jwtMaxCandidateKeys {
-		keys = keys[:jwtMaxCandidateKeys]
-	}
-	return keys
-}
-
-// jwkPublicKey turns an RSA or EC public JWK into a key, or nil.
-func jwkPublicKey(m map[string]any) any {
-	switch stringField(m, "kty") {
-	case "RSA":
-		n, okN := jwkBigInt(m, "n")
-		e, okE := jwkBigInt(m, "e")
-		if !okN || !okE || !e.IsInt64() || n.Sign() <= 0 {
-			return nil
-		}
-		return &rsa.PublicKey{N: n, E: int(e.Int64())}
-	case "EC":
-		curve := ecCurveNamed(stringField(m, "crv"))
-		x, okX := jwkBigInt(m, "x")
-		y, okY := jwkBigInt(m, "y")
-		if curve == nil || !okX || !okY || !curve.IsOnCurve(x, y) {
-			return nil
-		}
-		return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
-	}
-	return nil
-}
-
-// jwtHostKeyEntry is one origin's published keys, fetched once per scanner (ActiveScanner.jwtKeys).
-type jwtHostKeyEntry struct {
-	once sync.Once
-	keys []jwtKey
-}
-
-// jwtHostKeys fetches the host's JWKS from the conventional locations, through the scope-enforcing
-// sender. Only same-host jwks_uri values are followed.
-func jwtHostKeys(ctx context.Context, cc *CheckContext) []jwtKey {
-	ex := cc.Exchange
-	cacheKey := fmt.Sprintf("%v|%s|%d", ex.TLS, ex.Host, ex.Port)
-	v, _ := cc.Scanner.jwtKeys.LoadOrStore(cacheKey, &jwtHostKeyEntry{})
-	entry := v.(*jwtHostKeyEntry)
-	entry.once.Do(func() {
-		get := func(path string) []byte {
-			resp := cc.Scanner.sendTestRequestFull(ctx, ex, "GET", path, nil)
-			if resp == nil || resp.StatusCode != 200 {
-				return nil
-			}
-			decodeTypedResponse(resp)
-			return resp.Body
-		}
-		paths := []string{"/.well-known/jwks.json", "/jwks.json"}
-		if body := get("/.well-known/openid-configuration"); body != nil {
-			var conf struct {
-				JwksURI string `json:"jwks_uri"`
-			}
-			if json.Unmarshal(body, &conf) == nil && conf.JwksURI != "" {
-				if u, err := url.Parse(conf.JwksURI); err == nil && strings.EqualFold(u.Hostname(), ex.Host) && u.Path != "" {
-					paths = append([]string{u.RequestURI()}, paths...)
-				}
-			}
-		}
-		for _, path := range paths {
-			body := get(path)
-			if body == nil {
-				continue
-			}
-			var doc any
-			if json.Unmarshal(body, &doc) != nil {
-				continue
-			}
-			for _, m := range jwkMembersOf(doc) {
-				if pub := jwkPublicKey(m); pub != nil {
-					entry.keys = append(entry.keys, jwtKey{pub: pub, source: "published at " + path, kid: stringField(m, "kid")})
-				}
-			}
-			if len(entry.keys) > 0 {
-				return
-			}
-		}
-	})
-	return entry.keys
 }
 
 // ---------------------------------------------------------------------------

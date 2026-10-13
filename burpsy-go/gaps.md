@@ -3057,10 +3057,14 @@ change and 17/20 after, 0 FP (the app lists no secure JWT case). Root causes, pe
 
 Not covered:
 
-- **LEVEL_8#2, RS256 to HS256 key confusion.** The confusion forgeries exist, but need the server's
-  public key: LEVEL_8 tokens carry no jwk/x5c/kid and the host publishes no JWKS. The same key is
-  embedded in LEVEL_9/13 tokens; harvesting public keys from other same-host tokens in history is a
-  sound follow-up, but the benchmark audits LEVEL_8 before those exchanges exist in its chunk.
+- **LEVEL_8#2, RS256 to HS256 key confusion: fixed** (burpsy-react-ui-0vzb child bead). New burpsy row
+  `b5003430` JWT algorithm confusion (CWE-347, 327), riding the signature row under `check_jwt_forgery`
+  (jwt_confusion.go). Public keys now also come from captured same-origin traffic: the jwk/x5c header of
+  any JWT in a request or response, a JWK Set or JWK response, a PEM key or certificate in a body. A
+  candidate that verifies the captured token's own RS/PS/ES signature is the only one tried. Proof adds a
+  random-key HS256 control (refused, twice); a random-key token accepted is the signature row instead.
+  The benchmark gives every JWT case the family's `?fetch=true` issuing pages as companions (the history a
+  crawl captures); LEVEL_8#2 is found with the key from LEVEL_13's token, DER SubjectPublicKeyInfo.
 - **LEVEL_16, declared alg never checked.** The proof is a token with a changed alg header signed with
   the server's own key; the key is HIGH strength and not in any wordlist, so it is not provable from
   outside. Not done.

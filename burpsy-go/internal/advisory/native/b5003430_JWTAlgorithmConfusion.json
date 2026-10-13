@@ -1,0 +1,28 @@
+{
+  "typeIndex": 3036689456,
+  "name": "JWT algorithm confusion",
+  "description": "<p>The application verifies JSON Web Tokens with an asymmetric algorithm (RS256, PS256 or ES256) but takes the algorithm from the token's own header without pinning which algorithm the key may be used with. Told the token is HS256, it verifies an HMAC keyed with the bytes it holds for its public key. A public key is public: the application discloses it in tokens, in a JWK Set or in a PEM document, so anyone can sign tokens with arbitrary claims that the application accepts as genuine, which typically means impersonating any user or escalating privileges.</p>\n<p>burpsy reports this only by differential. The captured token's claims, re-signed as HS256 with a public key the target itself disclosed (in a token's jwk or x5c header, in a JWK Set, or in a PEM block in its traffic), were accepted like the original token, twice. The same claims signed as HS256 with a random key were refused twice, so the application does not accept any HS256 token; the original token with an altered signature was refused twice, and a token with its signature removed was refused, so the signature is checked; and the request without a token was answered differently, so the response depends on the token. Where the finding says so, the key used was first matched to the target by verifying the captured token's own signature with it.</p><p>This row is burpsy's own: Burp's issue catalogue has no entry for it.</p>",
+  "remediation": "<p>Pin the algorithm on the verifying side: configure the JWT library with the exact algorithm, or the algorithm family, each key may be used with, and reject any token whose header names another. Never pass the header's alg to the verification call. Keep asymmetric verification keys and HMAC secrets in separate key stores, typed so that a public key can never reach an HMAC verifier.</p>",
+  "webIntro": null,
+  "typicalSeverity": "HIGH",
+  "references": [
+    {
+      "title": "RFC 8725 section 3.1: Perform algorithm verification",
+      "url": "https://www.rfc-editor.org/rfc/rfc8725#section-3.1"
+    },
+    {
+      "title": "PortSwigger Web Security Academy: algorithm confusion attacks",
+      "url": "https://portswigger.net/web-security/jwt/algorithm-confusion"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-347: Improper Verification of Cryptographic Signature",
+      "url": "https://cwe.mitre.org/data/definitions/347.html"
+    },
+    {
+      "title": "CWE-327: Use of a Broken or Risky Cryptographic Algorithm",
+      "url": "https://cwe.mitre.org/data/definitions/327.html"
+    }
+  ]
+}

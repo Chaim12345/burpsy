@@ -409,6 +409,7 @@ def seed_all(reqs, app_base, work):
                 refresh_entry(r, vbase)
             except Exception as e:
                 fails.append({"test": r["test"], "seeder": fam, "note": "left as generated: %s" % e})
+    vulnapp_jwt_seed.add_issuer_companions(out)
     return out, identities, fails
 
 

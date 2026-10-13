@@ -322,6 +322,15 @@ func BurpsyNativeRows() []BurpsyRow {
 		Why: "Burp's catalogue has no row for a JWT verifier that truncates the signature at a NUL; its JWT rows " +
 			"are the forgeries JWT Editor automates. It rides the signature row because it is decided in that " +
 			"row's differential, against a token-with-trailing-bytes control.",
+	}, {
+		Name:      IssueJWTAlgorithmConfusion,
+		TypeIndex: 0xb5003430,
+		CWE:       347,
+		Rides:     "JWT signature not verified",
+		Why: "Burp's catalogue has no row for RS/ES-to-HS256 algorithm confusion: JWT Editor leaves the attack " +
+			"to the tester, and a scanner filing it under 'JWT signature not verified' misstates it, because the " +
+			"signature IS verified, with a public key used as an HMAC secret. It rides the signature row because " +
+			"it is decided in that row's differential, against an extra random-key HS256 control.",
 	}}
 }
 
