@@ -2,10 +2,15 @@ package scanner
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/vulnapp"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +33,11 @@ func wsipAudit(t *testing.T, path string, mod func(*ScanConfig)) ([]*Finding, ui
 	if !ok {
 		t.Fatalf("%s was never seeded", path)
 	}
+	return wsipAuditExchange(t, rt, path, id, mod)
+}
+
+func wsipAuditExchange(t *testing.T, rt *runtimeTarget, path string, id core.ExchangeID, mod func(*ScanConfig)) ([]*Finding, uint32) {
+	t.Helper()
 	cfg := &ScanConfig{MaxConcurrency: 2, Timeout: 2 * time.Minute,
 		CheckWebSocketHijacking: true, CheckClientIPSpoofing: true}
 	if mod != nil {
@@ -107,7 +117,13 @@ func TestWebSocketHijackingAndClientIPStayQuietOnTheSafeTwins(t *testing.T) {
 		"/wsip/safe/whoami":                              {"shows the socket address only", 2},
 		"/wsip/safe/echo-headers":                        {"echoes every request header", 2},
 	} {
-		fs, sent := wsipAudit(t, path, nil)
+		var fs []*Finding
+		var sent uint32
+		if path == "/wsip/safe/ratelimit-lapsing" {
+			fs, sent = wsipAuditFreshLapse(t)
+		} else {
+			fs, sent = wsipAudit(t, path, nil)
+		}
 		for _, row := range wsipRows {
 			if f := sessFindingIn(fs, row); f != nil {
 				t.Errorf("%s %s but %q was reported: %s\n%s", path, c.why, row, f.Description, f.Evidence)
@@ -117,6 +133,38 @@ func TestWebSocketHijackingAndClientIPStayQuietOnTheSafeTwins(t *testing.T) {
 			t.Errorf("%s: only %d requests sent, want at least %d: silence must be a verdict", path, sent, c.minSent)
 		}
 	}
+}
+
+var wsipLapseRuns atomic.Uint64
+
+// wsipAuditFreshLapse audits a capture of /wsip/safe/ratelimit-lapsing whose lapse starts now.
+//
+// The route answers 429 to the first two requests of each ?run= value and never again. The corpus
+// capture shares one run with every other client of the shared target — the seeding, the bundled
+// sweep, an earlier iteration under -count — so by the time this test reached it the limit could be
+// long spent: the baseline came back 200, the rate-limit test was never entered, and the audit sent
+// two requests (burpsy-react-ui-qgtr). A run of its own makes the sequence a function of this
+// audit's requests alone: the capture is the first 429, the baseline the second, and the first
+// spoofed probe meets the lapsed limit — which the unmodified request then shows, so the check must
+// conclude "lapsed, not the header" rather than stay silent for want of trying.
+func wsipAuditFreshLapse(t *testing.T) ([]*Finding, uint32) {
+	t.Helper()
+	rt := startRuntimeTarget(t)
+	path := fmt.Sprintf("/wsip/safe/ratelimit-lapsing?run=qgtr-%d", wsipLapseRuns.Add(1))
+	client := &http.Client{Timeout: 10 * time.Second}
+	id := rt.capture(t, client, vulnapp.Endpoint{Path: path})
+	ex, err := rt.store.GetExchange(id)
+	if err != nil {
+		t.Fatalf("captured %s is missing: %v", path, err)
+	}
+	resp, err := rt.store.Get(*ex.Response)
+	if err != nil {
+		t.Fatalf("captured response for %s is missing: %v", path, err)
+	}
+	if st := responseStatus(string(resp.Raw())); st != http.StatusTooManyRequests {
+		t.Fatalf("%s was captured HTTP %d, want 429: the twin is not rate limited, so silence on it proves nothing", path, st)
+	}
+	return wsipAuditExchange(t, rt, path, id, nil)
 }
 
 func TestWebSocketHijackingAndClientIPAreOffWithoutTheirSwitches(t *testing.T) {

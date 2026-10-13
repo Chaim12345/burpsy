@@ -143,13 +143,25 @@ func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, por
 
 	go func() {
 		defer close(resultsCh)
-		// Clear the cancel handle on exit so a later Stop is a no-op rather
-		// than cancelling a dead context.
-		defer func() {
+		// finish records the final status and clears the cancel handle under one lock, so a later
+		// Stop is a no-op rather than cancelling a dead context or relabelling the finished run, and
+		// no Stop can slip in between the status write and the handle clear.
+		finish := func() {
 			i.progressMu.Lock()
+			// Stop cancels runCtx while holding progressMu, so reading runCtx.Err() under the same
+			// lock cannot miss a Stop that already happened. A run that dispatched every payload
+			// but was cancelled while workers were still in flight ended because of the Stop, not
+			// because the plan was exhausted: their sends returned the cancellation, not a
+			// response. Reporting it "completed" would overwrite the "stopped" Stop set.
+			status := "completed"
+			if runCtx.Err() != nil {
+				status = "stopped"
+			}
+			i.progress.Status = status
 			i.runCancel = nil
 			i.progressMu.Unlock()
-		}()
+			runCancel() // release the derived context's resources
+		}
 
 		// Bound concurrency: one permit per in-flight worker, acquired in the
 		// driver loop *before* a worker is spawned. Spawning a goroutine per
@@ -174,6 +186,7 @@ func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, por
 				// that reaches `resultsCh <- result` after we return would panic
 				// with "send on closed channel". wg.Wait guarantees none remain.
 				wg.Wait()
+				finish()
 				return
 			case sem <- struct{}{}:
 			}
@@ -207,7 +220,7 @@ func (i *Intruder) Run(ctx context.Context, baseRequest string, host string, por
 		}
 
 		wg.Wait()
-		i.setProgressStatus("completed")
+		finish()
 	}()
 
 	return resultsCh, nil
@@ -333,11 +346,15 @@ func (i *Intruder) ClearResults() {
 // previously it only set the status string, which left the run blocked on a
 // timeout the caller owned and never cancelled. Now the driver's select on
 // runCtx.Done() fires, workers drain, and the channel closes cleanly.
+//
+// With no run in flight it is a no-op: a finished attack keeps the status it ended with, so a late
+// Stop cannot relabel a completed attack as stopped.
 func (i *Intruder) Stop() {
 	i.progressMu.Lock()
-	if i.runCancel != nil {
-		i.runCancel()
+	defer i.progressMu.Unlock()
+	if i.runCancel == nil {
+		return
 	}
+	i.runCancel()
 	i.progress.Status = "stopped"
-	i.progressMu.Unlock()
 }

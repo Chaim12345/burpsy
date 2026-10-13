@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -28,8 +29,16 @@ func startRemoteChrome(t *testing.T) (wsURL, httpBase string) {
 	if bin == "" {
 		t.Skip("no Chrome on PATH")
 	}
+	// Not t.TempDir: killing Chrome's main process does not stop its helper processes at once, and
+	// they keep writing the profile for a moment after Wait returns, so TempDir's single RemoveAll
+	// failed with "directory not empty" after the test body had passed (burpsy-react-ui-jhig).
+	profile, err := os.MkdirTemp("", "domexec-remote-chrome-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { removeAllEventually(t, profile) })
 	cmd := exec.Command(bin, "--headless=new", "--no-sandbox", "--disable-gpu", "--remote-debugging-port=0",
-		"--user-data-dir="+t.TempDir(), "about:blank")
+		"--user-data-dir="+profile, "about:blank")
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +67,19 @@ func startRemoteChrome(t *testing.T) (wsURL, httpBase string) {
 	}
 	httpBase = "http://" + strings.SplitN(strings.TrimPrefix(wsURL, "ws://"), "/", 2)[0]
 	return wsURL, httpBase
+}
+
+// removeAllEventually removes dir, retrying while exiting Chrome helpers still write into it. A dir
+// that outlives the retries is logged, not failed: it is a leaked temp dir, not a wrong result.
+func removeAllEventually(t *testing.T, dir string) {
+	t.Helper()
+	var err error
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if err = os.RemoveAll(dir); err == nil {
+			return
+		}
+	}
+	t.Logf("could not remove the Chrome profile %s: %v", dir, err)
 }
 
 func pageTargets(t *testing.T, httpBase string) int {

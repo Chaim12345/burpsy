@@ -70,7 +70,8 @@ func wsipEndpoints() []Endpoint {
 		{Path: "/wsip/safe/ratelimit?report=annual",
 			Note: rl + " (safe): per-report limiter keyed on the socket address only, already exhausted"},
 		{Path: "/wsip/safe/ratelimit-lapsing",
-			Note: rl + " (safe): answers 429 to its first two requests and never again, whatever the headers"},
+			Note: rl + " (safe): answers 429 to its first two requests and never again, whatever the headers " +
+				"(counted per ?run= value, so an audit can start its own lapse)"},
 
 		{Path: "/wsip/whoami", Row: spoof,
 			Note: "page greets the client by the address in X-Real-IP"},
@@ -273,12 +274,18 @@ func registerWsip(mux *http.ServeMux) {
 		limited(w, safe.allow(wsipSocketHost(r)+"|"+r.URL.Query().Get("report")))
 	})
 
+	// The lapse is counted per `run` query value, not for the route as a whole. One process-wide
+	// counter was spent by whatever reached the route first — the corpus seeding, a whole-corpus
+	// sweep, an earlier audit in the same test binary — so an audit that came later found the limit
+	// long gone, its baseline answered 200, and the rate-limit test never ran: two requests, no
+	// verdict (burpsy-react-ui-qgtr). A caller that needs the lapse to start fresh names its own run.
 	var lapsingMu sync.Mutex
-	lapsing := 0
+	lapsing := map[string]int{}
 	mux.HandleFunc("/wsip/safe/ratelimit-lapsing", func(w http.ResponseWriter, r *http.Request) {
+		run := r.URL.Query().Get("run")
 		lapsingMu.Lock()
-		lapsing++
-		n := lapsing
+		lapsing[run]++
+		n := lapsing[run]
 		lapsingMu.Unlock()
 		limited(w, n > 2)
 	})
