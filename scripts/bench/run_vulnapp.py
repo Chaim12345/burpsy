@@ -80,9 +80,8 @@ FULL_PROFILE = {
     "check_passive_analysis": True, "check_active_injection": True, "check_extended_active": True,
     "check_out_of_band": True, "check_stored": True,
     # DOM stays off: it needs Chrome and its own budget, and the DOM family is scored separately.
-    # The browser CONFIRMATION of a reflected-XSS point is switched on, but it does NOTHING in this
-    # harness today: it drives only caller-supplied routes (VULNAPP_XSS_BROWSER_TARGETS below), the
-    # scanner ships none, and /api/scanner/config has no key to supply one. See that constant.
+    # The browser CONFIRMATION of a reflected-XSS point is switched on; it drives only the routes the
+    # caller supplies, which configure_scanner sends with this profile (VULNAPP_XSS_BROWSER_TARGETS).
     "check_dom": False, "check_corpus": False,
     "check_xss_browser_confirm": True,
     # The browser confirmation drives Chrome, which under a full-profile run competes with the
@@ -126,13 +125,7 @@ FULL_PROFILE = {
 # levels answer text/plain and the SPA's own script writes the reply with innerHTML, so only a browser
 # can confirm them (j1mk.38). The route is benchmark knowledge — this app's root, navigation markup,
 # field and control — and therefore lives here, not in the scanner's defaults. The field names match
-# scanner.XSSBrowserTarget.
-#
-# UNSUPPORTED today: /api/scanner/config accepts only the boolean and timeout keys, so there is no way
-# to hand this route to a running burpsy, and the harness does not send it (an unknown key is refused
-# by name and would fail the whole profile PUT). Until the API gains an `xss_browser_targets` key, the
-# browser confirmation declines every VulnerableApp XSS point ("no browser route is configured"), and
-# the XSS levels it used to confirm score as misses.
+# scanner.XSSBrowserTarget, spelled as /api/scanner/config's xss_browser_targets key spells them.
 VULNAPP_XSS_BROWSER_TARGETS = [{
     "match": "127.0.0.1",
     "root_url": "http://127.0.0.1:9090/VulnerableApp/",
@@ -546,7 +539,9 @@ def main():
                     help="exit non-zero when the strict score percent is under this")
     args = ap.parse_args()
 
-    configure_scanner(args.web, args.probe_timeout_ms, FULL_PROFILE if args.full_profile else {})
+    configure_scanner(args.web, args.probe_timeout_ms,
+                      {**FULL_PROFILE, "xss_browser_targets": VULNAPP_XSS_BROWSER_TARGETS}
+                      if args.full_profile else {})
     cases = fetch_cases(args.app)
     # Hazardous families run LAST: the command-injection and RCE endpoints execute what they are
     # sent, and a probe loop can wedge the target's request thread (seen live: CommandInjection

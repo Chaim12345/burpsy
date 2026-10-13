@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
 )
@@ -86,6 +87,123 @@ type scannerConfigView struct {
 	// (scanner/checks_takeover.go), both passive and off by default.
 	CheckCookieAttributes  bool `json:"check_cookie_attributes"`
 	CheckSubdomainTakeover bool `json:"check_subdomain_takeover"`
+
+	// The application routes the reflected-XSS browser confirmation drives
+	// (scanner.ScanConfig.XSSBrowserTargets). Always a list on the wire, empty when none is set.
+	XSSBrowserTargets []xssBrowserTargetView `json:"xss_browser_targets"`
+}
+
+// xssBrowserTargetView is scanner.XSSBrowserTarget on the wire, one JSON key per struct field. Sink
+// is the sink's name as domexec.SinkKind.String spells it, or "" for the default innerHTML family.
+type xssBrowserTargetView struct {
+	Match          string `json:"match"`
+	RootURL        string `json:"root_url"`
+	MasterSelector string `json:"master_selector"`
+	MasterText     string `json:"master_text"`
+	LevelSelector  string `json:"level_selector"`
+	LevelText      string `json:"level_text"`
+	LevelFromPath  bool   `json:"level_from_path"`
+	InputSelector  string `json:"input_selector"`
+	SubmitSelector string `json:"submit_selector"`
+	ClickTrigger   bool   `json:"click_trigger"`
+	Sink           string `json:"sink"`
+}
+
+// MaxXSSBrowserTargets bounds xss_browser_targets. A route is one application's page; a list longer
+// than this is not a configuration anyone writes by hand, and every audit walks it per exchange.
+const MaxXSSBrowserTargets = 32
+
+// maxXSSBrowserTargetField bounds each string field of a route, so a route cannot smuggle a
+// megabyte selector into the browser or the persisted config.
+const maxXSSBrowserTargetField = 2048
+
+func xssBrowserTargetViews(ts []scanner.XSSBrowserTarget) []xssBrowserTargetView {
+	out := make([]xssBrowserTargetView, 0, len(ts))
+	for _, t := range ts {
+		sink := ""
+		if t.Sink != 0 {
+			sink = t.Sink.String()
+		}
+		out = append(out, xssBrowserTargetView{
+			Match: t.Match, RootURL: t.RootURL,
+			MasterSelector: t.MasterSelector, MasterText: t.MasterText,
+			LevelSelector: t.LevelSelector, LevelText: t.LevelText, LevelFromPath: t.LevelFromPath,
+			InputSelector: t.InputSelector, SubmitSelector: t.SubmitSelector, ClickTrigger: t.ClickTrigger,
+			Sink: sink,
+		})
+	}
+	return out
+}
+
+// xssBrowserSinkByName resolves a sink name to its domexec.SinkKind. SinkEval is value 0, which the
+// route struct reads as "the default innerHTML family", so it cannot be named here: accepting "eval"
+// would silently configure a different sink than the one asked for.
+func xssBrowserSinkByName(name string) (domexec.SinkKind, bool) {
+	for k := domexec.SinkKind(1); k <= domexec.SinkAjaxHeader; k++ {
+		if k.String() == name {
+			return k, true
+		}
+	}
+	return 0, false
+}
+
+// parseXSSBrowserTargets decodes and validates xss_browser_targets. Every rule here is one the
+// confirmation would otherwise discover at audit time as a decline on every point; refusing it at
+// the PUT tells the operator now, by field, instead of later as silence.
+func parseXSSBrowserTargets(raw json.RawMessage) ([]scanner.XSSBrowserTarget, error) {
+	var views []xssBrowserTargetView
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&views); err != nil {
+		return nil, fmt.Errorf("wants a list of route objects (%v)", err)
+	}
+	if len(views) > MaxXSSBrowserTargets {
+		return nil, fmt.Errorf("carries %d routes; at most %d are accepted", len(views), MaxXSSBrowserTargets)
+	}
+	out := make([]scanner.XSSBrowserTarget, 0, len(views))
+	for i, v := range views {
+		fields := []*string{&v.Match, &v.RootURL, &v.MasterSelector, &v.MasterText, &v.LevelSelector,
+			&v.LevelText, &v.InputSelector, &v.SubmitSelector, &v.Sink}
+		for _, f := range fields {
+			*f = strings.TrimSpace(*f)
+			if len(*f) > maxXSSBrowserTargetField {
+				return nil, fmt.Errorf("route %d has a field longer than %d bytes", i, maxXSSBrowserTargetField)
+			}
+		}
+		u, err := url.Parse(v.RootURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("route %d: root_url %q is not an absolute http(s) URL", i, v.RootURL)
+		}
+		for name, val := range map[string]string{
+			"master_selector": v.MasterSelector, "master_text": v.MasterText, "input_selector": v.InputSelector,
+		} {
+			if val == "" {
+				return nil, fmt.Errorf("route %d: %s is required", i, name)
+			}
+		}
+		if (v.LevelText != "" || v.LevelFromPath) && v.LevelSelector == "" {
+			return nil, fmt.Errorf("route %d: level_text or level_from_path needs a level_selector", i)
+		}
+		if v.ClickTrigger && v.SubmitSelector == "" {
+			return nil, fmt.Errorf("route %d: click_trigger needs a submit_selector to click", i)
+		}
+		var sink domexec.SinkKind
+		if v.Sink != "" {
+			k, ok := xssBrowserSinkByName(v.Sink)
+			if !ok {
+				return nil, fmt.Errorf("route %d: sink %q is not a sink this build instruments (\"\" means the innerHTML family)", i, v.Sink)
+			}
+			sink = k
+		}
+		out = append(out, scanner.XSSBrowserTarget{
+			Match: v.Match, RootURL: v.RootURL,
+			MasterSelector: v.MasterSelector, MasterText: v.MasterText,
+			LevelSelector: v.LevelSelector, LevelText: v.LevelText, LevelFromPath: v.LevelFromPath,
+			InputSelector: v.InputSelector, SubmitSelector: v.SubmitSelector, ClickTrigger: v.ClickTrigger,
+			Sink: sink,
+		})
+	}
+	return out, nil
 }
 
 func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
@@ -143,6 +261,8 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 
 		CheckCookieAttributes:  c.CheckCookieAttributes,
 		CheckSubdomainTakeover: c.CheckSubdomainTakeover,
+
+		XSSBrowserTargets: xssBrowserTargetViews(c.XSSBrowserTargets),
 	}
 }
 
@@ -233,6 +353,8 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 	}
 
 	view := scannerConfigFrom(s.wiredScanner().ConfigSnapshot())
+	// nil: the patch did not carry xss_browser_targets, so the live routes stay as they are.
+	var xssTargets []scanner.XSSBrowserTarget
 	for key, raw := range patch {
 		if get := scannerConfigBoolKeys[key]; get != nil {
 			var b bool
@@ -293,6 +415,18 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 				}
 			}
 			view.ResetMailboxURL = u
+			continue
+		}
+		if key == "xss_browser_targets" {
+			// A whole replacement, like reset_test_identities: [] clears every route. The parsed
+			// routes are held aside rather than round-tripped through the view, so what the scanner
+			// gets is exactly what was validated.
+			ts, err := parseXSSBrowserTargets(raw)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("key %q: %v", key, err), http.StatusBadRequest)
+				return
+			}
+			xssTargets = ts
 			continue
 		}
 		if key == "max_concurrency" {
@@ -358,6 +492,9 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckServerSideParamPollution = view.CheckServerSideParamPollution
 		c.CheckCookieAttributes = view.CheckCookieAttributes
 		c.CheckSubdomainTakeover = view.CheckSubdomainTakeover
+		if xssTargets != nil {
+			c.XSSBrowserTargets = xssTargets
+		}
 	})
 	if s.persist != nil {
 		if err := s.persist.SaveScanConfig(confirmed); err != nil {

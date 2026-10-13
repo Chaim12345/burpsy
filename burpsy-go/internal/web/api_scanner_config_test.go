@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/burpsy-go/burpsy/internal/core"
+	"github.com/burpsy-go/burpsy/internal/domexec"
 	"github.com/burpsy-go/burpsy/internal/persist"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"go.uber.org/zap"
@@ -294,5 +296,141 @@ func TestConfigCarriesTheServerSideParameterPollutionCheck(t *testing.T) {
 	}
 	if !s.wiredScanner().ConfigSnapshot().CheckServerSideParamPollution {
 		t.Error("the running scanner did not take check_server_side_parameter_pollution")
+	}
+}
+
+// vulnappLikeRoute is a well-formed xss_browser_targets entry: every field the route struct has.
+func vulnappLikeRoute() map[string]any {
+	return map[string]any{
+		"match":           "app.test",
+		"root_url":        "http://app.test:8080/App/",
+		"master_selector": ".nav-item",
+		"master_text":     "Reflected",
+		"level_selector":  ".sub-item",
+		"level_from_path": true,
+		"input_selector":  "#q",
+		"submit_selector": "#go",
+		"click_trigger":   true,
+		"sink":            "document.write",
+	}
+}
+
+// The browser-confirmation routes are on the wire: a PUT reaches the running scanner field for field,
+// GET reports them back in the same shape, the edit persists, and a patch that does not name the key
+// leaves the routes alone.
+func TestConfigXSSBrowserTargetsRoundTrip(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "cfg.db")
+	p, err := persist.Open(db, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	s := newScannerServer().WithPersist(p)
+	if got := getScannerConfig(t, s)["xss_browser_targets"]; got == nil {
+		t.Fatal("xss_browser_targets missing from GET; want an empty list when none is set")
+	} else if l, ok := got.([]any); !ok || len(l) != 0 {
+		t.Fatalf("xss_browser_targets default = %v, want []", got)
+	}
+
+	route := vulnappLikeRoute()
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"xss_browser_targets": []any{route}}); rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", rec.Code, rec.Body.String())
+	}
+	live := s.wiredScanner().ConfigSnapshot().XSSBrowserTargets
+	want := scanner.XSSBrowserTarget{
+		Match: "app.test", RootURL: "http://app.test:8080/App/", MasterSelector: ".nav-item", MasterText: "Reflected",
+		LevelSelector: ".sub-item", LevelFromPath: true, InputSelector: "#q", SubmitSelector: "#go", ClickTrigger: true,
+		Sink: domexec.SinkDocumentWrite,
+	}
+	if len(live) != 1 || live[0] != want {
+		t.Fatalf("live routes = %+v, want [%+v]", live, want)
+	}
+	got, _ := getScannerConfig(t, s)["xss_browser_targets"].([]any)
+	if len(got) != 1 {
+		t.Fatalf("GET routes = %v, want one", got)
+	}
+	back, _ := got[0].(map[string]any)
+	for k, v := range route {
+		if back[k] != v {
+			t.Errorf("GET %s = %v, want %v", k, back[k], v)
+		}
+	}
+	if back["level_text"] != "" {
+		t.Errorf("GET level_text = %v, want the empty string it was left as", back["level_text"])
+	}
+
+	// A patch that does not carry the key leaves the routes in place.
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_xss_browser_confirm": true}); rec.Code != http.StatusOK {
+		t.Fatalf("unrelated PUT = %d", rec.Code)
+	}
+	if n := len(s.wiredScanner().ConfigSnapshot().XSSBrowserTargets); n != 1 {
+		t.Fatalf("routes after an unrelated patch = %d, want 1", n)
+	}
+	// The persisted copy carries them, so a restart keeps them.
+	loaded, err := p.LoadScanConfig()
+	if err != nil || loaded == nil || len(loaded.XSSBrowserTargets) != 1 || loaded.XSSBrowserTargets[0] != want {
+		t.Fatalf("persisted routes = %+v (err %v), want [%+v]", loaded, err, want)
+	}
+	// [] clears them.
+	if rec := putJSON(t, s, "/api/scanner/config", map[string]any{"xss_browser_targets": []any{}}); rec.Code != http.StatusOK {
+		t.Fatalf("clearing PUT = %d", rec.Code)
+	}
+	if n := len(s.wiredScanner().ConfigSnapshot().XSSBrowserTargets); n != 0 {
+		t.Fatalf("routes after [] = %d, want 0", n)
+	}
+}
+
+// An invalid route is refused with 400 by what is wrong, and a refused PUT applies NOTHING, including
+// the other keys in the same body.
+func TestConfigXSSBrowserTargetsValidationRejects(t *testing.T) {
+	with := func(k string, v any) []any {
+		r := vulnappLikeRoute()
+		if v == nil {
+			delete(r, k)
+		} else {
+			r[k] = v
+		}
+		return []any{r}
+	}
+	tooMany := make([]any, MaxXSSBrowserTargets+1)
+	for i := range tooMany {
+		tooMany[i] = vulnappLikeRoute()
+	}
+	cases := map[string]any{
+		"not a list":            map[string]any{"root_url": "http://app.test/"},
+		"relative root":         with("root_url", "/App/"),
+		"non-http root":         with("root_url", "file:///etc/passwd"),
+		"hostless root":         with("root_url", "http:///App/"),
+		"missing root":          with("root_url", nil),
+		"blank master selector": with("master_selector", "   "),
+		"missing master text":   with("master_text", nil),
+		"blank input selector":  with("input_selector", ""),
+		"level without selector": func() []any {
+			r := vulnappLikeRoute()
+			r["level_selector"] = ""
+			return []any{r}
+		}(),
+		"click without submit": with("submit_selector", ""),
+		"unknown sink":         with("sink", "nosuchsink"),
+		"eval sink":            with("sink", "eval"),
+		"unknown field":        with("nosuchfield", "x"),
+		"wrong field type":     with("click_trigger", "yes"),
+		"oversized selector":   with("input_selector", strings.Repeat("a", 4096)),
+		"too many routes":      tooMany,
+	}
+	for name, v := range cases {
+		s := newScannerServer()
+		rec := putJSON(t, s, "/api/scanner/config", map[string]any{"xss_browser_targets": v, "check_stored": true})
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: PUT = %d, want 400 (%s)", name, rec.Code, rec.Body.String())
+			continue
+		}
+		if !strings.Contains(rec.Body.String(), "xss_browser_targets") {
+			t.Errorf("%s: refusal %q does not name the key", name, rec.Body.String())
+		}
+		cfg := s.wiredScanner().ConfigSnapshot()
+		if len(cfg.XSSBrowserTargets) != 0 || cfg.CheckStored {
+			t.Errorf("%s: a refused PUT applied something: %d routes, check_stored=%v", name, len(cfg.XSSBrowserTargets), cfg.CheckStored)
+		}
 	}
 }

@@ -201,7 +201,7 @@ var routeSchemas = map[string]opSchema{
 	"DELETE /api/scanner/configs":       {body: typeOf[scanConfigWriteReq]()},
 	"PUT /api/scanner/config": {
 		body: typeOf[map[string]json.RawMessage](), schema: scannerConfigPatchSchema,
-		keysCheckedBy: "applyScannerConfigPatch refuses a key in none of scannerConfigBoolKeys, scannerConfigIntMSKeys or max_concurrency",
+		keysCheckedBy: "applyScannerConfigPatch refuses a key in none of scannerConfigBoolKeys, scannerConfigIntMSKeys, its named keys (max_concurrency, xss_browser_targets, ...)",
 	},
 
 	"PUT /api/proxy/options": {
@@ -343,6 +343,23 @@ func scannerConfigPatchSchema() map[string]any {
 	}
 	for k := range scannerConfigIntMSKeys {
 		props[k] = map[string]any{"type": "integer", "minimum": 0, "description": "milliseconds"}
+	}
+	str := map[string]any{"type": "string", "maxLength": maxXSSBrowserTargetField}
+	props["xss_browser_targets"] = map[string]any{
+		"type": "array", "maxItems": MaxXSSBrowserTargets,
+		"description": "the reflected-XSS browser confirmation's application routes; replaces the whole list ([] clears it)",
+		"items": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"root_url", "master_selector", "master_text", "input_selector"},
+			"properties": map[string]any{
+				"match": str, "root_url": map[string]any{"type": "string", "maxLength": maxXSSBrowserTargetField, "description": "absolute http(s) URL on the audited origin"},
+				"master_selector": str, "master_text": str, "level_selector": str, "level_text": str,
+				"level_from_path": map[string]any{"type": "boolean"},
+				"input_selector":  str, "submit_selector": str,
+				"click_trigger": map[string]any{"type": "boolean"},
+				"sink":          map[string]any{"type": "string", "description": "a domexec sink name; empty means the innerHTML family"},
+			},
+		},
 	}
 	return map[string]any{"type": "object", "properties": props, "additionalProperties": false,
 		"description": "a patch: only the keys sent change"}

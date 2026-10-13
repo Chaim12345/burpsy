@@ -234,8 +234,8 @@ type ScanConfig struct {
 	// XSSBrowserTargets are the application routes the browser confirmation drives. The scanner ships
 	// none: a target this list does not cover is DECLINED with that reason rather than reported clean —
 	// the scanner cannot guess an application's navigation, and a guessed route would fabricate a
-	// finding the moment it was wrong. Supplied by a caller that knows its target. Not yet settable
-	// through /api/scanner/config, so only an embedding Go caller can supply one today.
+	// finding the moment it was wrong. Supplied by a caller that knows its target: an embedding Go
+	// caller, or a running process through /api/scanner/config's xss_browser_targets key.
 	XSSBrowserTargets []XSSBrowserTarget
 	// CheckSSRFInBand admits the IN-BAND technique of the SSRF row (0vzb.6): plant a canary URL this
 	// scanner serves and see whether the application fetches it and returns its body. Separate from
