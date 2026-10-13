@@ -426,11 +426,9 @@ def abilities(a, dom, dom_note):
                     "-collaborator-server %s, client %s" % (a.collaborator_server, a.collaborator_client or "interactsh-client on PATH")))
     else:
         out.append(("out-of-band collaborator (check_out_of_band, OOB SQLi/XXE/SSRF)", "SKIPPED",
-                    "burpsy's only collaborator is the external interactsh-client binary (no local or in-process "
-                    "endpoint in the binary; the tests' fake provider is test-only). It is not installed here, and "
-                    "running a downloaded third-party binary needs the user's approval. The public pool (oast.*) "
-                    "answers through the proxy and DNS resolves, so --collaborator-client PATH "
-                    "--collaborator-server public would enable it"))
+                    "no collaborator given: burpsy's only collaborator is the external interactsh-client binary "
+                    "(no in-process endpoint; the tests' fake provider is test-only). Pass --collaborator-client "
+                    "PATH (the public pool by default) or --collaborator-server URL to run it"))
     out.append(("BCheck corpus (check_corpus)", "RUN",
                 "--bchecks %s" % a.bchecks if a.bchecks else "the bundled PortSwigger corpus (attached when no -bchecks is given)"))
     out.append(("password-reset mailbox (check_password_reset)", "RUN",
@@ -967,7 +965,7 @@ def main():
     ap.add_argument("--bchecks", default="", help="BCheck corpus directory, passed to burpsy -bchecks")
     ap.add_argument("--collaborator-server", default="",
                     help='passed to burpsy -collaborator-server ("public" or a server URL); without it OOB is SKIPPED')
-    ap.add_argument("--collaborator-client", default="", help="passed to burpsy -collaborator-client (interactsh-client path)")
+    ap.add_argument("--collaborator-client", default="", help="passed to burpsy -collaborator-client (interactsh-client path); implies --collaborator-server public")
     ap.add_argument("--java-xmx", default="1g")
     ap.add_argument("--app-start-timeout", type=int, default=240)
     ap.add_argument("--app-console-log", default="", help="keep the app's WARN console output in this file")
@@ -976,6 +974,10 @@ def main():
     ap.add_argument("--run-as-current-user", action="store_true", help="non-root only: run the app as yourself")
     ap.add_argument("--allow-list-drift", action="store_true", help="score even when the list differs from the live app")
     a = ap.parse_args()
+    if a.collaborator_client and not a.collaborator_server:
+        # A client with no server named used to leave OOB SKIPPED, silently: interactsh-client's own
+        # default is the public pool, so naming the client means "use it".
+        a.collaborator_server = "public"
 
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
