@@ -53,7 +53,7 @@ const AUDIT_CHECK_GROUPS: { title: string; detail: string; rows: { key: keyof Sc
     title: "Engines & coverage",
     detail: "Cross-cutting engines and where the scanner is allowed to spend effort.",
     rows: [
-      { key: "check_corpus", label: "BCheck corpus actives", hint: "Only with a corpus loaded via --bchecks" },
+      { key: "check_corpus", label: "BCheck corpus actives", hint: "The bundled PortSwigger corpus, or one loaded via --bchecks" },
       { key: "check_dom", label: "DOM-based checks", hint: "Needs -dom chrome (or ws://) at startup" },
       { key: "check_out_of_band", label: "Out-of-band callbacks", hint: "interactsh confirmation for blind findings" },
       { key: "check_stored", label: "Stored-input rendering" },

@@ -115,8 +115,13 @@ func lex(src string) ([]token, *ParseError) {
 			var sb strings.Builder
 			for i < n && src[i] != '`' {
 				if src[i] == '\\' && i+1 < n && src[i+1] == '{' {
-					// \{ escapes an interpolation brace; keep the brace.
-					sb.WriteByte('{')
+					// \{ escapes an interpolation brace. The escape is kept, not resolved: the
+					// evaluator's interpolate is what turns it into a literal brace. Resolving it
+					// here as well unescaped it twice — the lexer emitted `{`, and interpolate then
+					// read that brace as the start of a reference, so `$\{jndi:ldap://{addr}/a}`
+					// (log4shell, SSPP's `\{"status":510\}`, every fastjson payload) went out as
+					// an unresolved reference instead of its literal JSON or JNDI text.
+					sb.WriteString("\\{")
 					i += 2
 					col += 2
 					continue

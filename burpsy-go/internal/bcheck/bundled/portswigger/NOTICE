@@ -1,0 +1,42 @@
+Bundled BCheck corpus — licence and attribution
+================================================
+
+Source
+  Repository: https://github.com/PortSwigger/BChecks
+  Commit:     d4e08e3ed331a34bfbb5241432bfac248629a8bb (2026-10-07)
+  Copyright:  PortSwigger Ltd and the individual contributors named in each
+              check's `metadata: author` field.
+
+Licence
+  The upstream repository is licensed under the GNU Lesser General Public
+  License, version 3 (LGPL-3.0). Its LICENSE file is reproduced verbatim in
+  this directory as LICENSE. The GNU General Public License, version 3, which
+  the LGPL-3.0 incorporates, is the LICENSE file at the root of the burpsy
+  repository.
+
+  Every file under checks/ is an unmodified copy of the upstream file at the
+  same relative path; manifest.json records each file's SHA-256, and the test
+  in this package fails if an embedded file no longer matches it.
+
+Why bundling is permitted
+  burpsy is licensed GPL-3.0-or-later. The LGPL-3.0 is the GPL-3.0 plus
+  additional permissions, so LGPL-3.0 material may be conveyed as part of a
+  GPL-3.0 work (LGPL-3.0 section 2(b) and the GPL-3.0's own terms). A burpsy
+  binary that embeds these files is therefore distributable under the
+  GPL-3.0; because the upstream grant names version 3 only, the combined work
+  is GPL-3.0 for as long as these files are in it, not "or any later
+  version". The obligations carried with it are those of the LGPL-3.0 and
+  GPL-3.0: keep this notice and both licence texts with the files, and keep
+  the files' source (they are their own source) available with any binary.
+
+What is and is not bundled
+  manifest.json lists every .bcheck file in the upstream tree at the commit
+  above — 266 files — with whether it parses, whether it runs under burpsy's
+  interpreter, whether it is embedded, whether it is enabled, and the reason
+  when it is not. Passive checks and checks excluded as unsafe are listed but
+  not embedded. Regenerate with:
+
+    go run ./cmd/bcheck-bundle -src <checkout> -commit <sha> -commit-date <date>
+
+  The bundled checks run only when the check_corpus scanner switch is on,
+  which it is not by default.

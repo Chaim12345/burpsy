@@ -54,6 +54,13 @@ type ActiveScanner struct {
 	// WithCorpusChecks supplies one — a process without --bchecks audits the built-ins only, so
 	// old behaviour is preserved.
 	corpus []*bcheck.Check
+	// bundled is the corpus compiled into the binary (internal/bcheck/bundled), supplied by
+	// WithBundledCorpus. Dispatched under the same CheckCorpus switch as corpus, after it, and a
+	// bundled check whose name a loaded check already carries is left out — an operator who loads
+	// the same upstream files from --bchecks gets each check once, in their copy. Kept apart from
+	// corpus because WithCorpusChecks replaces corpus on every console import (syncCorpus), and the
+	// bundled set must not vanish when an operator imports one custom check.
+	bundled []*bcheck.Check
 	// toolRunner executes the `run tool` statements of corpus checks, through
 	// the operator's allowlist. Nil means tool execution is disabled: checks
 	// that need a tool are counted at load (LoadReport.Tools) and excluded
@@ -613,6 +620,36 @@ func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner 
 	}
 	s.mu.Unlock()
 	return s
+}
+
+// WithBundledCorpus supplies the corpus compiled into the binary. Unlike WithCorpusChecks it does
+// NOT switch CheckCorpus on: the bundled set is available, not enabled, and an operator turns it on
+// with check_corpus (burpsy-react-ui-0vzb.21). A nil or empty slice clears it.
+func (s *ActiveScanner) WithBundledCorpus(checks []*bcheck.Check) *ActiveScanner {
+	s.mu.Lock()
+	s.bundled = checks
+	s.mu.Unlock()
+	return s
+}
+
+// dispatchCorpusLocked is the corpus the engine dispatches under CheckCorpus: the loaded corpus,
+// then every bundled check whose name the loaded corpus does not already carry. Callers hold s.mu.
+func (s *ActiveScanner) dispatchCorpusLocked() []*bcheck.Check {
+	if len(s.bundled) == 0 {
+		return s.corpus
+	}
+	loaded := make(map[string]bool, len(s.corpus))
+	for _, c := range s.corpus {
+		loaded[c.Name] = true
+	}
+	out := make([]*bcheck.Check, 0, len(s.corpus)+len(s.bundled))
+	out = append(out, s.corpus...)
+	for _, c := range s.bundled {
+		if !loaded[c.Name] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Audit runs an active audit on an exchange, under this scanner's AuditConfig.

@@ -130,6 +130,10 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		corpusChecks = ps.ActiveChecks()
 		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
 	}
+	bundledChecks, berr := bundledCorpus(bchecksDir, logger)
+	if berr != nil {
+		return nil, berr
+	}
 	senderCfg := sender.DefaultSenderConfig()
 	// Every sender this context builds — the repeater, the intruder's per-request senders and the
 	// active scanner's — shares the one policy, so -upstream-proxy covers the CLI's egress as
@@ -183,6 +187,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 			WithSender(sender.NewSender(senderCfg)).
 			WithScope(scope).
 			WithCorpusChecks(corpusChecks).
+			WithBundledCorpus(bundledChecks).
 			WithToolRunner(toolRunner).
 			WithStoredLedger(scanner.NewStoredLedger()).
 			WithProvenanceLedger(scanner.NewProvenanceLedger()).

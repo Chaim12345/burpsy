@@ -662,10 +662,17 @@ func main() {
 	// and without it every DOM-based check reports a missing capability — which is what this binary
 	// did unconditionally until the flag existed. The provider is lazy, so an audit whose check set
 	// contains no DOM check never starts a browser.
+	bundledChecks, berr := bundledCorpus(*bchecksDir, logger)
+	if berr != nil {
+		log.Fatal(berr)
+	}
 	activeScanner := scanner.NewActiveScanner(store, logger).
 		WithSender(httpSender).
 		WithScope(scope).
 		WithCorpusChecks(passiveScanner.ActiveChecks()).
+		// The compiled-in PortSwigger corpus when no -bchecks directory was given: available
+		// under check_corpus, which this does not turn on.
+		WithBundledCorpus(bundledChecks).
 		WithToolRunner(toolRunner).
 		WithOOBProvider(oobProvider).
 		// The capability handles this binary used to leave unwired: without the ledger the 10

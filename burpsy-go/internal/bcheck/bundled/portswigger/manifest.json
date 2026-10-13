@@ -1,0 +1,3703 @@
+{
+  "source": {
+    "repository": "https://github.com/PortSwigger/BChecks",
+    "commit": "d4e08e3ed331a34bfbb5241432bfac248629a8bb",
+    "commit_date": "2026-10-07T14:43:30+01:00",
+    "license": "LGPL-3.0",
+    "license_file": "portswigger/LICENSE",
+    "notice_file": "portswigger/NOTICE",
+    "imported_at": "2026-10-13",
+    "importer": "go run ./cmd/bcheck-bundle"
+  },
+  "entries": [
+    {
+      "source_path": "archived/Content-Security-Policy.bcheck",
+      "sha256": "e1b5b47e29231fa28ac8e6d3adac75234ea3dd1c937c2e739b7b5f2010e8c2c8",
+      "name": "Insecure Content-Security-Policy",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "examples/blind-ssrf.bcheck",
+      "sha256": "e8e002574d9c300757e6bb7d894a539b9a4b75bf864e98e0dfcd40cd801cf74c",
+      "name": "Request-level collaborator based",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/examples/blind-ssrf.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "examples/exposed-backup-file.bcheck",
+      "sha256": "d5c19b47dc565460d28af0f4829f96c5a0ded79943da0af49cacc38e286ee004",
+      "name": "Path-level",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "run_gap": "`{garbage} differs from {check}` compares two whole send bindings; this interpreter resolves only path references there, so the comparison is always false and the check can never report",
+      "imported": true,
+      "file": "checks/examples/exposed-backup-file.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "interpreter-gap",
+        "reason": "`{garbage} differs from {check}` compares two whole send bindings; this interpreter resolves only path references there, so the comparison is always false and the check can never report"
+      }
+    },
+    {
+      "source_path": "examples/exposed-git-directory.bcheck",
+      "sha256": "25ef87dfd9218c5bc2ec419d5acd0df9136c82954abed7b60f08b4bcf4e2347a",
+      "name": "Host-level",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/examples/exposed-git-directory.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "examples/leaked-aws-token.bcheck",
+      "sha256": "f87945dc8b6eb628ab3d058e39425e1da251801700fd5086acdef57c9c159f2e",
+      "name": "Response-level (passive)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "examples/log4shell.bcheck",
+      "sha256": "a4ea20c89b4de5ae52f9bbd8843cdb1f5857610b91332f98b9ed3d2a4e5626b4",
+      "name": "Log4Shell (collaborator)",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/examples/log4shell.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "examples/server-side-prototype-pollution.bcheck",
+      "sha256": "f2bca246f966d1cc58d13a4aab6e43913a9539f336cc2d3a84064db7c4a24444",
+      "name": "Server-side prototype pollution (status)",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/examples/server-side-prototype-pollution.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "examples/suspicious-input-transformation.bcheck",
+      "sha256": "3e8e81416fdbb0abc6d73287b65a76bcbda3509af0c1add8e37c7b47b2c39af3",
+      "name": "Insertion-point-level",
+      "given": "insertion point",
+      "family": "insertion-point",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/examples/suspicious-input-transformation.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/APIs/client_secret.bcheck",
+      "sha256": "87fbe7e55edcf283f85d7de5f475a86f51fa9b895f62af48b1ff10769a62199d",
+      "name": "Use of Known API Variable",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/APIs/couchbase-unauth-apis.bcheck",
+      "sha256": "f6f2c108e8f281d67d1b2d9c17f4b33b5307353aa487d5db69236c28d888fe74",
+      "name": "Couchbase Buckets Unauthenticated REST API - Detect",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/APIs/couchbase-unauth-apis.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Apache Struts OGNL Console Publicly Accessible.bcheck",
+      "sha256": "f1672c43ab0e4c7b3b59fcf721a4c2a0100fc4df1ee1fd38f8e0fa8d99f56562",
+      "name": "Apache Struts OGNL Console Publicly Accessible",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Apache Struts OGNL Console Publicly Accessible.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Apache Tomcat Manager Path Normalization Panel.bcheck",
+      "sha256": "ff8e857a252f567d8d7a74576fad125655fc33a35e8f889afca35a2b1e39f31f",
+      "name": "Apache Tomcat Manager Path Normalization Panel - Detect",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Apache Tomcat Manager Path Normalization Panel.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "`status is \"403\" or …` binds the `or` first, so any 403 reports"
+      }
+    },
+    {
+      "source_path": "other/Blind-SSRF-By-Collaborator.bcheck",
+      "sha256": "114a8fdfb08bed08a912afb3b01c72c88c97134602c5b62a1e8d3921d2c21a83",
+      "name": "Blind SSRF By Collaborator",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Blind-SSRF-By-Collaborator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Cache Deception check (Path confusion).bcheck",
+      "sha256": "471a77f14302639439aa6c3a30081827d76097943c11f9372347e19e9a36bff1",
+      "name": "Cache Deception check (Path confusion)",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Cache Deception check (Path confusion).bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on 19 endpoints including 7 safe twins — any path that ignores a suffix returns the same body"
+      }
+    },
+    {
+      "source_path": "other/Cloudflare External Image Resizing Misconfiguration.bcheck",
+      "sha256": "77ec9542587fb273ff2663ba7234956d07b5bcf190769d182ac48d2ac1034939",
+      "name": "Cloudflare External Image Resizing Misconfiguration",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Cloudflare External Image Resizing Misconfiguration.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Cookie-SameSite-Disabled.bcheck",
+      "sha256": "e980348507419cc67d99fdc1cad4b175eae23f5296aeba2a640496fcf5694ff1",
+      "name": "SameSite attribute was set to None",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/Etcd Server - Unauthenticated Access.bcheck",
+      "sha256": "7b0c12c63f692d506c690926f480c3d774cd68ff2aae9fbfda8a5323d835bac3",
+      "name": "Etcd Server - Unauthenticated Access",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Etcd Server - Unauthenticated Access.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/GraphQL/graphql-introspection-enabled.bcheck",
+      "sha256": "8231a8a6aafc549d70272d6d546232a4ca37c3df13d25a2054b9e46589015c12",
+      "name": "Graphql Introspection Query Enabled",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/GraphQL/graphql-introspection-enabled.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/GraphQL/grapple-get-method.bcheck",
+      "sha256": "66f4b85921b0e7854b233ab6f22accc7cfdb2b581204099016002401731f4dfd",
+      "name": "GraphQL CSRF GET / Method Enabled",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/GraphQL/grapple-get-method.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/HTTP Methods/CONNECT_port_scan.bcheck",
+      "sha256": "3be43f7807b320c17af73252e65dc8d78ce4957ca8f0a1e1ee1c0d14b1bc4681",
+      "name": "CONNECT port scan",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "port scanning: CONNECT tunnels to other ports through the target, which reaches hosts and services outside the declared scope"
+      }
+    },
+    {
+      "source_path": "other/HTTP Methods/Insecure HTTP Methods Allowed (Passive).bcheck",
+      "sha256": "e87483e79ce3dbdfc4ba918ffe936453a7b14a4e118bf1f170273e2347d4f8dc",
+      "name": "Insecure HTTP Methods Allowed [Passive]",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/HTTP Methods/httpMethodOverrideCapability.bcheck",
+      "sha256": "17d1572ede3338fbe0780a68de097c803d96830f1e37d9eb14fd08bb1e44b9dd",
+      "name": "HTTP method override capability detected",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/HTTP Methods/httpMethodOverrideCapability.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "reports an Allow header on the override probe without checking the unmodified request lacked one"
+      }
+    },
+    {
+      "source_path": "other/IBM Friendly Path Publicly Accessible.bcheck",
+      "sha256": "eb8c4f44a6b07f9f857d8af36cb27908457074a15f5bbf380ec98f1b441c2165",
+      "name": "IBM Friendly Path Publicly Accessible",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/IBM Friendly Path Publicly Accessible.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Sign Up\" or \"My Profile\" anywhere in the body reports, whatever the status"
+      }
+    },
+    {
+      "source_path": "other/IBM Websphere Source File Publicly Accessible.bcheck",
+      "sha256": "bc0ad28b8643487f77cddcca5beafabf8e8cfe7dd0c9bc3d4b70a93597e0c090",
+      "name": "IBM Websphere Portal Information Disclosure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/IBM Websphere Source File Publicly Accessible.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"servlet\" anywhere in the body reports, whatever the status"
+      }
+    },
+    {
+      "source_path": "other/JavaScript/Password in JavaScript Logger.bcheck",
+      "sha256": "0802ef273aec15fe49049ab2c15ea62c65e5662a1f2f3e830f3aae0049f28321",
+      "name": "Password in JavaScript Logger",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/JavaScript/jsMapFile.bcheck",
+      "sha256": "74948e6f7d5e3784cd11ba594cd7046e7bffee38c1a72255e0a68570134ad648",
+      "name": "Javascript Source map detected",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/JavaScript/malicious_javascript_imported.bcheck",
+      "sha256": "ec83b9976923e83a932db110db6d3238a30f7599e58b722cfed41f03b8c1257a",
+      "name": "Malicious JavaScript import in use",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/JavaScript/malicious_polyfill_cdn.bcheck",
+      "sha256": "76c0d54b8a51ab7bbabfa2bf124824313346ca9af5685dca9c76bd35df269e60",
+      "name": "Malicious Polyfill CDN In Use",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/Kubernetes_Pods_API_Discovery_\u0026_Remote_Code_Execution.bcheck",
+      "sha256": "30b415872b291a633d590c0dd3314df0c87523d4bdd0e4591ab94d2de0036c80",
+      "name": "Kubernetes Pods - API Discovery \u0026 Remote Code Execution",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Kubernetes_Pods_API_Discovery_\u0026_Remote_Code_Execution.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/MsExchange-ECP-Admin-Accessible.bcheck",
+      "sha256": "4a4a09aa6c6d5571bcd8441e11d56c081afb8a6db745151d9f5e6798a2fa6a11",
+      "name": "Microsoft Exchange Admin Center Exposure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/MsExchange-ECP-Admin-Accessible.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Object moved\" with a 302 is the default body of every IIS/ASP.NET redirect"
+      }
+    },
+    {
+      "source_path": "other/Netscaler_CitrixADC_hash_icon_detection.bcheck",
+      "sha256": "276ccdd8f259509d77e53ddc34bb9a702ea79ed58b668565266b7433dcab867e",
+      "name": "Netscaler/CitrixADC Icon Hash",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/OAuth/OpenID-Dynamic-Client-Registration-Endpoint-Detected.bcheck",
+      "sha256": "0edaa8c3e95045f1976b642e4c76a1f6f17fe5675307167271cb7dd99207e73b",
+      "name": "OpenID Connect Dynamic Registration Endpoint Detected",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/OAuth/OpenID-Dynamic-Client-Registration-Endpoint-Detected.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/OAuth/Use-of-Password-Grant-Type.bcheck",
+      "sha256": "15a458029d723c91d2dea2602519c472d6dfbedf99d021d668aecc9ef94da388",
+      "name": "Use of Password Grant Type",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/OAuth/Use-of-Password-Grant-Type.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Openredirect/mass48-openredirect.bcheck",
+      "sha256": "5ca5ead1639aaf295ca626045b210cbbb70f3cc608cbccdb4051be4b70bc9b67",
+      "name": "Mass 48 Param For Open Redirect",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Openredirect/mass48-openredirect.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/PHP Laravel Debug Mode enabled.bcheck",
+      "sha256": "8ae6d54f9004df5a96a94a9462c696ae3a4ea566e4ff106672b6369fd90eb2a8",
+      "name": "PHP Laravel Debug Mode enabled",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/PHP Laravel Debug Mode enabled.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Perl Jam 2 - RCE.bcheck",
+      "sha256": "09bcbf9f500bf9a92bcd010485dd6d07e1086a945caba72c6b3bfdebf9fd4887",
+      "name": "Perl JAM 2",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: runs /bin/bash -c ifconfig on the target"
+      }
+    },
+    {
+      "source_path": "other/Rails CRLF and XSS.bcheck",
+      "sha256": "edef991a73dfb62e13ad4863a5ea465be3d2c0827eb9196ba19faccb0fe07454",
+      "name": "Ruby on Rails - CRLF Injection and Cross-Site Scripting",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Rails CRLF and XSS.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/SAP Directory Listing.bcheck",
+      "sha256": "bbe26c84ae78a3fda3488be578534fd82553edfe366cb12a0ba5600dffc7e986",
+      "name": "SAP Directory Listing",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/SAP Directory Listing.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/SAP/SAP authentication bypass check.bcheck",
+      "sha256": "1a75cee38e37ddc194b324ca127bd92cb03c7e986154b506e03939d14dd7d006",
+      "name": "SAP authentication bypass check",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/SAP/SAP authentication bypass check.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Administration\" in a 200 body is a common word"
+      }
+    },
+    {
+      "source_path": "other/Use-of-Basic-Auth-Scheme.bcheck",
+      "sha256": "841a9a050c941d3d31e8b7d67e0f5dcef14e2a3a669327172cc980c98ed06b26",
+      "name": "Use of Basic Auth Scheme",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/Use-of-Unencrypted-URI-Schemes.bcheck",
+      "sha256": "f3d2234d507986e48b7d24ed189d9eb3ff7689f6bc56a669d1daaaed4eb5d06f",
+      "name": "Use of Unencrypted URI Schemes",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/WebBackup Exposed.bcheck",
+      "sha256": "ab0cb2e68cf3e0eccbef319fb2322e73fe6907cf15e1dfdaee722fdc9a9edeab",
+      "name": "WebBackup Exposed",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/WebBackup Exposed.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/Xdebug_remote_code_execution_via_xdebug_remote_connect_back.bcheck",
+      "sha256": "9ca2478747e20a54fbf855861b457062499419ed06a921a899caccf85691a9c2",
+      "name": "Xdebug remote code execution via xdebug.remote_connect_back",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/Xdebug_remote_code_execution_via_xdebug_remote_connect_back.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/apache-mod_info.bcheck",
+      "sha256": "89baa94d95f39780106658309af453241237d733f5eb547bdd361cac2f6cb78c",
+      "name": "Apache mod_info",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/apache-mod_info.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Apache Server\" is in the footer of every Apache page under ServerTokens Prod"
+      }
+    },
+    {
+      "source_path": "other/bypass/403 \u0026 401 Header Bypass via IP.bcheck",
+      "sha256": "fe83aaacdf21576118f37a3f8a5acd2374d4f355fdbde9cbb49fce43a4092bd0",
+      "name": "403 \u0026 401 Header Bypass via IP",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/bypass/403 \u0026 401 Header Bypass via IP.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on the safe twin /wsip/safe/via-proxy"
+      }
+    },
+    {
+      "source_path": "other/bypass/403-429-bypass.bcheck",
+      "sha256": "f7250865a194ab2124a62c2365e8a74b725bcc3d71abade651c779f23aa31297",
+      "name": "403/429 bypass using HTTP Header",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/bypass/403-429-bypass.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on the safe twin /wsip/safe/via-proxy and on /wsip/safe/ratelimit-lapsing"
+      }
+    },
+    {
+      "source_path": "other/bypass/PathSuffix_WAF_Proxy.bcheck",
+      "sha256": "fa371af61d16663e0fcd20b14ec409a1c19d49dad865fd424b5d8e170860d1af",
+      "name": "PathSuffix-Bypass-4ProxyOrWAF",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "run_gap": "`{garbage} differs from {check}` compares two whole send bindings; this interpreter resolves only path references there, so the comparison is always false and the check can never report",
+      "imported": true,
+      "file": "checks/other/bypass/PathSuffix_WAF_Proxy.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "interpreter-gap",
+        "reason": "`{garbage} differs from {check}` compares two whole send bindings; this interpreter resolves only path references there, so the comparison is always false and the check can never report"
+      }
+    },
+    {
+      "source_path": "other/bypass/path-bypass.bcheck",
+      "sha256": "8431b5b6287dcf0dbd438b7d31115cd46b86ea94ffd2ee69f7ca0cbc93c3d801",
+      "name": "Path-bypass",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/bypass/path-bypass.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on 12 endpoints including 6 safe twins and CSRF, NoSQL and session endpoints it does not test for"
+      }
+    },
+    {
+      "source_path": "other/bypass/waf-bypass.bcheck",
+      "sha256": "fa99bed6ac6adf2853b9836536ae15dc2ea6f7a811b634b39e69178479b5fead",
+      "name": "WAF-bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/bypass/waf-bypass.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "`protect` in any response header (X-XSS-Protection) arms it, and any non-403 then reports"
+      }
+    },
+    {
+      "source_path": "other/cache-monitor.bcheck",
+      "sha256": "02d01b4970b4dd1c7fa61aa8b2d4ccd9ba484499de289b33e5a4db47480bba65",
+      "name": "Cache \u0026 CDN Security Monitor",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/configs/apache-airflow-config-exposure.bcheck",
+      "sha256": "8ff2ac4445fdb4eecdd339aa2c4db3016de3af29095c92870026a0e0d53625b8",
+      "name": "Apache Airflow Configuration Page",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/configs/apache-airflow-config-exposure.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/configs/dockerrun-aws-config-page-exposure.bcheck",
+      "sha256": "18eae8244f9eca5d1dce2668f96e7e7022fb2790de219abe28442039bbf0c06a",
+      "name": "Dockerrun AWS Configuration Page Exposed",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/configs/dockerrun-aws-config-page-exposure.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/corsCredentialedRequestsMisconfiguration.bcheck",
+      "sha256": "fd3f3e59a10e1a96a5335d73f867a075c3e0e8f71b510bccbe35c6b8baf3ce47",
+      "name": "Invalid CORS configuration for credentialed requests detected",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/csrf_magic_backdoor.bcheck",
+      "sha256": "4e8cdc677383abe5c11b2646a3ebb0b5e648f637f6bd7e95927a60cb210a37e2",
+      "name": "CSRF-Magic backdoor detected",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/csrf_magic_backdoor.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/detectRateLimiter.bcheck",
+      "sha256": "6759ac1c50190b0d821ac76c39e847cea130356485212dea14a5779c0e93898d",
+      "name": "Rate limiter detected",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/email/email-splitting-attack.bcheck",
+      "sha256": "ea3d64cc9023ce0611572fedcff40306b66f7d86a884aadea4a3a19a64521da2",
+      "name": "Email splitting attack",
+      "given": "insertion point",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/email/email-splitting-attack.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/exposed-laravel-clockwork.bcheck",
+      "sha256": "e44bc996fee6e68c7166dd430b34e4efef0895cf5cb0e8a1ee8020b1fc84c377",
+      "name": "Exposed Laravel Clockwork Endpoint",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/exposed-laravel-clockwork.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"xdebug\" or \"webVitals\" anywhere in the body reports, whatever the status"
+      }
+    },
+    {
+      "source_path": "other/exposed-laravel-telescope.bcheck",
+      "sha256": "0e0541707a84cc3fb536916c2be9a25071d78b4e15e1f1559550ec203c5374cb",
+      "name": "Exposed Laravel Telescope Endpoint",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/exposed-laravel-telescope.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/exposed-simple-saml-php-ui.bcheck",
+      "sha256": "62c3bdd95d2f29b9baf39d049e3cc677c4b893ceef18f164f533cc09f68b98c9",
+      "name": "Simple SAML php Admin Interface",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/exposed-simple-saml-php-ui.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/exposed-swagger-ui.bcheck",
+      "sha256": "45d5ec564a3e6f9ff53bee088a63341a1d5e6a36655a34bb41b458fe768031b7",
+      "name": "Swagger endpoint found",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/exposed-swagger-ui.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.24-Deserialization-RCE.bcheck",
+      "sha256": "887dbdbd199650e86989a930382d91a265de690370d4699a39fbbec1d11ef40b",
+      "name": "Fastjson 1.2.24 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.24-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.41-Deserialization-RCE.bcheck",
+      "sha256": "1ae72103e3d4b24ba94b1ab10f62ef420516e56220d30a70d7eacfa815c05e21",
+      "name": "Fastjson 1.2.41 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.41-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.42-Deserialization-RCE.bcheck",
+      "sha256": "d996293273c742510f35e5f2c495f8b2a5c0d19f6d31b9e9e3f223bab4034a65",
+      "name": "Fastjson 1.2.42 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.42-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.43-Deserialization-RCE.bcheck",
+      "sha256": "551cf00f4caa698649b5806b6e58cc1529f7348764dceb56d7fb0419b77f0f61",
+      "name": "Fastjson 1.2.43 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.43-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.47-Deserialization-RCE.bcheck",
+      "sha256": "5439f816f61cf14de7d101f01be786cc936d8845466fbfdc2adb27de4860dff6",
+      "name": "Fastjson 1.2.47 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.47-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.62-Deserialization-RCE.bcheck",
+      "sha256": "544524e1bee3d1be15a717febe3d3847b57f4a82dfa6a863533c59b811332c4d",
+      "name": "Fastjson 1.2.62 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.62-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.67-Deserialization-RCE.bcheck",
+      "sha256": "b939b67a0f2a5f56179c75e018b5ce8d4a9750cee738e755cecfd4730b5d8ee9",
+      "name": "Fastjson 1.2.67 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.67-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.68-Deserialization-RCE.bcheck",
+      "sha256": "0b8e239a68b40bf580459c774c4b5c922af1414b199a1e36fb45c1c5b1e5f1f8",
+      "name": "Fastjson 1.2.68 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.68-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/fastjson/Fastjson-1.2.80-Deserialization-RCE.bcheck",
+      "sha256": "8e1128f4a465c8d8be595995d72e690a20988628bc477fb1ad6b8a12ee61ef2e",
+      "name": "Fastjson 1.2.80 Deserialization RCE",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/fastjson/Fastjson-1.2.80-Deserialization-RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/000~ROOT~000-exposed.bcheck",
+      "sha256": "5949bb0ce832219df5152d71fab631ac05817377fb62ac5cf7ad69b7732f4781",
+      "name": "Filesystem exposure via /home/000~ROOT~000/",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/000~ROOT~000-exposed.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Index of\" anywhere in the response is the whole condition"
+      }
+    },
+    {
+      "source_path": "other/files/Interesting-file-error-in-the-response.bcheck",
+      "sha256": "a4fd949b5006827c7ffaad692b8d4d459ff4963ea49bf154563436f1bde3fe60",
+      "name": "Interesting file error in the response",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/files/configs/WordPress-ReadMe.bcheck",
+      "sha256": "cf9f6b6453a43056a39060ba93e0baae14963a79e6c4767ff90c45ad4b27964e",
+      "name": "WordPress README file Exposure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/configs/WordPress-ReadMe.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/configs/git-config-discovery.bcheck",
+      "sha256": "c776c71557fdb06f7f4c03de82a1d16bece51ee056b096c66f130a4025d33729",
+      "name": "Git Configuration Check",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/configs/git-config-discovery.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/configs/gitlab-ci-discovery.bcheck",
+      "sha256": "d04c21f66157dcd4df2c539c225ba486eb06a0cfbe04862e051cc713f120f00a",
+      "name": "GitLab CI Exposure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/configs/gitlab-ci-discovery.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"stage\" anywhere in the body is the whole condition"
+      }
+    },
+    {
+      "source_path": "other/files/configs/php-info.discovery.bcheck",
+      "sha256": "ae64d8cf99e348bb2c91af8b4d6742851c15a86c4bf75095117afc86df376c56",
+      "name": "PHP Info Exposure",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/configs/php-info.discovery.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/configs/web-config.discovery.bcheck",
+      "sha256": "970ee883a1aa040e26d060b9ad9b93ee25acb518087aabea3eaedb3270b822bd",
+      "name": "web.config file exposure",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/configs/web-config.discovery.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/ds-store-exposed.bcheck",
+      "sha256": "57c4547cbc0904b04d584388f6fdd3468fd17dcf7a94abafc4dcecc7390285a8",
+      "name": ".DS_Store Configuration Check",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/ds-store-exposed.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/npm-debug-log.bcheck",
+      "sha256": "aa9b67c8c8fb618827bb9534571bf6193108b0762629f3a0fd971c9d64492ec9",
+      "name": "NPM Debug Log Files",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/npm-debug-log.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/python-common.bcheck",
+      "sha256": "9b930d79a1675bc4ad57d20d3ea4dd8e4b98535ed0ffd268c3c8d071bd202a10",
+      "name": "Common Python file exposures.",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/python-common.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/files/ruby-on-rails-storage.bcheck",
+      "sha256": "19a31c8b6881273b271a72f1f4352eadbc74da70fb8a43533b293ccfa3381426",
+      "name": "Ruby on Rails storage.yml File Disclosure",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/ruby-on-rails-storage.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "`matches \"service:\"` anywhere in the body reports on its own (the `or` binds first)"
+      }
+    },
+    {
+      "source_path": "other/files/svn-exposed.bcheck",
+      "sha256": "c13514dd93e47b8ae8c6661dd4a358f079ad2f3e4e55c0202c8c68fe643dec82",
+      "name": "SVN Configuration File Exposed",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/files/svn-exposed.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/forwardedRequestsCollaboratorInteraction.bcheck",
+      "sha256": "54fba34bc0a9e2bc59834ffa35c5d1986b9c1e57af664616ee64254d88feca82",
+      "name": "Forwarded requests collaborator interaction detected",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/forwardedRequestsCollaboratorInteraction.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/gcp.bcheck",
+      "sha256": "8b588ff9e1258e11417afeed3343d42f4bb453dcf4a438d821c2fd4d2c894cb9",
+      "name": "Response-level",
+      "given": "insertion point",
+      "family": "insertion-point",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "retrieves live cloud credentials: asks the GCP metadata service for a service-account access token and puts it in the finding"
+      }
+    },
+    {
+      "source_path": "other/go debug pprof exposed.bcheck",
+      "sha256": "e43183552ca6b38b89783d0fa59bf4f8c2ed994da6fca2ccfadfc922daf40971",
+      "name": "go debug pprof exposed",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/go debug pprof exposed.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/missing-security-txt.bcheck",
+      "sha256": "08b1ca2229d2331ce967074b3cbb7535dab32942643d7d597bdf4b1368cd4f07",
+      "name": "Missing security.txt",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/missing-security-txt.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on every host — it reports the absence of a file, not a defect"
+      }
+    },
+    {
+      "source_path": "other/nacos/Nacos-create-user-unauthorized-bypass.bcheck",
+      "sha256": "51e47d60532838ee5cde3dcaa929acfc040d6e2391de0ec17a26a5e3c83085be",
+      "name": "Nacos Unauthorized Create User",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "state change: creates (then tries to delete) a user account on the target"
+      }
+    },
+    {
+      "source_path": "other/nacos/Nacos-default-password.bcheck",
+      "sha256": "511b4e532d5a5d83a3510f9b82335223b1cf8ccc0b014034401305fbacf38c4a",
+      "name": "Nacos default password",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "credential guessing: logs in with a default username and password"
+      }
+    },
+    {
+      "source_path": "other/nacos/Nacos-severidentity-bypass.bcheck",
+      "sha256": "b6f7a1cb0047491c427bb901f52f2279bfad194ae92933b755550880ebbfb5a8",
+      "name": "Nacos ServerIdentity Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/nacos/Nacos-severidentity-bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/nacos/Nacos-user-list-unauthorized-bypass.bcheck",
+      "sha256": "e6994de76409f98ca2335722a442bcbfd0a51b87f2c8df6228c99cb5fef21382",
+      "name": "Nacos User List Unauthorized Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/nacos/Nacos-user-list-unauthorized-bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/nacos/Nacos-user-list-unauthorized.bcheck",
+      "sha256": "1b19cb257ab6e09bfb6a9f260fca30772b2735734d2138989286de903a76c853",
+      "name": "Nacos User List Unauthorized",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/nacos/Nacos-user-list-unauthorized.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/ntlm-authentication-discovery.bcheck",
+      "sha256": "745c826feb35e3a5f432e5f71234d928c2ab2e12da8f541df1ee87fecb71fcf6",
+      "name": "NTLM Authentication Detection",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/ntlm-authentication-discovery.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/php-8.1.0-dev-backdoor.bcheck",
+      "sha256": "9e25c299d8726640d26e6cb8fc0e77a74ebe94384f0198f57a4ae0c49a491a94",
+      "name": "PHP 8.1.0-dev Backdoor - Code Injection",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/php-8.1.0-dev-backdoor.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/prometheus/exposed-generic-prometheus-metrics.bcheck",
+      "sha256": "5fbd084bda0ac71c7856becba507f074c972dd4bf26bcc1a4a89e2b52610dbe0",
+      "name": "Exposed Generic Prometheus Metrics",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/prometheus/exposed-generic-prometheus-metrics.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "the metric regex matches almost any line of text/plain"
+      }
+    },
+    {
+      "source_path": "other/prometheus/exposed-prometheus-api-endpoints.bcheck",
+      "sha256": "987aa2d955f62269d298646f6446f6ab155548e97728161d825cda7c4ee4e51d",
+      "name": "Exposed Prometheus API Endpoints",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/prometheus/exposed-prometheus-api-endpoints.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/prometheus/exposed-prometheus-metrics.bcheck",
+      "sha256": "6001a6649374cefe484a550e8e651002a9e647f8fbf55e432eec62c03f9ce871",
+      "name": "Prometheus Metrics Publicly Available",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/prometheus/exposed-prometheus-metrics.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"memory\" in a 200 body is a common word"
+      }
+    },
+    {
+      "source_path": "other/prometheus/unauth-access-to-prometheus-server.bcheck",
+      "sha256": "e1c26bd9134ebd2398ecb77211cf0542e87bd07a0f6908391884b0bd7ee86d7c",
+      "name": "Unauthenticated Access to Prometheus (passive)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/recon/Check_OPTIONS.bcheck",
+      "sha256": "262b5c26ea8ad873f97959f80a4d24cf694ef28c50550a14f18256d2654a75e1",
+      "name": "HTTP Methods Available (passive)",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/recon/Check_OPTIONS.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "reports any Allow header — informational on nearly every server that answers OPTIONS"
+      }
+    },
+    {
+      "source_path": "other/recon/backend-language.bcheck",
+      "sha256": "0ef701a6865ca70d80b872889ea63fd7dc5126ff1a5b1e32c7a89a5861c85a4b",
+      "name": "Backend-language",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/recon/server-detect.bcheck",
+      "sha256": "a5f217611627c151c76f9cae4704c783db425510b149692e0254466f4eddd35e",
+      "name": "server-detect",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/recon/server-detect.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "reports any Server or X-Powered-By header — informational on nearly every host"
+      }
+    },
+    {
+      "source_path": "other/sentinel/Alibaba-Sentinel-SSRF.bcheck",
+      "sha256": "da985f8c59d704e6a68ca557a2a0884905909d4dcb39b9e6d355e9134cb96eac",
+      "name": "Alibaba Sentinel SSRF ",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/sentinel/Alibaba-Sentinel-SSRF.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/shiro/shiro_active.bcheck",
+      "sha256": "9e8c1a20ac2aed0b769defe5fffed91c18ac6cf404b5e9ec64f65087b14c15cd",
+      "name": "Shiro Cookie Check Active",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/shiro/shiro_active.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/shiro/shiro_passive.bcheck",
+      "sha256": "31817c3fec7e3b44327e9148020c25bdc0cf10778398dec08b054606aaebb4a4",
+      "name": "Shiro Cookie Check Passive",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/springboot/Springboot autoconfig actuator.bcheck",
+      "sha256": "92c4bd2afd94227d93f8c494af34f14e9751a7626b12a26b29415b3c3553e664",
+      "name": "Springboot autoconfig actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot autoconfig actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot beans actuator.bcheck",
+      "sha256": "4e2ce6354d52c8924f452c038152a2e51a3295640747792f2a1b2a86727fdf0f",
+      "name": "Springboot beans actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot beans actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot caches actuator.bcheck",
+      "sha256": "0f3d03edab96e4814431253e282dc6984108d152a4041af277b53972efc544bf",
+      "name": "Springboot caches actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot caches actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot conditions actuator.bcheck",
+      "sha256": "ba1625287f291487169f604deefe681a744d9239a359975b69c16f190f6f8e31",
+      "name": "Springboot conditions actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot conditions actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot configprops actuator.bcheck",
+      "sha256": "2189371e4c8656f294a2b9b52a93c6b6284b02bce3071ff18e4864693fc0a45b",
+      "name": "Springboot configprops actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot configprops actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot env actuator.bcheck",
+      "sha256": "9bc2641696692c52b12bf4516cd1530ce72925f03393625435b2e48eed43fd28",
+      "name": "Springboot env actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot env actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot health actuator.bcheck",
+      "sha256": "07df4c5bd6e3199890658dd2a3e031c2b1247d7de7a669749069c3dbae390c8f",
+      "name": "Springboot health actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot health actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot heapdump actuator.bcheck",
+      "sha256": "3e719635794296c29020e5059401989b672c3a6d612c9a916b32f4a8f92b229b",
+      "name": "Springboot heapdump actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot heapdump actuator.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "any 200 application/octet-stream response reports"
+      }
+    },
+    {
+      "source_path": "other/springboot/Springboot info actuator.bcheck",
+      "sha256": "277100aea1b94b383cdfa4eef057af10f5c92bc2e95830504b79d5f18161fad5",
+      "name": "Springboot info actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot info actuator.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"name\" and \"version\" keys in a JSON body are common to most APIs"
+      }
+    },
+    {
+      "source_path": "other/springboot/Springboot logfile actuator.bcheck",
+      "sha256": "1b74de4ede0244e9aadddaf28fb335bf7421bc2b9afa7b2b326ad667dc0ce86e",
+      "name": "Springboot logfile actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot logfile actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot loggers actuator.bcheck",
+      "sha256": "700a0f073445697a5f8b85805d38273c2a219a4f08562a3d8d87d4e920d6dc90",
+      "name": "Springboot loggers actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot loggers actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot metrics actuator.bcheck",
+      "sha256": "b5f5a638000b669b5a15f3db5a3daa7722c3cc7a3777ddd18a1433fd72403634",
+      "name": "Springboot metrics actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot metrics actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot scheduledtasks actuator.bcheck",
+      "sha256": "8788cf642ec1b4b58998265090da8139de9d1f54a128e21adae24b4f0a113e5a",
+      "name": "Springboot scheduledtasks actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot scheduledtasks actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot threaddump actuator.bcheck",
+      "sha256": "e102113691fbe85ac32a03d3ec37674f0900e9cf63a42de132be9c5eed5026da",
+      "name": "Springboot threaddump actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot threaddump actuator.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/springboot/Springboot trace actuator.bcheck",
+      "sha256": "47eac9b699e87939bbe310fa84c6e812001bc4b6e767c5339cbe6872f79170bf",
+      "name": "Springboot trace actuator",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/springboot/Springboot trace actuator.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"timestamp\", \"info\", \"method\" and \"path\" keys are common to most request-log JSON"
+      }
+    },
+    {
+      "source_path": "other/stackTrace.bcheck",
+      "sha256": "0a887d9a9ab927d5718a41817a83c6bbce3acd306f1e7623ef62ddf559b3912b",
+      "name": "Stack trace was detected",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/supportForOtherContentTypesThanJson.bcheck",
+      "sha256": "1f45cd6e51095ec429f6502602fd400464669e796ebaecc5045eb9aafbaf0207",
+      "name": "Support for other content types than json detected",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/supportForOtherContentTypesThanJson.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on 34 endpoints including 13 safe twins — a 2xx/5xx to a changed content type is not evidence"
+      }
+    },
+    {
+      "source_path": "other/supportForQUERYMethod.bcheck",
+      "sha256": "bff9fc10f68dc73df2378ce4fab44567f8f589384b586bf70d34e3fa82557cd5",
+      "name": "Support for the QUERY HTTP method was detected.",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/supportForQUERYMethod.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/supportForWebDAV.bcheck",
+      "sha256": "d11a020174cf13022a2ad3d8c8beca53f565eec27027bc26937d2860506f62d6",
+      "name": "Support for WebDAV detected",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/supportForWebDAV.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/symfony-profiler-debug-mode.bcheck",
+      "sha256": "6afd87668d539c1db3cb96a78fef1e806f0392529c5e22bfe37c1d3072bd0ea0",
+      "name": "Symfony Profiler Mode Enabled",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/symfony-profiler-debug-mode.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "\"Profiler\" or \"Project Configuration\" anywhere in the body reports, whatever the status"
+      }
+    },
+    {
+      "source_path": "other/symfony-verbose-debug-mode.bcheck",
+      "sha256": "609ba0944a298c8c4f06a2f519acb3eac1db8d8c4918f79fdc0d0320ac09a47b",
+      "name": "Misconfigured Symfony Verbose Plugin",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/symfony-verbose-debug-mode.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/takeover-s3-bucket.bcheck",
+      "sha256": "d662143baed4614b2791608080780a01d8adbfb5c5f72439798fde3c40231f2c",
+      "name": "AWS S3 Bucket takeover",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/takeover-shopify.bcheck",
+      "sha256": "76f4f3f029cc545002e1e56a109985e812301c0c37730ae32ff3ec65cd6379a1",
+      "name": "Shopify subdomain takeover",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/technologies/Firebase-Detect.bcheck",
+      "sha256": "af1c376ac1cc5f439488070f24b493650020772770a37be5252ea4c248d96949",
+      "name": "Firebase Information Found",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/technologies/WoodWing-Detect.bcheck",
+      "sha256": "f8513079f3ac12659d1953215a41596b8588b4c463e1fc49b2cf8d5b39c26e52",
+      "name": "Detect WoodWing Studio Server Panel",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/technologies/WoodWing-Detect.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/tokens/Certain-leaks-checker.bcheck",
+      "sha256": "cdd319793a3f9b8d92a8a5c4bd87f54ef8fdebbb8a05a17f7cb796fd9cd9e2c8",
+      "name": "Information Disclosure Secret Finder - certain",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/Tentative-leaks-checker.bcheck",
+      "sha256": "3847df9f2e16e9100b53b0ed59271f7ebf5922f9ee79c81cb42feb9f1c6f656c",
+      "name": "Information Disclosure Secret Finder - tentative",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/adobe-oauth-secret.bcheck",
+      "sha256": "4e500ec52ebe6d70be0d6af2307f3e2c43d83b5f318466a82aeaf564a8bdd029",
+      "name": "Adobe OAuth Client Secret",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/age-public-key.bcheck",
+      "sha256": "fca4443387516a030e2a138414638a0731b898a005eaf2ef9353cd32eecba8fc",
+      "name": "Age Recipient (X25519 public key)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/age-secret-key.bcheck",
+      "sha256": "b62665914abf8ab94b9ca60a5a25c1d0478871dbf4e937c27a0fd704370010d6",
+      "name": "Age Identity Key in Source Code",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/amazon-sns-topic.bcheck",
+      "sha256": "7a8776b696363a5e13dacb7a2e3fe283eb327b4dfbf468ea160044c214cfa85e",
+      "name": "Amazon SNS Topic Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/aws-access-key-value.bcheck",
+      "sha256": "5645a8d705b362f98bb88e6bcff41da65920e7bd55f2c0e63f39a889d388cb89",
+      "name": "AWS Access Key ID Value",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/aws-access-secret-key.bcheck",
+      "sha256": "2b33cb7e4c7adabd56b1a996435a8a448fd6544683936eb1eaa0996f3a3e3bc1",
+      "name": "AWS Access/Secret Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/aws-api-key.bcheck",
+      "sha256": "c67acedabbeb691c4fe99b6462a1c0d3e88382d996717ad1d2380eac7d2f850e",
+      "name": "AWS API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/aws-session-token.bcheck",
+      "sha256": "430cd1bd5805315ea5e0f628252247a4ce58c3474c950b38cd504c957cf012fc",
+      "name": "AWS Session Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/axiom-digitalocean-key-exposure.bcheck",
+      "sha256": "51c7b6c2f52bc4ef212eb83c05c1a5c0abd912509c487ac55612aacdb8517596",
+      "name": "DigitalOcean Key Exposure via Axiom",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/azure-apim-secretkey.bcheck",
+      "sha256": "fea4956a10a1d78a6863c022cf9289559b60cebee0965cafe85411ff5600a31d",
+      "name": "Azure APIM Secret Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/bitly-secret-key.bcheck",
+      "sha256": "abee9ad8fbb1fb36e9daf07003814a746eb84a518a18f7c02f22889e8eb08e5b",
+      "name": "Bitly Secret Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/braintree-access-token.bcheck",
+      "sha256": "8113d7ccb61aebd0a74c49ba5c5eeab5fcb7104ddf677b7e7635e2bdafcd3bda",
+      "name": "PayPal Braintree Access Token Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/cloudinary-credentials.bcheck",
+      "sha256": "e65bd4ee6129757a57dd6f7f945a4f8ad54937e8c327220497f1e9cb5566f066",
+      "name": "Cloudinary Credentials Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/codeclimate-token.bcheck",
+      "sha256": "7378b41eb003b7acb81b9cbc5ac5eb3a3ed8fc654b3f71368f693835a0cffce7",
+      "name": "CodeClimate Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/cookie-cached-on-disk.bcheck",
+      "sha256": "073f17987c361acf7c48a985ce52f5e94e8a8380679bd21c12730e5025c7902b",
+      "name": "Cookie cached on disk",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/crates-api-key.bcheck",
+      "sha256": "806cea6023be278a5ae3c5cbb734bb7ced9b6fb85c4efeec98b20059254891d2",
+      "name": "Crates.io API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/discord-webhook.bcheck",
+      "sha256": "aceedaff485c5c8dc6bbc33e12054155f0f9e8c9081e87521303c00eff4276c3",
+      "name": "Discord Webhook Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/dynatrace-api-token.bcheck",
+      "sha256": "6174ac7eaafcfd881a6e55d52dfd7968638827fd17c22182cdb2f82c272e2998",
+      "name": "Dynatrace API Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/facebook-access-token.bcheck",
+      "sha256": "01fd77ea3f95fb49bcb85c95cad9b926687876138be92f7a97d2eb85daf92266",
+      "name": "Facebook Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/fcm-server-key.bcheck",
+      "sha256": "af22a0c9c9043d3aadf11a79e8f66de7ab1975b88b101f304435bfdfc04f091d",
+      "name": "FCM Server Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/github-app.bcheck",
+      "sha256": "9f552656da2fec0a1a5169e969c6dedcb4e0d97d7520695ec519c7dbb1dd6296",
+      "name": "Github App Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/github-oauth-access.bcheck",
+      "sha256": "bdedbf44b9cf0c6c7417b1d34c957a8515365da6dbbe1c203ba94b08f510eeca",
+      "name": "GitHub OAuth Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/github-personal-access.bcheck",
+      "sha256": "a4409147b72e8b7ca5b02e2aa007799fde63fe7d860beab51cf30c7ea2950a1c",
+      "name": "GitHub Personal Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/github-refresh.bcheck",
+      "sha256": "7b4d83a9b4807e3243b301ca51295a87e12d41489c2c6494a1bc98188158c4a6",
+      "name": "GitHub Refresh Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/gitlab-personal-token.bcheck",
+      "sha256": "80232bd39ec49cfa36ad5d49d4098b6d7ee912b7fb77487226b2f378c93a1eee",
+      "name": "GitLab Personal Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/gitlab-pipeline-token.bcheck",
+      "sha256": "ede29f97b21e44a9053ac4c94ceb0e780ec28da81275913359f9ec73112f65ad",
+      "name": "GitLab Pipeline Trigger Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/gitlab-runner-token.bcheck",
+      "sha256": "c848fdd431b1c03de180159965e9068c184659beee38695de401cacd883ec250",
+      "name": "GitLab Runner Registration Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/google-api-key.bcheck",
+      "sha256": "470d64a7d0c60bbe4ffae3567b87c5da0015f4348a88f325281dfd666738591b",
+      "name": "Google API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/google-calendar-link.bcheck",
+      "sha256": "1e2441a02fcf2f145711f60ef10af882686e143b64d37f5ba93f22eff9567aa3",
+      "name": "Google Calendar URI Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/google-client-id.bcheck",
+      "sha256": "a60debccaccb3ae9a2912c4aef16c69411276c55109e371abff69bd722df49b4",
+      "name": "Google Client ID",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/google-oauth-prefixed.bcheck",
+      "sha256": "0d89bf43af7402b415f2077e502fbb12c4eec8363880233cfbed369ec437cba6",
+      "name": "Google OAuth Client Secret (prefixed)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/heroku-api-key.bcheck",
+      "sha256": "9c4d468246f3b5d443a83337422e9376f778156f6933b72ed1ce716e653decae",
+      "name": "Heroku API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/jdbc-connection-string.bcheck",
+      "sha256": "098a4cc5cc0663a35cdeb2b5bd340e2fba4fa7de6cbf5e5d39e3b9d07b032cd3",
+      "name": "JDBC Connection String Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/jenkins-crumb-token.bcheck",
+      "sha256": "9b45657e1463a4bd1b92d2230cdef1c79cbb7e4ac61f884b9dcfc70165f3f40a",
+      "name": "Jenkins Token or Crumb in Source Code",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/jwt-hmac-alg-detected.bcheck",
+      "sha256": "c7cdd5942f4519f3ac1f68753bcfe620c9c7336710462e68224bbf1b63ea7cbf",
+      "name": "HMAC-Signed JWT Identified",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/jwt-none-algorithm.bcheck",
+      "sha256": "9bdc46159326fafcc0577ad4a8f2f4431b7b2a182bf93845f244f92103a7939a",
+      "name": "None algorithm attack on JWS",
+      "given": "insertion point",
+      "family": "insertion-point",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/other/tokens/jwt-none-algorithm.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "other/tokens/jwt-token.bcheck",
+      "sha256": "6858edc6b8cac60c2069478a2f39f69feecc486463548e94d7936ae9a190293c",
+      "name": "JWT Token Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/loqate-api-key.bcheck",
+      "sha256": "d0cf26ad67cacc518ac68232680f3f3639e6ecd16f25e0bb52661b412198c6ad",
+      "name": "Loqate API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/mailchimp-api-key.bcheck",
+      "sha256": "e2f5f2e7c7d2e52a5cf5c2b71c82461aaa7a7937b6ec02fd47279e5c20743580",
+      "name": "Mailchimp API Value",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/mailgun-api-token.bcheck",
+      "sha256": "b5750beb52ef1b84af9c86a95d3aa4673a05c99b45009ee1bac2d3dd5322082a",
+      "name": "Mailgun API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/mapbox-token-disclosure.bcheck",
+      "sha256": "a19d2d5090068809844800a245209b97fdf1c572dd31eb1874c1e6a468646ba3",
+      "name": "Mapbox Token Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/microsoft-teams-webhook.bcheck",
+      "sha256": "fd39667f6893ff6942ba0002f574181db8d1745b85ab9f52389392577664c55e",
+      "name": "Microsoft Teams Webhook Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-admin-api-key.bcheck",
+      "sha256": "47994b8ca155dcd06ef7443c4cc783b0638940e0df71307a81da27088aa0136f",
+      "name": "NewRelic Admin API Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-insights-key.bcheck",
+      "sha256": "56552f18bca2399a4d41e682ad048ae3a2857796a29180c663360b8781684863",
+      "name": "New Relic Insights Keys Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-pixie-api-key.bcheck",
+      "sha256": "a157dcc1f79379dfd17dd42933af4cf631815bcd33962f98a85b7fd482ce89b0",
+      "name": "New Relic Pixie API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-pixie-deploy-key.bcheck",
+      "sha256": "be264f45f98d11043d1e9a12fafdd2ac2c533a5b353068afd5a44a634489291c",
+      "name": "New Relic Pixie Deploy Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-rest-api-key.bcheck",
+      "sha256": "7180479011ca969da82d6813cd301d7928966d467ba60e20a9b34ea2b5a2e50f",
+      "name": "NewRelic REST API Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/newrelic-synthetics-location-key.bcheck",
+      "sha256": "e0c80d271d1e9dcdd8ade95f606760eafa81af6437f5390b65e96e7f6c340d62",
+      "name": "Synthetics Location Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/npm-access-token.bcheck",
+      "sha256": "acd3782574b3d7293800c5276e815984cc236b9572e4bdbf1358cc86b5b7ecaf",
+      "name": "NPM Access Token (fine-grained)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/nuget-api-key.bcheck",
+      "sha256": "d2bfca0545f8821a8c8d69d308ca3326e8a1145b823cbb3b11e48277ec7880a4",
+      "name": "NuGet API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/oauth-access-key.bcheck",
+      "sha256": "282f93c7a403562556789dd64be77dc620dac687b3e8ffe5b9c1df1cdd0e446d",
+      "name": "Google OAuth Access Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/openai-api-key.bcheck",
+      "sha256": "68855231b3801e7c8f32aa57d2702a4185767dd1c83ec0a29279d1e811472954",
+      "name": "OpenAI API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/picatic-api-key.bcheck",
+      "sha256": "2436cbd6ab8e4481abfacd30f28b207447269ed3ee48fed5f441cc8fe3db293d",
+      "name": "Picatic API Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/pypi-upload-token.bcheck",
+      "sha256": "5c36d431fbfdf268f945250183823fb7cfaae8668f92c8de8b1bded60e96c80b",
+      "name": "PyPI Upload Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/razorpay-clientid-disclosure.bcheck",
+      "sha256": "eca17cc24b2a88d568db725b195ff44a6d4d33ea52e30ba5c85756295365ec48",
+      "name": "Razorpay Client ID Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/rubygems-api-key.bcheck",
+      "sha256": "393fb41c1ea876ed3d0302bfa32665676b62bccdd382fcd6c0f049e5cd77b872",
+      "name": "RubyGems API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/sauce-token.bcheck",
+      "sha256": "9bfed1c1b9e3f1b0370829d3ccdfb55930a164d43095dbe681181c0bc4657e3f",
+      "name": "Sauce Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/segment-public-token.bcheck",
+      "sha256": "6c0f474cdc8d60ded79da267e6716fc962432c49d0314a6e5a7d2925cfe4885d",
+      "name": "Segment Public API Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/sendgrid-api-key.bcheck",
+      "sha256": "835bae968d9ea249f246fab0e6ac39c7eade0eb3a27cb1823016efa429a1dc88",
+      "name": "Sendgrid API Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/shopify-app-secret.bcheck",
+      "sha256": "637cdaeceadaa6c755ad8a69d21e189230fd78b784242da28e8aeeb5a9a51a08",
+      "name": "Shopify App Secret",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/shopify-customapp-token.bcheck",
+      "sha256": "3c58012df83c19264119d7cf434246785881e57ad76de3251fc072261d96407b",
+      "name": "Shopify Access Token (Custom App)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/shopify-legacy-token.bcheck",
+      "sha256": "3294fedafd8e0de80238248ef2e2be873580a76eca92ff4b58b3ebae5ccf8921",
+      "name": "Shopify Access Token (Legacy Private App)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/shopify-public-token.bcheck",
+      "sha256": "b92d4a5a5cc803f907b604a5aedb1281ca18c7940ed47a718a5077ad198c2691",
+      "name": "Shopify Access Token (Public App)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/shoppable-token.bcheck",
+      "sha256": "2331bc657010c5e6454c4768ece55f02b9c0b2f866bbd59ee504341e82a63e40",
+      "name": "Shoppable Service Auth Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/slack-bot-token.bcheck",
+      "sha256": "f669e7aa9b62693981139c4ca3124086637d14d4bb7fe838180ebe73fe2f372c",
+      "name": "Slack Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/slack-user-token.bcheck",
+      "sha256": "f5afb753cf016222dcec7d2babfdec94e5bb46314b6f98e4a004f1cef53d3488",
+      "name": "Slack User token disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/slack-webhook-token.bcheck",
+      "sha256": "22ea0a85beae7d8601e71e1cb0d4fcfe5475f1eb05bd4c4343f2bc7bbe093b0f",
+      "name": "Slack Webhook Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/square-access.bcheck",
+      "sha256": "9e12d0dd9fe5fa177ebc9ed7ced56a9ff2ed98af9e85bcb87b9f860848414f79",
+      "name": "Square Access Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/square-oauth-secret-token.bcheck",
+      "sha256": "0160ef67d0ef7454dcc9da73dc01c5922e6009d81640193241b5cd1f8acb7250",
+      "name": "Square OAuth Secret Token Exposure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/stackhawk-api.bcheck",
+      "sha256": "11e8bdde7a1a0af9db74de40a694d405bef12a3b9ef8f53aaf265c4cf68f1e06",
+      "name": "StackHawk API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/stripe-restricted-key.bcheck",
+      "sha256": "d2b7ee994b9310dbc67753eafdf09a1cc2fd2a147fefdbfdca75e7e5ecb64f17",
+      "name": "Stripe Restricted Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/stripe-secret-key.bcheck",
+      "sha256": "a741be6c013462746895bac458101d54180a0940f35da68ee9630bf152bc8d09",
+      "name": "Stripe Secret Key Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/telegram-bot-token.bcheck",
+      "sha256": "100c4e08da8a33c8da5caa173441666e1bf809e95ce93dadcb996b428c0776e1",
+      "name": "Telegram Bot Token",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/tugboat-config-exposure.bcheck",
+      "sha256": "23e097c4145c5227ce025d49cc7c7a7d9d95eac720d69b4cefcabd40a42d5f52",
+      "name": "Tugboat Configuration File Exposure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/twilio-api-key.bcheck",
+      "sha256": "6d4c0fb2bb5947d33865d20a15f6b8f9fbf1dda46b5bf02dd35df800bd42c2b0",
+      "name": "Twilio API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/zapier-webhook-token.bcheck",
+      "sha256": "74458bfe9d16ebbf99f1708c91532a724a2bc5d008c28f42103e4115302a1709",
+      "name": "Zapier Webhook Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/zenserp-api-key.bcheck",
+      "sha256": "3fae1dca409c547e7932bef8d1033047525adb26230b31ee2c40ac66b6806eaf",
+      "name": "Zenserp API Key",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/tokens/zoho-webhook-token.bcheck",
+      "sha256": "155903a1a8feccc63eb5553f8f0f6723e287fc52b277dae055830c5876a1b4ed",
+      "name": "Zoho Webhook Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/uuid-detected-guid-versions.bcheck",
+      "sha256": "b76336473aa1735c7962aa784bcc1ccbca85c464a93d110c184e9465ac3a0506",
+      "name": "UUID detected",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "other/xxl-job/xxl_job_rce.bcheck",
+      "sha256": "9154f7c80b252e561f801a0e9b00438727443f6ad676a3e7408018f7b935bc48",
+      "name": "xxl job rce",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: schedules a GLUE_SHELL job that runs curl"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2001-0537 CISCO Authentication Bypass.bcheck",
+      "sha256": "f642e2237642b2a39f849e2b4db70e0fcb760b7bc73ee3ccc2e77606d3cca33c",
+      "name": "CVE-2001-0537 CISCO Authentication Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2001-0537 CISCO Authentication Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2011-3192-Apache DoS.bcheck",
+      "sha256": "238f38fc752deec015971fe1f2f63cbf89505d81cb73bd7fdb5bc669b35c31fe",
+      "name": "[CVE-2011-3192] Apache Range Header DoS (Apache Killer)",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "denial of service: the overlapping Range header is the Apache Killer exhaustion probe"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2016-4437-shiro_key_crack_active.bcheck",
+      "sha256": "0fd76890f10c14abc77c648812af99553090bd81bc43ecce072b55b3faf56342",
+      "name": "CVE-2016-4437 Shiro Key Crack",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "request amplifier: its run-for-each wraps the whole check, so it sends 1,207 probes per audited request whether or not the target is Shiro (686,826 probes over the vulnapp sweep)"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2017-4971-spring_webflow_rce.bcheck",
+      "sha256": "55b304076f3631d53aa2bb6ae769684c2a80bb32d9d68fada993e05009d37001",
+      "name": "CVE-2017-4971 Spring WebFlow RCE",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2017-4971-spring_webflow_rce.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2017-8046-spring_data_rest_rce.bcheck",
+      "sha256": "5b13c460389350c8e8db83848157df25738db8f3d2b541da2fd41b7158902734",
+      "name": "CVE-2017-8046 Spring Data Rest RCE",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2017-8046-spring_data_rest_rce.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2017-9248_TelerikUI_Encryption_Keys_Disclosure.bcheck",
+      "sha256": "ad87a362bcfca1787e475576a9578eca862a40c0e3d870107fd5ed27025db518",
+      "name": "CVE-2017-9248 - Telerik UI Encryption Keys Disclosure",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2018-1000129 - Jolokia 137 - Cross-Site Scripting.bcheck",
+      "sha256": "1b740da41fa266337687c4a464d73b0b4a04b89216f636aa851dc4d5d11e985f",
+      "name": "CVE-2018-1000129 - Jolokia 1.3.7 - Cross-Site Scripting",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2018-1000129 - Jolokia 137 - Cross-Site Scripting.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2018-11759-Apache mod_jk access control bypass.bcheck",
+      "sha256": "f574aa227aed8d7d5dab517803588aa45dc9e12b4f1b71fc997c3a6e8ea33e91",
+      "name": "CVE-2018-11759 - Apache mod_jk access control bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2018-11759-Apache mod_jk access control bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2018-1273-spring_data_commons_rce.bcheck",
+      "sha256": "b9bc010c41a170a5cf54d0e0e87eb38fca0f74a4f8875c99cf08791a41c85314",
+      "name": "CVE-2018-1273 Spring Data Commons RCE",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2018-1273-spring_data_commons_rce.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2018-15133-Laravel RCE.bcheck",
+      "sha256": "579922a94eb18ef25c0162a669911b0ddd1aafbbef3d8353d0a7f668a36909d3",
+      "name": "[CVE-2018-15133] PHP Laravel Framework token Unserialize Remote Command Execution",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2018-15133-Laravel RCE.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2018-20824 - Atlassian Jira WallboardServlet Cross Site Scripting.bcheck",
+      "sha256": "068a5733a2ac45dbb908f8bbb81c067365d3b2c4c42efd5087915acde425e077",
+      "name": "Atlassian Jira WallboardServlet \u003c7.13.1 - Cross-Site Scripting",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2018-20824 - Atlassian Jira WallboardServlet Cross Site Scripting.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2019-17662 - ThinVNC 10b1 - Auth Bypass.bcheck",
+      "sha256": "2cef83bb7d610fc127bc3b35aef00a9d1fa235adf3a04dc79d9c266c05ead999",
+      "name": "CVE-2019-17662 - ThinVNC 1.0b1 - Auth Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2019-17662 - ThinVNC 10b1 - Auth Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2020-10770 Keycloak request_uri SSRF.bcheck",
+      "sha256": "db60433785f7c81a3286dea2a403a63ef96181f611d0120fa280127eeb3ac2a3",
+      "name": "Keycloak before 12.0.1 version - request_uri Blind Server-Side Request Forgery (Unauthenticated)",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2020-10770 Keycloak request_uri SSRF.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2020-1957-shiro_auth_bypass.bcheck",
+      "sha256": "640137dd35906314b2bb97c6ab5797bd7583af606d7c61f36946301d907560bb",
+      "name": "CVE-2020-1957 Shiro AuthBypass",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2020-1957-shiro_auth_bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2020-35713 - Belkin Linksys RE6500 10012001 - RCE.bcheck",
+      "sha256": "d486b0ad406279a0ce56e3f503839f4b71d8919c7f9419da55de3e97c891c8c8",
+      "name": "CVE-2020-35713 - Belkin Linksys RE6500 \u003c1.0.012.001 - RCE",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: injects `wget` into the admin password field"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2020-5902 F5 Networks Authentication Bypass.bcheck",
+      "sha256": "2cdf3fe227980bc9a612cd2053a46423dc24b051a8097458a4762274d281adfe",
+      "name": "CVE-2020-5902 F5 Networks Authentication Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2020-5902 F5 Networks Authentication Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2021-20323 keycloak xss.bcheck",
+      "sha256": "543e06f6858c9a72b80ca6c45cca30952b0aafc7d9a2a822d3422365aa960ac2",
+      "name": "CVE-2021-20323",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2021-20323 keycloak xss.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2021-27748 SSRF Websphere Portal.bcheck",
+      "sha256": "05e75ce7420bfbfd92d67c1228eb20d84be8a23b41de4227fee92936483c28aa",
+      "name": "CVE-2021-27748 SSRF: Websphere Portal",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2021-27748 SSRF Websphere Portal.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2021-38647 - Microsoft Open Management Infrastructure - RCE.bcheck",
+      "sha256": "d7be4b6ce73af8511f608aa40cce4a271cb52a25dcc9dfee8e2772b6dc476c27",
+      "name": "CVE-2021-38647 - Microsoft Open Management Infrastructure - RCE",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: runs `id` as root through OMI ExecuteScript"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2021-41773_CVE-2021-42013 Apache-2.4.49-50.bcheck",
+      "sha256": "398d0b6971f3427ef938c01e7cf007ee24ad08d249f56842c1fb421a449bd6cb",
+      "name": "CVE-2021-41773 \u0026 CVE-2021-42013 (Apache 2.4.49 and 2.4.50)",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: posts `cat /etc/passwd` to /bin/sh through cgi-bin"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-0140.bcheck",
+      "sha256": "4f8a8a7a6fe69ad5418dbb649567dbc50c9f28ebb3eafe8fe4b571966438684f",
+      "name": "CVE-2022-0140",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2022-0140.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-22947-spring_cloud_gateway_actuator_api_rce.bcheck",
+      "sha256": "e0159126d54fc1ac9495e12b70a072102c006118ac2e06e73f1e58ebe58a2661",
+      "name": "CVE-2022-22947 Spring Cloud Gateway Actuator API RCE",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "state change: creates and refreshes a gateway route on the target (and only removes it on success)"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-22963-spring_cloud_function_rce.bcheck",
+      "sha256": "999d6bf8f568656dc8d96500ab396dbb73a471029ed49b5dfcfec43c06dbbe48",
+      "name": "CVE-2022-22963 Spring Cloud Function RCE",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2022-22963-spring_cloud_function_rce.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-22965-spring_data_binding_rce.bcheck",
+      "sha256": "f572a6df340e243ba7eb3f12660f88cb40782aefe73820f57210252fbf94c898",
+      "name": "CVE-2022-22965 Spring Data Binding RCE",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2022-22965-spring_data_binding_rce.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-22978-spring_security_auth_bypass.bcheck",
+      "sha256": "92d9498e59966f35b1b1892e9abc8f4594157c12ab0807ef4439b40a6d2e9da3",
+      "name": "CVE-2022-22978 Spring Security Authorization Bypass",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2022-22978-spring_security_auth_bypass.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on the safe twins /wsip/safe/admin and /wsip/safe/via-proxy"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2022-2460 VoipMonitor - Pre-Auth SQL Injection.bcheck",
+      "sha256": "b676dba3b246b248ec2f7a01c193fba4dadb5e0ce85e8f14bca09a00b05be81f",
+      "name": "CVE-2022-24260 VoipMonitor - Pre-Auth SQL Injection",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2022-2460 VoipMonitor - Pre-Auth SQL Injection.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-23752-Joomla-information-disclosure.bcheck",
+      "sha256": "a9a5941fe81d101fdb7105de0bea3854d258f9c72148923a92e00513b2469ada",
+      "name": "CVE-2023-23752 Unauthenticated information disclosure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-23752-Joomla-information-disclosure.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-24488 - Citrix Gateway Open Redirect and XSS.bcheck",
+      "sha256": "db60047ac54c1ff7f4c437d5ee46e825e8f01feff2610a5524b4519bf1ab42b4",
+      "name": "[CVE-2023-24488] Vulnerable Citrix Gateway Detected.",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-24488 - Citrix Gateway Open Redirect and XSS.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-25690 Apache mod_proxy CRLF Smuggling.bcheck",
+      "sha256": "9b5ed1d5d869a0078d40bcbf0271b5ab5c2c92ecf9450de58669f57eeee76548",
+      "name": "CVE-2023-25690",
+      "given": "request",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-25690 Apache mod_proxy CRLF Smuggling.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on 32 endpoints including 13 safe twins — a 200 to the split request reports without any interaction"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-26360 Adobe ColdFusion Arbitrary File Read and Code Execution.bcheck",
+      "sha256": "da53958a69fcabc19a286b26cbed9423bc1041713a94b578e611bfb84aa60a14",
+      "name": "CVE-2023-26360 Adobe ColdFusion Arbitrary File Read and Code Execution",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-26360 Adobe ColdFusion Arbitrary File Read and Code Execution.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-29298 Adobe ColdFusion Access Control Bypass.bcheck",
+      "sha256": "09c6e994b9a2724c6647b5c53eafe4cc128e20397b9be10f0e126ef3c0e4ee7a",
+      "name": "CVE-2023-29298 Adobe ColdFusion Access Control Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-29298 Adobe ColdFusion Access Control Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-32563 - Ivanti Avalanche - RCE.bcheck",
+      "sha256": "e7a41988180ebce2f744330866464905c48b7d3358eba12a37367a71e0826dd4",
+      "name": "CVE-2023-32563 - Ivanti Avalanche - RCE",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "writes to the target: uploads a JSP file into the web root and leaves it there"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-35078 Ivanti EPMM Unauthenticate Access.bcheck",
+      "sha256": "fe075178098273d1efef48da4ef305ccddc304a54932295a9eba2abf1103bac2",
+      "name": "Ivanti API Unauthenticated Access",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-35078 Ivanti EPMM Unauthenticate Access.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-36346 POS Codekop v2.0 - Cross-site Scripting.bcheck",
+      "sha256": "afc781198612bb25d2d966acff4c8fe6b6b2335536e371af111aa9262250c1d1",
+      "name": "CVE-2023-36346 POS Codekop v2.0 - Cross-site Scripting",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-36346 POS Codekop v2.0 - Cross-site Scripting.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-36845 Juniper Networks - PHP External Variable Modification.bcheck",
+      "sha256": "7bcae4dae438f117ae390d077af7170a1263be22352b13ab891cd82dbe883bd8",
+      "name": "CVE-2023-36845 Juniper Networks - PHP External Variable Modification",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-36845 Juniper Networks - PHP External Variable Modification.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-37265 - CasaOS - Auth Bypass due to a lack of IP address verification.bcheck",
+      "sha256": "351a0386c838fc972826d2ae8e3f2995b922e74926c8896467f2737011da3a82",
+      "name": "CVE-2023-37265 - CasaOS - Auth Bypass due to a lack of IP address verification",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-37265 - CasaOS - Auth Bypass due to a lack of IP address verification.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-38035 - Ivanti Sentry - Auth Bypass.bcheck",
+      "sha256": "6f1c6aa38619fe6383b1127574039766d32703825a66298dfe70d3ae2d5ccc1e",
+      "name": "CVE-2023-38035 - Ivanti Sentry - Auth Bypass",
+      "given": "host",
+      "family": "collaborator",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "command execution: invokes the MICSLogService command runner with curl"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-39141 Aria2 WebUI - Path Traversal.bcheck",
+      "sha256": "f8f0e8972ed0e1a8ed603c6fc968854c6535e64412035fbd5f15ca4895759e4c",
+      "name": "CVE-2023-39141 Aria2 WebUI - Path Traversal",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-39141 Aria2 WebUI - Path Traversal.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-46805-Ivanti Auth Bypass.bcheck",
+      "sha256": "815228dcc9c71fbf9fa16364b8d1a1a0070c5ef86eea17bac9b863fdd4da0b08",
+      "name": "CVE-2023-46805 - Ivanti Connect Secure and Ivanti Policy Secure Authentication Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-46805-Ivanti Auth Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-5074 D-Link D-View 8  v2.0.1.28 - Authentication Bypass.bcheck",
+      "sha256": "6d759851cd4a86c9bb00d87ba1c22296fe990eea35e585087802b4f112e5777b",
+      "name": "CVE-2023-5074 D-Link D-View 8 v2.0.1.28 - Authentication Bypass",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-5074 D-Link D-View 8  v2.0.1.28 - Authentication Bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2023-5244-Microweber less than V.2.0-Cross-Site-Scripting.bcheck",
+      "sha256": "a66628249cb77de252ddc381b5783dde13e50c8caefe2e6abb4eae46a6379f7c",
+      "name": "CVE-2023-5244 - Microweber \u003c V.2.0 - Cross-Site Scripting",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2023-5244-Microweber less than V.2.0-Cross-Site-Scripting.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2025-27636 - Apache Camel - Exec override via mixed-case header.bcheck",
+      "sha256": "668e0526647c4fe8a2bd2600478d252cd546543b826ec1b92b674a6522544708",
+      "name": "[CVE-2025-27636] – Exec override via mixed-case header in Apache Camel",
+      "given": "path",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2025-27636 - Apache Camel - Exec override via mixed-case header.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on the header-echo safe twin /wsip/safe/echo-headers — the marker is reflected, not executed"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2025-29927-Next-js-middleware-bypass.bcheck",
+      "sha256": "f110fe28ebe61a3a3d3274c5e8063f4410b621e78a0f86a828e0dca1d5d64cb3",
+      "name": "CVE-2025-29927 Next.js Middleware Bypass",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2025-29927-Next-js-middleware-bypass.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2025-30208_Vite_dev_server.bcheck",
+      "sha256": "0ac881356ad892046941cf45afd18081982e1a3b877f18220ea5b522524eb865",
+      "name": "[CVE-2025-30208] Vite @fs File Read or Directory Leak",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2025-30208_Vite_dev_server.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "weak-evidence",
+        "reason": "its third branch reports a bare 403 on /@fs/ (the `or` binds before the message test), which any WAF produces"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE-2025-5777 - CitrixBleed 2.bcheck",
+      "sha256": "4da20c29f8751e6a33ea88cf652116c3c25bf639045cbfabe352163f8fb1c92c",
+      "name": "[CVE-2025-5777] Citrix Netscaler CitrixBleed 2",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE-2025-5777 - CitrixBleed 2.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE_2021_20114_TCExam_Gt_14_8_1_Sensitive_Information_Exposure.bcheck",
+      "sha256": "f35c35b08cf8970b4422cbb76cab73e0fec8b2cd1f0da456dcc0c2c2d1423360",
+      "name": "CVE-2021-20114 TCExam \u003c= 14.8.1 - Sensitive Information Exposure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE_2021_20114_TCExam_Gt_14_8_1_Sensitive_Information_Exposure.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE_2021_20158_Trendnet_AC2600_TEW_827DRU_2_08B01_Admin_Password.bcheck",
+      "sha256": "f4eeb048001f0b4e8bb7f1c312ec2178543a0eda3d1a48211fe5989986dfd322",
+      "name": "CVE-2021-20158 Trendnet AC2600 TEW-827DRU 2.08B01 - Admin Password Change",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "destructive: changes the device's admin password"
+      }
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE_2021_21816_D_Link_DIR_3040_1_13B03_Information_Disclosure.bcheck",
+      "sha256": "3d34f3c790da388dbc27fd66c5560d5b83f5ce06b206ef707b259be2ff0e1558",
+      "name": "CVE-2021-21816 D-Link DIR-3040 1.13B03 - Information Disclosure",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE_2021_21816_D_Link_DIR_3040_1_13B03_Information_Disclosure.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerabilities-CVEd/CVE_2022_0150_WordPress_Accessibility_Helper_Lt_0_6_0_7_Cross_Site.bcheck",
+      "sha256": "243771903259220d9e35737984513f2d4b61e328b553e7c33987e3bb84b3ea2b",
+      "name": "CVE-2022-0150 WordPress Accessibility Helper \u003c0.6.0.7 - Cross-Site Scripting",
+      "given": "host",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerabilities-CVEd/CVE_2022_0150_WordPress_Accessibility_Helper_Lt_0_6_0_7_Cross_Site.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerability-classes/injection/CRLFInjection.bcheck",
+      "sha256": "6ca884c80fb713a8ee5f78977b8b666bf7f46e23b36d08f6dc44752c4ed81137",
+      "name": "CRLF Injection",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/CRLFInjection.bcheck",
+      "enabled": false,
+      "exclusion": {
+        "category": "false-positive",
+        "reason": "vulnapp sweep: fired on the safe twin /crlf/safe/r/home"
+      }
+    },
+    {
+      "source_path": "vulnerability-classes/injection/CSVinjection.bcheck",
+      "sha256": "574f4541b6189bfffcc303eae4f68702278017b59a5fccdb9e4ef75ca3c8e587",
+      "name": "CSV Injection with delayed Collaborator pingback",
+      "given": "insertion point",
+      "family": "collaborator",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "unsafe",
+        "reason": "plants spreadsheet formulas that run `cmd /C nslookup` on whoever opens an export — a third party's machine, outside the declared scope"
+      }
+    },
+    {
+      "source_path": "vulnerability-classes/injection/Detecting hidden input fields for XSS.bcheck",
+      "sha256": "e2b07a3f2c727c05e64164d7187166a098442bcebdb874d71e1f839ec1d2bf43",
+      "name": "Hidden Input Field Detection at Response Level (Passive)",
+      "given": "response",
+      "family": "passive",
+      "parses": true,
+      "runs": false,
+      "imported": false,
+      "enabled": false,
+      "exclusion": {
+        "category": "passive",
+        "reason": "a `given response` check: check_corpus gates the active audit only, so the passive set is recorded and not embedded"
+      }
+    },
+    {
+      "source_path": "vulnerability-classes/injection/ExtendedSSRFInjection.bcheck",
+      "sha256": "1819729252ca61e2b74b7fe9ac03d524bd48266fdd379529f68f8d82836f6c75",
+      "name": "Extended Out-of-Band SSRF Injections",
+      "given": "insertion point",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/ExtendedSSRFInjection.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerability-classes/injection/SSRFInjection.bcheck",
+      "sha256": "f3e316440c89f7475117af9dad628b5348aa2d96994e7df6b3beb60f0703f1a1",
+      "name": "SSRF in each insetpoint",
+      "given": "insertion point",
+      "family": "collaborator",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/SSRFInjection.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerability-classes/injection/SSTI-Razor.bcheck",
+      "sha256": "677aedffbaef52779a04dbbeb5ff2ca9f0dcbad803f7476472e6b0b5aa0cec7a",
+      "name": ".NET Razor SSTI Injection",
+      "given": "insertion point",
+      "family": "insertion-point",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/SSTI-Razor.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerability-classes/injection/Spring4Shell.bcheck",
+      "sha256": "e9fd7fec85b25065078d33ea4bacadc5833419cbfdf2a5de774a4e108093d847",
+      "name": "Spring4Shell (Response)",
+      "given": "request",
+      "family": "active",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/Spring4Shell.bcheck",
+      "enabled": true
+    },
+    {
+      "source_path": "vulnerability-classes/injection/template-injection.bcheck",
+      "sha256": "82f72ec5eae325a1f6252e958bd5edd01d1f027f9b065bb56618f0ee2fac8a47",
+      "name": "Template-injection",
+      "given": "insertion point",
+      "family": "insertion-point",
+      "parses": true,
+      "runs": true,
+      "imported": true,
+      "file": "checks/vulnerability-classes/injection/template-injection.bcheck",
+      "enabled": true
+    }
+  ]
+}

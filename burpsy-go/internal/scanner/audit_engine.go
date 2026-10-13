@@ -111,7 +111,7 @@ func (s *ActiveScanner) enabledChecks() []activeCheck {
 	}
 	cfg := s.ConfigSnapshot()
 	s.mu.RLock()
-	corpus := s.corpus
+	corpus := s.dispatchCorpusLocked()
 	s.mu.RUnlock()
 	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
 	for _, c := range activeCheckSet {
@@ -393,7 +393,7 @@ func (s *ActiveScanner) enabledChecksInTiers(cfg ScanConfig, tiers map[CheckInva
 		return nil
 	}
 	s.mu.RLock()
-	corpus := s.corpus
+	corpus := s.dispatchCorpusLocked()
 	s.mu.RUnlock()
 	out := make([]activeCheck, 0, len(activeCheckSet)+len(corpus))
 	for _, c := range activeCheckSet {

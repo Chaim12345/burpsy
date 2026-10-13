@@ -929,8 +929,20 @@ func (ctx *Context) resolvePathOpt(p string) (string, bool) {
 
 	var bind, side string
 	switch parts[0] {
-	case "response", "request", "check":
+	case "response", "request":
 		bind, side = "base", parts[0]
+	case "check":
+		// `check` is not a reserved binding in Burp's language — it is the single most common
+		// `called` name in PortSwigger's corpus (`send request called check:` then
+		// `{check.response.status_code}`). Treating it as an alias for the base exchange made
+		// every such check read nothing (side "response" never matched the shape below) and
+		// fire never; the Rust oracle aliases only bare `response`/`request`. A send named
+		// `check` is now resolved like any other binding; bound("check") still falls back to
+		// the base exchange when no send carries the name, which is all the alias ever served.
+		if len(parts) < 2 {
+			return "", false
+		}
+		bind, side = "check", parts[1]
 	default:
 		if len(parts) < 2 {
 			return "", false
@@ -988,7 +1000,16 @@ func (ctx *Context) boundTool(name string) *boundTool {
 // which makes a comparison false, never an empty string.
 func (ctx *Context) bound(name string) *Bound {
 	switch name {
-	case "base", "check":
+	case "base":
+		return &Bound{request: ctx.baseRequest(), response: ctx.responseFields()}
+	case "check":
+		// A send `called check` wins; with none, the Go port's historical alias for the base
+		// exchange still answers (see resolvePathOpt).
+		for i := len(ctx.sent) - 1; i >= 0; i-- {
+			if ctx.sent[i].name == name {
+				return &ctx.sent[i].bound
+			}
+		}
 		return &Bound{request: ctx.baseRequest(), response: ctx.responseFields()}
 	case "latest":
 		if n := len(ctx.sent); n > 0 {
@@ -1293,6 +1314,13 @@ func (ctx *Context) resolveValue(v Value) string {
 func (ctx *Context) resolveValueOpt(v Value) (string, bool) {
 	switch v.Type {
 	case "var":
+		// A builtin call is a value, not a path: `"root:x:0" in {to_lower(check1.response.body)}`
+		// is how the corpus case-folds before comparing. resolvePathOpt knows paths only, so every
+		// call written as a comparison operand used to read as unresolved and the comparison as
+		// false — the call never ran. resolveRef evaluates the same builtins templates use.
+		if isBuiltinCall(v.StringVal) {
+			return ctx.resolveRef(v.StringVal), true
+		}
 		s, ok := ctx.resolvePathOpt(v.StringVal)
 		if !ok {
 			ctx.recordUnresolved(v.StringVal)
@@ -1734,6 +1762,24 @@ func contains(s, substr string) bool {
 
 // hasCallPrefix reports whether name is a call of fn, matching the function name without regard to
 // case (Burp's reference writes MD5(…) and md5(…) alike).
+// builtinCalls are the functions resolveRef evaluates. Kept beside hasCallPrefix so a builtin added
+// there is added here, or a comparison operand calling it reads as an unresolved path.
+var builtinCalls = []string{
+	"to_lower(", "to_upper(", "base64_decode(", "base64_encode(", "regex_replace(",
+	"sha1(", "sha256(", "md5(", "generate_collaborator_address(", "random_str(",
+}
+
+// isBuiltinCall reports whether a reference is a call of one of the builtins resolveRef evaluates.
+func isBuiltinCall(name string) bool {
+	name = strings.TrimSpace(name)
+	for _, fn := range builtinCalls {
+		if hasCallPrefix(name, fn) {
+			return true
+		}
+	}
+	return false
+}
+
 func hasCallPrefix(name, fn string) bool {
 	return len(name) > len(fn) && strings.EqualFold(name[:len(fn)], fn) && strings.HasSuffix(name, ")")
 }
