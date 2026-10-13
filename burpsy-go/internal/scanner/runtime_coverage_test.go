@@ -810,6 +810,9 @@ func runtimeScanConfig() *ScanConfig {
 		// The NoSQL injection check (v0ei.6). It acts only on reads and logins with a query, form or
 		// JSON value.
 		CheckNoSQLInjection: true,
+		// Server-side parameter pollution (0vzb.3): delimiters appended to query and body values of GET
+		// and POST requests, each against its literal control; the internal APIs are vulnapp's own.
+		CheckServerSideParamPollution: true,
 		// Cross-site WebSocket hijacking and the client-IP header checks (vulnapp_wsip.go). The first acts
 		// only on a captured cookie-authenticated handshake; the second puts loopback and documentation
 		// (203.0.113.0/24) addresses in client-IP headers, sent to the loopback target only.
@@ -1024,7 +1027,7 @@ func TestTheScannerDetectsWhatTheTargetDeclaresItIsVulnerableTo(t *testing.T) {
 			claimed++
 		}
 	}
-	const wantDemonstrated = 176
+	const wantDemonstrated = 179
 
 	// Chrome is a required dependency of this suite, so its absence is a broken machine rather than
 	// a supported mode - and this is where that gets enforced.

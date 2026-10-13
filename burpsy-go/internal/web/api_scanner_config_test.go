@@ -280,3 +280,19 @@ func TestConfigCarriesTheCookieAndTakeoverChecks(t *testing.T) {
 			got.CheckCookieAttributes, got.CheckSubdomainTakeover)
 	}
 }
+
+// The server-side parameter pollution switch is on the wire, off by default, and a PUT reaches the
+// running scanner.
+func TestConfigCarriesTheServerSideParameterPollutionCheck(t *testing.T) {
+	s := newScannerServer()
+	if got := getScannerConfig(t, s)["check_server_side_parameter_pollution"]; got != false {
+		t.Fatalf("check_server_side_parameter_pollution = %v, want present and off by default", got)
+	}
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_server_side_parameter_pollution": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT = %d; body %s", rec.Code, rec.Body.String())
+	}
+	if !s.wiredScanner().ConfigSnapshot().CheckServerSideParamPollution {
+		t.Error("the running scanner did not take check_server_side_parameter_pollution")
+	}
+}

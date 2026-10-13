@@ -2928,3 +2928,32 @@ Three burpsy rows (`b5002800`, `b5002810` under `check_cookie_attributes`; `b500
   the table, nor are entries without a CNAME domain or with a status-only fingerprint. Only hostnames
   the audit dispatches (captured exchanges) are looked up: a hostname that appears only in a link or
   a certificate SAN is not. NS/MX delegation takeovers are not checked.
+## Server-side parameter pollution (2026-10-12, burpsy-react-ui-0vzb.3)
+
+Three burpsy rows (`b5002c00` query string, `b5002c10` REST path, `b5002c20` structured data) under
+`check_server_side_parameter_pollution`, off by default, riding "Client-side HTTP parameter pollution
+(reflected)". Burp's catalogue has no server-side row; PortSwigger documents the class as an Academy
+topic (API testing) tested by hand.
+
+Not covered:
+
+- **No internal names are guessed.** `field=`, `role=`, `../openapi.json` and the like are the
+  exploitation step; probes carry only the original value and random letters. A strict internal API
+  whose truncation and unknown-parameter answers are identical and that refuses duplicates with the
+  same message yields nothing.
+- **A front end that itself cuts a value at `&`** (and only at `&`, not at a percent sign) answers
+  the unknown-parameter and first-duplicate probes like the original value while their literal
+  controls are not cut: reported as query-string pollution. No realistic design was found that does
+  this, and no fixture covers it. Likewise a front end that builds its own JSON *response* by
+  concatenation and survives a bare quote reads as structured-data pollution.
+- **The "two structural probes" corroboration of the query-string rule** has no fixture that depends
+  on it (every safe twin is stopped earlier); removing it passes every test.
+- **The repeat and the baseline re-fetch** are not negative-controlled by a fixture (no flaky twin).
+- **Insertion points**: query and body values with a non-empty original value only. Path segments of
+  the captured URL (a REST front end), headers, cookies and empty values are not probed; XML bodies
+  built by concatenation are not probed with XML delimiters.
+- **Requests**: GET and POST only; paths naming delete/remove/purge/pay/transfer/cancel/revoke/logout
+  and similar are skipped. A POST that sends mail (a password-reset request, the canonical lab) is
+  re-sent ~30 times, each reaching only the object the captured request reached.
+- **VulnerableApp** has no parameter-pollution family; the rows cannot move its TP count, only add
+  false positives.

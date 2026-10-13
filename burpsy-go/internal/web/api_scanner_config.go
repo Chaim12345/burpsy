@@ -78,6 +78,8 @@ type scannerConfigView struct {
 	CheckWebSocketHijacking bool `json:"check_websocket_hijacking"`
 	// The spoofable client-IP header check (scanner/checks_client_ip.go), off by default.
 	CheckClientIPSpoofing bool `json:"check_client_ip_spoofing"`
+	// The server-side parameter pollution check (scanner/checks_sspp.go), off by default.
+	CheckServerSideParamPollution bool `json:"check_server_side_parameter_pollution"`
 
 	// The cookie prefix / SameSite rows (scanner/checks_cookie_attrs.go) and the subdomain-takeover row
 	// (scanner/checks_takeover.go), both passive and off by default.
@@ -131,10 +133,11 @@ func scannerConfigFrom(c scanner.ScanConfig) scannerConfigView {
 		CheckRequestSmuggling:    c.CheckRequestSmuggling,
 		CheckHostHeader:          c.CheckHostHeader,
 
-		CheckInsecureDeserialization: c.CheckInsecureDeserialization,
-		CheckNoSQLInjection:          c.CheckNoSQLInjection,
-		CheckWebSocketHijacking:      c.CheckWebSocketHijacking,
-		CheckClientIPSpoofing:        c.CheckClientIPSpoofing,
+		CheckInsecureDeserialization:  c.CheckInsecureDeserialization,
+		CheckNoSQLInjection:           c.CheckNoSQLInjection,
+		CheckWebSocketHijacking:       c.CheckWebSocketHijacking,
+		CheckClientIPSpoofing:         c.CheckClientIPSpoofing,
+		CheckServerSideParamPollution: c.CheckServerSideParamPollution,
 
 		CheckCookieAttributes:  c.CheckCookieAttributes,
 		CheckSubdomainTakeover: c.CheckSubdomainTakeover,
@@ -181,12 +184,13 @@ var scannerConfigBoolKeys = map[string]func(v *scannerConfigView) *bool{
 	"check_request_smuggling":    func(v *scannerConfigView) *bool { return &v.CheckRequestSmuggling },
 	"check_host_header":          func(v *scannerConfigView) *bool { return &v.CheckHostHeader },
 
-	"check_insecure_deserialization": func(v *scannerConfigView) *bool { return &v.CheckInsecureDeserialization },
-	"check_nosql_injection":          func(v *scannerConfigView) *bool { return &v.CheckNoSQLInjection },
-	"check_websocket_hijacking":      func(v *scannerConfigView) *bool { return &v.CheckWebSocketHijacking },
-	"check_client_ip_spoofing":       func(v *scannerConfigView) *bool { return &v.CheckClientIPSpoofing },
-	"check_cookie_attributes":        func(v *scannerConfigView) *bool { return &v.CheckCookieAttributes },
-	"check_subdomain_takeover":       func(v *scannerConfigView) *bool { return &v.CheckSubdomainTakeover },
+	"check_insecure_deserialization":        func(v *scannerConfigView) *bool { return &v.CheckInsecureDeserialization },
+	"check_nosql_injection":                 func(v *scannerConfigView) *bool { return &v.CheckNoSQLInjection },
+	"check_websocket_hijacking":             func(v *scannerConfigView) *bool { return &v.CheckWebSocketHijacking },
+	"check_client_ip_spoofing":              func(v *scannerConfigView) *bool { return &v.CheckClientIPSpoofing },
+	"check_server_side_parameter_pollution": func(v *scannerConfigView) *bool { return &v.CheckServerSideParamPollution },
+	"check_cookie_attributes":               func(v *scannerConfigView) *bool { return &v.CheckCookieAttributes },
+	"check_subdomain_takeover":              func(v *scannerConfigView) *bool { return &v.CheckSubdomainTakeover },
 }
 
 var scannerConfigIntMSKeys = map[string]func(v *scannerConfigView) *int{
@@ -347,6 +351,7 @@ func (s *Server) applyScannerConfigPatch(w http.ResponseWriter, r *http.Request)
 		c.CheckNoSQLInjection = view.CheckNoSQLInjection
 		c.CheckWebSocketHijacking = view.CheckWebSocketHijacking
 		c.CheckClientIPSpoofing = view.CheckClientIPSpoofing
+		c.CheckServerSideParamPollution = view.CheckServerSideParamPollution
 		c.CheckCookieAttributes = view.CheckCookieAttributes
 		c.CheckSubdomainTakeover = view.CheckSubdomainTakeover
 	})

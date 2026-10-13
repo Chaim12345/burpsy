@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687392,
+  "name": "Server-side parameter pollution (structured data)",
+  "description": "<p>Server-side parameter pollution in structured data arises when the application places a user-supplied value into a JSON (or other structured) document it sends to another component by string concatenation rather than with a serialiser. A <code>\"</code> in the value then closes the string the application opened, and what follows is read as further members of the document.</p>\n<p>An attacker can typically add members the application never meant to set, such as a role, an access level or an owner, and override members the application set before the value, which is mass assignment through the internal request.</p>\n<p>The structured-data row is reported when an injected <code>\",\"</code> made the internal document carry a member that came back as a separate JSON member, which the escaped literal did not; or when it produced exactly the original value's answer while a bare <code>\"</code> broke the document.</p>\n<p>burpsy reports this only on a differential with controls: the probe value, which the front end decodes so the delimiter reaches the internal request, changed the answer; the same characters encoded once more (so the internal request receives them as text) answered exactly like a plain random value; and the result held a second time with fresh random values. Every probe value is the original value plus random letters, so no probe names an internal parameter or field the request did not already carry.</p><p>This row is burpsy's own: Burp's issue catalogue has no server-side parameter pollution entry.</p>",
+  "remediation": "<p>Build every request to another component from encoded parts: URL-encode a query parameter value and a path segment (including <code>/ ? # &amp; =</code>) with the encoder for that position, and build JSON and XML with a serialiser rather than string concatenation. Validate the value against what it is meant to be (an identifier's character set, a known enumeration) before forwarding it. Have internal APIs reject unknown and duplicated parameters, and do not rely on the front end to remove the fields a client may not set.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Server-side parameter pollution",
+      "url": "https://portswigger.net/web-security/api-testing/server-side-parameter-pollution"
+    },
+    {
+      "title": "CAPEC-460: HTTP Parameter Pollution (HPP)",
+      "url": "https://capec.mitre.org/data/definitions/460.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')",
+      "url": "https://cwe.mitre.org/data/definitions/74.html"
+    }
+  ]
+}

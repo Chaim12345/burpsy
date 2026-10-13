@@ -484,8 +484,13 @@ func FinalCheckDescriptors() []CheckDescriptor {
 			reflectedContextCheck("Suspicious input transformation (reflected)", "info", contextTransformed)),
 		nativeDescriptor("CSS injection (reflected)", DispatchScopePerUrl, finalChecksEnabled,
 			reflectedContextCheck("CSS injection (reflected)", "medium", contextInsideTag("style"))),
-		nativeDescriptor("Client-side HTTP parameter pollution (reflected)", DispatchScopePerUrl, finalChecksEnabled,
-			reflectedContextCheck("Client-side HTTP parameter pollution (reflected)", "low", contextInAttribute("src"))),
+		// The server-side parameter pollution check (checks_sspp.go) rides this row behind its own switch:
+		// its findings are burpsy's own three server-side rows, the same class (CAPEC-460) on the request
+		// the server makes instead of the links it renders, and the registry admits one descriptor per
+		// Burp catalogue type.
+		nativeDescriptor("Client-side HTTP parameter pollution (reflected)", DispatchScopePerUrl,
+			func(c *ScanConfig) bool { return finalChecksEnabled(c) || ssppEnabled(c) },
+			csHPPOrSSPP(reflectedContextCheck("Client-side HTTP parameter pollution (reflected)", "low", contextInAttribute("src")))),
 		nativeDescriptor("Form action hijacking (reflected)", DispatchScopePerUrl, finalChecksEnabled,
 			reflectedContextCheck("Form action hijacking (reflected)", "medium", contextInAttribute("action"))),
 

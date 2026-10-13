@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687376,
+  "name": "Server-side parameter pollution (REST path)",
+  "description": "<p>Server-side parameter pollution in a REST path arises when the application places a user-supplied value into the URL path of a request it makes to another component, typically an internal REST API, without encoding it as a path segment. A <code>/</code> in the value then adds path segments, <code>..</code> walks up the internal API's path, <code>?</code> ends the path and starts a query string, and <code>#</code> cuts the rest of the internal URL off.</p>\n<p>An attacker can typically reach other objects and other routes of the internal API than the one the application meant to call: another user's record, a field the application never returns, an administrative endpoint, or the internal API's own definition file.</p>\n<p>The REST-path row is reported when a value that is not the original value reached the original value's answer through the internal path (a <code>/&lt;random&gt;/..</code> walk normalised away, or a <code>?</code> ending the path), and a second URL delimiter changed the answer too. Path normalisation alone is not reported, because a file lookup normalises paths as well.</p>\n<p>burpsy reports this only on a differential with controls: the probe value, which the front end decodes so the delimiter reaches the internal request, changed the answer; the same characters encoded once more (so the internal request receives them as text) answered exactly like a plain random value; and the result held a second time with fresh random values. Every probe value is the original value plus random letters, so no probe names an internal parameter or field the request did not already carry.</p><p>This row is burpsy's own: Burp's issue catalogue has no server-side parameter pollution entry.</p>",
+  "remediation": "<p>Build every request to another component from encoded parts: URL-encode a query parameter value and a path segment (including <code>/ ? # &amp; =</code>) with the encoder for that position, and build JSON and XML with a serialiser rather than string concatenation. Validate the value against what it is meant to be (an identifier's character set, a known enumeration) before forwarding it. Have internal APIs reject unknown and duplicated parameters, and do not rely on the front end to remove the fields a client may not set.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Server-side parameter pollution",
+      "url": "https://portswigger.net/web-security/api-testing/server-side-parameter-pollution"
+    },
+    {
+      "title": "CAPEC-460: HTTP Parameter Pollution (HPP)",
+      "url": "https://capec.mitre.org/data/definitions/460.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-74: Improper Neutralization of Special Elements in Output Used by a Downstream Component ('Injection')",
+      "url": "https://cwe.mitre.org/data/definitions/74.html"
+    }
+  ]
+}

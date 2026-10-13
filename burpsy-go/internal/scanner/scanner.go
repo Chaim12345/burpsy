@@ -344,6 +344,11 @@ type ScanConfig struct {
 	// against a plain-value control or by a MongoDB error a repaired control does not draw. Reads only
 	// (GET, or a POST naming a read or a login). Off by default.
 	CheckNoSQLInjection bool
+	// CheckServerSideParamPollution admits the server-side parameter pollution check (checks_sspp.go,
+	// burpsy-react-ui-0vzb.3): `&`, `#`, `/..`, `?` and `"` appended to query and body values, each
+	// against its once-more-encoded literal and a plain random value, for burpsy's query-string,
+	// REST-path and structured-data rows. GET and POST only. Off by default.
+	CheckServerSideParamPollution bool
 	// CheckWebSocketHijacking admits the cross-site WebSocket hijacking check (checks_ws_hijack.go):
 	// a captured cookie-authenticated handshake is re-opened with a random .invalid Origin and with no
 	// cookies, reading only what the server sends on connect. Off by default: it opens authenticated

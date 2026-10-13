@@ -116,6 +116,9 @@ FULL_PROFILE = {
     # the system resolver for each audited hostname's CNAME.
     "check_cookie_attributes": True,
     "check_subdomain_takeover": True,
+    # Server-side parameter pollution (0vzb.3): delimiters appended to query/body values of GET/POST requests.
+    # VulnerableApp has no parameter-pollution family, so every firing here is off-target.
+    "check_server_side_parameter_pollution": True,
 }
 
 

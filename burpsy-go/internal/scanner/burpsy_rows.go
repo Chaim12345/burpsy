@@ -228,7 +228,33 @@ func BurpsyNativeRows() []BurpsyRow {
 			"own; takeover is found with external tools (subjack, can-i-take-over-xyz). It rides 'Strict " +
 			"transport security not enforced', a passive per-host row, because it is a property of the " +
 			"hostname checked once per host.",
+	}, {
+		Name:      IssueSSPPQuery,
+		TypeIndex: 0xb5002c00,
+		CWE:       235,
+		Rides:     "Client-side HTTP parameter pollution (reflected)",
+		Why:       ssppRowWhy("a delimiter that becomes structure in an internal query string"),
+	}, {
+		Name:      IssueSSPPPath,
+		TypeIndex: 0xb5002c10,
+		CWE:       74,
+		Rides:     "Client-side HTTP parameter pollution (reflected)",
+		Why:       ssppRowWhy("a value that walks or ends an internal REST path"),
+	}, {
+		Name:      IssueSSPPJSON,
+		TypeIndex: 0xb5002c20,
+		CWE:       74,
+		Rides:     "Client-side HTTP parameter pollution (reflected)",
+		Why:       ssppRowWhy("a value that adds a member to an internal JSON document"),
 	}}
+}
+
+// ssppRowWhy is the shared reason for the server-side parameter pollution rows (checks_sspp.go).
+func ssppRowWhy(what string) string {
+	return "Burp's catalogue has no server-side parameter pollution row: its parameter-pollution rows are " +
+		"client-side (links and forms the response renders), and the server-side class is an Academy topic " +
+		"tested by hand. This row is " + what + ". It rides 'Client-side HTTP parameter pollution " +
+		"(reflected)', the same class (CAPEC-460) on the request the server makes instead of the page it renders."
 }
 
 // pwrRowWhy is the shared reason for the password-reset rows (checks_pwreset.go).

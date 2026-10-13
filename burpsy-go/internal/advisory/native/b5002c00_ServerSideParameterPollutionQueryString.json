@@ -1,0 +1,24 @@
+{
+  "typeIndex": 3036687360,
+  "name": "Server-side parameter pollution (query string)",
+  "description": "<p>Server-side parameter pollution in a query string arises when the application places a user-supplied value into the query string of a request it makes to another component, typically an internal API, without URL-encoding it. A <code>&amp;</code> in the value then starts a new parameter of the internal request, a <code>#</code> cuts the rest of the internal URL off, and a repeated parameter name competes with the one the application set.</p>\n<p>An attacker can typically add parameters the application never meant to expose (a <code>field</code> selecting which data to return, a flag disabling a filter), override the parameters the application set after the value, and truncate the internal request to remove restrictions the application appended. Reading another user's data or a password reset token through an internal lookup is the usual consequence.</p>\n<p>The query-string row is reported when an injected <code>&amp;</code> produced exactly the original value's answer from a value that is not the original value (an unknown internal parameter ignored, or the parameter repeated so that the original value won) and a second delimiter changed the answer too; or, tentatively, when an injected unknown parameter and the parameter's own name each changed the answer and answered differently from each other.</p>\n<p>burpsy reports this only on a differential with controls: the probe value, which the front end decodes so the delimiter reaches the internal request, changed the answer; the same characters encoded once more (so the internal request receives them as text) answered exactly like a plain random value; and the result held a second time with fresh random values. Every probe value is the original value plus random letters, so no probe names an internal parameter or field the request did not already carry.</p><p>This row is burpsy's own: Burp's issue catalogue has no server-side parameter pollution entry.</p>",
+  "remediation": "<p>Build every request to another component from encoded parts: URL-encode a query parameter value and a path segment (including <code>/ ? # &amp; =</code>) with the encoder for that position, and build JSON and XML with a serialiser rather than string concatenation. Validate the value against what it is meant to be (an identifier's character set, a known enumeration) before forwarding it. Have internal APIs reject unknown and duplicated parameters, and do not rely on the front end to remove the fields a client may not set.</p>",
+  "webIntro": null,
+  "typicalSeverity": "MEDIUM",
+  "references": [
+    {
+      "title": "PortSwigger Web Security Academy: Server-side parameter pollution",
+      "url": "https://portswigger.net/web-security/api-testing/server-side-parameter-pollution"
+    },
+    {
+      "title": "CAPEC-460: HTTP Parameter Pollution (HPP)",
+      "url": "https://capec.mitre.org/data/definitions/460.html"
+    }
+  ],
+  "vulnerabilityClassifications": [
+    {
+      "title": "CWE-235: Improper Handling of Extra Parameters",
+      "url": "https://cwe.mitre.org/data/definitions/235.html"
+    }
+  ]
+}

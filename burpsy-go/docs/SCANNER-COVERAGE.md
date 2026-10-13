@@ -63,6 +63,9 @@ which is what carries its CWE onto the finding.
 | `b5002800` | Cookie prefix requirements not met | 693 | Cookie scoped to parent domain | `check_cookie_attributes` |
 | `b5002810` | Session cookie without SameSite protection | 1275 | Cookie scoped to parent domain | `check_cookie_attributes` |
 | `b5002820` | Subdomain takeover | 672 | Strict transport security not enforced | `check_subdomain_takeover` |
+| `b5002c00` | Server-side parameter pollution (query string) | 235 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
+| `b5002c10` | Server-side parameter pollution (REST path) | 74 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
+| `b5002c20` | Server-side parameter pollution (structured data) | 74 | Client-side HTTP parameter pollution (reflected) | `check_server_side_parameter_pollution` |
 
 The two authentication rows (`checks_auth_logic.go`) are off by default because they send failed
 logins. Missing rate limiting is reported *tentative*: the burst uses an invented identity so no
