@@ -67,11 +67,12 @@ def http_json(method, url, body=None, headers=None, timeout=60):
     return json.loads(raw) if raw else None
 
 
-# FULL_PROFILE turns on every check family the scanner offers. The default server config leaves
-# several off (check_active_injection, check_reflection_probes, check_extended_active,
-# check_extended_coverage, check_xxe, check_stored, check_corpus), which is j1mk.37: a default scan
-# scores far below the full profile on VulnerableApp. A benchmark of what the scanner CAN detect
-# must run the full profile, so a miss is a detection gap and not a configuration choice.
+# FULL_PROFILE turns on every check family the scanner offers. The default server config runs the
+# non-destructive active families (j1mk.37: check_active_injection, check_reflection_probes,
+# check_xxe) but leaves the intrusive and out-of-process ones off (check_extended_active,
+# check_extended_coverage, check_stored, check_corpus, and the per-check opt-ins below). A benchmark
+# of what the scanner CAN detect must run the full profile, so a miss is a detection gap and not a
+# configuration choice.
 FULL_PROFILE = {
     "check_sqli": True, "check_xss": True, "check_path_traversal": True, "check_ssrf": True,
     "check_xxe": True, "check_jwt_weak": True, "check_js_vulns": True, "check_headers": True,

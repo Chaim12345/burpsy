@@ -17,11 +17,11 @@
 // checks WithCorpusChecks supplied. The engine above the table is scope-agnostic, which is what
 // lets the corpus entries ride the same plan/ledger/disposition machinery as the built-ins.
 //
-// Two of the seven switches — CheckSSRF and CheckXXE — have no implementation behind them. They are
-// in the table with a nil runner and dispatch as DispositionUnsupported, which is the honest answer:
-// before this engine existed, NewActiveScanner switched CheckSSRF *on* by default and nothing ran,
-// so an operator reading a clean audit had no way to know two of the checks they had enabled were
-// not there. Leaving them out of the table entirely would have preserved exactly that silence.
+// Two of the seven switches — CheckSSRF and CheckXXE — once had no implementation behind them and
+// sat in the table with a nil runner, dispatching as DispositionUnsupported: before this engine
+// existed, NewActiveScanner switched CheckSSRF *on* by default and nothing ran, so a clean audit hid
+// two checks that were not there. Both rows have evaluators now; CheckXXE admits the XML external
+// entity row and CheckSSRF's row needs CheckExtendedActive as well (checks_remaining.go).
 package scanner
 
 import (

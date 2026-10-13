@@ -38,6 +38,42 @@ Sum check: 5 + 6 + 2 + 6 + 5 + 5 + 15 + 28 + 12 + 48 + 3 + 10 + 22 + 16 = 183. E
 (`ValidateRegistry` rejects a duplicate, and `TestDeclinedCatalogDescriptors` fails if the
 per-family partition stops summing to 183).
 
+## Default audit (j1mk.37)
+
+What a scanner nobody configured runs is a policy, set in `NewActiveScanner`
+(`internal/scanner/scanner.go`) and pinned by `TestDefaultAuditPolicy` and
+`TestConfigGetReportsDefaultsIncludingThePassiveFamiliesOnByDefault`. Every switch stays editable at
+runtime through `PUT /api/scanner/config`.
+
+**On by default** is a family whose probes are inert (a marker, an arithmetic expression, a
+malformed fragment, a file read) and whose verdict rests on evidence a reflection cannot produce: a
+value the target computed, an error signature the baseline lacks, a true/false differential against a
+control, or file content. Burp's default audit runs these, and a default that skips them reports a
+target clean on checks it never sent.
+
+| Switch (`/api/scanner/config` key) | Rows | Evidence |
+|---|---|---|
+| `check_sqli`, `check_xss`, `check_path_traversal` | the original core rows | (unchanged; on before j1mk.37) |
+| `check_active_injection` | OS command, LDAP, XPath, XML, file path manipulation, SSTI, EL, PHP/Perl/Ruby/Python/server-side JS code injection | shell- or interpreter-computed product re-confirmed with fresh operands; LDAP true/false differential plus error signature; XPath/XML error signatures; file content |
+| `check_xxe` | XML external entity injection | file content, or the external entity expanding where an internal-entity control expanded to its marker |
+| `check_reflection_probes` | input reflection, open redirection, link manipulation, response header injection, unidentified code injection, SSI | placed marker or computed value; SSI uses an `#if` expression, never `#exec` |
+| the passive families | headers, passive posture, passive analysis, host discovery | network-free response analysis |
+
+`check_xxe` admits only the XML external entity row. **XML entity expansion** is a load test of the
+parser and answers to `check_extended_active` alone.
+
+**Off by default** is anything that leaves state behind, acts on an account, loads the target, or
+needs something outside this process: `check_extended_active` (it carries XML entity expansion,
+request smuggling, JWT forgery, the React2Shell row and the session comparisons),
+`check_out_of_band`, `check_ssrf_in_band`, `check_file_upload`, `check_idor`,
+`check_login_rate_limit`, `check_username_enumeration`, `check_password_reset`,
+`check_session_management`, `check_request_smuggling`, `check_insecure_deserialization`,
+`check_sqli_heavy_query`, `check_sqli_or_boolean`, `check_stored`, `check_host_header`,
+`check_graphql_hardening`, `check_jwt_forgery`, `check_nosql_injection`, `check_dom`,
+`check_xss_browser_confirm`, `check_extended_coverage`. (`check_corpus` follows whether a BCheck
+corpus is loaded.) A saved project keeps the switches it saved; the defaults apply to a scanner with
+no persisted override.
+
 ## Outside the catalog: burpsy's own rows
 
 Classes burpsy detects that Burp's catalogue has no row for. They are not catalogue rows: the 183
@@ -192,7 +228,8 @@ they are kept as registration points so a future decline has somewhere honest to
 ## Native / implemented checks
 
 These are registered as runnable `CheckDescriptor`s (Implementation = `ImplementationNative`).
-Each is gated behind a per-family `ScanConfig` switch, all off by default.
+Each is gated behind a per-family `ScanConfig` switch; which of them a default audit runs is
+section "Default audit" above.
 
 ### Original native registry (5)
 

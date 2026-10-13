@@ -105,10 +105,9 @@ func Test_the_disposition_counts_partition_the_enabled_check_set(t *testing.T) {
 	id := seedAuditExchange(t, store, "h.test", 80, "/", "<html>nothing here</html>")
 	// Every switch on, no sender: the offline path, where no probe is attempted at all.
 	//
-	// Five, not seven: CheckSSRF and CheckXXE each used to admit one declined row, and both
-	// rows now have evaluators that are additionally gated behind CheckExtendedActive (an OOB
-	// channel and payload sending respectively). Enabling those two switches alone therefore
-	// admits nothing. The property under test is the partition, not the literal count.
+	// Six, not seven: CheckSSRF's row has an OOB evaluator gated behind CheckExtendedActive, so
+	// that switch alone admits nothing; CheckXXE admits its XML external entity row again (j1mk.37
+	// put it in the default audit). The property under test is the partition, not the literal count.
 	scan := NewActiveScanner(store, zap.NewNop()).WithConfig(&ScanConfig{
 		MaxConcurrency:     1,
 		Timeout:            5 * time.Second,
@@ -126,7 +125,7 @@ func Test_the_disposition_counts_partition_the_enabled_check_set(t *testing.T) {
 	if got, want := outcome.Considered(), scan.ActiveCheckCount(); got != want {
 		t.Errorf("considered = %d, want the whole enabled check set (%d)", got, want)
 	}
-	if got, want := scan.ActiveCheckCount(), 5; got != want {
+	if got, want := scan.ActiveCheckCount(), 6; got != want {
 		t.Errorf("enabled checks = %d, want %d", got, want)
 	}
 	if outcome.State != ItemStateAudited {

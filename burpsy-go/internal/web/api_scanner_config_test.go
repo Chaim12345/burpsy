@@ -49,10 +49,27 @@ func TestConfigGetReportsDefaultsIncludingThePassiveFamiliesOnByDefault(t *testi
 		"check_passive_posture":  true,
 		"check_passive_analysis": true,
 		"check_host_discovery":   true,
-		// The explicit counter-example: XXE ships off because its checks need a parser the
-		// operator may not want exercised, and it is exactly the switch a runtime UI must be able
-		// to turn on without a rebuild.
-		"check_xxe": false,
+		// The default audit policy (j1mk.37): the non-destructive active families whose verdicts
+		// rest on computed values, error signatures, control differentials or file content are on,
+		// as they are in Burp's default audit.
+		"check_xxe":               true,
+		"check_active_injection":  true,
+		"check_reflection_probes": true,
+		// ...and everything intrusive, state-changing or needing something outside this process
+		// stays off. check_extended_active is the counter-example a runtime UI must be able to
+		// turn on without a rebuild: it carries entity expansion, smuggling and JWT forgery.
+		"check_extended_active":          false,
+		"check_out_of_band":              false,
+		"check_file_upload":              false,
+		"check_idor":                     false,
+		"check_login_rate_limit":         false,
+		"check_password_reset":           false,
+		"check_session_management":       false,
+		"check_request_smuggling":        false,
+		"check_insecure_deserialization": false,
+		"check_sqli_heavy_query":         false,
+		"check_sqli_or_boolean":          false,
+		"check_stored":                   false,
 	} {
 		if got := cfg[key]; got != want {
 			t.Errorf("%s = %v, want %v", key, got, want)
@@ -65,7 +82,7 @@ func TestConfigGetReportsDefaultsIncludingThePassiveFamiliesOnByDefault(t *testi
 
 func TestConfigPutAppliesAValidPatchAndAnswersWithConfirmedState(t *testing.T) {
 	s := newScannerServer()
-	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_xxe": true, "max_concurrency": 4})
+	rec := putJSON(t, s, "/api/scanner/config", map[string]any{"check_xxe": false, "max_concurrency": 4})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT config = %d; body %s", rec.Code, rec.Body.String())
 	}
@@ -73,10 +90,10 @@ func TestConfigPutAppliesAValidPatchAndAnswersWithConfirmedState(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &confirmed); err != nil {
 		t.Fatalf("decode confirmed: %v", err)
 	}
-	if confirmed["check_xxe"] != true || confirmed["max_concurrency"] != float64(4) {
+	if confirmed["check_xxe"] != false || confirmed["max_concurrency"] != float64(4) {
 		t.Fatalf("confirmed = %v/%v; an answer that does not carry the applied values makes the client guess", confirmed["check_xxe"], confirmed["max_concurrency"])
 	}
-	if again := getScannerConfig(t, s); again["check_xxe"] != true {
+	if again := getScannerConfig(t, s); again["check_xxe"] != false {
 		t.Fatalf("GET after PUT = %v; the edit did not reach the running scanner", again["check_xxe"])
 	}
 }

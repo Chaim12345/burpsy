@@ -37,18 +37,24 @@ import (
 
 // remainingChecksEnabled gates this file behind one opt-in switch.
 //
-// Two of these rows used to hang off CheckSSRF and CheckXXE, which are on by default in the
-// web layer's live-audit config. Once they had real evaluators that mattered: the OOB check
-// needs a collaborator binary and outbound DNS, and reports their absence as an error, so a
-// default scan on a machine without interactsh began failing every sweep. Sending XXE payloads
-// on a default scan is the same kind of posture change. Both are now opt-in, which restores
-// "a default scan sends nothing it was not asked to send" while keeping the checks available.
+// Two of these rows used to hang off CheckSSRF and CheckXXE. Once they had real evaluators that
+// mattered: the OOB check needs a collaborator binary and outbound DNS, and reports their absence as
+// an error, so a default scan on a machine without interactsh began failing every sweep. The OOB row
+// stays here. The XXE row answers to CheckXXE again (xxeChecksEnabled): its file-read probe needs
+// nothing outside this process, and j1mk.37 put it in the default audit, as Burp's is.
 func remainingChecksEnabled(c *ScanConfig) bool { return c != nil && c.CheckExtendedActive }
 
 // oobChecksEnabled narrows remainingChecksEnabled to the four rows that need a collaborator: an
 // out-of-band callback nothing in this process can synthesise. It is an AND, not an alternative:
 // CheckOutOfBand on its own admits nothing.
 func oobChecksEnabled(c *ScanConfig) bool { return remainingChecksEnabled(c) && c.CheckOutOfBand }
+
+// xxeChecksEnabled admits the XML external entity row under its own family switch or under the
+// extended family that carried it before CheckXXE had a runner. Only that row: "XML entity
+// expansion" is a load test of the parser and keeps the extended switch alone.
+func xxeChecksEnabled(c *ScanConfig) bool {
+	return c != nil && (c.CheckXXE || remainingChecksEnabled(c))
+}
 
 // tlsProbeChecksEnabled gates the TLS certificate row, which shells out to tlsx.
 //
@@ -1029,7 +1035,10 @@ func RemainingCheckDescriptors() []CheckDescriptor {
 		nativeDescriptor("Silverlight cross-domain policy", DispatchScopePerHost, remainingChecksEnabled,
 			crossDomainPolicyCheck("Silverlight cross-domain policy", "/clientaccesspolicy.xml", ParseSilverlightPolicy)),
 
-		nativeDescriptor("XML external entity injection", DispatchScopePerUrl, remainingChecksEnabled, checkXXE),
+		// The XXE row also answers to its own family switch, CheckXXE (on by default, j1mk.37): it reads
+		// a local file through an entity and proves it by content or by an internal-entity control.
+		// Entity expansion below stays behind CheckExtendedActive alone: it is intrusive.
+		nativeDescriptor("XML external entity injection", DispatchScopePerUrl, xxeChecksEnabled, checkXXE),
 		intrusiveDescriptor("XML entity expansion", DispatchScopePerUrl, remainingChecksEnabled, checkXMLEntityExpansion),
 
 		nativeDescriptor("File upload functionality", DispatchScopePerHost, remainingChecksEnabled, checkFileUploadFunctionality),

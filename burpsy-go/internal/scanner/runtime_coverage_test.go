@@ -742,7 +742,8 @@ func buildRawResponse(t *testing.T, res *http.Response) string {
 //     was simply wrong.
 //   - CheckStored (10 rows) — the manifest declares no stored vulnerability yet, so turning it on
 //     would exercise the planting half against endpoints that never surface a canary.
-//   - CheckSSRF, CheckXXE — subsumed by CheckExtendedActive's gate.
+//   - CheckSSRF — subsumed by CheckExtendedActive's gate. CheckXXE admits only the XXE row, which
+//     CheckExtendedActive (on here) admits too.
 //   - CheckCorpus — BCheck corpus, a separate evaluator architecture.
 //   - CheckExtendedCoverage — admits declined rows, of which there are now none.
 //

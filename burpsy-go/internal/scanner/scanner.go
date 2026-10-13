@@ -161,7 +161,10 @@ type ScanConfig struct {
 	// so it is additionally gated behind CheckExtendedActive: enabling CheckSSRF alone no
 	// longer admits it. That keeps a default scan from failing every sweep on a machine with
 	// no interactsh installed.
-	CheckSSRF    bool
+	CheckSSRF bool
+	// CheckXXE admits the "XML external entity injection" row (checks_remaining.go): a local file
+	// read through an external entity, proven by file content or an internal-entity control. On by
+	// default (j1mk.37). "XML entity expansion" is not this switch's; it needs CheckExtendedActive.
 	CheckXXE     bool
 	CheckJwtWeak bool
 	CheckJSVulns bool
@@ -187,8 +190,9 @@ type ScanConfig struct {
 	// checks_reflection2.go: input reflection, open redirection, link manipulation, HTTP response
 	// header injection, unidentified code injection, and SSI injection. These are the six catalog
 	// issues java_check_inventory.json's runtime trace confirmed firing on a live Burp Pro scan
-	// (Zr02/Zuag/Zb_5/Zwi/Zsn3/Zexx) that were not yet native. Off by default like every other
-	// per-family switch.
+	// (Zr02/Zuag/Zb_5/Zwi/Zsn3/Zexx) that were not yet native. On by default (j1mk.37): each sends an
+	// inert marker or expression and proves it by a computed value or a placed marker, never by an
+	// echo of the payload.
 	CheckReflectionProbes bool
 	// CheckHostDiscovery admits the three host-wide passive-discovery checks in
 	// checks_discovery.go: OpenAPI/Swagger definition found, robots.txt file, and GraphQL
@@ -213,7 +217,8 @@ type ScanConfig struct {
 	// OS command, LDAP, XPath, XML, file path manipulation, server-side template, expression
 	// language, and the five interpreted-language code-injection rows. These SEND crafted
 	// payloads, so unlike the passive families they are not admissible in a passive-only
-	// scan. Off by default like every other per-family switch.
+	// scan. On by default (j1mk.37): every row proves itself by a computed value, an error signature,
+	// a control differential or file content, and none of the payloads changes state.
 	CheckActiveInjection bool
 	// CheckDOM admits the wired DOM-based checks in checks_dom.go. They drive a real headless
 	// browser, so they need a browser provider; without one they report a refusal rather than
@@ -477,7 +482,34 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 			CheckXss:           true,
 			CheckPathTraversal: true,
 			CheckSSRF:          true,
-			CheckXXE:           false,
+			// Default audit policy (j1mk.37; burpsy-go/docs/SCANNER-COVERAGE.md "Default audit").
+			//
+			// ON: a family whose probes are inert (a marker, an arithmetic expression, a malformed
+			// fragment, a file READ) and whose verdict rests on evidence a reflection cannot produce:
+			// a value the target computed, an error signature the baseline lacks, a true/false
+			// differential against a control, or file content. Burp's default audit runs these, and a
+			// default that skips them reports a target clean on checks it never sent.
+			//   - CheckActiveInjection: OS command (shell-computed product), LDAP (boolean
+			//     differential + error), XPath and XML (error signatures), file path manipulation
+			//     (file content), SSTI/EL and the five code-injection rows (computed arithmetic,
+			//     re-confirmed with fresh operands).
+			//   - CheckXXE: the external-entity file read (content or internal-entity control). Entity
+			//     expansion is NOT included; it stays behind CheckExtendedActive.
+			//   - CheckReflectionProbes: input reflection, open redirect, link manipulation, response
+			//     header injection, unidentified code injection, SSI (an #if expression, never #exec).
+			//
+			// OFF: anything that leaves state behind, acts on an account, loads the target, or needs
+			// something outside this process. CheckExtendedActive stays off because it carries XML
+			// entity expansion, request smuggling, JWT forgery, the React2Shell row and the session
+			// comparisons; and each of CheckFileUpload, CheckIDOR, CheckLoginRateLimit,
+			// CheckUsernameEnumeration, CheckPasswordReset, CheckSessionManagement,
+			// CheckRequestSmuggling, CheckInsecureDeserialization, CheckSqliHeavyQuery,
+			// CheckSqliOrBoolean, CheckStored, CheckOutOfBand, CheckSSRFInBand, CheckHostHeader and
+			// CheckGraphQLHardening keeps its own opt-in. Every switch stays editable at runtime via
+			// /api/scanner/config.
+			CheckXXE:              true,
+			CheckActiveInjection:  true,
+			CheckReflectionProbes: true,
 			// Passive families default ON: they are network-free response analysis, which is what
 			// "passive scanning" means in Burp and what an operator expects a scanner to do without
 			// being asked. Every one stays switchable at runtime via /api/scanner/config.
