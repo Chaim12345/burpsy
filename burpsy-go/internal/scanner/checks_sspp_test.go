@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/burpsy-go/burpsy/internal/vulnapp"
 )
 
 // The server-side parameter pollution check (burpsy-react-ui-0vzb.3) against vulnapp's SSPP family,
@@ -86,7 +88,7 @@ func TestSSPPFindsEachTechnique(t *testing.T) {
 			"repeats the parameter after the original value", "answered exactly like the original value",
 			"`#` truncates", "Field not specified", "Parameter is not supported", `"carlos%26name%3D`}},
 		// Last duplicate wins, unknown ignored, field optional.
-		{"/sspp/query/reset", "username", IssueSSPPQuery, "firm", []string{
+		{"/sspp/query/lookup", "username", IssueSSPPQuery, "firm", []string{
 			"adds an internal query parameter", "with the original value after a random one"}},
 		// Strict: nothing equivalent; the unknown parameter and the repeated name are refused differently.
 		{"/sspp/query/strict?name=carlos", "name", IssueSSPPQuery, "tentative", []string{
@@ -141,7 +143,7 @@ func TestSSPPStaysQuietOnTheSafeTwins(t *testing.T) {
 				t.Errorf("an encoded value made probes structural: %v", ssppIDs(held))
 			}
 		}},
-		{"/sspp/safe/query/reset", "username", false, nil},
+		{"/sspp/safe/query/lookup", "username", false, nil},
 		{"/sspp/safe/query/strict?name=carlos", "name", false, nil},
 		{"/sspp/safe/query/truncate?name=carlos", "name", false, func(t *testing.T, first, _ outcomes) {
 			if st(first, ssppQAmp) || st(first, ssppHash) {
@@ -224,6 +226,36 @@ func TestSSPPDoesNotProbeADestructivePath(t *testing.T) {
 		ssppProbeable("PUT /sspp/query/search?name=x HTTP/1.1\r\n\r\n") ||
 		ssppProbeable("POST /account/remove HTTP/1.1\r\n\r\n") {
 		t.Error("ssppProbeable gates the wrong requests")
+	}
+}
+
+// A POST that would send mail — by its path or by a parameter name — gets no request at all from the
+// check: re-sending it ~30 times would mail a real address ~30 times. Both twins front the vulnerable
+// lookup, so without the gate each is found.
+func TestSSPPSendsNothingToAMailSendingPost(t *testing.T) {
+	for _, path := range []string{"/sspp/safe/query/forgot-password", "/sspp/safe/query/account"} {
+		t.Run(path, func(t *testing.T) {
+			startRuntimeTarget(t) // seeded (one capture request each) before counting
+			before := vulnapp.SSPPMailRequests()
+			fs, sent := ssppAudit(t, path)
+			if got := vulnapp.SSPPMailRequests() - before; got != 0 || sent != 0 {
+				t.Fatalf("the mail-sending POST received %d request(s) (engine counted %d); want 0", got, sent)
+			}
+			if f := ssppFindingIn(fs); f != nil {
+				t.Fatalf("reported %q without sending anything?", f.Name)
+			}
+		})
+	}
+	for raw, want := range map[string]bool{
+		"POST /sspp/x HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nname=a":         true,
+		"POST /forgot-password HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nu=a":   false,
+		"POST /x HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n\r\nemailAddress=a":      false,
+		"POST /x HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"phone\":\"1\",\"sms_code\":\"2\"}": false,
+		"GET /forgot-password?username=a HTTP/1.1\r\n\r\n":                                               true,
+	} {
+		if got := ssppProbeable(raw); got != want {
+			t.Errorf("ssppProbeable(%q) = %v, want %v", raw, got, want)
+		}
 	}
 }
 

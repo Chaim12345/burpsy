@@ -2953,7 +2953,10 @@ Not covered:
   the captured URL (a REST front end), headers, cookies and empty values are not probed; XML bodies
   built by concatenation are not probed with XML delimiters.
 - **Requests**: GET and POST only; paths naming delete/remove/purge/pay/transfer/cancel/revoke/logout
-  and similar are skipped. A POST that sends mail (a password-reset request, the canonical lab) is
-  re-sent ~30 times, each reaching only the object the captured request reached.
+  and similar are skipped, and so is any POST whose path words or parameter names suggest a message or
+  payment side effect (reset, forgot, password, mail, email, send, notify, invite, sms, otp, verify,
+  subscribe, contact, message, comment, order, checkout, pay, transfer, purchase). That excludes the
+  canonical PortSwigger labs (POST /forgot-password) and login forms with a password field: a probe
+  set is ~30 requests, i.e. ~30 mails. A mail-sending endpoint with neutral names is still probed.
 - **VulnerableApp** has no parameter-pollution family; the rows cannot move its TP count, only add
   false positives.

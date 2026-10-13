@@ -57,7 +57,12 @@ package scanner
 // Every probe value is the original value plus random letters, so no probe names an internal
 // parameter or field the request did not already carry, and no override value is anything but the
 // original value: a probe can only reach the object the captured request already reached. PUT, PATCH
-// and DELETE requests and paths naming a destructive operation are not probed.
+// and DELETE requests and paths naming a destructive operation are not probed. Nor is a POST whose path
+// or any parameter name suggests a message or payment side effect (reset, forgot, password, mail,
+// email, send, notify, invite, sms, otp, verify, subscribe, contact, message, comment, order, checkout,
+// pay, transfer, purchase): a probe set re-sends the request ~30 times, which for a password-reset or
+// contact form is ~30 emails to a real address. The canonical PortSwigger lab (POST /forgot-password)
+// is therefore not probed; a GET carrying the same value still is.
 //
 // # Not done
 //
@@ -148,21 +153,54 @@ var ssppDestructive = map[string]bool{
 	"logout": true, "signout": true, "unsubscribe": true, "deactivate": true,
 }
 
-// ssppProbeable reports whether the captured request may be re-sent with probes.
+// ssppSideEffect are words that, in a POST's path or in one of its parameter names, suggest the request
+// sends a message or moves money: re-sending it ~30 times would send ~30 emails, texts or orders to
+// whoever the captured request addressed.
+var ssppSideEffect = map[string]bool{
+	"reset": true, "forgot": true, "password": true, "passwd": true, "mail": true, "email": true, "send": true,
+	"notify": true, "notification": true, "invite": true, "invitation": true, "sms": true, "otp": true,
+	"verify": true, "verification": true, "subscribe": true, "contact": true, "message": true, "comment": true,
+	"order": true, "checkout": true, "pay": true, "payment": true, "transfer": true, "purchase": true,
+}
+
+// ssppProbeable reports whether the captured request may be re-sent with probes: GET or POST, no
+// destructive path word, and for a POST no message or payment word in its path or parameter names.
 func ssppProbeable(raw string) bool {
 	line, _, _ := strings.Cut(raw, "\r\n")
 	method, _, _ := strings.Cut(line, " ")
-	switch strings.ToUpper(method) {
+	method = strings.ToUpper(method)
+	switch method {
 	case "GET", "POST":
 	default:
 		return false
 	}
 	for _, w := range nosqliPathWords(raw) {
-		if ssppDestructive[w] {
+		if ssppDestructive[w] || method == "POST" && ssppSideEffect[w] {
 			return false
 		}
 	}
+	if method == "POST" {
+		pts, _ := bcheck.Enumerate([]byte(raw), []string{"query", "body"})
+		for _, pt := range pts {
+			for _, w := range ssppNameWords(pt.Name) {
+				if ssppSideEffect[w] {
+					return false
+				}
+			}
+		}
+	}
 	return true
+}
+
+// ssppNameWords splits a parameter name (camelCase, snake_case, a JSON path) into lower-case words,
+// plus the words joined, so "e_mail" and "emailAddress" both read as mail.
+func ssppNameWords(name string) []string {
+	name = nosqliCamel.ReplaceAllString(name, "${1} ${2}")
+	ws := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool { return r < 'a' || r > 'z' })
+	if len(ws) > 1 {
+		ws = append(ws, strings.Join(ws, ""))
+	}
+	return ws
 }
 
 // checkServerSideParamPollution probes one audited request.

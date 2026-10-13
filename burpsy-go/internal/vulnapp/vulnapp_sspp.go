@@ -20,7 +20,7 @@ package vulnapp
 //
 //   - GET /sspp/query/search pastes name into ?name=<v>&field=email (first wins, unknown refused,
 //     field required): `&name=x` after the value keeps the answer, `#` drops the field;
-//   - POST /sspp/query/reset pastes the username into ?username=<v>&field=email (last wins, unknown
+//   - POST /sspp/query/lookup pastes the username into ?username=<v>&field=email (last wins, unknown
 //     ignored, field optional): `&x=y`, `x&username=<v>` and `#` all keep the answer;
 //   - GET /sspp/query/strict refuses duplicates and unknown parameters and requires the field: no
 //     probe keeps the answer, but an unknown parameter and a repeated one are refused differently;
@@ -33,7 +33,7 @@ package vulnapp
 //
 // Safe twins (each vulnerable endpoint's front encoding its value), and negative controls:
 //
-//   - /sspp/safe/query/{search,reset,strict} URL-encode the value; /sspp/safe/path/user path-escapes
+//   - /sspp/safe/query/{search,lookup,strict} URL-encode the value; /sspp/safe/path/user path-escapes
 //     it; /sspp/safe/json/{profile,lookup} build the document with a serialiser;
 //   - /sspp/safe/validator/{query,path,json} refuse any value containing & # ? / " or \ with a
 //     message naming the character, before any internal call: every delimiter changes the answer
@@ -49,6 +49,8 @@ package vulnapp
 //     quote both answer like the original value, so the document never broke;
 //   - /sspp/safe/path/fetch requests a URL the client supplied whole (no network: a fixed table), so a
 //     `?` or `#` the client adds is its own and the fetch honours it;
+//   - POST /sspp/safe/query/forgot-password (path) and POST /sspp/safe/query/account (a notifyEmail
+//     parameter) are the vulnerable lookup behind a request that would send mail: never probed;
 //   - /sspp/safe/query/delete-alias is the vulnerable search behind a path naming a destructive
 //     operation, which the check must not probe at all;
 //   - /sspp/safe/json/echo builds its own JSON RESPONSE by concatenation (a different flaw) while the
@@ -63,7 +65,14 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync/atomic"
 )
+
+// ssppMail counts requests to the mail-sending twins.
+var ssppMail atomic.Int64
+
+// SSPPMailRequests is how many requests the mail-sending SSPP twins have received.
+func SSPPMailRequests() int64 { return ssppMail.Load() }
 
 const (
 	rowSSPPQuery = "Server-side parameter pollution (query string)"
@@ -76,7 +85,7 @@ func ssppEndpoints() []Endpoint {
 		{Path: "/sspp/query/search?name=carlos", Row: rowSSPPQuery,
 			Note: "pastes name into the internal query ?name=<v>&field=email; first duplicate wins, so name=carlos&name=x " +
 				"still finds carlos, and # drops the required field"},
-		{Path: "/sspp/query/reset", Method: http.MethodPost, Row: rowSSPPQuery, Body: "username=carlos",
+		{Path: "/sspp/query/lookup", Method: http.MethodPost, Row: rowSSPPQuery, Body: "username=carlos",
 			ContentType: "application/x-www-form-urlencoded",
 			Note:        "pastes username into ?username=<v>&field=email; unknown parameters ignored, last duplicate wins"},
 		{Path: "/sspp/query/strict?name=carlos", Row: rowSSPPQuery,
@@ -92,7 +101,7 @@ func ssppEndpoints() []Endpoint {
 
 		{Path: "/sspp/safe/query/search?name=carlos", Row: rowSSPPQuery, Safe: true,
 			Note: "URL-encodes name before building the internal query"},
-		{Path: "/sspp/safe/query/reset", Method: http.MethodPost, Row: rowSSPPQuery, Safe: true, Body: "username=carlos",
+		{Path: "/sspp/safe/query/lookup", Method: http.MethodPost, Row: rowSSPPQuery, Safe: true, Body: "username=carlos",
 			ContentType: "application/x-www-form-urlencoded",
 			Note:        "URL-encodes username before building the internal query"},
 		{Path: "/sspp/safe/query/strict?name=carlos", Row: rowSSPPQuery, Safe: true,
@@ -101,6 +110,12 @@ func ssppEndpoints() []Endpoint {
 			Note: "keeps only the leading letters and digits, then encodes: a probe and its literal control are cut alike"},
 		{Path: "/sspp/safe/query/delete-alias?name=carlos", Row: rowSSPPQuery, Safe: true,
 			Note: "the vulnerable search behind a path naming a destructive operation: the check must send it no probe"},
+		{Path: "/sspp/safe/query/forgot-password", Method: http.MethodPost, Row: rowSSPPQuery, Safe: true,
+			Body: "username=carlos", ContentType: "application/x-www-form-urlencoded",
+			Note: "the vulnerable lookup behind a POST that sends a reset mail: the check must send it nothing"},
+		{Path: "/sspp/safe/query/account", Method: http.MethodPost, Row: rowSSPPQuery, Safe: true,
+			Body: "name=carlos&notifyEmail=carlos%40carlos-montoya.example", ContentType: "application/x-www-form-urlencoded",
+			Note: "the vulnerable lookup behind a POST whose parameter names a mail address: the check must send it nothing"},
 		{Path: "/sspp/safe/validator/query?name=carlos", Row: rowSSPPQuery, Safe: true,
 			Note: "refuses & # ? / \" \\ with a message per character before any internal call"},
 		{Path: "/sspp/safe/path/user?name=carlos", Row: rowSSPPPath, Safe: true,
@@ -326,7 +341,7 @@ func ssppJSONUser(r *http.Request) string {
 
 func registerSSPP(mux *http.ServeMux) {
 	search := ssppQueryAPI{key: "name", refuseUnknown: true, fieldRequired: true}
-	reset := ssppQueryAPI{key: "username", lastWins: true}
+	lookupAPI := ssppQueryAPI{key: "username", lastWins: true}
 	strict := ssppQueryAPI{key: "name", refuseUnknown: true, refuseDup: true, fieldRequired: true}
 
 	queryFront := func(api ssppQueryAPI, form string, encode func(string) string) http.HandlerFunc {
@@ -338,11 +353,21 @@ func registerSSPP(mux *http.ServeMux) {
 	}
 	raw := func(v string) string { return v }
 	mux.HandleFunc("/sspp/query/search", queryFront(search, "name", raw))
-	mux.HandleFunc("/sspp/query/reset", queryFront(reset, "username", raw))
+	mux.HandleFunc("/sspp/query/lookup", queryFront(lookupAPI, "username", raw))
 	mux.HandleFunc("/sspp/query/strict", queryFront(strict, "name", raw))
 	mux.HandleFunc("/sspp/safe/query/search", queryFront(search, "name", url.QueryEscape))
-	mux.HandleFunc("/sspp/safe/query/reset", queryFront(reset, "username", url.QueryEscape))
+	mux.HandleFunc("/sspp/safe/query/lookup", queryFront(lookupAPI, "username", url.QueryEscape))
 	mux.HandleFunc("/sspp/safe/query/strict", queryFront(strict, "name", url.QueryEscape))
+	// The mail-sending fronts count every request after the capture, so a test can show no probe came.
+	mail := func(form string) http.HandlerFunc {
+		next := queryFront(lookupAPI, form, raw)
+		return func(w http.ResponseWriter, r *http.Request) {
+			ssppMail.Add(1)
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("/sspp/safe/query/forgot-password", mail("username"))
+	mux.HandleFunc("/sspp/safe/query/account", mail("name"))
 	mux.HandleFunc("/sspp/safe/query/delete-alias", queryFront(search, "name", raw))
 	mux.HandleFunc("/sspp/safe/path/fetch", func(w http.ResponseWriter, r *http.Request) {
 		u, err := url.Parse(r.FormValue("src"))
