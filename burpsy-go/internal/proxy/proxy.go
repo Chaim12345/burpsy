@@ -1656,6 +1656,18 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		// this request is going to.
 		method, path = refreshedRequestLine(requestData, method, path)
 
+		// The session seam (burpsy-react-ui-9llt), in the same slot the plaintext leg gives it:
+		// after every byte-level transform and the operator's hold, before the scope check, so
+		// the origin, history and the operator's edit see one set of bytes. One insertion covers
+		// everything this loop forwards — ordinary tunnel requests, retargets and WebSocket
+		// upgrades over TLS all read the rewritten bytes below. Nil coordinator is the unwired
+		// default and the call is a byte-for-byte no-op.
+		requestData = s.withSessionRules(requestData, reqHost, method, path, reqPort, reqTLS)
+		// A Cookie insert or a post-re-login rebuild rewrote the head, so the method and path
+		// are re-read from the final bytes, the same rule refreshedRequestLine states above:
+		// what is recorded and what is sent must agree with each other.
+		method, path = refreshedRequestLine(requestData, method, path)
+
 		// Scope decides retention, not egress: an excluded request is still
 		// forwarded, it is simply not kept. The request bytes are not stored
 		// here — both halves of an exchange are put away together by the one
@@ -1737,12 +1749,31 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 			}
 			if !core.IsWsUpgradeResponse(head) {
 				body, err := httputil.ReadResponseBody(upstreamBR, head)
-				if err != nil {
+				var truncated *httputil.TruncatedBodyError
+				if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
 					return
+				}
+				if truncated != nil {
+					// The same salvage the plaintext leg has (stream_response.go): a short
+					// Content-Length body forwards close-delimited rather than dropping the
+					// exchange. The truncation note travels with the record.
+					head = httputil.CloseDelimitedHead(head)
+					s.config.logger.Warn("response body truncated by upstream",
+						zap.String("path", path), zap.String("declared", truncated.Declared),
+						zap.Int("received", truncated.Received), zap.Error(err))
 				}
 				responseData := append(head, body...)
 				completed := time.Now()
-				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
+				var note *string
+				if truncated != nil {
+					t := "upstream closed the response body short of its declared Content-Length (" +
+						truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
+						"the partial body was forwarded close-delimited"
+					note = &t
+				}
+				// A truncated body leaves the upstream connection's framing unknowable, so
+				// this response ends the keep-alive loop either way.
+				if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
 					return
 				}
 				continue
@@ -1844,13 +1875,32 @@ func (s *Server) interceptTLS(clientConn net.Conn, host string, port uint16, cer
 		}
 
 		body, err := httputil.ReadResponseBody(upstreamBR, head)
-		if err != nil {
+		var truncated *httputil.TruncatedBodyError
+		if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
 			return
+		}
+		if truncated != nil {
+			// Truncation salvage, TLS leg (arch review: the TLS leg kept the old
+			// drop-the-exchange shape after the plaintext leg was fixed). The declared
+			// framing is false now, so the head goes out close-delimited and the record
+			// carries exactly what was lost; the upstream connection's framing is
+			// unknowable from here, so the keep-alive loop ends with this response.
+			head = httputil.CloseDelimitedHead(head)
+			s.config.logger.Warn("response body truncated by upstream",
+				zap.String("path", path), zap.String("declared", truncated.Declared),
+				zap.Int("received", truncated.Received), zap.Error(err))
 		}
 		responseData := append(head, body...)
 		completed := time.Now()
+		var note *string
+		if truncated != nil {
+			t := "upstream closed the response body short of its declared Content-Length (" +
+				truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
+				"the partial body was forwarded close-delimited"
+			note = &t
+		}
 
-		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, nil) {
+		if !s.handleTLSResponse(tlsClient, method, reqHost, reqPort, reqTLS, path, requestData, reqStages, inScope, responseData, startTime, firstByte, completed, serverIPOf(upstream), requestEdited, downgrade, false, note) || truncated != nil {
 			return
 		}
 	}

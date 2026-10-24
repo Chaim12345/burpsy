@@ -904,6 +904,14 @@ func (rt *runtimeTarget) auditEndpoint(t *testing.T, path string, dom bool) (map
 func TestAnAuditSendsProbesAndStaysWithinARequestBudget(t *testing.T) {
 	const budgetPerEndpoint = 2000
 
+	// A full-matrix run measured 1587s on an idle machine - it cannot fit the default 10m
+	// package timeout alongside the rest of the suite on a shared one, and its absence from
+	// a -short run is exactly what -short is for. The dedicated long-timeout job (30m+)
+	// remains the full-coverage path.
+	if testing.Short() {
+		t.Skip("full probe-budget matrix: run without -short (30m+ timeout) for the long-run gate")
+	}
+
 	rt := startRuntimeTarget(t)
 	var total uint32
 	var audited int

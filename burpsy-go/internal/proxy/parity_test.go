@@ -148,6 +148,10 @@ var exchangeFieldRules = map[string]fieldRule{
 	// Not ruleAbsent either: zero means "not computed", and both legs do compute it at this seam, so
 	// an absent claim would be false. The field being populated is checked per leg below.
 	"RequestFP": ruleMayDiffer,
+	// RequestShapeFP is the volatility-normalized twin of RequestFP (burpsy-go W4): same seam,
+	// same per-producer reasoning, same rule - each leg fingerprints the request bytes IT
+	// recorded, so identity between legs is not a claim either producer makes.
+	"RequestShapeFP": ruleMayDiffer,
 	// The same shape, for the same reason (burpsy-react-ui-7py5): the count is derived from the raw
 	// REQUEST bytes, and the proxy relays them verbatim while the crawler's sender re-renders what it
 	// parsed. For the parity body above neither carries a body, so the two counts agree at 0 and this

@@ -292,8 +292,15 @@ func ReadResponseBody(br *bufio.Reader, head []byte) ([]byte, error) {
 					readN = int64(remaining)
 				}
 				buf := make([]byte, readN)
-				if _, err := io.ReadFull(br, buf); err != nil {
-					return nil, fmt.Errorf("reading body: %w", err)
+				if n, err := io.ReadFull(br, buf); err != nil {
+					// An upstream that closes short of its declared Content-Length
+					// has still sent bytes — OWASP Juice Shop's serve-index /ftp/
+					// listing declares 59 more than it ever sends. Hand the partial
+					// body back with a typed error so a caller that can frame it
+					// honestly (close-delimited, see CloseDelimitedHead) may use it;
+					// callers that cannot discard it on err exactly as before.
+					body.Write(buf[:n])
+					return body.Bytes(), &TruncatedBodyError{Declared: cl, Received: len(body.Bytes()), Err: err}
 				}
 				remaining -= int(readN)
 				body.Write(buf)
@@ -329,4 +336,83 @@ func ResponseStatus(raw []byte) *int {
 		return nil
 	}
 	return &n
+}
+
+// TruncatedBodyError reports a response body that ended before its declared
+// Content-Length: the peer closed (or stopped) short. It carries the partial
+// body alongside (ReadResponseBody returns it as the result value) because the
+// bytes that arrived are still evidence — the honest framing for them is
+// close-delimited, which CloseDelimitedHead builds.
+type TruncatedBodyError struct {
+	Declared string // the Content-Length value the head claimed
+	Received int    // the body bytes that actually arrived
+	Err      error  // the underlying read error
+}
+
+func (e *TruncatedBodyError) Error() string {
+	return fmt.Sprintf("reading body: %v (declared Content-Length %s, received %d)", e.Err, e.Declared, e.Received)
+}
+
+func (e *TruncatedBodyError) Unwrap() error { return e.Err }
+
+// CloseDelimitedHead reframes a response head for a body that is delimited by
+// the end of the connection rather than by its declared framing: Content-Length
+// is now false, and Connection/Keep-Alive promise a reusable connection that a
+// close-delimited body cannot keep. Transfer-Encoding is left alone: a chunked
+// body that ended early is not salvageable this way (its partial bytes still
+// carry chunk framing), so no caller should reach this helper for one.
+func CloseDelimitedHead(head []byte) []byte {
+	lines := bytes.Split(head, []byte("\r\n"))
+	out := lines[:0]
+	for _, line := range lines {
+		lower := bytes.ToLower(line)
+		if bytes.HasPrefix(lower, []byte("content-length:")) ||
+			bytes.HasPrefix(lower, []byte("connection:")) ||
+			bytes.HasPrefix(lower, []byte("keep-alive:")) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return bytes.Join(out, []byte("\r\n"))
+}
+
+// EnsureConnectionClose returns rawRequest with its head declaring
+// "Connection: close", replacing any Connection lines it already carries.
+// The sender uses it after an authority has answered close-delimited once
+// (an HTTP/1.0-style response, or a truncated Content-Length body salvaged
+// via CloseDelimitedHead): on such an authority the connection is gone
+// anyway, and asking for the close up front turns "wait out the peer's
+// keep-alive timer for bytes that never come" into an EOF that arrives with
+// the body - OWASP Juice Shop's serve-index /ftp/ listing otherwise costs
+// ~5s per fetch (59 phantom bytes, server-side keep-alive hold).
+//
+// A request whose head is not CRLF-terminated is returned unchanged:
+// editing bytes one cannot parse is how a proxy corrupts a body.
+func EnsureConnectionClose(rawRequest []byte) []byte {
+	head, rest, ok := bytes.Cut(rawRequest, []byte("\r\n\r\n"))
+	if !ok {
+		return rawRequest
+	}
+	lines := bytes.Split(head, []byte("\r\n"))
+	out := lines[:1] // the request line is always kept
+	wrote := false
+	for _, line := range lines[1:] {
+		if bytes.HasPrefix(bytes.ToLower(line), []byte("connection:")) {
+			if !wrote {
+				out = append(out, []byte("Connection: close"))
+				wrote = true
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	if !wrote {
+		out = append(out, []byte("Connection: close"))
+	}
+	head = bytes.Join(out, []byte("\r\n"))
+	out = nil
+	result := make([]byte, 0, len(head)+4+len(rest))
+	result = append(result, head...)
+	result = append(result, '\r', '\n', '\r', '\n')
+	return append(result, rest...)
 }

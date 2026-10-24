@@ -4,9 +4,13 @@ package main
 // subset of cmd/burpsy/main.go's wiring it needs (store, scope, proxy, web
 // server) rather than sharing it, because cmd/burpsy owns the CLI dispatcher
 // and flag surface (see cmd/AGENTS.md) and a shared wiring package is a
-// larger refactor than this shell needs. The duplication is bounded and
-// documented here and in docs/DESKTOP.md; behaviour changes to the proxy or
-// web wiring must be mirrored in both entry points until that refactor lands.
+// larger refactor than this shell needs. The ActiveScanner is the exception:
+// both entry points build it from scanner.CapabilityWiring
+// (internal/scanner/wiring.go), so no binary can quietly run an audit engine
+// with fewer capability handles than another. The remaining duplication is
+// bounded and documented here and in docs/DESKTOP.md; behaviour changes to
+// the proxy or web wiring must be mirrored in both entry points until that
+// refactor lands.
 //
 // Hybrid mode: the desktop window never renders its own copy of the UI. It
 // starts the exact same web.Server the CLI does (embedded React UI via
@@ -34,6 +38,7 @@ import (
 	"github.com/burpsy-go/burpsy/internal/proxy"
 	"github.com/burpsy-go/burpsy/internal/scanner"
 	"github.com/burpsy-go/burpsy/internal/sender"
+	"github.com/burpsy-go/burpsy/internal/session"
 	"github.com/burpsy-go/burpsy/internal/toollog"
 	"github.com/burpsy-go/burpsy/internal/web"
 	"go.uber.org/zap"
@@ -98,6 +103,29 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 
+	// One session coordinator for every surface that compares or edits session state — the
+	// same single-handle rule cmd/burpsy/main.go follows: the console's Session page and the
+	// scanner's access-control and CSRF comparisons must govern and be governed by one rule
+	// set. The desktop binary previously wired no coordinator into its scanner at all, which
+	// is why every session-dependent check refused here while passing in the CLI.
+	sessionCoord := session.NewCoordinator(logger)
+	// The corpus compiled into the binary. Desktop has no -bchecks flag, so this is always the
+	// embedded set — attaching it switches check_corpus on, exactly as in the CLI
+	// (WithBundledCorpus). A failure is a build defect and refuses to start, as cmd/burpsy does.
+	bundledChecks, berr := scanner.BundledCorpusForDir("", logger)
+	if berr != nil {
+		logger.Fatal("bundled bcheck corpus", zap.Error(berr))
+	}
+	// One construction recipe for every binary — internal/scanner/wiring.go. Desktop wires the
+	// same capability handles the CLI does (ledgers, session coordinator, JS-library and JWT
+	// checks, bundled corpus); the handles it has no source for (OOB server, tool allowlist,
+	// DOM engine, audit-config flags) stay nil as explicit opt-outs, and the checks that need
+	// them keep reporting the missing capability by name.
+	caps := scanner.CapabilityWiring{
+		SessionCoordinator: sessionCoord,
+		CorpusChecks:       passiveScanner.ActiveChecks(),
+		BundledCorpus:      bundledChecks,
+	}
 	webServer := web.NewServer(a.store, a.scope).
 		// First in the chain, so a later WithPersist restores into and mirrors the same
 		// instance the proxy records into.
@@ -107,7 +135,14 @@ func (a *App) startup(ctx context.Context) {
 		WithScanner(scanner.NewActiveScanner(a.store, logger).
 			WithSender(sender.NewSender(sender.DefaultSenderConfig())).
 			WithScope(a.scope).
-			WithCorpusChecks(passiveScanner.ActiveChecks())).
+			WithCapabilities(caps)).
+		// The same recipe, handed to the lazy fallback so a scanner built on first audit
+		// wires the same handles this one did (internal/web/api_scanner_audit.go).
+		WithScannerCapabilities(caps).
+		// The same coordinator the scanner holds, so the Session page's rules and the
+		// scanner's session-dependent checks are one rule set — the wiring cmd/burpsy
+		// already had and this binary lacked.
+		WithSessionCoordinator(sessionCoord).
 		WithPassiveScanner(passiveScanner).
 		WithFindings(findingStore).
 		WithIntercept(interceptEngine).

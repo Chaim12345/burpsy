@@ -106,6 +106,9 @@ type PhaseOutcome struct {
 	// SessionPaused counts this phase's checks not admitted because the session breaker paused
 	// the run before this item.
 	SessionPaused int `json:"session_paused"`
+	// RateLimitedBounded counts this phase's checks never attempted because persistent
+	// throttling stopped the item (fkl8-b).
+	RateLimitedBounded int `json:"rate_limited_bounded"`
 }
 
 // Observed reports whether this phase did anything at all — ran a check, or was refused one. A
@@ -115,7 +118,7 @@ func (p PhaseOutcome) Observed() bool {
 	return p.Ran > 0 || p.Skipped > 0 || p.SendFailures > 0 || p.NotRun > 0 ||
 		p.AlreadyCovered > 0 || p.RateLimited > 0 || p.Refused > 0 ||
 		p.RequestBudgetSpent > 0 || p.UnitAbandoned > 0 || p.ItemFailed > 0 ||
-		p.SessionPaused > 0
+		p.SessionPaused > 0 || p.RateLimitedBounded > 0
 }
 
 // CheckInvasiveness is a check's rank in Burp's light/medium/intrusive active tiers. It is the

@@ -683,7 +683,20 @@ func idorCookieNamesChanged(a, b string) []string {
 	return out
 }
 
-// idorSessionIDs are the user ids the request's JWTs name for the session.
+// idorSessionClaims are the claim names a JWT names the session user by, wherever in the payload
+// they appear.
+var idorSessionClaims = map[string]bool{
+	"sub": true, "uid": true, "user_id": true, "userId": true, "userid": true, "id": true,
+}
+
+// idorSessionIDs are the user ids the request's JWTs name for the session. The claims are read
+// recursively, not only at the top level: a real token does not always carry its subject as a
+// top-level claim. Juice Shop, for one, signs the whole user row - the payload is
+// {data: {id: ...}, bid: ...} - so a top-level-only read finds nothing and a demonstrable owner
+// binding scores Tentative where Firm was provable. The response-side rule stays the proof: a
+// value here only promotes a finding when the original object's owner field equals it and the
+// swapped object's does not, so a wider lookup table cannot manufacture a binding, only miss one
+// less often.
 func idorSessionIDs(raw string) map[string]bool {
 	out := map[string]bool{}
 	for _, cand := range jwtCandidatesIn(raw) {
@@ -691,18 +704,36 @@ func idorSessionIDs(raw string) map[string]bool {
 		if t.ParseError != "" || t.Payload == nil {
 			continue
 		}
-		for _, claim := range []string{"sub", "uid", "user_id", "userId", "userid", "id"} {
-			switch v := t.Payload[claim].(type) {
-			case string:
-				if v != "" {
-					out[v] = true
-				}
-			case float64:
-				out[strconv.FormatFloat(v, 'f', -1, 64)] = true
-			}
-		}
+		idorCollectSessionClaims(t.Payload, out)
 	}
 	return out
+}
+
+// idorCollectSessionClaims folds every idorSessionClaims value in a decoded payload fragment into
+// out, descending into nested objects and arrays. Values are strings rendered as themselves and
+// numbers in their shortest form, the same two renderings idorShape's JSON leaves use, so a claim
+// and a response field compare equal when they name the same id.
+func idorCollectSessionClaims(v any, out map[string]bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			if idorSessionClaims[k] {
+				switch c := e.(type) {
+				case string:
+					if c != "" {
+						out[c] = true
+					}
+				case float64:
+					out[strconv.FormatFloat(c, 'f', -1, 64)] = true
+				}
+			}
+			idorCollectSessionClaims(e, out)
+		}
+	case []any:
+		for _, e := range x {
+			idorCollectSessionClaims(e, out)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

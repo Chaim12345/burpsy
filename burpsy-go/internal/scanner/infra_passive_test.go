@@ -262,3 +262,16 @@ func TestCharsetRecognitionUsesTheBrowserEncodingTableNotAHandList(t *testing.T)
 		t.Error("an invented label must still be reported as unrecognised, or the check reports nothing at all")
 	}
 }
+
+// serve-index — the Node/Express ecosystem's standard directory-listing
+// middleware — titles its pages "listing directory /path/", which none of the
+// Apache/IIS markers recovered from the Burp corpus match. OWASP Juice Shop's
+// /ftp/ route is the live exhibit; every Express app on serve-index shares it.
+func TestScanDisclosuresDetectsServeIndexListing(t *testing.T) {
+	body := `<!DOCTYPE html><html><head><title>listing directory /ftp/</title></head>` +
+		`<body><div id="listing"><h1>listing directory /ftp/</h1><ul id="files"></ul></div></body></html>`
+	got := ScanDisclosures(body)
+	if !containsDisclosureKind(got, DisclosureDirectoryListing) {
+		t.Errorf("a serve-index listing page was not flagged as a directory listing; found kinds: %v", got)
+	}
+}

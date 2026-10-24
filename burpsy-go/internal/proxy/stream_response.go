@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"errors"
 	"bytes"
 	"context"
 	"fmt"
@@ -393,12 +394,14 @@ func (s *Server) streamPlainResponse(
 	// bytes going out can still be the bytes that were recorded. A platform credential the operator
 	// configured is part of those bytes (burpsy-react-ui-trcy).
 	if _, err := upstreamConn.Write(s.forForwarding(requestData, host, method, path)); err != nil {
+		s.config.logger.Warn("forward failed: upstream write", zap.String("path", path), zap.Error(err))
 		return
 	}
 
 	br := bufio.NewReader(upstreamConn)
 	head, firstByte, err := readStreamingHead(br, s.config.network)
 	if err != nil {
+		s.config.logger.Warn("forward failed: reading response head", zap.String("path", path), zap.Error(err))
 		return
 	}
 
@@ -414,8 +417,34 @@ func (s *Server) streamPlainResponse(
 		// Reading it the ordinary way from the same buffered reader is correct and costs nothing: the
 		// head is already in hand, so this is ReadResponseBody and the rest of handleHTTP unchanged.
 		body, err := httputil.ReadResponseBody(br, head)
-		if err != nil {
+		var truncated *httputil.TruncatedBodyError
+		if err != nil && !(errors.As(err, &truncated) && len(body) > 0) {
+			s.config.logger.Warn("forward failed: reading response body", zap.String("path", path), zap.Error(err))
 			return
+		}
+		if truncated != nil {
+			// The upstream closed short of its declared Content-Length but did
+			// send bytes. Dropping the whole exchange is the worst answer: the
+			// client gets an empty reply to a request the origin answered, and
+			// history shows nothing at all. Forward what arrived instead. The
+			// declared framing is now false, so the head is rewritten
+			// close-delimited — safe on this leg, whose connection ends with
+			// this response — and the exchange is recorded with a note saying
+			// exactly what was lost, the same honesty rule the streaming path's
+			// truncation note follows. (Juice Shop's /ftp/ listing is the
+			// exhibit: it declares 59 bytes more than it ever sends.)
+			head = httputil.CloseDelimitedHead(head)
+			note := "upstream closed the response body short of its declared Content-Length (" +
+				truncated.Declared + " declared, " + strconv.Itoa(len(body)) + " received); " +
+				"the partial body was forwarded close-delimited"
+			s.config.logger.Warn("response body truncated by upstream",
+				zap.String("path", path), zap.String("declared", truncated.Declared),
+				zap.Int("received", len(body)), zap.Error(err))
+			if heldNote == "" {
+				heldNote = note
+			} else {
+				heldNote = note + "; " + heldNote
+			}
 		}
 		responseData := append(head, body...)
 		completed := time.Now()

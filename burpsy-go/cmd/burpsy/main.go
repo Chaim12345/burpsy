@@ -658,36 +658,47 @@ func main() {
 		}
 	}
 
-	// Hoisted out of the builder chain below because the DOM engine is conditional: -dom names one,
-	// and without it every DOM-based check reports a missing capability — which is what this binary
-	// did unconditionally until the flag existed. The provider is lazy, so an audit whose check set
-	// contains no DOM check never starts a browser.
 	bundledChecks, berr := bundledCorpus(*bchecksDir, logger)
 	if berr != nil {
 		log.Fatal(berr)
 	}
+	// One construction recipe for every binary — internal/scanner/wiring.go. The desktop shell
+	// and the web server's lazy fallback build from the same CapabilityWiring shape, so a
+	// capability-gated check files CapabilityMissing only when the process genuinely has no
+	// handle to give, never because one call site wired fewer than another.
+	caps := scanner.CapabilityWiring{
+		SessionCoordinator: sessionCoord,
+		ToolRunner:         toolRunner,
+		OOBProvider:        oobProvider,
+		CorpusChecks:       passiveScanner.ActiveChecks(),
+		// The compiled-in PortSwigger corpus when no -bchecks directory was given:
+		// attaching it switches check_corpus on (WithBundledCorpus).
+		BundledCorpus: bundledChecks,
+	}
+	// W2: an explicit -scan-config wins outright; without one the budget resolves through
+	// ScanConfig.Timeout (see below), so the recipe carries no AuditConfig on that path.
+	if *scanConfig != "" {
+		caps.AuditConfig = &auditConfig
+	}
+	// The DOM engine is conditional: -dom names one, and without it every DOM-based check
+	// reports a missing capability — which is what this binary did unconditionally until the
+	// flag existed. The provider is lazy, so an audit whose check set contains no DOM check
+	// never starts a browser.
+	if domOpts != nil {
+		caps.BrowserProvider = scanner.NewLazyBrowserProvider(*domOpts)
+	}
 	activeScanner := scanner.NewActiveScanner(store, logger).
 		WithSender(httpSender).
 		WithScope(scope).
-		WithCorpusChecks(passiveScanner.ActiveChecks()).
-		// The compiled-in PortSwigger corpus when no -bchecks directory was given: available
-		// under check_corpus, which this does not turn on.
-		WithBundledCorpus(bundledChecks).
-		WithToolRunner(toolRunner).
-		WithOOBProvider(oobProvider).
-		// The capability handles this binary used to leave unwired: without the ledger the 10
-		// stored/second-order checks refuse; without the coordinator, access-control and CSRF
-		// refuse; without the JS/JWT checks those families refuse despite data compiled into the
-		// binary. Each constructs unconditionally — the ledgers are in-memory and bounded, the JS
-		// corpus is vendored and parsed once per process, the JWT wordlist is the compiled-in list.
-		WithStoredLedger(scanner.NewStoredLedger()).
-		WithProvenanceLedger(scanner.NewProvenanceLedger()).
-		WithSessionCoordinator(sessionCoord).
-		WithJsLibraryCheck(scanner.NewJsLibraryCheck(scanner.VendoredJsVulnDb())).
-		WithJwtWeakSecretCheck(scanner.NewJwtWeakSecretCheck(scanner.BundledJwtWordlist())).
-		WithAuditConfig(auditConfig)
-	if domOpts != nil {
-		activeScanner = activeScanner.WithBrowserProvider(scanner.NewLazyBrowserProvider(*domOpts))
+		WithCapabilities(caps)
+	// W2: -scan-config is an explicit operator choice and wins outright (WithAuditConfig, via
+	// the recipe above). Without it the budget resolves through ScanConfig.Timeout - the same
+	// path the desktop takes - so restoreProjectScanState's per-project override drives this
+	// binary's audits too, instead of mutating a field nothing read. The CLI's own default is
+	// preserved by naming DefaultAuditBudget as the ScanConfig timeout (the old effective
+	// value), so the only behavior that changes is the persisted override coming alive.
+	if *scanConfig == "" {
+		activeScanner = activeScanner.WithScanTimeout(scanner.DefaultAuditBudget)
 	}
 	// Capture-time scanning reads the same run configuration the audit does (saq3.3.3). Every capture
 	// handle is built around passiveScanner, so this one line reaches proxy, crawl, Repeater and
@@ -733,6 +744,9 @@ func main() {
 		// allowlist, so a corpus check's `run tool` can dispatch; nil (no -tools) keeps tool
 		// checks counted-but-excluded.
 		WithScanner(activeScanner).
+		// The same recipe, handed to the lazy fallback so a scanner built on first audit
+		// wires the same handles this one did (internal/web/api_scanner_audit.go).
+		WithScannerCapabilities(caps).
 		WithCollaboratorStateDir(*collaboratorStateDir).
 		// WithOOBProvider carries -collaborator-server. Installed on this scanner and only this one,
 		// because it is the scanner the web server audits with — so the channel the Collaborator tab

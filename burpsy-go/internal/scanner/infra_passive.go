@@ -842,15 +842,19 @@ var sourceCodeMarkerRe = regexp.MustCompile(
 // --- Directory listing -------------------------------------------------------
 
 // directoryListingMarkerRe matches server-generated directory-listing page
-// markers, all confirmed live literals in burp.Zewc (map_root.tsv): Apache's
+// markers. Confirmed live literals in burp.Zewc (map_root.tsv): Apache's
 // "Index of /", IIS's "Directory Listing For /" and "[To Parent Directory]",
 // and the CGI-shell-out class's raw "dir"/"ls" output headers ("Volume
-// Serial Number is", "Directory of C:\..."). Matching is deliberately
-// case-sensitive: these are exact strings real server software emits, and
-// staying case-sensitive avoids the false positives a case-insensitive match
-// would invite from ordinary prose ("the index of refraction...").
+// Serial Number is", "Directory of C:\..."). Added beyond that corpus:
+// serve-index's "listing directory /" — the title/header the Node/Express
+// ecosystem's standard directory-listing middleware emits (OWASP Juice
+// Shop's /ftp/ route is the exhibit; every Express app mounted on serve-index
+// shares it). Matching is deliberately case-sensitive: these are exact
+// strings real server software emits, and staying case-sensitive avoids the
+// false positives a case-insensitive match would invite from ordinary prose
+// ("the index of refraction...").
 var directoryListingMarkerRe = regexp.MustCompile(
-	`Index of /|Directory Listing For /|\[To Parent Directory\]|Volume Serial Number is|Directory of [A-Za-z]:\\`)
+	`Index of /|Directory Listing For /|\[To Parent Directory\]|Volume Serial Number is|Directory of [A-Za-z]:\\|listing directory /`)
 
 // --- Email addresses ---------------------------------------------------------
 
@@ -1112,6 +1116,30 @@ func addMatches(out []Disclosure, body string, re *regexp.Regexp, kind Disclosur
 	return out
 }
 
+// addMatchesAt is addMatches with the match's position exposed, for the one
+// detector whose verdict needs the byte BEFORE the match.
+func addMatchesAt(out []Disclosure, body string, re *regexp.Regexp, kind DisclosureKind, accept func(body string, start, end int) bool) []Disclosure {
+	for _, loc := range re.FindAllStringIndex(body, -1) {
+		if accept != nil && !accept(body, loc[0], loc[1]) {
+			continue
+		}
+		out = append(out, Disclosure{Kind: kind, Match: body[loc[0]:loc[1]], Offset: loc[0]})
+	}
+	return out
+}
+
+// looksLikeCreditCardAt rejects the one context where a Luhn-valid digit run is
+// never a PAN: the fractional part of a decimal number. Metrics and timing
+// output ("0.010186612109289618") mint 13-19-digit runs on every emission, and
+// about one in ten of them passes Luhn by chance - exactly the false-positive
+// class the checksum exists to suppress, re-entering through the decimal point.
+func looksLikeCreditCardAt(body string, start, end int) bool {
+	if start > 0 && body[start-1] == '.' {
+		return false
+	}
+	return looksLikeValidCreditCard(body[start:end])
+}
+
 // ScanDisclosures scans body for every information-disclosure family this
 // file recognises and returns every hit, ordered by where it starts in
 // body.
@@ -1124,7 +1152,7 @@ func ScanDisclosures(body string) []Disclosure {
 	out = addMatches(out, body, emailRe, DisclosureEmailAddress, nil)
 	out = addMatches(out, body, privateIPCandidateRe, DisclosurePrivateIPAddress, isPrivateIPv4String)
 	out = addMatches(out, body, ssnShapeRe, DisclosureSocialSecurityNumber, looksLikeValidSSN)
-	out = addMatches(out, body, creditCardCandidateRe, DisclosureCreditCardNumber, looksLikeValidCreditCard)
+	out = addMatchesAt(out, body, creditCardCandidateRe, DisclosureCreditCardNumber, looksLikeCreditCardAt)
 	out = addMatches(out, body, privateKeyPEMRe, DisclosurePrivateKey, nil)
 	out = append(out, jwksDisclosuresIn(body)...)
 

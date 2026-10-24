@@ -168,6 +168,26 @@ func TestHiddenInputsRouteFindsAndFilesTheFixtureInputs(t *testing.T) {
 	}
 }
 
+// The merge key embeds the endpoint's path, and an endpoint is its path without the query — the
+// same rule the store's dedup key applies. Two captures of /hidden/account that differ only in
+// query hold the same form: one set of findings, not one per capture.
+func TestHiddenInputsMergeAcrossQueryStrings(t *testing.T) {
+	hf := newHiddenFixture(t, "")
+	id1 := hf.seed(t, "/hidden/account?next=/cart")
+	id2 := hf.seed(t, "/hidden/account?next=/orders")
+	run, raw := hf.run(t, id1, []string{"query", "cookie", "header"})
+	if run["state"] != "done" {
+		t.Fatalf("first run state %v: %s", run["state"], raw)
+	}
+	run, raw = hf.run(t, id2, []string{"query", "cookie", "header"})
+	if run["state"] != "done" {
+		t.Fatalf("second run state %v: %s", run["state"], raw)
+	}
+	if got := issueNames(t, hf.s); len(got) != 4 {
+		t.Errorf("two captures of one endpoint filed %d findings, want the same 4 merged: %v", len(got), got)
+	}
+}
+
 // The random page: no finding, the reason on the wire, and empty lists as [] rather than null.
 func TestHiddenInputsRouteReportsAnUnstablePageAndFilesNothing(t *testing.T) {
 	hf := newHiddenFixture(t, "")

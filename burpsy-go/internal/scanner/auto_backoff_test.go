@@ -151,3 +151,56 @@ func TestAnUnsetConfigInheritsTheDefaultBackoffWait(t *testing.T) {
 			elapsed, DefaultAutoBackoffMs)
 	}
 }
+
+// rateLimitedSeedWide is rateLimitedSeed with a wide active set, so the plan has more steps
+// than the per-item backoff cap - the shape the cap test needs.
+func rateLimitedSeedWide(t *testing.T, statuses ...int) (*ActiveScanner, core.ExchangeID, AuditConfig, func()) {
+	t.Helper()
+	var hits int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&hits, 1)
+		w.WriteHeader(statuses[int(n-1)%len(statuses)])
+		w.Write([]byte("ok"))
+	}))
+	store := core.NewTrafficStore()
+	h, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+	var port uint16
+	if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
+		t.Fatalf("port: %v", err)
+	}
+	snd := sender.NewSender(nil)
+	id := seedAuditExchange(t, store, h, port, "/limited?id=1", "<html></html>")
+	scan := NewActiveScanner(store, zap.NewNop()).WithSender(snd).WithConfig(&ScanConfig{
+		MaxConcurrency:        1,
+		CheckSqli:             true,
+		CheckPathTraversal:    true,
+		CheckSSRF:             true,
+		CheckActiveInjection:  true,
+		CheckReflectionProbes: true,
+		CheckCachePoisoning:   true,
+		CheckHeaders:          true,
+	})
+	return scan, id, DefaultAuditConfig(), srv.Close
+}
+
+func TestAutoBackoffPaymentsAreCappedPerItem(t *testing.T) {
+	// fkl8-c: a target that keeps 429ing must not be paid a courtesy wait per step for the
+	// whole plan. The consecutive-limited breaker bounds the uniformly-throttled item, but a
+	// meter that flaps - a per-key cap that answers some probe shapes 200 - never reaches it,
+	// and unbounded beats turned one vulnapp login-form row into 90s of waiting that produced
+	// no evidence. The plan here outlives the cap, so the wait count must stop at it.
+	scan, id, cfg, done := rateLimitedSeedWide(t, 429)
+	defer done()
+	cfg.AutoBackoffMs = SomeUint32(1) // count the waits, do not pay for them
+	out, _ := scan.AuditWithin(context.Background(), id, cfg)
+	if out.RateLimited == 0 {
+		t.Fatal("no backoff waits counted at all - the courtesy beat itself regressed")
+	}
+	if out.RateLimited > MaxItemAutoBackoffWaits {
+		t.Fatalf("one item paid %d backoff waits, want at most %d - the per-item cap did not hold", out.RateLimited, MaxItemAutoBackoffWaits)
+	}
+	t.Logf("waits paid: %d (cap %d)", out.RateLimited, MaxItemAutoBackoffWaits)
+}

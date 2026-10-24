@@ -190,7 +190,10 @@ func (s *Server) startAuditAsync(w http.ResponseWriter, id core.ExchangeID, cfg 
 // Built with the engagement scope: an active audit sends real traffic, and the engine refuses an
 // out-of-scope exchange before it plans any work. The corpus's active checks ride along when a
 // passive scanner (loaded via --bchecks) is attached — the same source main.go wires explicitly, so
-// an unwired server and a wired one cannot disagree about which checks run.
+// an unwired server and a wired one cannot disagree about which checks run. The capability handles
+// (ledgers, session coordinator, JS-library and JWT checks, bundled corpus) come from the
+// CapabilityWiring the process installed with WithScannerCapabilities, so the lazily built scanner
+// is the same engine the explicit one is, not a subset of it.
 //
 // The construction is memoised on s.scanner, which is what makes the corpus checks a property of the
 // process rather than of whichever route ran first: a server that has never served an audit and one
@@ -206,17 +209,27 @@ func (s *Server) activeScanner() *scanner.ActiveScanner {
 	s.scannerBuild.Lock()
 	defer s.scannerBuild.Unlock()
 	if s.scanner.Load() == nil {
+		// The same capability recipe the process's explicit scanner was built from
+		// (WithScannerCapabilities), with this server's own handles filling any the
+		// recipe leaves unset: the server's session coordinator is the one the
+		// Session page edits, and the scanner's session-dependent checks must read
+		// that one rule set.
+		caps := s.scannerCaps
+		if len(caps.CorpusChecks) == 0 && s.passiveScanner != nil {
+			caps.CorpusChecks = s.passiveScanner.ActiveChecks()
+		}
+		if caps.ToolRunner == nil {
+			caps.ToolRunner = s.toolRunner
+		}
+		if caps.SessionCoordinator == nil {
+			caps.SessionCoordinator = s.sessionCoordinator
+		}
 		active := scanner.NewActiveScanner(s.store, s.logger).
 			WithScope(s.scope).
 			WithPace(pool.ContextPacer{}).
 			// The dashboard's Pause all tasks reaches the audit loop (burpsy-react-ui-cijs).
-			WithSuiteGate(s.tasks.GateCheck)
-		if s.passiveScanner != nil {
-			active = active.WithCorpusChecks(s.passiveScanner.ActiveChecks())
-		}
-		if s.toolRunner != nil {
-			active = active.WithToolRunner(s.toolRunner)
-		}
+			WithSuiteGate(s.tasks.GateCheck).
+			WithCapabilities(caps)
 		s.scanner.Store(active)
 	}
 	return s.scanner.Load()

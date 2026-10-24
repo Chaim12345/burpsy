@@ -44,6 +44,12 @@ type Store struct {
 	// path is where this database lives, kept so a backup can name itself after it and so the
 	// backup endpoint can report which file it snapshotted. Open is the only writer.
 	path string
+	// health is this run's mirror-failure tally (mirror_health.go): the count, the first
+	// failure's detail, and the hook that puts failures on a surface an operator watches.
+	health mirrorHealth
+	// priorMirrorFailures is the failure count the PREVIOUS run of this database recorded,
+	// read and cleared by Open. 0 means the last run's mirror took every write.
+	priorMirrorFailures int64
 }
 
 // Path is the database file this store was opened on.
@@ -99,6 +105,9 @@ func Open(path string, logger *zap.Logger) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Did the previous run's mirror lose writes? Read before any sink is installed, so a
+	// caller wiring restore next can announce the divergence it is about to load.
+	s.loadAndClearMirrorFailureMarker()
 	return s, nil
 }
 
@@ -643,8 +652,12 @@ func (s *Store) addColumn(table, name, decl string) error {
 // Close closes the underlying connection.
 func (s *Store) Close() error { return s.db.Close() }
 
-// log mirrors a write error without letting it surface to the caller.
+// log mirrors a write error without letting it surface to the caller — but the failure is
+// no longer only a log line: noteWriteFailure counts it, marks the database so the next
+// run reports the divergence, and fires the hook that puts it on an operator surface
+// (mirror_health.go). The caller still never sees it; the operator now always does.
 func (s *Store) log(op string, err error) {
+	s.noteWriteFailure(op, err)
 	if s.logger != nil {
 		s.logger.Warn("persist write failed", zap.String("op", op), zap.Error(err))
 	}

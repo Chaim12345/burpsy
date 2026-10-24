@@ -465,6 +465,10 @@ func (fs *FindingStore) rebuildIndexLocked() {
 //
 // Query strings are deliberately not in the key. /search?q=a and /search?q=b are the same endpoint,
 // and merging across them is precisely the behaviour that turns five parameter hits into one issue.
+// The key is where that exclusion has to live: every producer keys on Exchange.Path, and an
+// exchange's Path is the whole request target, query included, on purpose (the site map derives a
+// node's parameter list from it — see internal/proxy/h2_relay.go). The stored target keeps the full
+// target for attribution; only the key strips the query, via dedupPath below.
 func (fs *FindingStore) dedupKeyLocked(name string, t FindingTarget) (string, bool) {
 	return fs.dedupKeyFor(name, t, "")
 }
@@ -495,7 +499,20 @@ func (fs *FindingStore) dedupKeyFor(name string, t FindingTarget, mergeKey strin
 			return name + "\x00" + t.Origin(), true
 		}
 	}
-	return name + "\x00" + t.Origin() + t.Path, true
+	return name + "\x00" + t.Origin() + dedupPath(t.Path), true
+}
+
+// dedupPath is the target's path as the dedup key sees it: the query string off. Two observations
+// of the same issue class at the same endpoint under different queries are one finding whose
+// occurrences (and times_seen) grow — the behaviour the key's doc has always claimed, and the one
+// an active check depends on, since each of its probes carries a different payload in the query
+// and would otherwise file one row per probe. Same rule report.stripQuery applies to Burp XML
+// export and audit.go's pathOnly applies to per-path ledger keys.
+func dedupPath(path string) string {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		return path[:i]
+	}
+	return path
 }
 
 // Add takes in a new finding, merging it into an existing one when it is the same catalog row seen

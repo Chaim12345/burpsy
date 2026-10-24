@@ -32,10 +32,16 @@
 // The expired response has already been forwarded to the client and recorded — it is
 // real traffic — and the fresh cookie is what the session's evidence carries.
 //
-// The h2 relay, the retarget path and the WebSocket upgrade path carry no session gate:
-// the HTTP/1 keep-alive leg is where a browser session actually lives, and a gate on the
-// other paths would be a second copy of the expiry logic drifting from this one. That is
-// a documented limit, not an unimplemented one.
+// # Which legs carry the gate
+//
+// Every relay leg that can see a request's bytes: the plaintext HTTP/1 leg (handleHTTP),
+// the decrypted tunnel's keep-alive loop (interceptTLS — ordinary requests, retargets and
+// WebSocket upgrades over TLS all read the rewritten bytes there), and the HTTP/2 relay
+// (relayH2Stream). The response half already covered every leg through record(). The one
+// mechanism is sessionCookieForRequest: the h1 legs attach its answer as a byte rewrite,
+// the h2 relay as a header set, so no leg carries a second copy of the expiry logic that
+// could drift from this one. TLS passthrough remains opaque by definition — a tunnel the
+// proxy never decrypts is a tunnel no rule can read.
 package proxy
 
 import (
@@ -271,55 +277,72 @@ func (s *Server) sessionRuleForRequest(coord ProxySessionCoordinator, host, meth
 		})
 }
 
-// withSessionRules applies the session-handling rules to one proxied request BEFORE it is
-// issued (Burp's model, Zrgc.java:124): a flagged expiry from the previous response
-// re-logs in — single-flight per rule inside the coordinator — and the fresh cookie rides
-// this request, the retried one the browser's own re-issue becomes. The jar cookie also
-// rides a request whose session is live, which is the standing half of the same model.
+// sessionCookieForRequest runs the session gate's decision for one outbound request and
+// returns the Cookie header value to attach, or "" to leave the request's own credentials
+// alone (Burp's model, Zrgc.java:124): a flagged expiry from the previous response re-logs
+// in — single-flight per rule inside the coordinator — and the fresh cookie rides this
+// request, the retried one the browser's own re-issue becomes. The jar cookie also rides a
+// request whose session is live, which is the standing half of the same model.
 //
-// nil coordinator keeps the request byte-for-byte what it was: one comparison, the common
-// case, and the bytes on the wire are the bytes the browser sent.
-func (s *Server) withSessionRules(requestData []byte, host, method, path string, port uint16, tls bool) []byte {
+// This is the ONE copy of the decision. The HTTP/1 legs consume it as a byte rewrite
+// (withSessionRules), the h2 relay as a header set — two attachment mechanics over one
+// expiry/re-login logic, so the legs can never drift into two interpretations of the same
+// rule set. browserSentAuthorization is the caller's read of whether the client supplied
+// its own Authorization header: those credentials win, the same rule every sender applies.
+// A flagged template ignores it — the browser's header is what expired, and the fresh
+// cookie supersedes it.
+//
+// nil coordinator or gate answers "": one comparison, the common case, and the request
+// goes out exactly as the browser sent it.
+func (s *Server) sessionCookieForRequest(host, method, path string, port uint16, tls bool, browserSentAuthorization bool) string {
 	coord := s.config.sessionCoordinator
 	if coord == nil || s.config.sessionGate == nil {
-		return requestData
+		return ""
 	}
 	template := proxyTemplate(method, host+path)
-
-	flagged := false
-	s.config.sessionGate.mu.Lock()
-	flagged = s.config.sessionGate.flagged[template]
-	s.config.sessionGate.mu.Unlock()
+	gate := s.config.sessionGate
+	gate.mu.Lock()
+	flagged := gate.flagged[template]
+	if flagged {
+		// Cleared whether or not a rule owns the target: a flag with no rule is stale,
+		// and the next request must not re-log in for a host nothing handles.
+		delete(gate.flagged, template)
+	}
+	gate.mu.Unlock()
 
 	if !flagged {
-		if insertAt := requestHeaderInsertPoint(requestData); insertAt >= 0 {
-			if hasAuthorizationHeader(requestData[:insertAt]) {
-				// The browser sent its own credentials; they win, the same rule every
-				// sender applies. A Cookie header the browser typed is its own too —
-				// left alone rather than merged with the jar's.
-				return requestData
-			}
-			if cookie := coord.CookieHeader(host, port, tls, path); cookie != "" {
-				requestData = withCookieHeader(requestData, cookie)
-			}
+		if browserSentAuthorization {
+			return ""
 		}
-		return requestData
+		return coord.CookieHeader(host, port, tls, path)
 	}
 
 	// Expiry was flagged by the previous response: re-login, and the fresh cookie rides
-	// this request. No rule owning the target makes the flag stale for it — cleared so
-	// the next request is not re-logged-in for a host nothing handles.
+	// this request.
 	rule := s.sessionRuleForRequest(coord, host, method, path, port, tls, nil)
-	s.config.sessionGate.mu.Lock()
-	delete(s.config.sessionGate.flagged, template)
-	s.config.sessionGate.mu.Unlock()
 	if rule == nil {
-		return requestData
+		return ""
 	}
 	cookie, _ := s.relogin(coord, rule, host, port, tls, path)
+	// A macro that failed or established nothing returns "": the browser's request goes
+	// out as it was, and the 401/login-page it produces is the client's honest answer.
+	return cookie
+}
+
+// withSessionRules applies the session-handling rules to one proxied request BEFORE it is
+// issued: the byte-rewrite attachment of sessionCookieForRequest's decision. The fresh or
+// standing jar cookie replaces any Cookie header the request carried (withCookieHeader) —
+// on a flagged template the browser's header is what expired.
+//
+// nil coordinator keeps the request byte-for-byte what it was: the decision helper answers
+// "", and the bytes on the wire are the bytes the browser sent.
+func (s *Server) withSessionRules(requestData []byte, host, method, path string, port uint16, tls bool) []byte {
+	browserAuth := false
+	if insertAt := requestHeaderInsertPoint(requestData); insertAt >= 0 {
+		browserAuth = hasAuthorizationHeader(requestData[:insertAt])
+	}
+	cookie := s.sessionCookieForRequest(host, method, path, port, tls, browserAuth)
 	if cookie == "" {
-		// The macro failed or established nothing: the browser's request goes out as it
-		// was, and the 401/login-page it produces is the client's honest answer.
 		return requestData
 	}
 	return withCookieHeader(requestData, cookie)
@@ -346,25 +369,36 @@ func withCookieHeader(requestData []byte, cookie string) []byte {
 	// the rebuild cannot disagree with what the client sent.
 	lineEnd := strings.IndexByte(string(head), '\n')
 	requestLine := head
-	rest := []byte{}
 	if lineEnd >= 0 {
 		requestLine = head[:lineEnd+1]
-		rest = head[lineEnd+1:]
 	}
+	// headerLines is fed the WHOLE head, request line included — never a slice that starts
+	// at the first header. It drops everything up to the first newline as "the request
+	// line", so a slice starting at Host: would lose the client's first header on any
+	// request carrying two or more (the shape every real browser request has; a
+	// single-header request is the only case the sliced variant survived).
+	//
 	// Replace an existing Cookie header rather than adding a second: two Cookie headers on
 	// one request is undefined behaviour every origin reads differently.
 	out := make([]byte, 0, len(requestData)+len(cookie)+len("Cookie: ")+len(eol))
 	out = append(out, requestLine...)
-	for _, line := range headerLines(rest) {
-		field, _, ok := strings.Cut(line, ":")
-		if ok && strings.EqualFold(strings.TrimSpace(field), "Cookie") {
-			continue
+	if lineEnd >= 0 {
+		for _, line := range headerLines(head) {
+			field, _, ok := strings.Cut(line, ":")
+			if ok && strings.EqualFold(strings.TrimSpace(field), "Cookie") {
+				continue
+			}
+			out = append(out, line...)
+			out = append(out, eol...)
 		}
-		out = append(out, line...)
-		out = append(out, eol...)
 	}
 	out = append(out, []byte("Cookie: "+cookie+eol)...)
-	out = append(out, requestData[insertAt:]...)
+	// requestData[insertAt:] begins with the head's own terminating marker — the first eol
+	// pair ends the last header the client sent. The rebuild terminates each header itself,
+	// so only the marker's second half — the empty line, then the body — is appended.
+	// Taking requestData[insertAt:] whole would put one extra blank line ON the body,
+	// which a keep-alive peer reads as the start of the next request.
+	out = append(out, requestData[insertAt+len(eol):]...)
 	return out
 }
 

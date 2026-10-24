@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -95,7 +96,13 @@ type Server struct {
 	// on the lazily built audit scanner. Nil means tool execution is disabled;
 	// corpus checks that need a tool are counted at load and never admitted.
 	toolRunner bcheck.ToolRunner
-	findings   *core.FindingStore
+	// scannerCaps is the capability recipe the lazily built audit scanner is
+	// constructed from (internal/scanner/wiring.go) — the same set the
+	// process's explicit scanner was built from, so a server that builds its
+	// scanner on first audit and one handed a finished scanner by WithScanner
+	// can never disagree about which capability-gated checks exist.
+	scannerCaps scanner.CapabilityWiring
+	findings    *core.FindingStore
 	// advisories is the issue-definition catalogue. Nil is a supported state and means every finding
 	// falls back to its own description and remediation — the catalogue enriches findings, it is
 	// never required to render one.
@@ -449,6 +456,17 @@ func (s *Server) WithExtensions(host *extension.Host) *Server {
 	return s
 }
 
+// WithScannerCapabilities sets the capability recipe the lazily built audit scanner
+// (Server.activeScanner) is constructed from. A server handed a finished scanner with
+// WithScanner never consults it; the recipe exists so the fallback wires the same
+// capability handles the process's own scanner got — ledgers, session coordinator,
+// JS-library and JWT checks, bundled corpus — instead of the scope/pace/gate-only
+// subset that used to leave every capability-gated check filing CapabilityMissing.
+func (s *Server) WithScannerCapabilities(caps scanner.CapabilityWiring) *Server {
+	s.scannerCaps = caps
+	return s
+}
+
 // WithScanner sets the active scanner used by the audit endpoint.
 //
 // The pool pacer is attached here rather than left to the caller, for the same reason
@@ -587,6 +605,25 @@ func (s *Server) WithDOMEngine(label string) *Server {
 func (s *Server) WithPersist(p *persist.Store) *Server {
 	s.persist = p
 	if p != nil {
+		// A failed mirror write used to be one Warn line and then silence: the process
+		// restarted into state that lagged what memory held, and nothing said so. The
+		// store now counts failures and marks the database (internal/persist/mirror_health.go);
+		// this hook puts each failure on the dashboard event log — the surface an operator
+		// actually watches — at the moment it happens.
+		p.SetWriteFailureHook(func(op string, err error) {
+			h := p.MirrorHealth()
+			s.events.Record("persist", dash.SeverityError, fmt.Sprintf(
+				"Durable mirror write failed (%s): %v. %d failure(s) this session; project state will diverge from this session on restart.",
+				op, err, h.Failures))
+		})
+		// ...and this announces the divergence the previous run recorded, on the side of the
+		// restart the loss actually surfaces on: the state about to be restored is the lagging one.
+		if prior := p.PriorSessionMirrorFailures(); prior > 0 {
+			detail := fmt.Sprintf(
+				"The previous session recorded %d durable-mirror write failure(s); the restored project state may lag what that session held.", prior)
+			s.logger.Warn("previous session's durable mirror lost writes", zap.Int64("failures", prior))
+			s.events.Record("persist", dash.SeverityError, detail)
+		}
 		if err := p.Restore(nil, nil, nil, s.matchReplace, s.sessionCoordinator, s.organizer, s.toolLog); err != nil {
 			s.logger.Warn("failed to restore web-owned state", zap.Error(err))
 		}

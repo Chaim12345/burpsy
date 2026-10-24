@@ -137,6 +137,52 @@ func TestFindingStoreMergeDoesNotDuplicateParams(t *testing.T) {
 	}
 }
 
+// Query strings are not part of an endpoint's identity: the same check firing on /search?q=a and
+// /search?q=b is one finding whose occurrences (times_seen) grow, not two rows. The dedup key's doc
+// has always claimed this, but the key carried the query verbatim until dedupPath stripped it —
+// which is how one check filed per-exchange rows: every probe of an active check carries a
+// different payload in the query, so each probe keyed its own finding.
+func TestFindingStoreMergesAcrossQueryStrings(t *testing.T) {
+	fs := NewFindingStore()
+	a := searchTarget()
+	a.Path = "/search?q=a"
+	b := searchTarget()
+	b.Path = "/search?q=b&sort=1"
+	id1 := fs.Add(xssAt("q", 1, a))
+	id2 := fs.Add(xssAt("sort", 2, b))
+
+	if fs.Count() != 1 || id1 != id2 {
+		t.Fatalf("Count = %d, ids %d/%d — the same endpoint under two queries must be one finding", fs.Count(), id1, id2)
+	}
+	f := fs.All()[0]
+	if len(f.Occurrences) != 2 {
+		t.Errorf("Occurrences = %d, want both probes recorded (times_seen = 2)", len(f.Occurrences))
+	}
+	if len(f.Params) != 2 || f.Params[0] != "q" || f.Params[1] != "sort" {
+		t.Errorf("Params = %v, want [q sort]", f.Params)
+	}
+	// The stored target keeps the first observation's full request target, query included — the
+	// strip is a property of the key, not of the record, so attribution loses nothing.
+	if f.Target.Path != "/search?q=a" {
+		t.Errorf("Target.Path = %q, want the first observation's full target kept", f.Target.Path)
+	}
+
+	// The query is the only thing stripped: a different path under the same query is still a
+	// different endpoint.
+	fs.Add(xssAt("q", 3, FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/login?q=a"}))
+	if fs.Count() != 2 {
+		t.Errorf("Count = %d, want 2 — /login?q=a is not /search", fs.Count())
+	}
+
+	// A root path with a query strips to the root, not to an empty key segment.
+	fs2 := NewFindingStore()
+	r1 := fs2.Add(xssAt("q", 1, FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/?lang=en"}))
+	r2 := fs2.Add(xssAt("lang", 2, FindingTarget{Host: "app.test", Port: 443, TLS: true, Path: "/"}))
+	if fs2.Count() != 1 || r1 != r2 {
+		t.Errorf("Count = %d, ids %d/%d — %q and %q are the same endpoint", fs2.Count(), r1, r2, "/?lang=en", "/")
+	}
+}
+
 func TestFindingStoreDoesNotMergeDifferentTargets(t *testing.T) {
 	fs := NewFindingStore()
 	other := searchTarget()

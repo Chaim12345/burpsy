@@ -20,6 +20,7 @@ import (
 
 	"github.com/burpsy-go/burpsy/internal/alpn"
 	burpsyhttp2 "github.com/burpsy-go/burpsy/internal/http2"
+	"github.com/burpsy-go/burpsy/internal/httputil"
 	"github.com/burpsy-go/burpsy/internal/upstream"
 )
 
@@ -46,6 +47,15 @@ type Sender struct {
 	// pool holds the HTTP/1 connections kept alive for reuse (ry5n, keepalive.go). Its zero value is
 	// an empty pool.
 	pool http1Pool
+	// closeDelimitedAuthorities remembers pool keys whose HTTP/1 responses arrived close-delimited:
+	// either HTTP/1.0-style by design, or salvaged from a truncated Content-Length body
+	// (httputil.TruncatedBodyError). Reusing a connection to such an authority buys nothing - the
+	// peer closed it - and NOT asking for the close costs real time: a peer that truncates while
+	// offering keep-alive holds the connection until its own idle timer fires, and OWASP Juice
+	// Shop's serve-index /ftp/ listing makes every fetch wait ~5s for 59 bytes that never come.
+	// A marked authority's next request carries Connection: close and skips the pool, so the EOF
+	// that frames its response arrives with the body instead of one keep-alive period later.
+	closeDelimitedAuthorities sync.Map
 	// jar is the cookie store a followed redirect chain replays from, and the same store its hops'
 	// responses are absorbed into. Nil means no replay, which is the default: burpsy sends what an
 	// operator wrote, and a cookie the target set mid-chain is not something they asked to send
@@ -999,6 +1009,21 @@ func (s *Sender) SendRaw(ctx context.Context, host string, port uint16, useTLS b
 // It will not change what is being asked in order to use a newer protocol. A request carrying a
 // Transfer-Encoding, a duplicated Content-Length, an unreadable request line — the probes this tool
 // exists to send — go out as HTTP/1.1 verbatim, with a Downgrade naming the construct. See protocol.go.
+// observeCloseDelimited marks an authority whose HTTP/1 response arrived close-delimited, so the
+// next send to it asks for the close up front (see closeDelimitedAuthorities). Only the head
+// decides: ResponseIsFrameless is exactly "a body may follow, yet neither Content-Length nor
+// Transfer-Encoding frames it" - the shape a truncated body takes after the salvage reframed it,
+// and the shape an HTTP/1.0-style response always had.
+func (s *Sender) observeCloseDelimited(key string, resp []byte) {
+	head, _, ok := bytes.Cut(resp, []byte("\r\n\r\n"))
+	if !ok {
+		return
+	}
+	if httputil.ResponseIsFrameless(append(head, []byte("\r\n\r\n")...)) {
+		s.closeDelimitedAuthorities.Store(key, struct{}{})
+	}
+}
+
 func (s *Sender) SendRawOutcome(
 	ctx context.Context,
 	host string,
@@ -1025,9 +1050,16 @@ func (s *Sender) SendRawOutcome(
 	// Keep-alive (ry5n): an HTTP/1 send may ride a connection an earlier send left reusable.
 	keep := settings.KeepAliveHTTP1() && !settings.Streaming.isStreaming(host)
 	key := poolKey(host, port, useTLS)
+	if _, closeDelimited := s.closeDelimitedAuthorities.Load(key); closeDelimited {
+		plan.http1 = httputil.EnsureConnectionClose(plan.http1)
+		keep = false
+	}
 	if keep {
 		if ic := s.pool.take(key, plan.wantH2); ic != nil {
 			resp, err := s.exchangeHTTP1(ctx, ic.conn, ic.br, host, plan.http1)
+			if err == nil {
+				s.observeCloseDelimited(key, resp)
+			}
 			if err == nil || !retryOnFresh(err, plan.http1) {
 				down := plan.block
 				if down == nil {
@@ -1049,6 +1081,9 @@ func (s *Sender) SendRawOutcome(
 		// No ALPN exists on cleartext, so nothing was negotiated and nothing is learnt about this
 		// authority beyond what cleartext implies.
 		resp, ip, err := s.sendHTTP1Plain(ctx, host, port, plan.http1, keep)
+		if err == nil {
+			s.observeCloseDelimited(key, resp)
+		}
 		out := s.finish(host, port, useTLS, "", plan.block, nil, nil, ip, err)
 		return resp, out, err
 	}
@@ -1134,6 +1169,9 @@ func (s *Sender) SendRawOutcome(
 		resp, err := s.exchangeHTTP1(ctx, conn, br, host, plan.http1)
 		stop()
 		out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
+		if err == nil {
+			s.observeCloseDelimited(key, resp)
+		}
 		if err == nil && reusableAfter(plan.http1, resp) && br.Buffered() == 0 {
 			kept = true
 			s.pool.put(key, &idleConn{conn: conn, br: br, negotiated: negotiated, offeredH2: plan.wantH2})
@@ -1141,6 +1179,9 @@ func (s *Sender) SendRawOutcome(
 		return resp, out, err
 	}
 	resp, err := s.writeHTTP1(ctx, conn, host, plan.http1)
+	if err == nil {
+		s.observeCloseDelimited(key, resp)
+	}
 	out := s.finish(host, port, useTLS, negotiated, down, nil, nil, remoteIP(conn), err)
 	return resp, out, err
 }

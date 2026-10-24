@@ -1,6 +1,7 @@
 package sender
 
 import (
+	"errors"
 	"bufio"
 	"bytes"
 	"context"
@@ -71,7 +72,17 @@ func readResponse(br *bufio.Reader, understand100, streaming bool, promote func(
 
 		body, err := httputil.ReadResponseBody(br, head)
 		if err != nil {
-			return nil, err
+			// A body that stopped short of its declared Content-Length is not a
+			// failed response: the peer answered, and the bytes are the answer.
+			// Reframed close-delimited the message is parseable again, so audit
+			// baselines and replays get what the server actually sent rather
+			// than nothing. The proxy leg marks the same event on the exchange
+			// it records; here the stripped framing is the visible artifact.
+			var truncated *httputil.TruncatedBodyError
+			if !errors.As(err, &truncated) || len(body) == 0 {
+				return nil, err
+			}
+			head = httputil.CloseDelimitedHead(head)
 		}
 		raw := make([]byte, 0, len(head)+len(body))
 		raw = append(raw, head...)

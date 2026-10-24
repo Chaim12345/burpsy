@@ -187,9 +187,10 @@ type ScanConfig struct {
 	// explicitly declined request-smuggling/client-side-desync entries in the same family
 	// (checks_cache.go).
 	CheckCachePoisoning bool
-	// CheckCorpus admits the loaded BCheck corpus's active checks into the audit set. Set by
-	// WithCorpusChecks when a corpus is loaded; WithConfig can switch it off. Off with a corpus
-	// loaded audits the built-ins alone, which is the honest opt-out.
+	// CheckCorpus admits the loaded and bundled BCheck corpora's active checks into the audit
+	// set. Set by WithCorpusChecks when a corpus is loaded and by WithBundledCorpus when the
+	// compiled-in corpus is attached; WithConfig can switch it off. Off with a corpus attached
+	// audits the built-ins alone, which is the honest opt-out.
 	CheckCorpus bool
 	// CheckExtendedCoverage admits every remaining catalog TypeIndex the registry declares — the
 	// Task 6 completeness sweep's native (header/CORS/CSP, cache poisoning/deception) and explicit
@@ -576,6 +577,16 @@ func (s *ActiveScanner) WithConfig(config *ScanConfig) *ActiveScanner {
 	return s
 }
 
+// WithScanTimeout sets ScanConfig.Timeout alone, leaving the rest of the configuration as built.
+// It exists for the CLI's no--scan-config path: the audit budget then resolves through the same
+// ScanConfig.Timeout the desktop uses (AuditConfig's fallback), so a persisted project override
+// drives the audit budget on BOTH binaries instead of mutating a field one binary never read
+// (arch review W2).
+func (s *ActiveScanner) WithScanTimeout(d time.Duration) *ActiveScanner {
+	s.config.Timeout = d
+	return s
+}
+
 // ConfigSnapshot returns a value copy of the scan configuration, taken atomically. Readers that
 // want a stable view across a long audit take one snapshot at entry instead of re-reading fields
 // that an operator may be flipping underneath them.
@@ -651,12 +662,20 @@ func (s *ActiveScanner) WithCorpusChecks(checks []*bcheck.Check) *ActiveScanner 
 	return s
 }
 
-// WithBundledCorpus supplies the corpus compiled into the binary. Unlike WithCorpusChecks it does
-// NOT switch CheckCorpus on: the bundled set is available, not enabled, and an operator turns it on
-// with check_corpus (burpsy-react-ui-0vzb.21). A nil or empty slice clears it.
+// WithBundledCorpus supplies the corpus compiled into the binary and, like WithCorpusChecks,
+// switches CheckCorpus on: the corpus the binary ships is part of the default audit set, and the
+// honest opt-out is check_corpus off (WithConfig), exactly as for a loaded corpus. The old shape —
+// attached but never dispatched unless the operator knew the switch existed — was under-coverage
+// that looked like a working scanner: a default run reported "audited" while the 111 compiled-in
+// PortSwigger checks sat loaded and silent (architecture review, weakness 7). A nil or empty slice
+// clears the set without touching the switch, so a process with no bundled corpus does not quietly
+// turn a knob that gates nothing.
 func (s *ActiveScanner) WithBundledCorpus(checks []*bcheck.Check) *ActiveScanner {
 	s.mu.Lock()
 	s.bundled = checks
+	if s.config != nil && len(checks) > 0 {
+		s.config.CheckCorpus = true
+	}
 	s.mu.Unlock()
 	return s
 }
