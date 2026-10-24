@@ -520,7 +520,11 @@ func NewActiveScanner(store *core.TrafficStore, logger *zap.Logger) *ActiveScann
 		logger: logger,
 		config: &ScanConfig{
 			MaxConcurrency:     10,
-			Timeout:            30 * time.Second,
+			// The audit budget fallback (ActiveScanner.AuditConfig). One default for every
+			// binary: the CLI sets the same value explicitly (WithScanTimeout), and the
+			// desktop - which wires neither a ScanConfig.Timeout nor an AuditConfig -
+			// inherits it here. A separate 30s was the desktop/CLI budget fork.
+			Timeout:            DefaultAuditBudget,
 			CheckSqli:          true,
 			CheckXss:           true,
 			CheckPathTraversal: true,

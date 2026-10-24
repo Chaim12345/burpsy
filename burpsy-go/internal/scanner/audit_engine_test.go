@@ -887,10 +887,12 @@ func Test_an_exchange_with_no_response_is_unauditable_rather_than_clean(t *testi
 
 func Test_the_audit_time_budget_comes_from_scan_config_rather_than_a_second_timeout(t *testing.T) {
 	scan := NewActiveScanner(core.NewTrafficStore(), zap.NewNop())
-	// NewActiveScanner's ScanConfig.Timeout is 30s, which used to be set by every caller and read by
-	// nobody. Two wall-clock knobs that could disagree is exactly what this reconciliation avoids.
-	if got := scan.AuditConfig().TimeBudget; got != 30*time.Second {
-		t.Errorf("time budget = %s, want ScanConfig.Timeout (30s)", got)
+	// NewActiveScanner's ScanConfig.Timeout is DefaultAuditBudget (120s), the one default every
+	// binary shares: the CLI sets it explicitly (cmd/burpsy/main.go WithScanTimeout) and the
+	// desktop inherits it here. Two wall-clock knobs that could disagree - or two defaults that
+	// could drift, the 30s/120s fork this killed - is exactly what this reconciliation avoids.
+	if got := scan.AuditConfig().TimeBudget; got != DefaultAuditBudget {
+		t.Errorf("time budget = %s, want the unified default %s", got, DefaultAuditBudget)
 	}
 	scan.WithConfig(&ScanConfig{MaxConcurrency: 1, Timeout: 7 * time.Second, CheckXss: true})
 	if got := scan.AuditConfig().TimeBudget; got != 7*time.Second {

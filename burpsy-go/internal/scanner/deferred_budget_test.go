@@ -48,8 +48,8 @@ func TestFinishScanUnsetDeferredBudgetInheritsTheDefault(t *testing.T) {
 
 func TestAuditBudgetResolutionOrder(t *testing.T) {
 	s := NewActiveScanner(nil, zap.NewNop())
-	if got := s.AuditConfig().TimeBudget; got != 30*time.Second {
-		t.Fatalf("a fresh scanner resolves through the ScanConfig default (30s), got %s", got)
+	if got := s.AuditConfig().TimeBudget; got != DefaultAuditBudget {
+		t.Fatalf("a fresh scanner resolves through the unified ScanConfig default (%s), got %s", DefaultAuditBudget, got)
 	}
 	s.WithScanTimeout(5 * time.Second)
 	if got := s.AuditConfig().TimeBudget; got != 5*time.Second {

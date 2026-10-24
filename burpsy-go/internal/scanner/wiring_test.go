@@ -104,6 +104,21 @@ func TestWithCapabilitiesDesktopShapeStillWiresDefaults(t *testing.T) {
 	}
 }
 
+// The desktop binary wires no AuditConfig and no ScanConfig.Timeout (cmd/desktop/main.go):
+// its audit budget is whatever a fresh ActiveScanner falls back to. That fallback must be the
+// same DefaultAuditBudget the CLI resolves - the 30s/120s fork, where a desktop audit had a
+// quarter of the CLI's budget by accident of construction order, was the user-flagged
+// divergence this pins shut.
+func TestDesktopShapeAuditBudgetIsTheUnifiedDefault(t *testing.T) {
+	store := core.NewTrafficStore()
+	s := NewActiveScanner(store, zap.NewNop()).WithCapabilities(CapabilityWiring{
+		SessionCoordinator: session.NewCoordinator(zap.NewNop()),
+	})
+	if got := s.AuditConfig().TimeBudget; got != DefaultAuditBudget {
+		t.Errorf("desktop-shaped scanner audits under %s, want the unified %s", got, DefaultAuditBudget)
+	}
+}
+
 func TestWithCapabilitiesHonoursNamedOptOuts(t *testing.T) {
 	store := core.NewTrafficStore()
 
