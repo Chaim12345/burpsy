@@ -15,14 +15,14 @@ import (
 //
 // The corpus semantics the W1 wiring pins: the bundled corpus compiled into
 // the binary is part of the default audit set (WithBundledCorpus switches
-// check_corpus on), and an operator's -bchecks directory REPLACES that bundled
-// set rather than adding to it (scanner.BundledCorpusForDir). So the plain
-// context's count already includes the bundled checks, and the corpus context
-// carries the plain count minus the bundled set plus the loaded directory's
-// checks. That exact arithmetic is what proves the loaded corpus reached the
-// active scanner: comparing against zero, or expecting *more* than the plain
-// count, both pass with the loaded corpus silently dropped behind the bundled
-// default.
+// check_corpus on), and an operator's -bchecks directory ADDS to that bundled
+// set (scanner.BundledCorpus), matching Burp's treatment of custom BChecks.
+// So the plain context's count already includes the bundled checks, and the
+// corpus context carries the plain count plus the loaded directory's checks.
+// That exact arithmetic is what proves the loaded corpus reached the active
+// scanner: comparing against zero passes with the loaded corpus silently
+// dropped, and expecting the bundled set to be replaced pins a semantics the
+// product no longer has.
 func TestCLIContextWiresTheLoadedCorpusIntoTheActiveScanner(t *testing.T) {
 	dir := t.TempDir()
 	// An M2-runnable check: `given request` with a send, no interaction server,
@@ -49,13 +49,13 @@ given request then
 	if err != nil {
 		t.Fatalf("newCLIContext (corpus): %v", err)
 	}
-	bundled, err := scanner.BundledCorpusForDir("", nil)
+	bundled, err := scanner.BundledCorpus(nil)
 	if err != nil {
 		t.Fatalf("bundled corpus: %v", err)
 	}
-	want := plain.scanner.ActiveCheckCount() - len(bundled) + 1
+	want := plain.scanner.ActiveCheckCount() + 1
 	if got := wired.scanner.ActiveCheckCount(); got != want {
-		t.Fatalf("corpus dir must replace the bundled set and land its own checks in the CLI scanner: plain=%d bundled=%d wired=%d want=%d",
+		t.Fatalf("corpus dir must add to the bundled set and land its own checks in the CLI scanner: plain=%d bundled=%d wired=%d want=%d",
 			plain.scanner.ActiveCheckCount(), len(bundled), got, want)
 	}
 }

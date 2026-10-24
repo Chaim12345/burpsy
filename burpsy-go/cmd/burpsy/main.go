@@ -50,7 +50,7 @@ func main() {
 	interceptTLS := flag.Bool("intercept-tls", false, "enable TLS interception")
 	caDir := flag.String("ca-dir", proxy.DefaultCADir(), "CA certificate directory")
 	segmentBytes := flag.Uint64("segment-bytes", core.DefaultSegmentTargetBytes, "target bytes per segment file")
-	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files and passively scan responses")
+	bchecksDir := flag.String("bchecks", "", "load PortSwigger BCheck files from DIR, added to the bundled corpus, and scan with them")
 	// Allowlist for the bcheck `run tool` statement: name=path pairs, comma-separated. A check
 	// that invokes a tool not named here is refused — the same gate as the egress chokepoint.
 	// Tool execution is operator policy because it runs arbitrary external binaries.
@@ -658,7 +658,7 @@ func main() {
 		}
 	}
 
-	bundledChecks, berr := bundledCorpus(*bchecksDir, logger)
+	bundledChecks, berr := bundledCorpus(logger)
 	if berr != nil {
 		log.Fatal(berr)
 	}

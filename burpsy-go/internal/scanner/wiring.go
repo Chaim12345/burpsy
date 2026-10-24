@@ -60,7 +60,7 @@ type CapabilityWiring struct {
 	// ScanConfig.CheckCorpus on, per WithCorpusChecks.
 	CorpusChecks []*bcheck.Check
 	// BundledCorpus is the corpus compiled into the binary, usually from
-	// BundledCorpusForDir. Attaching it switches check_corpus on — the shipped
+	// BundledCorpus. Attaching it switches check_corpus on — the shipped
 	// corpus is part of the default audit set; see WithBundledCorpus.
 	BundledCorpus []*bcheck.Check
 	// AuditConfig is the audit budget/limit set the binary resolved from its
@@ -127,10 +127,14 @@ func (s *ActiveScanner) WithCapabilities(w CapabilityWiring) *ActiveScanner {
 	return s
 }
 
-// BundledCorpusForDir returns the BCheck corpus compiled into the binary
-// (internal/bcheck/bundled), for CapabilityWiring.BundledCorpus, when no
-// corpus directory was given. With one, the operator's directory is the
-// corpus and nothing is bundled alongside it.
+// BundledCorpus returns the BCheck corpus compiled into the binary
+// (internal/bcheck/bundled), for CapabilityWiring.BundledCorpus. An operator's
+// -bchecks directory ADDS to this set, it never replaces it: that is Burp's
+// own treatment of custom BChecks, and an operator extending the shipped
+// corpus should not silently lose the hundred-plus checks the binary carries.
+// A loaded check that shares a bundled check's name replaces it at dispatch
+// (the dedup WithBundledCorpus documents), so overriding one shipped check
+// stays possible without forking the set.
 //
 // Attaching the result switches check_corpus on, exactly as a loaded
 // directory does (WithBundledCorpus): the corpus the binary ships is part of
@@ -141,10 +145,7 @@ func (s *ActiveScanner) WithCapabilities(w CapabilityWiring) *ActiveScanner {
 // that will not load is a build defect, not an operator error, so it is
 // returned as an error and the caller refuses to start rather than run
 // without a set it shipped.
-func BundledCorpusForDir(bchecksDir string, logger *zap.Logger) ([]*bcheck.Check, error) {
-	if bchecksDir != "" {
-		return nil, nil
-	}
+func BundledCorpus(logger *zap.Logger) ([]*bcheck.Check, error) {
 	m, err := bundled.LoadManifest()
 	if err != nil {
 		return nil, err

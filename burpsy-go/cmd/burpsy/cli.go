@@ -130,7 +130,7 @@ func newCLIContext(captureDir string, segmentBytes uint64, scopeInclude, scopeEx
 		corpusChecks = ps.ActiveChecks()
 		logger.Info("bchecks loaded", zap.String("dir", bchecksDir), zap.String("report", ps.Report().Summary()))
 	}
-	bundledChecks, berr := bundledCorpus(bchecksDir, logger)
+	bundledChecks, berr := bundledCorpus(logger)
 	if berr != nil {
 		return nil, berr
 	}

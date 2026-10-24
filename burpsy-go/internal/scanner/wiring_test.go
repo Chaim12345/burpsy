@@ -123,22 +123,18 @@ func TestWithCapabilitiesHonoursNamedOptOuts(t *testing.T) {
 	}
 }
 
-func TestBundledCorpusForDir(t *testing.T) {
-	// No operator corpus directory: the compiled-in corpus ships with the binary.
-	checks, err := BundledCorpusForDir("", zap.NewNop())
+func TestBundledCorpus(t *testing.T) {
+	// The compiled-in corpus ships with the binary, always: an operator's -bchecks
+	// directory ADDS to it (Burp's own semantics for custom BChecks), it does not
+	// replace it. The bundled answer therefore takes no directory argument, and a
+	// loaded check sharing a bundled check's name replaces it at dispatch rather
+	// than running beside it (TestTheBundledCorpusDispatchesByDefault pins that
+	// half of the union).
+	checks, err := BundledCorpus(zap.NewNop())
 	if err != nil {
 		t.Fatalf("bundled corpus failed to load: %v", err)
 	}
 	if len(checks) == 0 {
 		t.Fatal("bundled corpus is empty: the binary ships no compiled-in checks")
-	}
-
-	// An operator corpus directory replaces the bundled set rather than adding to it.
-	checks, err = BundledCorpusForDir("/operator/bchecks", zap.NewNop())
-	if err != nil {
-		t.Fatalf("directory given: unexpected error: %v", err)
-	}
-	if checks != nil {
-		t.Errorf("directory given: bundled corpus should be nil, got %d checks", len(checks))
 	}
 }

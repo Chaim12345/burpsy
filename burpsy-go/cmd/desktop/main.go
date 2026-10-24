@@ -112,7 +112,7 @@ func (a *App) startup(ctx context.Context) {
 	// The corpus compiled into the binary. Desktop has no -bchecks flag, so this is always the
 	// embedded set — attaching it switches check_corpus on, exactly as in the CLI
 	// (WithBundledCorpus). A failure is a build defect and refuses to start, as cmd/burpsy does.
-	bundledChecks, berr := scanner.BundledCorpusForDir("", logger)
+	bundledChecks, berr := scanner.BundledCorpus(logger)
 	if berr != nil {
 		logger.Fatal("bundled bcheck corpus", zap.Error(berr))
 	}
