@@ -56,7 +56,7 @@ func TestSDLImportsAsAPIDocument(t *testing.T) {
 // could run - is a named failure, not a silent zero.
 func TestBrokenSDLIsANamedFailure(t *testing.T) {
 	for name, body := range map[string]string{
-		"unterminated": "type Query {\n  book(title: String!): Book\n",
+		"unterminated":  "type Query {\n  book(title: String!): Book\n",
 		"no query root": "type Book {\n  title: String\n}\n\ntype Query {\n  broken(: String\n}\n",
 	} {
 		if _, _, failure := ParseAPIDocument("text/plain", []byte(body)); failure == "" {
@@ -82,5 +82,48 @@ func TestSDLImportDoesNotWidenRecognition(t *testing.T) {
 		if format, _, _ := ParseAPIDocument("text/plain", []byte(body)); format != APIDocNone {
 			t.Errorf("%s: non-SDL text recognised as %s", name, format)
 		}
+	}
+}
+
+// End-to-end: a schema document reached by a crawl has its operations ADMITTED against the
+// endpoint the document came from, counted once as GraphQL endpoints, not generic API ones.
+func TestASchemaDocumentReachedByACrawlHasItsOperationsAdmitted(t *testing.T) {
+	srv := sitemapTarget(t, map[string]servedPage{
+		"/":               {"<html><body><a href=\"/schema.graphql\">schema</a></body></html>", "text/html"},
+		"/schema.graphql": {schemaDocument, "text/plain"},
+	})
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.ParseAPIDefinitions = true
+	rep := run(t, cfg)
+
+	if rep.APIDocumentsRead != 1 {
+		t.Errorf("APIDocumentsRead = %d, want 1; fetches were %v", rep.APIDocumentsRead, fetchLog(rep))
+	}
+	if rep.GraphQLEndpointsFound != 6 {
+		t.Errorf("GraphQLEndpointsFound = %d, want the 6 operations the schema declares; skips %+v", rep.GraphQLEndpointsFound, rep.Skips.Counts)
+	}
+	if rep.APIEndpointsFound != 0 {
+		t.Errorf("APIEndpointsFound = %d; a schema document's operations count as GraphQL endpoints, not REST ones", rep.APIEndpointsFound)
+	}
+}
+
+// The failure half end-to-end: a document that announces SDL but is broken is a counted skip
+// with the API-definition reason, never "0 endpoints".
+func TestABrokenSchemaDocumentIsCountedAsItsOwnSkip(t *testing.T) {
+	srv := sitemapTarget(t, map[string]servedPage{
+		"/":               {"<html><body><a href=\"/schema.graphql\">schema</a></body></html>", "text/html"},
+		"/schema.graphql": {"type Query {\n  book(title: String!): Book\n", "text/plain"},
+	})
+
+	cfg := newHarness().config(srv.URL + "/")
+	cfg.ParseAPIDefinitions = true
+	rep := run(t, cfg)
+
+	if !skippedWith(rep, SkipAPIUnparsed) {
+		t.Errorf("a broken schema document did not record SkipAPIUnparsed; counts: %+v", rep.Skips.Counts)
+	}
+	if rep.GraphQLEndpointsFound != 0 {
+		t.Errorf("GraphQLEndpointsFound = %d for a document that could not be read", rep.GraphQLEndpointsFound)
 	}
 }

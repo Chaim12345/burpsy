@@ -76,6 +76,9 @@ const (
 	APIDocSwagger APIDocFormat = "swagger"
 	// APIDocWSDL means a SOAP WSDL.
 	APIDocWSDL APIDocFormat = "wsdl"
+	// APIDocGraphQLSDL means a GraphQL schema document in SDL form (burpsy-react-ui-4xqt.2),
+	// as servers publish it at /schema.graphql: read through the pinned gqlparser.
+	APIDocGraphQLSDL APIDocFormat = "graphql-sdl"
 	// APIDocGraphQLIntrospection means a saved GraphQL introspection result (burpsy-react-ui-4xqt.1):
 	// the document form of the answer the crawl's introspection reader consumes live. Its operations
 	// are read by the same loader (graphql.go), so a saved result and a live answer get one judgment.
@@ -148,6 +151,10 @@ func ParseAPIDocument(contentType string, body []byte) (format APIDocFormat, eps
 		eps, failure = ParseGraphQLOperations(body)
 		return format, eps, failure
 	}
+	if format == APIDocGraphQLSDL {
+		eps, failure = parseGraphQLSDL(body)
+		return format, eps, failure
+	}
 	eps, failure = parseOpenAPI(body)
 	return format, eps, failure
 }
@@ -189,6 +196,13 @@ func sniffAPIDocument(contentType string, body []byte) APIDocFormat {
 		// schema does not match, and the loader's named failure, not the sniffer, sorts the
 		// body that carries the marker without being a result.
 		return APIDocGraphQLIntrospection
+	case strings.Contains(lowerCT, "graphql"), looksLikeSDLDocument(string(head)):
+		// A schema document in SDL form. The content-type hint is the whole story for the
+		// content types servers use ("application/graphql", "application/graphql-response");
+		// the body marker is the line opening of a root operation type, which prose and
+		// TypeScript aliases do not carry (looksLikeSDLDocument). An introspection result
+		// served under a graphql content-type sorts first: the "__schema" case above wins.
+		return APIDocGraphQLSDL
 	default:
 		return APIDocNone
 	}

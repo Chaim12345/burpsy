@@ -2869,12 +2869,14 @@ func (c *Crawler) consumeAPIDocument(item frontierItem, contentType string, body
 
 	fetch.Fingerprint = rawBodyFingerprint(contentType, body)
 	c.recordLocation(fetch.Fingerprint, item.url.String(), fetch, rep)
-	if format == APIDocGraphQLIntrospection {
+	if format == APIDocGraphQLIntrospection || format == APIDocGraphQLSDL {
 		// A GraphQL operation has no path of its own, so the document's own URL is re-fed to
 		// the ordinary GET admission once per operation - the crawl will GET the endpoint the
 		// document came from as each operation's location (admitGraphQLOperations), tagged
 		// and counted as GraphQL endpoints, exactly as a live introspection answer's
-		// operations are.
+		// operations are. A schema document needs no dual-reader guard: the armed live
+		// reader judges introspection results only, so a body claimed by the exclusion above
+		// can never reach this branch as SDL.
 		c.admitGraphQLOperations(item.url, eps, rep, lim)
 		return true
 	}
