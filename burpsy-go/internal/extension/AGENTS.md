@@ -73,6 +73,12 @@ counterpart: Phase 8 never shipped on that side.
 - **Payload generators and processors have no console surface.** Kinds `payload-generator` and
   `payload-processor` are consumed by the Intruder engine through `Host.GeneratePayload` / `ProcessPayload`.
   On any error the processor returns a nil payload so the caller keeps the original and counts the failure.
+- **Traffic hooks never block or half-apply a message** (`Host.Hook`, hooks.go). Kinds `http-handler`,
+  `proxy-handler`, `websocket-handler` are called in plugin-name order, each seeing the previous output, only
+  for plugins granted `hook.traffic`. An error, invalid action, timeout (`HookTimeout`) or dead plugin leaves
+  the message as it was, is counted (`hook_failures`) and explained on the plugin's error console; a plugin
+  failing `HookFailureLimit` times running is suspended for `HookCooldown`. Nothing is parsed or
+  re-serialised, so an unchanged message is the caller's own bytes.
 - **There is no registry, store or install path,** and `PolicyView.Registry` is a nullable field holding
   null rather than an omission, so a caller reads "there is no store" instead of inferring it.
 

@@ -90,6 +90,11 @@ type Config struct {
 	// not silently mean "burpsy executed three binaries on boot" — see NewHost's own note. A plugin
 	// author who is iterating turns it on; an operator running someone else's plugins leaves it off.
 	ReloadOnStart bool
+	// HookTimeout bounds one traffic hook call; zero takes DefaultHookTimeout. HookFailureLimit
+	// consecutive failures suspend a plugin's hooks for HookCooldown (zero takes the defaults).
+	HookTimeout      time.Duration
+	HookFailureLimit int
+	HookCooldown     time.Duration
 	// Grants maps a plugin's allowlist name to the plugin->host methods the operator has
 	// allowed it (see GrantableMethods). A method not listed answers CodeNoGrant. Check the
 	// operator's input with ValidateGrants.
@@ -134,6 +139,15 @@ func (c Config) withDefaults() Config {
 	if c.ReloadInterval <= 0 {
 		c.ReloadInterval = DefaultReloadInterval
 	}
+	if c.HookTimeout <= 0 {
+		c.HookTimeout = DefaultHookTimeout
+	}
+	if c.HookFailureLimit <= 0 {
+		c.HookFailureLimit = DefaultHookFailureLimit
+	}
+	if c.HookCooldown <= 0 {
+		c.HookCooldown = DefaultHookCooldown
+	}
 	if c.Logger == nil {
 		c.Logger = zap.NewNop()
 	}
@@ -155,6 +169,12 @@ type plugin struct {
 	// hold mu for its duration.
 	invocations atomic.Int64
 	failures    atomic.Int64
+
+	// Traffic hook accounting (hooks.go). Reset on every load.
+	hookCalls      atomic.Int64
+	hookFails      atomic.Int64
+	hookStreak     atomic.Int64
+	hookSuspendEnd atomic.Int64 // unix nanos; 0 when not suspended
 
 	mu       sync.Mutex
 	state    State
@@ -425,6 +445,10 @@ func (h *Host) Load(name string) (PluginView, error) {
 	p.stopping = false
 	p.registrations = nil
 	p.refused = 0
+	p.hookCalls.Store(0)
+	p.hookFails.Store(0)
+	p.hookStreak.Store(0)
+	p.hookSuspendEnd.Store(0)
 	p.manifest = Manifest{}
 	spec := p.spec
 	p.mu.Unlock()
@@ -531,7 +555,7 @@ func (h *Host) validate(p *plugin, declared []Registration) ([]Registration, int
 		case seen[reg.ID]:
 			refuse(fmt.Sprintf("%q is declared twice; an invoke could not say which was meant", reg.ID))
 		case !validKinds[reg.Kind]:
-			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action, hotkey, payload-generator and payload-processor",
+			refuse(fmt.Sprintf("%q has kind %q; this host implements context-menu, menu, editor-tab, session-action, hotkey, payload-generator, payload-processor, http-handler, proxy-handler and websocket-handler",
 				reg.ID, reg.Kind))
 		case reg.Label == "":
 			refuse(fmt.Sprintf("%q has no label, and an unnamed action is a button with no name", reg.ID))
@@ -693,6 +717,12 @@ func (h *Host) Invoke(ctx context.Context, name string, params InvokeParams) (In
 		err = sess.call(callCtx, "sessionAction.invoke", params, &result)
 	case KindHotKey:
 		err = sess.call(callCtx, "hotkey.invoke", params, &result)
+	case KindHTTPHandler:
+		err = sess.call(callCtx, "http.handle", params, &result)
+	case KindProxyHandler:
+		err = sess.call(callCtx, "proxy.handle", params, &result)
+	case KindWebSocketHandler:
+		err = sess.call(callCtx, "websocket.handle", params, &result)
 	case KindPayloadGenerator:
 		err = sess.call(callCtx, "payload.generate", params, &result)
 	case KindPayloadProcessor:
@@ -860,6 +890,9 @@ func (p *plugin) viewLocked() PluginView {
 		Invocations:          int(p.invocations.Load()),
 		InvocationFailures:   int(p.failures.Load()),
 	}
+	view.HookCalls = int(p.hookCalls.Load())
+	view.HookFailures = int(p.hookFails.Load())
+	view.HookSuspended = p.hookSuspendEnd.Load() > time.Now().UnixNano()
 	view.Grants = append([]string{}, p.grants...)
 	view.HostCalls = map[string]int{}
 	if p.session != nil {

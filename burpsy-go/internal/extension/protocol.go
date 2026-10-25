@@ -139,6 +139,14 @@ const (
 	// surface; the Intruder engine is their consumer, through Host.GeneratePayload and
 	// Host.ProcessPayload.
 	KindPayloadProcessor Kind = "payload-processor"
+	// KindHTTPHandler, KindProxyHandler and KindWebSocketHandler are the traffic hooks
+	// (burpsy-react-ui-tvv5): registerHttpHandler (every tool's requests and responses),
+	// proxy().registerRequestHandler/registerResponseHandler, and the WebSocket created and message
+	// handlers. They have no console surface; the proxy, the sender and the WebSocket layer call
+	// Host.Hook. A hook never blocks or half-applies a message: see Host.Hook.
+	KindHTTPHandler      Kind = "http-handler"
+	KindProxyHandler     Kind = "proxy-handler"
+	KindWebSocketHandler Kind = "websocket-handler"
 )
 
 // validKinds is the closed set. A registration naming anything else is refused
@@ -147,6 +155,7 @@ const (
 var validKinds = map[Kind]bool{
 	KindContextMenu: true, KindMenu: true, KindEditorTab: true, KindSessionAction: true,
 	KindHotKey: true, KindPayloadGenerator: true, KindPayloadProcessor: true,
+	KindHTTPHandler: true, KindProxyHandler: true, KindWebSocketHandler: true,
 }
 
 // NormaliseChord spells a Burp-Settings hotkey ("Ctrl+Shift+P") in the console's own
@@ -385,6 +394,11 @@ type InvokeParams struct {
 	Payload   *string `json:"payload,omitempty"`
 	BaseValue *string `json:"base_value,omitempty"`
 	Encoding  string  `json:"encoding,omitempty"`
+
+	// Phase, and Raw/Encoding above, are the hook methods' payload: Phase is "request" or "response"
+	// (http.handle, proxy.handle) or "created" or "message" (websocket.handle), and Raw is the message
+	// bytes (base64 when Encoding says so, since a hook sees binary frames).
+	Phase string `json:"phase,omitempty"`
 }
 
 // MaxHotkeySelection bounds the rows one hotkey invocation may carry. The caller already
@@ -424,6 +438,8 @@ type InvokeResult struct {
 	Encoding string  `json:"encoding,omitempty"`
 	Done     bool    `json:"done,omitempty"`
 	Action   string  `json:"action,omitempty"`
+	// HookRaw is a hook's replacement message bytes, under the key "raw". Absent means unchanged.
+	HookRaw *string `json:"raw,omitempty"`
 }
 
 // SessionRequest is one request inside a sessionAction.invoke call, in the sender's own vocabulary.
@@ -583,6 +599,31 @@ var MethodSpecs = []MethodSpec{
 			"(messageEditorRequestResponse); both are omitted when there was none, which is the " +
 			"menu.invoke shape. At most 100 rows are carried. The ids and bytes are handed in " +
 			"because a plugin has no route to the traffic store.",
+	},
+	{
+		Name: "http.handle", Direction: HostToPlugin, Call: "request", Kind: KindHTTPHandler,
+		Params: `{"registration": string, "phase": "request"|"response", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of registerHttpHandler (grant: hook.traffic): called for each request about to be " +
+			"sent and each response received by any tool. The plugin answers the message to use, or nothing to " +
+			"leave it. drop is not offered here, as in Montoya. A plugin that errors, answers something invalid " +
+			"or exceeds the hook timeout is counted, explained on its console, and the original bytes go through; " +
+			"a plugin that keeps failing is suspended for a cooldown.",
+	},
+	{
+		Name: "proxy.handle", Direction: HostToPlugin, Call: "request", Kind: KindProxyHandler,
+		Params: `{"registration": string, "phase": "request"|"response", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue"|"drop"|"intercept"|"do-not-intercept", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of proxy().registerRequestHandler/registerResponseHandler (grant: hook.traffic): " +
+			"continue (optionally with a replacement), drop, or force the intercept decision. The first " +
+			"drop or intercept decision ends the chain. Same failure contract as http.handle.",
+	},
+	{
+		Name: "websocket.handle", Direction: HostToPlugin, Call: "request", Kind: KindWebSocketHandler,
+		Params: `{"registration": string, "phase": "created"|"message", "raw": string, "encoding"?: "base64"}`,
+		Result: `{"action"?: "continue"|"drop", "raw"?: string, "encoding"?: "base64"}`,
+		Why: "The analogue of registerWebSocketCreatedHandler and the message handlers (grant: hook.traffic). " +
+			"For created, raw is the upgrade request; for message, one frame's payload. Same failure contract.",
 	},
 	{
 		Name: "payload.generate", Direction: HostToPlugin, Call: "request", Kind: KindPayloadGenerator,

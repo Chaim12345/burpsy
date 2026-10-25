@@ -59,6 +59,12 @@ type PluginView struct {
 	Grants           []string       `json:"grants"`
 	HostCalls        map[string]int `json:"host_calls"`
 	RefusedHostCalls int            `json:"refused_host_calls"`
+
+	// Hook counters for the current load: hooks called, hooks that failed (error, invalid answer,
+	// timeout), and whether the plugin is suspended from hooks after repeated failures.
+	HookCalls     int  `json:"hook_calls"`
+	HookFailures  int  `json:"hook_failures"`
+	HookSuspended bool `json:"hook_suspended"`
 }
 
 // ListView is every allowlisted plugin plus the breakdown across them.
@@ -178,6 +184,9 @@ var kindLabels = map[Kind]string{
 	KindEditorTab:        "Message-editor tab",
 	KindSessionAction:    "Session-handling action",
 	KindHotKey:           "Hotkey",
+	KindHTTPHandler:      "HTTP handler (hook)",
+	KindProxyHandler:     "Proxy handler (hook)",
+	KindWebSocketHandler: "WebSocket handler (hook)",
 	KindPayloadGenerator: "Intruder payload generator",
 	KindPayloadProcessor: "Intruder payload processor",
 }
@@ -188,6 +197,9 @@ var kindMontoya = map[Kind]string{
 	KindEditorTab:        "registerHttpRequestEditorProvider (read-only half only)",
 	KindSessionAction:    "registerSessionHandlingAction",
 	KindHotKey:           "registerHotKeyHandler",
+	KindHTTPHandler:      "registerHttpHandler",
+	KindProxyHandler:     "proxy().registerRequestHandler / registerResponseHandler",
+	KindWebSocketHandler: "registerWebSocketCreatedHandler",
 	KindPayloadGenerator: "registerPayloadGeneratorProvider",
 	KindPayloadProcessor: "registerPayloadProcessor",
 }

@@ -107,6 +107,15 @@ func manifestFor(behaviour string) map[string]any {
 				{"id": "upper", "kind": "payload-processor", "label": "Upper-case"},
 			},
 		}
+	case "hooks":
+		return map[string]any{
+			"name": "hooker", "version": "0.1", "type": "go-test", "protocol": ProtocolVersion,
+			"registrations": []map[string]any{
+				{"id": "http", "kind": "http-handler", "label": "Sign requests"},
+				{"id": "proxy", "kind": "proxy-handler", "label": "Proxy rules"},
+				{"id": "ws", "kind": "websocket-handler", "label": "WS fuzz"},
+			},
+		}
 	case "no-registrations":
 		return map[string]any{"name": "quiet", "version": "1.0", "type": "shell", "protocol": ProtocolVersion}
 	default:
@@ -211,6 +220,32 @@ func runHelperPlugin(behaviour string) {
 				continue
 			}
 			reply(msg.ID, map[string]any{"output": "method=" + msg.Method + " params=" + string(msg.Params)})
+
+		case "http.handle", "proxy.handle", "websocket.handle":
+			var in struct {
+				Phase string `json:"phase"`
+				Raw   string `json:"raw"`
+			}
+			_ = json.Unmarshal(msg.Params, &in)
+			name := os.Getenv("BURPSY_PLUGIN_NAME")
+			switch in.Raw {
+			case "hang":
+				select {}
+			case "crash":
+				os.Exit(5)
+			case "garbage":
+				reply(msg.ID, map[string]any{"action": "explode"})
+			case "drop":
+				reply(msg.ID, map[string]any{"action": "drop"})
+			case "intercept":
+				reply(msg.ID, map[string]any{"action": "intercept"})
+			case "binary":
+				reply(msg.ID, map[string]any{"action": "continue", "raw": "/wCA", "encoding": "base64"})
+			case "noop":
+				reply(msg.ID, map[string]any{"action": "continue"})
+			default:
+				reply(msg.ID, map[string]any{"action": "continue", "raw": in.Raw + "[" + name + ":" + in.Phase + "]"})
+			}
 
 		case "payload.generate":
 			var in struct {

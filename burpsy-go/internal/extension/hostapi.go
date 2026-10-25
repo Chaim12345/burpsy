@@ -28,6 +28,8 @@ import (
 var grantable = []string{
 	"event.raise", "storage.get", "storage.set", "storage.delete", "ai.prompt", "http.send",
 	"traffic.query", "scope.check",
+	// hook.traffic is not a plugin->host method: it lets the host call this plugin's traffic hooks.
+	"hook.traffic",
 }
 
 // ErrUnknownGrant is a grant naming something that is not a plugin->host method.
