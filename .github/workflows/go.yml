@@ -139,13 +139,17 @@ jobs:
         run: go vet ./...
       # golangci-lint (v2) on the lines this change touches only: the findings already in the tree
       # are a backlog, not a gate (scripts/ci/golangci.yml has the linter set and the reasons).
+      # if: !cancelled() so a failed gofmt does not hide the lint and vulnerability results: each of
+      # these answers its own question.
       - name: golangci-lint (new issues only)
+        if: ${{ !cancelled() }}
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
         run: ../scripts/ci-lint.sh lint "$BASE"
       # govulncheck: fails on a reachable vulnerability that is not in
       # scripts/ci/govulncheck-baseline.txt, so a NEW one blocks and the known ones are tracked.
       - name: govulncheck (new reachable vulnerabilities only)
+        if: ${{ !cancelled() }}
         run: ../scripts/ci-lint.sh vuln
       - name: Save the Go cache (lint)
         if: always() && github.event_name != 'pull_request' && steps.env.outputs.cache-hit != 'true'
