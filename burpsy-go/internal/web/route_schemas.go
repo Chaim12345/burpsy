@@ -153,12 +153,14 @@ var routeSchemas = map[string]opSchema{
 	"POST /api/repeater/history-export": {body: typeOf[historyExportReq]()},
 	"POST /api/http2/kettle":            {body: typeOf[h2KettleReq]()},
 
-	"POST /api/repeater/send":            {body: typeOf[repeaterSendReq]()},
-	"POST /api/repeater/send-group":      {body: typeOf[repeaterGroupSendReq]()},
-	"POST /api/repeater/ws-send":         {body: typeOf[repeaterWsSendReq]()},
-	"POST /api/repeater/ws-attach":       {body: typeOf[repeaterWsAttachReq]()},
-	"POST /api/repeater/browser-reissue": {body: typeOf[repeaterBrowserReissueReq]()},
-	"POST /api/http2/program":            {body: typeOf[frameProgramReq]()},
+	"POST /api/repeater/graphql-query":    {body: typeOf[repeaterGraphQLQueryReq]()},
+	"POST /api/repeater/graphql-validate": {body: typeOf[repeaterGraphQLValidateReq]()},
+	"POST /api/repeater/send":             {body: typeOf[repeaterSendReq]()},
+	"POST /api/repeater/send-group":       {body: typeOf[repeaterGroupSendReq]()},
+	"POST /api/repeater/ws-send":          {body: typeOf[repeaterWsSendReq]()},
+	"POST /api/repeater/ws-attach":        {body: typeOf[repeaterWsAttachReq]()},
+	"POST /api/repeater/browser-reissue":  {body: typeOf[repeaterBrowserReissueReq]()},
+	"POST /api/http2/program":             {body: typeOf[frameProgramReq]()},
 
 	"POST /api/intercept/": {variants: map[string]reflect.Type{
 		"1/forward": typeOf[interceptForwardReq](),

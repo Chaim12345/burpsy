@@ -174,6 +174,44 @@ export function useRepeaterWsAttach() {
  * body (a fresh dial has no client to send to), and records the handshake exchange so the
  * result can offer "view in WebSockets history".
  */
+/** One gqlparser complaint, with the position the editor's squiggle needs when the parser gave one. */
+export interface GraphQLValidationError {
+ message: string;
+ line?: number;
+ column?: number;
+}
+
+export interface GraphQLValidateResult {
+ ok: boolean;
+ errors: GraphQLValidationError[];
+}
+
+/**
+ * Parse one GraphQL document with the server's pinned gqlparser - the same parser and token
+ * limit the scanner's ingest gate uses, so "valid here" and "scanned there" cannot drift
+ * (4xqt.3). Read-only: the document is the whole body and nothing is sent anywhere.
+ */
+export function validateGraphQLQuery(query: string) {
+ return api<GraphQLValidateResult>("/api/repeater/graphql-validate", json("POST", { query }));
+}
+
+export interface GraphQLQueryResult {
+ /** The whole request with exactly the operation's query content replaced. */
+ request: string;
+ /** Which carrier the query was replaced in: "body" (JSON) or "params" (URL). */
+ source: string;
+}
+
+/**
+ * Replace one operation's query inside a raw request's GraphQL carrier (4xqt.3). The server
+ * rewrites exactly that string's content - variables, operation name, extensions, formatting
+ * and header order reach the draft unchanged, with Content-Length moved when a body edit moved
+ * it - so the edit is the query and nothing else.
+ */
+export function applyGraphQLQuery(request: string, index: number, query: string) {
+ return api<GraphQLQueryResult>("/api/repeater/graphql-query", json("POST", { request, index, query }));
+}
+
 export function useRepeaterWsSend() {
  const inFlight = useRef<AbortController | null>(null);
  const mutation = useMutation({

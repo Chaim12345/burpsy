@@ -89,6 +89,7 @@ var groupedTools = []groupSpec{
 		short: "Sends one request (or a group, a WebSocket message — on a new, cloned or attached live connection — an HTTP/2 frame program) to the target and returns the response.",
 		ops: []string{
 			"POST /api/repeater/send", "POST /api/repeater/send-group", "POST /api/repeater/ws-send", "POST /api/repeater/ws-attach",
+			"POST /api/repeater/graphql-query", "POST /api/repeater/graphql-validate",
 			"POST /api/repeater/browser-reissue", "POST /api/http2/program",
 		},
 	},

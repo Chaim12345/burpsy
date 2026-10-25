@@ -1,7 +1,13 @@
+import { useState } from "react";
 import { Copy } from "lucide-react";
 import { copyToClipboard } from "../lib/api";
-import type { GraphQLDocument, JwtReport, ParamReport } from "../lib/message-views";
-import { Badge, IconButton } from "./primitives";
+import {
+ applyGraphQLQuery,
+ validateGraphQLQuery,
+ type GraphQLValidationError,
+} from "../lib/data.tools";
+import type { GraphQLDocument, GraphQLOperation, JwtReport, ParamReport } from "../lib/message-views";
+import { Badge, Button, IconButton, Textarea } from "./primitives";
 
 /**
  * The message editor's typed views: GraphQL, JWT and Params.
@@ -36,7 +42,17 @@ function Note({ children }: { children: React.ReactNode }): JSX.Element {
  return <p className="typed-warn">{children}</p>;
 }
 
-export function GraphQLView({ document: doc }: { document: GraphQLDocument }): JSX.Element {
+export function GraphQLView({
+ document: doc,
+ raw,
+ onChange,
+}: {
+ document: GraphQLDocument;
+ /** The request's exact bytes, when this view may edit them (4xqt.3). Absent on responses. */
+ raw?: string;
+ onChange?: (next: string) => void;
+}): JSX.Element {
+ const canEdit = raw !== undefined && onChange !== undefined;
  return (
   <div className="typed-view">
    <p className="typed-source">Carried in the {doc.source}.</p>
@@ -46,7 +62,11 @@ export function GraphQLView({ document: doc }: { document: GraphQLDocument }): J
       title={operation.operationName ? `Operation ${operation.operationName}` : "Operation (anonymous)"}
       detail={doc.operations.length > 1 ? `${index + 1} of ${doc.operations.length}` : undefined}
      >
-      <Block text={operation.query} />
+      {canEdit ? (
+       <GraphQLOperationEditor raw={raw} index={index} operation={operation} onChange={onChange} />
+      ) : (
+       <Block text={operation.query} />
+      )}
      </Section>
      <Section title="Variables">
       {operation.variables === null ? (
@@ -67,8 +87,85 @@ export function GraphQLView({ document: doc }: { document: GraphQLDocument }): J
     </div>
    ))}
    <p className="typed-foot">
-    Editing happens on the Raw view, which is the exact bytes. This view reads the document out of the request; it does not re-serialise it.
+    {canEdit
+     ? "Applying rewrites exactly this operation's query inside its carrier - variables, operation name, extensions, formatting and header order are unchanged. The full draft stays one click away on the Raw view."
+     : "Editing happens on the Raw view, which is the exact bytes. This view reads the document out of the request; it does not re-serialise it."}
    </p>
+  </div>
+ );
+}
+
+/**
+ * One operation's editable query (burpsy-react-ui-4xqt.3). Check parses the draft with the
+ * server's pinned gqlparser - the scanner's own parser and limit, so a document that passes
+ * here is a document the scanner's gate would read - and Apply rewrites exactly this
+ * operation's query inside the carrier, server-side, so no client re-serialisation can drift
+ * the bytes around the edit. Nothing applies itself: both steps are the operator's click.
+ */
+function GraphQLOperationEditor({
+ raw,
+ index,
+ operation,
+ onChange,
+}: {
+ raw: string;
+ index: number;
+ operation: GraphQLOperation;
+ onChange: (next: string) => void;
+}): JSX.Element {
+ const [draft, setDraft] = useState(operation.query);
+ const [errors, setErrors] = useState<GraphQLValidationError[] | null>(null);
+ const [busy, setBusy] = useState(false);
+ const [applyError, setApplyError] = useState<string | null>(null);
+ const dirty = draft !== operation.query;
+ const check = () => {
+  setBusy(true);
+  validateGraphQLQuery(draft)
+   .then((result) => setErrors(result.errors))
+   .catch((failure: unknown) => setErrors([{ message: failure instanceof Error ? failure.message : String(failure) }]))
+   .finally(() => setBusy(false));
+ };
+ const apply = () => {
+  setBusy(true);
+  setApplyError(null);
+  applyGraphQLQuery(raw, index, draft)
+   .then((result) => onChange(result.request))
+   .catch((failure: unknown) => setApplyError(failure instanceof Error ? failure.message : String(failure)))
+   .finally(() => setBusy(false));
+ };
+ return (
+  <div>
+   <Textarea
+    name={`graphql-operation-${index}`}
+    aria-label="Edit this operation's GraphQL query"
+    rows={Math.min(18, Math.max(6, draft.split("\n").length + 1))}
+    value={draft}
+    onChange={(event) => {
+     setDraft(event.target.value);
+     setErrors(null);
+    }}
+   />
+   <div>
+    <Button variant="outline" size="small" disabled={busy} onClick={check}>
+     Check
+    </Button>{" "}
+    <Button variant="outline" size="small" disabled={busy || !dirty} onClick={apply}>
+     Apply to request
+    </Button>
+   </div>
+   {errors !== null ? (
+    errors.length === 0 ? (
+     <Note>The document parses.</Note>
+    ) : (
+     errors.map((error, i) => (
+      <Note key={i}>
+       {error.line !== undefined ? `line ${error.line}, column ${error.column}: ` : ""}
+       {error.message}
+      </Note>
+     ))
+    )
+   ) : null}
+   {applyError !== null ? <Note>{applyError}</Note> : null}
   </div>
  );
 }

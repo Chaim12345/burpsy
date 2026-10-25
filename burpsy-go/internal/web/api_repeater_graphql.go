@@ -1,0 +1,355 @@
+package web
+
+// Repeater's GraphQL query editing and validation (burpsy-react-ui-4xqt.3), Burp's GraphQL
+// request view grown up: the typed view stops being read-only. Validation parses the document
+// with the pinned gqlparser exactly as the scanner's ingest gate does - same parser, same token
+// limit - so "valid here" and "scanned there" cannot drift. Editing replaces ONE operation's
+// query inside its carrier surgically: every other byte of the request - variables, operation
+// name, extensions, formatting, header order - reaches the draft unchanged, because the edit is
+// the query and nothing else. The carrier codecs are httputil's, body-identical to the
+// scanner's, so the document the operator edits is the document the scanner would prove.
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
+	"github.com/vektah/gqlparser/v2/parser"
+
+	"github.com/burpsy-go/burpsy/internal/httputil"
+)
+
+// graphQLRepeaterTokenLimit bounds the parser's work on one document, the same bound the
+// scanner's ingest gate sets (graphQLIngestTokenLimit): one gqlparser, one limit, one answer.
+const graphQLRepeaterTokenLimit = 1 << 18
+
+// repeaterGraphQLValidateReq is the POST body of /api/repeater/graphql-validate.
+type repeaterGraphQLValidateReq struct {
+	// Query is the GraphQL document to parse. It is the whole body: nothing here is
+	// operator-private, and the route sends nothing anywhere.
+	Query string `json:"query"`
+}
+
+type repeaterGraphQLError struct {
+	Message string `json:"message"`
+	Line    int    `json:"line,omitempty"`
+	Column  int    `json:"column,omitempty"`
+}
+
+type repeaterGraphQLValidateResp struct {
+	OK     bool                   `json:"ok"`
+	Errors []repeaterGraphQLError `json:"errors"`
+}
+
+func (s *Server) handleRepeaterGraphQLValidate(w http.ResponseWriter, r *http.Request) {
+	var req repeaterGraphQLValidateReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	_, err := parser.ParseQueryWithTokenLimit(&ast.Source{Input: req.Query}, graphQLRepeaterTokenLimit)
+	resp := repeaterGraphQLValidateResp{OK: err == nil, Errors: []repeaterGraphQLError{}}
+	if err != nil {
+		var gerr *gqlerror.Error
+		var lerr gqlerror.List
+		switch {
+		case errors.As(err, &gerr):
+			resp.Errors = append(resp.Errors, graphQLErrorOf(gerr))
+		case errors.As(err, &lerr):
+			for _, e := range lerr {
+				resp.Errors = append(resp.Errors, graphQLErrorOf(e))
+			}
+		default:
+			resp.Errors = append(resp.Errors, repeaterGraphQLError{Message: err.Error()})
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func graphQLErrorOf(e *gqlerror.Error) repeaterGraphQLError {
+	out := repeaterGraphQLError{Message: e.Message}
+	if len(e.Locations) > 0 {
+		out.Line, out.Column = e.Locations[0].Line, e.Locations[0].Column
+		return out
+	}
+	// gqlparser's parse errors carry the position in the message ("input:4:11: ...") more often
+	// than in Locations; the editor's squiggle needs it as numbers, not as text to re-parse.
+	var line, col int
+	if rest, found := strings.CutPrefix(e.Message, "input:"); found {
+		if _, err := fmt.Sscanf(rest, "%d:%d:", &line, &col); err == nil {
+			out.Line, out.Column = line, col
+		}
+	}
+	return out
+}
+
+// repeaterGraphQLQueryReq is the POST body of /api/repeater/graphql-query: replace one
+// operation's query inside the raw request's carrier.
+type repeaterGraphQLQueryReq struct {
+	Request string `json:"request"`
+	// Index selects the operation in carrier order (a batched body carries several). Zero-based.
+	Index int    `json:"index"`
+	Query string `json:"query"`
+}
+
+type repeaterGraphQLQueryResp struct {
+	Request string `json:"request"`
+	// Source names the carrier the query was replaced in - "body" or "params" - so the console
+	// can say what changed rather than the operator trusting that it did.
+	Source string `json:"source"`
+}
+
+func (s *Server) handleRepeaterGraphQLQuery(w http.ResponseWriter, r *http.Request) {
+	var req repeaterGraphQLQueryReq
+	if err := requestJSON(w, r, nil).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Index < 0 {
+		http.Error(w, "index selects an operation; negative names none", http.StatusBadRequest)
+		return
+	}
+	next, source, err := replaceGraphQLQuery(req.Request, req.Index, req.Query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, repeaterGraphQLQueryResp{Request: next, Source: source})
+}
+
+// graphQLQuerySpan is one operation's query string inside a raw request: the byte span of the
+// string CONTENT (between the JSON quotes, or after query= up to the next &), and how its
+// bytes decode.
+type graphQLQuerySpan struct {
+	start, end int
+	source     string // "body" | "params"
+}
+
+// replaceGraphQLQuery rewrites the Index'th operation's query inside raw, returning the whole
+// request with exactly that span changed - plus Content-Length, when a body edit moved it.
+func replaceGraphQLQuery(raw string, index int, query string) (string, string, error) {
+	spans := findGraphQLQuerySpans(raw)
+	if len(spans) == 0 {
+		return "", "", errors.New("no GraphQL carrier: the request has no query parameter and no " +
+			"JSON body field named \"query\" - write the query in the Raw view instead")
+	}
+	if index >= len(spans) {
+		return "", "", fmt.Errorf("index %d names no operation: the carrier holds %d", index, len(spans))
+	}
+	span := spans[index]
+	var replacement string
+	if span.source == "params" {
+		replacement = httputil.GraphQLPercentEncode(query)
+	} else {
+		replacement = httputil.GraphQLJSONStringContentEncode(query)
+	}
+	next := raw[:span.start] + replacement + raw[span.end:]
+	if span.source == "body" {
+		next = rewriteContentLength(next)
+	}
+	return next, span.source, nil
+}
+
+// findGraphQLQuerySpans locates every operation's query content in carrier order: the URL
+// query parameter first (a request carries its GraphQL document in one place), then the JSON
+// body's top-level "query" field or, for a batched body, each element's.
+func findGraphQLQuerySpans(raw string) []graphQLQuerySpan {
+	head, body, bodyOff := splitRequestHead(raw)
+	if spans := graphQLParamSpans(head); len(spans) > 0 {
+		return spans
+	}
+	spans := graphQLJSONSpans(body)
+	for i := range spans {
+		// The walk is body-relative; the replacer's spans are raw-relative.
+		spans[i].start += bodyOff
+		spans[i].end += bodyOff
+	}
+	return spans
+}
+
+// splitRequestHead cuts head from body at the first blank line. The body offset returned is
+// raw-relative, so spans found in body are spans in raw.
+func splitRequestHead(raw string) (head, body string, bodyOff int) {
+	if i := strings.Index(raw, "\r\n\r\n"); i >= 0 {
+		return raw[:i], raw[i+4:], i + 4
+	}
+	return raw, "", len(raw)
+}
+
+// graphQLParamSpans finds the query= parameter of the request target's query string. The
+// request line is the head's first line; the parameter value runs to the next & or the end of
+// the target. A '+' inside the value is data (the codec says so), so no splitting on it.
+func graphQLParamSpans(head string) []graphQLQuerySpan {
+	eol := strings.Index(head, "\r\n")
+	line := head
+	if eol >= 0 {
+		line = head[:eol]
+	}
+	parts := strings.SplitN(line, " ", 3)
+	if len(parts) < 2 {
+		return nil
+	}
+	target := parts[1]
+	q := strings.IndexByte(target, '?')
+	if q < 0 {
+		return nil
+	}
+	// The target sits inside the request line, which sits inside raw: its offset is the index
+	// of the target in the head plus the query-string start.
+	targetOff := strings.Index(head, target)
+	rest := target[q+1:]
+	for _, p := range strings.Split(rest, "&") {
+		if strings.HasPrefix(p, "query=") {
+			start := targetOff + q + 1 + strings.Index(rest, p) + len("query=")
+			return []graphQLQuerySpan{{start: start, end: start + len(p) - len("query="), source: "params"}}
+		}
+	}
+	return nil
+}
+
+// graphQLJSONSpans walks the body as JSON text without decoding it: a full unmarshal and
+// re-encode would reorder keys and reflow whitespace, changing bytes the operator did not edit.
+// The walk tracks string state and object/array depth, and records the content span of every
+// string value of a key named "query" at operation depth - the top-level object's, or each
+// batch element's.
+func graphQLJSONSpans(body string) []graphQLQuerySpan {
+	trimmed := strings.TrimLeft(body, " \t\r\n")
+	if len(trimmed) == 0 {
+		return nil
+	}
+	off := len(body) - len(trimmed)
+	var spans []graphQLQuerySpan
+	// wantDepth is the object depth at which a "query" key is an operation's: 1 for a bare
+	// object, 2 for elements of a top-level batch array. Anything deeper is a variable or an
+	// extension that happens to share the name, and is not the document.
+	wantDepth := 0
+	switch trimmed[0] {
+	case '{':
+		wantDepth = 1
+	case '[':
+		wantDepth = 2
+	default:
+		return nil
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := off; i < len(body); i++ {
+		c := body[i]
+		switch {
+		case inString && escaped:
+			escaped = false
+		case inString && c == '\\':
+			escaped = true
+		case inString && c == '"':
+			inString = false
+		case !inString && c == '"':
+			inString = true
+			if end, ok := graphQLKeyContent(body, i); ok && depth == wantDepth {
+				// i is at the opening quote of a key "query"; find its string value.
+				if vs, ve, ok := graphQLStringValueSpan(body, end); ok {
+					spans = append(spans, graphQLQuerySpan{start: vs, end: ve, source: "body"})
+					// The value is consumed through its closing quote: leave string state and
+					// skip the content, so a "query" inside it is data, not a key.
+					inString = false
+					i = ve
+					continue
+				}
+			}
+		case !inString && (c == '{' || c == '['):
+			depth++
+		case !inString && (c == '}' || c == ']'):
+			depth--
+		}
+	}
+	return spans
+}
+
+// graphQLKeyContent reports whether body[i:] opens a key whose decoded content is "query", and
+// the index just past its closing quote and any following whitespace and colon.
+func graphQLKeyContent(body string, i int) (int, bool) {
+	end := i + 1
+	escaped := false
+	for ; end < len(body); end++ {
+		c := body[end]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			break
+		}
+	}
+	if end >= len(body) {
+		return 0, false
+	}
+	if httputil.GraphQLJSONStringContentDecode(body[i+1:end]) != "query" {
+		return 0, false
+	}
+	j := end + 1
+	for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
+		j++
+	}
+	if j >= len(body) || body[j] != ':' {
+		return 0, false
+	}
+	j++
+	for j < len(body) && (body[j] == ' ' || body[j] == '\t') {
+		j++
+	}
+	return j, true
+}
+
+// graphQLStringValueSpan returns the content span of the JSON string value starting at j
+// (after the colon). A non-string value - an object, a number, null - is not an editable
+// document and is skipped rather than rewritten.
+func graphQLStringValueSpan(body string, j int) (int, int, bool) {
+	if j >= len(body) || body[j] != '"' {
+		return 0, 0, false
+	}
+	escaped := false
+	for end := j + 1; end < len(body); end++ {
+		c := body[end]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '"' {
+			return j + 1, end, true
+		}
+	}
+	return 0, 0, false
+}
+
+// rewriteContentLength sets the head's Content-Length to the body's new length after a
+// surgical edit. A request whose header disagrees with its bytes is a different request than
+// the operator approved. The header keeps its own name's casing; an absent header stays absent
+// (HTTP/1 requests without a body-framing header frame by connection close, which is the
+// sender's business, not this edit's).
+func rewriteContentLength(raw string) string {
+	_, body, bodyOff := splitRequestHead(raw)
+	head := raw[:bodyOff]
+	for _, line := range strings.Split(head, "\r\n") {
+		name, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+			start := strings.Index(raw, line)
+			return raw[:start] + name + ": " + strconv.Itoa(len(body)) + raw[start+len(line):]
+		}
+	}
+	return raw
+}

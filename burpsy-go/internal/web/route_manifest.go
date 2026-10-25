@@ -807,6 +807,18 @@ var manifest = map[string]route{
 		methods: []string{"POST"}, risk: riskRead,
 		summary: "Repeater's Save entire history: a tab's sends as one file, request/response bytes base64 by message id",
 	},
+	"/api/repeater/graphql-query": {
+		// riskRead: the edit is text surgery on the operator's own draft - nothing is dialled,
+		// nothing is stored. The send that later carries the draft is riskEgress as ever.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "replace one operation's query inside a raw request's GraphQL carrier (JSON body " +
+			"or URL parameter), changing no other byte but Content-Length",
+	},
+	"/api/repeater/graphql-validate": {
+		// riskRead: parse and report. gqlparser sees the document and nothing leaves the box.
+		methods: []string{"POST"}, risk: riskRead,
+		summary: "parse one GraphQL document with the pinned gqlparser and report errors with positions",
+	},
 	"/api/repeater/send": {
 		methods: []string{"POST"}, risk: riskEgress,
 		summary: "send one operator-authored request and record the exchange",
