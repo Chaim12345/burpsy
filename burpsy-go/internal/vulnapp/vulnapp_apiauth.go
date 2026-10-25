@@ -33,12 +33,12 @@ func apiAuthEndpoints() []Endpoint {
 			Note: "the same operation enforcing the admin role: a non-admin session is 403, " +
 				"anonymous is 401"},
 		{Path: "/api/users/2", Row: row, Method: "POST", ContentType: "application/json",
-			Body:          `{"username":"bob","email":"bob@example.test"}`,
+			Body:           `{"username":"bob","email":"bob@example.test"}`,
 			RequestHeaders: map[string]string{"Cookie": IDORSecondSessionCookie},
 			Note: "profile update that persists every field it is sent, including the server-managed " +
 				"role the GET answer names: a mass-assignment target; anonymous is 401"},
 		{Path: "/api/safe/users/2", Row: row, Safe: true, Method: "POST", ContentType: "application/json",
-			Body:          `{"username":"bob","email":"bob@example.test"}`,
+			Body:           `{"username":"bob","email":"bob@example.test"}`,
 			RequestHeaders: map[string]string{"Cookie": IDORSecondSessionCookie},
 			Note:           "the same update binding only username and email: an injected role is dropped"},
 	}
