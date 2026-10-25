@@ -77,6 +77,9 @@ type SyncPoints struct {
 // does, so the group's per-item recording does not fork.
 func (s *Sender) SendSynchronized(ctx context.Context, host string, port uint16, useTLS bool, raw []byte, sync SyncPoints) ([]byte, SendOutcome, error) {
 	if len(raw) == 0 {
+		// Signalled like every other failure: the barrier counts arrivals, and an empty
+		// request is one member that will never hold a byte.
+		signalReady(sync)
 		return nil, SendOutcome{}, fmt.Errorf("synchronized send: the request is empty, so there is no byte to withhold")
 	}
 	// planSend with the HTTP/1 preference: no h2 offer, no downgrade laundering. A request
