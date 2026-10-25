@@ -17,6 +17,7 @@ function openWsTab(): string {
   name: "ws",
   kind: "ws",
   target: "ws://example.test",
+  request: "",
   wsMode: "clone",
   wsSocket: 7,
  });
@@ -45,6 +46,20 @@ describe("a stored handshake edit does not survive a retarget", () => {
   expect(tab(id).wsHandshake).toBeUndefined();
  });
 
+ test("clearing the socket alone clears the edit", () => {
+  const id = openWsTab();
+  useApp.getState().updateRepeaterTab(id, { wsHandshake: "GET /x HTTP/1.1\r\n\r\n" });
+  useApp.getState().updateRepeaterTab(id, { wsSocket: undefined });
+  expect(tab(id).wsHandshake).toBeUndefined();
+ });
+
+ test("changing the path clears the edit", () => {
+  const id = openWsTab();
+  useApp.getState().updateRepeaterTab(id, { wsHandshake: "GET /x HTTP/1.1\r\n\r\n" });
+  useApp.getState().updateRepeaterTab(id, { wsPath: "/elsewhere" });
+  expect(tab(id).wsHandshake).toBeUndefined();
+ });
+
  test("an edit keystroke is not mistaken for a retarget", () => {
   const id = openWsTab();
   useApp.getState().updateRepeaterTab(id, { wsHandshake: "GET /a HTTP/1.1\r\n\r\n" });
@@ -52,13 +67,22 @@ describe("a stored handshake edit does not survive a retarget", () => {
   expect(tab(id).wsHandshake).toBe("GET /ab HTTP/1.1\r\n\r\n");
  });
 
- test("a patch that carries the new authority's edit keeps it", () => {
+ test("a patch restating the current aim keeps a legitimate edit", () => {
+  const id = openWsTab();
+  useApp.getState().updateRepeaterTab(id, { wsHandshake: "GET /x HTTP/1.1\r\n\r\n" });
+  useApp.getState().updateRepeaterTab(id, { target: "ws://example.test", wsMode: "clone", wsSocket: 7 });
+  expect(tab(id).wsHandshake).toBe("GET /x HTTP/1.1\r\n\r\n");
+ });
+
+ test("a retarget that carries wsHandshake in the same patch still clears it", () => {
+  // The same-patch exception would trust the caller to pair the new authority with a fresh edit;
+  // that trust is the edit/destination confusion the rule exists to prevent.
   const id = openWsTab();
   useApp.getState().updateRepeaterTab(id, {
    target: "ws://other.test",
    wsHandshake: "GET /fresh HTTP/1.1\r\n\r\n",
   });
-  expect(tab(id).wsHandshake).toBe("GET /fresh HTTP/1.1\r\n\r\n");
+  expect(tab(id).wsHandshake).toBeUndefined();
  });
 });
 
